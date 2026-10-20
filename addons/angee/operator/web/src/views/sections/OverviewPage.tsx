@@ -1,4 +1,4 @@
-import { CommandBand, DetailSection, ErrorBanner, LoadingPanel, MetricStrip, RecordActionBar, RecordHeader, StatusBadge, type ActionDescriptor, type MetricTileValue } from "@angee/ui";
+import { CommandBand, DetailSection, ErrorBanner, MetricStrip, RecordActionBar, RecordHeader, StatusBadge, type ActionDescriptor, type MetricTileValue } from "@angee/ui";
 import type { Row } from "@angee/metadata";
 import { useMemo, type ReactNode } from "react";
 
@@ -42,7 +42,7 @@ export function OverviewPage(): ReactNode {
         <RecordHeader density="compact" title={t("section.operator.overview.title")} meta={stack?.name} />
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-3">
           {error ? <ErrorBanner title={t("overview.error")} description={error.message} /> : null}
-          {loading ? <LoadingPanel message={t("overview.loading")} /> : (
+          {loading ? <MetricStrip loading loadingMessage={t("overview.loading")} density="prominent" className="grid-cols-2 sm:grid-cols-4" /> : (
             <>
               <div className="grid gap-3 sm:grid-cols-2">
                 <DetailSection

@@ -54,9 +54,8 @@ export function OverviewPage(): ReactElement {
     () => (overviewFacts?.unassigned_users ?? []).map((user) => ({ id: user.id, username: user.username ?? "", email: user.email ?? "" })),
     [overviewFacts],
   );
-  // `sublineColumn` directly: RowsListView does not resolve `subline` for local rows (a ui gap).
   const unassignedColumns = useMemo<readonly ListColumn<UnassignedUserRow>[]>(
-    () => [{ field: "username", header: t("overview.unassigned.user"), sublineColumn: { field: "email" } }],
+    () => [{ field: "username", header: t("overview.unassigned.user"), subline: "email" }],
     [t],
   );
 

@@ -241,8 +241,10 @@ function EntryDetails({ entry, record, onRevert, reverting, t }: {
         <FieldName model={change.model} field={change.field} />
       </span>
     ),
-    before: <HistoryValueCell value={change.old} t={t} />,
-    after: <HistoryValueCell value={change.new} t={t} />,
+    cells: {
+      before: <HistoryValueCell value={change.old} t={t} />,
+      after: <HistoryValueCell value={change.new} t={t} />,
+    },
     changed: true,
   }));
   const revertable = onRevert !== undefined && entry.can_revert;
@@ -263,8 +265,7 @@ function EntryDetails({ entry, record, onRevert, reverting, t }: {
         <ComparisonRows
           rows={rows}
           fieldLabel={t("history.field")}
-          beforeLabel={t("history.before")}
-          afterLabel={t("history.after")}
+          columns={[{ key: "before", label: t("history.before") }, { key: "after", label: t("history.after") }]}
         />
       ) : null}
       {entry.statements.length ? <StatementVersions statements={entry.statements} record={record} t={t} /> : null}

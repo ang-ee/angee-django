@@ -14,6 +14,7 @@ import { EmptyState, type EmptyStateProps } from "./EmptyState";
 import { MetaGrid, type MetaGridProps } from "./MetaGrid";
 import { MetricStrip, type MetricTileValue } from "./MetricStrip";
 import { RecordHeader, type RecordHeaderProps } from "./RecordHeader";
+import { CommandBand, type CommandBandProps } from "../views/resource/CommandBand";
 import { Skeleton, SkeletonStatus, SkeletonText } from "../ui/skeleton";
 
 export type DetailSurfaceEmptyState = Pick<
@@ -27,8 +28,10 @@ export type DetailSurfaceProps = Omit<
 > &
   Pick<
     RecordHeaderProps,
-    "actions" | "description" | "icon" | "meta" | "status" | "title" | "type"
+    "actions" | "crumbs" | "density" | "description" | "icon" | "lead" | "extra" | "meta" | "status" | "title" | "type"
   > & {
+    /** The record's command band (menu · verbs · chrome · pager) above the surface. */
+    band?: CommandBandProps;
     children?: React.ReactNode;
     className?: string;
     empty?: DetailSurfaceEmptyState | null | false;
@@ -70,11 +73,16 @@ export const DetailSurface = React.forwardRef<HTMLElement, DetailSurfaceProps>(
   function DetailSurface(
     {
       actions,
+      band,
       children,
       className,
+      crumbs,
+      density,
       description,
       empty,
+      extra,
       icon,
+      lead,
       loading = false,
       loadingMessage,
       meta,
@@ -101,19 +109,26 @@ export const DetailSurface = React.forwardRef<HTMLElement, DetailSurfaceProps>(
     }
 
     return (
-      <section ref={ref} className={styles.root({ className })} {...props}>
-        <RecordHeader
-          actions={actions}
-          description={description}
-          icon={icon}
-          meta={meta}
-          status={status}
-          title={title}
-          type={type}
-        />
-        {metrics && metrics.length > 0 ? <MetricStrip metrics={metrics} /> : null}
-        {children}
-      </section>
+      <>
+        {band ? <CommandBand {...band} /> : null}
+        <section ref={ref} className={styles.root({ className })} {...props}>
+          <RecordHeader
+            actions={actions}
+            crumbs={crumbs}
+            density={density}
+            description={description}
+            extra={extra}
+            icon={icon}
+            lead={lead}
+            meta={meta}
+            status={status}
+            title={title}
+            type={type}
+          />
+          {metrics && metrics.length > 0 ? <MetricStrip metrics={metrics} /> : null}
+          {children}
+        </section>
+      </>
     );
   },
 );
@@ -141,14 +156,7 @@ function DetailSurfaceSkeleton({
         </div>
         <Skeleton className="h-btn-sm w-20 shrink-0" />
       </div>
-      <div aria-hidden="true" className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {Array.from({ length: 4 }, (_, index) => (
-          <div key={index} className="rounded-8 border border-border-subtle bg-sheet p-3">
-            <Skeleton shape="text" size="sm" className="w-16" />
-            <Skeleton shape="text" size="lg" className="mt-3 w-24" />
-          </div>
-        ))}
-      </div>
+      <MetricStrip loading />
       {Array.from({ length: 2 }, (_, sectionIndex) => (
         <Card key={sectionIndex} aria-hidden="true" className="shadow-none">
           <CardHeader>

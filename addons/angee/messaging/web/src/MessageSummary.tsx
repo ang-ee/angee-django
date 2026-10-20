@@ -1,6 +1,6 @@
 import * as React from "react";
 import { senderAvatarUrl, senderDisplayName, type SenderIdentity } from "@angee/parties";
-import { Avatar, Glyph, PaneRow, avatarInitials, formatDate, formatDateTime, optionLabel, useEnumOptions, type PaneRowProps } from "@angee/ui";
+import { AbsoluteTime, Avatar, Glyph, PaneRow, avatarInitials, optionLabel, useEnumOptions, type PaneRowProps } from "@angee/ui";
 
 import { useMessagingT } from "./i18n";
 
@@ -27,11 +27,6 @@ export function useMessageChannelLabel(): (message: { channel?: { display_name: 
   }, [platforms]);
 }
 
-/** A message's absolute time for rows: the date, with the full stamp as the tooltip. */
-export function MessageTime({ value }: { value: string }): React.ReactElement {
-  return <time dateTime={value} title={formatDateTime(value)}>{formatDate(value)}</time>;
-}
-
 /** Messaging's compact pointer for a pane; the caller owns its destination. */
 export function MessagePaneRow({ message, ...props }: {
   message: MessageSummaryData & { platform?: string | null };
@@ -40,7 +35,7 @@ export function MessagePaneRow({ message, ...props }: {
   const channelLabel = useMessageChannelLabel();
   return <PaneRow icon="channel" title={message.title || message.preview}
     detail={channelLabel(message)}
-    meta={<MessageTime value={message.sent_at || message.created_at} />}
+    meta={<AbsoluteTime value={message.sent_at || message.created_at} display="date" />}
     sub={senderDisplayName(message.sender, t("message.unknownSender"))} verb={t("message.read")}
     {...props} />;
 }
@@ -78,7 +73,7 @@ export function MessageSummary({ message }: { message: MessageSummaryData }): Re
             <Glyph name="star" className="text-warning-text" label={t("message.starred")} />
           ) : null}
           <span className="ml-auto whitespace-nowrap text-12 text-fg-muted">
-            <MessageTime value={message.sent_at ?? message.created_at} />
+            <AbsoluteTime value={message.sent_at ?? message.created_at} display="date" />
           </span>
         </div>
         {message.title ? <p className="truncate text-13 font-medium">{message.title}</p> : null}

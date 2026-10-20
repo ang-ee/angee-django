@@ -1,7 +1,7 @@
 import * as React from "react";
 import { holdsPermission, rowValueAtPath } from "@angee/metadata";
 import { extractActionOutcome, useAuthoredMutation } from "@angee/refine";
-import { useAccessRole, type AccessRoleOwnerProps, type AccessRoleState } from "@angee/iam";
+import { subjectUserId, useAccessRole, userSubject, type AccessRoleOwnerProps, type AccessRoleState } from "@angee/iam";
 import { useActionResultRun } from "@angee/ui";
 
 import { ADMIT_RESPONDER, REMOVE_RESPONDER } from "./documents";
@@ -9,8 +9,9 @@ import { useProposalsT } from "./i18n";
 import { ROUND_MODEL } from "./resources";
 
 function userId(subject: string, invalidSubject: string): string {
-  if (!subject.startsWith("auth/user:")) throw new Error(invalidSubject);
-  return subject.slice("auth/user:".length);
+  const user = subjectUserId(subject);
+  if (user === null) throw new Error(invalidSubject);
+  return user;
 }
 
 /** The round owns both its live roster and its admission/removal verbs. */
@@ -25,7 +26,7 @@ export function RoundResponderAccessRole({ targetId, record }: AccessRoleOwnerPr
     const item = row as Record<string, unknown>;
     if (typeof item.user !== "string" || typeof item.name !== "string") return [];
     return [{
-      subject: `auth/user:${item.user}`, label: item.name, roleId: "proposals.responder",
+      subject: userSubject(item.user), label: item.name, roleId: "proposals.responder",
       roleLabel: t("round.action.responder"), removable: Boolean(record && holdsPermission(record, "manage")),
     }];
   }) : [], [record, roster, t]);

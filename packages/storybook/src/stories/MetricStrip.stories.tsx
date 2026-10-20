@@ -39,3 +39,7 @@ export const Prominent: Story = {
     />
   ),
 };
+
+export const Loading: Story = {
+  render: () => <MetricStrip loading loadingMessage="Loading metrics…" className="max-w-5xl" />,
+};

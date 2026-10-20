@@ -14,7 +14,7 @@ import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
 import { Select } from "../ui/select";
-import { Pager, type PagerState } from "../ui/pager";
+import { Pager, type PagerProps, type PagerState } from "../ui/pager";
 import { ToolbarRoot } from "../ui/toolbar";
 import { textRoleVariants } from "../ui/text";
 import {
@@ -254,18 +254,26 @@ function FullResourceToolbar({
   );
 }
 
+/** The paging facts a resource pager needs: the toolbar's, or a bespoke read's offset paging. */
+export type ResourcePagerProps = Pick<
+  ResourceToolbarProps,
+  "pager" | "pagerSubject" | "pagerTotalUnit" | "pagerPageSizeOptions" | "pagerMaxPageSize" | "onPageChange" | "onPageSizeChange"
+> & Pick<PagerProps, "disabled" | "labelElement"> & { chrome?: Pick<ResourceToolbarChrome, "pager"> };
+
 /** The resource pager, placed by the toolbar or by the pane's list body. */
 export function ResourceToolbarPager({ pager, pagerSubject, pagerTotalUnit, pagerPageSizeOptions,
-  pagerMaxPageSize, onPageChange, onPageSizeChange }: ResourceToolbarProps): ReactElement {
+  pagerMaxPageSize, onPageChange, onPageSizeChange, disabled, labelElement }: ResourcePagerProps): ReactElement {
   return <Pager {...pager} subject={pagerSubject} unit={pagerTotalUnit}
     pageSizeOptions={pagerPageSizeOptions} maxPageSize={pagerMaxPageSize}
+    disabled={disabled} labelElement={labelElement}
     onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} />;
 }
 
-/** A pane list's footer row: the resource pager under the rows, right-aligned.
+/** A pane list's footer row: the resource pager under the rows, right-aligned. Takes the
+ * toolbar's props, or only the paging facts when a pane pages a bespoke read.
  * @owner ResourceToolbar
  */
-export function ResourcePaneFooter(toolbar: ResourceToolbarProps): ReactElement | null {
+export function ResourcePaneFooter(toolbar: ResourcePagerProps): ReactElement | null {
   if (toolbar.chrome?.pager === false) return null;
   return <div className="flex shrink-0 justify-end border-t border-border-subtle px-2 py-1"><ResourceToolbarPager {...toolbar} /></div>;
 }

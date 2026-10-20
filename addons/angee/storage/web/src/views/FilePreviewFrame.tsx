@@ -7,7 +7,7 @@ import {
 } from "@angee/ui";
 
 import { StorageFileById } from "../data/documents";
-import { fileTypeLabel } from "../data/file-rows";
+import { useFileTypeLabel } from "../data/file-rows";
 import type { FileActions } from "../data/use-file-actions";
 import { useStorageT } from "../i18n";
 import { FileDetail } from "./FileDetail";
@@ -46,6 +46,7 @@ export function FilePreviewFrame({
     record: file as unknown as Row,
     formReadOnly: false,
   } : null, [file, metadata?.resource.schemaName]);
+  const fileTypeLabel = useFileTypeLabel();
   const type = file ? fileTypeLabel(file) : "";
   const facts = file
     ? t(file.created_by_label ? "file.facts" : "file.factsAnonymous", {

@@ -529,7 +529,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `formatDateTime`, `formatTime` (a row whose day label already names the day),
   `formatDayLabel` (Today, Yesterday, a weekday, then the date — every day
   separator: `PaneLabel` in `TimelineRail`, `MessageDaySeparator`, list date
-  groups) and `formatMonth`. `RelativeTime` / `formatRelativeTime` belong only to
+  groups) and `formatMonth`. A row or facts line renders its stamp through the
+  `AbsoluteTime` fragment (the clock time, the day or both, with the full stamp
+  as the tooltip); `MessageRow` and `StepList` compose it. `RelativeTime` /
+  `formatRelativeTime` belong only to
   a header whose value keeps moving while the page is open (a chat, a running
   job). Never `toLocale*`, never a date-fns `format` with a literal pattern,
   never a raw ISO string as user text. Numbers and counts format through

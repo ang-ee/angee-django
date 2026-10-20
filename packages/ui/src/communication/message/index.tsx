@@ -4,10 +4,10 @@
 // data, the mutations, and any streaming runtime around these. Tokens + `tone` follow
 // the base design system; copy routes through `useUiT`.
 
-import { useEffect, useId, useRef, useState, type HTMLAttributes, type ReactElement, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type HTMLAttributes, type ReactElement, type ReactNode } from "react";
 
 import { Glyph } from "../../chrome/Glyph";
-import { RelativeTime } from "../../fragments/RelativeTime";
+import { AbsoluteTime } from "../../fragments/AbsoluteTime";
 import { useUiT } from "../../i18n";
 import { cn } from "../../lib/cn";
 import { formatNumber } from "../../lib/format-number";
@@ -87,8 +87,10 @@ export interface MessageRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "ti
   avatar?: ReactNode;
   /** The author name / handle. */
   author?: ReactNode;
-  /** The message timestamp — rendered as a `RelativeTime` in the row header. */
+  /** The message timestamp — rendered absolutely (the clock time, full stamp as tooltip) in the row header. */
   timestamp?: Date | string | null;
+  /** Calendar time zone for the timestamp label. */
+  timeZone?: string;
   /** Inline meta beside the timestamp (e.g. an "edited" marker). */
   meta?: ReactNode;
   /** A direction/channel affordance (e.g. a "Email · Inbound" tag) for interleaved
@@ -105,7 +107,7 @@ export interface MessageRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "ti
 }
 
 /** One feed message: a leading avatar column and a content column carrying the author,
- *  an optional channel/direction affordance, a `RelativeTime`, the body, and the
+ *  an optional channel/direction affordance, an `AbsoluteTime`, the body, and the
  *  attachments / reactions / actions slots. The row is a `group`, so a
  *  `MessageActions` slot reveals on hover/focus. Pure presentation — every slot is
  *  composed by the consumer.
@@ -115,6 +117,7 @@ export function MessageRow({
   avatar,
   author,
   timestamp,
+  timeZone,
   meta,
   channel,
   attachments,
@@ -133,7 +136,7 @@ export function MessageRow({
             {author ? <span className="text-13 font-medium text-fg">{author}</span> : null}
             {channel}
             {timestamp ? (
-              <RelativeTime value={timestamp} className={textRoleVariants({ role: "caption" })} />
+              <AbsoluteTime value={timestamp} timeZone={timeZone} className={textRoleVariants({ role: "caption" })} />
             ) : null}
             {meta ? <span className={textRoleVariants({ role: "caption" })}>{meta}</span> : null}
           </div>
@@ -506,9 +509,8 @@ export interface ReactionGroupCopy {
 
 /**
  * Projects transport reaction groups into the presentational `ReactionBar`
- * contract. The caller supplies translated copy formatters so the shared owner
- * keeps the name/no-name grammar while every product routes wording through its
- * own statically discoverable i18n keys.
+ * contract with the copy the caller supplies; `useReactionGroups` is the rendered
+ * surface's entry and supplies the design system's own copy.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -536,6 +538,20 @@ export function reactionsFromGroups(
             }),
     };
   });
+}
+
+/**
+ * The reaction groups of one message as `ReactionBar` reactions, titled with the
+ * shared copy ("👍 reaction, 2" / "👍 by Ada, Grace"): the one owner of that grammar.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function useReactionGroups(groups: readonly ReactionGroup[]): Reaction[] {
+  const t = useUiT();
+  return useMemo(() => reactionsFromGroups(groups, {
+    count: (values) => t("message.reaction.groupCount", values),
+    named: (values) => t("message.reaction.groupNamed", values),
+  }), [groups, t]);
 }
 
 interface ReactionPillProps {

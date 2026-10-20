@@ -8,6 +8,8 @@ import { Tooltip } from "../ui/tooltip";
 export interface OverflowChipListItem extends ChipListItem {
   /** Makes the chip a link to this destination. */
   href?: string;
+  /** This chip's tone when it differs from the list's (a required input among optional ones). */
+  tone?: ChipTone;
 }
 
 export interface OverflowChipListProps {
@@ -34,7 +36,7 @@ export function OverflowChipList({ items, max = 6, tone = "muted", size = "sm", 
   return (
     <span className={cn("inline-flex min-w-0 flex-wrap items-center gap-1", className)}>
       {shown.map((item) => {
-        const chip = <Chip tone={tone} size={size} color={item.color}>{item.label}</Chip>;
+        const chip = <Chip tone={item.tone ?? tone} size={size} color={item.color}>{item.label}</Chip>;
         return item.href
           ? <NavLink key={item.id} href={item.href} variant="muted">{chip}</NavLink>
           : <React.Fragment key={item.id}>{chip}</React.Fragment>;

@@ -137,6 +137,8 @@ export function Editors() {
       allowedValues={["team", "private"]} onSelect={async () => undefined} />
     <U.InlineTextAction value="Handbook" inputLabel="Rename handbook" onSubmit={noop}
       renderTrigger={({ open }) => <U.Button onClick={open}>Rename handbook</U.Button>} />
+    <U.InlineTextAction multiline open value="A longer body the reader edits in place." inputLabel="Edit body"
+      submitLabel="Save" submitVariant="primary" submitUnchanged onSubmit={noop} onCancel={noop} />
   </div></RuntimeFixture>;
 }
 

@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import { EMPTY_VALUE } from "../lib/empty-value";
+
 import { tv } from "../lib/variants";
 import {
   DefinitionPair,
@@ -32,7 +34,7 @@ export const InfoRow = React.forwardRef<HTMLDivElement, InfoRowProps>(
     {
       action,
       className,
-      emptyValue = "-",
+      emptyValue = EMPTY_VALUE,
       label,
       value,
       ...props

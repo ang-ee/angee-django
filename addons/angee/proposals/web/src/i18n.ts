@@ -19,7 +19,6 @@ export const enProposalsMessages: Record<string, string> = {
   "comparison.edit": "Edit {subject}",
   "comparison.postingTo": "Posting to",
   "comparison.save": "Save",
-  "comparison.cancel": "Cancel",
   "comparison.saveError": "This answer could not be saved.",
   "comparison.statementHeading": "Statements",
   "comparison.statementHint": "One statement per responder.",

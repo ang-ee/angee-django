@@ -56,6 +56,12 @@ export interface AuthoredOperationOptions {
 
 export interface AuthoredQueryOptions extends AuthoredOperationOptions {
   enabled?: boolean;
+  /**
+   * `false` turns off refine's generic error notification, for a read whose
+   * surface renders the failure itself (an error banner in place of the record).
+   * The auth policy still runs and the query still reports its error.
+   */
+  errorNotification?: false;
   /** Retain the last result while a new variable set loads, using native Query placeholders. */
   keepPreviousData?: boolean;
   /** Exact rows whose live changes invalidate this read; omitted keeps model-wide semantics. */
@@ -103,14 +109,14 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
     refetchInterval: options.refetchInterval,
   });
   useAuthoredLiveInterest(options.enabled ?? true, models);
-  useAuthoredErrorPolicy([configured.queryKey]);
+  useAuthoredErrorPolicy([configured.queryKey], { notify: options.errorNotification !== false });
   return result;
 }
 
 /** Native query results addressed by a domain label; labels never key the cache. */
 export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
   scopes: readonly AuthoredQueryBatchScope<TDocument>[],
-  options: AuthoredOperationOptions & { enabled?: boolean } = {},
+  options: AuthoredOperationOptions & Pick<AuthoredQueryOptions, "enabled" | "errorNotification"> = {},
 ): ReadonlyMap<string, UseQueryResult<DocumentData<TDocument>, Error>> {
   const activeProvider = useActiveDataProviderName();
   const provider = options.dataProviderName ?? activeProvider ?? "default";
@@ -127,7 +133,7 @@ export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
   const results = useQueries({ queries });
   const models = useStableArray([...new Set(scopes.flatMap((scope) => scope.models ?? []))].sort());
   useAuthoredLiveInterest(options.enabled ?? true, models);
-  useAuthoredErrorPolicy(queries.map((query) => query.queryKey));
+  useAuthoredErrorPolicy(queries.map((query) => query.queryKey), { notify: options.errorNotification !== false });
   return new Map(scopes.map((scope, index) => [scope.key, results[index]!]));
 }
 

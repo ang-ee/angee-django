@@ -1,3 +1,4 @@
+import * as React from "react";
 // Presentational chat primitives — styled slots for an agent/comment chat surface.
 // No `@assistant-ui`/`streamdown` coupling: a consumer (the agents addon) wires the
 // streaming runtime and markdown around these. Tokens + `tone`/`Fill` follow the base
@@ -22,6 +23,7 @@ import { Chip } from "../../ui/chip";
 import { CodeBlock } from "../../ui/code";
 import { POPUP_BASE, POPUP_LIST } from "../../ui/popover";
 import { StatusDot } from "../../ui/status-icon";
+import { Skeleton } from "../../ui/skeleton";
 import { textRoleVariants } from "../../ui/text";
 import { formatJson } from "../../widgets/json-format";
 
@@ -127,9 +129,13 @@ export interface SessionRailProps extends Omit<HTMLAttributes<HTMLElement>, "tit
   label: string;
   /** Optional header slot above the list — e.g. a "+ New" control. */
   action?: ReactNode;
-  /** Marks the list busy while sessions load (skeleton rows render as children). */
+  /** Marks the list busy while sessions load; the rail renders its own skeleton rows meanwhile. */
   busy?: boolean;
-  children: ReactNode;
+  /** How many skeleton rows a busy rail shows (default 5). */
+  busyCount?: number;
+  /** The hint shown when there are no sessions and the rail is not busy. */
+  empty?: ReactNode;
+  children?: ReactNode;
 }
 
 /** The left rail of a sessions view: a labelled `nav` with an optional header action
@@ -141,10 +147,13 @@ export function SessionRail({
   label,
   action,
   busy,
+  busyCount = 5,
+  empty,
   className,
   children,
   ...props
 }: SessionRailProps): ReactElement {
+  const rows = React.Children.toArray(children);
   return (
     <nav
       aria-label={label}
@@ -155,7 +164,13 @@ export function SessionRail({
     >
       {action ? <div className="border-b border-border-subtle p-2">{action}</div> : null}
       <ul aria-busy={busy || undefined} className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
-        {children}
+        {busy && rows.length === 0
+          ? Array.from({ length: busyCount }, (_, index) => (
+            <li key={index} aria-hidden className="px-2 py-1.5"><Skeleton shape="text" size="md" /></li>
+          ))
+          : rows.length === 0 && empty
+            ? <li className={cn(textRoleVariants({ role: "meta" }), "px-2 py-3")}>{empty}</li>
+            : rows}
       </ul>
     </nav>
   );

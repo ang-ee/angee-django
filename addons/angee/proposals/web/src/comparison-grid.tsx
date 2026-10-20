@@ -1,6 +1,6 @@
 import { holdsPermission } from "@angee/metadata";
 import { extractActionOutcome } from "@angee/refine";
-import { Avatar, Chip, Button, FieldDescriptorControl, FormView, Glyph, Select, Table, TableBody, NavLink, TableCell, TableHead, TableHeader, TableRow, VisibilityControl, avatarInitials, canonicalOptionValue, cn, optionLabel, textRoleVariants, useAuthoredResourceMutation, useEnumOptions, useRuntimeAuth, useRuntimeViewAs, type FieldDescriptor, type WidgetOption } from "@angee/ui";
+import { Avatar, Chip, Button, FieldDescriptorControl, FormView, Glyph, InlineTextAction, Select, Table, TableBody, NavLink, TableCell, TableHead, TableHeader, TableRow, VisibilityControl, avatarInitials, canonicalOptionValue, cn, errorMessage, optionLabel, textRoleVariants, useAuthoredResourceMutation, useEnumOptions, useRuntimeAuth, useRuntimeViewAs, type FieldDescriptor, type WidgetOption } from "@angee/ui";
 import * as React from "react";
 
 import type { ComparisonAnswer, ComparisonProposal, ComparisonTopic } from "./comparison-data";
@@ -11,7 +11,6 @@ import {
 } from "./comparison-model";
 import { ANSWER_VISIBILITY } from "./documents";
 import { useProposalsT, type ProposalsT } from "./i18n";
-import { InlineBodyEditor } from "./inline-body-editor";
 import { ANSWER_MODEL } from "./resources";
 
 const FACT_DESCRIPTORS: Readonly<Record<ComparisonFactField, FieldDescriptor>> = {
@@ -227,6 +226,7 @@ function EditableAnswerCell({ row, proposal, answer, options }: {
   const subject = String(row.topic.name ?? row.topic.key ?? "");
   const writer = useComparisonAnswerWrite();
   const [editing, setEditing] = React.useState(false);
+  const [failure, setFailure] = React.useState<string | null>(null);
   const [visibility, setVisibility] = React.useState(
     canonicalOptionValue(options, answer?.visibility) ?? options[0]?.value ?? "round",
   );
@@ -252,8 +252,9 @@ function EditableAnswerCell({ row, proposal, answer, options }: {
     ? options.filter((option) => (answer.allowed_visibility ?? []).some((allowed) =>
       canonicalOptionValue(options, allowed) === option.value))
     : options;
-  return <InlineBodyEditor value={String(answer?.body ?? "")} label={t("comparison.writePrompt", { subject })}
-    pending={writer.pending} submitLabel={t("comparison.save")} fallback={t("comparison.saveError")}
+  return <InlineTextAction multiline open value={String(answer?.body ?? "")} inputLabel={t("comparison.writePrompt", { subject })}
+    placeholder={t("comparison.writePrompt", { subject })} busy={writer.pending} submitLabel={t("comparison.save")}
+    submitVariant="primary" submitUnchanged error={failure}
     extra={<span className={textRoleVariants({ role: "caption", className: "inline-flex items-center gap-2" })}>
       <span>{t("comparison.postingTo")}</span>
       <Select size="sm" className="min-w-36 w-auto" aria-label={t("comparison.postingTo")}
@@ -261,10 +262,15 @@ function EditableAnswerCell({ row, proposal, answer, options }: {
         value={visibility} onValueChange={(value) => setVisibility(value)}
         readOnly={choices.length < 2} />
     </span>}
-    onSave={async (body) => {
-      const saved = await writer.save(proposal.id, row.topic.id, body, visibility, answer);
-      if (saved) setEditing(false);
-      return Boolean(saved);
+    onSubmit={async (body) => {
+      try {
+        const saved = await writer.save(proposal.id, row.topic.id, body, visibility, answer);
+        if (saved) { setFailure(null); setEditing(false); }
+        return Boolean(saved);
+      } catch (error) {
+        setFailure(errorMessage(error, t("comparison.saveError")));
+        return false;
+      }
     }}
     onCancel={() => setEditing(false)} />;
 }

@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import { EMPTY_VALUE } from "../lib/empty-value";
+
 import { tv } from "../lib/variants";
 import { SectionEyebrow } from "../ui/section-eyebrow";
 import {
@@ -49,7 +51,7 @@ export const metaGridVariants = tv({
  * @kind fragment
  */
 export const MetaGrid = React.forwardRef<HTMLDListElement, MetaGridProps>(
-  function MetaGrid({ className, emptyValue = "-", rows, ...props }, ref) {
+  function MetaGrid({ className, emptyValue = EMPTY_VALUE, rows, ...props }, ref) {
     const styles = metaGridVariants();
 
     return (

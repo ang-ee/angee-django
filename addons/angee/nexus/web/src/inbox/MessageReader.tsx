@@ -37,7 +37,8 @@ export function InboxMessageReader({
   const query = useAuthoredQuery(
     InboxMessage,
     { ...scope, id: navigation.message },
-    { models: INBOX_MODELS, enabled: Boolean(navigation.message) },
+    // The reader shows a missing message itself (the banner with Retry), so the read raises no toast.
+    { models: INBOX_MODELS, enabled: Boolean(navigation.message), errorNotification: false },
   );
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string>();

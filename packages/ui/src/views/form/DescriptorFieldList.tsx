@@ -1,4 +1,7 @@
 import * as React from "react";
+
+import { useAppRuntime } from "../../runtime";
+import { resolveFieldLabels } from "./field-labels";
 import { Controller, useFormContext, useWatch } from "react-hook-form";
 import { canonicalModelLabelOrNull, modelMetadataForLabel, useSchemaFieldMetadata } from "@angee/metadata";
 import type { CrudFilter } from "@refinedev/core";
@@ -102,7 +105,8 @@ export function DescriptorFieldList({ fields, resolvedFields, readOnly = false }
   const form = useFormContext<Record<string, unknown>>();
   if (!form) throw new Error("DescriptorFieldList requires a React Hook Form FormProvider.");
   const values = useWatch({ control: form.control });
-  const renderedFields = fields === undefined ? resolvedFields : resolveDescriptorFields(fields, values);
+  const { i18n } = useAppRuntime();
+  const renderedFields = resolveFieldLabels(fields === undefined ? resolvedFields : resolveDescriptorFields(fields, values), i18n);
   return <>{renderedFields.map((field) => (
     <Controller key={field.name} name={field.name} control={form.control} exact={false}
       render={({ field: control, fieldState }) => (

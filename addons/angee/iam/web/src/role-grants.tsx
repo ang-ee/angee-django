@@ -7,10 +7,9 @@ import { useIamT } from "./i18n";
 /** Shared presentation and exact-tuple revoke for the hub and overview. */
 export function useRoleGrantColumns(): readonly ListColumn<IAMGrant>[] {
   const t = useIamT();
-  // `sublineColumn` directly: RowsListView does not resolve `subline` for local rows (a ui gap).
   return useMemo(() => [
-    { field: "subject_label", header: t("grants.column.subject"), sublineColumn: { field: "subject" } },
-    { field: "role_name", header: t("grants.column.role"), sublineColumn: { field: "role" } },
+    { field: "subject_label", header: t("grants.column.subject"), subline: "subject" },
+    { field: "role_name", header: t("grants.column.role"), subline: "role" },
     { field: "caveat_name", header: t("grants.column.condition"), render: (row: IAMGrant) => row.caveat_name ? <Code truncate>{row.caveat_name}</Code> : null },
     { field: "namespace", header: t("grants.column.namespace") },
   ], [t]);

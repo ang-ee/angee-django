@@ -31,6 +31,7 @@ import {
   type ListColumn,
 } from "./resource-view-list-body";
 import { ResourceListFrame } from "./ResourceListFrame";
+import { columnsWithMetadataDefaults } from "./model-metadata-defaults";
 import {
   listChromeState,
   type ListSearchDeclaration,
@@ -165,7 +166,7 @@ function ValidatedRowsListView<TRow extends StringIdRow>(
 function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   rows,
   query,
-  columns,
+  columns: declaredColumns,
   search: searchDeclaration,
   filterOptions: explicitFilterOptions,
   customFilterFields: explicitCustomFilterFields,
@@ -196,6 +197,9 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   resourceView: ResourceViewContextValue;
 }): React.ReactElement {
   const t = useUiT();
+  // Local rows carry no model metadata; the column defaults still resolve a declared
+  // `subline` into its cell column, as the list frame does for a resource.
+  const columns = React.useMemo(() => columnsWithMetadataDefaults(declaredColumns, null), [declaredColumns]);
   const rowActionSurface = useRowActionsSurface(rowActions);
   const [layout, setLayout] = React.useState<RowLayout>("list");
   const effectiveGroupStack = resourceView.state.groupStack;

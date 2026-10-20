@@ -200,6 +200,7 @@ export const enOperatorMessages: Record<string, string> = {
   "secrets.column.envVar": "Env var",
   "secrets.required": "Required",
   "secrets.generated": "Generated",
+  "secrets.protectedHint": "A required or generated secret cannot be deleted.",
   "secrets.delete": "Delete",
   "secrets.delete.confirm.title": "Delete secret?",
   "secrets.delete.confirm.body":

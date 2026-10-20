@@ -357,6 +357,7 @@ export {
 export {
   RemovedDisclosure,
   RemovedItem,
+  RemovedList,
   RemovedRecords,
   TRASH_PERMISSION,
   TRASH_REASON_MAX_LENGTH,
@@ -367,6 +368,7 @@ export {
   useTrashRowActions,
   type RemovedDisclosureProps,
   type RemovedItemProps,
+  type RemovedListProps,
   type RemovedRecordsProps,
   type TrashActionOptions,
   type TrashPrompt,

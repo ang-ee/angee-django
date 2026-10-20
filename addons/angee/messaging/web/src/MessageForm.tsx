@@ -4,6 +4,7 @@ import {
   NavLink, registerForm, useResourceRecordHrefLookup,
   type ListColumn, type RecordPanelContext, type RecordTabDescriptor,
   type RegisteredFormProps, useTrashActions,
+  useMimeLabel,
   useResolvedWidget,
 } from "@angee/ui";
 import { useModelMetadata } from "@angee/metadata";
@@ -55,11 +56,12 @@ const PART_FIELDS = [
 function partColumns(
   t: ReturnType<typeof useMessagingT>,
   recordHref: ReturnType<typeof useResourceRecordHrefLookup>,
+  mimeLabel: (mime: string | null | undefined) => string,
 ): readonly ListColumn<PartRow>[] {
   return [
     { field: "position" },
     { field: "role" },
-    { field: "type" },
+    { field: "type", render: (row) => mimeLabel(row.type) },
     { field: "name" },
     {
       field: "fragment.part_count",
@@ -113,7 +115,8 @@ function partColumns(
 function MessagePartsTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useMessagingT();
   const recordHref = useResourceRecordHrefLookup();
-  const columns = React.useMemo(() => partColumns(t, recordHref), [t, recordHref]);
+  const mimeLabel = useMimeLabel();
+  const columns = React.useMemo(() => partColumns(t, recordHref, mimeLabel), [t, recordHref, mimeLabel]);
   return (
     <ListView<PartRow>
       resource={PART_MODEL}

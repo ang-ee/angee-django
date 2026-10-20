@@ -4,7 +4,7 @@ import type { ResourceFilter } from "@angee/metadata";
 import { Column, FilePickerButton, Glyph, List, UploadDropTarget, formatSize, type ListProps, type ResourceListSnapshot } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
-import { fileDragPayload, fileTypeLabel, type StorageFileRow } from "../data/file-rows";
+import { fileDragPayload, useFileTypeLabel, type StorageFileRow } from "../data/file-rows";
 import type { StorageUpload, UploadTarget } from "../data/use-upload";
 import { fileGalleryCard } from "./file-columns";
 import { StorageUploadTasks } from "./StorageUploadTasks";
@@ -47,6 +47,7 @@ export function FileBrowserContent({
   canUpload,
 }: FileBrowserContentProps): ReactElement {
   const t = useStorageT();
+  const fileTypeLabel = useFileTypeLabel();
 
   function startUpload(files: readonly File[]): void {
     if (!canUpload || files.length === 0) return;

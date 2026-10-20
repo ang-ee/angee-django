@@ -18,12 +18,11 @@ vi.mock("@angee/ui", async () => {
   const actual = await vi.importActual<typeof import("@angee/ui")>("@angee/ui");
   return {
     ...actual,
-    ActionFormDialog: () => null,
-    Button: ({ children }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-      <button type="button">{children}</button>
+    // The verb reaches the record action bar through `RecordVerb`; the lifecycle
+    // predicates are what this file asserts, so the owner renders as a labelled button.
+    RecordVerb: ({ action }: { action: { label: React.ReactNode } }) => (
+      <button type="button">{action.label}</button>
     ),
-    Glyph: () => null,
-    useConfirm: () => vi.fn(async () => true),
     useRecordChromeContext: () => mocks.chrome,
     useRecordChromeActionMutation: () => [vi.fn(), { fetching: false, error: null }],
     useRecordChromeActionOutcome: () => [vi.fn(), { fetching: false, error: null }],

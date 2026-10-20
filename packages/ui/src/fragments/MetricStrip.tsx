@@ -11,6 +11,7 @@ import { tv, type VariantProps } from "../lib/variants";
 import { Chip } from "../ui/chip";
 import { Card } from "../ui/card";
 import { IconTile } from "../ui/icon-tile";
+import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import {
   DefinitionPair,
   definitionFromTuple,
@@ -98,6 +99,11 @@ export type MetricStripProps = Omit<
   density?: MetricDensity;
   items?: readonly DefinitionPairTuple[];
   metrics?: readonly MetricTileValue[];
+  /** Renders skeleton tiles while the metrics load. */
+  loading?: boolean;
+  /** How many skeleton tiles a loading strip shows (default 4). */
+  loadingCount?: number;
+  loadingMessage?: string;
 };
 
 /**
@@ -216,10 +222,24 @@ function AnimatedMetricTileNumber({
  * @kind fragment
  */
 export const MetricStrip = React.forwardRef<HTMLDListElement, MetricStripProps>(
-  function MetricStrip({ className, density = "compact", items, metrics, ...props }, ref) {
+  function MetricStrip({ className, density = "compact", items, metrics, loading = false, loadingCount = 4, loadingMessage, ...props }, ref) {
     const styles = metricStripVariants({ density });
     const resolved: readonly MetricTileValue[] =
       metrics ?? items?.map((item) => definitionFromTuple(item)) ?? [];
+
+    if (loading) {
+      // A strip that announces itself is a status; one inside another skeleton status (a
+      // detail surface) is plain hidden geometry, so the page keeps one live region.
+      const tiles = Array.from({ length: loadingCount }, (_, index) => (
+        <Card key={index} data-slot="metric-skeleton" className={styles.tile()} density="sm">
+          <Skeleton shape="text" size="sm" className="w-16" />
+          <Skeleton shape="text" size="lg" className="mt-3 w-24" />
+        </Card>
+      ));
+      return loadingMessage
+        ? <SkeletonStatus label={loadingMessage} className={cn(styles.root(), className)}>{tiles}</SkeletonStatus>
+        : <div aria-hidden="true" className={cn(styles.root(), className)}>{tiles}</div>;
+    }
 
     return (
       <dl ref={ref} className={cn(styles.root(), className)} {...props}>

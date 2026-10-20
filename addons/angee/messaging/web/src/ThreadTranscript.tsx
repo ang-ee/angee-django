@@ -16,17 +16,14 @@ import {
   PaneToolbar,
   ReactionBar,
   avatarInitials,
-  formatDateTime,
   formatDayLabel,
-  formatTime,
-  reactionsFromGroups,
+  useReactionGroups,
   type MessagePart,
 } from "@angee/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { useMessagingT } from "./i18n";
 import { MessageSourceCopies } from "./MessageSourceCopies";
-import { messagingReactionCopy } from "./reaction-copy";
 import type { ThreadTranscriptRow } from "./documents";
 import { messageFeedRows } from "./message-feed";
 import { useThreadMessageFeed } from "./thread-message-feed";
@@ -333,10 +330,7 @@ function TranscriptMessage({ message, t, timezone, onPreviewFile, actions, copie
   const direction = message.direction;
   const author = senderDisplayName(message.sender, t("message.author"));
   const timestamp = message.sent_at ?? message.created_at;
-  const reactions = reactionsFromGroups(
-    message.reaction_groups,
-    messagingReactionCopy(t),
-  );
+  const reactions = useReactionGroups(message.reaction_groups);
   const channel = direction === "INTERNAL"
     ? <Chip tone="warning">{t("transcript.noteLabel")}</Chip>
     : direction === "OUTBOUND"
@@ -347,8 +341,8 @@ function TranscriptMessage({ message, t, timezone, onPreviewFile, actions, copie
       avatar={<Avatar size="sm" src={senderAvatarUrl(message.sender)} initials={avatarInitials(author)} alt={author} />}
       author={author}
       channel={channel}
-      // A transcript row reads with its absolute time; relative time is for live headers.
-      meta={timestamp ? <time dateTime={timestamp} title={formatDateTime(timestamp, { timeZone: timezone })}>{formatTime(timestamp, { timeZone: timezone })}</time> : undefined}
+      timestamp={timestamp}
+      timeZone={timezone}
       reactions={reactions.length > 0 ? <ReactionBar reactions={reactions} label={t("message.reactions")} /> : undefined}
       actions={actions || copies ? <div className="mt-1 flex flex-wrap items-center gap-2">{copies}{actions}</div> : undefined}
     >

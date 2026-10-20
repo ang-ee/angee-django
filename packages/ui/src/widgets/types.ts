@@ -147,6 +147,8 @@ export interface FieldPresentation {
    * field (`"currency"`) or a one-hop related path (`"order.currency"`).
    */
   currencyField?: string;
+  /** For a money widget: the row path holding the presentation precision (a company's display places). */
+  fractionDigitsField?: string;
   /** Status widget shape; absent fields use the status widget's pill default. */
   statusDisplay?: StatusDisplay;
 }

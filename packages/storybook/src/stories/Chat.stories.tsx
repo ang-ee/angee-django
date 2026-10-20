@@ -59,6 +59,20 @@ export const Bar: Story = {
   ),
 };
 
+export const SessionsLoading: Story = {
+  render: () => (
+    // The rail owns its loading rows and its empty hint; the consumer passes `busy` and `empty`.
+    <div className="flex h-80 w-60 gap-4">
+      <div className="flex-1 overflow-hidden rounded-6 border border-border-subtle bg-sheet-2">
+        <SessionRail label="Rooms" busy empty="Start a room or a direct message." />
+      </div>
+      <div className="flex-1 overflow-hidden rounded-6 border border-border-subtle bg-sheet-2">
+        <SessionRail label="Rooms" empty="Start a room or a direct message." />
+      </div>
+    </div>
+  ),
+};
+
 export const Sessions: Story = {
   render: () => (
     // The left rail of the full-page sessions view: a labelled `nav` with a "+ New" header

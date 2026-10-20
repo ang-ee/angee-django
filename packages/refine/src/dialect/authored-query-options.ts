@@ -170,13 +170,13 @@ const handledQueryErrors = new WeakMap<Query, {
   action?: object;
 }>();
 
-export function useAuthoredErrorPolicy(keys: readonly QueryKey[]): void {
+export function useAuthoredErrorPolicy(keys: readonly QueryKey[], { notify: notifyErrors = true }: { notify?: boolean } = {}): void {
   const client = useQueryClient();
   const { mutate: checkError } = useOnError();
   const notify = useHandleNotification();
   const translate = useTranslate();
-  const callbacks = useRef({ checkError, notify, translate });
-  callbacks.current = { checkError, notify, translate };
+  const callbacks = useRef({ checkError, notify, translate, notifyErrors });
+  callbacks.current = { checkError, notify, translate, notifyErrors };
   const keySignature = JSON.stringify(
     [...new Set(keys.map((queryKey) =>
       client.defaultQueryOptions({ queryKey }).queryHash,
@@ -202,8 +202,9 @@ export function useAuthoredErrorPolicy(keys: readonly QueryKey[]): void {
       ) return;
       handledQueryErrors.set(query, { errorUpdateCount, errorUpdatedAt, action });
       const error = query.state.error as Error & { statusCode?: number };
-      const { checkError, notify, translate } = callbacks.current;
+      const { checkError, notify, translate, notifyErrors } = callbacks.current;
       checkError(error);
+      if (!notifyErrors) return;
       notify(undefined, {
         key: "post-notification",
         message: translate(

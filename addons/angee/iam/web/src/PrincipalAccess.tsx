@@ -85,17 +85,16 @@ export function PrincipalAccessTab(): React.ReactElement {
     (row: { direct: boolean }) => (row.direct ? t("principalAccess.direct") : t("principalAccess.inherited")),
     [t],
   );
-  // `sublineColumn` directly: RowsListView does not resolve `subline` for local rows (a ui gap).
   const roleColumns = React.useMemo<readonly ListColumn<IAMPrincipalRole>[]>(() => [
-    { field: "role_name", header: t("principalAccess.role"), sublineColumn: { field: "role" } },
+    { field: "role_name", header: t("principalAccess.role"), subline: "role" },
     { field: "namespace", header: t("principalAccess.namespace") },
-    { field: "source_label", header: t("principalAccess.source"), sublineColumn: { field: "source" } },
+    { field: "source_label", header: t("principalAccess.source"), subline: "source" },
     { field: "direct", header: t("principalAccess.scope"), render: scope },
   ], [scope, t]);
   const grantColumns = React.useMemo<readonly ListColumn<IAMPrincipalGrant>[]>(() => [
     { field: "resource", header: t("principalAccess.target"), render: (row) => <AccessTarget row={row} /> },
     { field: "relation", header: t("principalAccess.relation") },
-    { field: "source_label", header: t("principalAccess.source"), sublineColumn: { field: "source" } },
+    { field: "source_label", header: t("principalAccess.source"), subline: "source" },
     { field: "direct", header: t("principalAccess.scope"), render: scope },
     { field: "caveat_name", header: t("principalAccess.condition") },
   ], [scope, t]);

@@ -233,7 +233,8 @@ function facetDescriptor(props: FacetProps): FacetDescriptor {
 }
 
 function fieldDescriptor(props: FieldProps): FieldDescriptor {
-  return cachedDescriptor(fieldDescriptorCache, props, () => props);
+  // A message-key label rides in the descriptor until the form surface resolves it.
+  return cachedDescriptor(fieldDescriptorCache, props, () => props as FieldDescriptor);
 }
 
 function actionDescriptor(props: ActionProps): ActionDescriptor {
@@ -261,7 +262,8 @@ function actionDescriptor(props: ActionProps): ActionDescriptor {
 
 function groupDescriptor(props: GroupProps): GroupDescriptor {
   return cachedDescriptor(groupDescriptorCache, props, () => ({
-    ...(props.label !== undefined ? { label: props.label } : {}),
+    // A message-key label rides in the descriptor until the form surface resolves it.
+    ...(props.label !== undefined ? { label: props.label as ReactNode } : {}),
     ...(props.hint !== undefined ? { hint: props.hint } : {}),
     ...(props.audience !== undefined ? { audience: props.audience } : {}),
     ...(props.columns !== undefined ? { columns: props.columns } : {}),
