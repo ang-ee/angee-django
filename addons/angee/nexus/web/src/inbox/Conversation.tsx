@@ -1,8 +1,9 @@
-import { createContext, useContext, type ReactElement } from "react";
+import { createContext, useContext, useEffect, useState, type ReactElement } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { ThreadTranscript } from "@angee/messaging";
 import { Button, Chip, CommandBand, ErrorBanner, Glyph, PaneToolbarHost, RecordHeader } from "@angee/ui";
 import { InboxTranscriptMatches } from "./documents";
+import type { DocumentType } from "@angee/gql/console";
 import { INBOX_MODELS, type InboxNavigation, type InboxScope } from "./state";
 import { useNexusT } from "../i18n";
 
@@ -19,48 +20,82 @@ export function InboxConversation({
   scope: InboxScope;
 }) {
   const t = useNexusT();
+  // The match window inside the transcript reports its read; the band and header live above it.
+  const [matches, setMatches] = useState<TranscriptMatches | null>(null);
+  const [error, setError] = useState<string | null>(null);
   return (
     <section
       className="flex h-full min-h-0 flex-col"
       aria-label={t("inbox.conversation")}
     >
-      <ThreadTranscript
-        threadId={navigation.thread}
-        anchor={navigation.at}
-        timezone={scope.coverage.timezone}
-        onAnchorChange={(at) => navigation.patch({ at: at || undefined })}
-        renderWindow={(messages, children) => (
-          <MatchWindow
-            scope={scope}
-            navigation={navigation}
-            ids={messages.map((message) => message.id)}
-          >
-            {children}
-          </MatchWindow>
-        )}
-        renderMessageActions={(message) => (
-          <MessageActions id={message.id} navigation={navigation} />
-        )}
-        onPreviewFile={(message, part) => {
-          if (part.file?.id) navigation.previewFile(part.file.id, message.id);
-        }}
+      <CommandBand
+        verbs={
+          <Button size="sm" variant="ghost" onClick={navigation.results}>
+            <Glyph name="chevron-left" />
+            {t("inbox.backResults")}
+          </Button>
+        }
+        // The matches walk as the band's pager: the previous and next matching message.
+        navigation={matches ? {
+          total: matches.count,
+          onPrev: matches.previous ? () => navigation.patch({ at: `message:${matches.previous}` }) : undefined,
+          onNext: matches.next ? () => navigation.patch({ at: `message:${matches.next}` }) : undefined,
+        } : null}
       />
+      <RecordHeader
+        headingLevel={1}
+        crumbs={t("inbox.conversation")}
+        title={matches?.thread.conversation_label || t("inbox.conversation")}
+        meta={matches ? t("inbox.transcriptCount", { count: matches.count, total: matches.total }) : t("inbox.loading")}
+      />
+      <ErrorBanner description={error} />
+      {/* The transcript's own controls publish into this pane's toolbar row. */}
+      <PaneToolbarHost>
+        <ThreadTranscript
+          threadId={navigation.thread}
+          anchor={navigation.at}
+          timezone={scope.coverage.timezone}
+          onAnchorChange={(at) => navigation.patch({ at: at || undefined })}
+          renderWindow={(messages, children) => (
+            <MatchWindow
+              scope={scope}
+              navigation={navigation}
+              ids={messages.map((message) => message.id)}
+              onMatches={setMatches}
+              onError={setError}
+            >
+              {children}
+            </MatchWindow>
+          )}
+          renderMessageActions={(message) => (
+            <MessageActions id={message.id} navigation={navigation} />
+          )}
+          onPreviewFile={(message, part) => {
+            if (part.file?.id) navigation.previewFile(part.file.id, message.id);
+          }}
+        />
+      </PaneToolbarHost>
     </section>
   );
 }
+
+type TranscriptMatches = NonNullable<DocumentType<typeof InboxTranscriptMatches>["inbox_transcript_matches"]>;
 
 function MatchWindow({
   scope,
   navigation,
   ids,
   children,
+  onMatches,
+  onError,
 }: {
   scope: InboxScope;
   navigation: InboxNavigation;
   ids: string[];
   children: ReactElement;
+  onMatches: (matches: TranscriptMatches | null) => void;
+  onError: (message: string | null) => void;
 }) {
-  const t = useNexusT();
   const query = useAuthoredQuery(
     InboxTranscriptMatches,
     {
@@ -73,34 +108,13 @@ function MatchWindow({
     },
     { models: INBOX_MODELS },
   );
-  const matches = query.data?.inbox_transcript_matches;
+  const matches = query.data?.inbox_transcript_matches ?? null;
+  const errorMessage = query.error?.message ?? null;
+  useEffect(() => { onMatches(matches); }, [matches, onMatches]);
+  useEffect(() => { onError(errorMessage); }, [errorMessage, onError]);
   return (
     <Matches.Provider value={matches?.visible ?? []}>
-      <CommandBand
-        verbs={
-          <Button size="sm" variant="ghost" onClick={navigation.results}>
-            <Glyph name="chevron-left" />
-            {t("inbox.backResults")}
-          </Button>
-        }
-        // The matches walk as the band's pager: the previous and next matching message.
-        navigation={matches ? {
-          current: matches.count ? undefined : undefined,
-          total: matches.count,
-          onPrev: matches.previous ? () => navigation.patch({ at: `message:${matches.previous}` }) : undefined,
-          onNext: matches.next ? () => navigation.patch({ at: `message:${matches.next}` }) : undefined,
-        } : null}
-      />
-      <RecordHeader
-        density="compact"
-        headingLevel={1}
-        crumbs={t("inbox.conversation")}
-        title={matches?.thread.conversation_label || t("inbox.conversation")}
-        meta={matches ? t("inbox.transcriptCount", { count: matches.count, total: matches.total }) : t("inbox.loading")}
-      />
-      <ErrorBanner description={query.error?.message ?? null} />
-      {/* The transcript's own controls publish into this pane's toolbar row. */}
-      <PaneToolbarHost>{children}</PaneToolbarHost>
+      {children}
     </Matches.Provider>
   );
 }

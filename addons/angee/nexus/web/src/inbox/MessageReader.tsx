@@ -43,6 +43,11 @@ export function InboxMessageReader({
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const message = query.data?.inbox_message.message;
+  const uses = useMemo(() => {
+    const byTarget = new Map<string, number>();
+    for (const use of query.data?.inbox_message.uses ?? []) byTarget.set(use.target, (byTarget.get(use.target) ?? 0) + use.count);
+    return [...byTarget].map(([target, count]) => ({ target, count }));
+  }, [query.data?.inbox_message.uses]);
   async function copyLink() {
     try {
       await navigator.clipboard.writeText(window.location.href);
@@ -103,7 +108,6 @@ export function InboxMessageReader({
         chrome={chrome}
       />
       <RecordHeader
-        density="compact"
         headingLevel={1}
         crumbs={[t("inbox.message"), channel, direction].filter(Boolean).join(" · ")}
         title={message?.title || t("inbox.message")}
@@ -126,24 +130,18 @@ export function InboxMessageReader({
               const file = message.parts.find((part) => part.id === partId)?.file;
               if (file) navigation.previewFile(file.id, message.id);
             }}
-            renderPartActions={(part) => (
-              <div className="flex flex-wrap gap-2">
-                {query.data?.inbox_message.uses
-                  .filter((use) => use.part_id === part.id)
-                  .map((use) => (
-                    <Button
-                      key={use.target}
-                      size="sm"
-                      variant="link"
-                      onClick={() => navigation.connect(use.target, message.id)}
-                    >
-                      <Glyph name="link" />
-                      {t("inbox.accessibleUses", { count: use.count })}
-                    </Button>
-                  ))}
-              </div>
-            )}
           >
+            {/* The message's uses, once under the body: one verb per target, counts summed over its parts. */}
+            {uses.length ? (
+              <div className="flex flex-wrap gap-2">
+                {uses.map((use) => (
+                  <Button key={use.target} size="sm" variant="link" onClick={() => navigation.connect(use.target, message.id)}>
+                    <Glyph name="link" />
+                    {t("inbox.accessibleUses", { count: use.count })}
+                  </Button>
+                ))}
+              </div>
+            ) : null}
             {!query.data?.inbox_message.matches ? (
               <Alert tone="info" format="banner">
                 {t("inbox.outside")}

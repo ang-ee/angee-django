@@ -86,7 +86,7 @@ test("routed record uses the framework action menu, facts and retained JSON", as
 
 test("empty run facts are omitted", async () => {
   render(<RunStory run={runFixture({ finished_at: null })} />);
-  await screen.findByRole("heading", { name: "Record review run" });
+  await screen.findByRole("heading", { name: "Record review" });
   for (const label of ["Finished", "Outcome", "Reprocess of", "Parent run", "Trigger event"]) {
     expect(screen.queryByText(label)).toBeNull();
   }
@@ -95,7 +95,7 @@ test("empty run facts are omitted", async () => {
 test("populated run facts remain visible", async () => {
   render(<RunStory run={runFixture({ outcome: "approved", outcome_label: "Approved", reprocess_of: { id: "wfr_previous" },
     parent_step: { id: "wsr_parent", run: { id: "wfr_parent" } }, trigger_event: { id: "wte_review" } })} />);
-  await screen.findByRole("heading", { name: "Record review run" });
+  await screen.findByRole("heading", { name: "Record review" });
   await screen.findByText("Approved");
   for (const label of ["Finished", "Outcome", "Reprocess of", "Parent run", "Trigger event"]) {
     expect(screen.getByText(label)).toBeTruthy();
@@ -170,7 +170,7 @@ test("reprocess confirms then navigates to the returned replacement through the 
   await waitFor(() => expect(requests.filter(({ query }) => query.includes("mutation"))).toHaveLength(1));
   expect(await screen.findByText("Run reprocessed.")).toBeTruthy();
   await waitFor(() => expect(requests.some(({ query, variables }) => query.includes("workflowrun_by_pk") && variables.id === "wfr_replacement")).toBe(true));
-  expect(await screen.findByRole("heading", { name: "Record review run" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Record review" })).toBeTruthy();
 });
 
 test("cancel reports the backend outcome through the shared action lifecycle", async () => {
@@ -350,7 +350,7 @@ test("run query failures retain the shared retry action", async () => {
 test("backend capability facts hide operator actions and retain complete error evidence", async () => {
   const error = "Retained details: " + "all evidence remains visible. ".repeat(50);
   render(<RunStory run={runFixture({ can_reprocess: false, outcome: "error", failure_reason: error })} />);
-  await screen.findByRole("heading", { name: "Record review run" });
+  await screen.findByRole("heading", { name: "Record review" });
   expect(await screen.findByText(error.trim())).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
 });

@@ -158,11 +158,11 @@ describe("MessagesPage", () => {
     }
   });
 
-  test("ThreadsPage selects the schema-owned channel kind without a vendor relation", () => {
+  test("ThreadsPage shows the channel by its own label without a vendor relation", () => {
     render(<ThreadsPage />);
     expect(pageMocks.resourceProps?.resource).toBe("messaging.Thread");
-    const channelColumn = pageMocks.columns.find((column) => column.header === "threads.channelType");
-    expect(channelColumn?.field).toBe("channel.kind");
+    const channelColumn = pageMocks.columns.find((column) => column.header === "threads.channel");
+    expect(channelColumn?.field).toBe("channel");
     expect(pageMocks.columns.some((column) => column.field.startsWith("channel.vendor"))).toBe(false);
   });
 

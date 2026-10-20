@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useModelMetadata } from "@angee/metadata";
+import { modelLabelSegment, modelMetadataForLabel, useModelMetadata, useSchemaFieldMetadata } from "@angee/metadata";
 import { useNavigate } from "@tanstack/react-router";
 import {
   Button,
@@ -22,6 +22,7 @@ import {
   type ListColumn,
   type MutationDialogValues,
   type StringIdRow,
+  titleCase,
 } from "@angee/ui";
 import type { DashboardRegistry, DashboardSummary, DashboardTarget } from "@angee/ui/dashboard/headless";
 import { useDashboardsT } from "./i18n";
@@ -118,11 +119,16 @@ function DashboardCatalogue({ store, registry }: {
           ? routeHref("dashboards.resource", { key: dashboard.target.key })
           : routeHref("dashboards.addon", { key: dashboard.target.key }),
     })), [routeHref, summaries]);
+  // Resources read by their model's label; the wire label never reaches the card.
+  const schema = useSchemaFieldMetadata();
+  const resourceChips = React.useCallback((resources: readonly string[]) => resources.map((resource) => ({
+    id: resource, label: modelMetadataForLabel(schema, resource)?.label ?? titleCase(modelLabelSegment(resource)),
+  })), [schema]);
   const columns = React.useMemo<readonly ListColumn<DashboardRow>[]>(() => [
     { field: "title", header: t("catalogue.col.title"), subline: "description" },
     { field: "scope", header: t("catalogue.col.scope"), render: (row) => <Chip tone="neutral" size="sm">{t(SCOPE_LABEL[row.scope])}</Chip> },
-    { field: "resources", header: t("catalogue.col.resources"), sortable: false, render: (row) => <OverflowChipList items={row.resources.map((resource) => ({ id: resource, label: resource }))} max={4} /> },
-  ], [t]);
+    { field: "resources", header: t("catalogue.col.resources"), sortable: false, render: (row) => <OverflowChipList items={resourceChips(row.resources)} max={4} /> },
+  ], [resourceChips, t]);
   const createFields = React.useMemo<readonly DescriptorField[]>(() => [
     { name: "name", label: t("catalogue.name"), required: true },
   ], [t]);
@@ -169,7 +175,7 @@ function DashboardCatalogue({ store, registry }: {
                 <span className={textRoleVariants({ role: "description" })}>{row.description || t("common.noDescription")}</span>
                 <span className="flex flex-wrap items-center gap-1">
                   <Chip tone="neutral" size="sm">{t(SCOPE_LABEL[row.scope])}</Chip>
-                  <OverflowChipList items={row.resources.map((resource) => ({ id: resource, label: resource }))} max={3} />
+                  <OverflowChipList items={resourceChips(row.resources)} max={3} />
                 </span>
               </div>
             ),

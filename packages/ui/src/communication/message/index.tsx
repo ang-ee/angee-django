@@ -237,9 +237,14 @@ export function MessagePartsView({
   );
 }
 
-/** MIME multipart/alternative children are ordered from least to most faithful.
- * Render only the last representation this view supports, while retaining files
- * and every part outside an alternative container. */
+const TEXT_BODY_ROLES = new Set(["TITLE", "BODY", "QUOTED", "SIGNATURE"]);
+
+/** One body, rendered once. MIME multipart/alternative children are ordered from least
+ * to most faithful: only the last representation this view supports renders. An ingest
+ * that stores the plain text as paragraph parts beside the HTML body is the same case
+ * with a different parent: when an HTML body is present, its plain-text siblings
+ * (title, body, quote, signature) are the lesser representation and stay hidden; files
+ * and every non-text part keep rendering. */
 function preferredMessageParts(parts: readonly MessagePart[]): readonly MessagePart[] {
   const preferredByParent = new Map<string, MessagePart>();
   for (const part of parts) {
@@ -249,11 +254,16 @@ function preferredMessageParts(parts: readonly MessagePart[]): readonly MessageP
     const mime = normaliseMime(part.type);
     if (mime === "text/plain" || mime === "text/html") preferredByParent.set(parentId, part);
   }
-  if (preferredByParent.size === 0) return parts;
+  const hasHtmlBody = parts.some((part) =>
+    normaliseMime(part.type) === "text/html" && (part.fragment?.text ?? "").trim() !== ""
+      && !part.file && TEXT_BODY_ROLES.has(normalisePartValue(part.role) || "BODY"));
   return parts.filter((part) => {
-    const parentId = part.parent?.id;
-    if (!parentId || !preferredByParent.has(parentId) || !(part.fragment?.text ?? "").trim()) return true;
+    const text = (part.fragment?.text ?? "").trim();
     const mime = normaliseMime(part.type);
+    if (hasHtmlBody && mime === "text/plain" && text && !part.file
+      && TEXT_BODY_ROLES.has(normalisePartValue(part.role) || "BODY")) return false;
+    const parentId = part.parent?.id;
+    if (!parentId || !preferredByParent.has(parentId) || !text) return true;
     return (mime !== "text/plain" && mime !== "text/html") || preferredByParent.get(parentId) === part;
   });
 }

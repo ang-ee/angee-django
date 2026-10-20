@@ -506,12 +506,13 @@ export function useFormViewSurface({
     modelMetadata,
     schemaMetadata,
   ), [contextFields, modelMetadata, schemaMetadata]);
+  // Who and when: the by-field (its label projection when readable) and the matching stamp.
   const attributionFields = React.useMemo(() => fieldsWithMetadataDefaults(
-    ["created_by", "updated_by"].flatMap((name) => {
+    ["created_by", "updated_by", "created_at", "updated_at"].flatMap((name) => {
       const owner = modelMetadata?.fields[name];
       if (!owner || owner.readable === false) return [];
       const labelName = `${name}_label`;
-      const label = modelMetadata?.fields[labelName];
+      const label = name.endsWith("_by") ? modelMetadata?.fields[labelName] : undefined;
       return [{ name: label && label.readable !== false ? labelName : name, readOnly: true }];
     }),
     modelMetadata,

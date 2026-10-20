@@ -318,7 +318,7 @@ function ConsoleWorkbench({
     <>
       <Workbench
         className="area-content"
-        autoSave="console.workbench.v2"
+        autoSave="console.workbench.v3"
         scrollMode="contained"
         primary={
           desktopPrimary != null ? (

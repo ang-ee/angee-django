@@ -98,7 +98,6 @@ export function FilePreviewFrame({
       />
       <div className="flex h-full min-h-0 flex-col bg-canvas">
         <RecordHeader
-          density="compact"
           headingLevel={1}
           crumbs={crumbs}
           title={file

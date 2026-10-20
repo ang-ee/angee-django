@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 
 import type { ResourceFilter } from "@angee/metadata";
-import { Column, FilePickerButton, Glyph, List, UploadDropTarget, formatSize, type ListProps, type ResourceListSnapshot } from "@angee/ui";
+import { Column, Glyph, List, UploadDropTarget, formatSize, type ListProps, type ResourceListSnapshot } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 import { fileDragPayload, useFileTypeLabel, type StorageFileRow } from "../data/file-rows";
@@ -64,15 +64,8 @@ export function FileBrowserContent({
       draggableRow={fileDragPayload}
       renderCard={fileGalleryCard}
       onListStateChange={onListStateChange}
+      // Upload is the navigator's New ▾ verb; the list keeps the drop target and the empty hint.
       emptyContent={canUpload ? t("list.emptyUpload") : t("list.empty")}
-      toolbarActions={
-        canUpload ? (
-          <FilePickerButton size="sm" variant="secondary" label={t("upload.chooseFiles")} onFiles={startUpload}>
-            <Glyph name="upload" />
-            {t("upload.button")}
-          </FilePickerButton>
-        ) : undefined
-      }
     >
       <Column<StorageFileRow>
         field="title"
@@ -111,7 +104,7 @@ export function FileBrowserContent({
         header={t("column.size")}
         align="right"
         render={(row) => (
-          <span className="tabular-nums text-fg-muted">
+          <span className="whitespace-nowrap tabular-nums text-fg-muted">
             {formatSize(row.size_bytes)}
           </span>
         )}
@@ -121,7 +114,8 @@ export function FileBrowserContent({
         header={t("column.count")}
         aggregate="count"
         align="right"
-        render={() => <span className="text-fg-muted">1</span>}
+        // The count means something on a group footer only; a row's own "1" is noise.
+        render={() => null}
       />
       <Column<StorageFileRow>
         field="created_by_label"

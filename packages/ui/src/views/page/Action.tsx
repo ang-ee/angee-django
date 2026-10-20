@@ -196,6 +196,8 @@ export interface ActionProps extends ActionBinding {
   disabledReason?: ReactNode | ((record: Row) => ReactNode);
   /** A destructive verb: danger-toned, and confirmed before it runs on click (standard copy unless `confirm` names it). */
   danger?: boolean;
+  /** The verb on the collected form's submit button when it differs from the trigger's label ("Run report"). */
+  submitLabel?: ReactNode;
   /** Promote a frequent record verb out of the default Actions menu. */
   placement?: "menu" | "toolbar";
   /** The page's one primary verb: rendered as the primary button when it is on the toolbar and visible. */

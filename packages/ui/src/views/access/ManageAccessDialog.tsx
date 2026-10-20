@@ -107,7 +107,8 @@ export function ManageAccessDialog(props: ManageAccessDialogProps): React.ReactE
     <Button
       type="button"
       variant="ghost"
-      size={props.compact ? "sm" : "iconSm"}
+      // A text-sized button once it carries the reader avatars: an icon square cannot hold them.
+      size={props.compact || (props.people && props.people.length > 0) ? "sm" : "iconSm"}
       aria-label={t(props.compact ? "access.people" : "access.share")}
       title={props.compact ? undefined : t("access.share")}
       disabled={props.targetIds.length === 0}

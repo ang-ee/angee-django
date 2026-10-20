@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import {
   CollectionTreeView, ListView, PaneLabelAction, PaneRow, PaneToolbarHost,
-  RelativeTime, ScopeChip, Select, useResourceView,
+  AbsoluteTime, ScopeChip, Select, useResourceView,
   type ResourceViewFilter,
 } from "@angee/ui";
 import { InboxFilter, NAVIGATOR_LENSES, navigatorAxes } from "./contract";
@@ -40,7 +40,7 @@ export function InboxNavigatorPane({ coverage, onCoverage, timezone, navigation 
   const renderRow = (row: InboxNavigatorRow, interactive = true) => (
     <PaneRow icon={row.circle ? "users" : row.thread ? "channel" : "user"}
       title={row.label || t("inbox.conversation")} detail={row.count}
-      meta={row.latest ? <RelativeTime value={row.latest} /> : undefined}
+      meta={row.latest ? <AbsoluteTime display="date" value={row.latest} timeZone={timezone} /> : undefined}
       sub={[row.handle?.value, row.preview].filter(Boolean).join(" · ")}
       selected={navigation.sender === row.id || Boolean(row.circle && navigation.circle === row.circle.id)}
       verb={row.thread ? t("inbox.openConversation") : t("inbox.results")}

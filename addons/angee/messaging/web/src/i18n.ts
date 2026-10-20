@@ -172,7 +172,7 @@ export const enMessagingMessages: Record<string, string> = {
   "threads.tabConversation": "Conversation",
   "threads.title": "Title",
   "threads.noTitle": "(No subject)",
-  "threads.channelType": "Channel",
+  "threads.eyebrow": "Thread",
   "threads.channel": "Channel",
   "threads.messageCount": "Messages",
   "threads.groupAbout": "About",

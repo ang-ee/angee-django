@@ -49,6 +49,7 @@ from django.db.models.deletion import ProtectedError
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.db.models.query import ModelIterable
 from django.utils import timezone
+from django.utils.html import strip_tags
 from rebac import (
     PermissionDenied,
     SubjectRef,
@@ -453,14 +454,24 @@ _MESSAGE_ORDER = KeysetOrder("_order_at")
 
 
 def _preview(body: ParsedPart | None, *, limit: int = 280) -> str:
-    """Return a short text preview from the first text node of a parsed body tree."""
+    """Return a short text preview of a parsed body tree: the first plain body text, else the
+    first HTML body stripped of its markup. A preview is user text and never carries tags."""
 
-    if body is None:
+    plain = _first_body_text(body, html=False)
+    if plain:
+        return plain[:limit]
+    html = _first_body_text(body, html=True)
+    return " ".join(strip_tags(html).split())[:limit] if html else ""
+
+
+def _first_body_text(part: ParsedPart | None, *, html: bool) -> str:
+    if part is None:
         return ""
-    if body.text and body.role not in ("quoted", "signature"):
-        return body.text[:limit]
-    for child in body.children:
-        found = _preview(child, limit=limit)
+    is_html = part.type.casefold() == "text/html"
+    if part.text and part.role not in ("quoted", "signature") and is_html == html:
+        return part.text
+    for child in part.children:
+        found = _first_body_text(child, html=html)
         if found:
             return found
     return ""

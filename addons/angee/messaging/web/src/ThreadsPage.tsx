@@ -42,13 +42,15 @@ export function ThreadsPage(): React.ReactElement {
           header={t("threads.title")}
           render={(row) => threadTitle(row, t("threads.noTitle"))}
         />
-        <Column field="channel.kind" header={t("threads.channelType")} />
+        <Column field="channel" header={t("threads.channel")} />
         <Column field="modality" />
         <Column field="message_count" header={t("threads.messageCount")} />
         <Column field="last_message_at" />
         <Column field="tags" hiddenByDefault />
       </List>
-      <Form resource={MODEL} title={({ record }) => threadTitle(record, t("threads.noTitle"))}>
+      {/* The subject is the title fragment's text, so the record read selects it for the header. */}
+      <Form resource={MODEL} eyebrow={t("threads.eyebrow")} returning={["title.text"]}
+        title={({ record }) => threadTitle(record, t("threads.noTitle"))}>
         {/* The title is a pointer at a shared content-addressed fragment, derived
             by the ingest (normalized subject / record label) — not directly editable. */}
         <Group label={t("threads.groupAbout")} columns={2}>
