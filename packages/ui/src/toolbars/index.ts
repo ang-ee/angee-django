@@ -1,4 +1,5 @@
 export {
+  ResourcePaneFooter,
   ResourceToolbar,
   ResourceViewSwitcher,
   type ResourceToolbarCustomFilterChip,

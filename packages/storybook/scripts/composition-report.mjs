@@ -59,7 +59,21 @@ function canonical(value) {
   return value;
 }
 const sorted = canonical(graph);
-const output = `${JSON.stringify(sorted, null, 2)}\n`;
+// Compact emission: one node, edge or map entry per line, so the snapshot diffs by
+// entry instead of by indented field and stays a fraction of the pretty size.
+function emit(value, indent = "") {
+  if (Array.isArray(value)) {
+    if (value.every(item => typeof item !== "object" || item === null)) return JSON.stringify(value);
+    return `[\n${value.map(item => `${indent}  ${JSON.stringify(item)}`).join(",\n")}\n${indent}]`;
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value);
+    if (entries.length === 0) return "{}";
+    return `{\n${entries.map(([key, item]) => `${indent}  ${JSON.stringify(key)}: ${emit(item, `${indent}  `)}`).join(",\n")}\n${indent}}`;
+  }
+  return JSON.stringify(value);
+}
+const output = `${emit(sorted)}\n`;
 if (process.argv.includes("--check")) {
   if (readFileSync(file, "utf8") !== output) fail("run composition-report.mjs to reconcile catalog kinds, route instances and snapshot ordering");
 } else {
