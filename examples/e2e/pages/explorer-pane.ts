@@ -25,20 +25,22 @@ export class ExplorerPane {
   }
 
   async create(kind: "folder" | "note", title: string): Promise<void> {
-    const create = this.root.getByRole("button", { name: `New ${kind}`, exact: true });
-    await expect(create).toBeEnabled();
+    // One labeled "New" menu in the picker band, above the tree.
+    const menu = this.root.getByRole("button", { name: "New", exact: true });
+    await expect(menu).toBeEnabled();
     const pickerBox = await this.picker.boundingBox();
-    const createBox = await create.boundingBox();
+    const menuBox = await menu.boundingBox();
     expect(pickerBox).not.toBeNull();
-    expect(createBox).not.toBeNull();
-    // Both explorer verbs belong in the picker band, above the tree.
-    expect(Math.abs(pickerBox!.y - createBox!.y)).toBeLessThan(8);
-    await create.click();
-    const input = this.root.getByRole("textbox", {
+    expect(menuBox).not.toBeNull();
+    expect(Math.abs(pickerBox!.y - menuBox!.y)).toBeLessThan(8);
+    await menu.click();
+    await this.page.getByRole("menuitem", { name: kind === "folder" ? "Folder" : "Page", exact: true }).click();
+    // The new item is typed as a row in the tree where it will live; Enter creates it.
+    const input = this.root.getByRole("tree").getByRole("textbox", {
       name: this.label === "Files" ? "New folder name" : "New page title", exact: true,
     });
     await input.fill(title);
-    await this.root.getByRole("button", { name: "Create", exact: true }).click();
+    await input.press("Enter");
   }
 
   node(title: string): Locator {
