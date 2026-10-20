@@ -57,12 +57,12 @@ test("ontology, upstream attribution, deprecations and owner inheritance remain 
     assert.equal(entry?.reason, "upstream re-export");
     assert.match(entry.source, /^packages\/ui\/src\//);
   }
-  assert.deepEqual(catalog.filter(entry => entry.status === "deprecated").map(entry => entry.name).sort(),
-    ["DebouncedSearchInput", "Divider", "Tag", "TextInput", "TimelineEntry", "TimelineView"]);
+  // Every deprecated alias was deleted on 2026-10-20; the status stays a contract for the next one.
+  assert.deepEqual(catalog.filter(entry => entry.status === "deprecated").map(entry => entry.name), []);
   assert(catalog.some(entry => entry.kind !== null && entry.storyId === null));
   assert.throws(() => parseCatalog([{ ...catalog[0], role: "component" }]));
   assert.deepEqual(generated.regionDuplications["record-header"]?.map(owner => owner.name),
-    ["FormViewRecordHeader", "PageHeader", "RecordHeader", "SurfaceHeader"]);
+    ["PageHeader", "RecordHeader", "SurfaceHeader"]);
   assert(generated.stories.some(story => story.id === "fragments-emptystate--fill"));
   assert(!generated.stories.some(story => story.id === "fragments-emptystate--fill-centered-in-parent"));
 });
