@@ -14,6 +14,9 @@ const provenance = defineBaseAddon({
   id: "provenance",
   icons: { history: History },
   i18n: { provenance: enProvenanceMessages },
+  // How a changeset's activity and outcome read on the history rows: the one composed
+  // status vocabulary decides the tone, never a map of this addon's own.
+  statusTones: { manual: "success", pull: "success", push: "success", import: "success", merge: "info", revert: "warning", seed: "neutral", system: "neutral", failure: "danger" },
   containers: {
     "form#chrome": {
       "provenance.field-provenance": {

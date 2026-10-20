@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
-  Alert,
   Button,
+  ErrorBanner,
   Filter,
   PrimaryPanePublisher,
   ResourceViewProvider,
+  localTimeZone,
   useBreadcrumbLeafLabel,
   useChatter,
   useChatterContent,
@@ -47,7 +48,7 @@ function InboxExplorer() {
   useBreadcrumbLeafLabel(t("inbox.title"));
   const navigation = useInboxNavigation();
   const view = useResourceView();
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const timezone = localTimeZone();
   const { setActiveTab, setCollapsed } = useChatter();
   // Stable across every unrelated `c`-view change so the published navigator node
   // only republishes when coverage actually changes (shell-publisher pitfall).
@@ -130,38 +131,33 @@ function InboxExplorer() {
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
       <PrimaryPanePublisher node={primary} />
-      {navigation.message ? (
-        scope.value ? (
-          <InboxMessageReader
-            key={navigation.message}
-            scope={scope.value}
-            navigation={navigation}
-          />
-        ) : (
-          <Alert tone="danger">
-            {scope.error?.message}
-            <Button onClick={navigation.results}>
-              {t("inbox.backResults")}
-            </Button>
-          </Alert>
-        )
-      ) : navigation.thread ? (
-        scope.value ? (
-          <InboxConversation navigation={navigation} scope={scope.value} />
-        ) : (
-          <Alert tone="danger">
-            {scope.error?.message}
-            <Button onClick={navigation.results}>
-              {t("inbox.backResults")}
-            </Button>
-          </Alert>
-        )
+      {scope.error ? (
+        <ScopeError error={scope.error} onBack={navigation.results} />
+      ) : navigation.message && scope.value ? (
+        <InboxMessageReader
+          key={navigation.message}
+          scope={scope.value}
+          navigation={navigation}
+        />
+      ) : navigation.thread && scope.value ? (
+        <InboxConversation navigation={navigation} scope={scope.value} />
       ) : (
         <InboxResultsPane
           navigation={navigation}
           timezone={scope.value?.coverage.timezone ?? timezone}
         />
       )}
+    </div>
+  );
+}
+
+/** A coverage the server cannot read: the error, and the way back to plain results. */
+function ScopeError({ error, onBack }: { error: Error; onBack: () => void }) {
+  const t = useNexusT();
+  return (
+    <div className="grid gap-3 p-4">
+      <ErrorBanner title={t("inbox.scopeInvalid")} description={error.message} />
+      <div><Button size="sm" variant="secondary" onClick={onBack}>{t("inbox.backResults")}</Button></div>
     </div>
   );
 }

@@ -11,6 +11,7 @@ import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
 import type { TimelinePageEntry } from "./documents.console";
+import { useTimelineT, type TimelineT } from "./i18n";
 import { useTimelinePages } from "./useTimelinePages";
 
 export const TIMELINE_TAB_ID = "timeline.rail";
@@ -36,6 +37,7 @@ export function RecordTimelinePane({ context, selection }: { context: ChatterVie
   const { setActiveTab } = useChatter();
   const recordHref = useResourceRecordHrefLookup();
   const navigate = useNavigate();
+  const t = useTimelineT();
   const presentations = useContainer<TimelineKindContent>(TIMELINE_KINDS_CONTAINER);
   const presentationById = React.useMemo(() => new Map(presentations.map((child) => [child.id, child.content])), [presentations]);
 
@@ -52,16 +54,17 @@ export function RecordTimelinePane({ context, selection }: { context: ChatterVie
       for (const entry of page?.data?.timeline.entries ?? []) {
         if (seen.has(entry.key)) continue;
         seen.add(entry.key);
-        rows.push(toLine(entry, presentationById, recordHref));
+        rows.push(toLine(entry, presentationById, recordHref, t));
       }
     }
     return rows;
-  }, [pages, presentationById, recordHref]);
+  }, [pages, presentationById, recordHref, t]);
   const railKinds = React.useMemo<readonly TimelineRailKind[]>(() => (kinds ?? []).map((kind) => ({
     id: kind.id,
     count: kind.count ?? 0,
-    ...(presentationById.get(kind.id) ?? { label: kind.id, icon: "activity", tone: "muted" as const, verb: "", target: { page: true as const } }),
-  })), [kinds, presentationById]);
+    // A kind no addon presents keeps a neutral face: its id is a Python label, never user text.
+    ...(presentationById.get(kind.id) ?? { label: t("kind.unknown"), icon: "activity", tone: "muted" as const, verb: "", target: { page: true as const } }),
+  })), [kinds, presentationById, t]);
   const needsMeCount = first?.data?.timeline.needs_me ?? 0;
   const last = pages[pages.length - 1];
   const error = pages.find((page) => page?.error)?.error ?? null;
@@ -104,6 +107,7 @@ function toLine(
   entry: TimelinePageEntry,
   presentations: ReadonlyMap<string, TimelineKindContent>,
   recordHref: (model: string, id: string) => string | undefined,
+  t: TimelineT,
 ): TimelineRailEntry {
   const presentation = presentations.get(entry.kind);
   const href = presentation && "page" in presentation.target && entry.target_model && entry.target_id
@@ -111,7 +115,7 @@ function toLine(
     : undefined;
   // What folds under the line, named by each child kind's own presentation.
   const folded = entry.children
-    .map((child) => `${child.count} ${labelOf(presentations.get(child.kind)?.label, child.kind, child.count)}`)
+    .map((child) => t("folded", { label: kindLabel(presentations.get(child.kind)?.label, t), count: child.count }))
     .join(" · ");
   return {
     key: entry.key, at: entry.at, kind: entry.kind, title: entry.title, actor: entry.actor,
@@ -119,7 +123,7 @@ function toLine(
   };
 }
 
-function labelOf(label: React.ReactNode, kind: string, count: number): string {
-  const text = typeof label === "string" ? label : kind;
-  return count === 1 && text.endsWith("s") ? text.slice(0, -1).toLowerCase() : text.toLowerCase();
+/** A kind's presented label as text; a kind without one, or with a node label, reads as activity. */
+function kindLabel(label: React.ReactNode, t: TimelineT): string {
+  return typeof label === "string" ? label : t("kind.unknown");
 }

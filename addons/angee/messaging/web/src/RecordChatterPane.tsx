@@ -197,10 +197,10 @@ function NotificationSettingsDialog({ payload, modelLabel, recordId, reportError
                 })}
               </div>
             ) : null}
-            <div className="flex justify-end">
-              <Button type="button" size="sm" variant="secondary" onClick={onClose}>{t("chatter.done")}</Button>
-            </div>
           </Dialog.Body>
+          <Dialog.Footer>
+            <Button type="button" size="sm" variant="ghost" onClick={onClose}>{t("chatter.done")}</Button>
+          </Dialog.Footer>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

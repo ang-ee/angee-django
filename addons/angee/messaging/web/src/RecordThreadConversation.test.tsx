@@ -652,9 +652,9 @@ describe("RecordThreadStream", () => {
     });
     render(<RecordThreadStream heading={{ label: "Conversation" }}
       source={{ kind: "record", modelLabel: "projects.Project", recordId: "project_1" }} />);
-    const skeleton = screen.getByRole("status");
-    expect(skeleton.textContent).toContain("Loading comments");
-    expect(skeleton.querySelectorAll('[aria-hidden="true"]')).toHaveLength(9);
+    // The shared loading panel, not a skeleton geometry chosen here.
+    const loading = screen.getByRole("status");
+    expect(loading.textContent).toContain("Loading comments");
     expect(screen.queryByRole("searchbox")).toBeNull();
   });
 
@@ -670,7 +670,7 @@ describe("RecordThreadStream", () => {
     expect(screen.getByText("What happens next?")).toBeTruthy();
     expect(screen.getByText("Please describe the next step.")).toBeTruthy();
     expect(mocks.useAuthoredQuery.mock.calls.filter(([doc]) => operationName(doc) === "MessagingRecordThread")).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Show conversation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Conversation" }));
     expect(mocks.useAuthoredQuery.mock.calls.filter(([doc]) => operationName(doc) === "MessagingRecordThread")).toHaveLength(1);
     expect(screen.getByText("Ping the room")).toBeTruthy();
     expect(screen.getByPlaceholderText("Add a reply")).toBeTruthy();

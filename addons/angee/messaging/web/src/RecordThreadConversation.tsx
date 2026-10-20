@@ -2,7 +2,9 @@ import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
 import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
-import { Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, RelativeTime, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, Skeleton, SkeletonStatus, Textarea, avatarInitials, cn, createClientKey, errorMessage, reactionsFromGroups, textRoleVariants, useRuntimeViewAs, useTrashPrompt, useUiT } from "@angee/ui";
+import {
+  Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, FormRoot, Glyph, Input, LoadingPanel, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, RelativeTime, RemovableChip, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, Textarea, avatarInitials, cn, createClientKey, errorMessage, reactionsFromGroups, textRoleVariants, useConfirm, useRuntimeViewAs, useTrashPrompt, useUiT,
+} from "@angee/ui";
 import {
   StorageUploadTasks,
   useStorageUpload,
@@ -12,8 +14,10 @@ import {
 } from "@angee/storage";
 import { useDebounce } from "use-debounce";
 import { userDisplayName } from "@angee/iam";
+import { senderDisplayName } from "@angee/parties";
 
 import { useMessagingT, type MessagingT } from "./i18n";
+import { StarButton } from "./StarButton";
 import { messagingReactionCopy } from "./reaction-copy";
 import { StreamComposer } from "./StreamComposer";
 import {
@@ -455,14 +459,7 @@ export function RecordThreadConversation({
       {/* Search and notification controls survive a new query's loading state. */}
       {header?.(chrome)}
       {threadQuery.isFetching && threadQuery.data === undefined ? (
-        <SkeletonStatus label={t("chatter.loading")}
-          className={cn("flex flex-col gap-4 p-3", stream ? "min-h-40" : "min-h-72")}>
-          {!stream ? <Skeleton className="h-9 w-full" /> : null}
-          {[0, 1, 2].map((index) => <div key={index} className="flex gap-3">
-            <Skeleton className="h-8 w-8 rounded-full" />
-            <div className="flex flex-1 flex-col gap-2"><Skeleton className="h-4 w-1/3" /><Skeleton className="h-10 w-3/4" /></div>
-          </div>)}
-        </SkeletonStatus>
+        <LoadingPanel message={t("chatter.loading")} />
       ) : threadQuery.error || errorCode ? renderThreadError(errorCode, t) : <>
         {(stream ? Boolean(stream.search) : searchPlacement === "inline") ? <SearchInput
           value={search}
@@ -683,19 +680,9 @@ function ChatterComposer({
     audience={stream?.audience}
     before={readOnly ? <Banner tone="warning">{uiT("viewAs.readOnly")}</Banner> : null}
     inputBefore={<>
-      {replyToMessage ? <div className="flex items-center gap-2 rounded-6 border border-border-subtle bg-surface px-2 py-1.5">
-        <Glyph decorative name="quote" className="shrink-0 text-fg-muted" />
-        <div className="min-w-0 flex-1">
-          <div className={cn(textRoleVariants({ role: "caption" }), "font-medium")}>
-            {t("message.replyingTo", { kind: replyKindLabel(replyToMessage, t) })}
-          </div>
-          <div className="truncate text-13 text-fg">
-            {replyToMessage.preview || editableMessageBody(replyToMessage)}
-          </div>
-        </div>
-        <Button type="button" variant="ghost" size="iconSm" aria-label={t("composer.cancelReply")}
-          disabled={disabled} onClick={onClearReply}><Glyph name="x" /></Button>
-      </div> : null}
+      {replyToMessage ? <ReplyQuote kind={replyKindLabel(replyToMessage, t)} t={t}
+        preview={replyToMessage.preview || editableMessageBody(replyToMessage)}
+        onClear={disabled ? undefined : onClearReply} /> : null}
       {showKindSwitch && offeredKinds.length > 1 ? <SegmentedControl<RecordMessagePostKind>
         disabled={disabled} value={selectedPostKind} onValueChange={handleKindChange}
         options={[
@@ -722,7 +709,7 @@ function ChatterComposer({
     onFiles={showAttachments ? handleFiles : undefined}
     after={<>
       {showAttachments && taskRows.length > 0 ? <StorageUploadTasks uploads={{ ...uploads, tasks: taskRows }} t={storageT} /> : null}
-      {showAttachments ? <input ref={fileInputRef} type="file" disabled={disabled} multiple className="hidden"
+      {showAttachments ? <Input ref={fileInputRef} type="file" disabled={disabled} multiple className="hidden"
         onChange={(event) => { handleFiles(event.target.files); event.target.value = ""; }} /> : null}
       {!stream ? <p className={textRoleVariants({ role: "caption" })}>{copy?.help ?? t("composer.help")}</p> : null}
     </>} />;
@@ -773,7 +760,7 @@ function ComposerRecipients({
           }}
         />
         {selected.length > 0 ? (
-          <FieldRoot className="inline-flex h-8 items-center gap-1.5 rounded-6 border border-border-subtle px-2 text-12 text-fg-muted">
+          <FieldRoot className="inline-flex items-center gap-1.5 rounded-6 border border-border-subtle px-2 py-1 text-12 text-fg-muted">
             <FieldRoot.Item>
             <Checkbox
               disabled={disabled}
@@ -791,28 +778,11 @@ function ComposerRecipients({
       {selected.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">
           {selected.map((option) => (
-            <Chip key={option.id} tone="neutral" size="md" className="gap-1.5">
-              <span className="min-w-0 max-w-40 truncate">{option.label}</span>
-              {option.follower ? (
-                <Chip tone="neutral">
-                  {t("composer.follower")}
-                </Chip>
-              ) : null}
-              {option.suggested ? (
-                <Chip tone="info">
-                  {option.reason || t("composer.suggested")}
-                </Chip>
-              ) : null}
-              <button
-                type="button"
-                aria-label={t("composer.removeRecipient", { name: option.label })}
-                disabled={disabled}
-                onClick={() => onRemove(option.id)}
-                className="shrink-0 text-fg-muted outline-none hover:text-fg focus-visible:focus-ring"
-              >
-                <Glyph name="x" className="size-3" />
-              </button>
-            </Chip>
+            <RemovableChip key={option.id} tone={option.suggested ? "info" : "neutral"} size="md"
+              removeLabel={option.label} onRemove={() => onRemove(option.id)}
+              title={option.suggested ? option.reason || t("composer.suggested") : option.follower ? t("composer.follower") : undefined}>
+              {option.label}
+            </RemovableChip>
           ))}
         </div>
       ) : null}
@@ -872,7 +842,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
   // The server resolves actor-readable identity; older payloads retain their
   // actor-scoped sender projection as a fallback.
   const author = message.is_self ? t("message.you") :
-    message.author_label || message.sender?.display_name || message.sender?.value || t("message.author");
+    message.author_label || senderDisplayName(message.sender, t("message.author"));
   const timestamp = message.sent_at ?? message.created_at;
   const subtypeDescription = message.subtype?.description || message.subtype?.name || "";
   const directionTag = directionLabel(message.direction, t);
@@ -956,17 +926,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
               <Glyph name="quote" />
             </Button>
           ) : null}
-          <Button
-            type="button"
-            variant="ghost"
-            size="iconSm"
-            aria-label={message.starred ? t("message.unstar") : t("message.star")}
-            aria-pressed={message.starred}
-            className={message.starred ? "text-warning-text" : undefined}
-            onClick={() => onToggleStarred(message)}
-          >
-            <Glyph name="star" />
-          </Button>
+          <StarButton starred={Boolean(message.starred)} onToggle={() => onToggleStarred(message)} />
           <ReactionPicker
             options={QUICK_REACTIONS}
             active={activeReactions}
@@ -985,15 +945,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
             </Button>
           ) : null}
           {message.can_delete ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="iconSm"
-              aria-label={t("message.delete")}
-              onClick={() => onDelete(message)}
-            >
-              <Glyph name="trash" />
-            </Button>
+            <MessageDeleteButton t={t} onConfirmed={() => onDelete(message)} />
           ) : null}
           {message.can_trash && !readOnly ? (
             <MessageTrashButton t={t} onConfirmed={(reason) => onTrash(message, reason)} />
@@ -1002,12 +954,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
       }
     >
       {message.parent ? (
-        <div className="mb-2 rounded-6 border-l-2 border-border-subtle bg-surface px-2 py-1">
-          <div className={cn(textRoleVariants({ role: "caption" }), "font-medium")}>
-            {t("message.replyingTo", { kind: replyKindLabel(message.parent, t) })}
-          </div>
-          <div className="truncate text-13 text-fg-muted">{message.parent.preview}</div>
-        </div>
+        <ReplyQuote kind={replyKindLabel(message.parent, t)} preview={message.parent.preview} t={t} className="mb-2" />
       ) : null}
       {subtypeDescription && message.message_type !== "COMMENT" && !streamMode ? (
         <div className={cn(textRoleVariants({ role: "caption" }), "mb-1 font-medium")}>
@@ -1018,6 +965,25 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
     </MessageRow>
   );
 });
+
+/** The author's delete: a destructive verb confirms through the shared ceremony first. */
+function MessageDeleteButton({ t, onConfirmed }: { t: MessagingT; onConfirmed: () => void }): React.ReactElement {
+  const confirm = useConfirm();
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="iconSm"
+      aria-label={t("message.delete")}
+      onClick={() => {
+        void confirm({ title: t("message.deleteConfirm.title"), body: t("message.deleteConfirm.body"), confirm: t("message.delete"), danger: true })
+          .then((ok) => { if (ok) onConfirmed(); });
+      }}
+    >
+      <Glyph name="trash" />
+    </Button>
+  );
+}
 
 /** A moderator's remove control: the shared trash confirmation collects an optional reason. */
 function MessageTrashButton({ t, onConfirmed }: {
@@ -1077,6 +1043,30 @@ function RemovedMessages({ modelLabel, recordId, count, readOnly, t, onRestore }
   );
 }
 
+/** The one "replying to" quote: above a reply in the feed, and in the composer while composing one. */
+function ReplyQuote({ kind, preview, onClear, className, t }: {
+  kind: string;
+  preview: React.ReactNode;
+  onClear?: () => void;
+  className?: string;
+  t: MessagingT;
+}): React.ReactElement {
+  return (
+    <div className={cn("flex items-center gap-2 rounded-6 border-l-2 border-border-subtle bg-surface px-2 py-1", className)}>
+      <Glyph decorative name="quote" className="shrink-0 text-fg-muted" />
+      <div className="min-w-0 flex-1">
+        <div className={cn(textRoleVariants({ role: "caption" }), "font-medium")}>{t("message.replyingTo", { kind })}</div>
+        <div className="truncate text-13 text-fg-muted">{preview}</div>
+      </div>
+      {onClear ? (
+        <Button type="button" variant="ghost" size="iconSm" aria-label={t("composer.cancelReply")} onClick={onClear}>
+          <Glyph name="x" />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function MessageEditor({
   initialBody,
   t,
@@ -1090,7 +1080,7 @@ function MessageEditor({
 }): React.ReactElement {
   const [body, setBody] = React.useState(initialBody);
   return (
-    <form
+    <FormRoot
       className="space-y-2"
       onSubmit={(event) => {
         event.preventDefault();
@@ -1114,7 +1104,7 @@ function MessageEditor({
           {t("message.save")}
         </Button>
       </div>
-    </form>
+    </FormRoot>
   );
 }
 

@@ -12,12 +12,13 @@ export function useRecordConversationsCount(context: ChatterViewContext): number
 }
 
 /** The conversations the record came from (source-role thread attachments), each a row to its thread. */
-export function RecordConversationsGroup({ context }: { context: ChatterViewContext }): React.ReactElement {
+export function RecordConversationsGroup({ context }: { context: ChatterViewContext }): React.ReactElement | null {
   const t = useMessagingT();
   const query = useRecordSourceThreads(context);
   const href = useResourceRecordHrefLookup();
   const rows = query.data?.record_source_threads ?? [];
-  if (rows.length === 0) return <p className="px-1 py-1 text-13 text-fg-muted">{t("conversations.empty")}</p>;
+  // A Related group with no rows and no verb is absent, not an empty note.
+  if (rows.length === 0) return null;
   return (
     <PaneRows>
       {rows.map((edge) => {

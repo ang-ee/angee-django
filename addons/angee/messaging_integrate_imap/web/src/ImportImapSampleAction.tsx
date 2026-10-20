@@ -1,6 +1,6 @@
 import { useMessagingT } from "@angee/messaging";
 import { keysetFeedRows, useAuthoredMutation } from "@angee/refine";
-import { Alert, Button, Checkbox, ControlBandProvider, DialogForm, FieldRoot, Input, ActionTrigger, ResourceViewProvider, RowsListView, errorMessage, useLatestRef, useRecordChromeContext, useResourceView, type ListColumn } from "@angee/ui";
+import { Alert, Button, Checkbox, ControlBandProvider, DialogForm, FieldRoot, Glyph, Input, ActionTrigger, ResourceViewProvider, RowsListView, errorMessage, formatDateTime, formatSize, useLatestRef, useRecordChromeContext, useResourceView, type ListColumn } from "@angee/ui";
 import type { DocumentType } from "@angee/gql/console";
 import * as React from "react";
 import { flushSync } from "react-dom";
@@ -21,6 +21,15 @@ function isoDate(offsetDays = 0): string {
   date.setUTCDate(date.getUTCDate() + offsetDays);
   return date.toISOString().slice(0, 10);
 }
+
+/** The IMAP system flags, as words; a mailbox keyword keeps its own name without the backslash. */
+const FLAG_KEYS: Readonly<Record<string, string>> = {
+  "\\Seen": "channel.imap.sample.flag.seen",
+  "\\Answered": "channel.imap.sample.flag.answered",
+  "\\Flagged": "channel.imap.sample.flag.flagged",
+  "\\Draft": "channel.imap.sample.flag.draft",
+  "\\Deleted": "channel.imap.sample.flag.deleted",
+};
 
 /** Operator-selected historical import. The server owns IMAP safety and admission. */
 export function ImportImapSampleAction(): React.ReactElement {
@@ -61,12 +70,17 @@ function ImportImapSampleDialog(): React.ReactElement | null {
   const rows = keysetFeedRows(previewValues ? previewFeed.data : undefined, (left, right) => right.uid - left.uid);
   const page = previewValues ? previewFeed.data?.pages.at(-1) : undefined;
   const preview = page?.metadata;
+  const flagLabel = (flag: string): string => {
+    const key = FLAG_KEYS[flag];
+    return key ? t(key) : flag.replace(/^\\/, "");
+  };
   const columns: readonly ListColumn<SampleRow>[] = [
     { field: "subject", header: t("channel.imap.sample.subject"), render: (row) => row.subject || t("channel.imap.sample.noSubject") },
     { field: "sender", header: t("channel.imap.sample.sender") },
-    { field: "sent_at", header: t("channel.imap.sample.sent") },
-    { field: "size", header: t("channel.imap.sample.bytes"), align: "right" },
-    { field: "flags", header: t("channel.imap.sample.flags"), render: (row) => row.flags.join(", ") },
+    { field: "sent_at", header: t("channel.imap.sample.sent"), render: (row) => (row.sent_at ? formatDateTime(row.sent_at) : null) },
+    { field: "size", header: t("channel.imap.sample.size"), align: "right", render: (row) => formatSize(row.size) },
+    // IMAP system flags read as words; anything else is a keyword the mailbox invented.
+    { field: "flags", header: t("channel.imap.sample.flags"), render: (row) => row.flags.map((flag) => flagLabel(flag)).join(", ") },
   ];
 
   const invalidatePreview = (): void => {
@@ -157,18 +171,15 @@ function ImportImapSampleDialog(): React.ReactElement | null {
           : t("channel.imap.sample.flagsChanged")}
       </Alert> : null}
       {preview ? <div className="col-span-full min-h-0 space-y-3">
-        <Alert tone="info">{t("channel.imap.sample.count", {
-          loaded: rows.length, total: page?.count,
-          uidvalidity: preview.uidvalidity, upperUid: preview.upperUid,
-        })}</Alert>
+        <Alert tone="info">{t("channel.imap.sample.count", { loaded: rows.length, total: page?.count })}</Alert>
         <ControlBandProvider host={undefined}>
           <RowsListView scope="inherit" rows={rows} columns={columns} selectable emptyContent={t("channel.imap.sample.empty")}
             bulkActions={(selectedIds, clear) => <Button size="sm" variant="primary" disabled={busy || selectedIds.size > IMAP_SAMPLE_LIMIT}
               title={selectedIds.size > IMAP_SAMPLE_LIMIT ? t("channel.imap.sample.selectionTooLarge", { limit: IMAP_SAMPLE_LIMIT }) : undefined}
               onClick={() => void importSelected(selectedIds, clear)}>{importState.fetching ? t("channel.imap.sample.importing") : t("channel.imap.sample.importSelected", { count: selectedIds.size })}</Button>} />
         </ControlBandProvider>
-        {previewFeed.hasNextPage ? <Button type="button" variant="secondary" disabled={busy}
-          onClick={() => void previewFeed.fetchNextPage()}>{previewFeed.isFetching ? t("channel.imap.sample.previewing") : t("channel.imap.sample.loadOlder")}</Button> : null}
+        {previewFeed.hasNextPage ? <Button type="button" variant="secondary" size="sm" disabled={busy}
+          onClick={() => void previewFeed.fetchNextPage()}><Glyph name="chevron-up" />{previewFeed.isFetching ? t("channel.imap.sample.previewing") : t("channel.imap.sample.loadOlder")}</Button> : null}
       </div> : null}
     </DialogForm>;
 }

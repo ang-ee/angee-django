@@ -231,7 +231,8 @@ describe("ThreadTranscript", () => {
       message({ id: "z", feed_order_key: "v1:0001", parts: [{ role: "BODY", fragment: { text: "Oldest" }, file: null }] as never }),
     ];
     render(<ThreadTranscript threadId="thr_1" />);
-    const items = screen.getAllByRole("listitem");
+    // The transcript's own rows (each wraps its feed row), in reading order.
+    const items = Array.from(screen.getByRole("list", { name: "Conversation transcript" }).querySelectorAll(":scope > li"));
     expect(items[0]?.textContent).toContain("Oldest");
     expect(items[1]?.textContent).toContain("Newest");
   });

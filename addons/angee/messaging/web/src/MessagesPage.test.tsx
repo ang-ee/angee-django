@@ -170,7 +170,7 @@ describe("MessagesPage", () => {
     render(<messageForm.Component resource="messaging.Message" id="msg-1" readOnly />);
 
     expect(pageMocks.fields).toEqual(expect.arrayContaining([
-      "title", "status", "platform", "direction", "external_id",
+      "title", "status", "platform", "direction",
     ]));
     // The reader shows the sender and the date, so the envelope does not repeat them.
     expect(pageMocks.fields).not.toContain("sender");

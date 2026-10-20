@@ -62,15 +62,6 @@ function partColumns(
     { field: "type" },
     { field: "name" },
     {
-      field: "fragment.hash",
-      header: t("parts.fragment"),
-      render: (row) => {
-        const fragment = row.fragment;
-        if (!fragment?.hash) return null;
-        return <code className="text-2xs text-fg-subtle">{fragment.hash.slice(0, 10)}</code>;
-      },
-    },
-    {
       field: "fragment.part_count",
       header: t("parts.shared"),
       render: (row) => {
@@ -188,10 +179,10 @@ function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredForm
     <Field name="title" title readOnly />
     <Field name="status" readOnly />
     {/* The reader shows the sender and date; the envelope keeps the transport facts. */}
+    {/* The transport id is a wire fact, not user text: the envelope keeps the labelled facts. */}
     <Group label={t("messages.groupEnvelope")} columns={2} pane="envelope">
       <Field name="platform" readOnly />
       <Field name="direction" readOnly />
-      <Field name="external_id" readOnly />
     </Group>
     <Field name="is_trashed" hidden readOnly />
     {!readOnly ? trashActions.map((action) => <Action key={action.id} {...action} />) : null}

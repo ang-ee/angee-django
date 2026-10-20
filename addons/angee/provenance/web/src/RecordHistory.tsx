@@ -1,6 +1,7 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useAuthoredQuery } from "@angee/refine";
-import { Chip, Button, Code, CodeBlock, ComparisonRows, EmptyState, ErrorBanner, LoadingPanel, PaneRow, PaneRows, PaneToolbar, RecordActionBar, RecordReference, formatDateTime, optionToken, titleCase, useActionResultMutation, type ActionDescriptor, type ComparisonRow } from "@angee/ui";
+import { useModelMetadata } from "@angee/metadata";
+import { Chip, Code, CodeBlock, ComparisonRows, EmptyState, ErrorBanner, LoadingPanel, Pager, PaneRow, PaneRows, PaneToolbar, RecordActionBar, RecordReference, SectionEyebrow, StatusBadge, formatDateTime, formatJson, optionLabel, optionToken, useActionResultMutation, useEnumOptions, useStatusTone, type ActionDescriptor, type ComparisonRow, type StatusIconTone, type WidgetOption } from "@angee/ui";
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 import {
@@ -9,11 +10,13 @@ import {
   type HistoryStatement,
   type RecordHistory,
 } from "./documents.console";
-import { entryTone, historyValue, statementVerb } from "./history-entries";
+import { historyValue, statementVerb } from "./history-entries";
 import { useProvenanceT, type ProvenanceT } from "./i18n";
 
 /** Changesets per page; the server caps a page at 100. */
 export const HISTORY_PAGE_SIZE = 25;
+/** The changeset model whose enum options label a row's source kind. */
+const CHANGESET_MODEL = "provenance.Changeset";
 
 export interface UseRecordHistoryOptions {
   enabled?: boolean;
@@ -73,7 +76,6 @@ export function RecordHistoryTimeline({
         icon="activity"
         title={t("history.noRecordTitle")}
         description={t("history.noRecordDescription")}
-        className="min-h-48 p-4"
       />
     );
   }
@@ -92,7 +94,6 @@ export function RecordHistoryTimeline({
         icon="activity"
         title={t("history.emptyTitle")}
         description={t("history.emptyDescription")}
-        className="min-h-48 p-4"
       />
     );
   }
@@ -137,18 +138,8 @@ export function HistoryTimeline({
   useEffect(() => {
     if (selected) setOpenId(selected);
   }, [selected]);
-  const pager = onPage && history.total > HISTORY_PAGE_SIZE ? (
-    <li className="flex items-center justify-center gap-2 py-2">
-      <Button size="sm" variant="ghost" disabled={offset === 0 || fetching}
-        onClick={() => onPage(Math.max(0, offset - HISTORY_PAGE_SIZE))}>
-        {t("history.newer")}
-      </Button>
-      <Button size="sm" variant="ghost" disabled={offset + HISTORY_PAGE_SIZE >= history.total || fetching}
-        onClick={() => onPage(offset + HISTORY_PAGE_SIZE)}>
-        {t("history.older")}
-      </Button>
-    </li>
-  ) : null;
+  const sourceKinds = useEnumOptions(CHANGESET_MODEL, "source_kind", { casing: "upper" });
+  const statusTone = useStatusTone();
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PaneToolbar />
@@ -164,17 +155,26 @@ export function HistoryTimeline({
               onToggle={compact ? undefined : () => setOpenId((current) => current === entry.id ? null : entry.id)}
               onRevert={onRevert}
               reverting={reverting}
+              sourceKinds={sourceKinds}
+              statusTone={statusTone}
               t={t}
             />
           ))}
-          {pager}
         </PaneRows>
       </div>
+      {/* Offset paging over the changesets: the shared pager, as under every pane list. */}
+      {onPage && history.total > HISTORY_PAGE_SIZE ? (
+        <div className="flex shrink-0 justify-end border-t border-border-subtle px-2 py-1">
+          <Pager page={Math.floor(offset / HISTORY_PAGE_SIZE) + 1} pageSize={HISTORY_PAGE_SIZE} total={history.total}
+            disabled={fetching} unit={t("history.pagerUnit")} labelElement="span"
+            onPageChange={(page) => onPage((page - 1) * HISTORY_PAGE_SIZE)} />
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function HistoryRow({ entry, record, open, focused, onToggle, onRevert, reverting, t }: {
+function HistoryRow({ entry, record, open, focused, onToggle, onRevert, reverting, sourceKinds, statusTone, t }: {
   entry: HistoryEntry;
   record: RecordHistory;
   open: boolean;
@@ -182,6 +182,8 @@ function HistoryRow({ entry, record, open, focused, onToggle, onRevert, revertin
   onToggle?: () => void;
   onRevert: HistoryTimelineProps["onRevert"];
   reverting: boolean;
+  sourceKinds: readonly WidgetOption[];
+  statusTone: ReturnType<typeof useStatusTone>;
   t: ProvenanceT;
 }): ReactElement {
   const ref = useRef<HTMLLIElement>(null);
@@ -197,11 +199,12 @@ function HistoryRow({ entry, record, open, focused, onToggle, onRevert, revertin
     <li ref={ref}>
       <PaneRow
         icon={failed ? "triangle-alert" : "pencil"}
-        tone={failed ? "danger" : entryTone(entry)}
+        // The composed status vocabulary tones the activity; a failed outcome overrides it.
+        tone={rowTone(statusTone(failed ? "failure" : entry.activity))}
         title={actionLabel(t, entry.action)}
         detail={[counts.join(" · "), failed ? t("history.outcome.failure") : null].filter(Boolean).join(" · ") || undefined}
         meta={<time dateTime={entry.recorded_at}>{formatDateTime(entry.recorded_at)}</time>}
-        sub={[entry.actor ?? t("history.system"), activityLabel(t, entry.activity), entry.source_kind ? titleCase(optionToken(entry.source_kind)) : null, entry.change_reason]
+        sub={[entry.actor ?? t("history.system"), activityLabel(t, entry.activity), entry.source_kind ? optionLabel(sourceKinds, entry.source_kind) : null, entry.change_reason]
           .filter(Boolean).join(" · ")}
         verb={onToggle ? t("history.details") : undefined}
         selected={open}
@@ -237,7 +240,7 @@ function EntryDetails({ entry, record, onRevert, reverting, t }: {
       <span className="grid gap-0.5">
         {change.model !== record.model || change.id !== record.id
           ? <RecordReference model={change.model} id={change.id} /> : null}
-        <Code>{change.field}</Code>
+        <FieldName model={change.model} field={change.field} />
       </span>
     ),
     before: <HistoryValueCell value={change.old} t={t} />,
@@ -273,31 +276,51 @@ function EntryDetails({ entry, record, onRevert, reverting, t }: {
   );
 }
 
+/** The pane row's glyph tone from a status tone: the feedback intents, else muted. */
+function rowTone(tone: ReturnType<ReturnType<typeof useStatusTone>>): StatusIconTone {
+  return tone === "info" || tone === "success" || tone === "warning" || tone === "danger" ? tone : "muted";
+}
+
+/** A field's authored label; the wire name only when the model's metadata is not loaded. */
+function FieldName({ model, field }: { model: string; field: string }): ReactElement {
+  const metadata = useModelMetadata(model);
+  const label = metadata?.fields[field]?.label;
+  return label ? <span className="font-medium text-fg">{label}</span> : <Code>{field}</Code>;
+}
+
 function StatementVersions({ statements, record, t }: {
   statements: readonly HistoryStatement[];
   record: RecordHistory;
   t: ProvenanceT;
 }): ReactElement {
+  const sourceKinds = useEnumOptions(CHANGESET_MODEL, "source_kind", { casing: "upper" });
   return (
     <section className="grid gap-1" aria-label={t("history.statementsTitle")}>
-      <h4 className="text-13 font-semibold text-fg">{t("history.statementsTitle")}</h4>
-      <ul className="grid gap-1">
-        {statements.map((statement, index) => (
-          <li key={`${statement.id}:${index}`} className="flex min-w-0 flex-wrap items-center gap-1.5 text-13">
-            <Chip tone={statementVerb(statement) === "withdrawn" ? "warning" : "neutral"}>
-              {statementVerbLabel(t, statementVerb(statement))}
-            </Chip>
-            <span className="font-medium text-fg">{statement.aspect}</span>
-            <Chip size="sm" tone="info">{titleCase(optionToken(statement.source_kind))}</Chip>
-            {statement.source ? <StatementReference reference={statement.source} record={record} />
-              : <span className="text-fg-muted">{statement.asserted_by}</span>}
-            <span className="text-fg-muted">{t("history.statement.confidence", { confidence: statement.confidence })}</span>
-            <Code truncate>{JSON.stringify(statement.values)}</Code>
-            {statement.evidence.map((reference) => <StatementReference key={`${reference.model}:${reference.id}:${reference.pointer}`}
-              reference={reference} record={record} />)}
-          </li>
-        ))}
-      </ul>
+      <SectionEyebrow>{t("history.statementsTitle")}</SectionEyebrow>
+      <PaneRows>
+        {statements.map((statement, index) => {
+          const verb = statementVerb(statement);
+          return (
+            <li key={`${statement.id}:${index}`}>
+              <PaneRow
+                icon="pencil"
+                tone={verb === "withdrawn" ? "warning" : "muted"}
+                title={<FieldName model={record.model} field={statement.aspect} />}
+                detail={statementVerbLabel(t, verb)}
+                meta={t("history.statement.confidence", { confidence: statement.confidence })}
+                sub={<>
+                  <StatusBadge value={statement.source_kind} options={sourceKinds} display="text" />
+                  {" · "}
+                  {statement.source ? <StatementReference reference={statement.source} record={record} /> : statement.asserted_by}
+                  {" · "}
+                  <Code truncate>{formatJson(statement.values, { compact: true })}</Code>
+                  {statement.evidence.map((reference) => <span key={`${reference.model}:${reference.id}:${reference.pointer}`}> · <StatementReference reference={reference} record={record} /></span>)}
+                </>}
+              />
+            </li>
+          );
+        })}
+      </PaneRows>
     </section>
   );
 }
@@ -312,7 +335,7 @@ function StatementReference({ reference, record }: {
     id={sourceLink ? record.id : reference.id}
     label={reference.label}
     search={sourceLink ? { chatterTab: "integrate.sources", source: reference.id } : undefined}
-  />{reference.pointer ? <Code>{reference.pointer}</Code> : null}</span>;
+  /></span>;
 }
 
 function MergeFacts({ merge, t }: { merge: NonNullable<HistoryEntry["merge"]>; t: ProvenanceT }): ReactElement {
@@ -324,7 +347,7 @@ function MergeFacts({ merge, t }: { merge: NonNullable<HistoryEntry["merge"]>; t
   );
   return (
     <section className="grid gap-1 text-13" aria-label={t("history.mergeTitle")}>
-      <h4 className="font-semibold text-fg">{t("history.mergeTitle")}</h4>
+      <SectionEyebrow>{t("history.mergeTitle")}</SectionEyebrow>
       <p className="flex flex-wrap items-center gap-1.5">
         <span className="text-fg-muted">{t("history.survivor")}</span>
         {chip(merge.survivor)}
@@ -348,7 +371,7 @@ function actionLabel(t: ProvenanceT, action: string | null | undefined): string 
     case "delete":
       return t("history.action.delete");
     default:
-      return optionToken(action);
+      return t("history.action.other");
   }
 }
 
@@ -374,7 +397,7 @@ function activityLabel(t: ProvenanceT, activity: string | null | undefined): str
     case "run":
       return t("history.activity.run");
     default:
-      return optionToken(activity);
+      return t("history.activity.other");
   }
 }
 
@@ -392,6 +415,6 @@ function statementVerbLabel(t: ProvenanceT, verb: string): string {
     case "deprecated":
       return t("history.statement.deprecated");
     default:
-      return verb;
+      return t("history.statement.other");
   }
 }
