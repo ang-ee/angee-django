@@ -1,10 +1,9 @@
-import { textRoleVariants } from "@angee/ui";
+import { StatusBadge, textRoleVariants } from "@angee/ui";
 import type * as React from "react";
 
 import { serviceVerdict } from "../../data/service-state";
 import type { ServiceState } from "../../data/types";
 import { useOperatorT } from "../../i18n";
-import { StateTag } from "./StateTag";
 
 export interface ServiceStatusProps {
   service: Pick<ServiceState, "status" | "outcome" | "exitCode" | "restarts">;
@@ -22,7 +21,7 @@ export function ServiceStatus({ service }: ServiceStatusProps): React.ReactNode 
 
   return (
     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
-      <StateTag state={serviceVerdict(service)} />
+      <StatusBadge value={serviceVerdict(service)} />
       {notes.length > 0 ? (
         <span className={textRoleVariants({ role: "meta" })}>{notes.join(" · ")}</span>
       ) : null}

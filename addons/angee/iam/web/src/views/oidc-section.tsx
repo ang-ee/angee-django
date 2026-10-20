@@ -1,5 +1,8 @@
 import { Field, Group } from "@angee/ui";
 import { type Row } from "@angee/metadata";
+import type { ReactElement } from "react";
+
+import { useIamT } from "../i18n";
 
 // iam owns the OIDC provider-type impls (GenericOidc, Google). The tab those impls
 // enable shows only when the OAuth client's provider_type is one of them — keeping
@@ -21,8 +24,13 @@ function isOidcProvider(values: Row): boolean {
  * gate on the OIDC provider types, so the tab appears only for a login provider.
  * The fields are native on `OAuthClient` (folded in by the OIDC `extends` model).
  */
+function OidcSectionLabel(): ReactElement {
+  const t = useIamT();
+  return <>{t("oidc.section")}</>;
+}
+
 export const oidcLoginSection = (
-  <Group label="Sign-in (OIDC)" columns={2}>
+  <Group label={<OidcSectionLabel />} columns={2}>
     <Field name="login_enabled" widget="booleanBadge" showWhen={isOidcProvider} />
     <Field name="issuer" showWhen={isOidcProvider} />
     <Field name="jwks_uri" showWhen={isOidcProvider} />

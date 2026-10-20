@@ -1,80 +1,45 @@
-import { DetailSection, DetailSurface, NavLink, useRouteRecordId } from "@angee/ui";
+import { Code, DetailSection, formatDateTime, NavLink, useRouteRecordId } from "@angee/ui";
 import { type ReactElement } from "react";
 
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
+import { DaemonRecord } from "../parts/DaemonRecord";
 import { useWorkspaceActions } from "./workspace-actions";
-import { OperatorActionButtons } from "../parts/OperatorActionButtons";
 
-/** Workspace detail: overview + lifecycle actions. */
+/** Workspace record page: band verbs and the overview facts. */
 export function WorkspaceDetail(): ReactElement {
   const t = useOperatorT();
   const name = useRouteRecordId();
   const { snapshot, result, refetch } = useOperatorSnapshot({ workspaces: true });
-  const { actions, busy } = useWorkspaceActions(refetch);
-
-  const workspace =
-    (snapshot?.workspaces ?? []).find((candidate) => candidate.name === name) ?? null;
+  const { actions } = useWorkspaceActions(refetch);
+  const workspace = (snapshot?.workspaces ?? []).find((candidate) => candidate.name === name) ?? null;
 
   return (
-    <DetailSurface
-      publishBreadcrumbLabel
+    <DaemonRecord
+      record={workspace}
       loading={result.fetching && !snapshot}
       loadingMessage={t("workspaces.loading")}
-      empty={
-        !workspace
-          ? {
-              icon: "files",
-              title: t("workspaces.detail.notFound"),
-              description: name,
-            }
-          : null
-      }
+      notFound={{ icon: "files", title: t("workspaces.detail.notFound"), description: name }}
+      eyebrow={t("workspaces.record")}
       title={workspace?.name}
-      meta={
-        workspace ? (
-          <span className="text-fg-muted">{workspace.template}</span>
-        ) : null
-      }
-      actions={
-        workspace ? (
-          <OperatorActionButtons
-            actions={actions}
-            busy={busy}
-            subject={workspace}
-            className="flex flex-wrap gap-1"
-          />
-        ) : undefined
-      }
+      meta={workspace ? <span>{workspace.template}</span> : null}
+      verbs={actions}
     >
       {workspace ? (
         <DetailSection
           title={t("workspaces.detail.overview")}
           rows={[
             [t("workspaces.column.template"), workspace.template],
-            [t("workspaces.column.path"), workspace.path],
-            [
-              t("workspaces.column.port"),
-              workspace.processComposePort ?? "—",
-            ],
-            [t("workspaces.column.ttl"), workspace.ttl ?? "—"],
-            [
-              t("workspaces.detail.expiresAt"),
-              workspace.ttlExpiresAt ?? "—",
-            ],
-            [
-              t("workspaces.detail.mcp"),
-              workspace.playwrightMcpUrl ? (
-                <NavLink href={workspace.playwrightMcpUrl} target="_blank" variant="inline">
-                  {workspace.playwrightMcpUrl}
-                </NavLink>
-              ) : (
-                "—"
-              ),
-            ],
+            [t("workspaces.column.path"), <Code truncate>{workspace.path}</Code>],
+            [t("workspaces.column.port"), workspace.processComposePort],
+            [t("workspaces.column.ttl"), workspace.ttl],
+            [t("workspaces.detail.expiresAt"), workspace.ttlExpiresAt ? formatDateTime(workspace.ttlExpiresAt) : null],
+            [t("workspaces.detail.mcp"), workspace.playwrightMcpUrl ? (
+              <NavLink href={workspace.playwrightMcpUrl} target="_blank" variant="inline">{workspace.playwrightMcpUrl}</NavLink>
+            ) : null],
           ]}
         />
       ) : null}
-    </DetailSurface>
+    </DaemonRecord>
   );
 }

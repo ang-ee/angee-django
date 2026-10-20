@@ -1,7 +1,7 @@
 import { useMemo, type ReactElement } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  formSubmitError, Button, Code, MutationDialog, RowsListView, SubjectPicker,
+  formSubmitError, Button, Code, Glyph, MutationDialog, RowsListView, SubjectPicker,
   defineRowAction, mutationDialogValueCodecs, useAuthoredResourceMutation,
   type ListColumn, type DescriptorField, type RecordPanelContext,
 } from "@angee/ui";
@@ -63,7 +63,7 @@ export function GroupMembersTab({ recordId }: RecordPanelContext): ReactElement 
     scope="local"
     emptyContent={t("group.noMembers")}
     toolbarActions={<MutationDialog
-      trigger={<Button type="button" variant="primary" size="sm">{t("group.add")}</Button>}
+      trigger={<Button type="button" variant="primary" size="sm"><Glyph decorative name="plus" />{t("group.add")}</Button>}
       title={t("group.add")}
       description={t("group.membersDescription")}
       fields={fields}

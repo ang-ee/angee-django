@@ -53,6 +53,7 @@ export const enIamMessages: Record<string, string> = {
   "login.continueWith": "Continue with {provider}",
   "login.startFailed": "Sign-in could not start",
   "login.startError": "Could not start sign-in.",
+  "login.providerFallback": "provider",
 
   // OAuth callback page.
   "callback.completing": "Completing sign-in…",
@@ -95,14 +96,17 @@ export const enIamMessages: Record<string, string> = {
   "overview.namespaces.grantCount": "{count} grants",
   "overview.namespaces.empty": "No roles defined.",
   "overview.unassigned.title": "Users without direct roles",
+  "overview.unassigned.user": "User",
   "overview.unassigned.summary": "{count} users; access through groups and record grants may still apply.",
   "overview.unassigned.empty": "Every user has a direct role.",
 
-  // OIDC sign-in providers page — form-section labels and the discover action.
+  // The OIDC section contributed into the OAuth client form.
+  "oidc.section": "Sign-in (OIDC)",
 
   // Grants page.
   "grants.column.subject": "Recipient",
   "grants.column.role": "Role",
+  "grants.column.condition": "Condition",
   "grants.column.namespace": "Namespace",
   "grants.revoke.title": "Revoke role?",
   "grants.revoke.body": "Revoke {role} from {subject}?",
@@ -152,12 +156,12 @@ export const enIamMessages: Record<string, string> = {
   "roles.legacy": "Legacy grant",
 
   // Relationships page.
-  "relationships.column.resourceRef": "Resource Ref",
-  "relationships.column.subjectRef": "Subject Ref",
-  "relationships.column.resourceType": "Resource Type",
+  "relationships.column.resourceRef": "Resource ref",
+  "relationships.column.subjectRef": "Subject ref",
+  "relationships.column.resourceType": "Resource type",
   "relationships.column.resourceId": "Resource ID",
   "relationships.column.relation": "Relation",
-  "relationships.column.subjectType": "Subject Type",
+  "relationships.column.subjectType": "Subject type",
   "relationships.column.subjectId": "Subject ID",
   "relationships.column.caveat": "Caveat",
 
@@ -167,7 +171,7 @@ export const enIamMessages: Record<string, string> = {
   "schema.searchPlaceholder": "Search schema",
   "schema.resourceTypesLabel": "Resource types",
   "schema.noMatches": "No matching resource types.",
-  "schema.permissionGraph": "Permission Graph",
+  "schema.permissionGraph": "Permission graph",
   "schema.nodeCount": "{count} nodes",
   "schema.inspector": "Inspector",
   "schema.relations": "Relations",

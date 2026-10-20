@@ -66,15 +66,9 @@ vi.mock("@angee/refine", () => ({
 }));
 
 vi.mock("@angee/ui", () => {
-  const TabsRoot = ({ children }: { children?: ReactNode }) => <div>{children}</div>;
-  const Tabs = Object.assign(TabsRoot, {
-    List: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-    Tab: ({ children }: { children?: ReactNode }) => <button type="button">{children}</button>,
-    Count: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
-    Panel: ({ children }: { children?: ReactNode }) => <section>{children}</section>,
-  });
   return {
     Code: ({ children }: { children?: ReactNode }) => <code>{children}</code>,
+    SectionHeading: ({ label, count }: { label: ReactNode; count?: number }) => <h3>{label} {count}</h3>,
     createNamespaceT: (
       _namespace: string,
       fallback: Record<string, string>,
@@ -84,7 +78,6 @@ vi.mock("@angee/ui", () => {
       mocks.listProps.push(props);
       return null;
     },
-    Tabs,
     NavLink: ({ children, href }: { children?: ReactNode; href: string }) => (
       <a href={href}>{children}</a>
     ),
@@ -108,8 +101,9 @@ describe("principal access tab", () => {
     expect(renderHook(() => usePrincipalAccessRecordTab()).result.current?.id).toBe("access");
   });
 
-  test("queries the record principal and renders roles, grants, and permission paths", () => {
-    render(<PrincipalAccessTab />);
+  test("queries the record principal and renders roles, grants, and permission paths as three sections", () => {
+    const rendered = render(<PrincipalAccessTab />);
+    expect(rendered.getAllByRole("heading").map((heading) => heading.textContent)).toEqual(["Roles 1", "Grants 1", "Permissions 1"]);
     expect(mocks.queryVariables).toEqual({ subject: "auth/user:usr_alice" });
     expect(mocks.queryOptions?.enabled).toBe(true);
     expect(mocks.listProps).toHaveLength(3);

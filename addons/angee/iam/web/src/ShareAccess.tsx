@@ -80,16 +80,34 @@ function mayShowShare(record: Row | null | undefined, resource: DataResourceMeta
     || contributions.length > 0;
 }
 
+/**
+ * The model that owns a record's access surface — the listed model when it is
+ * grantable, else its canonical model — with the access-role and visibility
+ * owners registered for it. One resolution for the chrome control, the rail
+ * entry and the dialog.
+ */
+function useShareModel(resource: string): {
+  model: ReturnType<typeof useModelMetadata>;
+  accessResource: string;
+  roleEntries: ReturnType<typeof useContainer>;
+  visibilityEntries: ReturnType<typeof useContainer>;
+} {
+  const listed = useModelMetadata(resource);
+  const accessResource = listed?.resource.grantable?.length
+    ? resource
+    : listed?.resource.canonicalLabel ?? resource;
+  const model = useModelMetadata(accessResource);
+  const accessModels = React.useMemo(() => [accessResource], [accessResource]);
+  const roleEntries = useContainer("iam#access-roles", { models: accessModels });
+  const visibilityEntries = useContainer("iam#access-visibility", { models: accessModels });
+  return { model, accessResource, roleEntries, visibilityEntries };
+}
+
 /** IAM contributes the adapter once; models declare their share surface. */
 export function ShareRecordChrome(): React.ReactElement | null {
   const record = useRecordChromeContext();
-  const listed = useModelMetadata(record.resource);
-  const canonical = useModelMetadata(listed?.resource.canonicalLabel ?? record.resource);
-  const model = listed?.resource.grantable?.length ? listed : canonical;
-  const accessModels = React.useMemo(() => [model?.resource.modelLabel ?? record.resource], [model?.resource.modelLabel, record.resource]);
-  const roles = useContainer("iam#access-roles", { models: accessModels });
-  const visibility = useContainer("iam#access-visibility", { models: accessModels });
-  if (!mayShowShare(record.record, model?.resource, [...roles, ...visibility])) return null;
+  const { model, roleEntries, visibilityEntries } = useShareModel(record.resource);
+  if (!mayShowShare(record.record, model?.resource, [...roleEntries, ...visibilityEntries])) return null;
   return <ShareAccess
     resource={record.resource}
     targetIds={[record.recordId]}
@@ -100,13 +118,8 @@ export function ShareRecordChrome(): React.ReactElement | null {
 /** The same Share panel presented as a compact record-rail entry. */
 export function ShareAccessCompact(): React.ReactElement | null {
   const record = useRecordChromeContext();
-  const listed = useModelMetadata(record.resource);
-  const canonical = useModelMetadata(listed?.resource.canonicalLabel ?? record.resource);
-  const model = listed?.resource.grantable?.length ? listed : canonical;
-  const accessModels = React.useMemo(() => [model?.resource.modelLabel ?? record.resource], [model?.resource.modelLabel, record.resource]);
-  const roles = useContainer("iam#access-roles", { models: accessModels });
-  const visibility = useContainer("iam#access-visibility", { models: accessModels });
-  if (!mayShowShare(record.record, model?.resource, [...roles, ...visibility])) return null;
+  const { model, roleEntries, visibilityEntries } = useShareModel(record.resource);
+  if (!mayShowShare(record.record, model?.resource, [...roleEntries, ...visibilityEntries])) return null;
   return <ShareAccess resource={record.resource} targetIds={[record.recordId]}
     record={record.record} compact />;
 }
@@ -143,14 +156,7 @@ function ShareAccess(props: Omit<ShareAccessDialogProps, "open" | "onOpenChange"
 
 /** Open the canonical IAM access surface from a record action or setup task. */
 export function ShareAccessDialog({ resource, targetIds, ...props }: ShareAccessDialogProps): React.ReactElement | null {
-  const listedModel = useModelMetadata(resource);
-  const accessResource = listedModel?.resource.grantable?.length
-    ? resource
-    : listedModel?.resource.canonicalLabel ?? resource;
-  const model = useModelMetadata(accessResource);
-  const accessModels = React.useMemo(() => [accessResource], [accessResource]);
-  const roleEntries = useContainer("iam#access-roles", { models: accessModels });
-  const visibilityEntries = useContainer("iam#access-visibility", { models: accessModels });
+  const { model, accessResource, roleEntries, visibilityEntries } = useShareModel(resource);
   if (!model?.resource.resourceType ||
     (!model.resource.grantable?.length && !roleEntries.length && !visibilityEntries.length)) return null;
   return <BoundShareAccess

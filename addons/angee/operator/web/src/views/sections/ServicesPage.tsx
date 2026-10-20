@@ -1,67 +1,46 @@
-import { cn, defineRowAction, Skeleton, textRoleVariants, type ResourceToolbarGroupOption, type ListColumn, type RowActionDeclaration } from "@angee/ui";
+import { RowsListView, useRouteHref, type ResourceToolbarGroupOption, type ListColumn } from "@angee/ui";
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
-import {
-  OperatorRowsList,
-  type OperatorRowsSelector,
-} from "../parts/operator-rows";
+import { OperatorRowsList, type OperatorRowsSelector } from "../parts/operator-rows";
 import type { ServiceState } from "../../data/types";
-import { serviceDetailPath } from "../../lib/paths";
 import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
-import { OperatorSection } from "../parts/OperatorSection";
-import { OperatorActionButtons } from "../parts/OperatorActionButtons";
+import { verbRowActions } from "../parts/daemon-verbs";
 import { ServiceStatus } from "../parts/ServiceStatus";
 import { useServiceActions } from "./service-actions";
 
 type ServiceRowData = DaemonRow<ServiceState>;
+
+/** The service list's columns, shared by the page and the embedded single-service row. */
+function useServiceColumns(): readonly ListColumn<ServiceRowData>[] {
+  const t = useOperatorT();
+  return useMemo(() => [
+    { field: "name", header: t("services.column.name") },
+    { field: "runtime", header: t("services.column.runtime") },
+    { field: "outcome", header: t("services.column.status"), render: (service) => <ServiceStatus service={service} /> },
+    { field: "health", header: t("services.column.health") },
+  ], [t]);
+}
 
 export interface ServicesPageProps {
   /** Restrict the list to these service names; omit to show every service. */
   names?: readonly string[];
 }
 
-/** Services page: the daemon service list. Rows open the service detail page. */
+/** Services page: the daemon service list. Rows open the service record page. */
 export function ServicesPage({ names }: ServicesPageProps = {}): ReactNode {
   const t = useOperatorT();
+  const routeHref = useRouteHref();
   const { refetch } = useOperatorSnapshot({ services: true });
-  const serviceActions = useServiceActions(refetch);
+  const { actions, busy } = useServiceActions(refetch);
   const selectRows = useCallback<OperatorRowsSelector<ServiceRowData>>(
     (snapshot) => daemonRowsByName(
-      snapshot.services.filter(
-        (service) => names === undefined || names.includes(service.name),
-      ),
+      snapshot.services.filter((service) => names === undefined || names.includes(service.name)),
     ),
     [names],
   );
-
-  const columns = useMemo<readonly ListColumn<ServiceRowData>[]>(
-    () => [
-      {
-        field: "name",
-        header: t("services.column.name"),
-        render: (service) => <span className="font-medium text-fg">{service.name}</span>,
-      },
-      {
-        field: "runtime",
-        header: t("services.column.runtime"),
-        render: (service) => <span className={textRoleVariants({ role: "meta" })}>{service.runtime}</span>,
-      },
-      {
-        field: "outcome",
-        header: t("services.column.status"),
-        render: (service) => <ServiceStatus service={service} />,
-      },
-      {
-        field: "health",
-        header: t("services.column.health"),
-        render: (service) => <span className={textRoleVariants({ role: "meta" })}>{service.health ?? "—"}</span>,
-      },
-    ],
-    [t],
-  );
-
+  const columns = useServiceColumns();
   const groupOptions: readonly ResourceToolbarGroupOption[] = useMemo(
     () => [
       { id: "status", label: t("services.column.status"), group: { field: "outcome" }, type: "value" },
@@ -69,19 +48,7 @@ export function ServicesPage({ names }: ServicesPageProps = {}): ReactNode {
     ],
     [t],
   );
-  const rowActions = useMemo<readonly RowActionDeclaration<ServiceRowData>[]>(
-    () => serviceActions.actions.map((action, index) => defineRowAction({
-      kind: "page",
-      id: `service-${index}`,
-      label: action.label,
-      variant: action.variant,
-      disabled: () => serviceActions.busy,
-      visible: (service) => action.visible?.(service) ?? true,
-      pendingPolicy: "active-row",
-      onSelect: action.perform,
-    })),
-    [serviceActions.actions, serviceActions.busy],
-  );
+  const rowActions = useMemo(() => verbRowActions(actions, busy), [actions, busy]);
 
   return (
     <OperatorRowsList<ServiceRowData>
@@ -89,7 +56,7 @@ export function ServicesPage({ names }: ServicesPageProps = {}): ReactNode {
       selectRows={selectRows}
       columns={columns}
       groupOptions={groupOptions}
-      rowHref={(service) => serviceDetailPath(service.name)}
+      rowHref={(service) => routeHref("operator.services.detail", { name: service.name })}
       rowActions={rowActions}
       emptyContent={t("services.empty")}
     />
@@ -103,60 +70,28 @@ export interface ServiceRowProps {
   emptyContent?: ReactNode;
 }
 
-/** Compact single-service row for views that already own the service identity. */
+/** One service as an embedded row of the shared list, for views that already own the service identity. */
 export function ServiceRow({ name, emptyContent }: ServiceRowProps): ReactNode {
   const t = useOperatorT();
   const { snapshot, result, refetch } = useOperatorSnapshot({ services: true });
   const { actions, busy } = useServiceActions(refetch);
-  const service = (snapshot?.services ?? []).find((candidate) => candidate.name === name) ?? null;
-
-  return (
-    <OperatorSection
-      loading={result.fetching && !snapshot}
-      error={result.error && !snapshot ? result.error : null}
-      loadingMessage={t("services.loading")}
-      loadingContent={<ServiceRowSkeleton />}
-    >
-      {service ? (
-        <div
-          className={
-            "grid min-w-0 grid-cols-[minmax(0,1fr)_7rem_8rem_max-content] " +
-            "items-center gap-6 border-y border-border-subtle py-2 text-13"
-          }
-        >
-          <span className="min-w-0 truncate font-medium text-fg">{service.name}</span>
-          <span className="whitespace-nowrap text-fg-muted">{service.runtime}</span>
-          <span className="whitespace-nowrap">
-            <ServiceStatus service={service} />
-          </span>
-          <OperatorActionButtons actions={actions} busy={busy} subject={service} />
-        </div>
-      ) : (
-        <p className={cn(textRoleVariants({ role: "meta" }), "border-y border-border-subtle py-3")}>
-          {emptyContent ?? t("services.empty")}
-        </p>
-      )}
-    </OperatorSection>
+  const columns = useServiceColumns();
+  const rowActions = useMemo(() => verbRowActions(actions, busy), [actions, busy]);
+  const rows = useMemo(
+    () => daemonRowsByName((snapshot?.services ?? []).filter((candidate) => candidate.name === name)),
+    [name, snapshot],
   );
-}
-
-function ServiceRowSkeleton(): ReactNode {
   return (
-    <div
-      aria-hidden="true"
-      className={
-        "grid min-w-0 grid-cols-[minmax(0,1fr)_7rem_8rem_max-content] " +
-        "items-center gap-6 border-y border-border-subtle py-2"
-      }
-    >
-      <Skeleton shape="text" size="sm" className="h-5" />
-      <Skeleton shape="text" size="sm" className="h-5" />
-      <Skeleton shape="text" size="sm" className="h-6" />
-      <div className="flex shrink-0 justify-end gap-1">
-        <Skeleton className="h-btn-sm w-14" />
-        <Skeleton className="h-btn-sm w-16" />
-        <Skeleton className="h-btn-sm w-14" />
-      </div>
-    </div>
+    <RowsListView<ServiceRowData>
+      presentation="embedded"
+      scope="local"
+      selectable={false}
+      rows={rows}
+      columns={columns}
+      rowActions={rowActions}
+      fetching={result.fetching && !snapshot}
+      error={result.error && !snapshot ? result.error : null}
+      emptyContent={emptyContent ?? t("services.empty")}
+    />
   );
 }

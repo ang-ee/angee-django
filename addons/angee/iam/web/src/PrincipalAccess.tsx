@@ -2,9 +2,9 @@ import { useAuthoredQuery } from "@angee/refine";
 import {
   Code,
   InlineEmpty,
-  RowsListView,
-  Tabs,
   NavLink,
+  RowsListView,
+  SectionHeading,
   useRecordChromeContext,
   useResourceRecordHref,
   useResourceRoute,
@@ -61,7 +61,11 @@ export function usePrincipalAccessRecordTab(): RecordTabDescriptor {
   );
 }
 
-/** Administrative roles, explicit grants, and schema permission paths for a principal. */
+/**
+ * Administrative roles, explicit grants, and schema permission paths for a
+ * principal: three titled sections of one tab body (a record tab never nests a
+ * second tab strip).
+ */
 export function PrincipalAccessTab(): React.ReactElement {
   const t = useIamT();
   const chrome = useRecordChromeContext();
@@ -76,142 +80,51 @@ export function PrincipalAccessTab(): React.ReactElement {
   const access = query.data?.iam_principal_access;
   const roles = React.useMemo(() => access?.roles ?? [], [access?.roles]);
   const grants = React.useMemo(() => access?.grants ?? [], [access?.grants]);
-  const permissions = React.useMemo(
-    () => access?.permissions ?? [],
-    [access?.permissions],
+  const permissions = React.useMemo(() => access?.permissions ?? [], [access?.permissions]);
+  const scope = React.useCallback(
+    (row: { direct: boolean }) => (row.direct ? t("principalAccess.direct") : t("principalAccess.inherited")),
+    [t],
   );
+  // `sublineColumn` directly: RowsListView does not resolve `subline` for local rows (a ui gap).
   const roleColumns = React.useMemo<readonly ListColumn<IAMPrincipalRole>[]>(() => [
-    {
-      field: "role_name",
-      header: t("principalAccess.role"),
-      render: (row) => (
-        <div className="min-w-0">
-          <div>{row.role_name}</div>
-          <Code truncate>{row.role}</Code>
-        </div>
-      ),
-    },
+    { field: "role_name", header: t("principalAccess.role"), sublineColumn: { field: "role" } },
     { field: "namespace", header: t("principalAccess.namespace") },
-    {
-      field: "source_label",
-      header: t("principalAccess.source"),
-      render: (row) => (
-        <div className="min-w-0">
-          <div>{row.source_label}</div>
-          {row.source ? <Code truncate>{row.source}</Code> : null}
-        </div>
-      ),
-    },
-    {
-      field: "direct",
-      header: t("principalAccess.scope"),
-      render: (row) => row.direct
-        ? t("principalAccess.direct")
-        : t("principalAccess.inherited"),
-    },
-  ], [t]);
+    { field: "source_label", header: t("principalAccess.source"), sublineColumn: { field: "source" } },
+    { field: "direct", header: t("principalAccess.scope"), render: scope },
+  ], [scope, t]);
   const grantColumns = React.useMemo<readonly ListColumn<IAMPrincipalGrant>[]>(() => [
-    {
-      field: "resource",
-      header: t("principalAccess.target"),
-      render: (row) => <AccessTarget row={row} />,
-    },
+    { field: "resource", header: t("principalAccess.target"), render: (row) => <AccessTarget row={row} /> },
     { field: "relation", header: t("principalAccess.relation") },
-    {
-      field: "source_label",
-      header: t("principalAccess.source"),
-      render: (row) => (
-        <div className="min-w-0">
-          <div>{row.source_label}</div>
-          <Code truncate>{row.source}</Code>
-        </div>
-      ),
-    },
-    {
-      field: "direct",
-      header: t("principalAccess.scope"),
-      render: (row) => row.direct
-        ? t("principalAccess.direct")
-        : t("principalAccess.inherited"),
-    },
+    { field: "source_label", header: t("principalAccess.source"), sublineColumn: { field: "source" } },
+    { field: "direct", header: t("principalAccess.scope"), render: scope },
     { field: "caveat_name", header: t("principalAccess.condition") },
-  ], [t]);
-  const permissionColumns = React.useMemo<
-    readonly ListColumn<IAMPrincipalPermission>[]
-  >(() => [
-    {
-      field: "resource",
-      header: t("principalAccess.target"),
-      render: (row) => <AccessTarget row={row} />,
-    },
+  ], [scope, t]);
+  const permissionColumns = React.useMemo<readonly ListColumn<IAMPrincipalPermission>[]>(() => [
+    { field: "resource", header: t("principalAccess.target"), render: (row) => <AccessTarget row={row} /> },
     { field: "permission", header: t("principalAccess.permission") },
-    {
-      field: "source",
-      header: t("principalAccess.source"),
-      render: (row) => <Code truncate>{row.source}</Code>,
-    },
-    {
-      field: "direct",
-      header: t("principalAccess.scope"),
-      render: (row) => row.direct
-        ? t("principalAccess.direct")
-        : t("principalAccess.inherited"),
-    },
+    { field: "source", header: t("principalAccess.source"), render: (row) => <Code truncate>{row.source}</Code> },
+    { field: "direct", header: t("principalAccess.scope"), render: scope },
     { field: "caveat_name", header: t("principalAccess.condition") },
-  ], [t]);
+  ], [scope, t]);
 
   if (!chrome.record) return <InlineEmpty label={t("principalAccess.loading")} />;
   if (!subject) return <InlineEmpty label={t("principalAccess.missingSubject")} />;
 
+  const list = { fetching: query.isFetching, error: query.error, selectable: false, scope: "local" } as const;
   return (
-    <Tabs defaultValue="roles" variant="card">
-      <Tabs.List aria-label={t("principalAccess.tab")}>
-        <Tabs.Tab value="roles">
-          {t("principalAccess.roles")} <Tabs.Count>{roles.length}</Tabs.Count>
-        </Tabs.Tab>
-        <Tabs.Tab value="grants">
-          {t("principalAccess.grants")} <Tabs.Count>{grants.length}</Tabs.Count>
-        </Tabs.Tab>
-        <Tabs.Tab value="permissions">
-          {t("principalAccess.permissions")} <Tabs.Count>{permissions.length}</Tabs.Count>
-        </Tabs.Tab>
-      </Tabs.List>
-      <Tabs.Panel value="roles">
-        <RowsListView
-          rows={roles}
-          columns={roleColumns}
-          fetching={query.isFetching}
-          error={query.error}
-          selectable={false}
-          scope="local"
-          emptyContent={t("principalAccess.noRoles")}
-        />
-      </Tabs.Panel>
-      <Tabs.Panel value="grants">
-        <RowsListView
-          rows={grants}
-          columns={grantColumns}
-          fetching={query.isFetching}
-          error={query.error}
-          selectable={false}
-          scope="local"
-          emptyContent={t("principalAccess.noGrants")}
-        />
-      </Tabs.Panel>
-      <Tabs.Panel value="permissions">
-        <p className="mb-3 text-sm text-fg-muted">
-          {t("principalAccess.permissionsDescription")}
-        </p>
-        <RowsListView
-          rows={permissions}
-          columns={permissionColumns}
-          fetching={query.isFetching}
-          error={query.error}
-          selectable={false}
-          scope="local"
-          emptyContent={t("principalAccess.noPermissions")}
-        />
-      </Tabs.Panel>
-    </Tabs>
+    <div className="grid gap-6">
+      <section className="grid gap-2">
+        <SectionHeading label={t("principalAccess.roles")} count={roles.length} />
+        <RowsListView rows={roles} columns={roleColumns} {...list} emptyContent={t("principalAccess.noRoles")} />
+      </section>
+      <section className="grid gap-2">
+        <SectionHeading label={t("principalAccess.grants")} count={grants.length} />
+        <RowsListView rows={grants} columns={grantColumns} {...list} emptyContent={t("principalAccess.noGrants")} />
+      </section>
+      <section className="grid gap-2">
+        <SectionHeading label={t("principalAccess.permissions")} count={permissions.length} summary={t("principalAccess.permissionsDescription")} />
+        <RowsListView rows={permissions} columns={permissionColumns} {...list} emptyContent={t("principalAccess.noPermissions")} />
+      </section>
+    </div>
   );
 }

@@ -19,7 +19,7 @@ function RevealDemo(): React.ReactElement {
 }
 
 const meta = {
-  title: "Feedback/SecretReveal",
+  title: "Primitives/SecretReveal",
   component: RevealDemo,
   parameters: { layout: "centered" },
   decorators: [(Story) => <ModalsHost><Story /></ModalsHost>],

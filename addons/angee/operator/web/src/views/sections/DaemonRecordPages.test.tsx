@@ -1,7 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { AppRuntimeProvider, ModalsHost, ToastProvider, baseIcons, defaultWidgets } from "@angee/ui";
+import { createUiTestProviders } from "@angee/ui/testing";
 
 const routerMocks = vi.hoisted(() => ({
   params: {} as Record<string, string>,
@@ -36,13 +39,7 @@ vi.mock("../../data/transport", () => ({
 
 vi.mock("./source-actions", () => ({
   useSourceActions: () => ({
-    actions: [
-      {
-        label: "Fetch",
-        perform: operatorMocks.sourceAction,
-        variant: "secondary",
-      },
-    ],
+    actions: [{ id: "fetch", label: "Fetch", primary: true, perform: operatorMocks.sourceAction }],
     busy: false,
   }),
 }));
@@ -59,13 +56,7 @@ vi.mock("./service-actions", () => ({
 
 vi.mock("./workspace-actions", () => ({
   useWorkspaceActions: () => ({
-    actions: [
-      {
-        label: "Open",
-        perform: operatorMocks.workspaceAction,
-        variant: "secondary",
-      },
-    ],
+    actions: [{ id: "open", label: "Open", primary: true, perform: operatorMocks.workspaceAction }],
     busy: false,
   }),
 }));
@@ -73,6 +64,21 @@ vi.mock("./workspace-actions", () => ({
 import { SourceDetail } from "./SourceDetail";
 import { ServiceDetail } from "./ServiceDetail";
 import { WorkspaceDetail } from "./WorkspaceDetail";
+
+// The record band's verbs run through `RecordActionBar`: a mutation, confirm and toast host.
+const { Provider } = createUiTestProviders();
+
+function renderPage(page: ReactElement): ReturnType<typeof render> {
+  const wrap = (node: ReactElement) => (
+    <Provider>
+      <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets }}>
+        <ToastProvider><ModalsHost>{node}</ModalsHost></ToastProvider>
+      </AppRuntimeProvider>
+    </Provider>
+  );
+  const view = render(wrap(page));
+  return { ...view, rerender: (next: ReactNode) => view.rerender(wrap(next as ReactElement)) };
+}
 
 beforeEach(() => {
   routerMocks.params = {};
@@ -83,7 +89,7 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
-describe("operator detail surfaces", () => {
+describe("operator daemon record pages", () => {
   test("SourceDetail preserves loading and not-found states", () => {
     operatorMocks.useOperatorSnapshot.mockReturnValue({
       refetch: vi.fn(),
@@ -91,10 +97,10 @@ describe("operator detail surfaces", () => {
       snapshot: null,
     });
 
-    const view = render(<SourceDetail />);
+    const view = renderPage(<SourceDetail />);
 
     expect(screen.getByRole("status")).toBeTruthy();
-    expect(screen.getByText("sources.loading")).toBeTruthy();
+    expect(screen.getAllByText("sources.loading").length).toBeGreaterThan(0);
 
     routerMocks.params = { name: "missing" };
     operatorMocks.useOperatorSnapshot.mockReturnValue({
@@ -110,7 +116,7 @@ describe("operator detail surfaces", () => {
     expect(screen.getByText("missing")).toBeTruthy();
   });
 
-  test("SourceDetail renders overview rows and binds actions to the selected source", () => {
+  test("SourceDetail renders overview rows and binds the band verbs to the selected source", async () => {
     const source = {
       ahead: 2,
       behind: 1,
@@ -131,7 +137,7 @@ describe("operator detail surfaces", () => {
       snapshot: { sources: [source] },
     });
 
-    render(<SourceDetail />);
+    renderPage(<SourceDetail />);
 
     expect(screen.getByRole("heading", { name: "framework" })).toBeTruthy();
     expect(screen.getByText("sources.detail.overview")).toBeTruthy();
@@ -139,10 +145,10 @@ describe("operator detail surfaces", () => {
     expect(screen.getByText("↑2 ↓1")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Fetch" }));
-    expect(operatorMocks.sourceAction).toHaveBeenCalledWith(source);
+    await waitFor(() => expect(operatorMocks.sourceAction).toHaveBeenCalledWith(source));
   });
 
-  test("ServiceDetail keeps extra body content inside the shared detail frame", () => {
+  test("ServiceDetail keeps the log tail under the record header", () => {
     routerMocks.params = { name: "web" };
     operatorMocks.useOperatorSnapshot.mockReturnValue({
       refetch: vi.fn(),
@@ -159,7 +165,7 @@ describe("operator detail surfaces", () => {
       },
     });
 
-    render(<ServiceDetail />);
+    renderPage(<ServiceDetail />);
 
     expect(screen.getByRole("heading", { name: "web" })).toBeTruthy();
     expect(screen.getByText("services.detail.overview")).toBeTruthy();
@@ -167,7 +173,7 @@ describe("operator detail surfaces", () => {
     expect(screen.getByTestId("service-logs").textContent).toBe("web");
   });
 
-  test("WorkspaceDetail keeps actions inside the shared detail frame", () => {
+  test("WorkspaceDetail runs its band verbs against the open workspace", async () => {
     const workspace = {
       name: "notes-dev",
       path: "/work/notes-dev",
@@ -184,7 +190,7 @@ describe("operator detail surfaces", () => {
       snapshot: { workspaces: [workspace] },
     });
 
-    render(<WorkspaceDetail />);
+    renderPage(<WorkspaceDetail />);
 
     expect(screen.getByRole("heading", { name: "notes-dev" })).toBeTruthy();
     expect(screen.getByText("workspaces.detail.overview")).toBeTruthy();
@@ -192,6 +198,6 @@ describe("operator detail surfaces", () => {
     expect(screen.getByText("/work/notes-dev")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Open" }));
-    expect(operatorMocks.workspaceAction).toHaveBeenCalledWith(workspace);
+    await waitFor(() => expect(operatorMocks.workspaceAction).toHaveBeenCalledWith(workspace));
   });
 });
