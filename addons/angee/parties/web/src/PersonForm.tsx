@@ -32,7 +32,7 @@ export function PersonForm({ resource: _resource, ...props }: RegisteredFormProp
   const t = usePartiesT();
   const extraFields = containerContents(useContainer("parties.person#fields"));
   const contactActions = usePartyContactActions();
-  return <Form {...props} resource={MODEL}>
+  return <Form {...props} resource={MODEL} eyebrow={t("person.eyebrow")}>
     {personFields(t, extraFields)}
     {contactActions}
   </Form>;

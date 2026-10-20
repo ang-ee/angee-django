@@ -12,6 +12,8 @@ export const enPartiesMessages: Record<string, string> = {
   "overview.metric.sameAs": "Same identity statements",
   "overview.metric.sameAsCapped": "Showing the bounded review candidate count",
   "overview.error": "Could not load the relationship overview.",
+  "person.eyebrow": "Person",
+  "organization.eyebrow": "Organization",
   "person.handlePreferred": "Preferred",
   "person.tabs.handles": "Handles",
   "person.tabs.addresses": "Addresses",
