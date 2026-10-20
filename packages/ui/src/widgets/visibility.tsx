@@ -23,7 +23,9 @@ export interface VisibilityControlProps extends VisibilityBinding {
   audienceLabel?: string;
 }
 
-/** Inline audience label. Only returned choices can invoke the record's verb. */
+/** Inline audience label. Only returned choices can invoke the record's verb.
+ * @kind surface
+ */
 export function VisibilityControl({ value, options, label, readOnly, audienceLabel, ...binding }: VisibilityControlProps): ReactElement {
   const t = useUiT();
   const preview = useRuntimeViewAs();

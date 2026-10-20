@@ -79,7 +79,9 @@ export interface TreeProps {
 /** A folder/file tree is just a `Tree`; the alias names the common use. */
 export type FolderTreeProps = TreeProps;
 
-/** The tree-row recipe: base row + the `active`/`dropTarget` highlight states. */
+/** The tree-row recipe: base row + the `active`/`dropTarget` highlight states.
+ * @kind token
+ */
 export const treeVariants = tv({
   base: "flex items-center gap-2 h-7 px-2 rounded-6 text-13 text-fg-2 cursor-pointer transition-colors hover:bg-inset outline-none focus-visible:focus-ring [&_.glyph]:size-3.5 [&_.glyph]:text-fg-subtle",
   variants: {
@@ -137,6 +139,9 @@ function flattenTree(
   return out;
 }
 
+/**
+ * @kind primitive
+ */
 export function Tree({
   nodes,
   "aria-label": ariaLabel,
@@ -329,7 +334,9 @@ export function Tree({
   );
 }
 
-/** A folder/file tree is just a `Tree`; the alias names the common use. */
+/** A folder/file tree is just a `Tree`; the alias names the common use.
+ * @kind primitive
+ */
 export const FolderTree = Tree;
 
 function TreeRow({

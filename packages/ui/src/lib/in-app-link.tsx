@@ -18,18 +18,26 @@ export interface InAppPreloader {
  * search codec: the location `navigate({ href })` reaches. Preloads and the
  * redirects they follow use these options because router-core before 1.171.25
  * reads `href` only when navigating, and the `^1` peer range admits it.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function hrefLocation(router: AnyRouter, href: string): Pick<LinkOptions, "to" | "search" | "hash"> {
   const url = new URL(href, router.origin);
   return { to: url.pathname, search: router.options.parseSearch(url.search), hash: url.hash.slice(1) };
 }
 
-/** Bind the host router once; href navigation preserves its native search codec. */
+/** Bind the host router once; href navigation preserves its native search codec.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function routerNavigator(router: AnyRouter): InAppNavigator {
   return (href, options) => { void router.navigate({ href, ...options }); };
 }
 
-/** The router's own intent policy (`defaultPreload`, `defaultPreloadDelay`) for in-app anchors. */
+/** The router's own intent policy (`defaultPreload`, `defaultPreloadDelay`) for in-app anchors.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function routerPreloader(router: AnyRouter): InAppPreloader | undefined {
   if (router.options.defaultPreload !== "intent") return undefined;
   return {
@@ -51,6 +59,8 @@ const InAppLinkContext = React.createContext<InAppLinks | undefined>(undefined);
  * The host supplies routing and preloading; without a navigator, links retain
  * native anchor behavior. A nested provider that only changes how links navigate
  * keeps the enclosing preloader.
+ * @kind null
+ * @reason Provider infrastructure: InAppLink context.
  */
 export function InAppLinkProvider({ navigate, preload, children }: {
   navigate: InAppNavigator;
@@ -63,6 +73,10 @@ export function InAppLinkProvider({ navigate, preload, children }: {
   return <InAppLinkContext.Provider value={value}>{children}</InAppLinkContext.Provider>;
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useInAppNavigator(): InAppNavigator | undefined {
   return React.useContext(InAppLinkContext)?.navigate;
 }
@@ -94,6 +108,8 @@ function inAppDestination(anchor: HTMLElement, href: string | undefined): string
  * route under the host router's intent policy. The anchor's own handlers run
  * first. Mark server-served root-relative URLs (admin, media, logout) with
  * rel="external" to retain document navigation.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function useInAppLink(
   href: string | undefined,

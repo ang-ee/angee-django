@@ -10,6 +10,9 @@ export interface SystrayProps {
   onNotifications?: () => void;
 }
 
+/**
+ * @owner TopBar
+ */
 export function Systray({
   onHelp,
   onNotifications,

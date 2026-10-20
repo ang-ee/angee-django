@@ -31,6 +31,7 @@ const config = {
   framework: "@storybook/react-vite",
   stories: [
     "../src/stories/**/*.stories.@(ts|tsx)",
+    "../src/explorations/**/*.stories.@(ts|tsx)",
     ...addonStories,
   ],
   addons: [],

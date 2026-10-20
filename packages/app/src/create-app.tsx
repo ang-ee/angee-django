@@ -251,6 +251,8 @@ const APP_QUERY_CLIENT_CONFIG: QueryClientConfig = {
  * invalidation · auth), builds the router, and mounts one persistent layout
  * route per refine layout. The host writes one
  * `createApp({...}).mount(...)`.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function createApp(input: CreateAppInput): AngeeApp {
   const queryClient = new QueryClient(APP_QUERY_CLIENT_CONFIG);

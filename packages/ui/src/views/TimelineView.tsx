@@ -38,6 +38,10 @@ interface DayGroup<TRow> {
   rows: TRow[];
 }
 
+/**
+ * @kind surface
+ * @deprecated Lane 2 deletion candidate; migrate callers to the canonical owner.
+ */
 export function TimelineView<TRow extends object = Record<string, unknown>>({
   rows = [],
   dateField,

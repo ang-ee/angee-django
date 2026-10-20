@@ -26,13 +26,22 @@ import { useAuthoredResourceMutation } from "./authored-resource-mutation";
 import { RestoreRecord, TrashRecord } from "./documents";
 import { defineRowAction, type RowActionDeclaration } from "./RowActions";
 
-/** The record permission that offers trash and restore — the shared verbs' authority. */
+/** The record permission that offers trash and restore — the shared verbs' authority.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const TRASH_PERMISSION = "delete";
 
-/** Mirrors the backend's `TRASH_REASON_MAX_LENGTH`. */
+/** Mirrors the backend's `TRASH_REASON_MAX_LENGTH`.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const TRASH_REASON_MAX_LENGTH = 1000;
 
-/** The removed-record stamps the backend's `TrashedRefMixin` projects. */
+/** The removed-record stamps the backend's `TrashedRefMixin` projects.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const TRASH_STAMP_FIELDS = ["trashed_at", "trash_reason", "trashed_by_label"] as const;
 
 /** Ask to move one record to the trash; resolves the optional reason, or `null` when kept. */
@@ -43,6 +52,7 @@ export type TrashPrompt = (name?: string) => Promise<{ reason: string } | null>;
  * cancel label that names the record when the caller knows its name. Domain
  * verbs with their own transport (record chatter) compose it before their
  * mutation; resource records use {@link useTrashRecord}.
+ * @owner ModalsHost
  */
 export function useTrashPrompt(): TrashPrompt {
   const prompt = usePrompt();
@@ -80,6 +90,7 @@ export interface UseTrashRecordResult {
  * Run the shared `trash_record` / `restore_record` verbs for one trashable
  * resource, settling their outcome through the shared toast owner and
  * refreshing the resource's caches. The server checks `delete` on the record.
+ * @owner DeletePreviewDialog
  */
 export function useTrashRecord(resource: DataResourceMetadata | null | undefined): UseTrashRecordResult {
   const askTrash = useTrashPrompt();
@@ -131,6 +142,7 @@ export interface TrashActionOptions<TRow extends Row = Row> {
  * Record-form verbs for a trashable resource: Trash on an untrashed record,
  * Restore on a trashed one, each offered only when the record projects the
  * `delete` permission. The form must read the trash flag (a hidden field).
+ * @owner RecordActionBar
  */
 export function useTrashActions(
   resource: DataResourceMetadata | null | undefined,
@@ -170,7 +182,9 @@ export function useTrashActions(
   }, [available, flag, name, restore, t, trash]);
 }
 
-/** List-row verbs matching {@link useTrashActions}, for `ListView` `rowActions`. */
+/** List-row verbs matching {@link useTrashActions}, for `ListView` `rowActions`.
+ * @owner Action
+ */
 export function useTrashRowActions<TRow extends Row>(
   resource: DataResourceMetadata | null | undefined,
   options: TrashActionOptions<TRow> = {},
@@ -222,7 +236,9 @@ export interface RemovedDisclosureProps {
   children: React.ReactNode;
 }
 
-/** The collapsed "Removed (n)" section shared by every removed-records list. */
+/** The collapsed "Removed (n)" section shared by every removed-records list.
+ * @kind fragment
+ */
 export function RemovedDisclosure({
   count,
   defaultOpen = false,
@@ -254,7 +270,9 @@ export interface RemovedItemProps {
   children?: React.ReactNode;
 }
 
-/** One removed record: its name, who removed it and why, and Restore when allowed. */
+/** One removed record: its name, who removed it and why, and Restore when allowed.
+ * @kind fragment
+ */
 export function RemovedItem({
   label,
   trashedByLabel,
@@ -305,6 +323,7 @@ type RemovedRecordRow = BaseRecord & Row;
  * "Removed (n)" for any trashable resource: the trashed rows the reader may
  * still read (Zed withholds them from everyone else), each with Restore when
  * the row projects `delete`. Renders nothing for an untrashable resource.
+ * @kind surface
  */
 export function RemovedRecords<TRow extends Row = Row>({
   resource,

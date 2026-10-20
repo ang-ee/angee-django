@@ -33,7 +33,10 @@ const ResourceViewSortSchema = v.object({
   dir: v.picklist(RESOURCE_VIEW_SORT_DIRECTIONS),
 });
 
-/** Parse boundary for one favorite stored inside the opaque preferences JSON. */
+/** Parse boundary for one favorite stored inside the opaque preferences JSON.
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const ResourceViewFavoriteSchema = v.object({
   id: v.string(),
   label: v.string(),
@@ -47,7 +50,10 @@ export const ResourceViewFavoriteSchema = v.object({
   columnVisibility: v.optional(v.record(v.string(), v.boolean())),
 });
 
-/** Validate shipped query intent eagerly, using the same owner as URL/favorite state. */
+/** Validate shipped query intent eagerly, using the same owner as URL/favorite state.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function validateResourceViewPreset(preset: ResourceViewPreset, model: ModelMetadata): void {
   v.parse(ResourceViewFavoriteSchema, preset);
   if (!preset.label.trim()) throw new Error(`Resource view "${preset.id}" has an empty label.`);
@@ -63,7 +69,10 @@ export function validateResourceViewPreset(preset: ResourceViewPreset, model: Mo
   }
 }
 
-/** Resolve a shipped preset only for the collection it declares. */
+/** Resolve a shipped preset only for the collection it declares.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function resourceViewPreset(
   presets: Readonly<Record<string, ResourceViewPreset>>,
   id: string | undefined,
@@ -96,6 +105,10 @@ export function resourceViewPresetDefaults(
   };
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function resourceViewFavoritesFromJson(
   raw: string | null,
 ): readonly ResourceViewFavorite[] {
@@ -107,6 +120,10 @@ export function resourceViewFavoritesFromJson(
   }
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function resourceViewFavoritesFromUnknown(
   value: unknown,
 ): readonly ResourceViewFavorite[] {

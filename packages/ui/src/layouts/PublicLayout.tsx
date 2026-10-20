@@ -18,6 +18,9 @@ export interface PublicLayoutProps {
   className?: string;
 }
 
+/**
+ * @kind page
+ */
 export function PublicLayout({
   children,
   hero,

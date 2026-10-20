@@ -42,6 +42,9 @@ export interface MetricTileValue {
   href?: string;
 }
 
+/**
+ * @kind token
+ */
 export const metricStripVariants = tv({
   slots: {
     root: "grid gap-3 sm:grid-cols-2",
@@ -97,6 +100,9 @@ export type MetricStripProps = Omit<
   metrics?: readonly MetricTileValue[];
 };
 
+/**
+ * @kind fragment
+ */
 export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
   function MetricTile(
     {
@@ -206,6 +212,9 @@ function AnimatedMetricTileNumber({
   );
 }
 
+/**
+ * @kind fragment
+ */
 export const MetricStrip = React.forwardRef<HTMLDListElement, MetricStripProps>(
   function MetricStrip({ className, density = "compact", items, metrics, ...props }, ref) {
     const styles = metricStripVariants({ density });

@@ -40,6 +40,8 @@ interface ActionMutationVariables {
  * reach `run` via its context. The patch/refresh come from the form (which owns
  * the field selection and re-seeds itself); errors surface as a toast and a
  * `run` may return a success message.
+ * @kind region
+ * @region command-band
  */
 export function RecordActionBar({
   record,

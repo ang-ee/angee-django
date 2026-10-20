@@ -10,6 +10,10 @@ import type { Tone } from "../lib/tones";
 
 export type ChromeMenuGroup = "domain" | "platform";
 export type ChromeMenuStatus = "active" | "future";
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const SETTINGS_MENU_ENTRY_DESCRIPTOR = {
   id: "settings",
   group: "platform",
@@ -135,6 +139,10 @@ function isExternalTarget(target: string): boolean {
   return target.startsWith("//") || /^[A-Za-z][A-Za-z\d+.-]*:/.test(target);
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export class ChromeMenuNode implements ChromeMenuItem {
   id: string;
   label?: string;
@@ -248,6 +256,10 @@ export class ChromeMenuNode implements ChromeMenuItem {
   }
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export class MenuTree {
   readonly roots: readonly ChromeMenuNode[];
   readonly byId: ReadonlyMap<string, ChromeMenuNode>;
@@ -513,6 +525,10 @@ function scopesApp(item: ChromeMenuNode): boolean {
   return item.isApp || item.flatten === true;
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function buildMenuTree(
   items: readonly ChromeMenuItem[],
 ): MenuTree {

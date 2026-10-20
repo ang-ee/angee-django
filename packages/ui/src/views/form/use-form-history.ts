@@ -28,6 +28,7 @@ export interface FormHistory {
  * Each changed RHF notification creates one immutable frame, reused by stacks
  * and availability checks. Both stacks retain at most limit frames (default 100).
  * Call reset when the caller loads another record or accepts a saved baseline.
+ * @owner FormView
  */
 export function useFormHistory<TValues extends FieldValues>(
   form: Pick<UseFormReturn<TValues>, "getValues" | "reset" | "subscribe">,

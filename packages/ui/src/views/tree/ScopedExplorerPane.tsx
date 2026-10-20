@@ -65,6 +65,8 @@ export interface ScopedExplorerPaneProps<
  * primary pane, while loading/empty root states own the main surface. Addons
  * keep the facts that are genuinely theirs: tree row projection, drop policy,
  * route transitions, and domain actions.
+ * @kind region
+ * @region explorer-pane
  */
 export function ScopedExplorerPane<
   TRoot,

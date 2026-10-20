@@ -3,7 +3,9 @@ import type { Tone } from "../lib/tones";
 import { useAppRuntime } from "../runtime/runtime";
 import { statusTone, type StatusToneOptions } from "./status-tones";
 
-/** Resolve status tones against the current app's composed vocabulary. */
+/** Resolve status tones against the current app's composed vocabulary.
+ * @owner StatusIcon
+ */
 export function useStatusTone(): (
   value: string | null | undefined,
   override?: Record<string, Tone>,

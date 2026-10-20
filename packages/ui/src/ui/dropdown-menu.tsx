@@ -31,6 +31,9 @@ import {
 } from "./menu-parts";
 import { PORTALED_CONTROL_LAYER } from "./popover";
 
+/**
+ * @kind token
+ */
 export const dropdownMenuVariants = createMenuRecipe();
 
 export type DropdownMenuItemVariant = MenuItemVariant;
@@ -54,16 +57,46 @@ export type DropdownMenuViewportProps = React.ComponentPropsWithoutRef<
   typeof BaseMenu.Viewport
 >;
 
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuRoot = BaseMenu.Root;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuTrigger = BaseMenu.Trigger;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuPortal = BaseMenu.Portal;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuArrow = BaseMenu.Arrow;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuBackdrop = BaseMenu.Backdrop;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuGroup = BaseMenu.Group;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuRadioGroup = BaseMenu.RadioGroup;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuSubmenuRoot = BaseMenu.SubmenuRoot;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuViewport = BaseMenu.Viewport;
 
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuPositioner = React.forwardRef<
   HTMLDivElement,
   DropdownMenuPositionerProps
@@ -82,39 +115,75 @@ DropdownMenuPositioner.displayName = "DropdownMenuPositioner";
 const parts = createStyledMenuParts(dropdownMenuVariants, "DropdownMenu");
 
 export type DropdownMenuContentProps = MenuContentProps;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuContent = parts.Content;
 
 export type DropdownMenuItemProps = MenuItemProps;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuItem = parts.Item;
 
 export type DropdownMenuLinkItemProps = MenuLinkItemProps;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuLinkItem = parts.LinkItem;
 
 export type DropdownMenuCheckboxItemProps = MenuCheckboxItemProps;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuCheckboxItem = parts.CheckboxItem;
 
 export type DropdownMenuCheckboxItemIndicatorProps =
   MenuCheckboxItemIndicatorProps;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuCheckboxItemIndicator = parts.CheckboxItemIndicator;
 
 export type DropdownMenuRadioItemProps = MenuRadioItemProps;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuRadioItem = parts.RadioItem;
 
 export type DropdownMenuRadioItemIndicatorProps = MenuRadioItemIndicatorProps;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuRadioItemIndicator = parts.RadioItemIndicator;
 
 export type DropdownMenuSubmenuTriggerProps = MenuSubmenuTriggerProps;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuSubmenuTrigger = parts.SubmenuTrigger;
 
 export type DropdownMenuLabelProps = MenuLabelProps;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuLabel = parts.Label;
 
 export type DropdownMenuSeparatorProps = MenuSeparatorProps;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuSeparator = parts.Separator;
 
 export type DropdownMenuShortcutProps = MenuShortcutProps;
+/**
+ * @owner DropdownMenu
+ */
 export const DropdownMenuShortcut = parts.Shortcut;
 
+/**
+ * @kind primitive
+ */
 export const DropdownMenu = Object.assign(DropdownMenuRoot, {
   Root: DropdownMenuRoot,
   Trigger: DropdownMenuTrigger,

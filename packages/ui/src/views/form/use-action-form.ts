@@ -35,7 +35,9 @@ export interface UseActionFormResult<TValues extends FieldValues, TSubmitValues 
   resetErrors: () => void;
 }
 
-/** One native form owns values, validation, errors, and the submission lifecycle. */
+/** One native form owns values, validation, errors, and the submission lifecycle.
+ * @owner ActionFormDialog
+ */
 export function useActionForm<TValues extends FieldValues, TData = unknown, TSubmitValues extends FieldValues = TValues>(
   options: UseActionFormOptions<TValues, TData, TSubmitValues>,
 ): UseActionFormResult<TValues, TSubmitValues> {

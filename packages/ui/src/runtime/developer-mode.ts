@@ -38,6 +38,8 @@ function subscribe(listener: () => void): () => void {
  * The app router calls this on every navigation: `?debug=1` turns developer mode
  * on for the browser session and `?debug=0` turns it off, over the stored
  * preference; any other value changes nothing.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function applyDeveloperModeSearch(debug: unknown): void {
   if (debug !== "1" && debug !== "0") return;
@@ -50,6 +52,7 @@ export function applyDeveloperModeSearch(debug: unknown): void {
  * and provenance, hidden and removed entries, the active route, field names) and
  * changes nothing the server allows. The session override wins over the user's
  * stored preference.
+ * @owner DeveloperMenu
  */
 export function useDeveloperMode(): boolean {
   const override = useSyncExternalStore(subscribe, readOverride, () => null);
@@ -60,6 +63,7 @@ export function useDeveloperMode(): boolean {
 /**
  * The user-menu switch: it applies at once for the session and is stored in the
  * user's preferences when they can be written (not while viewing as another user).
+ * @owner DeveloperMenu
  */
 export function useDeveloperModeSwitch(): { enabled: boolean; setEnabled: (on: boolean) => void } {
   const enabled = useDeveloperMode();
@@ -72,7 +76,10 @@ export function useDeveloperModeSwitch(): { enabled: boolean; setEnabled: (on: b
   return { enabled, setEnabled };
 }
 
-/** The composition facts developer mode shows; `null` outside a composed app. */
+/** The composition facts developer mode shows; `null` outside a composed app.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useRuntimeComposition(): RuntimeComposition | null {
   return useAppRuntime().composition ?? null;
 }

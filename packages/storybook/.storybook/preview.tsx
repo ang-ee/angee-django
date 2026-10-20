@@ -9,17 +9,8 @@ import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import {
   AppearanceProvider,
   AppRuntimeProvider,
-  defineThemeContribution,
   type AppRuntime,
 } from "@angee/ui";
-import { themes as angeeThemes } from "@angee/theme-angee/themes";
-import { themes as auroraThemes } from "@angee/theme-aurora/themes";
-import { themes as carbonThemes } from "@angee/theme-carbon/themes";
-import { themes as fyltrThemes } from "@angee/theme-fyltr/themes";
-import { themes as ledgerThemes } from "@angee/theme-ledger/themes";
-import { themes as midnightThemes } from "@angee/theme-midnight/themes";
-import { themes as stockThemes } from "@angee/theme-stock/themes";
-import { themes as warmRedThemes } from "@angee/theme-warm-red/themes";
 import {
   ActiveGraphQLSchemaProvider,
 } from "@angee/metadata";
@@ -41,20 +32,10 @@ import {
 } from "@tanstack/react-router";
 
 import { titleCase } from "@angee/ui/lib/titleCase";
+import { previewThemes, previewThemeId, themeGlobalValue } from "../src/theme-global";
 
 import "../src/storybook.css";
 import "@angee/theme-aurora/styles";
-
-const previewThemes = [
-  defineThemeContribution({ definition: stockThemes[0] }),
-  defineThemeContribution({ definition: angeeThemes[0] }),
-  defineThemeContribution({ definition: fyltrThemes[0] }),
-  defineThemeContribution({ definition: ledgerThemes[0] }),
-  defineThemeContribution({ definition: carbonThemes[0] }),
-  defineThemeContribution({ definition: auroraThemes[0] }),
-  defineThemeContribution({ definition: midnightThemes[0] }),
-  defineThemeContribution({ definition: warmRedThemes[0] }),
-];
 
 // Stories read auth from the runtime (the ui-owned seam); no app-level auth
 // provider is mounted in the preview.
@@ -175,7 +156,7 @@ function StoryProviders({ Story, context }: { Story: StoryRenderer; context: Sto
       return (
         <AppRuntimeProvider runtime={previewRuntime}>
           <AppearanceProvider host={{
-            themeId: typeof globals.themeId === "string" ? globals.themeId : "angee.stock",
+            themeId: previewThemeId(globals.themeId),
             colorScheme: globals.colorScheme === "dark" ? "dark" : globals.colorScheme === "light" ? "light" : "system",
           }}>
             <Refine dataProvider={previewDataProviders} resources={resources}
@@ -230,11 +211,11 @@ const preview: Preview = {
     themeId: {
       name: "Theme",
       description: "Installed Angee theme",
-      defaultValue: "angee.stock",
+      defaultValue: themeGlobalValue("angee.stock"),
       toolbar: {
         icon: "paintbrush",
         items: previewThemes.map(({ definition }) => ({
-          value: definition.id,
+          value: themeGlobalValue(definition.id),
           title: titleCase(definition.id.replace(/^angee\./, "")),
         })),
         dynamicTitle: true,
@@ -265,16 +246,19 @@ const preview: Preview = {
         // compositions built on them); Toast is folded into Primitives beside
         // Alert, so there is no longer a one-member Feedback group.
         order: [
+          "Library",
           "Foundations",
           "Primitives",
           "Chrome",
-          "Shell",
           "Page",
           "Layouts",
           "Views",
           "Forms",
           "Widgets",
           "Fragments",
+          "Reports",
+          "*",
+          "Explorations",
         ],
       },
     },

@@ -195,8 +195,18 @@ measurements.
 | Distribution import checks | Framework source root, after builds | `node packages/scripts/check-dist-imports.mjs` |
 | UI export checks | Framework source root, after builds | `node packages/ui/scripts/check-views-exports.mjs` |
 | Package/exports architecture | Framework source root | `pnpm --config.verify-deps-before-run=false --fail-if-no-match --filter @angee/app exec vitest run src/architecture-guardrails.test.ts` |
+| Design-system catalog and token-name drift | Stack root | `pnpm --config.verify-deps-before-run=false --filter @angee/storybook run catalog:check` |
+| Composition report kinds, route instances and ordering | Stack root | `pnpm --config.verify-deps-before-run=false --filter @angee/storybook run composition:check` |
 | All composed fragment types | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false --dir web run typecheck` |
 | All composed fragment tests | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false -r run test` |
+
+After changing export annotations, story owners or token CSS, regenerate with
+`pnpm --config.verify-deps-before-run=false --filter @angee/storybook run catalog:generate`
+from the stack root. Then reconcile the composition snapshot with
+`pnpm --config.verify-deps-before-run=false --filter @angee/storybook exec node scripts/composition-report.mjs`.
+The UI catalog test exercises the generator's drift-check CLI; Storybook's
+`catalog:check` also verifies specimen reachability, guideline story links and
+the token deletion findings.
 
 The framework root has no generic `build` script. Package-filtered builds and the
 distribution checks above are the handoff path for published surfaces. A package

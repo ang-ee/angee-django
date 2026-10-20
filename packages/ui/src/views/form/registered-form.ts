@@ -16,7 +16,9 @@ export interface RegisteredForm extends RuntimeFormRegistration {
   Component: React.ComponentType<RegisteredFormProps>;
 }
 
-/** Declare a complete form without creating another runtime registry. */
+/** Declare a complete form without creating another runtime registry.
+ * @kind contribution
+ */
 export function registerForm(
   resource: string,
   Component: React.ComponentType<RegisteredFormProps>,
@@ -24,7 +26,9 @@ export function registerForm(
   return { resource, Component };
 }
 
-/** Resolve a complete form from the existing composed forms registry. */
+/** Resolve a complete form from the existing composed forms registry.
+ * @owner FormView
+ */
 export function useRegisteredForm(resource: string): RegisteredForm | undefined {
   const value = useFormOverride(resource);
   if (value == null || React.isValidElement(value)) return undefined;
@@ -40,7 +44,9 @@ export function useRegisteredForm(resource: string): RegisteredForm | undefined 
   throw new Error(`Registered form for "${resource}" is not a valid complete form.`);
 }
 
-/** Render the complete form registered for a runtime-selected resource. */
+/** Render the complete form registered for a runtime-selected resource.
+ * @kind surface
+ */
 export function RegisteredFormView(props: RegisteredFormProps): React.ReactElement {
   const registration = useRegisteredForm(props.resource);
   if (!registration) {

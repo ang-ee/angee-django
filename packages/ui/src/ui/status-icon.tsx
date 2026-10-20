@@ -21,6 +21,9 @@ const STATUS_ICON_TONE_CLASSES = Object.fromEntries([
   ["muted", "text-fg-muted"] as const,
 ]) as Record<StatusIconTone, string>;
 
+/**
+ * @kind token
+ */
 export const statusIconVariants = tv({
   base: "inline-flex shrink-0 items-center justify-center rounded-full [&_.glyph]:shrink-0 [&>svg]:shrink-0",
   variants: {
@@ -44,6 +47,9 @@ const STATUS_DOT_TONES = Object.fromEntries(
   TONES.map((tone) => [tone, tone === "neutral" ? "bg-fg-muted" : toneSolidBg(tone)]),
 ) as Record<Tone, string>;
 
+/**
+ * @kind token
+ */
 export const statusDotVariants = tv({
   base: "inline-flex shrink-0 rounded-full",
   variants: {
@@ -77,6 +83,9 @@ export type StatusIconProps = Omit<
     label?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const StatusIcon = React.forwardRef<HTMLSpanElement, StatusIconProps>(
   function StatusIcon(
     { className, icon, tone = "info", label, size = "sm", ...props },
@@ -120,6 +129,9 @@ export type StatusDotProps = Omit<
     tone?: Tone;
   };
 
+/**
+ * @kind primitive
+ */
 export const StatusDot = React.forwardRef<HTMLSpanElement, StatusDotProps>(
   function StatusDot({ className, label, size = "md", tone = "neutral", ...props }, ref) {
     return (

@@ -7,6 +7,9 @@ export interface ThemePreviewProps { definition: ThemeDefinition<unknown>; color
 export interface ThemeOptionsEditorProps { definition: ThemeDefinition<unknown>; value: ThemeOptionsEnvelope | undefined; disabled?: boolean; onChange: (value: ThemeOptionsEnvelope) => void }
 export interface ThemeContribution { definition: ThemeDefinition<unknown>; preview?: ComponentType<ThemePreviewProps>; optionsEditor?: ComponentType<ThemeOptionsEditorProps> }
 
+/**
+ * @kind contribution
+ */
 export function defineThemeContribution<TOptions>(contribution: { definition: ThemeDefinition<TOptions>; preview?: ComponentType<ThemePreviewProps>; optionsEditor?: ComponentType<ThemeOptionsEditorProps> }): ThemeContribution {
   return contribution as ThemeContribution;
 }

@@ -50,6 +50,9 @@ export type DetailSectionProps = Omit<
   title: React.ReactNode;
 };
 
+/**
+ * @kind token
+ */
 export const detailSurfaceVariants = tv({
   slots: {
     root: "flex min-h-0 flex-col gap-4 p-4",
@@ -61,6 +64,7 @@ export const detailSurfaceVariants = tv({
  * Page-level detail chrome for records, daemon objects, and metadata nodes. The
  * surface owns only state framing and vertical rhythm; callers supply every
  * domain fact, action, metric, and section row.
+ * @kind fragment
  */
 export const DetailSurface = React.forwardRef<HTMLElement, DetailSurfaceProps>(
   function DetailSurface(
@@ -164,6 +168,9 @@ function DetailSurfaceSkeleton({
   );
 }
 
+/**
+ * @kind fragment
+ */
 export const DetailSection = React.forwardRef<HTMLElement, DetailSectionProps>(
   function DetailSection(
     { children, className, density = "md", rows, title, ...props },

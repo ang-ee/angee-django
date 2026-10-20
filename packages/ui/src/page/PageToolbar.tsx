@@ -4,6 +4,9 @@ import { barVariants } from "../layouts/bar";
 import { tv, type VariantProps } from "../lib/variants";
 import { Toolbar } from "../ui/toolbar";
 
+/**
+ * @kind token
+ */
 export const pageToolbarVariants = tv({
   slots: {
     // The bar recipe owns the toolbar's chrome shell; the start/end flex slots
@@ -44,6 +47,10 @@ export type PageToolbarProps = React.HTMLAttributes<HTMLDivElement> &
     start?: React.ReactNode;
   };
 
+/**
+ * @kind region
+ * @region page-toolbar
+ */
 export const PageToolbar = React.forwardRef<HTMLDivElement, PageToolbarProps>(
   function PageToolbar(
     {

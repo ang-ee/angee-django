@@ -13,6 +13,9 @@ import { tv, type VariantProps } from "../lib/variants";
 import { textRoleVariants } from "./text";
 import { interactiveSurface } from "./widget-control";
 
+/**
+ * @kind token
+ */
 export const collapsibleVariants = tv({
   slots: {
     root: "w-full min-w-0",
@@ -78,6 +81,9 @@ export type CollapsibleRootProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner Collapsible
+ */
 export const CollapsibleRoot = React.forwardRef<
   HTMLDivElement,
   CollapsibleRootProps
@@ -107,6 +113,9 @@ export type CollapsibleTriggerProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner Collapsible
+ */
 export const CollapsibleTrigger = React.forwardRef<
   HTMLButtonElement,
   CollapsibleTriggerProps
@@ -128,6 +137,9 @@ export type CollapsibleIconProps = React.HTMLAttributes<HTMLSpanElement> &
     className?: string;
   };
 
+/**
+ * @owner Collapsible
+ */
 export const CollapsibleIcon = React.forwardRef<
   HTMLSpanElement,
   CollapsibleIconProps
@@ -150,6 +162,9 @@ export type CollapsiblePanelProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner Collapsible
+ */
 export const CollapsiblePanel = React.forwardRef<
   HTMLDivElement,
   CollapsiblePanelProps
@@ -166,6 +181,9 @@ export const CollapsiblePanel = React.forwardRef<
 });
 CollapsiblePanel.displayName = "CollapsiblePanel";
 
+/**
+ * @kind primitive
+ */
 export const Collapsible = Object.assign(CollapsibleRoot, {
   Root: CollapsibleRoot,
   Trigger: CollapsibleTrigger,

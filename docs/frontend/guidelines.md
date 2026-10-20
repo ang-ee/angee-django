@@ -117,6 +117,69 @@ bundle is rejected by [`composeAddons`](../../packages/app/src/define-addon.ts).
 Use the owning addon's namespace with `createNamespaceT`; do not override
 shared UI copy through an addon bundle.
 
+## Component ontology
+
+The [public catalog](../../packages/ui/src/catalog.ts) assigns one UX kind to
+each shipped component and its owner-specific hooks. The
+[Library overview](../../packages/storybook/src/stories/Library.stories.tsx) (story id `library-overview--default`)
+renders the owners; the
+[composition report](../../packages/storybook/src/stories/Composition.stories.tsx) (story id `reports-composition--default`)
+shows their dependencies.
+
+| Kind | Meaning |
+|---|---|
+| `token` | A named value or recipe: text role, tone, fill, radius, spacing, control height, elevation, motion, glyph, or a class recipe binding them. Each runtime export is counted once; there is no separate recipe category. |
+| `primitive` | One interactive or layout element with its recipe, usually wrapping Base UI: Button, Chip, Tabs, Toolbar, Select, Input, Avatar, Tree, Pager, Dialog or Menu. |
+| `fragment` | A data-free piece with fixed anatomy composed from primitives: PaneRow, PaneLabel, EmptyState, ErrorBanner, DefinitionPair, MetaGrid, status badge, RecordReference or RelativeTime. |
+| `region` | A chrome composition owning a shell place: record header, command band, aside head, pane toolbar band, explorer pane, reader, drawer rail, top bar, breadcrumb or control band. |
+| `surface` | A data-bound view: FormView, ListView, BoardView, Gantt, Dashboard, TreeView, Chatter or its panes. |
+| `page` | A shared design-system shape composing regions and surfaces: record, explorer, console, settings or hero page. An addon's routed page is a route instance that composes this shape. |
+| `contribution` | What addons add through containers: verbs, chrome controls, aside tabs, drill-ins, related groups, timeline kinds, widgets, sections or columns. |
+
+**The design system owns tokens, primitives, fragments, regions and pages.**
+Addons own contributions and surface content. An addon needing a missing owner
+first identifies the shell place or shared anatomy, searches the existing
+catalog and container contracts, and brings the concrete gap and intended
+composition to the framework owner. Extend that owner or contribute through its
+container. A new owner belongs in `@angee/ui` (or app composition in
+`@angee/app`) with its story and catalog entry, never as an addon-local copy.
+Addon route instances awaiting the lane-2 page shapes appear in the composition
+report as “composes no page shape yet”; they are information, not ownership
+violations.
+
+**The shipped owner is the only Storybook authority.** Authoritative stories
+render real `@angee/ui`, `@angee/app` shell owners and shipped addon components,
+with fixture data and providers. They never invent substitute anatomy. A study
+needing its own markup belongs under `Explorations/<YYYY-MM-DD> <name>`, names
+the ruling it fed and its superseding owner, and is deleted once that owner
+exists. Explorations sort last and never enter the Library or the shipped
+composition tree.
+
+The `@angee/ui/catalog` subpath audits runtime exports, including aliases; the
+root entry does not load it. Type-only exports are contracts, not rendered
+components. Declarations own `@kind` and the closed `@region` shell place;
+`@owner` lets hooks, parts and values follow their rendered owner. Nonvisual
+transport, schema, runtime and provider infrastructure needs an explicit
+`@reason` for `kind: null`. Upstream re-exports remain attributed to the local
+re-exporting file. `@deprecated` marks deletion candidates; other exports are
+stable.
+
+The [generator](../../packages/storybook/scripts/catalog.mjs) reads these facts
+through TypeScript, reports independent owners of the same shell place, and
+derives story links only from CSF `meta.component` or `parameters.owner`.
+Missing coverage stays `null` and is visible in the Library. This lane omits
+`composes`; the composition graph carries the inventory edges separately.
+`recipeAxes(recipe)` reads native tailwind-variants metadata for specimens.
+The guard regenerates and diffs the catalog, so shape-valid but stale facts fail.
+
+Token owners are visible in the live sheets:
+[type roles](../../packages/storybook/src/stories/TypeRoles.stories.tsx) (story id `foundations-type-roles--default`),
+[tones and fills](../../packages/storybook/src/stories/TonesAndFills.stories.tsx) (story id `foundations-tones-and-fills--default`),
+[geometry](../../packages/storybook/src/stories/GeometryTokens.stories.tsx) (story id `foundations-radius-spacing-and-control-heights--default`)
+and [glyphs](../../packages/storybook/src/stories/Glyphs.stories.tsx) (story id `foundations-glyphs--default`).
+The “no owner” badges preserve the inventory's unused-token and unresolved-class
+findings for repair or deletion; a specimen does not count as production use.
+
 ## Rules
 
 - Python ships schema and operations. TypeScript ships UX.
@@ -346,6 +409,9 @@ shared UI copy through an addon bundle.
   to no app. A `record#aside` child appears only on model-backed record views;
   a route whose param names no model has no aside. See the
   [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
+  Shipped examples: [context aside](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--context-aside`),
+  [explorer pane](../../packages/storybook/src/stories/ScopedExplorerPane.stories.tsx) (story id `views-scopedexplorerpane--pane`),
+  and [tool drawers](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--drawers`).
 - Human-in-the-loop queues use the resource page shell for filtering, grouping,
   paging, record selection, and URL state.
 - **Routed page components are code-split.** In an addon manifest give each
@@ -658,6 +724,7 @@ shared UI copy through an addon bundle.
   behavior must remain available.
   Projects exports its [standard declarations](../../addons/angee/projects/README.md)
   so consumer routes compose the same forms, lists and record tabs.
+  See the shipped [FormView hero](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--forms`).
 - **Statusbar steps are projections of owner facts.** `StatusbarSteps` renders only
   steps declared on the path, and a side or terminal state as one muted chip.
   Server-owned transitions declare `selectable` from eligible choices, and the
@@ -721,6 +788,7 @@ shared UI copy through an addon bundle.
   never a client copy of the server rule. RecordActionBar confirms every
   `danger` verb that runs on click: its `confirm` copy in the danger tone, or the
   standard copy titled by the verb. Declare `confirm` only for domain copy.
+  See the shipped [record verbs and command band](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--record-verbs`).
 - **Trash composes the shared owner.** A resource whose metadata marks a field
   `trashable` gets Trash and Restore from [the trash module](../../packages/ui/src/views/resource/trash.tsx):
   `useTrashActions` for record forms, `useTrashRowActions` for lists, and
@@ -1083,6 +1151,10 @@ Addons own theirs, such as `messaging.channels#toolbar`,
 and `iam#access-visibility`.
 
 ### Context aside
+
+Owner stories: [Chatter and its panes](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--context-aside`),
+[pane toolbar band](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--pane-toolbar`),
+and [pane rows and labels](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--pane-rows`).
 
 The context aside is the shell's right region: what is around the record. Its
 children are `record#aside` and `<model>#aside` contributions. A `record#aside`

@@ -47,6 +47,7 @@ export interface InlineTextActionProps
  * Inline create/rename owner: one trimmed text value, Enter submit, Escape/blur
  * cancel, focus management, busy state, and accessible labels. Addons provide
  * domain labels/icons; this primitive owns the interaction contract.
+ * @kind primitive
  */
 export function InlineTextAction({
   value = "",

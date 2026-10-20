@@ -45,6 +45,9 @@ function AccessibleSeriesTable({ points }: { points: readonly DashboardSeriesPoi
   );
 }
 
+/**
+ * @kind surface
+ */
 export function DashboardBars({
   points,
   title,
@@ -104,6 +107,9 @@ export function DashboardBars({
   );
 }
 
+/**
+ * @kind surface
+ */
 export function DashboardDonut({
   points,
   title,

@@ -34,6 +34,9 @@ export type MetaSectionProps = Omit<
   headingLevel?: 2 | 3 | 4 | 5 | 6;
 };
 
+/**
+ * @kind token
+ */
 export const metaGridVariants = tv({
   slots: {
     grid:
@@ -42,6 +45,9 @@ export const metaGridVariants = tv({
   },
 });
 
+/**
+ * @kind fragment
+ */
 export const MetaGrid = React.forwardRef<HTMLDListElement, MetaGridProps>(
   function MetaGrid({ className, emptyValue = "-", rows, ...props }, ref) {
     const styles = metaGridVariants();
@@ -70,6 +76,9 @@ export const MetaGrid = React.forwardRef<HTMLDListElement, MetaGridProps>(
 );
 MetaGrid.displayName = "MetaGrid";
 
+/**
+ * @kind fragment
+ */
 export const MetaSection = React.forwardRef<HTMLElement, MetaSectionProps>(
   function MetaSection({ children, className, title, headingLevel = 3, ...props }, ref) {
     const styles = metaGridVariants();

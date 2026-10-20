@@ -14,7 +14,9 @@ export interface RecordNavigation {
   onNext?: () => void;
 }
 
-/** Shared current-record pager rendered in record detail toolbars. */
+/** Shared current-record pager rendered in record detail toolbars.
+ * @kind fragment
+ */
 export function RecordPager({
   navigation,
 }: {

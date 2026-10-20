@@ -5,6 +5,9 @@ import { tv, type VariantProps } from "../lib/variants";
 import { sectionEyebrowVariants } from "../ui/section-eyebrow";
 import { textRoleVariants } from "../ui/text";
 
+/**
+ * @kind token
+ */
 export const definitionPairVariants = tv({
   slots: {
     root: "min-w-0",
@@ -129,6 +132,10 @@ type NormalizedDefinition<T> = T extends DefinitionPairTuple
   ? DefinitionPairValue & { label: T[0]; value: T[1] }
   : T;
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function definitionFromTuple<
   T extends DefinitionPairValue | DefinitionPairTuple,
 >(definition: T): NormalizedDefinition<T> {
@@ -141,6 +148,9 @@ export function definitionFromTuple<
   return definition as NormalizedDefinition<T>;
 }
 
+/**
+ * @kind fragment
+ */
 export const DefinitionPair = React.forwardRef<
   HTMLDivElement,
   DefinitionPairProps

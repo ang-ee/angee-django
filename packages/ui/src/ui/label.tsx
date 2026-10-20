@@ -5,6 +5,9 @@ import { toneText } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 import { sectionEyebrowVariants } from "./section-eyebrow";
 
+/**
+ * @kind token
+ */
 export const labelVariants = tv({
   base: "inline-flex min-w-0 items-center gap-1",
   variants: {
@@ -58,6 +61,9 @@ export type LabelProps = Omit<
     requiredIndicator?: React.ReactNode;
   };
 
+/**
+ * @kind primitive
+ */
 export const Label = React.forwardRef<HTMLLabelElement, LabelProps>(
   function Label(
     {
@@ -109,6 +115,7 @@ export interface RequiredMarkProps {
  * The decorative required-field mark — `aria-hidden`, since the accessible
  * required state lives on the control, not the label. The one owner shared by
  * `Label`, `FieldLabel`, and the form-layout `FieldRow`.
+ * @kind primitive
  */
 export function RequiredMark({
   required = false,
@@ -130,7 +137,9 @@ export interface OptionalHintProps {
   className?: string;
 }
 
-/** The muted hint shown after a label for an optional field. */
+/** The muted hint shown after a label for an optional field.
+ * @kind primitive
+ */
 export function OptionalHint({
   optional,
   className,

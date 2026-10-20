@@ -118,6 +118,9 @@ function FieldMarker(_props: FieldProps): null {
   return null;
 }
 
+/**
+ * @kind contribution
+ */
 export const Field = Object.assign(FieldMarker, {
   [PAGE_ELEMENT_SLOT]: "field" as const,
 });

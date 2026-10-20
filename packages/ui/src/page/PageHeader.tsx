@@ -5,6 +5,9 @@ import { tv, type VariantProps } from "../lib/variants";
 import { sectionEyebrowVariants } from "../ui/section-eyebrow";
 import { textRoleVariants } from "../ui/text";
 
+/**
+ * @kind token
+ */
 export const pageHeaderVariants = tv({
   slots: {
     // The bar recipe owns the header's chrome shell; the per-density padding,
@@ -56,6 +59,10 @@ export type PageHeaderProps = Omit<React.HTMLAttributes<HTMLElement>, "title"> &
     title?: React.ReactNode;
   };
 
+/**
+ * @kind region
+ * @region record-header
+ */
 export const PageHeader = React.forwardRef<HTMLElement, PageHeaderProps>(
   function PageHeader(
     {

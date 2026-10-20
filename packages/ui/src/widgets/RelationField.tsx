@@ -76,6 +76,7 @@ export interface RelationFieldProps extends Pick<WidgetControlProps, "presentati
  * and — when `onCreate` is given and the typed query matches nothing — a
  * "Create …" row. Pure UI; the caller owns the options and what happens on
  * create (`RelationPicker` wires it to an inline create form).
+ * @kind surface
  */
 export function RelationField({
   value,

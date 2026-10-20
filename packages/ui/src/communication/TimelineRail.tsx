@@ -40,7 +40,15 @@ export interface TimelineRailKind extends TimelineKindContent {
   count: number;
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const TIMELINE_SCOPE_ALL = "all";
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const TIMELINE_SCOPE_NEEDS_ME = "needs-me";
 
 export interface TimelineRailProps {
@@ -61,6 +69,9 @@ export interface TimelineRailProps {
 
 const MAX_SCOPE_CHIPS = 2;
 
+/**
+ * @kind surface
+ */
 export function TimelineRail({
   entries, kinds, needsMe, scope, onScope, pending = false, error = null, onRetry, hasMore = false, onLoadOlder, onOpen, className,
 }: TimelineRailProps): React.ReactElement {

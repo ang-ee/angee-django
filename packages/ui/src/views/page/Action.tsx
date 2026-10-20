@@ -217,6 +217,9 @@ function ActionMarker(_props: ActionProps): null {
   return null;
 }
 
+/**
+ * @kind contribution
+ */
 export const Action = Object.assign(ActionMarker, {
   [PAGE_ELEMENT_SLOT]: "action" as const,
 });

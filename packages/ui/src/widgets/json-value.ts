@@ -18,7 +18,10 @@ function isPlainObject(input: unknown): input is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-/** Recursive JSON data contract shared by form specs, widgets, and transports. */
+/** Recursive JSON data contract shared by form specs, widgets, and transports.
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const JsonValueSchema: v.GenericSchema<unknown, JsonValue> = v.lazy(() =>
   v.union([
     v.null(),
@@ -33,20 +36,29 @@ export const JsonValueSchema: v.GenericSchema<unknown, JsonValue> = v.lazy(() =>
   ]),
 );
 
-/** Validate an optional untyped form value at the shared JSON boundary. */
+/** Validate an optional untyped form value at the shared JSON boundary.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function jsonValueFromUnknown(value: unknown): JsonValue | undefined {
   if (value === undefined) return undefined;
   const result = v.safeParse(JsonValueSchema, omitUndefinedObjectProperties(value));
   return result.success ? result.output : undefined;
 }
 
-/** Validate an untyped value and retain it only when its JSON root is an object. */
+/** Validate an untyped value and retain it only when its JSON root is an object.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function jsonObjectFromUnknown(value: unknown): JsonObject | undefined {
   const json = jsonValueFromUnknown(value);
   return isJsonObject(json) ? json : undefined;
 }
 
-/** Narrow an already validated JSON value to an object root. */
+/** Narrow an already validated JSON value to an object root.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isJsonObject(value: JsonValue | undefined): value is JsonObject {
   return isPlainObject(value);
 }

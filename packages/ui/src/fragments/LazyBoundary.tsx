@@ -26,6 +26,7 @@ export interface LazyBoundaryProps {
  * surface composes it — the preview pane, lazy widgets, the spotlight, the
  * relation picker — so the Suspense+error pairing (and the "degrade, don't
  * blank" guarantee) lives once instead of being re-hand-rolled per call site.
+ * @kind fragment
  */
 export function LazyBoundary({
   pending,

@@ -27,6 +27,9 @@ import {
   type DialogTriggerProps,
 } from "./dialog";
 
+/**
+ * @kind token
+ */
 export const drawerVariants = tv({
   slots: {
     content:
@@ -76,12 +79,33 @@ export type DrawerTitleProps = DialogTitleProps;
 export type DrawerDescriptionProps = DialogDescriptionProps;
 export type DrawerCloseProps = DialogCloseProps;
 
+/**
+ * @owner Drawer
+ */
 export const DrawerRoot = DialogRoot;
+/**
+ * @owner Drawer
+ */
 export const DrawerTrigger = DialogTrigger;
+/**
+ * @owner Drawer
+ */
 export const DrawerPortal = DialogPortal;
+/**
+ * @owner Drawer
+ */
 export const DrawerBackdrop = DialogBackdrop;
+/**
+ * @owner Drawer
+ */
 export const DrawerTitle = DialogTitle;
+/**
+ * @owner Drawer
+ */
 export const DrawerDescription = DialogDescription;
+/**
+ * @owner Drawer
+ */
 export const DrawerClose = DialogClose;
 
 export type DrawerContentProps = BaseDialogPopupProps &
@@ -89,6 +113,9 @@ export type DrawerContentProps = BaseDialogPopupProps &
     className?: string;
   };
 
+/**
+ * @owner Drawer
+ */
 export const DrawerContent = React.forwardRef<
   HTMLDivElement,
   DrawerContentProps
@@ -105,6 +132,9 @@ export const DrawerContent = React.forwardRef<
 });
 DrawerContent.displayName = "DrawerContent";
 
+/**
+ * @owner Drawer
+ */
 export const DrawerHeader = React.forwardRef<
   HTMLDivElement,
   DrawerHeaderProps
@@ -114,6 +144,9 @@ export const DrawerHeader = React.forwardRef<
 });
 DrawerHeader.displayName = "DrawerHeader";
 
+/**
+ * @owner Drawer
+ */
 export const DrawerBody = React.forwardRef<HTMLDivElement, DrawerBodyProps>(
   function DrawerBody({ className, ...props }, ref) {
     const styles = drawerVariants();
@@ -122,6 +155,9 @@ export const DrawerBody = React.forwardRef<HTMLDivElement, DrawerBodyProps>(
 );
 DrawerBody.displayName = "DrawerBody";
 
+/**
+ * @owner Drawer
+ */
 export const DrawerFooter = React.forwardRef<
   HTMLDivElement,
   DrawerFooterProps
@@ -131,6 +167,9 @@ export const DrawerFooter = React.forwardRef<
 });
 DrawerFooter.displayName = "DrawerFooter";
 
+/**
+ * @kind primitive
+ */
 export const Drawer = Object.assign(DrawerRoot, {
   Root: DrawerRoot,
   Trigger: DrawerTrigger,
@@ -145,8 +184,23 @@ export const Drawer = Object.assign(DrawerRoot, {
   Close: DrawerClose,
 });
 
+/**
+ * @kind primitive
+ */
 export const Sheet = Drawer;
+/**
+ * @owner Sheet
+ */
 export const SheetContent = DrawerContent;
+/**
+ * @owner Sheet
+ */
 export const SheetHeader = DrawerHeader;
+/**
+ * @owner Sheet
+ */
 export const SheetBody = DrawerBody;
+/**
+ * @owner Sheet
+ */
 export const SheetFooter = DrawerFooter;

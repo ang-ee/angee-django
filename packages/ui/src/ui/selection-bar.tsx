@@ -6,6 +6,9 @@ import { tv, type VariantProps } from "../lib/variants";
 import { Button, type ButtonProps } from "./button";
 import { CountBadge } from "./badge";
 
+/**
+ * @kind token
+ */
 export const selectionBarVariants = tv({
   slots: {
     root: "inline-flex h-10 max-w-full items-center gap-3 rounded-8 px-3 shadow-popover",
@@ -76,6 +79,9 @@ export type SelectionBarActionProps = Omit<
     tone?: SelectionBarActionTone;
   };
 
+/**
+ * @owner SelectionBar
+ */
 export const SelectionBarAction = React.forwardRef<
   HTMLElement,
   SelectionBarActionProps
@@ -111,6 +117,9 @@ export type SelectionBarProps = Omit<
     summary?: React.ReactNode;
   };
 
+/**
+ * @owner SelectionBar
+ */
 export const SelectionBarRoot = React.forwardRef<
   HTMLDivElement,
   SelectionBarProps
@@ -174,6 +183,9 @@ export const SelectionBarRoot = React.forwardRef<
 });
 SelectionBarRoot.displayName = "SelectionBar";
 
+/**
+ * @kind primitive
+ */
 export const SelectionBar = Object.assign(SelectionBarRoot, {
   Root: SelectionBarRoot,
   Action: SelectionBarAction,

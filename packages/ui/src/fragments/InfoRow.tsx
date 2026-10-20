@@ -6,6 +6,9 @@ import {
   type DefinitionPairValue,
 } from "./DefinitionPair";
 
+/**
+ * @kind token
+ */
 export const infoRowVariants = tv({
   base: "px-4 py-2 text-13",
 });
@@ -21,6 +24,9 @@ export type InfoRowProps = Omit<
   value?: React.ReactNode;
 };
 
+/**
+ * @kind fragment
+ */
 export const InfoRow = React.forwardRef<HTMLDivElement, InfoRowProps>(
   function InfoRow(
     {

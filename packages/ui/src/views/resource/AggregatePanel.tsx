@@ -46,7 +46,9 @@ function defaultFormat(key: unknown): React.ReactNode {
   return String(key);
 }
 
-/** Count-by-group rows for one model, with a total. */
+/** Count-by-group rows for one model, with a total.
+ * @kind surface
+ */
 export function AggregatePanel({
   resource,
   dimensions,

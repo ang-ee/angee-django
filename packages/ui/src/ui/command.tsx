@@ -13,6 +13,9 @@ const COMMAND_ITEM = cn(
   "h-9 data-[disabled=true]:cursor-not-allowed data-[disabled=true]:opacity-60 data-[selected=true]:bg-inset [&_.glyph]:size-4 [&_.glyph]:text-fg-muted",
 );
 
+/**
+ * @kind token
+ */
 export const commandVariants = tv({
   slots: {
     root: "flex min-h-0 flex-col",
@@ -44,6 +47,9 @@ export type CommandProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner Command
+ */
 export const CommandRoot = React.forwardRef<HTMLDivElement, CommandProps>(
   function CommandRoot({ className, ...props }, ref) {
     const styles = commandVariants();
@@ -63,6 +69,9 @@ export type CommandSearchProps = React.HTMLAttributes<HTMLDivElement> & {
   icon?: React.ReactNode;
 };
 
+/**
+ * @owner Command
+ */
 export const CommandSearch = React.forwardRef<
   HTMLDivElement,
   CommandSearchProps
@@ -87,6 +96,9 @@ export type CommandInputProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner Command
+ */
 export const CommandInput = React.forwardRef<
   HTMLInputElement,
   CommandInputProps
@@ -109,6 +121,9 @@ export type CommandListProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner Command
+ */
 export const CommandList = React.forwardRef<HTMLDivElement, CommandListProps>(
   function CommandList({ className, ...props }, ref) {
     const styles = commandVariants();
@@ -130,6 +145,9 @@ export type CommandEmptyProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner Command
+ */
 export const CommandEmpty = React.forwardRef<
   HTMLDivElement,
   CommandEmptyProps
@@ -152,6 +170,9 @@ export type CommandGroupProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner Command
+ */
 export const CommandGroup = React.forwardRef<
   HTMLDivElement,
   CommandGroupProps
@@ -179,6 +200,9 @@ export type CommandItemProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner Command
+ */
 export const CommandItem = React.forwardRef<HTMLDivElement, CommandItemProps>(
   function CommandItem({ className, ...props }, ref) {
     const styles = commandVariants();
@@ -200,6 +224,9 @@ export type CommandSeparatorProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner Command
+ */
 export const CommandSeparator = React.forwardRef<
   HTMLDivElement,
   CommandSeparatorProps
@@ -222,6 +249,9 @@ export type CommandLoadingProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner Command
+ */
 export const CommandLoading = React.forwardRef<
   HTMLDivElement,
   CommandLoadingProps
@@ -241,6 +271,9 @@ export type CommandShortcutProps = React.HTMLAttributes<HTMLSpanElement> & {
   className?: string;
 };
 
+/**
+ * @owner Command
+ */
 export const CommandShortcut = React.forwardRef<
   HTMLSpanElement,
   CommandShortcutProps
@@ -252,6 +285,9 @@ export const CommandShortcut = React.forwardRef<
 });
 CommandShortcut.displayName = "CommandShortcut";
 
+/**
+ * @kind primitive
+ */
 export const Command = Object.assign(CommandRoot, {
   Root: CommandRoot,
   Search: CommandSearch,

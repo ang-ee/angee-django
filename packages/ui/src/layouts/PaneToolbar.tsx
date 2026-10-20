@@ -26,7 +26,9 @@ export interface PaneToolbarHostProps extends Pick<React.HTMLAttributes<HTMLDivE
   className?: string;
 }
 
-/** A side pane's frame: the toolbar row, then the pane's content filling the rest. */
+/** A side pane's frame: the toolbar row, then the pane's content filling the rest.
+ * @owner PaneToolbar
+ */
 export function PaneToolbarHost({ children, back, title, className, ...rest }: PaneToolbarHostProps): React.ReactElement {
   const [host, setHost] = React.useState<HTMLElement | null>(null);
   return (
@@ -74,7 +76,10 @@ export interface PaneToolbarProps {
   className?: string;
 }
 
-/** The pane's live toolbar content, portaled into its host's row. */
+/** The pane's live toolbar content, portaled into its host's row.
+ * @kind region
+ * @region pane-toolbar-band
+ */
 export function PaneToolbar({ scope, selector, search = false, onSearch, actions, overflow = false, onOverflow, className }: PaneToolbarProps): React.ReactElement | React.ReactPortal | null {
   return (
     <band.Band className={className}>
@@ -105,7 +110,9 @@ export interface PaneToolbarIconButtonProps extends Omit<React.ComponentPropsWit
   disabled?: boolean;
 }
 
-/** The toolbar's 28px icon button, with an optional count badge (needs you). */
+/** The toolbar's 28px icon button, with an optional count badge (needs you).
+ * @owner PaneToolbar
+ */
 export function PaneToolbarIconButton({ icon, label, onClick, tone, active, badge, disabled, className, ...props }: PaneToolbarIconButtonProps): React.ReactElement {
   return (
     <button
@@ -143,7 +150,9 @@ export interface PaneToolbarMenuRadioGroup {
   items: readonly { value: string; label: React.ReactNode; disabled?: boolean }[];
 }
 
-/** The toolbar's overflow: one menu behind the shared icon, with the pane's secondary verbs. */
+/** The toolbar's overflow: one menu behind the shared icon, with the pane's secondary verbs.
+ * @owner PaneToolbar
+ */
 export function PaneToolbarMenu({ label, items = [], groups = [] }: {
   label?: string;
   items?: readonly PaneToolbarMenuItem[];

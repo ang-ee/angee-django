@@ -72,6 +72,10 @@ export type {
   TabProps,
 };
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function parsePageColumns<TRow extends object = Record<string, unknown>>(
   children: ReactNode,
 ): ColumnDescriptor<TRow>[] {
@@ -88,6 +92,10 @@ export function parsePageColumns<TRow extends object = Record<string, unknown>>(
   });
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function parsePageFields(children: ReactNode): FieldDescriptor[] {
   return cachedChildDescriptors(fieldListCache, children, () => {
     const fields: FieldDescriptor[] = [];
@@ -124,6 +132,10 @@ export function hasDirectPageElement(
   );
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function parsePageGroups(children: ReactNode): GroupDescriptor[] {
   return cachedChildDescriptors(groupListCache, children, () =>
     pageChildren(children).flatMap((child) => {
@@ -133,6 +145,10 @@ export function parsePageGroups(children: ReactNode): GroupDescriptor[] {
   );
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function parsePageActions(children: ReactNode): ActionDescriptor[] {
   return cachedChildDescriptors(actionListCache, children, () => {
     const actions = pageChildren(children).flatMap((child) => {
@@ -143,6 +159,10 @@ export function parsePageActions(children: ReactNode): ActionDescriptor[] {
   });
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function parsePageTabs(children: ReactNode): TabDescriptor[] {
   return cachedChildDescriptors(tabListCache, children, () => {
     const tabs = pageChildren(children).flatMap((child) => {
@@ -321,6 +341,10 @@ function cachedChildDescriptors<TDescriptor>(
   return descriptors;
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function parsePageFacets(children: ReactNode): FacetDescriptor[] {
   return cachedChildDescriptors(facetListCache, children, () => {
     const facets = pageChildren(children).flatMap((child) => {
@@ -335,6 +359,10 @@ export function parsePageFacets(children: ReactNode): FacetDescriptor[] {
   });
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function mergePageFacets(
   explicit: readonly FacetDescriptor[] | undefined,
   declared: readonly FacetDescriptor[],

@@ -60,6 +60,7 @@ type ArgValues = Record<string, unknown>;
  * On an `ok=false` outcome it binds the in-band `validationErrors` to their args
  * and stays open; it closes only on `ok=true`, toasting the success `message`.
  * A thrown (non-domain / GraphQL) failure surfaces in the form-level banner.
+ * @kind surface
  */
 export function ActionFormDialog(props: ActionFormDialogProps): React.ReactElement | null {
   return props.open ? <ActionFormDialogOpening {...props} /> : null;

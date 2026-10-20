@@ -8,6 +8,9 @@ import {
 import { tv, type VariantProps } from "../lib/variants";
 import { Toggle, type ToggleProps } from "./toggle";
 
+/**
+ * @kind token
+ */
 export const toggleGroupVariants = tv({
   slots: {
     root:
@@ -73,6 +76,9 @@ export type ToggleGroupRootProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner ToggleGroup
+ */
 export const ToggleGroupRoot = React.forwardRef<
   HTMLDivElement,
   ToggleGroupRootProps
@@ -105,6 +111,9 @@ export type ToggleGroupItemProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner ToggleGroup
+ */
 export const ToggleGroupItem = React.forwardRef<
   HTMLButtonElement,
   ToggleGroupItemProps
@@ -128,6 +137,9 @@ export const ToggleGroupItem = React.forwardRef<
 });
 ToggleGroupItem.displayName = "ToggleGroupItem";
 
+/**
+ * @kind primitive
+ */
 export const ToggleGroup = Object.assign(ToggleGroupRoot, {
   Root: ToggleGroupRoot,
   Item: ToggleGroupItem,
@@ -155,6 +167,9 @@ export type SegmentedControlProps<Value extends string = string> = Omit<
   ) => void;
 };
 
+/**
+ * @kind primitive
+ */
 export function SegmentedControl<Value extends string = string>({
   options,
   value,

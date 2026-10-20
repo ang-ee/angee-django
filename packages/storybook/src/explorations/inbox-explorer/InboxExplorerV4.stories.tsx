@@ -11,7 +11,7 @@ const menu: ResourceProps[] = [
 ];
 
 const meta = {
-  title: "Nexus/Inbox Explorer V4 — console study",
+  title: "Explorations/2026-09-11 Inbox Explorer V4 — Nexus ruling",
   component: InboxExplorerV4,
   parameters: {
     layout: "fullscreen", route: "/nexus/inbox", angeeRoutes: ["/nexus", "/nexus/inbox"], angeeResources: menu,

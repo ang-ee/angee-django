@@ -94,6 +94,10 @@ const ChatterContext = createContext<ChatterContextValue>({
   registerSecondaryController: () => undefined,
 });
 
+/**
+ * @kind null
+ * @reason Provider infrastructure: Chatter context.
+ */
 export function ChatterProvider({
   children,
   defaultCollapsed = false,
@@ -256,6 +260,9 @@ export function ChatterProvider({
   );
 }
 
+/**
+ * @owner Chatter
+ */
 export function useChatter(): ChatterContextValue {
   return useContext(ChatterContext);
 }
@@ -264,6 +271,7 @@ export function useChatter(): ChatterContextValue {
  * Publish secondary-pane content for the lifetime of the calling component.
  * Pass a memoized `content` object; inline objects or tab arrays republish on
  * every render and can churn the shell.
+ * @owner Chatter
  */
 export function useChatterContent(content: ChatterContent | null): void {
   const ownerRef = useRef<symbol | null>(null);

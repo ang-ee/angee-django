@@ -230,7 +230,9 @@ export interface ResourceRecordController<TRow extends Row = Row> {
   onRecordTabChange?: (tab: string) => void;
 }
 
-/** The refine list action surface, with optional inline/drawer record UX. */
+/** The refine list action surface, with optional inline/drawer record UX.
+ * @kind surface
+ */
 export function ResourceList<TRow extends Row = Row>({
   pageSize,
   defaultView,
@@ -321,7 +323,9 @@ export function ResourceList<TRow extends Row = Row>({
   });
 }
 
-/** A drawer-mode `ResourceList` with local query/record state and inline controls. */
+/** A drawer-mode `ResourceList` with local query/record state and inline controls.
+ * @kind surface
+ */
 export function DrawerResourceList<TRow extends Row = Row>(
   props: DrawerResourceListProps<TRow>,
 ): React.ReactElement {
@@ -347,7 +351,9 @@ export interface ResourceFormActionProps
   id?: string | null;
 }
 
-/** The refine create action surface for one resource. */
+/** The refine create action surface for one resource.
+ * @kind surface
+ */
 export function ResourceCreate({
   resource,
   ...props
@@ -355,7 +361,9 @@ export function ResourceCreate({
   return <FormView {...props} resource={resource} id={null} />;
 }
 
-/** The refine edit action surface for one resource record. */
+/** The refine edit action surface for one resource record.
+ * @kind surface
+ */
 export function ResourceEdit({
   resource,
   id,
@@ -364,7 +372,9 @@ export function ResourceEdit({
   return <FormView {...props} resource={resource} id={id} publishBreadcrumbLabel />;
 }
 
-/** The refine show action surface for one resource record. */
+/** The refine show action surface for one resource record.
+ * @kind surface
+ */
 export function ResourceShow({
   resource,
   id,

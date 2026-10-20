@@ -24,11 +24,18 @@ const RESOURCE_VIEW_SEARCH_SHAPE = {
 
 export type ResourceViewSearchKey = keyof typeof RESOURCE_VIEW_SEARCH_SHAPE;
 export type ResourceViewSearch = Partial<typeof RESOURCE_VIEW_SEARCH_SHAPE>;
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const RESOURCE_VIEW_SEARCH_KEYS = Object.keys(
   RESOURCE_VIEW_SEARCH_SHAPE,
 ) as ResourceViewSearchKey[];
 
-/** Encode only persisted view facts, retaining the existing URL vocabulary. */
+/** Encode only persisted view facts, retaining the existing URL vocabulary.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function resourceViewStateToSearch(
   state: ResourceViewState,
   initial: ResourceViewInitialState = {},
@@ -63,7 +70,10 @@ export function resourceViewStateToSearch(
   return search;
 }
 
-/** Decode URL syntax into native state, never a second table state model. */
+/** Decode URL syntax into native state, never a second table state model.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function resourceViewSearchToState(
   input: ResourceViewSearch | Record<string, unknown>,
   initial: ResourceViewInitialState = {},
@@ -112,6 +122,10 @@ export function normaliseGroupStack(groups: unknown): readonly ResourceViewGroup
   return parsed;
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function mergeResourceViewSearch(
   current: Record<string, unknown>,
   next: Partial<Record<ResourceViewSearchKey, unknown>>,
@@ -191,7 +205,10 @@ export function parseSearchAnchor(value: unknown): string | null {
 
 const CALENDAR_ANCHOR_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
-/** Today as a local `yyyy-MM-dd` anchor (the calendar's default reference day). */
+/** Today as a local `yyyy-MM-dd` anchor (the calendar's default reference day).
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function todayCalendarAnchor(): string {
   return format(new Date(), CALENDAR_ANCHOR_FORMAT);
 }
@@ -233,6 +250,10 @@ export function serializeResourceViewGroupStack(
   return groups.map(serializeResourceViewGroup).join(",");
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function resourceViewGroupsEqual(
   left: ResourceViewGroup,
   right: ResourceViewGroup,

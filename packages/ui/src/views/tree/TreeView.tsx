@@ -59,6 +59,9 @@ export interface TreeViewProps<
   className?: string;
 }
 
+/**
+ * @kind surface
+ */
 export function TreeView<TRow extends Record<string, unknown>>({
   rows = [],
   parent = "parentId" as keyof TRow & string,

@@ -53,6 +53,7 @@ function RowsRead(props: WidgetRenderProps<RowsValue>): ReactElement {
  * Render fixed-N object rows as a table, or titled sections with rowTitle.
  * Both layouts evaluate showWhen against each row. Tables retain empty cells
  * for hidden fields so the remaining values stay under their column headers.
+ * @kind surface
  */
 export function RowsField({
   value,

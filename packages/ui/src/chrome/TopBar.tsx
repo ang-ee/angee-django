@@ -35,6 +35,10 @@ export interface TopBarProps {
   className?: string;
 }
 
+/**
+ * @kind region
+ * @region top-bar
+ */
 export function TopBar({
   navigation,
   primaryPane,

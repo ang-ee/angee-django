@@ -13,6 +13,10 @@ export interface TimelineEntryProps
   emptyBody?: React.ReactNode;
 }
 
+/**
+ * @kind fragment
+ * @deprecated Lane 2 deletion candidate; migrate callers to the canonical owner.
+ */
 export function TimelineEntry({
   body,
   className,

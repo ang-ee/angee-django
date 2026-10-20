@@ -59,7 +59,10 @@ export type AnyCollectionQuery<TRequest, TResult> = CollectionQuery<
   TResult
 >;
 
-/** Keep document variables/results checked at the declaration, erase once here. */
+/** Keep document variables/results checked at the declaration, erase once here.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function collectionQuery<
   TDocument extends AuthoredDocument,
   TRequest,

@@ -5,6 +5,9 @@ import { tv, type VariantProps } from "../lib/variants";
 import { NavLink } from "../ui/nav-link";
 import { tabsVariants } from "../ui/tabs";
 
+/**
+ * @kind token
+ */
 export const sectionNavVariants = tv({
   slots: {
     root: "shrink-0",
@@ -52,6 +55,10 @@ export type SectionNavProps = Omit<
     label?: string;
   };
 
+/**
+ * @kind region
+ * @region section-navigation
+ */
 export const SectionNav = React.forwardRef<HTMLElement, SectionNavProps>(
   function SectionNav(
     {

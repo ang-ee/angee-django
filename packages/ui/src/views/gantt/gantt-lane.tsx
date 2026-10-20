@@ -20,7 +20,9 @@ export interface GanttLaneDetails {
   note?: string | null;
 }
 
-/** Shared label for collection Gantt lanes. The record link is a real anchor when declared. */
+/** Shared label for collection Gantt lanes. The record link is a real anchor when declared.
+ * @kind surface
+ */
 export function GanttLane({ details, onOpen }: {
   details: GanttLaneDetails;
   onOpen?: () => void;

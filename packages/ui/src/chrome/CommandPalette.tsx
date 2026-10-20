@@ -23,6 +23,8 @@ export interface CommandPaletteProps {
  * The live ⌘K command palette: a rail-styled trigger plus the {@link Spotlight}
  * dialog, seeded with one navigate command per menu destination. `commands`
  * appends host-supplied actions after the nav set.
+ * @kind region
+ * @region command-palette
  */
 export function CommandPalette({
   commands,

@@ -12,6 +12,9 @@ import {
   widgetControlPresentationProps,
 } from "./widget-control";
 
+/**
+ * @kind token
+ */
 export const inputVariants = tv({
   extend: widgetControlSurfaceVariants,
   base: "w-full text-fg placeholder:text-fg-subtle",
@@ -27,7 +30,9 @@ export const inputVariants = tv({
   },
 });
 
-/** One input-shaped box holding a value's chips and the draft input, wrapping as it fills. */
+/** One input-shaped box holding a value's chips and the draft input, wrapping as it fills.
+ * @kind token
+ */
 export const chipInputVariants = tv({
   extend: inputVariants,
   base: "flex flex-wrap items-center gap-1 py-1",
@@ -48,6 +53,9 @@ export const chipInputVariants = tv({
 // search-specific surface, the data-attribute read-only path, and the read-only
 // input cursor. `invalid` stays as an inert pass-through so the prop type still
 // resolves (its class payload comes from the composed owner call).
+/**
+ * @kind token
+ */
 export const searchInputVariants = tv({
   slots: {
     root:
@@ -120,6 +128,9 @@ export type InputProps = Omit<
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Input(
   {
     size = "md",
@@ -153,7 +164,10 @@ export interface DebouncedSearchInputProps extends Omit<SearchInputProps, "value
   onValueChange: (value: string) => void;
 }
 
-/** SearchInput with the same commit/blur/Enter behavior as ResourceToolbar. */
+/** SearchInput with the same commit/blur/Enter behavior as ResourceToolbar.
+ * @kind primitive
+ * @deprecated Lane 2 deletion candidate; migrate callers to the canonical owner.
+ */
 export function DebouncedSearchInput({ value, onValueChange, onBlur, onKeyDown, ...props }: DebouncedSearchInputProps) {
   const { draft, setDraft, commit } = useDebouncedText(value, onValueChange);
   return <SearchInput {...props} value={draft}
@@ -165,6 +179,10 @@ export function DebouncedSearchInput({ value, onValueChange, onBlur, onKeyDown, 
 
 export type TextInputProps = InputProps;
 
+/**
+ * @kind primitive
+ * @deprecated Lane 2 deletion candidate; migrate callers to the canonical owner.
+ */
 export function TextInput(props: TextInputProps): React.ReactElement {
   return <Input {...props} />;
 }
@@ -180,6 +198,9 @@ export type SearchInputProps = Omit<
     onClear?: () => void;
   };
 
+/**
+ * @kind primitive
+ */
 export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
   function SearchInput(
     {

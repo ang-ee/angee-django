@@ -22,6 +22,9 @@ import {
   type WidgetControlSurfaceProps,
 } from "./widget-control";
 
+/**
+ * @kind token
+ */
 export const numberFieldVariants = tv({
   slots: {
     root: "inline-flex min-w-0 flex-col gap-1",
@@ -89,6 +92,9 @@ export type NumberFieldRootProps = Omit<BaseNumberFieldRootProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner NumberField
+ */
 export const NumberFieldRoot = React.forwardRef<
   HTMLDivElement,
   NumberFieldRootProps
@@ -117,6 +123,9 @@ export type NumberFieldGroupProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner NumberField
+ */
 export const NumberFieldGroup = React.forwardRef<
   HTMLDivElement,
   NumberFieldGroupProps
@@ -152,6 +161,9 @@ export type NumberFieldInputProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner NumberField
+ */
 export const NumberFieldInput = React.forwardRef<
   HTMLInputElement,
   NumberFieldInputProps
@@ -178,6 +190,9 @@ export type NumberFieldIncrementProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner NumberField
+ */
 export const NumberFieldIncrement = React.forwardRef<
   HTMLButtonElement,
   NumberFieldIncrementProps
@@ -214,6 +229,9 @@ export type NumberFieldDecrementProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner NumberField
+ */
 export const NumberFieldDecrement = React.forwardRef<
   HTMLButtonElement,
   NumberFieldDecrementProps
@@ -249,6 +267,9 @@ export type NumberFieldScrubAreaProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner NumberField
+ */
 export const NumberFieldScrubArea = React.forwardRef<
   HTMLSpanElement,
   NumberFieldScrubAreaProps
@@ -271,6 +292,9 @@ export type NumberFieldScrubAreaCursorProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner NumberField
+ */
 export const NumberFieldScrubAreaCursor = React.forwardRef<
   HTMLSpanElement,
   NumberFieldScrubAreaCursorProps
@@ -318,6 +342,9 @@ export type NumberFieldProps = Omit<NumberFieldRootProps, "children"> &
     showStepper?: boolean;
   };
 
+/**
+ * @kind primitive
+ */
 export const NumberField = React.forwardRef<HTMLDivElement, NumberFieldProps>(
   function NumberField(
     {

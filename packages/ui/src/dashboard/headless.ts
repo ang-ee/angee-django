@@ -5,9 +5,19 @@ import * as v from "valibot";
 
 import { JsonValueSchema, type JsonObject } from "../widgets/json-value";
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const DASHBOARD_SCHEMA_VERSION = 1 as const;
+/**
+ * @kind token
+ */
 export const DASHBOARD_COLUMNS = 12;
 
+/**
+ * @kind token
+ */
 export const DASHBOARD_LIMITS = {
   columns: { min: 1, max: 24 },
   widgets: 100,
@@ -22,12 +32,20 @@ export const DASHBOARD_LIMITS = {
 const PositiveInteger = v.pipe(v.number(), v.integer(), v.minValue(1));
 const NonNegativeInteger = v.pipe(v.number(), v.integer(), v.minValue(0));
 
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const DashboardTargetSchema = v.variant("scope", [
   v.strictObject({ scope: v.literal("addon"), key: v.pipe(v.string(), v.minLength(1)) }),
   v.strictObject({ scope: v.literal("resource"), key: v.pipe(v.string(), v.minLength(1)) }),
   v.strictObject({ scope: v.literal("personal"), id: v.pipe(v.string(), v.minLength(1)) }),
 ]);
 
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const DashboardRefreshSchema = v.variant("mode", [
   v.strictObject({ mode: v.literal("live") }),
   v.strictObject({
@@ -37,11 +55,19 @@ export const DashboardRefreshSchema = v.variant("mode", [
   v.strictObject({ mode: v.literal("manual") }),
 ]);
 
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const WidgetMeasureSchema = v.strictObject({
   op: v.picklist(["count", "sum", "avg", "min", "max"]),
   field: v.optional(v.pipe(v.string(), v.minLength(1))),
 });
 
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const WidgetSourceSchema = v.strictObject({
   resource: v.pipe(v.string(), v.minLength(1)),
   filter: v.optional(v.record(v.string(), JsonValueSchema)),
@@ -59,6 +85,10 @@ export const WidgetSourceSchema = v.strictObject({
   refresh: v.optional(DashboardRefreshSchema),
 });
 
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const WidgetDataSpecSchema = v.variant("shape", [
   v.strictObject({ shape: v.literal("value"), source: WidgetSourceSchema }),
   v.strictObject({ shape: v.literal("series"), source: WidgetSourceSchema }),
@@ -73,7 +103,10 @@ export const WidgetDataSpecSchema = v.variant("shape", [
   }),
 ]);
 
-/** Ordered row columns use the same dotted paths as the widget source fields. */
+/** Ordered row columns use the same dotted paths as the widget source fields.
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const WidgetColumnsSchema = v.pipe(
   v.array(v.strictObject({
     path: v.pipe(v.string(), v.minLength(1)),
@@ -98,7 +131,10 @@ export const WidgetColumnsSchema = v.pipe(
   }),
 );
 
-/** Decode optional row columns without revalidating the enclosing snapshot. */
+/** Decode optional row columns without revalidating the enclosing snapshot.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function widgetColumns(spec: { options: JsonObject }) {
   return v.safeParse(v.optional(WidgetColumnsSchema), spec.options.columns);
 }
@@ -106,7 +142,10 @@ export function widgetColumns(spec: { options: JsonObject }) {
 /** A readable scope row authorizes listing, independently of the widget's results. */
 /** Who sees a widget: a container the reader must read, named through the resource that declares
  *  the scope — e.g. `{ resource: "projects.Task", key: "queue__slug", value: "<slug>" }`, never the
- *  container's own model. */
+ *  container's own model.
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const WidgetVisibilitySchema = v.strictObject({
   resource: v.pipe(v.string(), v.minLength(1)),
   key: v.pipe(v.string(), v.minLength(1)),
@@ -114,6 +153,10 @@ export const WidgetVisibilitySchema = v.strictObject({
 });
 export type WidgetVisibility = v.InferOutput<typeof WidgetVisibilitySchema>;
 
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const WidgetSpecSchema = v.pipe(v.strictObject({
   schemaVersion: v.literal(DASHBOARD_SCHEMA_VERSION),
   id: v.pipe(v.string(), v.minLength(1)),
@@ -181,6 +224,10 @@ export const WidgetSpecSchema = v.pipe(v.strictObject({
   });
 }));
 
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const DashboardSnapshotSchema = v.strictObject({
   schemaVersion: v.literal(DASHBOARD_SCHEMA_VERSION),
   columns: v.pipe(
@@ -350,12 +397,20 @@ export interface DashboardRegistry {
   store: DashboardStore | null;
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function dashboardTargetKey(target: DashboardTarget): string {
   return target.scope === "personal"
     ? `personal:${target.id}`
     : `${target.scope}:${target.key}`;
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function parseDashboardSnapshot(value: unknown): DashboardSnapshot {
   const result = v.safeParse(DashboardSnapshotSchema, value);
   if (!result.success) {
@@ -371,6 +426,10 @@ export function parseDashboardSnapshot(value: unknown): DashboardSnapshot {
   return result.output;
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function validateDashboardLayout(snapshot: DashboardSnapshot): void {
   const ids = new Set<string>();
   const active = snapshot.widgets.filter((widget) => !widget.isArchived);

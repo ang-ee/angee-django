@@ -46,7 +46,9 @@ export interface CollectionTreeViewProps<TRow extends Row> extends Pick<
   renderRow?: (row: TRow) => ReactNode;
 }
 
-/** Native tree plus the same authored transport, filter toolbar and independent page state as ListView. */
+/** Native tree plus the same authored transport, filter toolbar and independent page state as ListView.
+ * @kind surface
+ */
 export function CollectionTreeView<TRow extends Row>(
   props: CollectionTreeViewProps<TRow>,
 ) {

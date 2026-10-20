@@ -27,6 +27,8 @@ const ABSENT = Symbol("absent");
  * the provider/consumer boilerplate every runtime context would otherwise
  * repeat: declare the value type, name the context for error messages, and read
  * it with `use()` (required) or `useMaybe()` (optional).
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function makeContext<T>(name: string): ContextBinding<T> {
   const Ctx = createContext<T | typeof ABSENT>(ABSENT) as Context<

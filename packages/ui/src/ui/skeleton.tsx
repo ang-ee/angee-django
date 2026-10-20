@@ -3,6 +3,9 @@ import * as React from "react";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const skeletonVariants = tv({
   base:
     "relative overflow-hidden bg-inset text-transparent before:absolute before:inset-0 before:-translate-x-full before:bg-gradient-to-r before:from-transparent before:via-sheet before:to-transparent before:animate-skeleton-shimmer",
@@ -39,6 +42,9 @@ export type SkeletonProps = React.HTMLAttributes<HTMLDivElement> &
     decorative?: boolean;
   };
 
+/**
+ * @kind primitive
+ */
 export const Skeleton = React.forwardRef<HTMLDivElement, SkeletonProps>(
   function Skeleton(
     {
@@ -70,6 +76,9 @@ export type SkeletonTextProps = Omit<SkeletonProps, "children" | "shape"> & {
   lines?: number;
 };
 
+/**
+ * @owner Skeleton
+ */
 export const SkeletonText = React.forwardRef<
   HTMLDivElement,
   SkeletonTextProps
@@ -107,6 +116,9 @@ export type SkeletonStatusProps = React.HTMLAttributes<HTMLDivElement> & {
   label: React.ReactNode;
 };
 
+/**
+ * @owner Skeleton
+ */
 export const SkeletonStatus = React.forwardRef<
   HTMLDivElement,
   SkeletonStatusProps

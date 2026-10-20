@@ -94,6 +94,7 @@ type LineViewRow = { id: string; index: number; value: Row };
  * A row the backend locks (`lines.lockField`) is a system row: the list shows a lock
  * in place of its reorder handle, it carries a "System" marker, it offers no duplicate
  * or remove, and its locked cells are read-only while its other cells stay editable.
+ * @kind surface
  */
 export function EditableLines({
   control, setValue, name, lines, parentRow, readOnly, footer, rowErrors,

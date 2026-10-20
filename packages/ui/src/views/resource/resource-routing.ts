@@ -132,6 +132,9 @@ export function RoutedRecordController<TRow extends Row = Row>({
   });
 }
 
+/**
+ * @owner RecordReference
+ */
 export function useRouteRecordId(): string | undefined {
   const fullPath = useMatches({ select: leafFullPath });
   const activeParamName = trailingRouteParamName(fullPath);
@@ -143,14 +146,20 @@ export function useRouteRecordId(): string | undefined {
   return useMatches({ select: selectRecordId });
 }
 
-/** Read one named string parameter from the active route without asserting its route tree. */
+/** Read one named string parameter from the active route without asserting its route tree.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function useRouteParam(name: string): string | undefined {
   const params: Record<string, unknown> = useParams({ strict: false });
   const value = params[name];
   return typeof value === "string" ? value : undefined;
 }
 
-/** Read the app's flat search object through its router-owned runtime shape. */
+/** Read the app's flat search object through its router-owned runtime shape.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function useRouteSearch(): Readonly<Record<string, unknown>> {
   return useSearch({ strict: false });
 }

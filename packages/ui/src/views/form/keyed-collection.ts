@@ -19,14 +19,20 @@ export interface KeyedCollectionSnapshot<TValue> {
   clientIdByKey: ReadonlyMap<string, string>;
 }
 
-/** Load a keyed document using each loaded key as its stable client identity. */
+/** Load a keyed document using each loaded key as its stable client identity.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function keyedCollectionFromRecord<TValue>(
   values: Readonly<Record<string, TValue>>,
 ): KeyedCollection<TValue> {
   return Object.entries(values).map(([key, value]) => ({ clientId: key, key, value: structuredClone(value) }));
 }
 
-/** Append this entry through RHF's native array controls or setValue. */
+/** Append this entry through RHF's native array controls or setValue.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function createKeyedEntry<TValue>(value: TValue, key = ""): KeyedEntry<TValue> {
   return { clientId: createClientKey("entry"), key, value: structuredClone(value) };
 }
@@ -37,6 +43,8 @@ export function createKeyedEntry<TValue>(value: TValue, key = ""): KeyedEntry<TV
  * client id. The caller projects those ids to its current array field paths.
  * Record values follow JavaScript key enumeration; the collection and maps
  * retain authored order. The caller owns other key and reference validation.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function keyedCollectionToRecord<TValue>(
   entries: readonly KeyedEntry<TValue>[],

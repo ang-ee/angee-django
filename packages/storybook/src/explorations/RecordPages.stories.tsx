@@ -4,9 +4,9 @@ import { RecordPage, type RecordPageProps } from "./record-page/RecordPage";
 import { BodyTabs, Field, FieldGrid, LinesTable, Placeholder } from "./record-page/Subject";
 
 /**
- * Four record pages from one composition: invoice, file, knowledge page, person. The components
- * under `./record-page` are the reusable parts (explorer pane, command band, subject, document
- * pane, context aside with its four panes, pane toolbar); each page only supplies data.
+ * Historical 2026-10-19 whiteboard: invoice, file, knowledge page and person.
+ * Its local anatomy fed the four-region ruling; it is not a component library.
+ * See record-page/README.md for the shipped owners and the remaining page gap.
  */
 
 const t = (daysAgo: number, hh: number, mm: number) => new Date(2026, 9, 19 - daysAgo, hh, mm).toISOString();
@@ -170,7 +170,7 @@ const PERSON: RecordPageProps = {
 /* ------------------------------------------------------------------------------------------- */
 
 const meta = {
-  title: "Shell/Record pages",
+  title: "Explorations/2026-10-19 Record pages — four-region ruling",
   component: RecordPage,
   excludeStories: [],
   parameters: { layout: "fullscreen" },

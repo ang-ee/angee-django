@@ -32,7 +32,9 @@ export interface GanttViewProps extends GanttRowLayout {
 
 const DEFAULT_SIDEBAR_WIDTH = 224;
 
-/** Read-only date-scaled schedules. The drawing library loads only on mount. */
+/** Read-only date-scaled schedules. The drawing library loads only on mount.
+ * @kind surface
+ */
 export function GanttView(props: GanttViewProps) {
   const t = useUiT();
   const [attempt, setAttempt] = useState(0);

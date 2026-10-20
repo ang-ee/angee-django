@@ -108,6 +108,9 @@ export interface RowsGalleryConfig<TRow extends StringIdRow = StringIdRow> {
 
 type RowLayout = "list" | "grid";
 
+/**
+ * @kind surface
+ */
 export function RowsListView<TRow extends StringIdRow = StringIdRow>(
   props: RowsListViewProps<TRow>,
 ): React.ReactElement {

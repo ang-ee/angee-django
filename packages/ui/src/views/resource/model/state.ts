@@ -22,7 +22,10 @@ export interface ResourceViewState {
   anchor: string;
 }
 
-/** Decode declarative defaults at the view boundary; live state stays native. */
+/** Decode declarative defaults at the view boundary; live state stays native.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function createResourceViewState(initial: ResourceViewInitialState = {}): ResourceViewState {
   const view = initial.view ?? "list";
   const groupStack = normaliseGroupStack(initial.groupStacks?.[view] === null ? []

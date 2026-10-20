@@ -21,6 +21,9 @@ export interface DashboardViewProps {
   children?: ReactNode;
 }
 
+/**
+ * @kind surface
+ */
 export function DashboardView({
   children,
   className,

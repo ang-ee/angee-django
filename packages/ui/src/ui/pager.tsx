@@ -39,7 +39,9 @@ export interface PagerProps extends PagerState {
 
 const DEFAULT_PAGE_SIZE_OPTIONS = [10, 20, 50, 80, 100, 200] as const;
 
-/** The pager range-label recipe: an interactive `button` trigger vs a static `span`. */
+/** The pager range-label recipe: an interactive `button` trigger vs a static `span`.
+ * @kind token
+ */
 export const pagerVariants = tv({
   base: "tabular-nums",
   variants: {
@@ -82,6 +84,9 @@ function pagerRangeLabel({
   }`;
 }
 
+/**
+ * @kind primitive
+ */
 export function Pager({
   page,
   pageSize,

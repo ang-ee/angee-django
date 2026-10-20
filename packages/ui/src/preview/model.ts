@@ -67,25 +67,37 @@ function extension(name: string): string {
   return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
 }
 
-/** Lower-cased mime with parameters stripped; the empty/unknown becomes octet. */
+/** Lower-cased mime with parameters stripped; the empty/unknown becomes octet.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function normaliseMime(value: string | null | undefined): string {
   if (!value) return DEFAULT_MIME;
   return value.split(";")[0]?.trim().toLowerCase() || DEFAULT_MIME;
 }
 
-/** The file's content type, falling back to its extension then octet-stream. */
+/** The file's content type, falling back to its extension then octet-stream.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function displayMime(file: PreviewFile): string {
   const declared = normaliseMime(file.mime);
   if (declared !== DEFAULT_MIME) return declared;
   return EXT_MIME[extension(file.name)] ?? DEFAULT_MIME;
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isImageMime(mime: string): boolean {
   return mime.startsWith("image/");
 }
 /**
  * HEIC/HEIF images — a subset of `isImageMime` that browsers (bar Safari) cannot
  * decode, so they need a dedicated renderer rather than a plain `<img>`.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function isHeicMime(mime: string): boolean {
   return (
@@ -95,22 +107,40 @@ export function isHeicMime(mime: string): boolean {
     mime === "image/heif-sequence"
   );
 }
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isMarkdownMime(mime: string): boolean {
   return mime === "text/markdown" || mime === "text/x-markdown";
 }
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isJsonMime(mime: string): boolean {
   return mime === "application/json" || mime.endsWith("+json");
 }
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isTextOrCodeMime(mime: string): boolean {
   return mime.startsWith("text/") || isJsonMime(mime);
 }
 
-/** A highlight language hint for a file (by extension). */
+/** A highlight language hint for a file (by extension).
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function languageForFile(file: PreviewFile): string {
   return EXT_LANGUAGE[extension(file.name)] ?? "text";
 }
 
-/** A human file size (e.g. "1.4 MB"). */
+/** A human file size (e.g. "1.4 MB").
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function formatSize(bytes: number | null | undefined): string {
   if (bytes == null || !Number.isFinite(bytes)) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];

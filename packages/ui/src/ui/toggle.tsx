@@ -7,6 +7,9 @@ import {
 import { tv, type VariantProps } from "../lib/variants";
 import { interactiveSurfaceVariants } from "./widget-control";
 
+/**
+ * @kind token
+ */
 export const toggleVariants = tv({
   extend: interactiveSurfaceVariants,
   base: "inline-flex shrink-0 cursor-pointer select-none items-center justify-center gap-1.5 rounded-6 text-13 font-medium data-[pressed]:text-fg [&_.glyph]:size-3.5",
@@ -45,6 +48,9 @@ export type ToggleProps = Omit<BaseToggleProps<string>, "className"> &
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const Toggle = React.forwardRef<HTMLButtonElement, ToggleProps>(
   function Toggle(
     { className, variant = "default", size = "md", type = "button", ...props },
@@ -62,4 +68,7 @@ export const Toggle = React.forwardRef<HTMLButtonElement, ToggleProps>(
 );
 Toggle.displayName = "Toggle";
 
+/**
+ * @owner Toggle
+ */
 export const ToggleRoot = Toggle;

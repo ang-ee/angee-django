@@ -117,6 +117,9 @@ function WrappingTitleEditor({
 export const FORM_VIEW_COLUMN_CLASS =
   "mx-auto w-full max-w-[1100px] px-6 sm:px-8";
 
+/** @kind region
+ * @region record-header
+ */
 export function FormViewRecordHeader({
   surface,
   compact = false,

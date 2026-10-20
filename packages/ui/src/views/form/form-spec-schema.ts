@@ -129,7 +129,10 @@ const FormSchema = v.pipe(FieldSchema, v.check(
   'root type must be "object".',
 ));
 
-/** Validate the supported emitted form vocabulary before resolving widgets. */
+/** Validate the supported emitted form vocabulary before resolving widgets.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function parseFormSpec(value: unknown): FormSpecWire {
   const result = v.safeParse(FormSchema, value);
   if (result.success) return result.output;
@@ -138,11 +141,17 @@ export function parseFormSpec(value: unknown): FormSpecWire {
   throw new Error(`Invalid ${path}: ${issue.message}`);
 }
 
-/** Invalid/non-object payloads carry no seeds; only declared fields consume them. */
+/** Invalid/non-object payloads carry no seeds; only declared fields consume them.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function parseFormSpecPayload(payload: unknown): Record<string, unknown> {
   const result = v.safeParse(v.record(v.string(), v.unknown()), payload);
   return result.success ? result.output : {};
 }
 
-/** Every non-standard field entry is an annotation for full JSON Schema validators. */
+/** Every non-standard field entry is an annotation for full JSON Schema validators.
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const FORM_SPEC_ANNOTATIONS: readonly string[] = Object.keys(FieldAnnotationSchema.entries);
