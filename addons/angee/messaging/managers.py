@@ -467,7 +467,7 @@ def _preview(body: ParsedPart | None, *, limit: int = 280) -> str:
 def _first_body_text(part: ParsedPart | None, *, html: bool) -> str:
     if part is None:
         return ""
-    is_html = part.type.casefold() == "text/html"
+    is_html = (part.type or "").casefold() == "text/html"
     if part.text and part.role not in ("quoted", "signature") and is_html == html:
         return part.text
     for child in part.children:

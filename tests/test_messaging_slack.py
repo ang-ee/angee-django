@@ -50,6 +50,7 @@ class _BridgeStub:
         self.credential = _CredentialStub()
         self._state = SimpleNamespace(adding=False, db="default")
         self.subscription_state = {"team_id": "T1", "own_id": "U0"}
+        self.last_sync_started_at: datetime | None = None
 
     def fresh_credential(self) -> Any:
         """Supply the integration credential contract without a database."""
