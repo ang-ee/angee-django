@@ -40,10 +40,17 @@ class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
         return self.filter(verdict__isnull=True)
 
     def waiting_on(self, actor: Any) -> Any:
-        """Open questions assigned to this actor, retaining this queryset's read scope."""
+        """Open assignments, or unassigned questions this actor may answer.
+
+        Retain the caller's read scope. An unassigned question delegates to the
+        composed ``act`` permission rather than inventing a default assignee.
+        """
 
         identity = actor_user_id(to_subject_ref(actor)) if actor is not None else None
-        return self.none() if identity is None else self.open().filter(assignees=identity)
+        if identity is None:
+            return self.none()
+        actionable = self.model.objects.with_actor(actor).with_action("act").scoped().filter(pk=OuterRef("pk"))
+        return self.open().filter(Q(assignees=identity) | (Q(assignees__isnull=True) & Q(Exists(actionable))))
 
     def open_for(self, *records: Any) -> Any:
         return self.open().for_records(*records)

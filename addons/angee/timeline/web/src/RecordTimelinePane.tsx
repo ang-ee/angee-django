@@ -26,7 +26,7 @@ export const TIMELINE_KINDS_CONTAINER = "timeline#kinds";
 export const TIMELINE_FOCUS_NEEDS_ME = "needs-me";
 
 export function RecordTimelinePane({ context, selection }: { context: ChatterViewContext; selection?: ChatterSelection }): React.ReactElement {
-  const model = context.route?.canonicalLabel ?? context.route?.modelLabel ?? "";
+  const model = context.route?.modelLabel ?? context.route?.canonicalLabel ?? "";
   const id = context.view.kind === "record" ? context.view.sqid ?? "" : "";
   const [scope, setScope] = React.useState<string>(selection?.focus === TIMELINE_FOCUS_NEEDS_ME ? TIMELINE_SCOPE_NEEDS_ME : TIMELINE_SCOPE_ALL);
   React.useEffect(() => {
