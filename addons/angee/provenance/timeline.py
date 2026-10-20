@@ -41,7 +41,7 @@ class ChangeKind(TimelineKind):
             yield EventData(
                 kind=self.id, target=changeset, record=(model, pk), at=changeset.occurred_at,
                 title=f"{changeset.get_action_display()} · {changeset.get_activity_display()}",
-                detail=changeset.change_reason, actor=changeset.actor, actor_label=label, fold=fold,
+                detail=changeset.reason_display, actor=changeset.actor, actor_label=label, fold=fold,
             )
 
 

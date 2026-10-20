@@ -161,3 +161,21 @@ def test_merge_history_projects_the_unchanged_survivor(composed_permissions) -> 
         boundary = changesets.filter(activity="merge").get()
         assert (tag_model, survivor.pk) in set(changesets.filter(pk=boundary.pk).records_touched())
     assert Event.objects.for_record(survivor).filter(target_pk=boundary.pk).count() == 1
+
+
+def test_machine_reason_never_reaches_a_user(composed_permissions) -> None:
+    """A system-context reason code is silent in the API and the timeline; a sentence passes through."""
+
+    owner = create_platform_admin("timeline-machine-reason")
+    with open_changeset(fresh=True, change_reason="integrate.stream.advance"):
+        vault = vault_for(owner)
+    event = Event.objects.for_record(vault).get(kind="provenance.change")
+    changeset = apps.get_model("provenance", "Changeset")._base_manager.get(pk=event.target_pk)
+    assert changeset.change_reason == "integrate.stream.advance"
+    assert changeset.reason_display == ""
+    assert event.detail == ""
+    with actor_context(owner), open_changeset(fresh=True, change_reason="Renamed after the audit"):
+        vault.name = "Audited"
+        vault.save()
+    latest = Event.objects.for_record(vault).filter(kind="provenance.change").order_by("-at", "-pk").first()
+    assert latest is not None and latest.detail == "Renamed after the audit"
