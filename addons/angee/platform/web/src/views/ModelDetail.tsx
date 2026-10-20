@@ -1,10 +1,9 @@
 import { type ReactElement } from "react";
 
-import { NavLink, Chip, Code, DetailSection, DetailSurface, useRouteHref, useRouteRecordId } from "@angee/ui";
+import { NavLink, Chip, Code, DetailSection, DetailSurface, OverflowChipList, useRouteHref, useRouteRecordId } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import { platformScopeSearch } from "../lib/paths";
-import { LinkedChips } from "../lib/cells";
 import { usePlatformModel } from "../lib/explorer";
 
 export function ModelDetail(): ReactElement {
@@ -97,17 +96,11 @@ export function ModelDetail(): ReactElement {
             rows={[
               [
                 t("col.dependsOn"),
-                <LinkedChips
-                  items={model.depends_on}
-                  href={(id) => routeHref("platform.models.record", { id })}
-                />,
+                <OverflowChipList items={model.depends_on.map((id) => ({ id, label: id, href: routeHref("platform.models.record", { id }) }))} />,
               ],
               [
                 t("col.dependedBy"),
-                <LinkedChips
-                  items={dependedBy}
-                  href={(id) => routeHref("platform.models.record", { id })}
-                />,
+                <OverflowChipList items={dependedBy.map((id) => ({ id, label: id, href: routeHref("platform.models.record", { id }) }))} />,
               ],
             ]}
           />

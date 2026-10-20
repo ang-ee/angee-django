@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -79,8 +79,6 @@ describe("ImplementationDetail", () => {
     renderDetail();
     expect(screen.getByRole("link", { name: "workflows.Step" }).getAttribute("href")).toBe("/platform.models.record/workflows.step");
     expect(screen.getByRole("link", { name: "Workflows" }).getAttribute("href")).toBe("/platform.addons.record/angee.workflows");
-    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
-
     expect(screen.getByText("Explicit flag")).toBeTruthy();
     expect(screen.getByText("Schema flag")).toBeTruthy();
     expect(screen.getByText("Unset flag")).toBeTruthy();
@@ -92,7 +90,6 @@ describe("ImplementationDetail", () => {
 
   test("distinguishes unavailable source from a query failure", () => {
     renderDetail();
-    fireEvent.click(screen.getByRole("tab", { name: "Code" }));
     expect(screen.getByText("Source is packaged without Python files.")).toBeTruthy();
 
     cleanup();

@@ -40,8 +40,7 @@ export const enIntegrateMessages: Record<string, string> = {
   "sources.empty": "No sources are attached to this record.",
   "sources.never": "Never",
   "streams.back": "Back to streams",
-  "streams.failureScope": "Failures · {key} · {partition}",
-  "streams.linkScope": "Links · {key} · {partition}",
+  "streams.scope": "{key} · {partition}",
   "streams.cursor.items_one": "{count} item",
   "streams.cursor.items_other": "{count} items",
   "streams.cursor.object": "Object",
@@ -71,6 +70,7 @@ export const enIntegrateMessages: Record<string, string> = {
   "integrations.add.none": "No integration types are available to you.",
   "integrations.add.connectDescription": "Continue to its connection setup.",
   "integrations.add.back": "Back",
+  "integrations.add.choose": "Choose",
   "integrations.add.continue": "Continue",
   // Webhooks page.
   "webhooks.filters": "Filters",

@@ -171,7 +171,9 @@ describe("AddRepositoryControl typeahead", () => {
         <RepositoryPicker vcsBridgeId={VCS_ID} onPick={onPick} readOnly />
       </AppRuntimeProvider>,
     );
-    expect((candidate as HTMLButtonElement).disabled).toBe(true);
+    // A read-only picker keeps the candidate's facts but no longer offers it as a control.
+    expect(screen.queryByRole("button", { name: /acme\/widgets/ })).toBeNull();
+    expect(screen.getByText("acme/widgets")).toBeTruthy();
     fireEvent.click(candidate);
     expect(onPick).not.toHaveBeenCalled();
   });

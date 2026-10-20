@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type ReactElement, type ReactNode } from "react";
-import { Chip, Button, Glyph, errorMessage, useStatusTone, textRoleVariants, useAuthoredResourceMutation, useToast, type CardActionContext, type Tone } from "@angee/ui";
+import { Chip, Button, Glyph, OverflowChipList, StatusBadge, errorMessage, textRoleVariants, useActionResultRun, useAuthoredResourceMutation, type CardActionContext } from "@angee/ui";
 import { useAuthoredQuery } from "@angee/refine";
 import type { AddonKind } from "@angee/gql/console/graphql";
 
@@ -40,53 +40,31 @@ export interface AddonResourceRow extends Record<string, unknown> {
 
 const MAX_CARD_KEYWORDS = 5;
 
-// The reflection enums color the same way wherever they render (card body + list
-// columns), so the override maps live here once and both surfaces import them: the
-// shared `useStatusTone` vocabulary owns the mechanism (`disabled` is already neutral
-// there), with these platform-specific values supplied as the override.
-export const STATE_TONES: Record<string, Tone> = {
-  ENABLED: "success",
-  REMOVED: "danger",
-};
-export const SOURCE_TONES: Record<string, Tone> = {
-  REMOTE: "info",
-};
-
 /**
  * The Odoo-style app card body — name, description, keyword chips, and the
  * source/state provenance line. Composed inside the shared `BoardView` card frame
  * (via `ListView`'s `renderCard`), so it carries no interactive elements: the
  * frame owns the open-detail click and the footer owns the lifecycle actions.
+ * The reflection enums take their tones from the addon's `statusTones` vocabulary.
  */
 export function AddonCard({ row }: { row: AddonResourceRow }): ReactElement {
-  const statusTone = useStatusTone();
   const t = usePlatformT();
   // The JSON scalar may arrive null (a catalogue row whose keywords are unset) — guard the
   // boundary, and dedupe so the chip `key` stays unique.
-  const keywords = [...new Set(row.keywords ?? [])].slice(0, MAX_CARD_KEYWORDS);
+  const keywords = [...new Set(row.keywords ?? [])].map((keyword) => ({ id: keyword, label: keyword }));
   return (
     <div className="grid min-w-0 gap-2">
       <span className="block min-w-0">
-        <span className="block truncate text-sm font-semibold text-fg">{row.label}</span>
+        <span className={textRoleVariants({ role: "title", truncate: true })}>{row.label}</span>
         <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.id}</span>
       </span>
       {row.description ? (
-        <p className="line-clamp-2 text-13 text-fg-muted">{row.description}</p>
+        <p className={textRoleVariants({ role: "description" })}>{row.description}</p>
       ) : null}
-      {keywords.length > 0 ? (
-        <span className="flex flex-wrap gap-1">
-          {keywords.map((keyword) => (
-            <Chip key={keyword} tone="muted" size="sm">
-              {keyword}
-            </Chip>
-          ))}
-        </span>
-      ) : null}
+      <OverflowChipList items={keywords} max={MAX_CARD_KEYWORDS} />
       <span className="flex flex-wrap items-center gap-1">
-        <Chip tone={statusTone(row.state, STATE_TONES)}>{addonEnumLabel(t, "state", row.state)}</Chip>
-        <Chip tone={statusTone(row.source, SOURCE_TONES, { unknownTone: "neutral" })}>
-          {addonEnumLabel(t, "source", row.source)}
-        </Chip>
+        <StatusBadge value={row.state}>{addonEnumLabel(t, "state", row.state)}</StatusBadge>
+        <StatusBadge value={row.source}>{addonEnumLabel(t, "source", row.source)}</StatusBadge>
         {row.forced ? <Chip tone="info">{t("apps.required")}</Chip> : null}
         {row.pending ? <Chip tone="warning">{t("apps.pending")}</Chip> : null}
       </span>
@@ -99,7 +77,8 @@ export function AddonCard({ row }: { row: AddonResourceRow }): ReactElement {
  * addons still open the server-owned refusal preview. An available addon offers
  * Install; a removed addon offers Reinstall through the same server-owned preview.
  * Pending rows show the restart state once queued. Both writes go
- * through the platform AddonInstaller mutations and refetch the reflected board.
+ * through the platform AddonInstaller mutations, settle through the shared
+ * action-result run, and refetch the reflected board.
  */
 export function AddonCardActions({
   row,
@@ -109,7 +88,7 @@ export function AddonCardActions({
   context: CardActionContext;
 }): ReactNode {
   const t = usePlatformT();
-  const toast = useToast();
+  const settle = useActionResultRun({ noResultTitle: t("apps.actionFailed") });
   const [action, setAction] = useState<AddonChangeAction | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
   const applyingRef = useRef(false);
@@ -137,29 +116,21 @@ export function AddonCardActions({
       if (!action || !change?.can_apply || applyingRef.current) return;
       applyingRef.current = true;
       try {
-        const result =
-          action === "INSTALL"
-            ? (await install({ addon: row.id, revision: change.revision }))?.install
-            : (await disable({ addon: row.id, revision: change.revision }))?.disable;
-        if (result?.ok) {
-          toast.success({ title: result.message });
+        const outcome = await settle(async () => action === "INSTALL"
+          ? (await install({ addon: row.id, revision: change.revision }))?.install
+          : (await disable({ addon: row.id, revision: change.revision }))?.disable);
+        if (outcome?.ok) {
           setAction(null);
           context.refresh();
         } else {
-          const message = result?.message ?? t("apps.actionFailed");
-          setApplyError(message);
-          toast.danger({ title: message });
+          setApplyError(outcome?.message ?? t("apps.actionFailed"));
           await preview.refetch();
         }
-      } catch (cause) {
-        const message = errorMessage(cause, t("apps.actionFailed"));
-        setApplyError(message);
-        toast.danger({ title: message });
       } finally {
         applyingRef.current = false;
       }
     },
-    [action, context, disable, install, preview.data, preview.refetch, row.id, t, toast],
+    [action, context, disable, install, preview.data, preview.refetch, row.id, settle, t],
   );
 
   const dialog = action ? (

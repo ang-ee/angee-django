@@ -33,28 +33,6 @@ vi.mock("../i18n", async (importOriginal) => ({
     vars?.count ? `${key}:${vars.count}` : key,
 }));
 
-vi.mock("../lib/cells", () => ({
-  LinkedChips: ({
-    items,
-    href,
-    format,
-  }: {
-    items: readonly string[];
-    href: (item: string) => string;
-    format?: (item: string) => string;
-  }) => (
-    <span>
-      {items.length
-        ? items.map((item) => (
-            <a key={item} href={href(item)}>
-              {format ? format(item) : item}
-            </a>
-          ))
-        : "—"}
-    </span>
-  ),
-}));
-
 vi.mock("../lib/explorer", () => ({
   usePlatformAddon: platformMocks.usePlatformAddon,
   usePlatformModel: platformMocks.usePlatformModel,

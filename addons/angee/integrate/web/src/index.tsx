@@ -107,8 +107,8 @@ const integrateMenu: readonly BaseMenuItem[] = [
         label: "OAuth",
         icon: "auth",
         children: [
-          { id: "integrate.providers", label: "OAuth Providers", route: "integrate.providers", icon: "auth" },
-          { id: "integrate.accounts", label: "External Accounts", route: "integrate.accounts", icon: "users" },
+          { id: "integrate.providers", label: "OAuth providers", route: "integrate.providers", icon: "auth" },
+          { id: "integrate.accounts", label: "External accounts", route: "integrate.accounts", icon: "users" },
         ],
       },
       { id: "integrate.credentials", label: "Credentials", route: "integrate.credentials", icon: "check" },
@@ -182,6 +182,11 @@ export {
   parseManualCode,
   type OAuthConnectPayload,
 } from "./connect/ConnectOAuthButton";
+export {
+  useOAuthAuthorization,
+  type OAuthAuthorization,
+  type OAuthAuthorizationStart,
+} from "./connect/use-oauth-authorization";
 export {
   ConditionalMutationButton,
   type ConditionalMutationButtonContext,

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Button, DialogForm, Glyph, RelationField, errorMessage, useAuthoredResourceMutation, useRelationOptions } from "@angee/ui";
+import { Button, DialogForm, ErrorBanner, Glyph, RelationField, errorMessage, useAuthoredResourceMutation, useRelationOptions } from "@angee/ui";
 
 import { useIntegrateVcsT } from "../i18n";
 import { VCS_BRIDGE_RELATION } from "../data/vcs-bridge";
@@ -97,6 +97,7 @@ function AddRepositoryDialog({
       title={t("addRepo.title")}
       description={t("addRepo.description")}
       size="lg"
+      // A picker, not a form: Enter in the bridge field submits nothing.
       onSubmit={(event) => event.preventDefault()}
     >
       <div className="flex flex-col gap-3">
@@ -108,11 +109,7 @@ function AddRepositoryDialog({
           searchPlaceholder={t("addRepo.integrationSearch")}
           onChange={setPickedId}
         />
-        {error ? (
-          <p className="text-13 text-danger-text" role="alert">
-            {error}
-          </p>
-        ) : null}
+        <ErrorBanner description={error} />
         <RepositoryPicker
           vcsBridgeId={vcsBridgeId}
           onPick={(candidate) => void add(candidate)}

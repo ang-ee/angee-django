@@ -1,7 +1,7 @@
 import { useMemo, type ReactElement } from "react";
 
 import { useAuthoredQuery } from "@angee/refine";
-import { NavLink, Chip, Code, CodeBlock, DetailSection, DetailSurface, ErrorBanner, FieldDescription, FieldLabel, FieldRoot, InlineEmpty, JsonValueView, LabeledDescriptorField, Tabs, deserializeFormSpec, errorMessage, jsonObjectFromUnknown, useAppRuntime, useRouteHref, useRouteRecordId } from "@angee/ui";
+import { NavLink, Chip, Code, CodeBlock, DetailSection, DetailSurface, ErrorBanner, FieldDescription, FieldLabel, FieldRoot, InlineEmpty, JsonValueView, LabeledDescriptorField, deserializeFormSpec, errorMessage, jsonObjectFromUnknown, useAppRuntime, useRouteHref, useRouteRecordId } from "@angee/ui";
 
 import { PlatformImplementation, type PlatformImplementationData } from "../documents";
 import { usePlatformT } from "../i18n";
@@ -75,35 +75,24 @@ export function ImplementationDetail(): ReactElement {
     >
       {implementation ? (
         <>
-          <Tabs defaultValue="overview">
-            <Tabs.List aria-label={t("implementation.sections")}>
-              <Tabs.Tab value="overview">{t("implementation.overview")}</Tabs.Tab>
-              <Tabs.Tab value="settings">{t("implementation.settings")}</Tabs.Tab>
-              <Tabs.Tab value="code">{t("implementation.code")}</Tabs.Tab>
-            </Tabs.List>
-            <Tabs.Panel value="overview">
-              <DetailSection title={t("detail.definition")} rows={[
-                [t("implementation.key"), <Code>{implementation.key}</Code>],
-                [t("col.category"), implementation.category],
-                [t("col.model"), <NavLink href={routeHref("platform.models.record", { id: implementation.model.toLowerCase() })} variant="inline">{implementation.model}</NavLink>],
-                [t("col.field"), implementation.field],
-                [t("implementation.registry"), <Code>{implementation.registry_setting}</Code>],
-                [t("implementation.baseClass"), <Code>{implementation.base_class_path}</Code>],
-                [t("col.addon"), implementation.addon_id
-                  ? <NavLink href={routeHref("platform.addons.record", { id: implementation.addon_id })} variant="inline">{implementation.addon_label}</NavLink>
-                  : t("implementation.external")],
-              ]} />
-            </Tabs.Panel>
-            <Tabs.Panel value="settings"><ImplementationSettings implementation={implementation} /></Tabs.Panel>
-            <Tabs.Panel value="code">
-              <DetailSection title={t("implementation.code")}>
-                {implementation.source_file ? <Code>{implementation.source_file}{implementation.source_start_line ? `:${implementation.source_start_line}` : ""}</Code> : null}
-                {implementation.source != null
-                  ? <CodeBlock className="mt-3">{implementation.source}</CodeBlock>
-                  : <InlineEmpty label={implementation.source_unavailable_reason ?? t("implementation.noSource")} />}
-              </DetailSection>
-            </Tabs.Panel>
-          </Tabs>
+          <DetailSection title={t("detail.definition")} rows={[
+            [t("implementation.key"), <Code>{implementation.key}</Code>],
+            [t("col.category"), implementation.category],
+            [t("col.model"), <NavLink href={routeHref("platform.models.record", { id: implementation.model.toLowerCase() })} variant="inline">{implementation.model}</NavLink>],
+            [t("col.field"), implementation.field],
+            [t("implementation.registry"), <Code>{implementation.registry_setting}</Code>],
+            [t("implementation.baseClass"), <Code>{implementation.base_class_path}</Code>],
+            [t("col.addon"), implementation.addon_id
+              ? <NavLink href={routeHref("platform.addons.record", { id: implementation.addon_id })} variant="inline">{implementation.addon_label}</NavLink>
+              : t("implementation.external")],
+          ]} />
+          <ImplementationSettings implementation={implementation} />
+          <DetailSection title={t("implementation.code")}>
+            {implementation.source_file ? <Code>{implementation.source_file}{implementation.source_start_line ? `:${implementation.source_start_line}` : ""}</Code> : null}
+            {implementation.source != null
+              ? <CodeBlock className="mt-3">{implementation.source}</CodeBlock>
+              : <InlineEmpty label={implementation.source_unavailable_reason ?? t("implementation.noSource")} />}
+          </DetailSection>
         </>
       ) : null}
     </DetailSurface>

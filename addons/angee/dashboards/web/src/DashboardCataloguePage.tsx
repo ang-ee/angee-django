@@ -3,22 +3,25 @@ import { useModelMetadata } from "@angee/metadata";
 import { useNavigate } from "@tanstack/react-router";
 import {
   Button,
-  Card,
+  Chip,
   EmptyState,
-  ErrorBanner,
-  Input,
-  LoadingPanel,
+  Glyph,
+  MutationDialog,
+  OverflowChipList,
   Page,
   PageBody,
   PageHeader,
-  PageToolbar,
   RemovedRecords,
-  Select,
-  NavLink,
+  RowsListView,
+  mutationDialogValueCodecs,
   textRoleVariants,
   useDashboardRegistry,
   useAppRuntime,
   useRouteHref,
+  type DescriptorField,
+  type ListColumn,
+  type MutationDialogValues,
+  type StringIdRow,
 } from "@angee/ui";
 import type { DashboardRegistry, DashboardSummary, DashboardTarget } from "@angee/ui/dashboard/headless";
 import { useDashboardsT } from "./i18n";
@@ -33,8 +36,24 @@ export function DashboardCataloguePage(): React.ReactElement {
   return <DashboardCatalogue store={store} registry={registry} />;
 }
 
+/** The scope labels, one static key per scope so the i18n guard sees them. */
+const SCOPE_LABEL = {
+  personal: "catalogue.scope.personal",
+  resource: "catalogue.scope.resource",
+  addon: "catalogue.scope.addon",
+} as const;
+
 function targetKey(target: DashboardTarget): string {
   return target.scope === "personal" ? `personal:${target.id}` : `${target.scope}:${target.key}`;
+}
+
+/** One catalogue row: a stored or declared dashboard with its destination. */
+interface DashboardRow extends StringIdRow {
+  title: string;
+  description: string;
+  scope: DashboardTarget["scope"];
+  resources: readonly string[];
+  href: string;
 }
 
 function DashboardCatalogue({ store, registry }: {
@@ -46,12 +65,9 @@ function DashboardCatalogue({ store, registry }: {
   const { resourceViews } = useAppRuntime();
   const navigate = useNavigate();
   const routeHref = useRouteHref();
-  const [name, setName] = React.useState("");
-  const [creating, setCreating] = React.useState(false);
-  const [error, setError] = React.useState<Error | null>(null);
-  const [query, setQuery] = React.useState("");
-  const [sort, setSort] = React.useState<"name" | "scope">("name");
   const t = useDashboardsT();
+  // Stored summaries first, then the declared addon and resource dashboards no one
+  // has customized yet, so every dashboard the viewer can open is one row.
   const summaries = React.useMemo<readonly DashboardSummary[]>(() => {
     const presetResource = (preset: string) => resourceViews[preset]?.resource ?? null;
     const merged = new Map(catalogue.summaries.map((summary) => [targetKey(summary.target), {
@@ -86,102 +102,81 @@ function DashboardCatalogue({ store, registry }: {
         capabilities: { canEdit: definition.editable !== false, canReset: false, canTrash: false },
       });
     }
-    return [...merged.values()].sort((left, right) => left.title.localeCompare(right.title));
+    return [...merged.values()];
   }, [catalogue.summaries, registry.definitions, resourceViews]);
-  const visibleSummaries = React.useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase();
-    return summaries
-      .filter((dashboard) => dashboard.available)
-      .filter((dashboard) =>
-        !needle
-        || dashboard.title.toLocaleLowerCase().includes(needle)
-        || dashboard.description?.toLocaleLowerCase().includes(needle)
-        || dashboard.resources.some((resource) => resource.toLocaleLowerCase().includes(needle)),
-      )
-      .sort((left, right) => {
-        if (sort === "scope") {
-          const scopeOrder = left.target.scope.localeCompare(right.target.scope);
-          if (scopeOrder !== 0) return scopeOrder;
-        }
-        return left.title.localeCompare(right.title);
-      });
-  }, [query, sort, summaries]);
-
-  const create = async () => {
-    if (!name.trim()) return;
-    setCreating(true);
-    setError(null);
-    try {
-      const result = await catalogue.createPersonal({
-        name: name.trim(),
-        idempotencyKey: globalThis.crypto?.randomUUID?.() ?? `dashboard-${Date.now()}`,
-      });
-      await navigate({ to: routeHref("dashboards.detail", { id: result.persistedId }) });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause : new Error(String(cause)));
-    } finally {
-      setCreating(false);
-    }
-  };
+  const rows = React.useMemo<readonly DashboardRow[]>(() => summaries
+    .filter((dashboard) => dashboard.available)
+    .map((dashboard) => ({
+      id: targetKey(dashboard.target),
+      title: dashboard.title,
+      description: dashboard.description ?? "",
+      scope: dashboard.target.scope,
+      resources: dashboard.resources,
+      href: dashboard.target.scope === "personal"
+        ? routeHref("dashboards.detail", { id: dashboard.target.id })
+        : dashboard.target.scope === "resource"
+          ? routeHref("dashboards.resource", { key: dashboard.target.key })
+          : routeHref("dashboards.addon", { key: dashboard.target.key }),
+    })), [routeHref, summaries]);
+  const columns = React.useMemo<readonly ListColumn<DashboardRow>[]>(() => [
+    { field: "title", header: t("catalogue.col.title"), subline: "description" },
+    { field: "scope", header: t("catalogue.col.scope"), render: (row) => <Chip tone="neutral" size="sm">{t(SCOPE_LABEL[row.scope])}</Chip> },
+    { field: "resources", header: t("catalogue.col.resources"), sortable: false, render: (row) => <OverflowChipList items={row.resources.map((resource) => ({ id: resource, label: resource }))} max={4} /> },
+  ], [t]);
+  const createFields = React.useMemo<readonly DescriptorField[]>(() => [
+    { name: "name", label: t("catalogue.name"), required: true },
+  ], [t]);
 
   return (
     <Page>
       <PageHeader
         title={t("catalogue.title")}
         description={t("catalogue.description")}
-      />
-      <PageToolbar
-        start={(
-          <>
-            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("catalogue.name")} aria-label={t("catalogue.name")} className="min-w-40 flex-1 sm:w-56 sm:flex-none" />
-            <Button type="button" variant="primary" disabled={creating || !name.trim()} onClick={() => void create()}>
-              {creating ? t("common.creating") : t("common.create")}
-            </Button>
-          </>
+        actions={(
+          <MutationDialog
+            trigger={<Button variant="primary" size="sm"><Glyph decorative name="plus" />{t("common.create")}</Button>}
+            title={t("common.create")}
+            fields={createFields}
+            submitLabel={t("common.create")}
+            submittingLabel={t("common.creating")}
+            parseValues={(values: MutationDialogValues) => ({ name: mutationDialogValueCodecs.requiredString(values.name, "name") })}
+            onSubmit={async ({ name }) => {
+              const result = await catalogue.createPersonal({
+                name,
+                idempotencyKey: globalThis.crypto?.randomUUID?.() ?? `dashboard-${Date.now()}`,
+              });
+              return { status: "ok", data: result };
+            }}
+            onSubmitted={(result) => { void navigate({ to: routeHref("dashboards.detail", { id: result.persistedId }) }); }}
+          />
         )}
-        end={(
-          <>
-            <Input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("catalogue.search")} aria-label={t("catalogue.search")} className="min-w-40 flex-1 sm:w-56 sm:flex-none" />
-            <Select
-              value={sort}
-              aria-label={t("catalogue.sort")}
-              className="w-32"
-              options={[
-                { value: "name", label: t("catalogue.sort.name") },
-                { value: "scope", label: t("catalogue.sort.scope") },
-              ]}
-              onValueChange={(value) => setSort(value as "name" | "scope")}
-            />
-          </>
-        )}
-        className="flex-wrap"
       />
-      <ErrorBanner description={(error ?? catalogue.error)?.message ?? null} />
       <PageBody className="space-y-4">
-      {catalogue.loading && summaries.length === 0 ? <LoadingPanel message={t("common.loading")} /> : null}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {visibleSummaries.map((dashboard) => {
-          const href = dashboard.target.scope === "personal"
-            ? routeHref("dashboards.detail", { id: dashboard.target.id })
-            : dashboard.target.scope === "resource"
-              ? routeHref("dashboards.resource", { key: dashboard.target.key })
-              : routeHref("dashboards.addon", { key: dashboard.target.key });
-          return (
-            <Card key={`${dashboard.target.scope}:${dashboard.id}`} className="flex min-h-32 flex-col gap-2 p-4">
-              <NavLink href={href} variant="muted" className={textRoleVariants({ role: "title" })}>{dashboard.title}</NavLink>
-              <p className="line-clamp-2 text-13 text-fg-muted">{dashboard.description || t("common.noDescription")}</p>
-              <div className="mt-auto flex flex-wrap gap-1 text-2xs text-fg-subtle">
-                <span>{dashboard.target.scope}</span>
-                {dashboard.resources.map((resource) => <span key={resource}>· {resource}</span>)}
+        <RowsListView<DashboardRow>
+          rows={rows}
+          columns={columns}
+          fetching={catalogue.loading && rows.length === 0}
+          error={catalogue.error ?? null}
+          search={{ box: true }}
+          groupOptions={[{ id: "scope", label: t("catalogue.col.scope"), group: { field: "scope" }, type: "value" }]}
+          rowHref={(row) => row.href}
+          gallery={{
+            title: "title",
+            subtitle: "description",
+            renderCard: (row) => (
+              <div className="grid min-w-0 gap-2">
+                <span className={textRoleVariants({ role: "title", truncate: true })}>{row.title}</span>
+                <span className={textRoleVariants({ role: "description" })}>{row.description || t("common.noDescription")}</span>
+                <span className="flex flex-wrap items-center gap-1">
+                  <Chip tone="neutral" size="sm">{t(SCOPE_LABEL[row.scope])}</Chip>
+                  <OverflowChipList items={row.resources.map((resource) => ({ id: resource, label: resource }))} max={3} />
+                </span>
               </div>
-            </Card>
-          );
-        })}
-      </div>
-      {!catalogue.loading && visibleSummaries.length === 0 ? (
-        <EmptyState icon="dashboard" title={t("catalogue.empty.title")} description={t("catalogue.empty.description")} />
-      ) : null}
-      <RemovedRecords resource={dashboardResource} label={(row) => String(row.name ?? row.id)} fields={["name"]} />
+            ),
+          }}
+          emptyContent={{ icon: "dashboard", title: t("catalogue.empty.title"), description: t("catalogue.empty.description") }}
+        />
+        <RemovedRecords resource={dashboardResource} label={(row) => String(row.name ?? row.id)} fields={["name"]} />
       </PageBody>
     </Page>
   );

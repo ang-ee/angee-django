@@ -223,7 +223,8 @@ describe("Integration Streams contribution", () => {
     await screen.findByTestId("sync-data-view");
     expect(listProps().resource).toBe(RECORD_LINK_MODEL);
     expect(listProps().baseFilter).toEqual({ stream: { exact: "stream_7" } });
-    await screen.findByText("Links · contacts · address-book");
+    await screen.findByText("contacts · address-book");
+    expect(screen.getByText("Links")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /back/i }));
     await waitFor(() => expect(listProps().resource).toBe(SYNC_STREAM_MODEL));
     expect(router.state.location.search).toMatchObject({ filter: "retained", recordTab: "streams" });

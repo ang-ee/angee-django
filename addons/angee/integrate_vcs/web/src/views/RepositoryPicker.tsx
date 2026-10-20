@@ -1,7 +1,6 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import { Button, Glyph, Input, Skeleton, SkeletonStatus, cn, errorMessage, textRoleVariants } from "@angee/ui";
-import { ErrorBanner } from "@angee/ui/fragments/ErrorBanner";
+import { Button, ErrorBanner, Glyph, InlineEmpty, PaneRow, PaneRows, SearchInput, Skeleton, SkeletonStatus, errorMessage } from "@angee/ui";
 import { useDebounce } from "use-debounce";
 import type { DocumentVariables } from "@angee/refine";
 
@@ -70,9 +69,8 @@ export function RepositoryPicker({
 
   return (
     <div className="flex flex-col gap-3">
-      <Input
+      <SearchInput
         id={id}
-        type="search"
         aria-label={t("addRepo.nameLabel")}
         aria-describedby={describedBy}
         placeholder={t("addRepo.namePlaceholder")}
@@ -125,69 +123,59 @@ function RepoCandidateList({
 }): React.ReactElement {
   const t = useIntegrateVcsT();
   if (!hasBridge) {
-    return <ListHint>{t("addRepo.selectIntegration")}</ListHint>;
+    return <InlineEmpty label={t("addRepo.selectIntegration")} />;
   }
   if (!searching) {
-    return <ListHint>{t("addRepo.typeToSearch")}</ListHint>;
+    return <InlineEmpty label={t("addRepo.typeToSearch")} />;
   }
   if (fetching && candidates.length === 0) {
     return <CandidateListSkeleton label={t("addRepo.searching")} />;
   }
   if (candidates.length === 0) {
-    return <ListHint>{t("addRepo.noMatches")}</ListHint>;
+    return <InlineEmpty label={t("addRepo.noMatches")} />;
   }
+  // Each candidate is a pane row whose own control picks it; a picked or busy row
+  // keeps its facts but is no longer a control.
   return (
-    <ul className="flex max-h-72 flex-col gap-1 overflow-auto">
+    <PaneRows className="max-h-72 overflow-auto">
       {candidates.map((candidate) => {
         const isPicked = pickedNames?.has(candidate.name) ?? false;
         const isBusy = busyName === candidate.name;
+        const pickable = !readOnly && !isPicked && !isBusy;
         return (
-          <li key={candidate.name}>
-            <button
-              type="button"
-              disabled={readOnly || isPicked || isBusy}
-              aria-busy={isBusy || undefined}
-              onClick={() => onPick(candidate)}
-              className="flex w-full items-center gap-3 rounded-6 border border-border bg-sheet px-3 py-2 text-left outline-none transition-colors hover:border-border-strong focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-13 text-fg">{candidate.name}</div>
-                <div className="truncate text-12 text-fg-muted">
-                  {candidate.default_branch} · {candidate.visibility}
-                </div>
-              </div>
-              {isBusy ? (
+          <li key={candidate.name} aria-busy={isBusy || undefined}>
+            <PaneRow
+              icon="repository"
+              title={candidate.name}
+              sub={`${candidate.default_branch} · ${candidate.visibility}`}
+              selected={isPicked}
+              label={pickable ? t("addRepo.pick") : undefined}
+              onOpen={pickable ? () => onPick(candidate) : undefined}
+              meta={isBusy ? (
                 <SkeletonStatus label={t("addRepo.searching")} className="shrink-0">
                   <Skeleton className="h-3 w-12" shape="text" />
                 </SkeletonStatus>
               ) : isPicked ? (
-                <span className="flex items-center gap-1 text-12 text-fg-muted">
-                  <Glyph decorative name="check" />
-                  {pickedLabel}
-                </span>
-              ) : (
-                <Glyph decorative name="plus" className="text-fg-muted" />
-              )}
-            </button>
+                <span className="flex items-center gap-1"><Glyph decorative name="check" />{pickedLabel}</span>
+              ) : undefined}
+              verb={pickable ? t("addRepo.pick") : undefined}
+            />
           </li>
         );
       })}
-    </ul>
+    </PaneRows>
   );
 }
 
 function CandidateListSkeleton({ label }: { label: React.ReactNode }): React.ReactElement {
+  // The shape of three pane rows while the host answers.
   return <SkeletonStatus label={label} className="grid gap-1 py-1">
-    {Array.from({ length: 3 }, (_, index) => <div key={index} className="flex items-center gap-3 rounded-6 border border-border bg-sheet px-3 py-2">
+    {Array.from({ length: 3 }, (_, index) => <div key={index} className="flex items-center gap-2 px-1 py-1.5">
+      <Skeleton className="size-4 rounded-full" />
       <div className="min-w-0 flex-1 space-y-2">
         <Skeleton className={index === 1 ? "h-3 w-2/3" : "h-3 w-1/2"} shape="text" />
         <Skeleton className="h-3 w-1/3" shape="text" />
       </div>
-      <Skeleton className="size-4 rounded-full" />
     </div>)}
   </SkeletonStatus>;
-}
-
-function ListHint({ children }: { children: React.ReactNode }): React.ReactElement {
-  return <p className={cn(textRoleVariants({ role: "meta" }), "px-1 py-3")}>{children}</p>;
 }

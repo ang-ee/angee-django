@@ -1,7 +1,7 @@
 import { type ReactElement } from "react";
 import { parseAsString, useQueryState } from "nuqs";
 
-import { NavLink, Code, ListView, textRoleVariants, useRouteHref, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
+import { NavLink, Code, ListView, useRouteHref, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
 import type { PlatformImplementationData } from "../documents";
 import { usePlatformT } from "../i18n";
@@ -18,14 +18,11 @@ export function ImplementationsPage(): ReactElement {
   const [addon] = useQueryState("addon", parseAsString);
   const columns: readonly ListColumn<ImplementationRow>[] = [
     {
-      field: "label", header: t("implementation.name"),
+      field: "label", header: t("implementation.name"), subline: "key",
       render: (row) => (
-        <span className="flex min-w-0 flex-col">
-          <NavLink href={routeHref("platform.implementations.record", { id: row.id })} variant="inline">
-            {row.label}
-          </NavLink>
-          <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.key}</span>
-        </span>
+        <NavLink href={routeHref("platform.implementations.record", { id: row.id })} variant="inline">
+          {row.label}
+        </NavLink>
       ),
     },
     { field: "category", header: t("col.category") },
