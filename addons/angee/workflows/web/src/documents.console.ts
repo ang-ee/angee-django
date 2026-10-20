@@ -118,16 +118,6 @@ export const RevokeWorkflowTriggerGrantDocument = graphql(`
   }
 `);
 
-export const DecisionWaitingRunsDocument = graphql(`
-  query DecisionWaitingRuns($decision: String!) {
-    steprun(where: { decision: { _eq: $decision }, status: { _eq: "waiting" } }, order_by: [{ rank: asc }, { map_index: asc }]) {
-      id node_label map_index is_mapped
-      run { id display_name }
-    }
-  }
-`);
-
-
 export const WorkflowStudioDocument = graphql(`
   query WorkflowStudio($id: String!, $target: ID!) {
     workflow_by_pk(id: $id) {
@@ -156,5 +146,45 @@ export const SaveWorkflowDraftDocument = graphql(`
 export const PublishWorkflowDocument = graphql(`
   mutation PublishWorkflow($id: ID!, $revision: Int!) {
     publish_workflow(id: $id, expected_revision: $revision) { number dependents document }
+  }
+`);
+
+/** The records a run worked on, its subject and trigger, and the steps that asked a decision. */
+export const RunRelatedDocument = graphql(`
+  query RunRelated($run: String!) {
+    workflowrun_by_pk(id: $run) {
+      id subject_model subject_id
+      trigger_event { record_model record_id }
+    }
+    steprecord(where: { run: { _eq: $run } }, order_by: [{ created_at: asc }]) {
+      id label operation record_model record_id
+      step_run { id node_label }
+    }
+    steprun(where: { run: { _eq: $run }, decision: { _is_null: false } }, order_by: [{ rank: asc }, { map_index: asc }]) {
+      id node_label map_index is_mapped status
+      decision { id kind_label is_open verdict_label created_at answered_at answered_by { display_name } }
+    }
+  }
+`);
+
+/** The steps that asked one decision, waiting or settled, with their runs. */
+export const DecisionStepsDocument = graphql(`
+  query DecisionSteps($decision: String!) {
+    steprun(where: { decision: { _eq: $decision } }, order_by: [{ rank: asc }, { map_index: asc }]) {
+      id node_label map_index is_mapped status
+      run { id display_name version { workflow { display_name } } }
+    }
+  }
+`);
+
+/** The runs that worked on one record, through the run owner's read. */
+export const RecordRelatedRunsDocument = graphql(`
+  query RecordRelatedRuns($records: [TimelineRecordInput!]!) {
+    record_timeline(records: $records, run_limit: 20) {
+      records {
+        record_model record_id
+        runs { id display_name status outcome_label created_at finished_at version { workflow { display_name } } }
+      }
+    }
   }
 `);

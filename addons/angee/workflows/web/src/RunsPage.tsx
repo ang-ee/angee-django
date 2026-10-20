@@ -8,6 +8,7 @@ import { RUN_MODEL, RUN_MODELS } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 import { StepRuns } from "./StepRuns";
 import { RunGraph } from "./RunGraph";
+import { RunHeaderRecords } from "./RunHeaderRecords";
 import { useRunCancelActions } from "./run-cancel";
 
 export function RunsPage() {
@@ -64,8 +65,8 @@ export function RunsList({ baseFilter, embedded = false }: {
         return typeof name === "string" && name ? name : typeof record?.display_name === "string" ? record.display_name : t("run.eyebrow");
       }}
       contextFields={["created_at"]}
-      headerExtras={({ record }) => typeof record?.subject_id === "string" && typeof record.subject_model === "string"
-        ? <RecordReference model={record.subject_model} id={record.subject_id} /> : null}>
+      // The source the run started from and the record it produced, beside the title.
+      headerExtras={({ record }) => typeof record?.id === "string" ? <RunHeaderRecords runId={record.id} /> : null}>
       <Field name="status" widget="statusbar" status />
       <Group label={t("run.facts")} columns={2}>
         <Field name="outcome" hidden readOnly />

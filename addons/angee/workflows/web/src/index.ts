@@ -5,6 +5,7 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { RUN_MODEL } from "./documents.console";
 import { WORKFLOW_MODEL } from "./catalogue/resources";
 import { decisionRunOrigin } from "./contributions";
+import { decisionRunGroup, recordRunsGroup, runDecisionsGroup, runRecordsGroup } from "./related";
 import { enWorkflowsMessages } from "./i18n";
 import { TriggerCondition } from "./TriggerCondition";
 import { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";
@@ -53,6 +54,11 @@ export default defineBaseAddon({
       } },
     },
     "decisions#origin": { "workflows.run": decisionRunOrigin },
+    // Related: a run lists the records it worked on and the decisions it asked; every other
+    // record lists the runs that worked on it; a decision lists the run that asked it.
+    "related#groups": { "workflows.runs": recordRunsGroup },
+    "workflows.WorkflowRun#groups": { "workflows.records": runRecordsGroup, "workflows.decisions": runDecisionsGroup },
+    "decisions.Decision#groups": { "workflows.run": decisionRunGroup },
   },
   statusTones: WORKFLOW_STATUS_TONES,
   icons: { workflow: Workflow, "redo-2": Redo2 },

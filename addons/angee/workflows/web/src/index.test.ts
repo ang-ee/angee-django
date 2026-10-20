@@ -33,6 +33,10 @@ test("registers read-only workflow and run pages with additive record and decisi
   expect(Object.keys(addon.containers?.["timeline#kinds"] ?? {})).toEqual(["workflows.run"]);
   expect(addon.containers?.["record#aside"]).toMatchObject({ "workflows.run": { content: { strip: false, target: { model: "workflows.WorkflowRun" } } } });
   expect(Object.keys(addon.containers?.["form#actions-menu"] ?? {})).toEqual(["workflows.run-workflow"]);
+  // Related: a run lists its records and decisions, a decision its run, every other record its runs.
+  expect(Object.keys(addon.containers?.["related#groups"] ?? {})).toEqual(["workflows.runs"]);
+  expect(Object.keys(addon.containers?.["workflows.WorkflowRun#groups"] ?? {})).toEqual(["workflows.records", "workflows.decisions"]);
+  expect(Object.keys(addon.containers?.["decisions.Decision#groups"] ?? {})).toEqual(["workflows.run"]);
 });
 
 test("trigger record breadcrumbs inherit the declared Triggers collection label", async () => {

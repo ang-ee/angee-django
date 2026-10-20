@@ -34,3 +34,13 @@ export const DecideDocument = graphql(`
     decide(id: $id, revision: $revision, chosen: $chosen, values: $values) { ok message id code validation_errors }
   }
 `);
+
+/** The decisions that concern one record, open first, newest first. */
+export const RecordDecisionsDocument = graphql(`
+  query RecordDecisions($model: String!, $id: String!) {
+    decision_records(where: { record_model: { _eq: $model }, record_id: { _eq: $id } }) {
+      id
+      decision { id kind_label is_open verdict_label created_at answered_at answered_by { display_name } }
+    }
+  }
+`);

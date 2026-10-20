@@ -35,6 +35,9 @@ describe("decisions fragment", () => {
     // Independent waiters contribute origin links through the declared container.
     expect(decisions.containers?.["decisions#origin"]).toEqual({});
     expect(Object.keys(decisions.containers?.["timeline#kinds"] ?? {})).toEqual(["decisions.decision"]);
+    // Related: every record lists the decisions that concern it; a decision lists what it concerns.
+    expect(Object.keys(decisions.containers?.["related#groups"] ?? {})).toEqual(["decisions.decisions"]);
+    expect(Object.keys(decisions.containers?.["decisions.Decision#groups"] ?? {})).toEqual(["decisions.concerns"]);
     expect(DecisionCard).toBeTypeOf("function");
   });
 });
