@@ -8,49 +8,29 @@ import {
 import { useOperatorT } from "../../i18n";
 import { useOperatorAction } from "../../data/transport";
 import type { SourceState } from "../../data/types";
-import { useRunDaemonAction } from "../parts/run-action";
-import type { OperatorAction } from "../parts/OperatorActionButtons";
+import { useDaemonMutationRun, type DaemonVerb } from "../parts/daemon-verbs";
 
-/** A git action for a source: its label, tone, and bound handler. */
-export type SourceRowAction = OperatorAction<SourceState>;
-
-/** Source git actions shared by the source detail page. */
+/** Source git verbs shared by the source record page. */
 export function useSourceActions(refetch: () => void): {
-  actions: readonly SourceRowAction[];
+  actions: readonly DaemonVerb<SourceState>[];
   busy: boolean;
 } {
   const t = useOperatorT();
-  const runDaemon = useRunDaemonAction(refetch);
+  const runDaemon = useDaemonMutationRun(refetch);
 
   const fetchSource = useOperatorAction(SOURCE_FETCH_MUTATION);
   const pull = useOperatorAction(SOURCE_PULL_MUTATION);
   const push = useOperatorAction(SOURCE_PUSH_MUTATION);
   const busy = fetchSource.result.fetching || pull.result.fetching || push.result.fetching;
 
-  const actions = useMemo<readonly SourceRowAction[]>(() => {
-    const defs: readonly {
-      field: string;
-      label: string;
-      variant: SourceRowAction["variant"];
-      run: (variables: { name: string }) => Promise<object | undefined>;
-    }[] = [
-      { field: "sourceFetch", label: t("sources.fetch"), variant: "secondary", run: fetchSource.run },
-      { field: "sourcePull", label: t("sources.pull"), variant: "ghost", run: pull.run },
-      { field: "sourcePush", label: t("sources.push"), variant: "ghost", run: push.run },
-    ];
-    return defs.map((def) => ({
-      label: def.label,
-      variant: def.variant,
-      perform: async (source: SourceState) => {
-        await runDaemon({
-          run: def.run,
-          field: def.field,
-          variables: { name: source.name },
-          label: def.label,
-        });
-      },
-    }));
-  }, [fetchSource.run, pull.run, push.run, runDaemon, t]);
+  const actions = useMemo<readonly DaemonVerb<SourceState>[]>(() => [
+    { id: "fetch", label: t("sources.fetch"), primary: true,
+      perform: (source) => runDaemon({ run: fetchSource.run, field: "sourceFetch", variables: { name: source.name } }) },
+    { id: "pull", label: t("sources.pull"),
+      perform: (source) => runDaemon({ run: pull.run, field: "sourcePull", variables: { name: source.name } }) },
+    { id: "push", label: t("sources.push"), placement: "menu",
+      perform: (source) => runDaemon({ run: push.run, field: "sourcePush", variables: { name: source.name } }) },
+  ], [fetchSource.run, pull.run, push.run, runDaemon, t]);
 
   return { actions, busy };
 }

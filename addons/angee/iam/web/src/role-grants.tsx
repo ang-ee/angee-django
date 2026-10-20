@@ -7,24 +7,11 @@ import { useIamT } from "./i18n";
 /** Shared presentation and exact-tuple revoke for the hub and overview. */
 export function useRoleGrantColumns(): readonly ListColumn<IAMGrant>[] {
   const t = useIamT();
+  // `sublineColumn` directly: RowsListView does not resolve `subline` for local rows (a ui gap).
   return useMemo(() => [
-    {
-      field: "subject_label",
-      header: t("grants.column.subject"),
-      render: (row: IAMGrant) => <span className="flex min-w-0 flex-col">
-        <span className="truncate text-13 text-fg">{row.subject_label}</span>
-        <Code truncate tone="muted" className="text-2xs">{row.subject}</Code>
-      </span>,
-    },
-    {
-      field: "role",
-      header: t("grants.column.role"),
-      render: (row: IAMGrant) => <span className="flex min-w-0 flex-col">
-        <span className="truncate font-medium text-fg">{row.role_name}</span>
-        <Code truncate tone="muted">{row.role}</Code>
-        {row.caveat_name ? <Code truncate tone="muted">{row.caveat_name}</Code> : null}
-      </span>,
-    },
+    { field: "subject_label", header: t("grants.column.subject"), sublineColumn: { field: "subject" } },
+    { field: "role_name", header: t("grants.column.role"), sublineColumn: { field: "role" } },
+    { field: "caveat_name", header: t("grants.column.condition"), render: (row: IAMGrant) => row.caveat_name ? <Code truncate>{row.caveat_name}</Code> : null },
     { field: "namespace", header: t("grants.column.namespace") },
   ], [t]);
 }
@@ -41,7 +28,7 @@ export function useRoleGrantActions(): readonly RowActionDeclaration<IAMGrant>[]
     invalidateModels: IAM_ROLE_MUTATION_INVALIDATES,
     confirm: {
       title: () => t("grants.revoke.title"),
-      body: (row: IAMGrant) => t("grants.revoke.body", { role: row.role, subject: row.subject_label }),
+      body: (row: IAMGrant) => t("grants.revoke.body", { role: row.role_name, subject: row.subject_label }),
       confirm: () => t("revoke"),
       cancel: () => t("grants.revoke.cancel"),
     },

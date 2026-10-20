@@ -1,5 +1,5 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
-import { Alert, Button, Glyph, LoadingPanel, errorMessage } from "@angee/ui";
+import { Avatar, Button, ErrorBanner, LoadingPanel, avatarInitials, errorMessage } from "@angee/ui";
 import { useState, type ReactNode } from "react";
 
 import {
@@ -49,9 +49,7 @@ export function OAuthLoginMethods(): ReactNode {
 
   if (queryError && connections.length === 0) {
     return (
-      <Alert className="mb-6" tone="danger" title={t("login.providersUnavailable")}>
-        {t("login.passwordStillAvailable")}
-      </Alert>
+      <ErrorBanner className="mb-6" title={t("login.providersUnavailable")} description={t("login.passwordStillAvailable")} />
     );
   }
 
@@ -61,13 +59,13 @@ export function OAuthLoginMethods(): ReactNode {
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-2">
         {connections.map((connection) => {
-          const label = connectionLabel(connection);
+          const label = connectionLabel(connection, t("login.providerFallback"));
           const active = startingSqid === connection.oauth_client_sqid;
           return (
             <Button
               key={connection.oauth_client_sqid}
               type="button"
-              className="!h-11 w-full justify-start bg-sheet"
+              className="w-full justify-start"
               disabled={startingSqid !== null}
               loading={active}
               loadingText={t("login.continueWith", { provider: label })}
@@ -75,37 +73,23 @@ export function OAuthLoginMethods(): ReactNode {
               size="lg"
               variant="secondary"
             >
-              <ProviderMark label={label} />
+              <Avatar size="sm" initials={avatarInitials(label)} aria-hidden="true" />
               <span className="min-w-0 truncate">{t("login.continueWith", { provider: label })}</span>
             </Button>
           );
         })}
       </div>
       {startError ? (
-        <Alert tone="danger" title={t("login.startFailed")}>
-          {startError}
-        </Alert>
+        <ErrorBanner title={t("login.startFailed")} description={startError} />
       ) : null}
     </div>
   );
 }
 
-function ProviderMark({ label }: { label: string }): ReactNode {
-  const initial = label.trim().charAt(0).toUpperCase();
-  return (
-    <span
-      aria-hidden="true"
-      className="flex size-7 shrink-0 items-center justify-center rounded-6 border border-border-subtle bg-accent-soft text-12 font-semibold text-accent-soft-text"
-    >
-      {initial || <Glyph name="auth" className="size-4" />}
-    </span>
-  );
-}
-
-function connectionLabel(connection: AvailableConnection): string {
+function connectionLabel(connection: AvailableConnection, fallback: string): string {
   return (
     connection.oauth_client_display_name.trim() ||
     connection.oauth_client_slug.trim() ||
-    "provider"
+    fallback
   );
 }

@@ -1,4 +1,4 @@
-import { ChipList, Select, textRoleVariants, type WidgetDefinition, type WidgetRenderProps } from "@angee/ui";
+import { ChipList, FieldError, Select, type WidgetDefinition, type WidgetRenderProps } from "@angee/ui";
 import { useMemo, type ReactElement } from "react";
 
 import { useAssignmentSubjects, type AssignmentSubjectKind } from "./assignment-subjects";
@@ -51,9 +51,7 @@ export function subjectsWidget({ kinds }: { kinds: readonly AssignmentSubjectKin
           }}
         />
         {subjects.error ? (
-          <span className={textRoleVariants({ role: "caption" })}>
-            {t("assignmentSubjects.unavailable")}
-          </span>
+          <FieldError match>{t("assignmentSubjects.unavailable")}</FieldError>
         ) : null}
       </div>
     );

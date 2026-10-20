@@ -2,7 +2,7 @@ import { useMemo, type ReactElement } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 
 import {
-  formSubmitError, Button, DashboardView, InlineEmpty, Metric, MiniCard, MutationDialog, RowsListView, SurfacePanel, mutationDialogValueCodecs, textRoleVariants, titleCase, useAuthoredResourceMutation, useRouteHref, type DescriptorField } from "@angee/ui";
+  formSubmitError, Button, DashboardView, InlineEmpty, Metric, MiniCard, MutationDialog, RowsListView, SurfacePanel, formatNumber, mutationDialogValueCodecs, titleCase, useAuthoredResourceMutation, useResourceRecordHref, useRouteHref, type DescriptorField, type ListColumn } from "@angee/ui";
 
 import {
   IamGrantRole,
@@ -17,15 +17,23 @@ import { useRoleGrantActions, useRoleGrantColumns } from "../role-grants";
 
 const PEEK_LIMIT = 6;
 
+interface UnassignedUserRow extends Record<string, unknown> {
+  id: string;
+  username: string;
+  email: string;
+}
+
 /**
  * The identity overview — an aggregate dashboard. A metric band over the
- * permission inventory, the role-grant composer, and three peek panels
- * (privileged grants, role namespaces, unassigned principals) derived from the
- * same reads. Writes route through the grant/revoke mutations and refetch.
+ * permission inventory, then three peek panels (privileged grants with the
+ * grant composer as the panel's verb, role namespaces, unassigned principals)
+ * derived from the same reads. Writes route through the grant/revoke mutations
+ * and refetch.
  */
 export function OverviewPage(): ReactElement {
   const t = useIamT();
   const routeHref = useRouteHref();
+  const userHref = useResourceRecordHref("iam.User");
   const overviewVars = useMemo<IAMOverviewVariables>(
     () => ({ peekLimit: PEEK_LIMIT }),
     [],
@@ -42,9 +50,14 @@ export function OverviewPage(): ReactElement {
     [overviewFacts],
   );
   const namespaces = overviewFacts?.namespaces ?? [];
-  const unassigned = useMemo(
-    () => [...(overviewFacts?.unassigned_users ?? [])],
+  const unassigned = useMemo<readonly UnassignedUserRow[]>(
+    () => (overviewFacts?.unassigned_users ?? []).map((user) => ({ id: user.id, username: user.username ?? "", email: user.email ?? "" })),
     [overviewFacts],
+  );
+  // `sublineColumn` directly: RowsListView does not resolve `subline` for local rows (a ui gap).
+  const unassignedColumns = useMemo<readonly ListColumn<UnassignedUserRow>[]>(
+    () => [{ field: "username", header: t("overview.unassigned.user"), sublineColumn: { field: "email" } }],
+    [t],
   );
 
   const roleOptions = useMemo(
@@ -90,15 +103,13 @@ export function OverviewPage(): ReactElement {
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="space-y-6">
-          <SurfacePanel title={t("overview.grant.title")} summary={t("overview.grant.summary")}>
-            <div className="p-4">
+          <SurfacePanel
+            title={t("overview.privileged.title")}
+            summary={t("overview.privileged.summary", { count: formatNumber(privilegedTotal) })}
+            actions={(
               <MutationDialog
                 trigger={(
-                  <Button
-                    type="button"
-                    variant="primary"
-                    disabled={roleOptions.length === 0}
-                  >
+                  <Button type="button" variant="primary" size="sm" disabled={roleOptions.length === 0}>
                     {t("overview.grant.submit")}
                   </Button>
                 )}
@@ -119,12 +130,7 @@ export function OverviewPage(): ReactElement {
                     : formSubmitError(t("overview.grant.error"));
                 }}
               />
-            </div>
-          </SurfacePanel>
-
-          <SurfacePanel
-            title={t("overview.privileged.title")}
-            summary={t("overview.privileged.summary", { count: privilegedTotal.toLocaleString() })}
+            )}
           >
             <RowsListView
               rows={privileged}
@@ -142,7 +148,7 @@ export function OverviewPage(): ReactElement {
         <div className="space-y-6">
           <SurfacePanel
             title={t("overview.namespaces.title")}
-            summary={t("overview.namespaces.summary", { count: namespaces.length.toLocaleString() })}
+            summary={t("overview.namespaces.summary", { count: formatNumber(namespaces.length) })}
           >
             <div className="space-y-3 p-4">
               {namespaces.map((namespace) => (
@@ -153,7 +159,7 @@ export function OverviewPage(): ReactElement {
                     count: namespace.role_count,
                   })}
                   primaryTag={{
-                    label: t("overview.namespaces.grantCount", { count: namespace.grant_count.toLocaleString() }),
+                    label: t("overview.namespaces.grantCount", { count: formatNumber(namespace.grant_count) }),
                     tone: namespace.grant_count > 0 ? "brand" : "neutral",
                   }}
                 />
@@ -164,21 +170,18 @@ export function OverviewPage(): ReactElement {
 
           <SurfacePanel
             title={t("overview.unassigned.title")}
-            summary={t("overview.unassigned.summary", { count: unassignedTotal.toLocaleString() })}
+            summary={t("overview.unassigned.summary", { count: formatNumber(unassignedTotal) })}
           >
-            <div className="divide-y divide-border-subtle">
-              {unassigned.map((user) => (
-                <div key={user.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-13 font-medium text-fg">{user.username}</div>
-                    <div className={textRoleVariants({ role: "caption", truncate: true })}>{user.email}</div>
-                  </div>
-                </div>
-              ))}
-              {unassigned.length === 0 ? (
-                <div className="p-4"><InlineEmpty label={t("overview.unassigned.empty")} /></div>
-              ) : null}
-            </div>
+            <RowsListView
+              rows={unassigned}
+              columns={unassignedColumns}
+              rowHref={userHref ? (user) => userHref(user.id) ?? "" : undefined}
+              fetching={overview.isFetching}
+              error={overview.error}
+              selectable={false}
+              scope="local"
+              emptyContent={t("overview.unassigned.empty")}
+            />
           </SurfacePanel>
         </div>
       </div>

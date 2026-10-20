@@ -142,9 +142,14 @@ const operator = defineBaseAddon({
     "operator-logs": OperatorLogsGlyph,
     server: Server,
   },
-  // The daemon's own service verdict the shared vocabulary lacks: a service the
-  // runtime keeps restarting after it exited needs attention, like a pending one.
-  statusTones: { restarting: "warning" },
+  // The daemon's own status words the shared vocabulary lacks: a service the
+  // runtime keeps restarting after it exited needs attention, like a pending one;
+  // an application with a service down is unavailable; a working tree is dirty or
+  // clean; a branch is pushed or unpushed; a secret is set, empty or protected.
+  statusTones: {
+    restarting: "warning", unavailable: "warning", dirty: "warning", clean: "success",
+    pushed: "success", unpushed: "warning", set: "success", empty: "neutral", protected: "info",
+  },
   // The first console-shell drawer adopter: a non-modal bottom drawer streaming
   // a chosen service's logs. Sticky across navigation (mounted once
   // above the router outlet) and not route-scoped — it picks its own target.

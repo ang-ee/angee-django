@@ -1,6 +1,6 @@
 import { useMemo, type ReactElement } from "react";
 
-import { Chip, Code, ListView, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
+import { Code, ListView, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
 import { useIamT } from "../i18n";
 
@@ -26,60 +26,26 @@ function relationshipGroupOptions(
   t: (key: string) => string,
 ): readonly ResourceToolbarGroupOption[] {
   return [
-    {
-      id: "resource_type",
-      label: t("relationships.column.resourceType"),
-      group: { field: "resource_type" },
-      type: "value",
-    },
-    {
-      id: "subject_type",
-      label: t("relationships.column.subjectType"),
-      group: { field: "subject_type" },
-      type: "value",
-    },
-    {
-      id: "relation",
-      label: t("relationships.column.relation"),
-      group: { field: "relation" },
-      type: "value",
-    },
+    { id: "resource_type", label: t("relationships.column.resourceType"), group: { field: "resource_type" }, type: "value" },
+    { id: "subject_type", label: t("relationships.column.subjectType"), group: { field: "subject_type" }, type: "value" },
+    { id: "relation", label: t("relationships.column.relation"), group: { field: "relation" }, type: "value" },
   ];
 }
 
 export function RelationshipsPage(): ReactElement {
   const t = useIamT();
+  // Relation and caveat names are schema identifiers: code, not status; an empty
+  // caveat renders through the cell owner's placeholder.
   const relationshipColumns = useMemo<readonly ListColumn<RelationshipResourceRow>[]>(
     () => [
-      {
-        field: "resource_id",
-        header: t("relationships.column.resourceRef"),
-        render: (row) => <Code truncate>{ref(row.resource_type, row.resource_id)}</Code>,
-      },
-      {
-        field: "subject_id",
-        header: t("relationships.column.subjectRef"),
-        render: (row) => <Code truncate>{ref(row.subject_type, row.subject_id)}</Code>,
-      },
+      { field: "resource_id", header: t("relationships.column.resourceRef"), render: (row) => <Code truncate>{ref(row.resource_type, row.resource_id)}</Code> },
+      { field: "subject_id", header: t("relationships.column.subjectRef"), render: (row) => <Code truncate>{ref(row.subject_type, row.subject_id)}</Code> },
       { field: "resource_type", header: t("relationships.column.resourceType") },
       { field: "resource_id", header: t("relationships.column.resourceId") },
-      {
-        field: "relation",
-        header: t("relationships.column.relation"),
-        render: (row) => <Chip tone="info">{row.relation}</Chip>,
-      },
+      { field: "relation", header: t("relationships.column.relation"), render: (row) => <Code truncate>{row.relation}</Code> },
       { field: "subject_type", header: t("relationships.column.subjectType") },
       { field: "subject_id", header: t("relationships.column.subjectId") },
-      {
-        field: "caveat_name",
-        header: t("relationships.column.caveat"),
-        render: (row) =>
-          row.caveat_name ? (
-            <Chip tone="warning">{row.caveat_name}</Chip>
-          ) : (
-            <span className="text-fg-muted">-</span>
-          ),
-      },
+      { field: "caveat_name", header: t("relationships.column.caveat") },
     ],
     [t],
   );

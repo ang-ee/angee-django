@@ -11,7 +11,7 @@ import {
 } from "./account-actions";
 
 const mocks = vi.hoisted(() => ({
-  authored: vi.fn(), prompt: vi.fn(), options: vi.fn(), setActive: vi.fn(), rename: vi.fn(),
+  authored: vi.fn(), prompt: vi.fn(), reveal: vi.fn(), options: vi.fn(), setActive: vi.fn(), rename: vi.fn(),
 }));
 vi.mock("@angee/refine", async (original) => ({
   ...await original<object>(),
@@ -21,7 +21,7 @@ vi.mock("@angee/refine", async (original) => ({
 }));
 vi.mock("@angee/ui", async (original) => ({
   ...await original<object>(),
-  usePrompt: () => mocks.prompt,
+  useSecretReveal: () => mocks.reveal,
   useActionResultMutation: () => [mocks.setActive, {}],
   useActionOutcomeMutation: () => [mocks.rename, {}],
 }));
@@ -75,17 +75,17 @@ describe("account verbs follow the row's server projection", () => {
 describe("one-time sign-in reveal", () => {
   test("reset reveals the username and new password once, with a combined copy control", async () => {
     mocks.authored.mockResolvedValue({ reset_user_password: { username: "ada", password: "once-only" } });
-    mocks.prompt.mockResolvedValue(null);
+    mocks.reveal.mockResolvedValue(undefined);
     const { result } = renderHook(useResetPasswordAction);
     expect(result.current.visibleWhen?.(record)).toBe(true);
     expect(result.current.confirm).toBeTruthy();
     expect(mocks.options).toHaveBeenCalledWith(expect.objectContaining({ transient: true }));
     await act(async () => { await result.current.run?.(context()); });
     expect(mocks.authored).toHaveBeenCalledExactlyOnceWith({ id: "user-1", confirmed: true, expectedRevision: 4 });
-    const reveal = mocks.prompt.mock.calls[0]?.[0];
-    expect(reveal.fields).toEqual([
-      expect.objectContaining({ name: "username", defaultValue: "ada", readOnly: true, copyable: true }),
-      expect.objectContaining({ name: "password", defaultValue: "once-only", readOnly: true, copyable: true }),
+    const reveal = mocks.reveal.mock.calls[0]?.[0];
+    expect(reveal.secrets).toEqual([
+      expect.objectContaining({ name: "username", value: "ada" }),
+      expect.objectContaining({ name: "password", value: "once-only" }),
     ]);
     expect(reveal.copy.value).toContain("ada");
     expect(reveal.copy.value).toContain("once-only");
@@ -93,15 +93,15 @@ describe("one-time sign-in reveal", () => {
 
   test("give access reveals the issued password with the username", async () => {
     mocks.authored.mockResolvedValue({ issue_user_password: { username: "grace", password: "first-secret" } });
-    mocks.prompt.mockResolvedValue(null);
+    mocks.reveal.mockResolvedValue(undefined);
     const { result } = renderHook(useIssuePasswordAction);
     expect(result.current.visibleWhen?.(record)).toBe(false);
     expect(result.current.visibleWhen?.({ ...record, account_actions: ["ISSUE_PASSWORD"] })).toBe(true);
     await act(async () => { await result.current.run?.(context()); });
     expect(mocks.authored).toHaveBeenCalledExactlyOnceWith({ id: "user-1" });
-    expect(mocks.prompt).toHaveBeenCalledWith(expect.objectContaining({ fields: [
-      expect.objectContaining({ defaultValue: "grace" }),
-      expect.objectContaining({ defaultValue: "first-secret" }),
+    expect(mocks.reveal).toHaveBeenCalledWith(expect.objectContaining({ secrets: [
+      expect.objectContaining({ value: "grace" }),
+      expect.objectContaining({ value: "first-secret" }),
     ] }));
   });
 
@@ -109,6 +109,6 @@ describe("one-time sign-in reveal", () => {
     mocks.authored.mockResolvedValue(null);
     const { result } = renderHook(useResetPasswordAction);
     await expect(result.current.run?.(context())).rejects.toThrow();
-    expect(mocks.prompt).not.toHaveBeenCalled();
+    expect(mocks.reveal).not.toHaveBeenCalled();
   });
 });
