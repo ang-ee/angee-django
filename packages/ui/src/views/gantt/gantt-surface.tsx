@@ -3,7 +3,7 @@ import { addWeeks, startOfDay, startOfWeek, subMilliseconds } from "date-fns";
 import { cn } from "../../lib/cn";
 import { useUiT } from "../../i18n";
 import { Gantt, type GanttProps } from "./gantt";
-import { GanttView as GanttGrid } from "./gantt-view";
+import { GanttGrid } from "./gantt-view";
 import { GanttNav, GanttNavToday, GanttNavPrev, GanttNavNext, GanttTitle, GanttScaleSwitcher } from "./gantt-nav";
 import { Button } from "../../ui/button";
 import { Glyph } from "../../chrome/Glyph";

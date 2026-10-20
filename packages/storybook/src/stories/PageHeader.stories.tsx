@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Badge, Button, Glyph, Page, PageBody, PageHeader } from "@angee/ui";
+import { Chip, Button, Glyph, Page, PageBody, PageHeader } from "@angee/ui";
 
 const meta = {
   title: "Page/PageHeader",
@@ -19,7 +19,7 @@ export const Dense: Story = {
       <PageHeader
         density="compact"
         crumbs="Health / Patients / PT-1842"
-        eyebrow={<Badge tone="info">Open chart</Badge>}
+        eyebrow={<Chip tone="info">Open chart</Chip>}
         title="Jordan Ellis"
         description="68 yo M - MRN 481029 - primary care panel"
         actions={

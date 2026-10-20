@@ -1,8 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
-import {
-  Badge, Card, CardContent, Chip, FILLS, Glyph, Page, PageBody, PageHeader,
-  SectionHeading, TONES, baseIcons, recipeAxes, textRoleVariants,
-} from "@angee/ui";
+import { Chip, Card, CardContent, FILLS, Glyph, Page, PageBody, PageHeader, SectionHeading, TONES, baseIcons, recipeAxes, textRoleVariants } from "@angee/ui";
 
 import { tokenNames } from "@angee/ui/tokens";
 import { noOwner, unresolvedClasses } from "./token-findings";
@@ -43,7 +40,7 @@ function TokenGrid({ names }: { names: readonly string[] }) {
       <CardContent className="grid gap-3 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <code className={textRoleVariants({ role: "caption" })}>{name}</code>
-          {noOwner.has(name) && <Badge tone="warning">no owner</Badge>}
+          {noOwner.has(name) && <Chip tone="warning">no owner</Chip>}
         </div>
         <div className="min-h-10 overflow-hidden rounded-4 border border-border p-2" style={tokenStyle(name)}>
           {/^(--font-|--fs-|--lh-|--fw-|--text-(?:\d|lg|2xs))/.test(name) ? "Aa · 0123456789" : null}
@@ -75,12 +72,12 @@ export function ToneMatrix() {
   return <div className="grid gap-3">
       {[...TONES].sort().map(tone => <Card key={tone}><CardContent className="flex flex-wrap items-center gap-3 p-4">
         <code className={textRoleVariants({ role: "caption", className: "w-20" })}>{tone}</code>
-        {[...FILLS].sort().map(variant => <Badge key={variant} tone={tone} variant={variant}>{variant}</Badge>)}
+        {[...FILLS].sort().map(variant => <Chip key={variant} tone={tone} variant={variant}>{variant}</Chip>)}
       </CardContent></Card>)}
   </div>;
 }
 export function TonesSheet() {
-  return <SheetPage title="Tones and fills" description="Every semantic tone × fill, rendered by the shipped Badge. Unused tokens are inventory findings, not theme fallbacks.">
+  return <SheetPage title="Tones and fills" description="Every semantic tone × fill, rendered by the shipped Chip. Unused tokens are inventory findings, not theme fallbacks.">
     <ToneMatrix />
     <TokenGrid names={tokenNames.filter(name =>
       /^--(?:color-|n-\d|b-\d|t-\d|black$|brand|accent|neutral|green|amber|red|blue|purple|pink|surface-|text-(?!\d|lg|2xs)|border-|success|warning|danger|info|on-|chart-|tooltip-|avatar-|ring|bg-grid-color)/.test(name))} />
@@ -93,7 +90,7 @@ function MissingClasses({ names }: { names: readonly string[] }) {
     <SectionHeading label="Unresolved utilities" />
     <p className={textRoleVariants({ role: "description" })}>These inventory class names have no token owner. Lane 2 must repair or delete their callers.</p>
     {names.map(name => <div key={name} className="flex items-center gap-3">
-      <code>{name}</code><Badge tone="warning">no owner</Badge>
+      <code>{name}</code><Chip tone="warning">no owner</Chip>
     </div>)}
   </CardContent></Card>;
 }

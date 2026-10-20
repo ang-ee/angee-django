@@ -2,10 +2,12 @@ import * as React from "react";
 import { type Row as TableRowModel } from "@tanstack/react-table";
 import type { AggregateBucket } from "@angee/refine";
 import { ResourceQuery, type GroupAxis, type ModelMetadata, type Row } from "@angee/metadata";
-import { format } from "date-fns";
 import { Glyph } from "../../../chrome/Glyph";
 import { useUiT, type UiTranslate } from "../../../i18n";
+import { formatNumber } from "../../../lib/format-number";
 import { TableCell, TableRow } from "../../../ui/table";
+import { depthIndent } from "../../../ui/tree";
+import { formatDate, formatMonth } from "../../../widgets/date-format";
 import type { ResourceViewGroup } from "../resource-view-model";
 import { enumValueLabel } from "./cell-utils";
 import { queryForColumns } from "../resource-query";
@@ -24,7 +26,7 @@ export function GroupHeader<TRow extends Row>({
   const expanded = row.getIsExpanded();
   const label = groupedRowLabel(row, groupStack, t);
   const rowCount = row.getLeafRows().length;
-  const indent = { paddingLeft: `calc(0.75rem + ${row.depth * 1.25}rem)` };
+  const indent = { paddingLeft: depthIndent(row.depth) };
   // The chevron only appears when the header is a toggle; the lead/trailing
   // content is identical either way, so it is rendered once and the branch
   // chooses only the wrapper (interactive button vs static row).
@@ -39,7 +41,7 @@ export function GroupHeader<TRow extends Row>({
         ) : null}
         <span className="min-w-0 truncate">{label}</span>
         <span className="font-normal text-fg-muted">
-          {rowCount.toLocaleString()}
+          {formatNumber(rowCount)}
         </span>
       </span>
     </>
@@ -168,15 +170,15 @@ function groupLabelFromKey(
   }
   if (group.granularity === "month") {
     const date = dateFromGroupKey(key);
-    if (date) return format(date, "MMMM yyyy");
+    if (date) return formatMonth(date);
   }
   if (group.granularity === "week") {
     const date = dateFromGroupKey(key);
-    if (date) return t("list.weekOf", { date: format(date, "MMMM d, yyyy") });
+    if (date) return t("list.weekOf", { date: formatDate(date, { density: "full" }) });
   }
   if (!group.granularity) {
     const date = dateFromGroupKey(key);
-    if (date) return format(date, "MMMM d, yyyy");
+    if (date) return formatDate(date, { density: "full" });
   }
   return key;
 }

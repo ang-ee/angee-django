@@ -17,12 +17,13 @@ import { cn } from "../../lib/cn";
 import { useRender, type UseRenderRenderProp } from "../../lib/slot";
 import type { Tone } from "../../lib/tones";
 import { tv } from "../../lib/variants";
-import { Button, type ButtonProps } from "../../ui/button";
-import { Tag } from "../../ui/badge";
+import { ToolbarRoot } from "../../ui/toolbar";
+import { Chip } from "../../ui/chip";
 import { CodeBlock } from "../../ui/code";
 import { POPUP_BASE, POPUP_LIST } from "../../ui/popover";
 import { StatusDot } from "../../ui/status-icon";
 import { textRoleVariants } from "../../ui/text";
+import { formatJson } from "../../widgets/json-format";
 
 // ---------------------------------------------------------------------------
 // Header
@@ -37,7 +38,7 @@ export interface ChatHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "titl
 }
 
 /** Chat surface header: a status dot, title/subtitle, an optional status tag, and an
- *  actions row (cog / clear / reconnect via `ChatHeaderAction`).
+ *  actions row (cog / clear / reconnect as ghost `sm` Buttons).
  * @kind region
  * @region aside-head
  */
@@ -62,9 +63,9 @@ export function ChatHeader({
           {subtitle ? <div className={textRoleVariants({ role: "caption", truncate: true })}>{subtitle}</div> : null}
         </div>
         {statusLabel ? (
-          <Tag tone={statusTone} density="compact" shape="pill">
+          <Chip tone={statusTone}>
             {statusLabel}
-          </Tag>
+          </Chip>
         ) : null}
       </div>
       {actions ? (
@@ -83,13 +84,14 @@ export interface ChatBarProps extends Omit<HTMLAttributes<HTMLElement>, "title">
 
 /** A dense, single-row chat header frame: a leading `start` slot (status + chooser) and a
  *  trailing `end` slot (overflow menu), divided by a bottom border. Pure presentation — the
- *  consumer composes the chooser/menu; this owns only the dense bar layout.
+ *  consumer composes the chooser/menu; this owns only the dense bar layout, a `Toolbar`.
  * @kind region
  * @region command-band
  */
 export function ChatBar({ start, end, className, ...props }: ChatBarProps): ReactElement {
   return (
-    <header
+    <ToolbarRoot
+      render={<header />}
       className={cn(
         barVariants({
           edge: "bottom",
@@ -106,25 +108,8 @@ export function ChatBar({ start, end, className, ...props }: ChatBarProps): Reac
     >
       <div className="flex min-w-0 items-center gap-2">{start}</div>
       {end ? <div className="flex shrink-0 items-center gap-1.5">{end}</div> : null}
-    </header>
+    </ToolbarRoot>
   );
-}
-
-export interface ChatHeaderActionProps extends Omit<ButtonProps, "size" | "variant"> {
-  size?: ButtonProps["size"];
-  variant?: ButtonProps["variant"];
-}
-
-/** Compact header button (defaults to a ghost `sm`), for cog/clear/reconnect.
- * @owner ChatHeader
- */
-export function ChatHeaderAction({
-  size = "sm",
-  variant = "ghost",
-  className,
-  ...props
-}: ChatHeaderActionProps): ReactElement {
-  return <Button size={size} variant={variant} className={cn("h-6 px-2 text-2xs", className)} {...props} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +170,7 @@ export const sessionRailItemVariants = tv({
   base: "flex h-8 w-full items-center gap-2 rounded-6 px-2 text-left text-13 text-fg-2 no-underline outline-none transition-colors hover:bg-inset hover:text-fg focus-visible:focus-ring",
   variants: {
     active: {
-      true: "bg-brand-soft font-medium text-brand-soft-text hover:bg-brand-soft",
+      true: "selected font-medium hover:selected",
       false: "",
     },
   },
@@ -404,12 +389,12 @@ export function ToolFallback({
       </summary>
       {hasInput ? (
         <CodeBlock wrap tone="muted" className="mt-1 max-h-32 overflow-auto">
-          {`${t("chat.tool.input")}: ${formatJson(input)}`}
+          {`${t("chat.tool.input")}: ${toolText(input)}`}
         </CodeBlock>
       ) : null}
       {hasResult ? (
         <CodeBlock wrap tone={isError ? "danger" : "muted"} className="mt-1 max-h-32 overflow-auto">
-          {`${t("chat.tool.result")}: ${formatJson(result)}`}
+          {`${t("chat.tool.result")}: ${toolText(result)}`}
         </CodeBlock>
       ) : null}
     </details>
@@ -457,12 +442,8 @@ export function ContextBlock({ label, children, className }: ContextBlockProps):
   );
 }
 
-function formatJson(value: unknown): string {
+/** A tool payload as text: raw when it already is text, JSON otherwise. */
+function toolText(value: unknown): string {
   if (value == null) return "";
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
+  return typeof value === "string" ? value : formatJson(value);
 }

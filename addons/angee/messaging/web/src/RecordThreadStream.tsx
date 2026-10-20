@@ -1,10 +1,6 @@
 import * as React from "react";
 import { holdsPermission, type Row } from "@angee/metadata";
-import {
-  ActionFormDialog, Avatar, Button, Chip, EmptyState, ErrorBanner, MessageRow, RecordActionBar,
-  SectionHeading, Tag, actionOutcomeSubmitResult, avatarInitials, useActionForm, useRuntimeViewAs,
-  type RecordActionDescriptor, type ResourceListProps,
-} from "@angee/ui";
+import { ActionFormDialog, Avatar, Button, Chip, EmptyState, ErrorBanner, MessageRow, RecordActionBar, SectionHeading, actionOutcomeSubmitResult, avatarInitials, useActionForm, useRuntimeViewAs, type RecordActionDescriptor, type ResourceListProps } from "@angee/ui";
 
 import { RecordThreadConversation, type RecordThreadConversationProps } from "./RecordThreadConversation";
 import { useMessagingT } from "./i18n";
@@ -111,7 +107,7 @@ function ChildStreamItem({ item, modelLabel, submitKey }: {
       <MessageRow avatar={<Avatar size="sm" initials={avatarInitials(author)} alt={author} />}
         author={author} timestamp={item.createdAt} channel={<>
           <Chip tone="neutral" size="md">{audience}</Chip>
-          {item.kindLabel ? <Tag tone="info" density="micro">{item.kindLabel}</Tag> : null}
+          {item.kindLabel ? <Chip tone="info">{item.kindLabel}</Chip> : null}
         </>}>
         <div className="font-medium">{item.title}</div>
         {item.body ? <div>{item.body}</div> : null}
@@ -179,7 +175,7 @@ function InlineCreateComposer({ action, composer, submitKey = "enter", onCreated
     readerLine={composer.readerLine ?? (composer.audience ? undefined : t("composer.audience"))}
     audience={composer.audience}
     after={<>
-      {form.fieldErrors[composer.bodyArg]?.map((message) => <p key={message} className="text-xs text-danger-text">{message}</p>)}
+      {form.fieldErrors[composer.bodyArg]?.map((message) => <p key={message} className="text-12 text-danger-text">{message}</p>)}
       <ErrorBanner description={form.formError} />
     </>} />;
 }

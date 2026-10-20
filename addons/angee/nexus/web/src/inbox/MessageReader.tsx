@@ -15,7 +15,7 @@ import {
   LoadingPanel,
   MetaGrid,
   RecordHeader,
-  Tag,
+  Chip,
   type RecordChromeContext,
 } from "@angee/ui";
 
@@ -171,7 +171,7 @@ export function InboxMessageReader({
                 />
                 {message.participants.map((participant) => (
                   <div key={participant.id} className="text-13">
-                    <Tag>{participant.role}</Tag>{" "}
+                    <Chip>{participant.role}</Chip>{" "}
                     {senderDisplayName(participant.handle)}{" "}
                     <span className="text-fg-muted">
                       {participant.handle?.value}

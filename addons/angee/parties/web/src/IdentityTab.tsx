@@ -1,13 +1,5 @@
 import * as React from "react";
-import {
-  ListView,
-  Tag,
-  NavLink,
-  type ListColumn,
-  type RecordPanelContext,
-  useRouteSearch,
-  useResourceRecordHrefLookup,
-} from "@angee/ui";
+import { ListView, Chip, NavLink, type ListColumn, type RecordPanelContext, useRouteSearch, useResourceRecordHrefLookup } from "@angee/ui";
 
 import { usePartiesT } from "./i18n";
 import {
@@ -22,9 +14,9 @@ type LinkRow = PartyStatementActionRow & {
 };
 
 function linkState(row: LinkRow, t: ReturnType<typeof usePartiesT>): React.ReactElement {
-  if (row.is_dismissed) return <Tag tone="neutral">{t("identity.state.dismissed")}</Tag>;
-  if (row.is_confirmed) return <Tag tone="success">{t("identity.state.confirmed")}</Tag>;
-  return <Tag tone="warning">{t("identity.state.suggested")}</Tag>;
+  if (row.is_dismissed) return <Chip tone="neutral">{t("identity.state.dismissed")}</Chip>;
+  if (row.is_confirmed) return <Chip tone="success">{t("identity.state.confirmed")}</Chip>;
+  return <Chip tone="warning">{t("identity.state.suggested")}</Chip>;
 }
 
 /**

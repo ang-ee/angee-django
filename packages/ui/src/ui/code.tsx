@@ -28,7 +28,7 @@ export const codeVariants = tv({
     },
     size: {
       sm: "text-2xs",
-      md: "text-xs",
+      md: "text-12",
     },
     truncate: {
       true: "min-w-0 truncate",
@@ -47,7 +47,7 @@ export const codeVariants = tv({
  * @kind token
  */
 export const codeBlockVariants = tv({
-  base: "block max-w-full overflow-x-auto rounded-6 border border-border-subtle bg-inset p-3 font-mono text-xs leading-5 text-fg",
+  base: "block max-w-full overflow-x-auto rounded-6 border border-border-subtle bg-inset p-3 font-mono text-12 leading-5 text-fg",
   variants: {
     wrap: {
       true: "whitespace-pre-wrap break-words",

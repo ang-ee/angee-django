@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { rowValueAtPath, type Row } from "@angee/metadata";
-import { Badge, useRecordFieldMarks, useStatusTone, type ListColumn, type ResourceToolbarFilterOption } from "@angee/ui";
+import { Chip, useRecordFieldMarks, useStatusTone, type ListColumn, type ResourceToolbarFilterOption } from "@angee/ui";
 
 import type { Decision } from "./documents.console";
 import { useDecisionsT } from "./i18n";
@@ -36,8 +36,8 @@ function AttentionCell({ row }: { row: Row }) {
   const tags = Array.isArray(value) ? value.filter(isAttentionTag) : [];
   if (!open && tags.length === 0) return null;
   return <span className="inline-flex flex-wrap items-center gap-1">
-    {open ? <Badge tone={tone(OPEN_DECISION_TONE)} density="compact"><AttentionLabel needs /></Badge> : null}
-    {tags.map((tag) => <Badge key={tag.id} tone={tone(tag.name)} density="compact">{tag.name}</Badge>)}
+    {open ? <Chip tone={tone(OPEN_DECISION_TONE)}><AttentionLabel needs /></Chip> : null}
+    {tags.map((tag) => <Chip key={tag.id} tone={tone(tag.name)}>{tag.name}</Chip>)}
   </span>;
 }
 

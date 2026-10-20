@@ -38,15 +38,13 @@ export const popoverVariants = tv({
     content:
       "overflow-hidden rounded-8 border border-border-subtle bg-popover shadow-popover outline-none motion-safe:transition-[opacity,scale] data-[starting-style]:opacity-0 data-[starting-style]:scale-95 data-[ending-style]:opacity-0 data-[ending-style]:scale-95",
     list: "max-h-64 overflow-y-auto p-1",
-    input:
-      "h-7 w-full border-0 bg-transparent px-2 text-13 text-fg outline-none placeholder:text-fg-muted",
     item:
       "flex h-7 cursor-pointer select-none items-center gap-2 rounded-6 px-2 text-13 text-fg outline-none data-[highlighted]:bg-inset data-[selected]:text-brand-soft-text",
     modal:
       "z-modal overflow-hidden rounded-12 border border-border-subtle bg-sheet shadow-lg outline-none",
     modalBackdrop: "fixed inset-0 z-modal-backdrop bg-overlay",
     title: "px-3 py-2 text-13 font-semibold text-fg",
-    description: "px-3 pb-2 text-xs text-fg-muted",
+    description: "px-3 pb-2 text-12 text-fg-muted",
   },
   variants: {
     surface: {
@@ -63,10 +61,6 @@ export const popoverVariants = tv({
  * @kind token
  */
 export const POPUP_BASE = popoverVariants().content();
-/**
- * @kind token
- */
-export const POPUP_INPUT = popoverVariants().input();
 /**
  * @kind token
  */
@@ -319,25 +313,6 @@ export const PopoverList = React.forwardRef<HTMLDivElement, PopoverListProps>(
 );
 PopoverList.displayName = "PopoverList";
 
-export type PopoverInputProps = Omit<
-  React.InputHTMLAttributes<HTMLInputElement>,
-  "className" | "color"
-> & {
-  className?: string;
-};
-
-/**
- * @owner Popover
- */
-export const PopoverInput = React.forwardRef<
-  HTMLInputElement,
-  PopoverInputProps
->(function PopoverInput({ className, ...props }, ref) {
-  const styles = popoverVariants();
-  return <input ref={ref} className={styles.input({ className })} {...props} />;
-});
-PopoverInput.displayName = "PopoverInput";
-
 export type PopoverItemProps = React.HTMLAttributes<HTMLDivElement> & {
   className?: string;
 };
@@ -365,7 +340,6 @@ export const Popover = {
   Content: PopoverContent,
   Popup: PopoverPopup,
   List: PopoverList,
-  Input: PopoverInput,
   Item: PopoverItem,
   Arrow: PopoverArrow,
   Backdrop: PopoverBackdrop,

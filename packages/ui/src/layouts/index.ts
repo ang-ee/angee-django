@@ -10,12 +10,12 @@ export {
 export {
   PaneToolbar,
   PaneToolbarHost,
-  PaneToolbarIconButton,
   type PaneToolbarAction,
   type PaneToolbarHostProps,
-  type PaneToolbarIconButtonProps,
   PaneToolbarMenu,
   type PaneToolbarMenuItem,
+  type PaneToolbarMenuProps,
+  type PaneToolbarMenuRadioGroup,
   type PaneToolbarProps,
 } from "./PaneToolbar";
 export {

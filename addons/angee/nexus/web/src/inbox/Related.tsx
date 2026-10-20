@@ -2,8 +2,8 @@ import { useMemo } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { MessagePaneRow } from "@angee/messaging";
 import {
-  Alert, Button, Dialog, PreviewPane, EmptyState, ListView, PaneLabel, PaneRow,
-  PaneRows, PaneToolbar, PaneToolbarIconButton, useResourceRecordHrefLookup,
+  Alert, Button, Dialog, PreviewPane, EmptyState, Glyph, ListView, PaneLabel, PaneRow,
+  PaneRows, PaneToolbar, useResourceRecordHrefLookup,
 } from "@angee/ui";
 import { InboxRelatedTarget, type InboxConnectionRow } from "./documents";
 import { relatedSource } from "./sources";
@@ -52,7 +52,7 @@ export function InboxRelatedPane({ navigation }: { navigation: InboxNavigation }
         <ListView presentation="workspace" selectable={false} resource="nexus.InboxConnections" source={source}
           columns={columns} availableViews={["list"]} textFilterField="text" groupOptions={[]}
           filterOptions={[]} customFilterFields={[]}
-          pane={{ selector: <PaneToolbarIconButton {...close} /> }}
+          pane={{ selector: <Button type="button" variant="ghost" size="iconSm" aria-label={close.label} title={close.label} onClick={close.onClick}><Glyph name={close.icon} /></Button> }}
           renderPaneRow={(row) => <ConnectionRow row={row} navigation={navigation} />}
           emptyContent={t("inbox.noRelated")} />
       </>}

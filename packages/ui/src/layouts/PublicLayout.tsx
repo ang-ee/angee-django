@@ -71,7 +71,7 @@ export function PublicLayout({
             </div>
           </section>
           {footer ? (
-            <div className="col-span-full px-4 pb-8 text-center text-xs text-n-200 sm:px-6">
+            <div className="col-span-full px-4 pb-8 text-center text-12 text-n-200 sm:px-6">
               {footer}
             </div>
           ) : null}

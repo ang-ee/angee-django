@@ -1,6 +1,6 @@
 import { useMessagingT } from "@angee/messaging";
 import { keysetFeedRows, useAuthoredMutation } from "@angee/refine";
-import { Alert, Button, Checkbox, ControlBandProvider, DialogForm, FieldRoot, FieldRow, Input, ActionTrigger, ResourceViewProvider, RowsListView, errorMessage, useLatestRef, useRecordChromeContext, useResourceView, type ListColumn } from "@angee/ui";
+import { Alert, Button, Checkbox, ControlBandProvider, DialogForm, FieldRoot, Input, ActionTrigger, ResourceViewProvider, RowsListView, errorMessage, useLatestRef, useRecordChromeContext, useResourceView, type ListColumn } from "@angee/ui";
 import type { DocumentType } from "@angee/gql/console";
 import * as React from "react";
 import { flushSync } from "react-dom";
@@ -34,6 +34,7 @@ function ImportImapSampleDialog(): React.ReactElement | null {
   const { recordId, record } = useRecordChromeContext();
   const { clearSelectedIds, setPage } = useResourceView();
   const [open, setOpen] = React.useState(false);
+  const fieldId = React.useId();
   const form = useForm<PreviewValues>({
     defaultValues: { mailbox: "INBOX", since: isoDate(-30), before: isoDate(1), allDates: false, limit: 20 },
   });
@@ -106,30 +107,42 @@ function ImportImapSampleDialog(): React.ReactElement | null {
       </ActionTrigger>
     }
     footer={<Button type="submit" variant="primary" disabled={busy}>{previewFeed.isFetching ? t("channel.imap.sample.previewing") : t("channel.imap.sample.preview")}</Button>}>
-      <FieldRow label={t("channel.imap.sample.mailbox")}><Input disabled={busy} invalid={Boolean(errors.mailbox)} aria-describedby={errors.mailbox ? formErrorId : undefined} {...form.register("mailbox", {
+      <FieldRoot invalid={Boolean(errors.mailbox)}>
+        <FieldRoot.Label htmlFor={`${fieldId}-mailbox`}>{t("channel.imap.sample.mailbox")}</FieldRoot.Label>
+        <Input id={`${fieldId}-mailbox`} invalid={Boolean(errors.mailbox)} disabled={busy} aria-describedby={errors.mailbox ? formErrorId : undefined} {...form.register("mailbox", {
         setValueAs: (value: string) => value.trim(), required: t("channel.imap.sample.invalidRange"), onChange: invalidatePreview,
-      })} /></FieldRow>
+      })} />
+      </FieldRoot>
       <Controller name="allDates" control={form.control} render={({ field }) => <FieldRoot>
         <FieldRoot.Label>{t("channel.imap.sample.allDates")}</FieldRoot.Label>
         <Checkbox ref={field.ref} name={field.name} checked={field.value} disabled={busy} onBlur={field.onBlur}
           onCheckedChange={(checked) => { field.onChange(checked); invalidatePreview(); }} />
       </FieldRoot>} />
-      <FieldRow label={t("channel.imap.sample.since")}><Input type="date" disabled={busy || allDates} invalid={Boolean(errors.before)} aria-describedby={errors.before ? formErrorId : undefined} {...form.register("since", { onChange: invalidatePreview })} /></FieldRow>
-      <FieldRow label={t("channel.imap.sample.before")}><Input type="date" disabled={busy || allDates} invalid={Boolean(errors.before)} aria-describedby={errors.before ? formErrorId : undefined} {...form.register("before", {
+      <FieldRoot invalid={Boolean(errors.before)}>
+        <FieldRoot.Label htmlFor={`${fieldId}-since`}>{t("channel.imap.sample.since")}</FieldRoot.Label>
+        <Input id={`${fieldId}-since`} invalid={Boolean(errors.before)} type="date" disabled={busy || allDates} aria-describedby={errors.before ? formErrorId : undefined} {...form.register("since", { onChange: invalidatePreview })} />
+      </FieldRoot>
+      <FieldRoot invalid={Boolean(errors.before)}>
+        <FieldRoot.Label htmlFor={`${fieldId}-before`}>{t("channel.imap.sample.before")}</FieldRoot.Label>
+        <Input id={`${fieldId}-before`} invalid={Boolean(errors.before)} type="date" disabled={busy || allDates} aria-describedby={errors.before ? formErrorId : undefined} {...form.register("before", {
         validate: (value, values) => {
           if (values.allDates) return true;
           const span = Date.parse(`${value}T00:00:00Z`) - Date.parse(`${values.since}T00:00:00Z`);
           if (!Number.isFinite(span) || span <= 0) return t("channel.imap.sample.invalidRange");
           return span / 86_400_000 <= 366 || t("channel.imap.sample.rangeTooLong");
         }, onChange: invalidatePreview,
-      })} /></FieldRow>
-      <FieldRow label={t("channel.imap.sample.limit")}><Input type="number" min={1} max={IMAP_SAMPLE_LIMIT} disabled={busy} invalid={Boolean(errors.limit)} aria-describedby={errors.limit ? formErrorId : undefined} {...form.register("limit", {
+      })} />
+      </FieldRoot>
+      <FieldRoot invalid={Boolean(errors.limit)}>
+        <FieldRoot.Label htmlFor={`${fieldId}-limit`}>{t("channel.imap.sample.limit")}</FieldRoot.Label>
+        <Input id={`${fieldId}-limit`} invalid={Boolean(errors.limit)} type="number" min={1} max={IMAP_SAMPLE_LIMIT} disabled={busy} aria-describedby={errors.limit ? formErrorId : undefined} {...form.register("limit", {
         valueAsNumber: true, required: invalidLimit,
         min: { value: 1, message: invalidLimit },
         max: { value: IMAP_SAMPLE_LIMIT, message: invalidLimit },
         validate: (value) => Number.isInteger(value) || invalidLimit,
         onChange: invalidatePreview,
-      })} /></FieldRow>
+      })} />
+      </FieldRoot>
       {formError || operationError ? <Alert id={formErrorId} className="col-span-full" tone="danger">{formError || errorMessage(operationError, t("channel.imap.sample.failed"))}</Alert> : null}
       {outcome ? <Alert
         className="col-span-full"

@@ -6,7 +6,7 @@ import { useDashboardRegistry } from "../runtime/runtime";
 import { useDndKitSensors } from "../lib/dnd";
 import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
-import { DropdownMenu } from "../ui/dropdown-menu";
+import { ActionMenu, ActionTrigger } from "../toolbars/ActionMenu";
 import { Glyph } from "../chrome/Glyph";
 import { Input } from "../ui/input";
 import { NavLink } from "../ui/nav-link";
@@ -534,7 +534,7 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
           />
         </div>
         {!editing && fullViewHref ? <NavLink href={fullViewHref} aria-label={t("surface.fullView", { title: visibleTitle })} affordance="outward" className="shrink-0 rounded-4 p-1 text-sm text-fg-muted hover:text-fg focus-visible:focus-ring" /> : null}
-        {editing ? <button type="button" className="cursor-grab rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.move", { title: visibleTitle })} {...drag.attributes} {...drag.listeners}><Glyph name="grip-vertical" fallbackName="more-vertical" size={14} /></button> : null}
+        {editing ? <Button type="button" variant="ghost" size="iconSm" className="cursor-grab" aria-label={t("surface.move", { title: visibleTitle })} {...drag.attributes} {...drag.listeners}><Glyph name="grip-vertical" fallbackName="more-vertical" /></Button> : null}
         {editing ? (
           <Input
             size="sm"
@@ -546,10 +546,10 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
         ) : null}
         {editing ? (
           <>
-            <button type="button" className="rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.moveLeft")} onClick={() => onMove(-1, 0)}><Glyph name="arrow-left" size={12} /></button>
-            <button type="button" className="rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.moveRight")} onClick={() => onMove(1, 0)}><Glyph name="arrow-right" size={12} /></button>
-            <button type="button" className="rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.wider")} onClick={() => onResize(1, 0)}><Glyph name="maximize-2" size={12} /></button>
-            <button type="button" className="rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.removeWidget")} onClick={onArchive}><Glyph name="archive" fallbackName="x" size={12} /></button>
+            <Button type="button" variant="ghost" size="iconSm" aria-label={t("surface.moveLeft")} onClick={() => onMove(-1, 0)}><Glyph name="arrow-left" /></Button>
+            <Button type="button" variant="ghost" size="iconSm" aria-label={t("surface.moveRight")} onClick={() => onMove(1, 0)}><Glyph name="arrow-right" /></Button>
+            <Button type="button" variant="ghost" size="iconSm" aria-label={t("surface.wider")} onClick={() => onResize(1, 0)}><Glyph name="maximize-2" /></Button>
+            <Button type="button" variant="ghost" size="iconSm" aria-label={t("surface.removeWidget")} onClick={onArchive}><Glyph name="archive" fallbackName="x" /></Button>
           </>
         ) : null}
       </header>
@@ -610,12 +610,9 @@ function WidgetDataBody({ widget, kind, definition, editing, pageScope, titleId,
         <Component spec={widget} data={data} titleId={titleId} authored={Authored ? <Authored /> : undefined} hostedView={HostedView} onCountChange={onCountChange} />
       </div>
       {!editing && widget.data.shape !== "none" && widget.data.shape !== "resourceView" ? (
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger render={<button type="button" className="absolute right-1 top-1 rounded-4 p-1 text-fg-muted hover:text-fg focus-visible:focus-ring" aria-label={t("surface.widgetMenu", { title: widget.title })}><Glyph name="more-horizontal" fallbackName="more-vertical" size={14} /></button>} />
-          <DropdownMenu.Portal><DropdownMenu.Positioner align="end" sideOffset={4}><DropdownMenu.Content>
-            <DropdownMenu.Item onClick={data.refetch}>{t("surface.refresh")}</DropdownMenu.Item>
-          </DropdownMenu.Content></DropdownMenu.Positioner></DropdownMenu.Portal>
-        </DropdownMenu.Root>
+        <ActionMenu label={null} aria-label={t("surface.widgetMenu", { title: widget.title })} glyph="more-horizontal" size="iconSm" align="end" className="absolute right-1 top-1">
+          <ActionTrigger glyph="refresh" onClick={data.refetch}>{t("surface.refresh")}</ActionTrigger>
+        </ActionMenu>
       ) : null}
     </div>
   );

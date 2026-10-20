@@ -12,7 +12,7 @@ const CATEGORY_OPTIONS = ["triage", "backlog", "unstarted", "started", "complete
   .map((value) => ({ value, label: value }));
 
 vi.mock("@angee/ui", () => ({
-  Badge: ({ children }: { children?: React.ReactNode }) => <span data-badge>{children}</span>,
+  Chip: ({ children }: { children?: React.ReactNode }) => <span data-badge>{children}</span>,
   Field: () => null,
   Form: (props: Record<string, unknown>) => {
     mocks.formProps = props;

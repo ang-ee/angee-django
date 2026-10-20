@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { formatDayLabel } from "@angee/ui";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ThreadTranscript } from "./ThreadTranscript";
@@ -253,7 +254,7 @@ test("day separators and date anchors share the explicitly selected timezone", (
   ];
   const onAnchorChange = vi.fn();
   render(<ThreadTranscript threadId="thr_1" order="history" timezone="America/New_York" onAnchorChange={onAnchorChange} />);
-  const day = new Intl.DateTimeFormat(undefined, { timeZone: "America/New_York" }).format(new Date("2026-07-02T00:30:00Z"));
+  const day = formatDayLabel("2026-07-02T00:30:00Z", { timeZone: "America/New_York" });
   expect(screen.getAllByText(day)).toHaveLength(1);
   fireEvent.change(screen.getByLabelText("Jump to date"), { target: { value: "2026-07-01" } });
   expect(onAnchorChange).toHaveBeenCalledWith("date:2026-07-01@America/New_York");

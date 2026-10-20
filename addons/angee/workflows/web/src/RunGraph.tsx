@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useAuthoredQuery } from "@angee/refine";
-import {
-  Badge, Button, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, MetaGrid, MetaSection, RailPanel,
-  errorMessage, formatDateTime, optionLabel, routeSearchParam, updateRouteSearch, useAppRuntime, useChatter, useChatterContent,
-  useEnumOptions, useRouteSearch, useStatusTone, type GraphViewNode,
-} from "@angee/ui";
+import { Chip, Button, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, MetaGrid, MetaSection, RailPanel, errorMessage, formatDateTime, optionLabel, routeSearchParam, updateRouteSearch, useAppRuntime, useChatter, useChatterContent, useEnumOptions, useRouteSearch, useStatusTone, type GraphViewNode } from "@angee/ui";
 import { RUN_MODEL, STEP_RUN_MODEL, WorkflowRunGraphDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 import { projectRunGraph, RUN_GRAPH_EDGE_STYLES, type RunGraphNode } from "./run-graph";
@@ -81,8 +77,8 @@ function RunNodeInspector({ runId, node, detail }: {
     <MetaSection title={node.label}>
       <MetaGrid rows={[
         [t("run.graphKey"), node.key], [t("run.graphStep"), node.step_label],
-        [t("run.status"), <Badge tone={resolveTone(row?.status ?? "unreached", WORKFLOW_STEP_STATUS_TONES)}>
-          {row ? optionLabel(statuses, row.status) : t("run.graphPending")}</Badge>],
+        [t("run.status"), <Chip tone={resolveTone(row?.status ?? "unreached", WORKFLOW_STEP_STATUS_TONES)}>
+          {row ? optionLabel(statuses, row.status) : t("run.graphPending")}</Chip>],
         ...(detail ? [[t("run.graphProgress"), detail] as const] : []),
         ...(row ? [[t("step.attempts"), row.attempt], [t("step.page"), formatStepPage(row.page_index, t)],
           [t("step.created"), formatDateTime(row.created_at)], [t("step.updated"), formatDateTime(row.updated_at)],

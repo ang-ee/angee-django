@@ -13,13 +13,12 @@ import {
 } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 
-/** A tinted status glyph speaks in feedback tones (+ a `muted` quiet state). */
+/** A tinted status glyph speaks in feedback tones (+ the `muted` quiet tone). */
 export type StatusIconTone = FeedbackIntent | "muted";
 
-const STATUS_ICON_TONE_CLASSES = Object.fromEntries([
-  ...FEEDBACK_INTENTS.map((tone) => [tone, toneText(tone)] as const),
-  ["muted", "text-fg-muted"] as const,
-]) as Record<StatusIconTone, string>;
+const STATUS_ICON_TONE_CLASSES = Object.fromEntries(
+  [...FEEDBACK_INTENTS, "muted" as const].map((tone) => [tone, toneText(tone)] as const),
+) as Record<StatusIconTone, string>;
 
 /**
  * @kind token
@@ -44,7 +43,7 @@ export const statusIconVariants = tv({
 // shared `toneSolidBg` owner). Neutral keeps the muted gray — a near-black solid
 // would read as a bullet, not a status.
 const STATUS_DOT_TONES = Object.fromEntries(
-  TONES.map((tone) => [tone, tone === "neutral" ? "bg-fg-muted" : toneSolidBg(tone)]),
+  TONES.map((tone) => [tone, tone === "neutral" ? "bg-fg-muted" : tone === "muted" ? "bg-fg-subtle" : toneSolidBg(tone)]),
 ) as Record<Tone, string>;
 
 /**

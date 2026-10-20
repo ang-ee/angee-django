@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { Badge } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import type { WidgetDefinition, WidgetOption, WidgetRenderProps } from "./types";
 
 function BooleanBadgeRead({
@@ -9,13 +9,11 @@ function BooleanBadgeRead({
 }: WidgetRenderProps<boolean | string | number>): ReactElement {
   const active = booleanValue(value);
   return (
-    <Badge
+    <Chip
       tone={active ? "success" : "neutral"}
-      density="compact"
-      shape="pill"
     >
       {booleanLabel(active, field?.options)}
-    </Badge>
+    </Chip>
   );
 }
 

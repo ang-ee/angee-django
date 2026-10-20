@@ -5,6 +5,7 @@ import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { POPUP_ITEM, POPUP_LIST } from "./popover";
+import { shortcutVariants } from "./kbd";
 import { SectionEyebrow } from "./section-eyebrow";
 import { textRoleVariants } from "./text";
 
@@ -34,7 +35,7 @@ export const commandVariants = tv({
     item: COMMAND_ITEM,
     separator: "my-1 h-px bg-border-subtle",
     loading: cn(textRoleVariants({ role: "meta" }), "px-4 py-3"),
-    shortcut: cn(textRoleVariants({ role: "caption" }), "ml-auto"),
+    shortcut: shortcutVariants(),
   },
 });
 

@@ -1,8 +1,5 @@
 import type { DocumentType } from "@angee/gql/console";
-import {
-  Avatar, Badge, Card, CardContent, CardFooter, CardHeader, InlineEmpty, NavLink, Skeleton, SkeletonText,
-  avatarInitials, useRouteHref, useStatusTone,
-} from "@angee/ui";
+import { Avatar, Chip, Card, CardContent, CardFooter, CardHeader, InlineEmpty, NavLink, Skeleton, SkeletonText, avatarInitials, useRouteHref, useStatusTone } from "@angee/ui";
 import type { ReactElement } from "react";
 
 import type { TaskAccessNeedsDocument } from "./documents";
@@ -57,16 +54,16 @@ export function TaskAccessDecisions({
         <Avatar size="sm" src={need.party?.display_avatar?.url || undefined} initials={avatarInitials(name)} />
         <span className="font-medium">{name}</span>
         {email ? <span className="text-fg-muted">{email}</span> : null}
-        <Badge shape="pill" tone={statusTone(stateKey, { approved: "success", denied: "danger", pending: "warning" })}>
+        <Chip tone={statusTone(stateKey, { approved: "success", denied: "danger", pending: "warning" })}>
           {t(state.pill)}
-        </Badge>
+        </Chip>
       </CardHeader>
       <CardContent className="pt-0 text-sm text-fg-muted">
         {t(state.sentence, { email: email || t("access.emailUnknown") })}
       </CardContent>
       <CardFooter className="flex-wrap">
         {canManage ? <TaskAccessActions need={need} /> : null}
-        {need.access_decision ? <NavLink className="text-xs" href={routeHref("decisions.inbox.record", {
+        {need.access_decision ? <NavLink className="text-12" href={routeHref("decisions.inbox.record", {
           id: need.access_decision.id,
         })} variant="inline">{t("access.audit")}</NavLink> : null}
       </CardFooter>

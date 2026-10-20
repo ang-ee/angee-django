@@ -55,9 +55,9 @@ export const selectVariants = tv({
   variants: {
     size: {
       sm: {
-        trigger: "h-7 text-13",
+        trigger: "h-control-xs text-13",
         content: "text-13",
-        item: "h-7",
+        item: "h-control-xs",
       },
       md: {
         trigger: "h-9",

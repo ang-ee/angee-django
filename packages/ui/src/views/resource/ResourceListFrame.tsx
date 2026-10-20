@@ -14,7 +14,7 @@ import { SectionHeading } from "../form/SectionHeading";
 import { useUiT } from "../../i18n";
 import {
   ListLoadingFooter,
-  SelectionBar,
+  ListSelectionBar,
 } from "./resource-view-list-body";
 import type { ListChrome, ResourceCollectionPresentation } from "./resource-view-types";
 
@@ -130,7 +130,7 @@ export function ResourceListFrame({
           </p>
         ) : null}
         {selection && selection.count > 0 ? (
-          <SelectionBar
+          <ListSelectionBar
             count={selection.count}
             onClear={selection.onClear}
             onDelete={selection.onDelete}

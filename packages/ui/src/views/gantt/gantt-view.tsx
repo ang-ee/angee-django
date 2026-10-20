@@ -73,6 +73,7 @@ import {
 } from "date-fns"
 
 import { cn } from "../../lib/cn"
+import { depthIndent } from "../../ui/tree"
 import { Button } from "../../ui/button"
 import { Checkbox } from "../../ui/checkbox"
 import {
@@ -398,7 +399,7 @@ function setScrollStart(viewport: HTMLElement, value: number) {
     getComputedStyle(viewport).direction === "rtl" ? -value : value
 }
 
-function GanttView({
+function GanttGrid({
   className,
   render,
   interval: intervalProp,
@@ -2749,7 +2750,7 @@ function GanttView({
             data-slot="gantt-splitter"
             className={cn(
               "group/gantt-splitter bg-border hover:bg-brand/60 data-resizing:bg-brand relative z-30 w-px shrink-0 cursor-col-resize touch-none outline-none",
-              "focus-visible:ring-ring/50 focus-visible:ring-2",
+              "focus-visible:ring-border-focus/50 focus-visible:ring-2",
               "after:absolute after:inset-y-0 after:-start-1 after:-end-1"
             )}
             onPointerDown={beginSplit}
@@ -3206,7 +3207,7 @@ const GanttTreeRow = memo(function GanttTreeRow({
             <span
               aria-hidden
               className="shrink-0"
-              style={{ width: `${row.depth * 0.875}rem` }}
+              style={{ width: depthIndent(row.depth, { base: 0, step: 0.875 }) }}
             />
             {/* fixed gutter: groups toggle here, leaves carry the checkbox -
               titles of one level share the same x either way */}
@@ -3940,7 +3941,7 @@ const GanttTimelineRow = memo(function GanttTimelineRow({
                 </span>
               )}
               {placement !== "after" && !segment.continuesAfter && segment.occurrence.event.note ? (
-                <span data-slot="gantt-bar-note" className="pointer-events-none absolute start-full top-1/2 z-10 ms-2 max-w-60 -translate-y-1/2 truncate text-xs text-fg-muted">
+                <span data-slot="gantt-bar-note" className="pointer-events-none absolute start-full top-1/2 z-10 ms-2 max-w-60 -translate-y-1/2 truncate text-12 text-fg-muted">
                   {segment.occurrence.event.note}
                 </span>
               ) : null}
@@ -4110,7 +4111,7 @@ const GanttTimelineRow = memo(function GanttTimelineRow({
             height: `${laneHeightRem}rem`,
           }}
         >
-          <span className="bg-fg text-sheet absolute start-full top-1/2 ms-2 inline-flex w-max -translate-y-1/2 items-center rounded-6 px-2 py-1 text-xs font-medium whitespace-nowrap">
+          <span className="bg-fg text-sheet absolute start-full top-1/2 ms-2 inline-flex w-max -translate-y-1/2 items-center rounded-6 px-2 py-1 text-12 font-medium whitespace-nowrap">
             {draftLabel}
             {/* Same arrow as every other bubble, one size down. A 45-degree
                 square is symmetric, so size-2.5 spans ~14px whichever edge it
@@ -4203,7 +4204,7 @@ const GanttTimelineRow = memo(function GanttTimelineRow({
               <span
                 data-slot="gantt-schedule-hint-bubble"
                 className={cn(
-                  "bg-fg text-sheet absolute start-1/2 inline-flex w-max -translate-x-1/2 items-center rounded-6 px-2 py-1 text-xs font-medium whitespace-nowrap",
+                  "bg-fg text-sheet absolute start-1/2 inline-flex w-max -translate-x-1/2 items-center rounded-6 px-2 py-1 text-12 font-medium whitespace-nowrap",
                   rowIndex === 0 ? "top-full mt-2" : "bottom-full mb-2"
                 )}
               >
@@ -4414,5 +4415,5 @@ function GanttOffscreenChips({
   )
 }
 
-export { GanttView }
+export { GanttGrid }
 export type { GanttViewProps }

@@ -394,7 +394,7 @@ function PromptCopyButton({ value, label }: { value: string; label?: ReactNode }
         <Glyph name={state === "copied" ? "check" : "copy"} />
         {label ?? t("modal.copy")}
       </Button>
-      <span role="status" className="text-xs text-fg-muted">{state === "copied" ? t("modal.copied") : null}</span>
+      <span role="status" className="text-12 text-fg-muted">{state === "copied" ? t("modal.copied") : null}</span>
       <ErrorBanner description={state === "failed" ? t("modal.copyFailed") : null} />
     </div>
   );

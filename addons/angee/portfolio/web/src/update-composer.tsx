@@ -1,20 +1,4 @@
-import {
-  Badge,
-  Button,
-  Glyph,
-  MutationDialog,
-  RelativeTime,
-  actionOutcomeSubmitResult,
-  canonicalOptionValue,
-  mutationDialogValueCodecs,
-  useStatusTone,
-  useActionOutcomeMutation,
-  useEnumOptions,
-  useRecordChromeContext,
-  type DescriptorField,
-  type MutationDialogValues,
-  type WidgetOption,
-} from "@angee/ui";
+import { Chip, Button, Glyph, MutationDialog, RelativeTime, actionOutcomeSubmitResult, canonicalOptionValue, mutationDialogValueCodecs, useStatusTone, useActionOutcomeMutation, useEnumOptions, useRecordChromeContext, type DescriptorField, type MutationDialogValues, type WidgetOption } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import * as React from "react";
 
@@ -66,9 +50,9 @@ export function PortfolioHealthSummary({
   } as const;
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Badge tone={statusTone(normalized)} shape="pill">
+      <Chip tone={statusTone(normalized)}>
         {normalized ? copy[normalized] : t("update.health.none")}
-      </Badge>
+      </Chip>
       {typeof updatedAt === "string" || typeof updatedAt === "number" ? (
         <span className="text-12 text-fg-muted">
           {t("update.health.updated")} <RelativeTime value={updatedAt} />

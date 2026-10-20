@@ -1,7 +1,7 @@
 import { createContext, useContext, type ReactElement } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { ThreadTranscript } from "@angee/messaging";
-import { Alert, Button, CommandBand, Glyph, Tag } from "@angee/ui";
+import { Alert, Button, CommandBand, Glyph, Chip } from "@angee/ui";
 import { InboxTranscriptMatches } from "./documents";
 import { INBOX_MODELS, type InboxNavigation, type InboxScope } from "./state";
 import { useNexusT } from "../i18n";
@@ -138,7 +138,7 @@ function MessageActions({
   const matches = useContext(Matches);
   return (
     <div className="flex items-center gap-2">
-      {matches.includes(id) ? <Tag tone="brand">{t("inbox.match")}</Tag> : null}
+      {matches.includes(id) ? <Chip tone="brand">{t("inbox.match")}</Chip> : null}
       <Button size="sm" variant="ghost" onClick={() => navigation.read(id)}>
         {t("inbox.read")}
         <Glyph name="chevron-right" />

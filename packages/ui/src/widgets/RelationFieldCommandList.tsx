@@ -4,7 +4,7 @@ import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { Command } from "../ui/command";
 import { Button } from "../ui/button";
-import { Badge } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import type { RelationSearchState, RelationOption } from "./RelationField";
 
 export interface RelationFieldCommandListProps {
@@ -105,9 +105,9 @@ export default function RelationFieldCommandList({
                 ) : null}
               </span>
               {option.status ? (
-                <Badge className="shrink-0" density="compact" tone={option.status.tone}>
+                <Chip className="shrink-0" tone={option.status.tone}>
                   {option.status.label}
-                </Badge>
+                </Chip>
               ) : null}
               {option.value === value ? (
                 <Glyph decorative name="check" />

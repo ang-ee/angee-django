@@ -1,25 +1,6 @@
 import * as React from "react";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
-import {
-  Avatar,
-  Button,
-  Card,
-  Chip,
-  Collapsible,
-  EmptyState,
-  ErrorBanner,
-  LoadingPanel,
-  Page,
-  PageBody,
-  PageFooter,
-  PageHeader,
-  RadioGroup,
-  RailPanel,
-  Tag,
-  avatarInitials,
-  useRouteHref,
-  useRouteParam,
-} from "@angee/ui";
+import { Avatar, Button, Card, Chip, Collapsible, EmptyState, ErrorBanner, LoadingPanel, Page, PageBody, PageFooter, PageHeader, RadioGroup, RailPanel, avatarInitials, useRouteHref, useRouteParam } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
 import {
@@ -140,7 +121,7 @@ function ProvenanceTag({
   label: string;
 }): React.ReactElement {
   const tone = provenance === "both" ? "success" : provenance === "left" ? "info" : "warning";
-  return <Tag tone={tone}>{label}</Tag>;
+  return <Chip tone={tone}>{label}</Chip>;
 }
 
 function SurvivorOption({
@@ -167,7 +148,7 @@ function SurvivorOption({
           />
           <span className="min-w-0">
             <span className="block truncate text-sm font-semibold text-fg">{record.display_name}</span>
-            <span className="block truncate text-xs text-fg-muted">{origin}</span>
+            <span className="block truncate text-12 text-fg-muted">{origin}</span>
           </span>
         </span>
       }
@@ -378,7 +359,7 @@ export function MergePage(): React.ReactElement {
                 <Collapsible.Trigger>
                   <Collapsible.Icon />
                   {t("merge.fields.identical")}
-                  <Tag>{identical.length}</Tag>
+                  <Chip>{identical.length}</Chip>
                 </Collapsible.Trigger>
                 <Collapsible.Panel>
                   <div className="grid gap-2">
@@ -389,7 +370,7 @@ export function MergePage(): React.ReactElement {
                           <span className="truncate text-13 text-fg-muted">
                             {formatScalar(field.left, t("merge.fields.empty"))}
                           </span>
-                          <Tag tone="success">{t("merge.fields.identicalTag")}</Tag>
+                          <Chip tone="success">{t("merge.fields.identicalTag")}</Chip>
                         </span>
                       </div>
                     ))}

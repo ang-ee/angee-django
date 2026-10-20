@@ -1,6 +1,6 @@
 import { type ReactElement } from "react";
 
-import { Badge, Code, DetailSection, DetailSurface, useRouteHref, useRouteRecordId } from "@angee/ui";
+import { Chip, Code, DetailSection, DetailSurface, useRouteHref, useRouteRecordId } from "@angee/ui";
 
 import { addonEnumLabel, usePlatformT } from "../i18n";
 import { platformScopeSearch } from "../lib/paths";
@@ -33,10 +33,10 @@ export function AddonDetail(): ReactElement {
         addon ? (
           <>
             <Code tone="muted">{addon.id}</Code>
-            <Badge tone="neutral">{addon.namespace}</Badge>
-            <Badge tone={addon.kind === "REQUIRED" ? "info" : "neutral"}>
+            <Chip tone="neutral">{addon.namespace}</Chip>
+            <Chip tone={addon.kind === "REQUIRED" ? "info" : "neutral"}>
               {addonEnumLabel(t, "kind", addon.kind)}
-            </Badge>
+            </Chip>
           </>
         ) : null
       }

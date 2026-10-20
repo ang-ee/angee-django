@@ -8,7 +8,7 @@ import { getHumanLocale } from "../lib/human-locale";
 import { type Tone } from "../lib/tones";
 import { useMotionTokens } from "../lib/use-motion-tokens";
 import { tv, type VariantProps } from "../lib/variants";
-import { Tag } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import { Card } from "../ui/card";
 import { IconTile } from "../ui/icon-tile";
 import {
@@ -138,7 +138,7 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
         detail={detail}
         label={
           density === "prominent" ? (
-            <Tag tone={tone ?? "neutral"}>{label}</Tag>
+            <Chip tone={tone ?? "neutral"}>{label}</Chip>
           ) : (
             label
           )

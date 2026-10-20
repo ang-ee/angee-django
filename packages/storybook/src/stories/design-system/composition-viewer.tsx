@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Badge, Card, CardContent, Chip, EmptyState, PaneLabel, PaneRow, PaneRows, SearchInput, SectionHeading, ToggleGroup, Tree, textRoleVariants, type TreeNode } from "@angee/ui";
+import { Chip, Card, CardContent, EmptyState, PaneLabel, PaneRow, PaneRows, SearchInput, SectionHeading, ToggleGroup, Tree, textRoleVariants, type TreeNode } from "@angee/ui";
 import { parseCompositionReport, type CompositionReport } from "@angee/ui/catalog";
 import snapshot from "../../../reports/composition.json";
 import { SheetPage } from "./token-sheets";
@@ -41,7 +41,7 @@ function NodeLabel({ node }: { node: Node }) {
   return <span className="inline-flex min-w-0 items-center gap-2">
     <span className="truncate">{node.id}</span>
     <Chip tone={node.ownershipViolation ? "warning" : "neutral"}>{node.routeInstance ? "route instance" : node.kind ?? "infrastructure"}</Chip>
-    {node.ownershipViolation && <Badge tone="danger">owner mismatch</Badge>}
+    {node.ownershipViolation && <Chip tone="danger">owner mismatch</Chip>}
   </span>;
 }
 

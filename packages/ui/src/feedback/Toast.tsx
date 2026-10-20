@@ -183,7 +183,7 @@ function ToastItem({
           render={
             <Button
               type="button"
-              variant="icon"
+              variant="ghost"
               size="iconSm"
               aria-label={t("toast.dismiss")}
               className="text-current hover:bg-sheet/70 hover:text-current"

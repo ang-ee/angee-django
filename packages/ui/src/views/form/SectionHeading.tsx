@@ -31,10 +31,10 @@ export function SectionHeading({
       <SectionEyebrow as={as} tracking="wide" weight="semibold" tone="fg" className="shrink-0">
         {label}
       </SectionEyebrow>
-      {count != null ? <span className="text-xs text-fg-muted">{count}</span> : null}
-      {summary != null ? <span className="text-xs text-fg-muted">{summary}</span> : null}
-      {hint != null ? <span className="text-xs text-fg-muted">{hint}</span> : null}
-      {audience != null ? <span className="ml-auto text-xs text-fg-muted">{audience}</span> : null}
+      {count != null ? <span className="text-12 text-fg-muted">{count}</span> : null}
+      {summary != null ? <span className="text-12 text-fg-muted">{summary}</span> : null}
+      {hint != null ? <span className="text-12 text-fg-muted">{hint}</span> : null}
+      {audience != null ? <span className="ml-auto text-12 text-fg-muted">{audience}</span> : null}
     </Container>
   );
 }

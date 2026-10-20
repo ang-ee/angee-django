@@ -3,8 +3,10 @@ import * as React from "react";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
+import { ActionMenu, ActionTrigger } from "../toolbars/ActionMenu";
 import { Button } from "../ui/button";
 import { DropdownMenu } from "../ui/dropdown-menu";
+import { ToolbarButton, ToolbarRoot } from "../ui/toolbar";
 import { createLayoutBand } from "./layout-band";
 
 /**
@@ -13,9 +15,10 @@ import { createLayoutBand } from "./layout-band";
  * row (32px) above its scroll area and may lead it with a way back and a title;
  * the mounted pane publishes the rest live through `PaneToolbar`: scope · selector
  * · search · actions · overflow. Each host owns its own band registry, so a
- * retained but hidden pane never publishes into another pane's row.
+ * retained but hidden pane never publishes into another pane's row. The band is a
+ * `Toolbar` (roving focus); its controls are the one `Button` at `iconSm` (28px).
  */
-const band = createLayoutBand("div", "flex min-w-0 flex-1 items-center gap-1");
+const band = createLayoutBand(ToolbarRoot, "flex min-w-0 flex-1 items-center gap-1");
 
 export interface PaneToolbarHostProps extends Pick<React.HTMLAttributes<HTMLDivElement>, "role" | "aria-label"> {
   children: React.ReactNode;
@@ -36,9 +39,9 @@ export function PaneToolbarHost({ children, back, title, className, ...rest }: P
       {/* The row shows only while something sits in it: a way back, a title or a published band. */}
       <div className="hidden h-8 shrink-0 items-center gap-1 border-b border-border-subtle bg-sheet px-2 has-[>*:not(:empty)]:flex">
         {back ? (
-          <button type="button" onClick={back.onClick} className="flex shrink-0 items-center text-13 text-link hover:underline">
+          <Button type="button" variant="link" size="sm" onClick={back.onClick} className="shrink-0 gap-0 px-0 text-13 hover:underline">
             <Glyph name="chevron-left" />{back.label}
-          </button>
+          </Button>
         ) : null}
         {title ? <span className="min-w-0 shrink truncate text-13 font-semibold">{title}</span> : null}
         <div ref={setHost} className="flex min-w-0 flex-1 items-center gap-1" />
@@ -57,6 +60,8 @@ export interface PaneToolbarAction {
   text?: boolean;
   /** A count on the icon button (unread, needs you). */
   badge?: number;
+  /** The control's toggle state (a search field that is open). */
+  pressed?: boolean;
   disabled?: boolean;
   /** Make the action a menu: the button opens these items instead of running `onClick`. */
   items?: readonly PaneToolbarMenuItem[];
@@ -83,62 +88,41 @@ export interface PaneToolbarProps {
  * @region pane-toolbar-band
  */
 export function PaneToolbar({ scope, selector, search = false, onSearch, actions, overflow = false, onOverflow, className }: PaneToolbarProps): React.ReactElement | React.ReactPortal | null {
+  const t = useUiT();
   return (
     <band.Band className={className}>
       {selector}
       {scope ? <div className="flex min-w-0 items-center gap-1 overflow-hidden [&>*]:shrink-0">{scope}</div> : null}
       <span className="ml-auto flex shrink-0 items-center gap-0.5">
-        {search === true ? <PaneToolbarIconButton icon="search" label="Search" onClick={onSearch} /> : search || null}
+        {search === true ? <PaneToolbarButton icon="search" label={t("paneToolbar.search")} onClick={onSearch} /> : search || null}
         {Array.isArray(actions) ? (actions as readonly PaneToolbarAction[]).map((action) => action.items ? (
-          <PaneToolbarMenu key={action.label} label={action.label} items={action.items}
-            trigger={action.text
-              ? <Button size="sm" variant="ghost" disabled={action.disabled} className="h-6 whitespace-nowrap px-1.5 text-12"><Glyph name={action.icon} /> {action.label}<Glyph name="chevron-down" className="glyph opacity-60" /></Button>
-              : <PaneToolbarIconButton icon={action.icon} label={action.label} badge={action.badge} disabled={action.disabled} />} />
-        ) : action.text ? (
-          <Button key={action.label} size="sm" variant={action.tone === "danger" ? "danger" : "ghost"} disabled={action.disabled} onClick={action.onClick} className="h-6 whitespace-nowrap px-1.5 text-12">
-            <Glyph name={action.icon} /> {action.label}
-          </Button>
+          <PaneToolbarMenu key={action.label} label={action.label} icon={action.icon} text={action.text}
+            badge={action.badge} disabled={action.disabled} items={action.items} />
         ) : (
-          <PaneToolbarIconButton key={action.label} icon={action.icon} label={action.label} tone={action.tone} badge={action.badge} disabled={action.disabled} onClick={action.onClick} />
+          <PaneToolbarButton key={action.label} icon={action.icon} label={action.label} text={action.text} tone={action.tone}
+            badge={action.badge} pressed={action.pressed} disabled={action.disabled} onClick={action.onClick} />
         )) : (actions as React.ReactNode)}
-        {overflow === true ? <PaneToolbarIconButton icon="more-horizontal" label="More" onClick={onOverflow} /> : overflow || null}
+        {overflow === true ? <PaneToolbarButton icon="more-horizontal" label={t("paneToolbar.more")} onClick={onOverflow} /> : overflow || null}
       </span>
     </band.Band>
   );
 }
 
-export interface PaneToolbarIconButtonProps extends Omit<React.ComponentPropsWithRef<"button">, "children" | "onClick"> {
-  icon: string;
-  label: string;
-  onClick?: () => void;
-  tone?: "danger";
-  active?: boolean;
-  badge?: number;
-  disabled?: boolean;
-}
-
-/** The toolbar's 28px icon button, with an optional count badge (needs you).
+/** One descriptor control: the toolbar `Button` at `iconSm`, or a small labelled verb.
  * @owner PaneToolbar
  */
-export function PaneToolbarIconButton({ icon, label, onClick, tone, active, badge, disabled, className, ...props }: PaneToolbarIconButtonProps): React.ReactElement {
+function PaneToolbarButton({ icon, label, text, tone, badge, pressed, disabled, onClick }: Omit<PaneToolbarAction, "items">): React.ReactElement {
+  if (text) {
+    return (
+      <ToolbarButton size="sm" variant={tone === "danger" ? "danger" : "ghost"} disabled={disabled} onClick={onClick} badge={badge} pressed={pressed} className="h-control-xs whitespace-nowrap px-1.5 text-12">
+        <Glyph name={icon} /> {label}
+      </ToolbarButton>
+    );
+  }
   return (
-    <button
-      {...props}
-      type="button"
-      aria-label={label}
-      title={label}
-      aria-pressed={active}
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        "relative grid size-7 place-items-center rounded-6 disabled:opacity-50",
-        active ? "bg-canvas text-fg" : tone === "danger" ? "text-danger-text hover:bg-danger-bg" : "text-fg-muted hover:bg-canvas hover:text-fg",
-        className,
-      )}
-    >
+    <ToolbarButton size="iconSm" variant={tone === "danger" ? "danger" : "ghost"} aria-label={label} title={label} disabled={disabled} onClick={onClick} badge={badge} pressed={pressed}>
       <Glyph name={icon} />
-      {badge ? <span className="absolute -right-0.5 -top-0.5 grid h-3.5 min-w-3.5 place-items-center rounded-full bg-warning-text px-0.5 text-[10px] font-semibold leading-none text-white">{badge}</span> : null}
-    </button>
+    </ToolbarButton>
   );
 }
 
@@ -157,39 +141,44 @@ export interface PaneToolbarMenuRadioGroup {
   items: readonly { value: string; label: React.ReactNode; disabled?: boolean }[];
 }
 
-/** The toolbar's overflow: one menu behind the shared icon, with the pane's secondary verbs.
+export interface PaneToolbarMenuProps {
+  /** The menu's name: the icon button's accessible label, or the labelled trigger's text. */
+  label?: string;
+  /** The trigger's glyph; the shared overflow icon when omitted. */
+  icon?: string;
+  /** Show the label beside the glyph (a labelled "New ▾" menu). */
+  text?: boolean;
+  badge?: number;
+  disabled?: boolean;
+  items?: readonly PaneToolbarMenuItem[];
+  /** Radio groups before the items: a pane's order, grouping or coverage choices. */
+  groups?: readonly PaneToolbarMenuRadioGroup[];
+}
+
+/** The toolbar's overflow: one `ActionMenu` behind the shared icon, with the pane's secondary verbs.
  * @owner PaneToolbar
  */
-export function PaneToolbarMenu({ label, items = [], groups = [], trigger }: {
-  label?: string;
-  items?: readonly PaneToolbarMenuItem[];
-  groups?: readonly PaneToolbarMenuRadioGroup[];
-  /** The menu's button; the shared overflow icon when omitted. */
-  trigger?: React.ReactElement;
-}): React.ReactElement | null {
+export function PaneToolbarMenu({ label, icon = "more-horizontal", text = false, badge, disabled, items = [], groups = [] }: PaneToolbarMenuProps): React.ReactElement | null {
   const t = useUiT();
   if (items.length === 0 && groups.length === 0) return null;
+  const name = label ?? t("paneToolbar.more");
   return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger render={trigger ?? <PaneToolbarIconButton icon="more-horizontal" label={label ?? t("paneToolbar.more")} />} />
-      <DropdownMenu.Portal>
-        <DropdownMenu.Positioner sideOffset={4} align="end">
-          <DropdownMenu.Content className="w-52">
-            {groups.map((group) => <DropdownMenu.RadioGroup key={group.label} aria-label={group.label}
-              value={group.value} onValueChange={group.onValueChange}>
-              <DropdownMenu.Label>{group.label}</DropdownMenu.Label>
-              {group.items.map((item) => <DropdownMenu.RadioItem key={item.value} value={item.value} disabled={item.disabled}>
-                <DropdownMenu.RadioItemIndicator /><span>{item.label}</span>
-              </DropdownMenu.RadioItem>)}
-            </DropdownMenu.RadioGroup>)}
-            {items.map((item) => (
-              <DropdownMenu.Item key={item.label} disabled={item.disabled} variant={item.tone === "danger" ? "danger" : undefined} onClick={item.onClick}>
-                {item.icon ? <Glyph name={item.icon} decorative /> : null}{item.label}
-              </DropdownMenu.Item>
-            ))}
-          </DropdownMenu.Content>
-        </DropdownMenu.Positioner>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+    <ActionMenu align="end" glyph={icon} disabled={disabled} badge={badge}
+      {...(text
+        ? { label: <>{name}<Glyph name="chevron-down" className="opacity-60" /></>, size: "sm" as const, className: "h-control-xs whitespace-nowrap px-1.5 text-12" }
+        : { label: null, "aria-label": name, size: "iconSm" as const })}>
+      {groups.map((group) => <DropdownMenu.RadioGroup key={group.label} aria-label={group.label}
+        value={group.value} onValueChange={group.onValueChange}>
+        <DropdownMenu.Label>{group.label}</DropdownMenu.Label>
+        {group.items.map((item) => <DropdownMenu.RadioItem key={item.value} value={item.value} disabled={item.disabled}>
+          <DropdownMenu.RadioItemIndicator /><span>{item.label}</span>
+        </DropdownMenu.RadioItem>)}
+      </DropdownMenu.RadioGroup>)}
+      {items.map((item) => (
+        <ActionTrigger key={item.label} glyph={item.icon} disabled={item.disabled} variant={item.tone === "danger" ? "danger" : "secondary"} onClick={item.onClick}>
+          {item.label}
+        </ActionTrigger>
+      ))}
+    </ActionMenu>
   );
 }

@@ -273,7 +273,7 @@ test("the search area flexes only for the full box: shortcuts take a row, and a 
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 293, 80));
   for (const searchDeclaration of [{}, declaration]) {
     fixture(searchDeclaration, { wrap: true });
-    expect(area().closest("section")?.className).toContain("resource-toolbar-wrap");
+    expect(area().closest(".resource-toolbar")?.className).toContain("resource-toolbar-wrap");
     expect(area().getAttribute("data-search-layout")).toBe("trigger");
     expect(host().className).toContain("shrink-0");
     cleanup();

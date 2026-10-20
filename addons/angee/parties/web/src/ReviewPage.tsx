@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import { Avatar, EmptyState, ErrorBanner, Glyph, ListView, LoadingPanel, NavLink, Page, PageBody, PageHeader, RailPanel, Tag, avatarInitials, type ListColumn, type StringIdRow, useRouteHref, useResourceRecordHrefLookup } from "@angee/ui";
+import { Avatar, EmptyState, ErrorBanner, Glyph, ListView, LoadingPanel, NavLink, Page, PageBody, PageHeader, RailPanel, Chip, avatarInitials, type ListColumn, type StringIdRow, useRouteHref, useResourceRecordHrefLookup } from "@angee/ui";
 import { SameAsPairs, PartyReviewCounts } from "./documents";
 import { usePartiesT } from "./i18n";
 import { usePartyStatementRowActions } from "./party-statement-row-actions";
@@ -124,12 +124,12 @@ export function ReviewPage(): React.ReactElement {
                         <PartySummary party={candidate.right} align="right" />
                       </span>
                       <span className="flex flex-wrap items-center gap-2">
-                        <Tag tone="warning">{t("review.sameAs.sharedHandle")}</Tag>
-                        <span className="truncate font-mono text-xs text-fg-muted">
+                        <Chip tone="warning">{t("review.sameAs.sharedHandle")}</Chip>
+                        <span className="truncate font-mono text-12 text-fg-muted">
                           {candidate.normalized_value}
                         </span>
                       </span>
-                      <span className="text-xs font-medium text-link">
+                      <span className="text-12 font-medium text-link">
                         {t("review.sameAs.compare")}
                       </span>
                     </span>

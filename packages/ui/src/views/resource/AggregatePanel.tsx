@@ -11,7 +11,7 @@ import type { AggregateBucket } from "@angee/refine";
 import { useUiT } from "../../i18n";
 import { cn } from "../../lib/cn";
 import { errorMessage } from "../../feedback/error-message";
-import { CountBadge } from "../../ui/badge";
+import { CountBadge } from "../../ui/count-badge";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import { textRoleVariants } from "../../ui/text";
 import {

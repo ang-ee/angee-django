@@ -24,7 +24,7 @@ export const radioGroupVariants = tv({
     indicator: "size-2 rounded-full bg-brand",
     text: "min-w-0 space-y-0.5",
     label: "block text-13 font-medium text-fg",
-    description: "block text-xs leading-5 text-fg-muted",
+    description: "block text-12 leading-5 text-fg-muted",
     media: "min-w-0",
   },
   variants: {
@@ -45,7 +45,7 @@ export const radioGroupVariants = tv({
       sm: {
         radio: "size-3.5",
         indicator: "size-1.5",
-        label: "text-xs",
+        label: "text-12",
         description: "text-2xs",
       },
       md: "",

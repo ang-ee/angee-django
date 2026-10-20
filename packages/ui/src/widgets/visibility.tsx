@@ -2,7 +2,7 @@ import { rowValueAtPath } from "@angee/metadata";
 import { useMutation } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 
-import { Badge } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import { Button } from "../ui/button";
 import { DropdownMenu } from "../ui/dropdown-menu";
 import { Glyph } from "../chrome/Glyph";
@@ -40,9 +40,9 @@ export function VisibilityControl({ value, options, label, readOnly, audienceLab
     if (state.disabled || !state.allowed.has(selected) || selected === state.current || !option || option.disabled) return;
     await settle(() => state.binding.onSelect(selected));
   } });
-  const badge = <Badge tone="neutral" density="compact" shape="pill">
+  const badge = <Chip tone="neutral">
     <Glyph decorative name="eye" />{audienceLabel ?? optionLabel(options, current ?? String(value ?? ""))}
-  </Badge>;
+  </Chip>;
   const destinations = options.filter((option) => option.value !== current && allowed.has(option.value) && !option.disabled);
   if (destinations.length === 0) return badge;
   if (destinations.length === 1) {
@@ -80,7 +80,7 @@ function VisibilityWidget(props: WidgetRenderProps): ReactElement {
     const Edit = selectWidget.edit;
     if (Edit) return <Edit {...props as WidgetRenderProps<string>} />;
   }
-  return <Badge tone="neutral" density="compact">{optionLabel(props.field?.options, String(props.value ?? ""))}</Badge>;
+  return <Chip tone="neutral">{optionLabel(props.field?.options, String(props.value ?? ""))}</Chip>;
 }
 
 function RecordVisibilityWidget({ field }: WidgetRenderProps): ReactElement {

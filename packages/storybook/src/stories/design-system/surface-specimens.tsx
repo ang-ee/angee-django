@@ -119,7 +119,6 @@ export function Charts() {
       <div className="h-48"><U.DashboardBars title="Records by state" points={points} /></div>
       <div className="h-48"><U.DashboardDonut title="State share" points={points} /></div>
     </div>
-    <U.TimelineView rows={[{ ...record, date: "2026-10-19T12:00:00Z" }]} dateField="date" titleField="title" bodyField="owner" />
   </U.DashboardView>;
 }
 

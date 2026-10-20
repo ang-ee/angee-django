@@ -14,7 +14,7 @@ import { useResourceViewSurface } from "../resource/resource-view-surface";
 import { useSearchCatalog } from "../resource/search/catalog";
 import { useResourceSearch } from "../resource/search/use-resource-search";
 import type { ResourceToolbarProps } from "../../toolbars";
-import { ResourceToolbarPager } from "../../toolbars/ResourceToolbar";
+import { ResourcePaneFooter } from "../../toolbars/ResourceToolbar";
 import {
   useCollectionQueryBatch,
   type CollectionSource,
@@ -226,7 +226,7 @@ export function CollectionTreeView<TRow extends Row>(
           );
         }}
       />}
-      {props.pane ? <div className="flex shrink-0 justify-end border-t border-border-subtle px-2 py-1"><ResourceToolbarPager {...toolbar} /></div> : null}
+      {props.pane ? <ResourcePaneFooter {...toolbar} /> : null}
     </ResourceListFrame>
   );
 }

@@ -50,6 +50,7 @@ export { StatusbarSteps, StatusbarSkeleton, type StatusbarStep, type StatusbarSt
 export { VisibilityControl } from "./visibility";
 export type { VisibilityControlProps } from "./visibility";
 export { JsonValueSchema } from "./json-value";
+export { formatJson } from "./json-format";
 export { widgetLabel } from "./label";
 export { slugify } from "./slug";
 export { useStatusTone } from "./use-status-tone";
@@ -64,8 +65,10 @@ export {
   formatDateStorage,
   formatDateTime,
   formatDateTimeStorage,
-  formatDuration,
+  formatDayLabel,
+  formatMonth,
   formatRelativeTime,
+  formatTime,
   formatTimeInput,
   setHumanDateLocale,
   valueLabel,

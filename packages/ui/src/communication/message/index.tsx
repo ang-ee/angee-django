@@ -10,7 +10,9 @@ import { Glyph } from "../../chrome/Glyph";
 import { RelativeTime } from "../../fragments/RelativeTime";
 import { useUiT } from "../../i18n";
 import { cn } from "../../lib/cn";
+import { formatNumber } from "../../lib/format-number";
 import { formatSize, isImageMime, normaliseMime } from "../../preview/model";
+import { formatDayLabel, type DateFormatValue } from "../../widgets/date-format";
 import { Chip, type ChipTone } from "../../ui/chip";
 import { Kbd } from "../../ui/kbd";
 import { textRoleVariants } from "../../ui/text";
@@ -52,23 +54,25 @@ export function MessageFeed({ label, busy, className, children, ...props }: Mess
   );
 }
 
-export interface MessageDaySeparatorProps extends HTMLAttributes<HTMLElement> {
+export interface MessageDaySeparatorProps extends Omit<HTMLAttributes<HTMLElement>, "children"> {
   /** Use div within a virtualized message row; feeds default to a list item. */
   as?: "li" | "div";
-  /** The day label (e.g. "Today", "12 May"). The consumer owns the date formatting. */
-  children: ReactNode;
+  /** The day the bucket holds; the separator labels it through `formatDayLabel`. */
+  date: DateFormatValue;
+  /** The calendar zone that decides the day, when the feed is read in one. */
+  timeZone?: string;
 }
 
 /** An optional day-group separator row: a centered, muted label dividing the feed into
- *  day buckets. Pure presentation — the consumer decides where the day boundaries fall
- *  and formats the label.
+ *  day buckets. The consumer decides where the day boundaries fall; the label is the
+ *  shared day label (Today, Yesterday, a weekday, then the date).
  * @kind fragment
  */
-export function MessageDaySeparator({ children, className, as: Component = "li", ...props }: MessageDaySeparatorProps): ReactElement {
+export function MessageDaySeparator({ date, timeZone, className, as: Component = "li", ...props }: MessageDaySeparatorProps): ReactElement {
   return (
     <Component className={cn("flex items-center gap-2 py-1", className)} {...props}>
       <span className="h-px flex-1 bg-border-subtle" aria-hidden />
-      <span className={cn(textRoleVariants({ role: "caption" }), "shrink-0")}>{children}</span>
+      <span className={cn(textRoleVariants({ role: "caption" }), "shrink-0")}>{formatDayLabel(date, { timeZone })}</span>
       <span className="h-px flex-1 bg-border-subtle" aria-hidden />
     </Component>
   );
@@ -267,7 +271,7 @@ interface MessagePartItemProps {
 function MessagePartItem({ part, allParts, resolveFileUrl, actions, active, onPreviewFile }: MessagePartItemProps): ReactElement | null {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current?.scrollIntoView?.({ block: "center" }); }, [active]);
-  return <div ref={ref} data-part-id={part.id} className={cn("space-y-1", active && "rounded-6 bg-brand-soft p-2 ring-1 ring-brand/30")}>
+  return <div ref={ref} data-part-id={part.id} className={cn("space-y-1", active && "selected rounded-6 p-2 ring-1 ring-brand/30")}>
     <MessagePartContent part={part} allParts={allParts} resolveFileUrl={resolveFileUrl} active={active} onPreviewFile={onPreviewFile} />
     {actions}
   </div>;
@@ -291,7 +295,7 @@ function MessagePartContent({ part, allParts, resolveFileUrl, active, onPreviewF
   if (role === "TITLE") {
     return (
       <div className="space-y-1">
-        {hasText ? <h3 className="text-14 font-semibold leading-snug text-current">{text}</h3> : null}
+        {hasText ? <h3 className="text-sm font-semibold leading-snug text-current">{text}</h3> : null}
         {fileNode}
       </div>
     );
@@ -328,15 +332,16 @@ function QuotedMessagePart({ content, file, active }: QuotedMessagePartProps): R
   if (!content && !file) return null;
   return (
     <div className="space-y-1">
-      <button
-        type="button"
+      <Chip
+        tone="inherit"
+        size="md"
         aria-expanded={open}
         aria-controls={contentId}
         onClick={() => setOpen((current) => !current)}
-        className="inline-flex h-6 items-center rounded-full border border-current/20 px-2 text-2xs font-medium text-current opacity-75 outline-none transition-opacity hover:opacity-100 focus-visible:focus-ring"
+        className="opacity-75 hover:opacity-100"
       >
         {open ? t("message.parts.hideQuoted") : t("message.parts.showQuoted")}
-      </button>
+      </Chip>
       {open ? (
         <blockquote id={contentId} className="space-y-1 border-l-2 border-current pl-3 text-current opacity-75">
           {content}
@@ -523,7 +528,7 @@ export function reactionsFromGroups(
         names.length === 0
           ? copy.count({
               reaction: group.reaction,
-              count: group.count.toLocaleString(),
+              count: formatNumber(group.count),
             })
           : copy.named({
               reaction: group.reaction,
@@ -555,23 +560,19 @@ function ReactionPill({ reaction, count, active, title, disabled, onToggle }: Re
       ? t("message.reaction.pill", { reaction })
       : t("message.reaction.pillCount", { reaction, count });
   return (
-    <button
-      type="button"
+    <Chip
+      size="md"
+      tone="muted"
+      variant="surface"
+      pressed={Boolean(active)}
       disabled={disabled || !onToggle}
       title={title}
-      aria-pressed={active}
       aria-label={label}
       onClick={onToggle ? () => onToggle(reaction) : undefined}
-      className={cn(
-        "inline-flex h-7 items-center gap-1 rounded-full border px-2 text-12 outline-none transition-colors focus-visible:focus-ring disabled:opacity-60",
-        active
-          ? "border-brand bg-brand-soft text-brand-soft-text"
-          : "border-border-subtle bg-sheet-2 text-fg-muted hover:bg-inset hover:text-fg",
-      )}
     >
       <span aria-hidden="true">{reaction}</span>
-      {count === undefined ? null : <span aria-hidden="true">{count.toLocaleString()}</span>}
-    </button>
+      {count === undefined ? null : <span aria-hidden="true">{formatNumber(count)}</span>}
+    </Chip>
   );
 }
 

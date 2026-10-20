@@ -12,7 +12,7 @@ import {
 import { Glyph } from "../../chrome/Glyph";
 import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
-import { Badge } from "../../ui/badge";
+import { Chip } from "../../ui/chip";
 import { Button } from "../../ui/button";
 import { relationValueId, type WidgetControlProps } from "../../widgets/types";
 import { RowsListView } from "../resource/RowsListView";
@@ -201,7 +201,7 @@ export function EditableLines({
             )}
           />
           {messages.map((message, index) => (
-            <p key={index} className="mt-1 text-xs text-danger-text">{message}</p>
+            <p key={index} className="mt-1 text-12 text-danger-text">{message}</p>
           ))}
         </div>;
       },
@@ -224,7 +224,7 @@ export function EditableLines({
       id: "system", field: "system", header: t("lines.system"), headerVisuallyHidden: true,
       sortable: false, hideable: false,
       render: (row) => unlocked(row) ? null : (
-        <Badge tone="neutral" density="compact" title={t("lines.systemHint")}>{t("lines.system")}</Badge>
+        <Chip tone="neutral" title={t("lines.systemHint")}>{t("lines.system")}</Chip>
       ),
     });
   }
@@ -260,7 +260,7 @@ export function EditableLines({
       </Button>}
     />
     {described.length > 0 ? (
-      <dl className="grid gap-1 px-2 pt-2 text-xs text-fg-muted">
+      <dl className="grid gap-1 px-2 pt-2 text-12 text-fg-muted">
         {described.map(({ name, label, description }) => (
           <div key={name}>
             <dt className="inline font-medium text-fg-2">{label}</dt>{": "}

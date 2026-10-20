@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, Glyph, MiniCard, RailPanel, Tag } from "@angee/ui";
+import { Button, Glyph, MiniCard, RailPanel, Chip } from "@angee/ui";
 
 const meta = {
   title: "Fragments/RailPanel",
@@ -16,7 +16,7 @@ export const Section: Story = {
     <div className="max-w-xs">
       <RailPanel
         actions={
-          <Button aria-label="Add source" size="iconSm" variant="icon">
+          <Button aria-label="Add source" size="iconSm" variant="ghost">
             <Glyph name="plus" />
           </Button>
         }
@@ -31,7 +31,7 @@ export const Section: Story = {
           />
           <MiniCard
             meta="Manual import"
-            tags={<Tag tone="info">CSV</Tag>}
+            tags={<Chip tone="info">CSV</Chip>}
             title="Partner export"
           />
         </div>

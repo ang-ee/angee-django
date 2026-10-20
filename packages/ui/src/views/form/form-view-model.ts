@@ -12,6 +12,7 @@ import {
   type Row,
 } from "@angee/metadata";
 
+import { formatNumber } from "../../lib/format-number";
 import { dateFromUnknown, formatDate } from "../../widgets/date-format";
 import { canonicalOptionValue, relationIdList, relationValueId } from "../../widgets/types";
 import type { UiTranslate } from "../../i18n";
@@ -686,7 +687,7 @@ function formatWordCount(value: unknown, t: UiTranslate): string {
         ? Number(value)
         : Number.NaN;
   if (Number.isFinite(count)) {
-    return t("form.wordCount", { count: new Intl.NumberFormat().format(count) });
+    return t("form.wordCount", { count: formatNumber(count) });
   }
   return t("form.wordCount", { count: String(value) });
 }

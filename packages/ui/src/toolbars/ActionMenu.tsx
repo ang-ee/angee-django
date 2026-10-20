@@ -87,11 +87,15 @@ export interface ActionMenuProps {
   children: React.ReactNode;
   /** Defaults to Actions; pass null with an aria-label for an icon-only trigger. */
   label?: React.ReactNode;
-  glyph?: string;
+  /** The trigger's glyph (`more-vertical` by default); `null` for a label-only trigger. */
+  glyph?: string | null;
   variant?: ButtonVariant;
   size?: ButtonSize;
   blocked?: boolean;
   loading?: boolean;
+  disabled?: boolean;
+  /** A count on the trigger (a pane menu's unread). */
+  badge?: number;
   align?: DropdownMenuPositionerProps["align"];
   "aria-label"?: string;
   className?: string;
@@ -108,6 +112,8 @@ export function ActionMenu({
   size = "md",
   blocked = false,
   loading = false,
+  disabled = false,
+  badge,
   align = "start",
   "aria-label": ariaLabel,
   className,
@@ -123,9 +129,9 @@ export function ActionMenu({
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger render={
-        <Button ref={triggerRef} type="button" variant={variant} size={size}
+        <Button ref={triggerRef} type="button" variant={variant} size={size} disabled={disabled} badge={badge}
           className={className} aria-label={ariaLabel} loading={loading || pendingCount > 0}>
-          <Glyph decorative name={glyph} />
+          {glyph ? <Glyph decorative name={glyph} /> : null}
           {label === undefined ? t("list.actions") : label}
         </Button>
       } />

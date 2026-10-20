@@ -280,7 +280,7 @@ function ActionArgRow({
         <FieldDescription>{arg.description}</FieldDescription>
       ) : null}
       {messages && messages.length > 0 ? (
-        <p className="mt-1 text-xs leading-5 text-danger-text">
+        <p className="mt-1 text-12 leading-5 text-danger-text">
           {messages.join(", ")}
         </p>
       ) : null}

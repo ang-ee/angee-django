@@ -13,10 +13,25 @@ import {
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
+import { CountBadge } from "./count-badge";
 import { toneGlyph, type Tone } from "../lib/tones";
 import { tv } from "../lib/variants";
 import { SectionEyebrow } from "./section-eyebrow";
 import { Skeleton } from "./skeleton";
+
+/**
+ * The one indentation formula for nested rows: a base inset plus one step per
+ * level, as a CSS length. Each tree-shaped surface names its own anatomy (the
+ * width of its caret column, its row gutter); the arithmetic lives here once.
+ * @kind null
+ * @reason Layout utility: computes a CSS length, renders nothing.
+ */
+export function depthIndent(
+  depth: number,
+  { base = 0.75, step = 1.25 }: { base?: number; step?: number } = {},
+): string {
+  return `${base + Math.max(depth, 0) * step}rem`;
+}
 
 /**
  * Generic recursive tree primitive. Renders one flat row per node with
@@ -83,13 +98,13 @@ export type FolderTreeProps = TreeProps;
  * @kind token
  */
 export const treeVariants = tv({
-  base: "flex items-center gap-2 h-7 px-2 rounded-6 text-13 text-fg-2 cursor-pointer transition-colors hover:bg-inset outline-none focus-visible:focus-ring [&_.glyph]:size-3.5 [&_.glyph]:text-fg-subtle",
+  base: "flex items-center gap-2 h-control-xs px-2 rounded-6 text-13 text-fg-2 cursor-pointer transition-colors hover:bg-inset outline-none focus-visible:focus-ring [&_.glyph]:size-3.5 [&_.glyph]:text-fg-subtle",
   variants: {
     active: {
-      true: "bg-brand-soft text-brand-soft-text font-medium [&_.glyph]:text-brand-soft-text",
+      true: "selected font-medium [&_.glyph]:text-brand-soft-text",
     },
     dropTarget: {
-      true: "bg-brand-soft ring-1 ring-inset ring-brand text-brand-soft-text",
+      true: "selected ring-1 ring-inset ring-brand",
     },
   },
 });
@@ -375,11 +390,10 @@ function TreeRow({
   const t = useUiT();
   const { node, depth, hasChildren, collapsed } = row;
   const loading = node.loading ?? false;
-  // Depth-driven left padding so nested rows indent without wrapping.
+  // Depth-driven left padding so nested rows indent without wrapping: the row's
+  // own `px-2` at the root, then the caret column plus one step per level.
   const padLeft: CSSProperties | undefined =
-    depth > 0
-      ? { paddingLeft: `calc(0.5rem + ${1.25 + (depth - 1) * 0.75}rem)` }
-      : undefined;
+    depth > 0 ? { paddingLeft: depthIndent(depth, { base: 1, step: 0.75 }) } : undefined;
   const isActive = selectedId === node.id;
   const isDraggable = getNodeDraggable?.(node.id) ?? false;
   const isDropTarget = dropTargetId === node.id;
@@ -456,9 +470,7 @@ function TreeRow({
       ) : null}
       <span className="flex-1 truncate">{node.label}</span>
       {typeof node.count === "number" ? (
-        <span className="text-2xs tabular-nums text-fg-subtle">
-          {node.count.toLocaleString()}
-        </span>
+        <CountBadge tone="muted" variant="ghost" value={node.count} />
       ) : null}
     </div>
   );

@@ -1,7 +1,6 @@
 import { useMemo, type ReactElement } from "react";
 
-import {
-  Badge, Code, ListView, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
+import { Chip, Code, ListView, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
 import { useIamT } from "../i18n";
 
@@ -67,7 +66,7 @@ export function RelationshipsPage(): ReactElement {
       {
         field: "relation",
         header: t("relationships.column.relation"),
-        render: (row) => <Badge tone="info">{row.relation}</Badge>,
+        render: (row) => <Chip tone="info">{row.relation}</Chip>,
       },
       { field: "subject_type", header: t("relationships.column.subjectType") },
       { field: "subject_id", header: t("relationships.column.subjectId") },
@@ -76,7 +75,7 @@ export function RelationshipsPage(): ReactElement {
         header: t("relationships.column.caveat"),
         render: (row) =>
           row.caveat_name ? (
-            <Badge tone="warning">{row.caveat_name}</Badge>
+            <Chip tone="warning">{row.caveat_name}</Chip>
           ) : (
             <span className="text-fg-muted">-</span>
           ),

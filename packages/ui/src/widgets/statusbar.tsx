@@ -1,11 +1,13 @@
 import * as React from "react";
-import { Check, ChevronDown, Pencil } from "lucide-react";
 
+import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
+import { toneClass } from "../lib/tones";
 import { useUiT } from "../i18n";
 import { statusLabel } from "../lib/labels";
-import { Badge } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import { DropdownMenu } from "../ui/dropdown-menu";
+import { ActionMenu } from "../toolbars/ActionMenu";
 import { PopoverContent, PopoverPortal, PopoverPositioner, PopoverRoot, PopoverTrigger } from "../ui/popover";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { formatDate, formatDateRange, type DateFormatValue } from "./date-format";
@@ -48,7 +50,7 @@ export interface StatusbarStepsProps {
 function Statusbar({ value, onChange, field, readOnly }: WidgetRenderProps<string>): React.ReactElement {
   const steps = field?.options ?? [];
   if (steps.length === 0) {
-    return <span className="inline-flex h-6 items-center rounded-6 bg-inset px-2 text-xs font-medium text-fg-muted">{value ? statusLabel(value) : ""}</span>;
+    return <Chip tone="muted" size="md" shape="rounded">{value ? statusLabel(value) : ""}</Chip>;
   }
   return <StatusbarSteps steps={steps.map((step) => ({ ...step, selectable: step.selectable ?? true }))}
     value={value} onChange={onChange} readOnly={readOnly} fill={field?.fill} containerWidth={field?.containerWidth} />;
@@ -118,14 +120,14 @@ export function StatusbarSteps({ steps, value, onChange, onEditDates, dateEditor
         const canSelect = selectable(step);
         const detail = [dateRange(step), isCurrent ? step.note : undefined].filter(Boolean);
         return <div key={step.value} role="listitem" aria-current={isCurrent ? "step" : undefined}
-          className={cn("group relative min-w-0 p-px text-xs font-medium", fill ? "flex-1" : "flex-none",
+          className={cn("group relative min-w-0 p-px text-12 font-medium", fill ? "flex-1" : "flex-none",
             index > 0 && "-ml-2.5", isCurrent ? "z-20" : complete ? "z-10" : "z-0",
             index === 0 ? FIRST_CLIP : index === path.length - 1 ? LAST_CLIP : STEP_CLIP,
             terminal ? "bg-border-strong" : isCurrent ? "bg-brand" : complete ? "bg-success" : "bg-border-strong")}>
           <div className={cn("flex h-full min-h-7 items-center gap-1.5", index === 0 ? "pl-3.5 pr-4" : "pl-5 pr-4",
             index === 0 ? FIRST_CLIP : index === path.length - 1 ? LAST_CLIP : STEP_CLIP,
-            terminal ? "bg-inset text-fg-muted" : isCurrent ? "bg-brand text-on-brand" : complete ? "bg-success-soft text-success-text" : "bg-inset text-fg-muted")}>
-            {complete && !terminal ? <Check aria-hidden="true" className="size-3.5 shrink-0" /> : null}
+            toneClass(terminal ? "muted" : isCurrent ? "brand" : complete ? "success" : "muted", isCurrent ? "solid" : "soft"))}>
+            {complete && !terminal ? <Glyph name="check" decorative className="size-3.5 shrink-0" /> : null}
             <button type="button" disabled={!canSelect} onClick={() => choose(step)}
               className={cn("min-w-0 text-left outline-none focus-visible:focus-ring disabled:cursor-default", canSelect && "cursor-pointer underline-offset-2 hover:underline")}>
               <span className="block truncate">{step.label}</span>
@@ -135,36 +137,38 @@ export function StatusbarSteps({ steps, value, onChange, onEditDates, dateEditor
             {step.editableDates && dateEditor ? <PopoverRoot>
               <PopoverTrigger aria-label={t("statusbar.editDates", { label: optionTextLabel(step.label, step.value) })}
                 className="ml-auto size-4 shrink-0 rounded-4 border-0 bg-transparent p-0.5 outline-none focus-visible:focus-ring">
-                <Pencil aria-hidden="true" className="size-3" />
+                <Glyph name="pencil" decorative className="size-3" />
               </PopoverTrigger>
               <PopoverPortal><PopoverPositioner sideOffset={6} align="end">
-                <PopoverContent surface="sheet" className="w-72 p-3 text-xs text-fg">{dateEditor(step)}</PopoverContent>
+                <PopoverContent surface="sheet" className="w-72 p-3 text-12 text-fg">{dateEditor(step)}</PopoverContent>
               </PopoverPositioner></PopoverPortal>
             </PopoverRoot> : step.editableDates && onEditDates ? <button type="button"
               aria-label={t("statusbar.editDates", { label: optionTextLabel(step.label, step.value) })}
               onClick={() => onEditDates(step.value)} className="ml-auto shrink-0 rounded-4 p-0.5 outline-none focus-visible:focus-ring">
-              <Pencil aria-hidden="true" className="size-3" />
+              <Glyph name="pencil" decorative className="size-3" />
             </button> : null}
           </div>
         </div>;
       })}
     </div>
-    {collapsed ? <DropdownMenu.Root><DropdownMenu.Trigger render={<button type="button"
-      className="inline-flex h-8 max-w-full items-center gap-2 rounded-6 border border-border-strong bg-inset px-3 text-xs text-fg outline-none focus-visible:focus-ring" />}>
-      <span className="truncate">{terminal?.label ?? active?.label ?? optionLabel(steps, value)}</span>
-      <span className="shrink-0 text-fg-muted">{t("statusbar.position", { current: current >= 0 ? current + 1 : "–", total: path.length })}</span>
-      <ChevronDown aria-hidden="true" className="size-3.5 shrink-0" />
-    </DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Positioner><DropdownMenu.Content>
+    {/* The collapsed bar is one menu of the path's steps: field choices, not verbs, so
+        they stay native items under the shared menu shell. */}
+    {collapsed ? <ActionMenu glyph={null} variant="secondary" size="sm" className="max-w-full"
+      label={<>
+        <span className="truncate">{terminal?.label ?? active?.label ?? optionLabel(steps, value)}</span>
+        <span className="shrink-0 text-fg-muted">{t("statusbar.position", { current: current >= 0 ? current + 1 : "–", total: path.length })}</span>
+        <Glyph name="chevron-down" decorative className="size-3.5 shrink-0" />
+      </>}>
       {path.map((step) => <React.Fragment key={step.value}>
         <DropdownMenu.Item disabled={!selectable(step)} onClick={() => choose(step)}>{step.label}</DropdownMenu.Item>
         {step.editableDates && onEditDates ? <DropdownMenu.Item onClick={() => onEditDates(step.value)}>
           {t("statusbar.editDates", { label: optionTextLabel(step.label, step.value) })}
         </DropdownMenu.Item> : null}
       </React.Fragment>)}
-    </DropdownMenu.Content></DropdownMenu.Positioner></DropdownMenu.Portal></DropdownMenu.Root> : null}
-    {terminal ? <div className="mt-1.5 flex items-center gap-2"><Badge tone="neutral" shape="pill">
+    </ActionMenu> : null}
+    {terminal ? <div className="mt-1.5 flex items-center gap-2"><Chip tone="neutral">
       {terminal.label}{terminal.date ? ` · ${formatDate(terminal.date)}` : ""}
-    </Badge></div> : null}
+    </Chip></div> : null}
   </div>;
 }
 

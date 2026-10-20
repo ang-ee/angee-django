@@ -4,7 +4,7 @@ import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { Button, type ButtonProps } from "./button";
-import { CountBadge } from "./badge";
+import { CountBadge } from "./count-badge";
 
 /**
  * @kind token

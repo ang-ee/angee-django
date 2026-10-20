@@ -103,7 +103,7 @@ export function FilterClauseRow({ fields, value, onChange, onSubmit, error, read
           )
       ) : null}
     </> : <p className="text-13 text-fg-muted">{t("resourceToolbar.noFilterFields")}</p>}
-    {error ? <p id={errorId} role="alert" className="text-xs text-danger-text">{error}</p> : null}
+    {error ? <p id={errorId} role="alert" className="text-12 text-danger-text">{error}</p> : null}
   </div>;
 }
 

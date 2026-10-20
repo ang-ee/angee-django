@@ -16,6 +16,7 @@
  */
 export const TONES = [
   "neutral",
+  "muted",
   "brand",
   "accent",
   "info",
@@ -94,6 +95,7 @@ export type Fill = (typeof FILLS)[number];
 // slider indicators) both read it via `toneSolidBg`, so they can't drift.
 const SOLID_BG: Record<Tone, string> = {
   neutral: "bg-neutral",
+  muted: "bg-fg-muted",
   brand: "bg-brand",
   accent: "bg-accent",
   info: "bg-info",
@@ -114,12 +116,12 @@ export function toneSolidBg(tone: Tone): string {
 
 /** Solid-fill token for SVG and inline CSS consumers of the semantic palette. */
 export function toneColorVar(tone: Tone): string {
-  return `var(--${tone})`;
+  return tone === "muted" ? "var(--text-muted)" : `var(--${tone})`;
 }
 
 /** Foreground token paired with a tone's solid fill. */
 export function toneOnColorVar(tone: Tone): string {
-  return tone === "neutral" ? "var(--color-fg-inverse)" : `var(--color-on-${tone})`;
+  return tone === "neutral" || tone === "muted" ? "var(--color-fg-inverse)" : `var(--color-on-${tone})`;
 }
 
 // The tone-colored text utility per tone — the one place each on-surface
@@ -127,9 +129,10 @@ export function toneOnColorVar(tone: Tone): string {
 // interpolate this (mirroring how the solid column reads `SOLID_BG`), so a tone's
 // text color lives once. The brand-family palettes (brand/accent/purple/pink)
 // use the `-soft-text` token; the feedback palettes use plain `text-<tone>-text`;
-// neutral is the body foreground, not a colored token.
+// neutral is the body foreground and muted the quiet foreground, not colored tokens.
 const TONE_TEXT: Record<Tone, string> = {
   neutral: "text-fg-2",
+  muted: "text-fg-muted",
   brand: "text-brand-soft-text",
   accent: "text-accent-soft-text",
   info: "text-info-text",
@@ -155,6 +158,7 @@ export function toneText(tone: Tone): string {
 // colours the icon itself; neutral is the body foreground, not a colored token.
 const GLYPH_TONE: Record<Tone, string> = {
   neutral: "[&_.glyph]:text-fg-2!",
+  muted: "[&_.glyph]:text-fg-muted!",
   brand: "[&_.glyph]:text-brand-soft-text!",
   accent: "[&_.glyph]:text-accent-soft-text!",
   info: "[&_.glyph]:text-info-text!",
@@ -182,6 +186,15 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
     surface: `bg-sheet ${TONE_TEXT.neutral} border-border`,
     outline: `bg-transparent ${TONE_TEXT.neutral} border-border`,
     ghost: `bg-transparent ${TONE_TEXT.neutral} border-transparent`,
+  },
+  // The quiet tone: inert, not-yet and secondary states (planned steps, idle
+  // rows, muted chips). Its fills stay on the neutral surfaces with muted ink.
+  muted: {
+    solid: `${SOLID_BG.muted} text-fg-inverse border-fg-muted`,
+    soft: `bg-inset ${TONE_TEXT.muted} border-transparent`,
+    surface: `bg-sheet ${TONE_TEXT.muted} border-border-subtle`,
+    outline: `bg-transparent ${TONE_TEXT.muted} border-border-subtle`,
+    ghost: `bg-transparent ${TONE_TEXT.muted} border-transparent`,
   },
   brand: {
     solid: `${SOLID_BG.brand} text-on-brand border-brand`,

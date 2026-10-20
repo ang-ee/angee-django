@@ -43,7 +43,7 @@ export function ProposalStatements({ proposals, loading = false, labels }: Propo
           <div className="mb-3 flex items-center gap-2">
             <Avatar size="sm" initials={avatarInitials(name)} alt={name} />
             <span className="text-13 font-semibold text-fg">{name}</span>
-            <span className="ml-auto text-xs text-fg-muted">
+            <span className="ml-auto text-12 text-fg-muted">
               {own ? t("comparison.statementPrivate") : t("comparison.statementAudience")}
             </span>
           </div>
@@ -91,6 +91,6 @@ function EditableStatement({ proposal }: { proposal: ComparisonProposal }): Reac
       {!empty ? <Button type="button" variant="ghost" size="sm" disabled={writer.pending}
         onClick={() => setEditing(false)}>{t("comparison.cancel")}</Button> : null}
     </div>
-    {failure ? <p role="alert" className="text-xs text-danger-text">{failure}</p> : null}
+    {failure ? <p role="alert" className="text-12 text-danger-text">{failure}</p> : null}
   </form>;
 }

@@ -3,6 +3,7 @@ import { Filter, QueryParseError } from "@angee/metadata";
 import { Glyph } from "../../../chrome/Glyph";
 import { useUiT } from "../../../i18n";
 import { useDebouncedText } from "../../../lib/use-debounced-text";
+import { SearchInput } from "../../../ui/input";
 import { Toolbar } from "../../../ui/toolbar";
 import { Toggle } from "../../../ui/toggle";
 import { SelectRoot, SelectTrigger, SelectValue, SelectIcon, SelectPortal, SelectPositioner, SelectContent,
@@ -59,11 +60,10 @@ function TextShortcut({ search, shortcut }: { search: ResourceSearch; shortcut: 
   const value = search.active.find((item) => item.kind === "text" && item.field === shortcut.field);
   const { draft, setDraft, commit } = useDebouncedText(value?.kind === "text" ? value.value : "", (next) => search.setText(next, shortcut.field));
   const label = shortcut.label ?? search.catalog.text.find((item) => item.field === shortcut.field)?.label;
-  return <label className="relative min-w-32 flex-1 basis-40">
-    <Glyph name="search" className="pointer-events-none absolute left-2 top-2 size-3.5 text-fg-muted" />
-    <Toolbar.Input type="search" aria-label={labelText(label) ?? shortcut.field} placeholder={labelText(label) ?? shortcut.field}
-      className="w-full pl-7" value={draft} onChange={(event) => { setDraft(event.currentTarget.value); commit(event.currentTarget.value); }} />
-  </label>;
+  return <SearchInput size="sm" className="min-w-32 flex-1 basis-40" aria-label={labelText(label) ?? shortcut.field}
+    placeholder={labelText(label) ?? shortcut.field} value={draft}
+    onChange={(event) => { setDraft(event.currentTarget.value); commit(event.currentTarget.value); }}
+    onClear={() => { setDraft(""); commit(""); commit.flush(); }} />;
 }
 
 function FacetShortcut({ search, shortcut }: { search: ResourceSearch; shortcut: Extract<SearchShortcut, { kind: "facet" }> }) {

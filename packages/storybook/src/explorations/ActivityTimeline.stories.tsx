@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import * as React from "react";
-import { Badge, Button, Chip, CountBadge, MessageFeed, MessageRow, StatusIcon, StepList, type StepListItem } from "@angee/ui";
+import { Chip, Button, CountBadge, MessageFeed, MessageRow, StatusIcon, StepList, type StepListItem } from "@angee/ui";
 import { ActorAvatar, DecisionCardMock, KIND_META, RunEntry, billEntries, dayLabel, time, type Entry, type Kind } from "./activity-explorer.mocks";
 
 /**
@@ -87,7 +87,7 @@ function TimelineRail({ entries, active, onOpen, eligible }: TimelineRailProps):
               <div className="flex items-baseline gap-2 text-11 text-fg-muted">
                 <span>{time(entry.at)}</span>
                 <span>{entry.actor.name}</span>
-                {entry.needsMe ? <Badge tone="warning" variant="soft">needs you</Badge> : null}
+                {entry.needsMe ? <Chip tone="warning" variant="soft">needs you</Chip> : null}
               </div>
               <div className="text-13">{row.what}</div>
               <button type="button" aria-pressed={isActive} onClick={() => onOpen(row.panel)}
@@ -238,7 +238,7 @@ export function TimelinePage({ entries, eligible, initial = null, narrow = false
     <div className="min-w-0 flex-1 p-5">
       <p className="text-11 uppercase tracking-wide text-fg-muted">Vendor bill</p>
       <h1 className="text-20 font-semibold">SYN-UBL-9506 · Cloudflare, Inc.</h1>
-      <div className="mt-2 flex gap-2"><Badge tone="warning" variant="soft">Waiting · Match the supplier contract</Badge><Badge tone="neutral" variant="soft">€307.14</Badge></div>
+      <div className="mt-2 flex gap-2"><Chip tone="warning" variant="soft">Waiting · Match the supplier contract</Chip><Chip tone="neutral" variant="soft">€307.14</Chip></div>
       <div className="mt-6 h-[36rem] rounded-8 border border-dashed border-border-subtle p-4 text-12 text-fg-muted">record form (unchanged)</div>
     </div>
     {narrow ? (drill ?? rail) : <>{rail}{drill}</>}

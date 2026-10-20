@@ -51,7 +51,7 @@ export const numberFieldVariants = tv({
     size: {
       sm: {
         group: "h-btn-sm",
-        input: "px-2 text-xs",
+        input: "px-2 text-12",
         stepper: "w-6",
       },
       md: "",
