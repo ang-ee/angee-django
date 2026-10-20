@@ -3,9 +3,6 @@ import {
   ErrorBanner,
   List,
   LoadingPanel,
-  Page,
-  PageBody,
-  PageHeader,
   useBreadcrumbLeafLabel,
   useRouteParam,
   useResourceRecordHref,
@@ -15,6 +12,7 @@ import { TASK_MODEL } from "@angee/projects";
 
 import { useQueueContext } from "../context";
 import { useWorkT } from "../i18n";
+import { QueueRecordPage } from "../queue-page";
 import { QueueSettingsLink } from "../queue-settings-link";
 import { TriageDwell, type WorkTaskRow } from "../task-work";
 import { useTriageRowActions } from "../triage-actions";
@@ -25,39 +23,25 @@ export function TriageInboxPage(): React.ReactElement {
   const t = useWorkT();
   const recordHref = useResourceRecordHref(TASK_MODEL);
   const queue = useQueueContext(queueId);
-  const name = queue.data?.work_queues_by_pk?.name ?? queueId;
+  const name = queue.data?.work_queues_by_pk?.name;
   // The Triage hub's record page: the queue names the crumb after the hub.
-  useBreadcrumbLeafLabel(queue.data?.work_queues_by_pk?.name);
+  useBreadcrumbLeafLabel(name);
   // Never send a placeholder sqid to the server — an unknown id makes the
   // stage decoder raise. While the queue loads we render a loading panel; a
   // queue without a triage stage gets the no-match filter (the MyWorkPage
   // idiom), so the standard empty state renders without a bogus query.
   const triageStageId = queue.data?.work_stages[0]?.id ?? null;
   const actions = useTriageRowActions<WorkTaskRow>(queueId);
-
-  if (!queue.data && !queue.error) {
-    return (
-      <Page>
-        <PageHeader
-          title={t("triage.title", { queue: name })}
-          description={t("triage.description")}
-          actions={<QueueSettingsLink queueId={queueId} />}
-        />
-        <PageBody>
-          <LoadingPanel />
-        </PageBody>
-      </Page>
-    );
-  }
+  const loading = !queue.data && !queue.error;
 
   return (
-    <Page>
-      <PageHeader
-        title={t("triage.title", { queue: name })}
-        description={t("triage.description")}
-        actions={<QueueSettingsLink queueId={queueId} />}
-      />
-      <PageBody>
+    <QueueRecordPage
+      eyebrow={t("queue.eyebrow.triage")}
+      title={name ?? t("queue.loading")}
+      description={t("triage.description")}
+      verbs={<QueueSettingsLink queueId={queueId} />}
+    >
+      {loading ? <LoadingPanel /> : <>
         {queue.error ? <ErrorBanner description={queue.error.message} /> : null}
         <List<WorkTaskRow>
           resource={TASK_MODEL}
@@ -93,7 +77,7 @@ export function TriageInboxPage(): React.ReactElement {
           <Column field="created_at" />
         </List>
         {actions.dialog}
-      </PageBody>
-    </Page>
+      </>}
+    </QueueRecordPage>
   );
 }

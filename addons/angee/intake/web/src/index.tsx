@@ -7,6 +7,7 @@ import {
   ErrorBanner,
   Glyph,
   Group,
+  LoadingPanel,
   SkeletonStatus,
   Tab,
   useRecordChromeContext,
@@ -15,7 +16,7 @@ import { MessageSquareQuote } from "lucide-react";
 import type { ReactElement } from "react";
 
 import { enIntakeMessages, useIntakeT } from "./i18n";
-import { TaskAccessCardSkeleton, TaskAccessDecisions } from "./TaskAccessDecisions";
+import { TaskAccessDecisions } from "./TaskAccessDecisions";
 import { TaskAccessNeedsDocument } from "./documents";
 import { NEED_MODEL } from "./resources";
 import { RecordNeedsPane } from "./RecordNeedsPane";
@@ -27,6 +28,8 @@ const intake = defineBaseAddon({
   id: "intake",
   i18n: { intake: enIntakeMessages },
   icons: { "intake-needs": MessageSquareQuote },
+  // The access verdict words beyond the framework's: no decision at all reads as inert.
+  statusTones: { unavailable: "neutral" },
   containers: {
     [`${TASK_MODEL}#access-roles`]: {
       "intake.requester": { content: TaskRequesterAccessRole },
@@ -95,7 +98,7 @@ function TaskAccessGroup(): ReactElement {
     models: [NEED_MODEL, "decisions.Decision"],
   });
   if (query.isFetching && !query.data) return <SkeletonStatus label={t("access.label")}>
-    <TaskAccessCardSkeleton />
+    <LoadingPanel density="inline" />
   </SkeletonStatus>;
   if (query.error) return <ErrorBanner description={t("access.error")} />;
   return <TaskAccessDecisions needs={query.data?.intake_needs ?? []}

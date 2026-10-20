@@ -1,32 +1,21 @@
-import { describe, expect, test } from "vitest";
+import { createAngeeI18nInstance } from "@angee/ui/runtime/i18n";
+import { expect, test } from "vitest";
 
 import { estimateLabel } from "./estimates";
-import type { WorkT } from "./i18n";
+import { enWorkMessages, type WorkT } from "./i18n";
 
-const t = ((key: string, vars?: Record<string, unknown>) => {
-  if (key === "estimate.points") return `${String(vars?.count)} points`;
-  if (["estimate.hours", "estimate.days", "estimate.weeks"].includes(key)) {
-    return `${String(vars?.count)} ${key.replace("estimate.", "")}`;
-  }
-  if (key === "estimate.size.unknown") return `Size ${String(vars?.value)}`;
-  return key.replace("estimate.size.", "").toUpperCase();
-}) as WorkT;
+const translator = createAngeeI18nInstance({ work: enWorkMessages });
+const t = ((key: string, vars?: Record<string, unknown>) => translator.t(key, { ns: "work", ...vars })) as unknown as WorkT;
 
-describe("estimateLabel", () => {
-  test("hides missing estimates and queues with no estimation scale", () => {
-    expect(estimateLabel(null, "LINEAR", t)).toBeNull();
-    expect(estimateLabel(3, "NONE", t)).toBeNull();
-  });
+test.each([
+  ["HOURS", 1, "1 hour"], ["HOURS", 0.5, "0.5 hours"], ["HOURS", 0, "0 hours"],
+  ["DAYS", 1, "1 day"], ["DAYS", 1.25, "1.25 days"], ["WEEKS", 1, "1 week"],
+  ["WEEKS", 2.5, "2.5 weeks"], ["LINEAR", 1, "1 point"], ["FIBONACCI", 2, "2 points"],
+  ["EXPONENTIAL", 4, "4 points"], ["TSHIRT", 3, "M"],
+] as const)("the board's estimate column renders %s estimate %s as %s", (scale, value, expected) => {
+  expect(estimateLabel(value, scale, t)).toBe(expected);
+});
 
-  test("renders numeric scales in their declared units without rounding", () => {
-    expect(estimateLabel(5, "FIBONACCI", t)).toBe("5 points");
-    expect(estimateLabel(1.5, "HOURS", t)).toBe("1.5 hours");
-    expect(estimateLabel(0.25, "DAYS", t)).toBe("0.25 days");
-    expect(estimateLabel(2.5, "WEEKS", t)).toBe("2.5 weeks");
-  });
-
-  test("maps canonical T-shirt values and keeps an explicit fallback", () => {
-    expect(estimateLabel(8, "TSHIRT", t)).toBe("XL");
-    expect(estimateLabel(7, "TSHIRT", t)).toBe("Size 7");
-  });
+test("the estimate is omitted when the queue disables estimates", () => {
+  expect(estimateLabel(3, "NONE", t)).toBeNull();
 });

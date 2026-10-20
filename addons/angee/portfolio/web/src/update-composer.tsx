@@ -1,12 +1,10 @@
-import { Chip, Button, Glyph, MutationDialog, RelativeTime, actionOutcomeSubmitResult, canonicalOptionValue, mutationDialogValueCodecs, useStatusTone, useActionOutcomeMutation, useEnumOptions, useRecordChromeContext, type DescriptorField, type MutationDialogValues, type WidgetOption } from "@angee/ui";
+import { Button, Glyph, MutationDialog, StatusBadge, actionOutcomeSubmitResult, canonicalOptionValue, formatDateTime, mutationDialogValueCodecs, textRoleVariants, useActionOutcomeMutation, useEnumOptions, useRecordChromeContext, type DescriptorField, type MutationDialogValues, type WidgetOption } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import * as React from "react";
 
 import { usePortfolioT } from "./i18n";
 import { UPDATE_MODEL } from "./resources";
 
-const HEALTH_VALUES = ["ON_TRACK", "AT_RISK", "OFF_TRACK"] as const;
-type KnownPortfolioHealth = (typeof HEALTH_VALUES)[number];
 type UpdateActionName = "report_project_update" | "report_initiative_update";
 
 export interface PortfolioUpdateValues extends Record<string, unknown> {
@@ -18,13 +16,14 @@ export interface PortfolioUpdateValues extends Record<string, unknown> {
 export function parsePortfolioUpdateValues(
   values: MutationDialogValues,
   healthOptions: readonly WidgetOption[],
+  message = "A portfolio update health assertion is required.",
 ): PortfolioUpdateValues {
   const health = mutationDialogValueCodecs
     .requiredString(values.health, "health")
     .toUpperCase();
   const canonical = canonicalOptionValue(healthOptions, health);
   if (canonical === undefined) {
-    throw new TypeError("A portfolio update health assertion is required.");
+    throw new TypeError(message);
   }
   return {
     health: canonical,
@@ -32,7 +31,7 @@ export function parsePortfolioUpdateValues(
   };
 }
 
-/** Current denormalized health plus its last-report timestamp. */
+/** Current denormalized health as the one status pill, plus its last-report time. */
 export function PortfolioHealthSummary({
   health,
   updatedAt,
@@ -40,22 +39,15 @@ export function PortfolioHealthSummary({
   health: unknown;
   updatedAt: unknown;
 }): React.ReactElement {
-  const statusTone = useStatusTone();
   const t = usePortfolioT();
-  const normalized = normalizeHealth(health);
-  const copy = {
-    ON_TRACK: t("update.health.onTrack"),
-    AT_RISK: t("update.health.atRisk"),
-    OFF_TRACK: t("update.health.offTrack"),
-  } as const;
+  const healthOptions = useEnumOptions(UPDATE_MODEL, "health", { casing: "upper" });
+  const value = typeof health === "string" ? health : null;
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Chip tone={statusTone(normalized)}>
-        {normalized ? copy[normalized] : t("update.health.none")}
-      </Chip>
+      <StatusBadge value={value} options={healthOptions}>{value ? undefined : t("update.health.none")}</StatusBadge>
       {typeof updatedAt === "string" || typeof updatedAt === "number" ? (
-        <span className="text-12 text-fg-muted">
-          {t("update.health.updated")} <RelativeTime value={updatedAt} />
+        <span className={textRoleVariants({ role: "caption" })}>
+          {t("update.health.updated")} {formatDateTime(updatedAt)}
         </span>
       ) : null}
     </div>
@@ -86,7 +78,7 @@ function RecordUpdatesSection({
           health={context.record?.health}
           updatedAt={context.record?.health_updated_at}
         />
-        <p className="text-13 text-fg-muted">{t("update.pane.description")}</p>
+        <p className={textRoleVariants({ role: "meta" })}>{t("update.pane.description")}</p>
       </div>
       <PortfolioUpdateComposer
         action={action}
@@ -165,16 +157,9 @@ export function PortfolioUpdateComposer({
         submitLabel={t("update.submit")}
         submittingLabel={t("update.submitting")}
         errorFallback={t("update.error")}
-        parseValues={(values) => parsePortfolioUpdateValues(values, healthOptions)}
+        parseValues={(values) => parsePortfolioUpdateValues(values, healthOptions, t("update.healthRequired"))}
         onSubmit={submit}
       />
     </>
   );
-}
-
-function normalizeHealth(value: unknown): KnownPortfolioHealth | null {
-  const normalized = String(value ?? "").trim().toUpperCase();
-  return HEALTH_VALUES.includes(normalized as KnownPortfolioHealth)
-    ? (normalized as KnownPortfolioHealth)
-    : null;
 }

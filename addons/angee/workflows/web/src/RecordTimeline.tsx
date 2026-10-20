@@ -3,8 +3,8 @@ import type { DocumentType } from "@angee/gql/console";
 import * as v from "valibot";
 import { DecisionCard } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
-import { Alert, Chip, Button, CountBadge, ErrorBanner, InlineEmpty, LoadingPanel, PaneToolbar, RecordActionBar, RecordIssues, RecordReference, SegmentedControl, StepList, optionToken, titleCase, useActiveRecordForm, useStatusTone, formatDateTime, textRoleVariants, type StepListItem } from "@angee/ui";
-import { RecordTimelineDocument, RUN_MODELS } from "./documents.console";
+import { Alert, Button, CountBadge, ErrorBanner, InlineEmpty, LoadingPanel, PaneToolbar, RecordActionBar, RecordIssues, RecordReference, SegmentedControl, StatusBadge, StepList, optionLabel, optionToken, titleCase, useActiveRecordForm, useEnumOptions, useStatusTone, formatDateTime, textRoleVariants, type StepListItem } from "@angee/ui";
+import { RecordTimelineDocument, RUN_MODEL, RUN_MODELS } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 import { useStepRetryActions } from "./step-retry";
 import { useRunCancelActions } from "./run-cancel";
@@ -69,7 +69,7 @@ export function RecordTimelineView({ data, openCount, set = false, drillIn = fal
   const retryActions = useStepRetryActions(true);
   const cancelActions = useRunCancelActions(data.map((entry) => entry.record_model));
   const cancelRun = (run: TimelineRun) => <RecordActionBar record={run} actions={cancelActions} />;
-  const link = (model: string, id: string, label?: string) => <Chip tone="info" size="sm"><RecordReference model={model} id={id} label={label} /></Chip>;
+  const link = (model: string, id: string, label?: string) => <RecordReference model={model} id={id} label={label} />;
   const runs = [...new Map(data.flatMap(({ runs }) => runs).map((run) => [run.id, run])).values()];
   const card = (decision: TimelineDecision, id: string, compact = false, records?: readonly string[], runId?: string) =>
     <RecordTimelineDecisionCard key={decision.id} decision={decision} recordId={id}
@@ -99,7 +99,7 @@ export function RecordTimelineView({ data, openCount, set = false, drillIn = fal
     }
     return <div className="grid min-w-0 gap-4">
       <header className="grid gap-2"><h2 className={textRoleVariants({ role: "title" })}>{t("runs.title")} <CountBadge tone={count ? "warning" : "neutral"} value={count} /></h2>
-        <p className="text-13 text-fg-muted">{t("timeline.records", { count: data.length })} · {t("timeline.decisions", { count })} · {t("timeline.heldRuns", { count: runs.filter((run) => held(run).length).length })}</p>
+        <p className={textRoleVariants({ role: "meta" })}>{t("timeline.records", { count: data.length })} · {t("timeline.decisions", { count })} · {t("timeline.heldRuns", { count: runs.filter((run) => held(run).length).length })}</p>
         <SegmentedControl<"record" | "question"> aria-label={t("timeline.groupBy")} value={grouping} onValueChange={setGrouping}
           options={[{ value: "record", label: t("timeline.byRecord") }, { value: "question", label: t("timeline.byQuestion") }]} />
         {active.map((run) => <div key={run.id}>{cancelRun(run)}</div>)}
@@ -108,7 +108,7 @@ export function RecordTimelineView({ data, openCount, set = false, drillIn = fal
         {link(entry.record_model, entry.record_id)}{entry.decisions.map((decision) => card(decision, entry.record_id, true))}
         {heldRuns(entry)}
       </section>) : <>{[...questions].map(([question, items]) => <section key={question} className="grid gap-2 border-t border-border-subtle pt-3">
-        <h3 className="text-13 font-semibold">{[...items.values()][0]?.decision.kind_label} <CountBadge value={items.size} tone="warning" /></h3>
+        <h3 className={textRoleVariants({ role: "title" })}>{[...items.values()][0]?.decision.kind_label} <CountBadge value={items.size} tone="warning" /></h3>
         {[...items.values()].map(({ entries, decision }) => <div key={decision.id} className="grid gap-1">
           <div className="flex flex-wrap gap-1">{entries.map((entry) => <span key={entry.record_id}>{link(entry.record_model, entry.record_id)}</span>)}</div>
           {card(decision, entries[0]!.record_id, true)}
@@ -130,7 +130,7 @@ export function RecordTimelineView({ data, openCount, set = false, drillIn = fal
         actions={<>{link("workflows.WorkflowRun", single.id, t("timeline.openRun"))}{single.can_cancel ? cancelRun(single) : null}</>}
       /> : <PaneToolbar />}
       <div className="grid min-w-0 gap-4 p-3">
-        {single?.status && optionToken(single.status) === "failed" && single.failure_reason ? <p className="text-13 text-danger-text">{single.failure_reason}</p> : null}
+        {single?.status && optionToken(single.status) === "failed" && single.failure_reason ? <Alert tone="danger">{single.failure_reason}</Alert> : null}
         {runs.map((run) => <section key={run.id} className="grid min-w-0 gap-3" aria-label={run.display_name}>
           <RunSteps run={run} recordId={entry?.record_id ?? ""}
             card={(decision, id, compact, records) => card(decision, id, compact, records, run.can_cancel ? run.id : undefined)}
@@ -145,13 +145,13 @@ export function RecordTimelineView({ data, openCount, set = false, drillIn = fal
       <h2 className={textRoleVariants({ role: "title", truncate: true, className: "min-w-0" })}>{single?.version?.workflow?.display_name ?? t("timeline.workflows", { count: runs.length })}</h2>
       <CountBadge tone={count ? "warning" : "neutral"} value={count} title={t("timeline.decisions", { count })} />
     </div>{single ? <div className="flex flex-wrap items-center gap-2"><RunStatus run={single} />
-      <time dateTime={single.created_at}>{formatDateTime(new Date(single.created_at))}</time>
-      {link("workflows.WorkflowRun", single.id, t("timeline.openRun"))}</div> : <p className="text-13 text-fg-muted">{t("timeline.history")}</p>}
+      <time dateTime={single.created_at}>{formatDateTime(single.created_at)}</time>
+      {link("workflows.WorkflowRun", single.id, t("timeline.openRun"))}</div> : <p className={textRoleVariants({ role: "meta" })}>{t("timeline.history")}</p>}
       {active.map((run) => <div key={run.id}>{cancelRun(run)}</div>)}
     </header>
     {runs.map((run) => <section key={run.id} className="grid min-w-0 gap-3" aria-label={run.display_name}>
-      {!single ? <div className="grid gap-1 border-t border-border-subtle pt-3"><h3 className="text-13 font-semibold">{run.version?.workflow?.display_name}</h3>
-        <RunStatus run={run} /><time dateTime={run.created_at}>{formatDateTime(new Date(run.created_at))}</time>
+      {!single ? <div className="grid gap-1 border-t border-border-subtle pt-3"><h3 className={textRoleVariants({ role: "title" })}>{run.version?.workflow?.display_name}</h3>
+        <RunStatus run={run} /><time dateTime={run.created_at}>{formatDateTime(run.created_at)}</time>
         {link("workflows.WorkflowRun", run.id, t("timeline.openRun"))}</div> : null}
       <RunSteps run={run} recordId={entry?.record_id ?? ""}
         card={(decision, id, compact, records) => card(decision, id, compact, records, run.can_cancel ? run.id : undefined)}
@@ -162,19 +162,21 @@ export function RecordTimelineView({ data, openCount, set = false, drillIn = fal
   </div>;
 }
 
+/** The run's state word, derived from its status and the holds its steps carry; the composed
+ * status vocabulary (workflows contributes the run-state words) decides the tone. */
+const UNKNOWN_STATE_TONE = { unknown: "neutral" } as const;
 function RunStatus({ run, compact = false }: { run: TimelineRun; compact?: boolean }) {
   const t = useWorkflowsT();
-  const resolveTone = useStatusTone();
   const holds = runSteps(run).flatMap((step) => step.hold ? [step.hold] : []);
   const status = optionToken(run.status);
   const state = status === "canceled" || status === "interrupted" ? "stopped" : status === "failed" ? "error"
     : status === "succeeded" ? "plan_complete" : status === "running" ? "plan_running"
     : status === "waiting" ? holds.includes("error") ? "error" : holds.includes("run") ? "run"
       : holds.includes("decision") ? "decision" : "waiting" : "unknown";
-  const badge = <Chip tone={state === "unknown" ? "neutral" : resolveTone(state)}>{state === "plan_complete" && run.outcome_label || t(`timeline.status.${state}`)}</Chip>;
+  const badge = <StatusBadge value={state} tone={UNKNOWN_STATE_TONE}>{state === "plan_complete" && run.outcome_label || t(`timeline.status.${state}`)}</StatusBadge>;
   if (compact) return badge;
   return <div className="grid gap-1">{badge}
-    {status === "failed" && run.failure_reason ? <p className="text-13 text-danger-text">{run.failure_reason}</p> : null}</div>;
+    {status === "failed" && run.failure_reason ? <Alert tone="danger">{run.failure_reason}</Alert> : null}</div>;
 }
 
 function stepState(status: string): StepListItem["state"] {
@@ -206,6 +208,7 @@ function RunSteps({ run, recordId, card, link, retry }: {
 }) {
   const t = useWorkflowsT();
   const resolveTone = useStatusTone();
+  const originOptions = useEnumOptions(RUN_MODEL, "origin");
   const [expanded, setExpanded] = useState(false);
   const ordered = [...run.graph.nodes].filter((node) => !node.key.endsWith(".body")).sort((a, b) => a.rank - b.rank);
   const done = ordered.filter((node) => node.plan === "done");
@@ -214,7 +217,7 @@ function RunSteps({ run, recordId, card, link, retry }: {
     && optionToken(node.step_run?.status) === "succeeded";
   const items: StepListItem[] = [{ id: "trigger", state: "trigger", title: run.trigger_event?.trigger?.display_name
     ?? (run.parent_step ? t("timeline.continuedBy", { name: run.run_as?.display_name ?? t("timeline.user") })
-      : optionToken(run.origin) === "manual" ? t("timeline.startedBy", { name: run.run_as?.display_name ?? t("timeline.user") }) : t("timeline.originStarted", { origin: t(`origin.${optionToken(run.origin)}`) })), timestamp: run.created_at,
+      : optionToken(run.origin) === "manual" ? t("timeline.startedBy", { name: run.run_as?.display_name ?? t("timeline.user") }) : t("timeline.originStarted", { origin: String(optionLabel(originOptions, run.origin)) })), timestamp: run.created_at,
     children: run.trigger_event?.record_model && run.trigger_event.record_id ? link(run.trigger_event.record_model, run.trigger_event.record_id)
       : run.subject_model && run.subject_id ? link(run.subject_model, run.subject_id) : null }];
   const folded = !expanded && runSteps(run).some((step) => optionToken(step.status) === "waiting") && done.length > 6;
@@ -226,7 +229,7 @@ function RunSteps({ run, recordId, card, link, retry }: {
       <TimelineNotes notes={notes} />
       {records.length ? <div className="flex min-w-0 flex-wrap gap-1">{records.map((record) => record.record_model && record.record_id ? <span key={record.id}>{link(record.record_model, record.record_id, record.label || undefined)}</span> : null)}</div> : null}
       {step?.child_runs.map((child) => <div key={child.id}>{link("workflows.WorkflowRun", child.id, child.display_name)}</div>)}
-      {step?.hold === "run" && step.awaited_run ? <div className="text-13 font-medium text-warning-text">{t("timeline.waitingFor", { name: step.awaited_run.display_name })}{link("workflows.WorkflowRun", step.awaited_run.id, t("timeline.openRun"))}</div> : null}
+      {step?.hold === "run" && step.awaited_run ? <Alert tone="warning" title={t("timeline.waitingFor", { name: step.awaited_run.display_name })}>{link("workflows.WorkflowRun", step.awaited_run.id, t("timeline.openRun"))}</Alert> : null}
       {step?.hold === "error" ? <Alert tone="danger" title={t("timeline.status.error")} actions={retry(step)}>{step.failure_reason || step.wait_reason}</Alert> : null}
       {step?.decision ? card(step.decision, recordId, false, records.flatMap((record) => record.record_id ? [record.record_id] : [])) : null}
     </>;
@@ -249,7 +252,7 @@ function RunSteps({ run, recordId, card, link, retry }: {
     for (const mapped of step?.map_steps ?? []) {
       const status = optionToken(mapped.status);
       items.push({ id: mapped.id, state: stepState(status),
-        title: `${mapped.node_label} · ${mapped.map_index + 1}`, outcome: mapped.outcome_label, timestamp: mapped.updated_at,
+        title: t("timeline.mappedStep", { label: mapped.node_label, index: mapped.map_index + 1 }), outcome: mapped.outcome_label, timestamp: mapped.updated_at,
         tone: ["ready", "running", "waiting", "succeeded", "failed", "canceled", "skipped"].includes(status) ? resolveTone(status) : "neutral", children: details(mapped) });
     }
   };

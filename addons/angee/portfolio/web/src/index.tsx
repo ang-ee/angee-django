@@ -29,6 +29,10 @@ import {
   InitiativeUpdatesSection,
   ProjectUpdatesSection,
 } from "./update-composer";
+import { InitiativeProjectsTab, ProductProjectsTab, ProductReleasesTab } from "./record-sections";
+
+/** A tab label resolved through the host's i18n, with the bundled English as the fallback. */
+const tabLabel = (key: keyof typeof enPortfolioMessages) => ({ namespace: "portfolio", key, fallback: enPortfolioMessages[key] });
 
 
 const portfolioRoutes: readonly BaseAddonRoute[] = [
@@ -99,25 +103,31 @@ const portfolio = defineBaseAddon({
       "portfolio.project-updates": {
         sequence: 45,
         content: (
-          <Tab
-            id="portfolio-updates"
-            label={{ namespace: "portfolio", key: "update.pane.title", fallback: enPortfolioMessages["update.pane.title"] }}
-            icon={<Glyph decorative name="portfolio-update" />}
-          >
+          <Tab id="portfolio-updates" label={tabLabel("update.pane.title")} icon={<Glyph decorative name="portfolio-update" />}>
             <ProjectUpdatesSection />
           </Tab>
         ),
       },
     },
+    [`${PRODUCT_MODEL}#sections`]: {
+      "portfolio.product-releases": {
+        sequence: 10,
+        content: <Tab id="releases" label={tabLabel("product.tabs.releases")} icon={<Glyph decorative name="portfolio-release" />}><ProductReleasesTab /></Tab>,
+      },
+      "portfolio.product-projects": {
+        sequence: 20,
+        content: <Tab id="projects" label={tabLabel("product.tabs.projects")} icon={<Glyph decorative name="projects" />}><ProductProjectsTab /></Tab>,
+      },
+    },
     [`${INITIATIVE_MODEL}#sections`]: {
+      "portfolio.initiative-projects": {
+        sequence: 10,
+        content: <Tab id="projects" label={tabLabel("initiative.tabs.projects")} icon={<Glyph decorative name="projects" />}><InitiativeProjectsTab /></Tab>,
+      },
       "portfolio.initiative-updates": {
         sequence: 45,
         content: (
-          <Tab
-            id="portfolio-updates"
-            label={{ namespace: "portfolio", key: "update.pane.title", fallback: enPortfolioMessages["update.pane.title"] }}
-            icon={<Glyph decorative name="portfolio-update" />}
-          >
+          <Tab id="portfolio-updates" label={tabLabel("update.pane.title")} icon={<Glyph decorative name="portfolio-update" />}>
             <InitiativeUpdatesSection />
           </Tab>
         ),

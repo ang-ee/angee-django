@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ActionMenu, ActionTrigger, Alert, Chip, Button, ChatBar, ChatBubble, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, Glyph, InfoRow, LazyBoundary, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, useStatusTone, textRoleVariants } from "@angee/ui";
+import { ActionMenu, ActionTrigger, Alert, Button, ChatBar, ChatBubble, ChatTypingIndicator, ContextBlock, Dialog, DropdownMenu, ErrorBanner, Glyph, InlineEmpty, LazyBoundary, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, MetaGrid, StatusBadge, StatusDot, Textarea, ToolFallback, titleCase, useStatusTone } from "@angee/ui";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -42,11 +42,11 @@ import type { AgentChatView, McpServerConfig } from "../documents";
  */
 export function AgentChat(props: AgentChatProps): React.ReactElement {
   if (props.runtimeClass === undefined) {
-    return <div className="h-full min-h-[28rem] bg-sheet" aria-busy="true" />;
+    return <LoadingPanel />;
   }
   return (
     <AgentChatProvider value={props}>
-      <LazyBoundary pending={<div className="h-full min-h-[28rem] bg-sheet" aria-busy="true" />}>
+      <LazyBoundary pending={<LoadingPanel />}>
         <AcpAgentChat />
       </LazyBoundary>
     </AgentChatProvider>
@@ -169,30 +169,23 @@ function AgentChatContent({
             </ActionMenu>
           }
         />
-        {error !== null ? (
-          <Alert tone="danger" className="m-3">
-            {error}
-          </Alert>
-        ) : null}
+        {error !== null ? <ErrorBanner description={error} className="m-3" /> : null}
         <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
           <div className="relative flex min-h-0 flex-1 flex-col">
             <ThreadPrimitive.Viewport autoScroll className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
               <ThreadPrimitive.Empty>
-                <p className={cn(textRoleVariants({ role: "meta" }), "leading-relaxed")}>{t("chat.empty")}</p>
+                <InlineEmpty label={t("chat.empty")} />
               </ThreadPrimitive.Empty>
               <Transcript />
               {runtimeState.permissions.map((permission) => (
                 <AgentPermission key={permission.id} permission={permission} answer={runtimeState.answerPermission} />
               ))}
             </ThreadPrimitive.Viewport>
-            <ThreadPrimitive.ScrollToBottom
-              aria-label={t("chat.scrollToBottom")}
-              className={cn(
-                buttonVariants({ variant: "secondary", size: "iconSm" }),
-                "absolute bottom-3 right-3 z-10 rounded-full disabled:pointer-events-none disabled:opacity-0",
-              )}
-            >
-              <Glyph name="arrow-down" className="h-4 w-4" />
+            <ThreadPrimitive.ScrollToBottom asChild>
+              <Button type="button" variant="secondary" size="iconSm" aria-label={t("chat.scrollToBottom")}
+                className="absolute bottom-3 right-3 z-10 rounded-full disabled:pointer-events-none disabled:opacity-0">
+                <Glyph name="arrow-down" />
+              </Button>
             </ThreadPrimitive.ScrollToBottom>
           </div>
           <SlashCommandComposer commands={availableCommands}>
@@ -201,8 +194,7 @@ function AgentChatContent({
                 input={
                   <ComposerPrimitive.Input
                     ref={composerRef}
-                    render={<textarea />}
-                    className={messageComposerInputClassName}
+                    render={<Textarea size="md" resize="none" />}
                     rows={3}
                     placeholder={ready ? t("chat.placeholder") : t(`chat.status.${status}`)}
                     aria-label={t("chat.placeholder")}
@@ -226,24 +218,20 @@ function AgentChatContent({
                 actions={
                   <>
                     {imageSupported ? (
-                      <ComposerPrimitive.AddAttachment
-                        aria-label={t("chat.attach")}
-                        className={buttonVariants({ variant: "ghost", size: "sm" })}
-                      >
-                        <Glyph name="attachment" className="h-4 w-4" />
+                      <ComposerPrimitive.AddAttachment asChild>
+                        <Button type="button" variant="ghost" size="iconSm" aria-label={t("chat.attach")}>
+                          <Glyph name="attachment" />
+                        </Button>
                       </ComposerPrimitive.AddAttachment>
                     ) : null}
                     <ThreadPrimitive.If running={runtimeState.protocolVersion === 2 ? undefined : false}>
-                      <ComposerPrimitive.Send
-                        disabled={!ready}
-                        className="text-13 text-accent disabled:text-fg-muted"
-                      >
-                        {t("chat.send")}
+                      <ComposerPrimitive.Send asChild disabled={!ready}>
+                        <Button type="submit" variant="primary" size="sm">{t("chat.send")}</Button>
                       </ComposerPrimitive.Send>
                     </ThreadPrimitive.If>
                     <ThreadPrimitive.If running>
-                      <ComposerPrimitive.Cancel disabled={!ready} className="text-13 text-danger-text">
-                        {t("chat.stop")}
+                      <ComposerPrimitive.Cancel asChild disabled={!ready}>
+                        <Button type="button" variant="danger" size="sm">{t("chat.stop")}</Button>
                       </ComposerPrimitive.Cancel>
                     </ThreadPrimitive.If>
                   </>
@@ -297,22 +285,21 @@ function ComposerImageAttachment(): React.ReactElement {
       {previewUrl !== null ? (
         <div className="relative">
           <img src={previewUrl} alt={name} title={name} className="h-12 w-12 rounded-6 object-cover" />
-          <AttachmentPrimitive.Remove
-            aria-label={t("chat.removeAttachment")}
-            className="absolute -right-1 -top-1 inline-flex size-4 items-center justify-center rounded-full border border-border-subtle bg-sheet-2 text-fg-muted shadow-xs hover:text-fg"
-          >
-            <Glyph name="x" className="h-3 w-3" />
+          <AttachmentPrimitive.Remove asChild>
+            <Button type="button" variant="secondary" size="iconSm" aria-label={t("chat.removeAttachment")}
+              className="absolute -right-1 -top-1 rounded-full">
+              <Glyph name="x" />
+            </Button>
           </AttachmentPrimitive.Remove>
         </div>
       ) : (
         <MessageAttachmentChip
           icon={<Glyph name="attachment" className="h-3 w-3" />}
           remove={
-            <AttachmentPrimitive.Remove
-              aria-label={t("chat.removeAttachment")}
-              className="flex shrink-0 items-center text-fg-muted hover:text-fg"
-            >
-              <Glyph name="x" className="h-3 w-3" />
+            <AttachmentPrimitive.Remove asChild>
+              <Button type="button" variant="ghost" size="iconSm" aria-label={t("chat.removeAttachment")}>
+                <Glyph name="x" />
+              </Button>
             </AttachmentPrimitive.Remove>
           }
         >
@@ -374,29 +361,24 @@ function RecordAttachmentChip({
         icon={<Glyph name="file" className="h-3 w-3" />}
         onClick={() => setOpen(true)}
         remove={
-          <button
-            type="button"
-            onClick={clearRecord}
-            aria-label={t("chat.removeAttachment")}
-            className="flex shrink-0 items-center text-fg-muted hover:text-fg"
-          >
-            <Glyph name="x" className="h-3 w-3" />
-          </button>
+          <Button type="button" variant="ghost" size="iconSm" onClick={clearRecord} aria-label={t("chat.removeAttachment")}>
+            <Glyph name="x" />
+          </Button>
         }
       >
         {t("chat.viewAttachment")}
       </MessageAttachmentChip>
-      <DialogRoot open={open} onOpenChange={setOpen}>
-        <DialogPortal>
-          <DialogBackdrop />
-          <DialogContent>
-            <DialogTitle>{t("chat.context")}</DialogTitle>
-            <DialogBody>
+      <Dialog.Root open={open} onOpenChange={setOpen}>
+        <Dialog.Portal>
+          <Dialog.Backdrop />
+          <Dialog.Content>
+            <Dialog.Header><Dialog.Title>{t("chat.context")}</Dialog.Title></Dialog.Header>
+            <Dialog.Body>
               <ContextBlock label={t("chat.inspectContext")}>{context || "—"}</ContextBlock>
-            </DialogBody>
-          </DialogContent>
-        </DialogPortal>
-      </DialogRoot>
+            </Dialog.Body>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </>
   );
 }
@@ -412,7 +394,7 @@ function AssistantMessage(): React.ReactElement {
         <MessagePrimitive.Parts
           components={{ Text: AssistantText, Reasoning: ReasoningPart, tools: { Fallback: ToolPart } }}
         />
-        {failed ? <Chip tone="danger" role="status">{t("chat.failed")}</Chip> : null}
+        {failed ? <StatusBadge value="failed" className="self-start" >{t("chat.failed")}</StatusBadge> : null}
         {/* Pre-token "thinking" dots: only on the last assistant turn that has started but has no
             content yet, and only while the thread is running. `hasContent` flips true the moment
             the first text/reasoning/tool part streams in, which removes the indicator. */}
@@ -424,11 +406,10 @@ function AssistantMessage(): React.ReactElement {
       </ChatBubble>
       <MessageActions align="start">
         <ActionBarPrimitive.Root>
-          <ActionBarPrimitive.Copy
-            aria-label={t("chat.copy")}
-            className={buttonVariants({ variant: "ghost", size: "sm" })}
-          >
-            <Glyph name="copy" className="h-3 w-3" />
+          <ActionBarPrimitive.Copy asChild>
+            <Button type="button" variant="ghost" size="iconSm" aria-label={t("chat.copy")}>
+              <Glyph name="copy" />
+            </Button>
           </ActionBarPrimitive.Copy>
         </ActionBarPrimitive.Root>
       </MessageActions>
@@ -490,22 +471,22 @@ function SettingsDialog({
 }): React.ReactElement {
   const t = useAgentsT();
   return (
-    <DialogRoot open={open} onOpenChange={onOpenChange}>
-      <DialogPortal>
-        <DialogBackdrop />
-        <DialogContent>
-          <DialogTitle>{t("chat.settings")}</DialogTitle>
-          <DialogBody>
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Backdrop />
+        <Dialog.Content>
+          <Dialog.Header><Dialog.Title>{t("chat.settings")}</Dialog.Title></Dialog.Header>
+          <Dialog.Body>
             <SessionInfo
               modelHandle={modelHandle}
               view={view}
               mcpServers={mcpServers}
               renderContext={renderContext}
             />
-          </DialogBody>
-        </DialogContent>
-      </DialogPortal>
-    </DialogRoot>
+          </Dialog.Body>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
@@ -527,21 +508,12 @@ function SessionInfo({
 
   const servers = Object.keys(mcpServers);
   return (
-    <div className="space-y-2 text-2xs">
-      <InfoRow className="px-0 py-0 text-2xs" label={t("chat.model")} value={modelHandle || "—"} />
-      <InfoRow className="px-0 py-0 text-2xs" label={t("chat.viewLabel")} value={`${view.kind} · ${view.type}`} />
-      <div>
-        <div className="font-medium text-fg-muted">{t("chat.mcpServers")}</div>
-        {servers.length === 0 ? (
-          <div className="text-fg-subtle">—</div>
-        ) : (
-          servers.map((name) => (
-            <div key={name} className="truncate text-fg">
-              {name}
-            </div>
-          ))
-        )}
-      </div>
+    <div className="space-y-3">
+      <MetaGrid rows={[
+        [t("chat.model"), modelHandle || "—"],
+        [t("chat.viewLabel"), t("chat.viewOf", { kind: titleCase(view.kind), type: view.type })],
+        [t("chat.mcpServers"), servers.length === 0 ? "—" : servers.join(", ")],
+      ]} />
       <ContextBlock label={t("chat.context")}>{context || "—"}</ContextBlock>
     </div>
   );

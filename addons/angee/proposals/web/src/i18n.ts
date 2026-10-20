@@ -87,6 +87,8 @@ export const enProposalsMessages: Record<string, string> = {
     "This ends the round without an award. The round cannot be reopened.",
   "round.action.failed": "The round action returned no result.",
   "round.action.invalidOutcome": "Choose a round outcome.",
+  "round.action.invalidPolicy": "Choose an opening policy.",
+  "round.eyebrow": "Round",
   "round.action.invalidFacilitator": "Choose a new facilitator.",
   "round.outcome.awarded": "Awarded",
   "round.outcome.noAward": "No award",
@@ -106,7 +108,7 @@ export const enProposalsMessages: Record<string, string> = {
   "comparison.title": "Compare {round}",
   "comparison.description":
     "Topics align every readable response; audiences appear with their answers.",
-  "comparison.back": "Round record",
+  "comparison.eyebrow": "Round · Comparison",
   "comparison.gridLabel": "Proposal comparison",
   "comparison.subject": "Subject",
   "comparison.empty.title": "No readable proposals",

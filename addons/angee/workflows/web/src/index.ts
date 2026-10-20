@@ -1,6 +1,6 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { createElement } from "react";
-import { Workflow } from "lucide-react";
+import { Redo2, Workflow } from "lucide-react";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { RUN_MODEL } from "./documents.console";
 import { WORKFLOW_MODEL } from "./catalogue/resources";
@@ -55,7 +55,7 @@ export default defineBaseAddon({
     "decisions#origin": { "workflows.run": decisionRunOrigin },
   },
   statusTones: WORKFLOW_STATUS_TONES,
-  icons: { workflow: Workflow },
+  icons: { workflow: Workflow, "redo-2": Redo2 },
 
   widgets: {
     "angee.workflows.condition": { read: TriggerCondition, edit: TriggerCondition },

@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { ToastProvider } from "@angee/ui";
+import { ModalsHost, ToastProvider } from "@angee/ui";
 import type { ChatterViewContext } from "@angee/ui/runtime";
 
 const mocks = vi.hoisted(() => ({
@@ -81,7 +81,7 @@ function payload(tasks: unknown[]) {
 }
 
 function renderPane() {
-  return render(<ToastProvider><RecordTasksPane context={context()} /></ToastProvider>);
+  return render(<ToastProvider><ModalsHost><RecordTasksPane context={context()} /></ModalsHost></ToastProvider>);
 }
 
 beforeEach(() => {
@@ -131,7 +131,7 @@ describe("RecordTasksPane", () => {
     renderPane();
     fireEvent.click(screen.getByRole("button", { name: /Chase the credit note/ }));
     fireEvent.change(screen.getByLabelText("Completion note"), { target: { value: "Supplier confirmed." } });
-    fireEvent.click(screen.getByRole("button", { name: "Mark done" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Mark done" }));
     await waitFor(() => expect(mocks.calls).toEqual([
       { op: "complete_task", vars: { id: "tsk_1", feedback: "Supplier confirmed." } },
     ]));
@@ -141,6 +141,7 @@ describe("RecordTasksPane", () => {
     mocks.data = payload([task()]);
     renderPane();
     fireEvent.click(screen.getByRole("button", { name: "Cancel task" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel task" }));
     await waitFor(() => expect(mocks.calls).toEqual([{ op: "drop_task", vars: { id: "tsk_1", reason: "OBSOLETE" } }]));
   });
 
@@ -148,7 +149,7 @@ describe("RecordTasksPane", () => {
     mocks.data = payload([task({ task_actions: [] })]);
     renderPane();
     expect(screen.getByRole("region", { name: "Planned" }).textContent).toContain("Chase the credit note");
-    expect(screen.queryByRole("button", { name: "Mark done" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "Mark done" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Cancel task" })).toBeNull();
   });
 
@@ -167,7 +168,7 @@ describe("RecordTasksPane", () => {
   });
 
   test("asks for a record outside a record view", () => {
-    render(<ToastProvider><RecordTasksPane context={{ route: { modelLabel: "billing.Invoice" }, view: { kind: "list" } } as unknown as ChatterViewContext} /></ToastProvider>);
+    render(<ToastProvider><ModalsHost><RecordTasksPane context={{ route: { modelLabel: "billing.Invoice" }, view: { kind: "list" } } as unknown as ChatterViewContext} /></ModalsHost></ToastProvider>);
     expect(screen.getByText("No record selected")).toBeTruthy();
   });
 });

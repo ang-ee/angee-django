@@ -2,12 +2,15 @@ import { extractActionOutcome, useAuthoredMutation, useAuthoredQuery } from "@an
 import * as React from "react";
 import {
   Button,
+  Checkbox,
   DatePopover,
   EmptyState,
   ErrorBanner,
   FieldRoot,
+  FormRoot,
   Glyph,
   LoadingPanel,
+  PaneLabelAction,
   PaneRow,
   PaneRows,
   PaneToolbar,
@@ -20,9 +23,11 @@ import {
   dateFromValue,
   formatDate,
   formatDateStorage,
+  textRoleVariants,
   useActionForm,
   useActionOutcomeMutation,
   useActionResultRun,
+  useConfirm,
   useUiT,
   useWatch,
   type ResolverResult,
@@ -83,6 +88,7 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
     invalidateModels: RECORD_TASK_MODELS,
   });
   const settle = useActionResultRun();
+  const confirm = useConfirm();
   const [mode, setMode] = React.useState<Mode>("schedule");
   const [dateOpen, setDateOpen] = React.useState(false);
   const [feedbackById, setFeedbackById] = React.useState<Record<string, string>>({});
@@ -139,27 +145,13 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
   }, [expandedId, tasks]);
 
   if (!enabled) {
-    return (
-      <EmptyState
-        icon="project-task"
-        title={t("recordTasks.noRecord")}
-        description={t("recordTasks.noRecordHint")}
-        className="min-h-48 p-4"
-      />
-    );
+    return <EmptyState icon="project-task" title={t("recordTasks.noRecord")} description={t("recordTasks.noRecordHint")} />;
   }
   if (tasksQuery.isFetching && tasksQuery.data === undefined) {
     return <LoadingPanel message={t("recordTasks.loading")} />;
   }
   if (tasksQuery.error) {
-    return (
-      <EmptyState
-        icon="project-task"
-        title={t("recordTasks.unavailable")}
-        description={t("recordTasks.unavailableHint")}
-        className="min-h-48 p-4"
-      />
-    );
+    return <ErrorBanner title={t("recordTasks.unavailable")} description={t("recordTasks.unavailableHint")} className="m-3" />;
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
@@ -172,8 +164,10 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
     if (outcome?.ok) setFeedbackById(({ [id]: _removed, ...rest }) => rest);
   }
 
-  async function handleCancel(id: string): Promise<void> {
-    await settle(() => dropTask(id, { reason: "OBSOLETE" }));
+  async function handleCancel(task: RecordTaskRow): Promise<void> {
+    // Dropping is destructive: the shared confirm ceremony names the task first.
+    if (!await confirm({ title: t("recordTasks.cancelTitle", { title: task.title }), body: t("recordTasks.cancelBody"), confirm: t("recordTasks.cancel"), danger: true })) return;
+    await settle(() => dropTask(task.id, { reason: "OBSOLETE" }));
   }
 
   const kindOptions = kinds.map((kind) => ({ value: kind.key, label: kind.name }));
@@ -189,15 +183,13 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
       <li key={task.id}>
         <PaneRow
           leading={offers("complete") ? (
-            <button
-              type="button"
+            <Checkbox
+              size="sm"
               aria-label={t("recordTasks.markDone")}
               disabled={busy}
-              onClick={(event) => { event.stopPropagation(); void handleComplete(task.id); }}
-              className="grid size-4 place-items-center rounded-4 border border-border-strong text-fg-muted hover:bg-canvas hover:text-fg disabled:opacity-50"
-            >
-              <Glyph name="check" className="opacity-0 hover:opacity-100" />
-            </button>
+              checked={false}
+              onCheckedChange={(checked) => { if (checked) void handleComplete(task.id); }}
+            />
           ) : (
             <StatusIcon tone={taskOpen ? "muted" : "success"} icon={taskOpen ? kind?.glyph || "project-task" : "circle-check"} size="sm" />
           )}
@@ -206,16 +198,16 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
           meta={task.due_date ? formatDate(task.due_date) : undefined}
           sub={[assignee, dueLabel(task, t)].filter(Boolean).join(" · ")}
           verb={offers("drop") ? (
-            <span role="button" aria-label={t("recordTasks.cancel")} onClick={(event) => { event.stopPropagation(); void handleCancel(task.id); }}>
+            <PaneLabelAction icon="circle-x" disabled={busy} onClick={() => void handleCancel(task)}>
               {t("recordTasks.cancel")}
-            </span>
+            </PaneLabelAction>
           ) : undefined}
           selected={expanded}
           onOpen={() => setExpandedId(expanded ? null : task.id)}
         />
         {expanded ? (
           <div className="ml-6 space-y-2 pb-2 pr-1">
-            {task.note ? <p className="whitespace-pre-wrap text-13 text-fg-muted">{task.note}</p> : null}
+            {task.note ? <p className={textRoleVariants({ role: "meta", className: "whitespace-pre-wrap" })}>{task.note}</p> : null}
             {offers("complete") ? (
               <Textarea
                 value={feedbackById[task.id] ?? ""}
@@ -247,15 +239,10 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
             <PaneRows>{shown.map(row)}</PaneRows>
           </section>
         ) : (
-          <EmptyState
-            icon="project-task"
-            title={t("recordTasks.emptyTitle")}
-            description={t("recordTasks.emptyHint")}
-            className="min-h-40 p-4"
-          />
+          <EmptyState icon="project-task" title={t("recordTasks.emptyTitle")} description={t("recordTasks.emptyHint")} />
         )}
       </div>
-      <form onSubmit={handleSubmit} className="space-y-2 border-t border-border-subtle p-3">
+      <FormRoot onSubmit={handleSubmit} className="space-y-2 border-t border-border-subtle p-3">
         <SegmentedControl<Mode>
           aria-label={t("recordTasks.tab")}
           value={mode}
@@ -325,13 +312,9 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
             {mode === "log" ? t("recordTasks.log") : t("recordTasks.schedule")}
           </Button>
         </div>
-        {(dayError ?? typeError) ? (
-          <p role="alert" className="text-12 text-danger-text">
-            {(dayError ?? typeError)?.message}
-          </p>
-        ) : null}
+        {(dayError ?? typeError) ? <ErrorBanner description={(dayError ?? typeError)?.message} /> : null}
         {form.formError ? <ErrorBanner description={form.formError} /> : null}
-      </form>
+      </FormRoot>
     </div>
   );
 }

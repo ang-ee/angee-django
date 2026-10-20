@@ -135,12 +135,12 @@ export function useRoundCeremonyActions(
       },
       widen: {
         id: "widen-round", label: t("round.action.widen"),
-        args: [{ name: "policy", widget: "select", options: [
+        args: [{ name: "policy", label: t("round.visibility.opening"), widget: "select", options: [
           "ANSWERS", "ANSWERS_AND_TRACKS", "DRAFTS_AND_TRACKS",
         ].map((value) => ({ value, label: t(openingPolicyLabelKey(value)) })) }],
         submit: async (values, context) => extractActionOutcome(await widen({
           round: actionRecordId(context.record, t("round.action.failed")), revision: recordRevision(context.record),
-          policy: openingPolicyValue(values.policy),
+          policy: openingPolicyValue(values.policy, t("round.action.invalidPolicy")),
         }), "widen_proposal_round_opening_policy"),
         visibleWhen: (record) => holdsPermission(record, "write") && isOpenedRound(record),
       },
@@ -323,7 +323,7 @@ function idList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
 }
 
-function openingPolicyValue(value: unknown): "ANSWERS" | "ANSWERS_AND_TRACKS" | "DRAFTS_AND_TRACKS" {
+function openingPolicyValue(value: unknown, message: string): "ANSWERS" | "ANSWERS_AND_TRACKS" | "DRAFTS_AND_TRACKS" {
   if (value === "ANSWERS" || value === "ANSWERS_AND_TRACKS" || value === "DRAFTS_AND_TRACKS") return value;
-  throw new Error("Choose an opening policy.");
+  throw new Error(message);
 }

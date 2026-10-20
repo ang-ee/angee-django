@@ -1,7 +1,5 @@
-import { PROJECT_MODEL } from "@angee/projects";
 import {
   Column,
-  DrawerResourceList,
   Facet,
   Field,
   Form,
@@ -9,46 +7,21 @@ import {
   List,
   ResourceList,
   useEnumOptions,
-  useRouteHref,
-  type RecordPanelContext,
-  type RecordTabDescriptor,
-  type StringIdRow,
 } from "@angee/ui";
 import * as React from "react";
 
 import { usePortfolioT } from "../i18n";
-import { PRODUCT_MODEL, RELEASE_MODEL } from "../resources";
-
-interface ProjectRow extends StringIdRow {
-  title?: unknown;
-}
+import { PRODUCT_MODEL } from "../resources";
 
 /** Product collection and phasal record surface with projects and releases. */
 export function ProductsPage(): React.ReactElement {
   const t = usePortfolioT();
   const lifecycleOptions = useEnumOptions(PRODUCT_MODEL, "lifecycle");
-  const recordTabs = React.useMemo<readonly RecordTabDescriptor[]>(
-    () => [
-      {
-        id: "releases",
-        label: t("product.tabs.releases"),
-        render: (context) => <ProductReleasesTab {...context} />,
-      },
-      {
-        id: "projects",
-        label: t("product.tabs.projects"),
-        render: (context) => <ProductProjectsTab {...context} />,
-      },
-    ],
-    [t],
-  );
-
   return (
     <ResourceList
       resource={PRODUCT_MODEL}
       placement="inline"
       routed
-      recordTabs={recordTabs}
     >
       <List
         resource={PRODUCT_MODEL}
@@ -62,7 +35,7 @@ export function ProductsPage(): React.ReactElement {
         <Column field="originated_from" />
         <Column field="updated_at" />
       </List>
-      <Form resource={PRODUCT_MODEL}>
+      <Form resource={PRODUCT_MODEL} eyebrow={t("product.eyebrow")}>
         <Field name="name" title />
         <Field
           name="lifecycle"
@@ -79,53 +52,3 @@ export function ProductsPage(): React.ReactElement {
   );
 }
 
-function ProductReleasesTab({ recordId }: RecordPanelContext): React.ReactElement {
-  const t = usePortfolioT();
-  const statusOptions = useEnumOptions(RELEASE_MODEL, "status");
-  return (
-    <DrawerResourceList resource={RELEASE_MODEL} presentation="embedded" createDefaults={{ product: recordId }}>
-      <List
-        resource={RELEASE_MODEL}
-        baseFilter={{ product: { exact: recordId } }}
-        order={{ target_date: "DESC" }}
-        emptyContent={t("product.empty.releases")}
-      >
-        <Column field="name" header={t("common.name")} />
-        <Column field="status" widget="statusBadge" />
-        <Column field="target_date" />
-        <Column field="shipped_on" />
-      </List>
-      <Form resource={RELEASE_MODEL}>
-        <Field name="name" title />
-        <Field name="status" widget="statusbar" status options={statusOptions} />
-        <Field name="product" readOnly />
-        <Group label={t("release.group.dates")} columns={2}>
-          <Field name="target_date" />
-          <Field name="shipped_on" />
-        </Group>
-        <Field name="notes" widget="markdown.editor" body />
-      </Form>
-    </DrawerResourceList>
-  );
-}
-
-function ProductProjectsTab({ recordId }: RecordPanelContext): React.ReactElement {
-  const t = usePortfolioT();
-  const routeHref = useRouteHref();
-  return (
-    <List<ProjectRow>
-      resource={PROJECT_MODEL}
-      presentation="embedded"
-      baseFilter={{ product: { exact: recordId } }}
-      order={{ sort_order: "ASC" }}
-      rowHref={(row) => routeHref("projects.projects.record", { id: row.id })}
-      emptyContent={t("product.empty.projects")}
-    >
-      <Column field="title" />
-      <Column field="status" widget="statusBadge" />
-      <Column field="health" widget="statusBadge" />
-      <Column field="priority" />
-      <Column field="target_date" />
-    </List>
-  );
-}
