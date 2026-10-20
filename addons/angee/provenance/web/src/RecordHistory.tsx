@@ -1,7 +1,7 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useAuthoredQuery } from "@angee/refine";
 import { useModelMetadata } from "@angee/metadata";
-import { Chip, Code, CodeBlock, ComparisonRows, EmptyState, ErrorBanner, LoadingPanel, Pager, PaneRow, PaneRows, PaneToolbar, RecordActionBar, RecordReference, SectionEyebrow, StatusBadge, formatDateTime, formatJson, optionLabel, optionToken, useActionResultMutation, useEnumOptions, useStatusTone, type ActionDescriptor, type ComparisonRow, type StatusIconTone, type WidgetOption } from "@angee/ui";
+import { Chip, Code, CodeBlock, ComparisonRows, EmptyState, ErrorBanner, LoadingPanel, PaneRow, PaneRows, PaneToolbar, RecordActionBar, RecordReference, ResourcePaneFooter, SectionEyebrow, StatusBadge, formatDateTime, formatJson, optionLabel, optionToken, useActionResultMutation, useEnumOptions, useStatusTone, type ActionDescriptor, type ComparisonRow, type StatusIconTone, type WidgetOption } from "@angee/ui";
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 import {
@@ -162,13 +162,11 @@ export function HistoryTimeline({
           ))}
         </PaneRows>
       </div>
-      {/* Offset paging over the changesets: the shared pager, as under every pane list. */}
+      {/* Offset paging over the changesets: the pane footer, as under every pane list. */}
       {onPage && history.total > HISTORY_PAGE_SIZE ? (
-        <div className="flex shrink-0 justify-end border-t border-border-subtle px-2 py-1">
-          <Pager page={Math.floor(offset / HISTORY_PAGE_SIZE) + 1} pageSize={HISTORY_PAGE_SIZE} total={history.total}
-            disabled={fetching} unit={t("history.pagerUnit")} labelElement="span"
-            onPageChange={(page) => onPage((page - 1) * HISTORY_PAGE_SIZE)} />
-        </div>
+        <ResourcePaneFooter pager={{ page: Math.floor(offset / HISTORY_PAGE_SIZE) + 1, pageSize: HISTORY_PAGE_SIZE, total: history.total }}
+          disabled={fetching} pagerTotalUnit={t("history.pagerUnit")} labelElement="span"
+          onPageChange={(page) => onPage((page - 1) * HISTORY_PAGE_SIZE)} />
       ) : null}
     </div>
   );

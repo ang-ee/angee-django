@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from contextlib import nullcontext
 from graphlib import CycleError, TopologicalSorter
@@ -52,6 +53,10 @@ from angee.refs import MergePolicy, RecordRefMixin
 from angee.serialization import canonical_json, canonical_json_sha256, json_safe
 
 ProvenanceRole = role_anchor("provenance/role")
+
+
+# A dotted machine identifier, the shape of a ``system_context`` reason code.
+MACHINE_REASON = re.compile(r"[a-z0-9_]+(?:\.[a-z0-9_]+)+")
 
 
 class ChangesetManager(AngeeManager.from_queryset(ChangesetQuerySet)):  # type: ignore[misc]
@@ -209,6 +214,18 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
                 name="%(app_label)s_%(class)s_claim",
             ),
         )
+
+    @property
+    def reason_display(self) -> str:
+        """The reason as user text: a human sentence passes through, a machine reason is silent.
+
+        Automated changes record the ``system_context(reason=...)`` code (``integrate.stream.advance``)
+        as their reason; the action and activity already say what happened, so the code never
+        reaches a user. Every presentation (API, timeline) reads this, not ``change_reason``.
+        """
+
+        reason = self.change_reason.strip()
+        return "" if MACHINE_REASON.fullmatch(reason) else reason
 
     @classmethod
     def record_ref_field(cls) -> GenericForeignKey:

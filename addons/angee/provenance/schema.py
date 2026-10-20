@@ -274,7 +274,7 @@ def _attribution(changeset: Any, actor: SubjectRef | None, source_kind: str | No
         source_kind=cast(Any, SourceKind(source_kind)) if source_kind is not None else None,
         action=cast(Any, ChangesetContract.Action(changeset.action)),
         activity=cast(Any, ChangesetContract.Activity(changeset.activity)),
-        change_reason=changeset.change_reason,
+        change_reason=changeset.reason_display,
         occurred_at=changeset.occurred_at,
         recorded_at=changeset.recorded_at,
         outcome=cast(Any, ChangesetContract.Outcome(changeset.outcome)) if changeset.outcome else None,
