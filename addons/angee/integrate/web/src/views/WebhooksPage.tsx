@@ -1,6 +1,6 @@
 import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import { Action, Column, ResourceList, Field, Form, Group, List, useRecordAction, useRecordActionMutation, type RecordActionRunner } from "@angee/ui";
+import { Action, Column, ResourceList, Field, Form, Group, List, useRecordAction, useRecordActionMutation, useSecretReveal, type RecordActionRunner } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../i18n";
@@ -12,7 +12,7 @@ const webhookList = (
   <List resource={MODEL}>
     <Column field="target_url" />
     <Column field="enabled" />
-    <Column field="last_delivery_status" />
+    <Column field="last_delivery_status" widget="statusBadge" />
   </List>
 );
 
@@ -21,31 +21,24 @@ export function WebhooksPage(): React.ReactElement {
   const t = useIntegrateT();
   const [sendTest] = useRecordActionMutation<ActionFieldName>("test_webhook_delivery");
   const [rotateSecret] = useAuthoredMutation(RotateWebhookSecret, { transient: true });
+  const revealSecret = useSecretReveal();
   const rotateById = React.useCallback<RecordActionRunner>(
-    async (id, ctx) => {
+    async (id) => {
       const result = await rotateSecret({ id });
       const outcome = result?.rotate_webhook_secret;
       if (outcome && !outcome.ok)
         throw new Error(t("webhooks.rotateFailed"));
       const secret = outcome?.secret;
       if (secret) {
-        await ctx.prompt({
+        await revealSecret({
           title: t("webhooks.newSecretTitle"),
           body: t("webhooks.newSecretBody"),
-          fields: [
-            {
-              name: "secret",
-              label: t("webhooks.signingSecret"),
-              defaultValue: secret,
-              readOnly: true,
-              copyable: true,
-            },
-          ],
+          secrets: [{ name: "secret", label: t("webhooks.signingSecret"), value: secret }],
         });
       }
       return t("webhooks.rotated");
     },
-    [rotateSecret, t],
+    [revealSecret, rotateSecret, t],
   );
   const rotate = useRecordAction(rotateById);
 

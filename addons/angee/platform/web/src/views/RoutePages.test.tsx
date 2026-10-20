@@ -32,6 +32,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   }: {
     columns?: ReadonlyArray<{
       field: string;
+      subline?: string;
       render?: (row: Record<string, unknown>) => React.ReactNode;
     }>;
     resource: string;
@@ -85,7 +86,10 @@ vi.mock("@angee/ui", async (importOriginal) => ({
         data-base-filter={JSON.stringify(baseFilter)}
       >
         {columns.map((column) => (
-          <span key={column.field}>{column.render?.(row)}</span>
+          <span key={column.field}>
+            {column.render ? column.render(row) : String(row[column.field] ?? "")}
+            {column.subline ? <span>{String(row[column.subline] ?? "")}</span> : null}
+          </span>
         ))}
       </div>
     );
@@ -100,22 +104,10 @@ vi.mock("../i18n", async (importOriginal) => ({
   usePlatformT: () => (key: string) => key,
 }));
 
-vi.mock("../lib/cells", () => ({
-  LinkedChips: ({
-    href,
-    items,
-  }: {
-    href: (item: string) => string;
-    items: readonly string[];
-  }) => <>{items.map((item) => <a key={item} href={href(item)}>{item}</a>)}</>,
-}));
-
 vi.mock("./AddonCard", () => ({
   ADDON_MODEL: "platform.Addon",
   AddonCard: () => null,
   AddonCardActions: () => null,
-  SOURCE_TONES: {},
-  STATE_TONES: {},
 }));
 
 import { AddonsPage } from "./AddonsPage";
@@ -208,7 +200,7 @@ describe("platform route consumers", () => {
 
     const list = screen.getByTestId("platform.Addon");
     expect(screen.getAllByText("example.notes")).toHaveLength(2);
-    expect(list.getAttribute("data-sort-field")).toBe("name");
+    expect(list.getAttribute("data-sort-field")).toBe("label");
     expect(list.getAttribute("data-search-field")).toBe("name");
     expect(list.getAttribute("data-order")).toBe(JSON.stringify({ name: "ASC" }));
     expect(list.getAttribute("data-fields")).toContain('"label"');

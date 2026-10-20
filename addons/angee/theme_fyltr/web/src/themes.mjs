@@ -82,7 +82,6 @@ export const themes = [defineTheme({
       "--border-subtle": "#1b262f",
       "--border-default": "#32414c",
       "--border-strong": "#4b5b66",
-      "--border-focus": "#00c853",
       "--border-on-rail": "#1b262f",
       "--brand": "#00c853",
       "--brand-hover": "#20dc6d",

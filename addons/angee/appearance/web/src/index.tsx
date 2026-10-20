@@ -1,15 +1,17 @@
 import { defineBaseAddon } from "@angee/app";
-import { DropdownMenu, Glyph } from "@angee/ui";
+import { DropdownMenu, Glyph, useRouteHref } from "@angee/ui";
 import { lazyRouteComponent, useNavigate } from "@tanstack/react-router";
 import { createElement } from "react";
 import { Palette } from "lucide-react";
-import { enAppearanceMessages } from "./i18n";
+import { enAppearanceMessages, useAppearanceT } from "./i18n";
 
 
 function AppearanceMenuItem() {
+  const t = useAppearanceT();
   const navigate = useNavigate();
-  return <DropdownMenu.Item onClick={() => void navigate({ to: "/settings/appearance" })}>
-    <Glyph name="appearance" /><span className="flex-1 truncate">Appearance</span>
+  const routeHref = useRouteHref();
+  return <DropdownMenu.Item onClick={() => void navigate({ to: routeHref("appearance.settings") })}>
+    <Glyph name="appearance" /><span className="flex-1 truncate">{t("menu.appearance")}</span>
   </DropdownMenu.Item>;
 }
 

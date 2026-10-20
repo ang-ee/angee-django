@@ -3,10 +3,9 @@ import { parseAsString, useQueryState } from "nuqs";
 
 import {
   NavLink,
-  Code, ListView, textRoleVariants, useRouteHref, type ResourceToolbarGroupOption, type ListColumn, type RouteHref } from "@angee/ui";
+  Code, ListView, OverflowChipList, useRouteHref, type ResourceToolbarGroupOption, type ListColumn, type RouteHref } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
-import { LinkedChips } from "../lib/cells";
 import { platformScopeSearch } from "../lib/paths";
 
 // The `platform.Model` Hasura resource row (`hasura_pydantic_resource`,
@@ -34,13 +33,11 @@ function columns(
     {
       field: "model_name",
       header: t("col.model"),
+      subline: "id",
       render: (row) => (
-        <span className="flex min-w-0 flex-col">
-          <NavLink href={routeHref("platform.models.record", { id: row.id })} variant="inline" className="font-medium">
-            {row.model_name}
-          </NavLink>
-          <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.id}</span>
-        </span>
+        <NavLink href={routeHref("platform.models.record", { id: row.id })} variant="inline" className="font-medium">
+          {row.model_name}
+        </NavLink>
       ),
     },
     {
@@ -87,9 +84,8 @@ function columns(
       header: t("col.dependsOn"),
       sortable: false,
       render: (row) => (
-        <LinkedChips
-          items={row.depends_on}
-          href={(id) => routeHref("platform.models.record", { id })}
+        <OverflowChipList
+          items={row.depends_on.map((id) => ({ id, label: id, href: routeHref("platform.models.record", { id }) }))}
         />
       ),
     },

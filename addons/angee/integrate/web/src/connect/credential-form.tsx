@@ -6,6 +6,7 @@ import {
   Form,
   Group,
   registerForm,
+  useSecretReveal,
   useAuthoredResourceMutation,
   useRecordAction,
   useRecordActionMutation,
@@ -43,27 +44,20 @@ export function CredentialForm({
   const [createCredential] = useAuthoredResourceMutation(IntegrateCreateCredential, {
     invalidateModels: INTEGRATE_CREATE_CREDENTIAL_INVALIDATES,
   });
+  const revealSecret = useSecretReveal();
 
   const revealById = React.useCallback<RecordActionRunner>(
-    async (id, context) => {
+    async (id) => {
       const result = await revealCredential({ id });
       const secret = result?.reveal_credential.secret ?? "";
       if (!secret) throw new Error(t("credentials.reveal.noSecret"));
-      await context.prompt({
+      await revealSecret({
         title: t("credentials.reveal.title"),
         body: t("credentials.reveal.body"),
-        fields: [
-          {
-            name: "secret",
-            label: t("credentials.reveal.secretLabel"),
-            defaultValue: secret,
-            readOnly: true,
-            copyable: true,
-          },
-        ],
+        secrets: [{ name: "secret", label: t("credentials.reveal.secretLabel"), value: secret }],
       });
     },
-    [revealCredential, t],
+    [revealCredential, revealSecret, t],
   );
   const reveal = useRecordAction(revealById, { refresh: false });
 

@@ -1,10 +1,11 @@
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  EmptyState,
   ErrorBanner,
+  InlineEmpty,
   LoadingPanel,
   PaneRow,
   PaneRows,
+  StatusBadge,
   formatDateTime,
   type ChatterViewContext,
   type ContainerChild,
@@ -53,7 +54,7 @@ function sourceRows(data: unknown): readonly RecordSourceRow[] {
 export const recordSourcesGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 70,
   content: {
-    label: enIntegrateMessages["sources.title"] ?? "Sources",
+    label: enIntegrateMessages["sources.title"]!,
     edge: { model: RECORD_LINK_MODEL },
     useCount: (context) => {
       const query = useRecordSources(context);
@@ -71,7 +72,7 @@ export function RecordSourcesPane({ context }: { context: ChatterViewContext }):
 
   if (query.error) return <ErrorBanner description={query.error.message} />;
   if (query.isLoading) return <LoadingPanel message={t("sources.loading")} density="inline" />;
-  if (rows.length === 0) return <EmptyState icon="link" title={t("sources.empty")} className="min-h-24 p-3" />;
+  if (rows.length === 0) return <InlineEmpty icon="link" label={t("sources.empty")} />;
 
   return <PaneRows>
     {rows.map((source) => <li key={source.id}>
@@ -79,7 +80,7 @@ export function RecordSourcesPane({ context }: { context: ChatterViewContext }):
         icon="link"
         title={source.stream.integration.display_name}
         detail={`${source.stream.key}${source.stream.partition ? ` · ${source.stream.partition}` : ""}`}
-        meta={source.status}
+        meta={<StatusBadge value={source.status} display="dot" />}
         sub={`${source.external_key} · ${source.last_seen_at ? formatDateTime(source.last_seen_at) : t("sources.never")}`}
         href={source.source_url ?? undefined}
         target="_blank" rel="noopener"
