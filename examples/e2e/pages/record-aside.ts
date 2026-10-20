@@ -30,8 +30,12 @@ export class RecordAside {
     return this.root.getByRole("button", { name: new RegExp(`^${name}(?:\\s*\\d+)?$`) });
   }
 
+  /**
+   * A pane row by its verb and title. The row's control is named by the title; the verb
+   * is its native tooltip (`PaneRow` renders a string verb as a presentational hint).
+   */
   line(verb: RegExp, title?: string): Locator {
-    const rows = this.root.getByRole("button", { name: verb });
+    const rows = this.root.getByRole("button").and(this.root.getByTitle(verb));
     return title ? rows.filter({ hasText: title }) : rows;
   }
 
@@ -67,7 +71,7 @@ export class RecordAside {
     const { complete_task: completed } = await this.mutate<{
       complete_task: { ok: boolean; message: string };
     }>("complete_task", planned.getByRole("listitem").filter({ hasText: title })
-      .getByRole("button", { name: "Mark done", exact: true }));
+      .getByRole("checkbox", { name: "Mark done", exact: true }));
     expect(completed.ok, completed.message).toBe(true);
   }
 
