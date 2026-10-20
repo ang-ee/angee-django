@@ -5,7 +5,7 @@ import {
   type ResourceViewFilter,
 } from "@angee/ui";
 import { InboxFilter, NAVIGATOR_LENSES, navigatorAxes } from "./contract";
-import { InboxCoverageKind, useNavigatorControls } from "./Controls";
+import { useCoverageKind, useNavigatorControls } from "./Controls";
 import { navigatorSource } from "./sources";
 import type { InboxNavigatorRow } from "./documents";
 import type { InboxNavigation } from "./state";
@@ -21,6 +21,7 @@ export function InboxNavigatorPane({ coverage, onCoverage, timezone, navigation 
   const view = useResourceView();
   const lens = navigation.finder;
   const controls = useNavigatorControls(lens);
+  const kind = useCoverageKind(coverage, onCoverage);
   const groupField = view.state.groupStack[0]?.field ?? "";
   const fading = new InboxFilter(view.state.filter).one("fading") === "yes";
   const source = useMemo(
@@ -45,17 +46,21 @@ export function InboxNavigatorPane({ coverage, onCoverage, timezone, navigation 
       verb={row.thread ? t("inbox.openConversation") : t("inbox.results")}
       onOpen={interactive ? () => select(row) : undefined} />
   );
+  // The band: the lens as the selector, then the scope chips: Everyone (or the selection) and
+  // the conversation-kind coverage as a chip menu, so the row fits a 16rem pane.
   const pane = {
-      selector: <>
-        <Select size="sm" className="min-w-0 w-24" aria-label={t("inbox.navigatorLens")} value={lens}
+      selector: <Select size="sm" className="min-w-0 w-32" aria-label={t("inbox.navigatorLens")} value={lens}
           options={NAVIGATOR_LENSES.map((value) => ({ value, label: t(`inbox.${value}`) }))}
           onValueChange={(finder) => {
             const selected = NAVIGATOR_LENSES.find((lens) => lens === finder);
             if (selected) navigation.changeNavigator(selected, view.state);
-          }} />
-        <InboxCoverageKind coverage={coverage} onCoverage={onCoverage} />
+          }} />,
+      scope: <>
+        <ScopeChip label={t("inbox.everyone")} active={!navigation.sender && !navigation.circle} onClick={() => navigation.select()} />
+        {kind.value !== "any" ? <ScopeChip label={kind.label} active onClick={() => kind.setValue("any")} /> : null}
       </>,
-      scope: <ScopeChip label={t("inbox.everyone")} active={!navigation.sender && !navigation.circle} onClick={() => navigation.select()} />,
+      // The conversation-kind coverage is an occasional narrowing: it lives in the pane's overflow.
+      overflowGroups: [{ label: t("inbox.kind"), value: kind.value, onValueChange: kind.setValue, items: kind.options }],
   };
   return (
     <PaneToolbarHost role="region" aria-label={t("inbox.navigator")}>
