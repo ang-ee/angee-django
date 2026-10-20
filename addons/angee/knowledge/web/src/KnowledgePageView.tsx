@@ -100,7 +100,7 @@ function PageSubject({ detail, onDelete, frame }: {
   ].join(" · ");
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-canvas">
+    <article className="flex h-full min-h-0 flex-col bg-canvas">
       <CommandBand
         verbs={<>
           {canWrite ? (active ? (
@@ -150,6 +150,6 @@ function PageSubject({ detail, onDelete, frame }: {
           onEdit={canWrite ? () => setEditing(true) : undefined}
         />
       )}
-    </div>
+    </article>
   );
 }

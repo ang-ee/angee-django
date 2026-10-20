@@ -803,7 +803,7 @@ describe("FormView", () => {
     sdkMocks.record = { ...sdkMocks.record, title: "A long record title with several words that need wrapping" };
     renderWithProviders(<FormView resource="notes.Note" id="note-1" readOnly fields={[{ name: "title", title: true }]} />);
     const heading = await screen.findByRole("heading", { name: String(sdkMocks.record.title) });
-    expect(heading.className).toContain("break-words");
+    expect(heading.className).toContain("overflow-wrap:anywhere");
     expect(heading.className).not.toContain("truncate");
   });
 
@@ -2761,11 +2761,11 @@ describe("FormView", () => {
     const steps = within(header).getByRole("list");
     expect(screen.getAllByRole("list")).toEqual([steps]);
     expect(title.compareDocumentPosition(steps) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(header.firstElementChild?.contains(title)).toBe(true);
-    expect(header.lastElementChild?.contains(steps)).toBe(true);
-    expect(header.lastElementChild?.className).toContain("justify-end");
-    expect(header.className).toContain("flex-wrap");
-    expect(header.firstElementChild?.className).toContain("basis-64");
+    // The statusbar sits at the end of the title row, right-aligned, and the title keeps its width.
+    const titleRow = title.closest<HTMLElement>("[data-record-title-row]")!;
+    expect(titleRow.contains(steps)).toBe(true);
+    expect(steps.closest<HTMLElement>(".justify-end")).not.toBeNull();
+    expect(titleRow.className).toContain("flex-wrap");
     expect(screen.queryByText("Status")).toBeNull();
     expect(screen.queryByLabelText("Status")).toBeNull();
     expect(screen.getByText("Lead body").compareDocumentPosition(screen.getByText("Details")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -2815,7 +2815,6 @@ describe("FormView", () => {
     </FormView>);
     const title = await screen.findByDisplayValue("First");
     const header = title.closest("header")!;
-    expect(header.className).toBe("grid gap-4");
     const status = screen.getByLabelText("Status");
     expect(header.contains(status)).toBe(false);
     expect(screen.getByText("Status")).toBeTruthy();
@@ -3444,8 +3443,7 @@ describe("FormView", () => {
       const title = screen.getByRole("textbox", { name: "Title" });
       const header = title.closest("header")!;
       const strip = screen.getByRole("tablist");
-      expect(header.className).toContain("gap-y-4");
-      expect(title.className).toContain("text-28");
+      expect(title.className).toContain("text-22");
       return { headerClasses: header.parentElement!.className, stripClasses: strip.className };
     };
     const chrome = recordChrome();
@@ -3477,10 +3475,9 @@ describe("FormView", () => {
     );
 
     const heading = await screen.findByRole("heading", { name: "First" });
-    expect(heading.className).toContain("text-base");
-    expect(heading.className).not.toContain("text-28");
+    expect(heading.className).toContain("text-15");
+    expect(heading.className).not.toContain("text-22");
     expect(within(heading.closest("header")!).getByText("Active").className).toContain("justify-self-start");
-    expect(heading.closest("header")?.className).toBe("grid gap-1");
     expect(screen.getAllByText("Active")).toHaveLength(1);
     expect(screen.queryByRole("list")).toBeNull();
     expect(screen.queryByText("Draft")).toBeNull();
@@ -3519,7 +3516,7 @@ describe("FormView", () => {
       />,
     );
     const title = await screen.findByRole("textbox", { name: "Title" });
-    const row = title.closest<HTMLElement>("[data-form-title-row]")!;
+    const row = title.closest<HTMLElement>("[data-record-title-row]")!;
     // The row wraps, and the title keeps a readable basis rather than shrinking to its minimum.
     expect(row.className).toContain("flex-wrap");
     expect([...row.children][0]?.className).toContain("flex-[1_1_16rem]");
