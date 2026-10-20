@@ -58,8 +58,15 @@ test("a scheduled task needs its assignee until completion moves it to Done", as
       url.searchParams.get("chatterFrom") === "timeline.rail");
     await expect(aside.tab("Tasks")).toHaveAttribute("aria-selected", "true");
     const planned = aside.root.getByRole("region", { name: "Planned", exact: true });
-    await planned.getByRole("listitem").filter({ hasText: title })
-      .getByRole("button", { name: "Mark done", exact: true }).click();
+    await aside.completeTask(title);
+    const { record_tasks } = requireGraphQLData(await consoleApi.query<{
+      record_tasks: Array<{ id: string; status: string; done_at: string | null }>;
+    }>(`query CompletedTask($id: ID!) {
+      record_tasks(model_label: "notes.Note", record_id: $id) { id status done_at }
+    }`, { id: note.id }));
+    const completed = record_tasks.find((task) => task.id === taskId);
+    expect(completed?.status).toBe("DONE");
+    expect(completed?.done_at).toBeTruthy();
     await expect(aside.scope("Planned")).toHaveText(/Planned\s*0/);
     await expect(planned).toHaveCount(0);
     await aside.scope("Done").click();

@@ -42,6 +42,7 @@ export class ExplorerPane {
   }
 
   node(title: string): Locator {
-    return this.root.getByRole("treeitem", { name: title, exact: true });
+    // A folder's accessible name also includes its Expand/Collapse control.
+    return this.root.getByRole("treeitem").filter({ has: this.page.getByText(title, { exact: true }) });
   }
 }

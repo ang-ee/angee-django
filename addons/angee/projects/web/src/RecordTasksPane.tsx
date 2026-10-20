@@ -2,7 +2,6 @@ import { extractActionOutcome, useAuthoredMutation, useAuthoredQuery } from "@an
 import * as React from "react";
 import {
   Button,
-  Chip,
   DatePopover,
   EmptyState,
   ErrorBanner,
@@ -12,6 +11,7 @@ import {
   PaneRow,
   PaneRows,
   PaneToolbar,
+  ScopeChip,
   SegmentedControl,
   Select,
   StatusIcon,
@@ -333,16 +333,6 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
         {form.formError ? <ErrorBanner description={form.formError} /> : null}
       </form>
     </div>
-  );
-}
-
-function ScopeChip({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }): React.ReactElement {
-  return (
-    <button type="button" aria-pressed={active} onClick={onClick} className="rounded-full">
-      <Chip size="sm" tone={active ? "brand" : "muted"} variant={active ? "solid" : "soft"} className="cursor-pointer whitespace-nowrap">
-        {label}<span className={active ? "ml-1 opacity-80" : "ml-1 text-fg-muted"}>{count}</span>
-      </Chip>
-    </button>
   );
 }
 

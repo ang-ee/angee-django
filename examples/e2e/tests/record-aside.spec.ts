@@ -1,4 +1,4 @@
-import { expect, roleStatePath } from "@angee/e2e";
+import { expect, GraphQLClient, requireGraphQLData, roleStatePath } from "@angee/e2e";
 
 import { NotesPage } from "../pages/notes-page";
 import { RecordAside } from "../pages/record-aside";
@@ -9,7 +9,16 @@ test.use({ storageState: roleStatePath("alice") });
 test("a note's context strip opens a creation change and returns from its deep link", async ({ page, note }) => {
   const notes = new NotesPage(page);
   const aside = new RecordAside(page);
-  const creation = aside.line(/View change/).filter({ hasText: /^Create/ });
+  // Timeline labels the logical changeset's action, not an individual row's
+  // history type. Identify the creating boundary through its authorized history.
+  const { history } = requireGraphQLData(await new GraphQLClient(page.request, "/graphql/console/").query<{
+    history: { entries: Array<{ id: string }> };
+  }>(`query CreatingChangeset($id: ID!) {
+    history(model: "notes.Note", id: $id) { entries { id } }
+  }`, { id: note.id }));
+  expect(history.entries).toHaveLength(1);
+  const changesetId = history.entries[0]!.id;
+  const creation = aside.line(/View change/);
   await notes.openNote(note.id);
   await aside.reveal();
 
@@ -26,17 +35,17 @@ test("a note's context strip opens a creation change and returns from its deep l
     await creation.click();
     await expect(page).toHaveURL((url) =>
       url.searchParams.get("chatterTab") === "provenance.history" &&
-      Boolean(url.searchParams.get("chatterTarget")) &&
+      url.searchParams.get("chatterTarget") === changesetId &&
       url.searchParams.get("chatterFocus") === "changeset" &&
       url.searchParams.get("chatterFrom") === "timeline.rail",
     );
     await expect(aside.backToTimeline).toBeVisible();
-    await expect(aside.root.getByRole("button", { name: /^Created/ })).toHaveAttribute("aria-current", "true");
+    await expect(aside.currentHistoryEntry).toBeVisible();
     await expect(aside.root.getByRole("cell", { name: note.title, exact: true })).toBeVisible();
     // Reload proves the four shell keys restore the drill-in without in-memory navigation state.
     await page.reload();
     await expect(aside.backToTimeline).toBeVisible();
-    await expect(aside.root.getByRole("button", { name: /^Created/ })).toHaveAttribute("aria-current", "true");
+    await expect(aside.currentHistoryEntry).toBeVisible();
     await aside.backToTimeline.click();
     await expect(aside.tab("Timeline")).toHaveAttribute("aria-selected", "true");
     await expect(creation).toBeVisible();

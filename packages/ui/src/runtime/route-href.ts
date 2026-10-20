@@ -1,3 +1,6 @@
+/** Record-route sentinel for a blank create form, never a persisted row. */
+export const REFINE_CREATE_ID = "new";
+
 /** Query keys owned by shared record routing; addon detail state declares its own keys. */
 export const RECORD_NAVIGATION_SEARCH_KEY = "recordNav";
 export const RECORD_TAB_SEARCH_KEY = "recordTab";

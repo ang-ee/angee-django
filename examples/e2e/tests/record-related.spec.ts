@@ -19,11 +19,11 @@ test("Related uploads a file, follows its record link and binds a knowledge page
     await aside.open("Related");
     await test.step("upload through the Files group and follow the file row", async () => {
       const upload = aside.root.getByRole("button", { name: "Upload", exact: true });
-      await expect(aside.root.getByRole("listitem").filter({ has: upload })).toContainText(/^Files/);
+      await expect(aside.groupWithVerb("Upload")).toContainText(/^Files/);
       await upload.click();
       const picker = page.getByRole("dialog", { name: "Upload", exact: true });
       // File inputs have no implicit ARIA role; their accessible label owns this selector.
-      const input = picker.getByLabel("Upload", { exact: true });
+      const input = picker.getByLabel("Choose files", { exact: true });
       await expect(input).toBeEnabled();
       await input.setInputFiles({
         name: filename, mimeType: "text/plain", buffer: Buffer.from(`Attached to ${note.title}`),
@@ -43,19 +43,10 @@ test("Related uploads a file, follows its record link and binds a knowledge page
       await expect(aside.tab("Tasks")).toHaveCount(0);
     });
 
-    await test.step("the file's reverse attachment group links back when contributed", async (step) => {
-      // Some compositions omit the reverse group. The requested exception applies
-      // only to Attached to; upload and page binding must still pass.
-      if (!(await aside.tab("Related").count())) {
-        step.skip(true, "Storage has no Related/Attached to contribution on file records.");
-        return;
-      }
+    await test.step("the file's reverse attachment group links back to the note", async () => {
       await aside.open("Related");
       const attachedTo = aside.root.getByRole("listitem").filter({ hasText: /^Attached to(?:\s*·\s*\d+)?$/ });
-      if (!(await attachedTo.count())) {
-        step.skip(true, "Storage does not contribute an Attached to group.");
-        return;
-      }
+      await expect(attachedTo).toBeVisible();
       await expect(aside.root.getByRole("link", { name: note.title, exact: true }))
         .toHaveAttribute("href", `/notes/${note.id}`);
     });
@@ -75,7 +66,7 @@ test("Related uploads a file, follows its record link and binds a knowledge page
       await notes.openNote(note.id);
       await aside.open("Related");
       const bind = aside.root.getByRole("button", { name: "Bind", exact: true });
-      await expect(aside.root.getByRole("listitem").filter({ has: bind })).toContainText(/^Pages/);
+      await expect(aside.groupWithVerb("Bind")).toContainText(/^Pages/);
       await bind.click();
       const picker = page.getByRole("dialog", { name: "Bind", exact: true });
       await picker.getByRole("combobox", { name: "Choose a page", exact: true }).click();

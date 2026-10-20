@@ -2,6 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { useCallback, useState } from "react";
 
 const sdk = vi.hoisted(() => ({ query: vi.fn(), bind: vi.fn(), unbind: vi.fn(), navigate: vi.fn(), preview: { viewAs: null as string | null, pending: false } }));
 
@@ -27,7 +28,7 @@ vi.mock("@angee/ui", async (original) => ({
 
 import { pageBacklinksGroup, pageBoundToGroup, recordPagesGroup } from "./RecordPagesPane";
 import { KnowledgeBindRecord, KnowledgePage, KnowledgePageRecordBindings, KnowledgePages, KnowledgeRecordPages } from "./data/documents";
-import { AppRuntimeProvider, CHATTER_CONTAINERS, InAppLinkProvider, RelatedPane, containersFromChildren, createRouteHref, useRelatedCount, type ChatterViewContext, type ContainerChild, type RelatedGroupContent } from "@angee/ui";
+import { AppRuntimeProvider, CHATTER_CONTAINERS, InAppLinkProvider, RelatedPane, RelatedCountProbe, containersFromChildren, createRouteHref, type ChatterViewContext, type ContainerChild, type RelatedGroupContent } from "@angee/ui";
 
 import { createUiTestProviders } from "@angee/ui/testing";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
@@ -46,7 +47,11 @@ const context: ChatterViewContext = {
   view: { kind: "record", type: "example/record", sqid: "rec_1" },
 };
 
-function Count({ current }: { current: ChatterViewContext }) { return <span>Related {useRelatedCount(current)}</span>; }
+function Count({ current }: { current: ChatterViewContext }) {
+  const [count, setCount] = useState<number>();
+  const publish = useCallback((_: string, next: number | undefined) => setCount(next), []);
+  return <><RelatedCountProbe id="related" context={current} onCount={publish} /><span>Related {count}</span></>;
+}
 function Groups({ groups, current = context }: {
   groups: Record<string, ContainerChild<RelatedGroupContent>>; current?: ChatterViewContext;
 }) {
