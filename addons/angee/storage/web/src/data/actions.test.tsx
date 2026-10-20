@@ -43,6 +43,16 @@ vi.mock("@angee/ui", async (importOriginal) => {
         return result;
       },
     })),
+    // Restore rides the shared trash owner; the test records the ids it is asked for.
+    useTrashRecord: vi.fn(() => ({
+      available: true,
+      busy: false,
+      trash: vi.fn(async () => true),
+      restore: vi.fn(async (id: string) => {
+        sdk.authoredCalls.push({ id });
+        return true;
+      }),
+    })),
   };
 });
 

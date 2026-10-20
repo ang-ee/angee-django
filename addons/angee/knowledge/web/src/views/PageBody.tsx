@@ -20,7 +20,7 @@ export function PageBody({ detail, pages, onOpenPage, onNewPageHere, onEdit }: {
   const body = detail.markdown?.body ?? "";
   if (detail.kind === "folder") {
     return (
-      <div className="mx-auto min-h-0 w-full max-w-[820px] flex-1 overflow-auto p-4">
+      <div className="mx-auto min-h-0 w-full max-w-prose flex-1 overflow-auto p-4">
         {pages.length ? (
           <PaneRows>
             {pages.map((page) => (
@@ -41,7 +41,7 @@ export function PageBody({ detail, pages, onOpenPage, onNewPageHere, onEdit }: {
     );
   }
   return (
-    <div className="mx-auto min-h-0 w-full max-w-[820px] flex-1 overflow-auto p-6">
+    <div className="mx-auto min-h-0 w-full max-w-prose flex-1 overflow-auto p-6">
       {body && Preview ? (
         <Preview value={body} field={{ label: detail.title }} readOnly />
       ) : (
@@ -59,7 +59,7 @@ export function PageBodyEditor({ editor }: { editor: PageEditorState }): ReactEl
   const Body = markdown?.edit;
   const bodyField = useMemo<WidgetField>(() => ({ name: "body", label: t("editor.bodyPlaceholder") }), [t]);
   return (
-    <div className="mx-auto min-h-0 w-full max-w-[820px] flex-1 overflow-auto p-6">
+    <div className="mx-auto min-h-0 w-full max-w-prose flex-1 overflow-auto p-6">
       {Body ? (
         <Body value={editor.body} field={bodyField} onChange={(next) => editor.setBody(typeof next === "string" ? next : "")} />
       ) : null}

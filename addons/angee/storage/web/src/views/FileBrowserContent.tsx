@@ -1,13 +1,12 @@
-import { useRef, type ReactElement } from "react";
+import type { ReactElement } from "react";
 
 import type { ResourceFilter } from "@angee/metadata";
-import { Chip, Button, Column, Glyph, List, UploadDropTarget, formatSize, useStatusTone, useRuntimeViewAs, type ListProps, type ResourceListSnapshot } from "@angee/ui";
+import { Column, FilePickerButton, Glyph, List, UploadDropTarget, formatSize, type ListProps, type ResourceListSnapshot } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
-import { fileDragPayload, type StorageFileRow } from "../data/file-rows";
+import { fileDragPayload, fileTypeLabel, type StorageFileRow } from "../data/file-rows";
 import type { StorageUpload, UploadTarget } from "../data/use-upload";
 import { fileGalleryCard } from "./file-columns";
-import { fileStageLabel, formatDate } from "../lib/file-display";
 import { StorageUploadTasks } from "./StorageUploadTasks";
 
 export interface FileBrowserContentProps {
@@ -47,14 +46,10 @@ export function FileBrowserContent({
   uploadTarget,
   canUpload,
 }: FileBrowserContentProps): ReactElement {
-  const preview = useRuntimeViewAs();
-  const previewBlocked = Boolean(preview.viewAs || preview.pending);
   const t = useStorageT();
-  const statusTone = useStatusTone();
-  const inputRef = useRef<HTMLInputElement>(null);
 
-  function startUpload(files: FileList | readonly File[] | null): void {
-    if (previewBlocked || !canUpload || !files || files.length === 0) return;
+  function startUpload(files: readonly File[]): void {
+    if (!canUpload || files.length === 0) return;
     uploads.upload(Array.from(files), uploadTarget);
   }
 
@@ -71,16 +66,10 @@ export function FileBrowserContent({
       emptyContent={canUpload ? t("list.emptyUpload") : t("list.empty")}
       toolbarActions={
         canUpload ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            disabled={previewBlocked}
-            onClick={() => inputRef.current?.click()}
-          >
-            <Glyph name="attachment" />
+          <FilePickerButton size="sm" variant="secondary" label={t("upload.chooseFiles")} onFiles={startUpload}>
+            <Glyph name="upload" />
             {t("upload.button")}
-          </Button>
+          </FilePickerButton>
         ) : undefined
       }
     >
@@ -104,18 +93,12 @@ export function FileBrowserContent({
       <Column<StorageFileRow>
         field="mime_type.label"
         header={t("column.type")}
-        render={(row) =>
-          row.mime_type?.label || row.mime_type?.mime_type || "—"
-        }
+        render={(row) => fileTypeLabel(row)}
       />
       <Column<StorageFileRow>
         field="upload_state"
         header={t("column.stage")}
-        render={(row) => (
-          <Chip tone={statusTone(row.upload_state, undefined, { unknownTone: "neutral" })}>
-            {fileStageLabel(row.upload_state, t)}
-          </Chip>
-        )}
+        widget="statusBadge"
       />
       <Column<StorageFileRow>
         field="visibility"
@@ -142,22 +125,10 @@ export function FileBrowserContent({
       <Column<StorageFileRow>
         field="created_by_label"
         header={t("column.author")}
-        render={(row) => row.created_by_label || "—"}
+        widget="userRef"
       />
-      <Column<StorageFileRow>
-        field="created_at"
-        header={t("column.created")}
-        render={(row) => (
-          <span className="text-fg-muted">{formatDate(row.created_at)}</span>
-        )}
-      />
-      <Column<StorageFileRow>
-        field="updated_at"
-        header={t("column.modified")}
-        render={(row) => (
-          <span className="text-fg-muted">{formatDate(row.updated_at)}</span>
-        )}
-      />
+      <Column<StorageFileRow> field="created_at" header={t("column.created")} widget="date" />
+      <Column<StorageFileRow> field="updated_at" header={t("column.modified")} widget="date" />
       <Column<StorageFileRow> field="tags" hiddenByDefault />
     </List>
   );
@@ -175,17 +146,6 @@ export function FileBrowserContent({
       <div className="min-h-0 flex-1">
         {list}
       </div>
-      <input
-        ref={inputRef}
-        type="file"
-        disabled={previewBlocked}
-        multiple
-        className="hidden"
-        onChange={(event) => {
-          startUpload(event.target.files);
-          event.target.value = "";
-        }}
-      />
     </UploadDropTarget>
   );
 }

@@ -35,7 +35,8 @@ export default defineBaseAddon({
   containers: {
     "decisions#origin": {},
     "timeline#kinds": {
-      "decisions.decision": { content: { label: "Decisions", icon: "check", tone: "success", verb: "Open decision", target: { page: true } } },
+      // An open decision waits on someone: the warning tone, as on the card and the attention pill.
+      "decisions.decision": { content: { label: "Decisions", icon: "check", tone: "warning", verb: "Open decision", target: { page: true } } },
     },
   },
   i18n: { decisions: enDecisionsMessages },

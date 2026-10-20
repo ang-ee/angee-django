@@ -3,7 +3,10 @@ import { fieldRecord, recordValue, refineFieldsFromPaths, stringValue } from "@a
 import { useOne, type BaseRecord, type HttpError } from "@refinedev/core";
 import type { ReactElement } from "react";
 import * as v from "valibot";
-import { ErrorBanner, JsonValueSchema, RecordReference, titleCase, useResolvedWidget, useUiT, type JsonValue, type RecordTargetSearch } from "@angee/ui";
+import {
+  ErrorBanner, JsonValueSchema, MetaGrid, RecordReference, SectionEyebrow, statusLabel, textRoleVariants, titleCase, useResolvedWidget, useUiT,
+  type JsonValue, type RecordTargetSearch,
+} from "@angee/ui";
 
 import { useDecisionsT } from "./i18n";
 
@@ -42,23 +45,24 @@ export function DecisionContext({ context, reasonOnly = false, representedRecord
   const t = useDecisionsT();
   const parsed = v.safeParse(DecisionContextSchema, context);
   if (!parsed.success) return <ErrorBanner description={t("context.invalid")} />;
-  if (reasonOnly) return parsed.output.reason ? <p className="mt-1 text-12 text-fg-muted">{parsed.output.reason}</p> : null;
+  if (reasonOnly) return parsed.output.reason ? <p className={`${textRoleVariants({ role: "caption" })} mt-1`}>{parsed.output.reason}</p> : null;
   const { facts } = parsed.output;
   const references = parsed.output.references.filter((reference) => !representedRecords.includes(reference.id));
   if (!facts.length && !references.length) return null;
   const authorityLabels = {
     source: t("context.source"), correction: t("context.correction"), unverified: t("context.unverified"),
   };
-  return <section aria-label={t("context.title")} className="min-w-0 space-y-2 text-12 [overflow-wrap:anywhere]">
+  return <section aria-label={t("context.title")} className="min-w-0 space-y-2 [overflow-wrap:anywhere]">
     {facts.length ? <section aria-label={t("context.facts")} className="space-y-1">
-      <h2 className="font-medium">{t("context.facts")}</h2>
-      <dl className="space-y-1">{facts.filter((fact) => fact.value !== null && fact.value !== "").map((fact, index) => <div key={`${fact.pointer}:${index}`} className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
-        <dt className="font-medium" title={authorityLabels[fact.authority]}><span>{fact.label}</span>:</dt>
-        <dd className="min-w-0">
+      <SectionEyebrow as="h2">{t("context.facts")}</SectionEyebrow>
+      <MetaGrid rows={facts.filter((fact) => fact.value !== null && fact.value !== "").map((fact, index) => ({
+        id: `${fact.pointer}:${index}`,
+        label: <span title={authorityLabels[fact.authority]}>{fact.label}</span>,
+        value: <>
           <FactValue value={fact.value} widget={fact.widget} row={fact.row} />
           {fact.evidence.length ? <div className="ml-1 inline-block align-baseline"><References heading="h3" title={t("context.evidence")} references={fact.evidence.filter((reference) => !representedRecords.includes(reference.id))} /></div> : null}
-        </dd>
-      </div>)}</dl>
+        </>,
+      }))} />
     </section> : null}
     <References title={t("context.references")} references={references} />
   </section>;
@@ -76,7 +80,9 @@ export function FactValue({ value, widget, row, relationModel, label, tab, searc
   if (value !== null && typeof value === "object") return <span>{Object.entries(value).filter(([, item]) => item !== null && item !== "").map(([name, item], index) =>
     <span key={name}>{index ? " · " : ""}<span className="text-fg-muted">{titleCase(name)} </span><FactValue value={item} /></span>,
   )}</span>;
-  return <span>{value === null ? emptyLabel : typeof value === "boolean" ? t(value ? "list.yes" : "list.no") : options?.find((option) => option.value === value)?.description ?? value}</span>;
+  // A choice value outside its options reads as a humanized word, never the stored token.
+  return <span>{value === null ? emptyLabel : typeof value === "boolean" ? t(value ? "list.yes" : "list.no")
+    : options?.find((option) => option.value === value)?.description ?? (options && typeof value === "string" ? statusLabel(value) : value)}</span>;
 }
 
 function References({ title, references, heading: Heading = "h2" }: {

@@ -1,7 +1,8 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
-  Button, EmptyState, ErrorBanner, PaneLabelPopover, PaneRow, PaneRows, RecordReferenceRow, Select, Skeleton, SkeletonStatus, errorMessage,
-  useRelatedGroups, useRouteHref, useRuntimeViewAs, type ChatterViewContext, type ContainerChild, type RelatedGroupContent, type RelatedGroupLabel,
+  Button, ErrorBanner, InlineEmpty, PaneLabelPopover, PaneRow, PaneRows, RecordReferenceRow, Select, Skeleton, SkeletonStatus, SkeletonText,
+  errorMessage, useRelatedGroups, useRouteHref, useRuntimeViewAs, type ChatterViewContext, type ContainerChild, type RelatedGroupContent,
+  type RelatedGroupLabel,
 } from "@angee/ui";
 import { useMemo, useState, type ReactElement } from "react";
 
@@ -109,8 +110,8 @@ function RecordPagesGroup({ context, role, label }: { context: ChatterViewContex
   return <>
     {label(<PaneLabelPopover icon="plus" label={t("record.bind")} open={open} onOpenChange={setOpen}>
       {bindError ? <ErrorBanner description={bindError} /> : null}
-      {pagesQuery.error ? <ErrorBanner description={pagesQuery.error.message} /> : null}
-      {pagesQuery.isPending && !pagesQuery.data ? <SkeletonStatus label={t("record.loadingPages")}><Skeleton className="h-7" /></SkeletonStatus> :
+      {pagesQuery.error ? <ErrorBanner description={errorMessage(pagesQuery.error, t("record.loadError"))} /> : null}
+      {pagesQuery.isPending && !pagesQuery.data ? <SkeletonStatus label={t("record.loadingPages")}><Skeleton size="lg" /></SkeletonStatus> :
         <Select aria-label={t("record.choosePage")} value={chosenPage}
           options={unboundPages.map((page) => ({ value: page.id, label: page.title }))}
           placeholder={t("record.choosePage")} onValueChange={setPageToBind} />}
@@ -118,20 +119,21 @@ function RecordPagesGroup({ context, role, label }: { context: ChatterViewContex
         onClick={() => void changeBinding(chosenPage, false)}>{t("record.bind")}</Button>
     </PaneLabelPopover>)}
     <li>
-      {query.isPending && !query.data ? <SkeletonStatus label={t("record.loading")} className="space-y-2 p-2">
-        <Skeleton className="h-8" /><Skeleton className="h-8" />
-      </SkeletonStatus> : query.error && !query.data ? <ErrorBanner description={query.error.message} /> :
+      {query.isPending && !query.data ? <SkeletonStatus label={t("record.loading")} className="p-2">
+        <SkeletonText lines={2} size="lg" />
+      </SkeletonStatus> : query.error && !query.data ? <ErrorBanner description={errorMessage(query.error, t("record.loadError"))} /> :
         <div className="flex min-h-0 flex-col">
           {unbindError ? <ErrorBanner description={unbindError} /> : null}
           {bindings?.length ? <PaneRows>
-            {bindings.map((binding) => <li key={binding.id} className="flex items-center gap-1">
-              <PaneRow icon="note" title={binding.page_title || binding.page} sub={role ? undefined : binding.role}
-                href={routeHref("knowledge.page", { id: binding.page ?? "" })} />
-              {canWrite && binding.page_can_write ? <Button type="button" size="sm" variant="ghost" className="shrink-0"
-                disabled={busy} aria-label={`${t("record.unbind")} ${binding.page_title || binding.page}${role ? "" : ` (${binding.role})`}`}
-                onClick={() => binding.page && void changeBinding(binding.page, true, binding.role)}>{t("record.unbind")}</Button> : null}
+            {bindings.map((binding) => <li key={binding.id}>
+              {/* Unbind is the row's verb; the binding role is a declared id, never shown raw. */}
+              <PaneRow icon="note" title={binding.page_title || t("record.untitledPage")}
+                href={routeHref("knowledge.page", { id: binding.page ?? "" })}
+                verb={canWrite && binding.page_can_write ? <Button type="button" size="sm" variant="ghost"
+                  disabled={busy} aria-label={`${t("record.unbind")} ${binding.page_title || t("record.untitledPage")}`}
+                  onClick={() => binding.page && void changeBinding(binding.page, true, binding.role)}>{t("record.unbind")}</Button> : undefined} />
             </li>)}
-          </PaneRows> : <EmptyState icon="knowledge" title={t("record.empty")} className="min-h-24 p-3" />}
+          </PaneRows> : <InlineEmpty icon="knowledge" label={t("record.empty")} />}
         </div>}
     </li>
   </>;
@@ -176,8 +178,8 @@ function PageBacklinks({ context }: { context: ChatterViewContext }): ReactEleme
   const routeHref = useRouteHref();
   const query = usePageDetail(context);
   const backlinks = query.data?.pages_by_pk?.backlinks ?? [];
-  if (query.isPending && !query.data) return <SkeletonStatus label={t("page.loading")}><Skeleton className="h-8" /></SkeletonStatus>;
-  if (query.error) return <ErrorBanner description={query.error.message} />;
+  if (query.isPending && !query.data) return <SkeletonStatus label={t("page.loading")}><Skeleton size="lg" /></SkeletonStatus>;
+  if (query.error) return <ErrorBanner description={errorMessage(query.error, t("page.loadError"))} />;
   return <PaneRows>
     {backlinks.map((backlink) => {
       const href = routeHref("knowledge.page", { id: backlink.page });
@@ -194,11 +196,11 @@ function PageBoundTo({ context }: { context: ChatterViewContext }): ReactElement
   const bindings = query.data?.page_record_bindings.map((binding) => ({
     key: binding.id, model: binding.model_label, id: binding.record_id, role: binding.role,
   })) ?? [];
-  if (query.isPending && !query.data) return <SkeletonStatus label={t("page.loading")}><Skeleton className="h-8" /></SkeletonStatus>;
-  if (query.error) return <ErrorBanner description={query.error.message} />;
+  if (query.isPending && !query.data) return <SkeletonStatus label={t("page.loading")}><Skeleton size="lg" /></SkeletonStatus>;
+  if (query.error) return <ErrorBanner description={errorMessage(query.error, t("page.loadError"))} />;
   return <PaneRows>
     {bindings.map((binding) => <li key={binding.key}>
-      <RecordReferenceRow model={binding.model} id={binding.id} meta={binding.role} references={bindings} />
+      <RecordReferenceRow model={binding.model} id={binding.id} references={bindings} />
     </li>)}
   </PaneRows>;
 }

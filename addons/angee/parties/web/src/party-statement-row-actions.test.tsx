@@ -42,7 +42,7 @@ describe("party handle row actions", () => {
       throw new Error("Expected authored party-statement actions.");
     }
     expect(confirmAction.confirm).toBeUndefined();
-    expect(dismissAction.confirm).toBeUndefined();
+    expect(dismissAction.confirm).toBeDefined();
     expect(confirmAction.variables(decided)).toEqual({ id: "claim-1" });
     expect(confirmAction.visible(decided)).toBe(true);
     expect(detailConfirm?.visible(decided)).toBe(false);

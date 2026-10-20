@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { rowValueAtPath, type Row } from "@angee/metadata";
-import { Chip, useRecordFieldMarks, useStatusTone, type ListColumn, type ResourceToolbarFilterOption } from "@angee/ui";
+import { StatusBadge, useRecordFieldMarks, type ListColumn, type ResourceToolbarFilterOption } from "@angee/ui";
 
 import type { Decision } from "./documents.console";
 import { useDecisionsT } from "./i18n";
@@ -30,14 +30,14 @@ export const openDecisionFilter: ResourceToolbarFilterOption = {
 function AttentionLabel({ needs = false }: { needs?: boolean }) { const t = useDecisionsT(); return <>{t(needs ? "attention.needs" : "attention.title")}</>; }
 
 function AttentionCell({ row }: { row: Row }) {
-  const tone = useStatusTone();
   const open = rowValueAtPath(row, "has_open_decisions") === true;
   const value = rowValueAtPath(row, "tags");
   const tags = Array.isArray(value) ? value.filter(isAttentionTag) : [];
   if (!open && tags.length === 0) return null;
   return <span className="inline-flex flex-wrap items-center gap-1">
-    {open ? <Chip tone={tone(OPEN_DECISION_TONE)}><AttentionLabel needs /></Chip> : null}
-    {tags.map((tag) => <Chip key={tag.id} tone={tone(tag.name)}>{tag.name}</Chip>)}
+    {open ? <StatusBadge value={OPEN_DECISION_TONE}><AttentionLabel needs /></StatusBadge> : null}
+    {/* An attention tag's tone is its name in the composed status vocabulary; the name is its label. */}
+    {tags.map((tag) => <StatusBadge key={tag.id} value={tag.name}>{tag.name}</StatusBadge>)}
   </span>;
 }
 

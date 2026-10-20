@@ -1,7 +1,8 @@
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  EmptyState, ErrorBanner, PaneLabelPopover, PaneRow, PaneRows, Select, Skeleton, SkeletonStatus, UploadDropTarget, formatSize,
-  useResourceRecordHrefLookup, useRuntimeViewAs, type ChatterViewContext, type ContainerChild, type RelatedGroupContent, type RelatedGroupLabel,
+  ErrorBanner, FilePickerButton, Glyph, InlineEmpty, PaneLabelPopover, PaneRow, PaneRows, Select, Skeleton, SkeletonStatus, UploadDropTarget,
+  formatSize, useResourceRecordHrefLookup, useRuntimeViewAs, type ChatterViewContext, type ContainerChild, type RelatedGroupContent,
+  type RelatedGroupLabel,
 } from "@angee/ui";
 import { useMemo, useState, type ReactElement } from "react";
 
@@ -57,8 +58,8 @@ function RecordFilesGroup({ context, label }: { context: ChatterViewContext; lab
   const selectedDriveId = drives.some((drive) => drive.id === driveId) ? driveId : drives[0]?.id ?? "";
   const canUpload = offersUpload && Boolean(selectedDriveId);
 
-  function startUpload(files: FileList | readonly File[] | null): void {
-    if (!files?.length || !canUpload) return;
+  function startUpload(files: readonly File[]): void {
+    if (!files.length || !canUpload) return;
     uploads.upload(Array.from(files), {
       driveId: selectedDriveId,
       visibility: "RECORD",
@@ -70,13 +71,13 @@ function RecordFilesGroup({ context, label }: { context: ChatterViewContext; lab
     {label(<PaneLabelPopover icon="plus" label={t("upload.button")}>
       {drivesQuery.isPending ? <SkeletonStatus label={t("record.loadingDrives")}><Skeleton className="h-7" /></SkeletonStatus> : null}
       {drivesQuery.error ? <ErrorBanner description={drivesQuery.error.message} /> : null}
-      {drivesQuery.data && !drives.length ? <EmptyState icon="drive" title={t("drives.emptyTitle")}
-        description={t("drives.emptyDescription")} className="p-3" /> : null}
+      {drivesQuery.data && !drives.length ? <InlineEmpty icon="drive" label={t("drives.emptyDescription")} /> : null}
       {drives.length > 1 ? <Select aria-label={t("drive.label")} value={selectedDriveId}
         options={drives.map((drive) => ({ value: drive.id, label: drive.name }))}
         placeholder={t("drive.placeholder")} onValueChange={setDriveId} /> : null}
-      <input type="file" multiple aria-label={t("upload.chooseFiles")} disabled={!canUpload} className="min-w-0 text-13"
-        onChange={(event) => { startUpload(event.currentTarget.files); event.currentTarget.value = ""; }} />
+      <FilePickerButton size="sm" variant="secondary" disabled={!canUpload} label={t("upload.chooseFiles")} onFiles={startUpload}>
+        <Glyph name="upload" />{t("upload.chooseFiles")}
+      </FilePickerButton>
     </PaneLabelPopover>)}
     <li>
       {!recordFiles ? filesQuery.error ? <ErrorBanner description={filesQuery.error.message} /> :
@@ -88,7 +89,7 @@ function RecordFilesGroup({ context, label }: { context: ChatterViewContext; lab
                 meta={formatSize(edge.file.size_bytes)} sub={edge.file.created_by_label || edge.file.filename}
                 href={recordHref(FILE_MODEL, edge.file.id)} />
             </li>)}
-          </PaneRows> : <EmptyState icon="file" title={t("record.empty")} className="min-h-24 p-3" />}
+          </PaneRows> : <InlineEmpty icon="file" label={t("record.empty")} />}
         </UploadDropTarget>}
       {uploads.tasks.length ? <StorageUploadTasks uploads={uploads} t={t} /> : null}
     </li>

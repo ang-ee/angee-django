@@ -24,9 +24,11 @@ export const enStorageMessages: Record<string, string> = {
   "preview.loading": "Loading preview",
   "preview.loadError": "Could not load this preview.",
   "preview.decoding": "Decoding photo",
-  "preview.pdfPage": "Page {page} of {total}",
+  "preview.pages": "Pages",
   "preview.pdfPrev": "Previous page",
   "preview.pdfNext": "Next page",
+  "preview.fetchFailed": "The file could not be fetched ({status}).",
+  "preview.decodeFailed": "The photo could not be decoded.",
 
   // Primary-pane folder navigator landmark.
   "nav.label": "Files",
@@ -35,6 +37,14 @@ export const enStorageMessages: Record<string, string> = {
   "drive.label": "Drive",
   "drive.placeholder": "Select a drive",
   "drive.searchPlaceholder": "Search drives…",
+  "drive.unnamed": "Untitled drive",
+  "drive.create.name": "Name",
+  "drive.create.slug": "Slug",
+  "drive.create.slugPlaceholder": "assets",
+  "drive.create.backend": "Backend",
+  "drive.create.prefix": "Prefix",
+  "drive.create.prefixPlaceholder": "optional key prefix",
+  "drive.create.description": "Description",
 
   // Folder delete confirm + inline folder controls.
   "folder.deleteTitle": 'Delete "{name}"?',
@@ -90,9 +100,6 @@ export const enStorageMessages: Record<string, string> = {
   "file.download": "Download",
   "file.restore": "Restore",
   "file.trash": "Trash",
-  "file.unknownType": "Unknown type",
-  // File preview pane header subtitle: mime label · formatted size (formatSize
-  // already carries the unit, e.g. "1.4 MB").
 
   // File detail record form — section + field labels.
   "file.details": "Details",
@@ -100,12 +107,6 @@ export const enStorageMessages: Record<string, string> = {
   "file.author": "Uploaded by",
   "file.stage": "Stage",
   "file.visibility": "Audience",
-
-  // File-row stage badge.
-  "stage.ready": "Ready",
-  "stage.uploading": "Uploading",
-  "stage.failed": "Failed",
-  "stage.unknown": "Unknown",
 
   // File-list column headers.
   "column.name": "Name",

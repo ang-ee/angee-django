@@ -1,8 +1,8 @@
 import { useAuthoredQuery } from "@angee/refine";
 import { holdsPermission, useModelMetadata, type Row } from "@angee/metadata";
 import {
-  Button, CommandBand, ErrorBanner, Glyph, RecordHeader, Skeleton, SkeletonStatus, cn,
-  formatDate, textRoleVariants, type RecordChromeContext, type RecordNavigation,
+  Button, CommandBand, ErrorBanner, Glyph, Input, RecordHeader, Skeleton, SkeletonStatus, SkeletonText, cn,
+  errorMessage, formatDate, formatNumber, textRoleVariants, type RecordChromeContext, type RecordNavigation,
 } from "@angee/ui";
 import { useCallback, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 
@@ -42,9 +42,9 @@ function KnowledgePageContent({ pageId, onDelete, frame }: KnowledgePageViewProp
   const detail = query.data?.pages_by_pk;
   if (!detail) {
     if (query.isPending) return <SkeletonStatus label={t("page.loading")} className="space-y-3 p-4">
-      <Skeleton className="h-7 w-2/3" /><Skeleton className="h-4" /><Skeleton className="h-4 w-5/6" />
+      <Skeleton size="lg" className="w-2/3" /><SkeletonText lines={2} />
     </SkeletonStatus>;
-    if (query.error) return <ErrorBanner description={query.error.message} />;
+    if (query.error) return <ErrorBanner description={errorMessage(query.error, t("page.loadError"))} />;
     return null;
   }
   return <PageSubject key={detail.id} detail={detail} onDelete={onDelete} frame={frame} />;
@@ -96,7 +96,7 @@ function PageSubject({ detail, onDelete, frame }: {
     detail.created_by_label
       ? t("page.facts", { date: formatDate(detail.updated_at), by: detail.created_by_label })
       : t("page.lastUpdated", { value: formatDate(detail.updated_at) }),
-    ...(detail.markdown ? [t("editor.wordCount", { count: detail.markdown.word_count.toLocaleString() })] : []),
+    ...(detail.markdown ? [t("editor.wordCount", { count: formatNumber(detail.markdown.word_count) })] : []),
   ].join(" · ");
 
   return (
@@ -127,12 +127,15 @@ function PageSubject({ detail, onDelete, frame }: {
           headingLevel={active ? null : 1}
           crumbs={frame?.crumbs}
           title={active ? (
-            <input
+            // The title edits in place, in the display role: the plain presentation keeps the
+            // field's focus ring and placeholder and drops the box.
+            <Input
               autoFocus
+              presentation="cell"
               value={editor.title}
               placeholder={t("editor.titlePlaceholder")}
               aria-label={t("editor.titleLabel")}
-              className={cn(textRoleVariants({ role: "display" }), "w-full min-w-0 border-0 bg-transparent outline-none placeholder:text-fg-subtle")}
+              className={cn(textRoleVariants({ role: "display" }), "h-auto px-0")}
               onChange={(event) => editor.setTitle(event.currentTarget.value)}
               onBlur={editor.commitTitle}
             />

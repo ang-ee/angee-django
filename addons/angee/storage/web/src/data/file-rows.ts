@@ -1,4 +1,4 @@
-import { routeSearchParam, type DndPayload } from "@angee/ui";
+import { displayMime, routeSearchParam, type DndPayload } from "@angee/ui";
 
 import type { StorageFile, StorageFolder } from "./documents";
 
@@ -166,4 +166,10 @@ export function folderTreeRows(
     });
   }
   return rows;
+}
+
+/** A file's type as the user reads it: the registered label, else the mime the
+ * preview model derives from the declared type or the extension. */
+export function fileTypeLabel(row: Pick<StorageFileRow, "filename" | "mime_type">): string {
+  return row.mime_type?.label || displayMime({ url: "", name: row.filename, mime: row.mime_type?.mime_type });
 }

@@ -119,7 +119,8 @@ describe("MountSourceBrowser", () => {
       (screen.getByRole("button", { name: "Use this folder" }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
-    expect((screen.getByRole("button", { name: /child/ }) as HTMLButtonElement).disabled).toBe(true);
+    // A read-only browser lists locations as plain rows: nothing to open.
+    expect(screen.queryByRole("button", { name: /child/ })).toBeNull();
   });
 
   test("labels the browser group without relabelling its intrinsic action", () => {
@@ -135,7 +136,7 @@ describe("MountSourceBrowser", () => {
 
   test("passes the descriptor error association to the manual source input", () => {
     render(<Browser invalid />);
-    const input = screen.getByRole("textbox", { name: "Source folder" });
+    const input = screen.getByRole("searchbox", { name: "Source folder" });
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(input.getAttribute("aria-describedby")).toBe("mount-help");
   });

@@ -24,7 +24,7 @@ const storageIntegrate = defineBaseAddon({
       description: "Connect and synchronize external storage folders",
     },
   ],
-  i18n: { storage: enStorageIntegrateMessages },
+  i18n: { "storage-integrate": enStorageIntegrateMessages },
   forms: { [MOUNT_MODEL]: mountForm },
   containers: {
     // Connect verbs for each storage backend, on the Mount list's toolbar.

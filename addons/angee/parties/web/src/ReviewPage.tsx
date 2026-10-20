@@ -1,15 +1,12 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import { Avatar, EmptyState, ErrorBanner, Glyph, ListView, LoadingPanel, NavLink, Page, PageBody, PageHeader, RailPanel, Chip, avatarInitials, type ListColumn, type StringIdRow, useRouteHref, useResourceRecordHrefLookup } from "@angee/ui";
+import { Alert, Avatar, EmptyState, ErrorBanner, Glyph, ListView, LoadingPanel, NavLink, Page, PageBody, PageHeader, RailPanel, Chip, avatarInitials, type ListColumn, useRouteHref } from "@angee/ui";
 import { SameAsPairs, PartyReviewCounts } from "./documents";
 import { usePartiesT } from "./i18n";
+import { useIdentityClaimColumns, type IdentityClaimRow } from "./identity-columns";
 import { usePartyStatementRowActions } from "./party-statement-row-actions";
 
-type SuggestionRow = StringIdRow & {
-  source_kind?: string;
-  evidence?: Array<{ model: string; id: string }>;
-  evidence_truncated?: boolean;
-};
+type SuggestionRow = IdentityClaimRow & { source_kind?: string };
 
 /**
  * Human identity review, split between uncertain party↔handle claims and
@@ -18,7 +15,7 @@ type SuggestionRow = StringIdRow & {
 export function ReviewPage(): React.ReactElement {
   const t = usePartiesT();
   const routeHref = useRouteHref();
-  const recordHref = useResourceRecordHrefLookup();
+  const shared = useIdentityClaimColumns<SuggestionRow>();
   const counts = useAuthoredQuery(PartyReviewCounts, undefined, {
     models: ["parties.PartyStatement"],
   });
@@ -32,20 +29,11 @@ export function ReviewPage(): React.ReactElement {
       { field: "handle.value", header: t("review.handle") },
       { field: "handle.platform", header: t("review.platform") },
       { field: "subject.display_name", header: t("review.party") },
-      { field: "confidence" },
+      shared.confidence,
       { field: "source_kind", header: t("identity.claim") },
-      {
-        field: "evidence",
-        header: t("identity.evidence"),
-        render: (row) => <span className="flex flex-wrap gap-2">{row.evidence?.map((ref, index) => {
-          const href = recordHref(ref.model, ref.id);
-          return href ? <NavLink key={`${ref.model}:${ref.id}`} href={href} variant="inline">
-            {t("identity.evidenceSource", { number: index + 1 })}
-          </NavLink> : null;
-        })}{row.evidence_truncated ? <span>{t("identity.evidenceTruncated")}</span> : null}</span>,
-      },
+      shared.evidence,
     ],
-    [recordHref, t],
+    [shared, t],
   );
   const handleCount = counts.data?.party_statements_aggregate.aggregate?.count ?? 0;
   const sameAsCandidates = sameAs.data?.same_as_pairs ?? [];
@@ -64,7 +52,7 @@ export function ReviewPage(): React.ReactElement {
             fetching={counts.isFetching}
           >
             {counts.error ? <ErrorBanner description={t("review.error")} /> : null}
-            <p className="mb-3 text-13 text-fg-muted">{t("identity.authenticationScope")}</p>
+            <Alert tone="info" className="mb-3">{t("identity.authenticationScope")}</Alert>
             <ListView<SuggestionRow>
               resource="parties.PartyStatement"
               fields={[
@@ -123,14 +111,10 @@ export function ReviewPage(): React.ReactElement {
                         <Glyph name="chevron-right" className="text-fg-muted" />
                         <PartySummary party={candidate.right} align="right" />
                       </span>
+                      {/* The card is the link to the comparison; the shared handle is the reason. */}
                       <span className="flex flex-wrap items-center gap-2">
                         <Chip tone="warning">{t("review.sameAs.sharedHandle")}</Chip>
-                        <span className="truncate font-mono text-12 text-fg-muted">
-                          {candidate.normalized_value}
-                        </span>
-                      </span>
-                      <span className="text-12 font-medium text-link">
-                        {t("review.sameAs.compare")}
+                        <Chip mono className="min-w-0">{candidate.normalized_value}</Chip>
                       </span>
                     </span>
                   </NavLink>

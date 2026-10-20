@@ -3,7 +3,7 @@ import * as v from "valibot";
 import { holdsPermission, useSchemaFieldMetadata, modelMetadataForLabel } from "@angee/metadata";
 import {
   Button, Card, Checkbox, ErrorBanner, FieldDescriptorControl, JsonValueSchema, MetaGrid, RadioGroup, RecordReference,
-  RelativeTime, StatusIcon, cn, radioGroupVariants,
+  RelativeTime, StatusIcon, cn, radioGroupVariants, textRoleVariants,
   actionFormSubmitResult, formSubmitError, titleCase, useAuthoredResourceMutation, useRevealedRecordField,
 } from "@angee/ui";
 import { DecisionContext, DecisionContextSchema, FactValue } from "./DecisionContext";
@@ -99,7 +99,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
   if (!open) {
     const withdrawn = verdict.success && verdict.output.length === 0;
     const supplied = v.safeParse(VerdictValuesSchema, decision.verdict_values);
-    return <p ref={closedRef} tabIndex={-1} className="text-12 text-fg-muted">{decision.kind_label}{" · "}
+    return <p ref={closedRef} tabIndex={-1} className={textRoleVariants({ role: "caption" })}>{decision.kind_label}{" · "}
       {!withdrawn && decision.answered_by ? <><span>{decision.answered_by.display_name}</span>{" · "}</> : null}<span>{withdrawn
       ? t("decision.withdrawn", { name: decision.answered_by?.display_name ?? t("decision.operator") })
       : supplied.success && verdict.success && proposal.success ? <>{t("decision.chose", { labels: "" })}{alternatives.filter((alternative) => verdict.output.includes(alternative.key)).map((alternative, index) =>
@@ -130,8 +130,8 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
   return <DecisionProvider value={{ decision }}><Card asChild className={cn("min-w-0 p-3 shadow-none", highlighted && "border-brand ring-2 ring-brand/30")}>
     <section ref={ref} aria-label={decision.kind_label} data-decision={decision.id}>
       <div className="flex min-w-0 items-start gap-2"><StatusIcon tone="warning" size="sm" icon="help" className="mt-0.5" />
-        <div className="min-w-0 flex-1"><h2 className="text-13 font-semibold leading-5 text-fg [overflow-wrap:anywhere]">{decision.kind_label}</h2>
-          {!inStep ? <div className="mt-0.5 text-12 text-fg-muted"><DecisionOriginOutlet />
+        <div className="min-w-0 flex-1"><h2 className={cn(textRoleVariants({ role: "value" }), "font-semibold [overflow-wrap:anywhere]")}>{decision.kind_label}</h2>
+          {!inStep ? <div className={cn(textRoleVariants({ role: "caption" }), "mt-0.5")}><DecisionOriginOutlet />
             {decision.requester ? t("decision.requestedBy", { name: decision.requester.display_name }) : null}{" · "}<RelativeTime value={decision.created_at} /></div> : null}
         </div>
       </div>
@@ -154,12 +154,12 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
           </RadioGroup>}</div>
       </> : <ErrorBanner description={t("decision.invalidProposal")} />}
       {error ? <ErrorBanner description={error} /> : null}
-      <div className="mt-2 flex flex-wrap gap-1.5">
+      <div className="mt-2 flex flex-wrap gap-2">
         {canAnswer && proposal.success ? <Button size="sm" variant="primary" disabled={locked || !complete} onClick={() => void submit()}>{t("decision.submit")}</Button> : null}
         {onEditField && editField ? <Button size="sm" variant="ghost" onClick={() => onEditField(editField)}>{t("decision.editOnForm")}</Button> : null}
         {actions}
       </div>
-      {decision.assignees.length ? <p className="mt-2 text-12 text-fg-muted">{t("decision.mayAnswer", { names: decision.assignees.map(({ display_name }) => display_name).join(", ") })}</p> : null}
+      {decision.assignees.length ? <p className={cn(textRoleVariants({ role: "caption" }), "mt-2")}>{t("decision.mayAnswer", { names: decision.assignees.map(({ display_name }) => display_name).join(", ") })}</p> : null}
       {!compact ? <div className="mt-3 border-t border-border-subtle pt-2">
         <div className="flex min-w-0 flex-wrap gap-1">{decision.records.map((record) => record.record_id && record.record_id !== selfId && !inStep?.records.includes(record.record_id)
           ? <span key={record.id}>{recordLink(record.record_id)}</span> : null)}</div>
