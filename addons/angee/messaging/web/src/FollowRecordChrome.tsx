@@ -47,7 +47,7 @@ function FollowToggle({ modelLabel, recordId }: { modelLabel: string; recordId: 
       variant="ghost"
       aria-label={label}
       title={label}
-      aria-pressed={following}
+      pressed={following}
       disabled={state.fetching}
       onClick={() => {
         void setFollowing({ modelLabel, recordId, following: !following, notificationPolicy: "inbox", subtypeKeys: following ? [] : defaults })

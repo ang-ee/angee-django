@@ -2,13 +2,13 @@ import { useMemo } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { MessagePaneRow } from "@angee/messaging";
 import {
-  Alert, Button, Dialog, PreviewPane, EmptyState, Glyph, ListView, PaneLabel, PaneRow,
-  PaneRows, PaneToolbar, useResourceRecordHrefLookup,
+  Button, Dialog, ErrorBanner, PreviewPane, EmptyState, Glyph, ListView, PaneLabel, PaneRow,
+  PaneRows, PaneToolbar, formatNumber, optionLabel, useEnumOptions, useResourceRecordHrefLookup,
 } from "@angee/ui";
 import { InboxRelatedTarget, type InboxConnectionRow } from "./documents";
 import { relatedSource } from "./sources";
 import { INBOX_MODELS, type InboxNavigation } from "./state";
-import { useNexusT } from "../i18n";
+import { connectionLabel, useNexusT } from "../i18n";
 
 /** The pinned target and its collection stay independent of main scope and coverage. */
 export function InboxRelatedPane({ navigation }: { navigation: InboxNavigation }) {
@@ -29,7 +29,7 @@ export function InboxRelatedPane({ navigation }: { navigation: InboxNavigation }
         <PaneToolbar actions={[close]} />
         <EmptyState icon="link" title={t("inbox.related")} description={t("inbox.relatedHint")} />
       </> : <>
-        {query.error ? <Alert tone="danger">{query.error.message}</Alert> : null}
+        <ErrorBanner description={query.error?.message ?? null} />
         <PaneRows className="px-2 py-1">
           <PaneLabel count={target?.count}>
             {target && file ? <Dialog.Root key={target.id}>
@@ -63,19 +63,23 @@ export function InboxRelatedPane({ navigation }: { navigation: InboxNavigation }
 function ConnectionRow({ row, navigation }: { row: InboxConnectionRow; navigation: InboxNavigation }) {
   const t = useNexusT();
   const href = useResourceRecordHrefLookup();
+  // A handle row's role is its platform; a participant row's role is its envelope role.
+  const platforms = useEnumOptions("messaging.Message", "platform", { casing: "upper" });
+  const participantRoles = useEnumOptions("messaging.Participant", "role", { casing: "upper" });
   const message = row.message;
   if (message) return <MessagePaneRow message={message}
     {...(message.id === navigation.relatedFrom ? { detail: t("inbox.source") } : {})}
     onOpen={() => navigation.read(message.id, row.part?.id)} />;
-  if (row.handle) return <PaneRow icon="user" title={row.label} detail={row.role} sub={row.handle.value}
+  // Connection roles and provenance are server tokens: each reads through its label, or not at all.
+  if (row.handle) return <PaneRow icon="user" title={row.label} detail={optionLabel(platforms, row.role)} sub={row.handle.value}
     href={href("parties.Handle", row.handle.id)} verb={t("graph.openRecord")} />;
   if (row.src && row.dst) return <PaneRows>
-    <PaneLabel>{t(`inbox.relation.${row.label}`)}</PaneLabel>
+    <PaneLabel>{connectionLabel(t, "relation", row.label) ?? row.label}</PaneLabel>
     {[row.src, row.dst].map((message, index) => <li key={`${index}:${message.id}`}>
       <MessagePaneRow message={message} icon={index === 0 ? "arrow-up-right" : "arrow-down"} sub={row.provenance}
-        meta={row.confidence !== null ? `${Math.round(row.confidence * 100)}%` : undefined}
+        meta={row.confidence !== null ? formatNumber(row.confidence, { style: "percent", maximumFractionDigits: 0 }) : undefined}
         onOpen={() => navigation.read(message.id)} />
     </li>)}
   </PaneRows>;
-  return <PaneRow icon="link" title={row.label} detail={row.role} />;
+  return <PaneRow icon="link" title={row.label} detail={optionLabel(participantRoles, row.role)} />;
 }

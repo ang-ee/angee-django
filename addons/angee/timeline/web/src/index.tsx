@@ -1,6 +1,7 @@
 import { defineBaseAddon } from "@angee/app";
 import { ListOrdered } from "lucide-react";
 
+import { enTimelineMessages } from "./i18n";
 import { NeedsYouChrome } from "./NeedsYouChrome";
 import { RecordTimelinePane, TIMELINE_TAB_ID } from "./RecordTimelinePane";
 
@@ -15,6 +16,7 @@ export { TIMELINE_FOCUS_NEEDS_ME, TIMELINE_KINDS_CONTAINER, TIMELINE_TAB_ID, Rec
 export default defineBaseAddon({
   id: "timeline",
   icons: { timeline: ListOrdered },
+  i18n: { timeline: enTimelineMessages },
   containers: {
     "timeline#kinds": {},
     "form#chrome": {

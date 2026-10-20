@@ -34,11 +34,11 @@ export const enProvenanceMessages: Record<string, string> = {
   "history.revertConfirm.title": "Revert this change?",
   "history.revertConfirm.body":
     "The record returns to the state before this change. Later changes to the same rows refuse the revert; the revert is recorded as a new entry.",
-  "history.newer": "Newer",
-  "history.older": "Older",
+  "history.pagerUnit": "changes",
   "history.action.create": "Created",
   "history.action.update": "Updated",
   "history.action.delete": "Deleted",
+  "history.action.other": "Changed",
   "history.activity.manual": "edited",
   "history.activity.pull": "synced in",
   "history.activity.push": "synced out",
@@ -48,12 +48,14 @@ export const enProvenanceMessages: Record<string, string> = {
   "history.activity.seed": "seeded",
   "history.activity.system": "system write",
   "history.activity.run": "ran",
+  "history.activity.other": "changed",
   "history.outcome.failure": "Failed",
   "history.statement.asserted": "asserted",
   "history.statement.applied": "applied",
   "history.statement.withdrawn": "withdrawn",
   "history.statement.quarantined": "quarantined",
   "history.statement.deprecated": "deprecated",
+  "history.statement.other": "recorded",
   "history.statement.confidence": "confidence {confidence}",
 };
 

@@ -6,6 +6,7 @@ import {
   useResourceView,
   useRelationSelectedOption,
   useEnumOptions,
+  optionLabel,
   type FilterClauseField,
   type ResourceToolbarFilterOption,
   type ResourceViewFilter,
@@ -20,7 +21,7 @@ import {
   type NavigatorLens,
   type ResultLens,
 } from "./contract";
-import { useNexusT } from "../i18n";
+import { connectionLabel, useNexusT } from "../i18n";
 
 /**
  * The shared conversation-kind coverage as one choice. Each choice replaces the
@@ -90,6 +91,7 @@ export function useResultControls(lens: ResultLens) {
     new InboxFilter(view.state.filter).one("handle"),
   );
   const roles = useEnumOptions("messaging.Part", "role");
+  const platforms = useEnumOptions("messaging.Message", "platform", { casing: "upper" });
   const sources = useAuthoredQuery(InboxAccounts, {}, { models: INBOX_SOURCE_MODELS });
   const coverage = t("inbox.coverage");
   const messages = t("inbox.messages");
@@ -99,8 +101,8 @@ export function useResultControls(lens: ResultLens) {
     ...(sources.data?.inbox_platforms ?? []).map((value) => ({
       id: `platform:${value}`,
       group: coverage,
-      label: value,
-      chipLabel: `${t("inbox.platform")}: ${value}`,
+      label: optionLabel(platforms, value),
+      chipLabel: `${t("inbox.platform")}: ${optionLabel(platforms, value)}`,
       filter: { platform: { exact: value } },
     })),
     ...(sources.data?.inbox_accounts ?? []).map((row) => ({
@@ -131,7 +133,7 @@ export function useResultControls(lens: ResultLens) {
     ...(sources.data?.inbox_relation_kinds ?? []).map((value) => ({
       id: `relations:${value}`,
       group: messages,
-      label: t(`inbox.relation.${value}`),
+      label: connectionLabel(t, "relation", value) ?? value,
       filter: { relations: { exact: value } },
     })),
     ...(lens === "text"

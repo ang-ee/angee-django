@@ -1,10 +1,9 @@
 import { useMemo } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { senderDisplayName } from "@angee/parties";
-import { MessagePaneRow } from "@angee/messaging";
+import { MessagePaneRow, MessageTime, useMessageChannelLabel } from "@angee/messaging";
 import {
-  ListView, PaneLabelAction, PaneRow, PaneToolbarHost, RelativeTime,
-  ScopeChip, Select, useResourceView,
+  ListView, PaneLabelAction, PaneRow, PaneToolbarHost, ScopeChip, Select, optionLabel, useEnumOptions, useResourceView,
 } from "@angee/ui";
 import { RESULT_LENSES, resultLensForGroup } from "./contract";
 import { useResultControls } from "./Controls";
@@ -37,7 +36,7 @@ export function InboxResultsPane({ navigation, timezone }: { navigation: InboxNa
               if (selected) navigation.changeResult(selected, view.state);
             }} />,
           scope: navigation.sender || navigation.circle ? <ScopeChip active
-            label={selection.data?.inbox_selection?.label ?? selection.error?.message ?? t("inbox.loading")}
+            label={selection.data?.inbox_selection?.label ?? (selection.error ? t("inbox.selectionUnavailable") : t("inbox.loading"))}
             onClick={() => navigation.select()} /> : undefined }}
         renderPaneRow={(row) => <ResultRow row={row} navigation={navigation} />}
         emptyContent={{ title: t("inbox.noResults"), description: t("inbox.noResultsHint") }}
@@ -54,16 +53,17 @@ export function InboxResultsPane({ navigation, timezone }: { navigation: InboxNa
 
 function ResultRow({ row, navigation }: { row: InboxResultRow; navigation: InboxNavigation }) {
   const t = useNexusT();
+  const channelLabel = useMessageChannelLabel();
+  const roles = useEnumOptions("messaging.Part", "role", { casing: "upper" });
   const message = row.message;
   const sender = senderDisplayName(message.sender);
-  const channel = message.channel?.display_name || message.platform;
   if (!row.part) return <MessagePaneRow message={message}
     selected={navigation.message === message.id} onOpen={() => navigation.read(message.id)} />;
   const available = Boolean(row.file || row.fragment);
   return <PaneRow icon={row.fragment ? "file" : "files"}
       title={row.file ? row.part.name || row.file.filename : row.fragment ? t("inbox.sharedText") : row.part.name || t("inbox.file")}
-      detail={available ? row.part.role : t("inbox.fileUnavailable")} tone={available ? "muted" : "warning"}
-      meta={<RelativeTime value={row.latest} />} sub={row.fragment?.text || `${sender} · ${channel}`}
+      detail={available ? optionLabel(roles, row.part.role) : t("inbox.fileUnavailable")} tone={available ? "muted" : "warning"}
+      meta={<MessageTime value={row.latest} />} sub={row.fragment?.text || [sender, channelLabel(message)].filter(Boolean).join(" · ")}
       verb={available ? t("inbox.matchingUses", { count: row.count }) : t("inbox.read")}
       onOpen={() => available ? navigation.connect(row.id, message.id) : navigation.read(message.id, row.part?.id)} />;
 }

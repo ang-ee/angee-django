@@ -66,6 +66,8 @@ export {
   MESSAGE_SUMMARY_FIELDS,
   MessageSummary,
   MessagePaneRow,
+  MessageTime,
+  useMessageChannelLabel,
   type MessageSummaryData,
 } from "./MessageSummary";
 export { MessageReader, type MessageReaderProps } from "./MessageReader";
@@ -105,6 +107,8 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
   },
   icons: { inbox: Inbox, threads: MessagesSquare, send: Send, channel: Mail },
   i18n: { messaging: enMessagingMessages },
+  // Channel pairing states on the composed status vocabulary: the overview and lists share them.
+  statusTones: { paired: "success", logged_out: "danger", duplicate_account: "danger", awaiting_scan: "info", awaiting_password: "warning" },
   forms: { "messaging.Channel": channelForm, "messaging.Message": messageForm },
   containers: {
     // The Channels list's Connect menu: each vendor's child renders ActionTrigger or

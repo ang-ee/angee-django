@@ -9,13 +9,14 @@ import {
   Button,
   Collapsible,
   CommandBand,
-  EmptyState,
+  ErrorBanner,
   formatDateTime,
   Glyph,
   LoadingPanel,
   MetaGrid,
   RecordHeader,
-  Chip,
+  optionLabel,
+  useEnumOptions,
   type RecordChromeContext,
 } from "@angee/ui";
 
@@ -53,6 +54,9 @@ export function InboxMessageReader({
     ? t("inbox.backConversation")
     : t("inbox.backResults");
   const metadata = useModelMetadata(MESSAGE_MODEL);
+  const directions = useEnumOptions(MESSAGE_MODEL, "direction", { casing: "upper" });
+  const statuses = useEnumOptions(MESSAGE_MODEL, "status", { casing: "upper" });
+  const platforms = useEnumOptions(MESSAGE_MODEL, "platform", { casing: "upper" });
   // The open message is a record: its header controls come through form#chrome like any other.
   const chrome = useMemo<RecordChromeContext | null>(() => message ? {
     resource: MESSAGE_MODEL,
@@ -63,7 +67,8 @@ export function InboxMessageReader({
     formReadOnly: true,
   } : null, [message, metadata?.resource.schemaName]);
   const sender = message?.sender ? senderDisplayName(message.sender) : undefined;
-  const channel = message?.channel?.display_name || message?.platform;
+  const channel = message?.channel?.display_name || (message?.platform ? optionLabel(platforms, message.platform) : undefined);
+  const direction = message ? optionLabel(directions, message.direction) : undefined;
   return (
     <section
       aria-label={t("inbox.message")}
@@ -99,7 +104,7 @@ export function InboxMessageReader({
       <RecordHeader
         density="compact"
         headingLevel={1}
-        crumbs={[t("inbox.message"), channel, message?.direction].filter(Boolean).join(" · ")}
+        crumbs={[t("inbox.message"), channel, direction].filter(Boolean).join(" · ")}
         title={message?.title || t("inbox.message")}
         meta={message ? [sender, message.received_at ? formatDateTime(message.received_at) : undefined].filter(Boolean).join(" · ") : undefined}
         status={message && !message.thread ? { label: t("inbox.standalone") } : undefined}
@@ -107,15 +112,10 @@ export function InboxMessageReader({
       {query.isPending ? (
         <LoadingPanel />
       ) : query.error || !message ? (
-        <EmptyState
-          title={t("inbox.unavailable")}
-          description={query.error?.message}
-          actions={
-            <Button onClick={() => void query.refetch()}>
-              {t("inbox.retry")}
-            </Button>
-          }
-        />
+        <div className="grid gap-3 p-4">
+          <ErrorBanner title={t("inbox.unavailable")} description={query.error?.message ?? t("inbox.unavailableHint")} />
+          <div><Button size="sm" variant="secondary" onClick={() => void query.refetch()}>{t("inbox.retry")}</Button></div>
+        </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto p-6">
           <MessageReader
@@ -133,11 +133,10 @@ export function InboxMessageReader({
                     <Button
                       key={use.target}
                       size="sm"
-                      variant="ghost"
-                      className="h-auto px-0 text-brand"
+                      variant="link"
                       onClick={() => navigation.connect(use.target, message.id)}
                     >
-                      <Glyph name="link" size={13} />
+                      <Glyph name="link" />
                       {t("inbox.accessibleUses", { count: use.count })}
                     </Button>
                   ))}
@@ -149,7 +148,7 @@ export function InboxMessageReader({
                 {t("inbox.outside")}
               </Alert>
             ) : null}
-            {actionError ? <Alert tone="danger">{actionError}</Alert> : null}
+            <ErrorBanner description={actionError ?? null} />
             {message.sender?.party && !message.sender.party_link_confirmed ? (
               <Alert tone="info">
                 {t("inbox.suggested")}: {message.sender.party.display_name}
@@ -160,24 +159,15 @@ export function InboxMessageReader({
                 {t("inbox.details")}
               </Collapsible.Trigger>
               <Collapsible.Panel className="space-y-3 pt-3">
+                {/* The envelope's labelled facts; the reader's own header names the participants. */}
                 <MetaGrid
                   rows={[
                     [t("inbox.account"), message.channel?.display_name ?? "—"],
-                    [t("inbox.direction"), message.direction],
-                    [t("inbox.status"), message.status],
-                    [t("inbox.externalId"), message.external_id || "—"],
-                    [t("inbox.received"), message.received_at ?? "—"],
+                    [t("inbox.direction"), direction ?? "—"],
+                    [t("inbox.status"), optionLabel(statuses, message.status)],
+                    [t("inbox.received"), message.received_at ? formatDateTime(message.received_at) : "—"],
                   ]}
                 />
-                {message.participants.map((participant) => (
-                  <div key={participant.id} className="text-13">
-                    <Chip>{participant.role}</Chip>{" "}
-                    {senderDisplayName(participant.handle)}{" "}
-                    <span className="text-fg-muted">
-                      {participant.handle?.value}
-                    </span>
-                  </div>
-                ))}
               </Collapsible.Panel>
             </Collapsible.Root>
           </MessageReader>

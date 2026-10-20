@@ -31,11 +31,3 @@ export function statementVerb(statement: {
   if (statement.history_type === "CREATED") return "asserted";
   return statement.applied ? "applied" : "asserted";
 }
-
-/** The step tone of an entry: failures and reverts stand out, merges inform, edits pass. */
-export function entryTone(entry: { activity: string; outcome?: string | null }): "danger" | "warning" | "info" | "success" {
-  if (entry.outcome === "FAILURE") return "danger";
-  if (entry.activity === "REVERT") return "warning";
-  if (entry.activity === "MERGE") return "info";
-  return "success";
-}

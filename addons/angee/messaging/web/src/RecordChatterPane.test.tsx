@@ -31,6 +31,8 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
+    // The delete verb confirms through the shared ceremony; the test answers yes.
+    useConfirm: () => async () => true,
     useNamespaceT:
       (_namespace: string, messages: Record<string, string>) =>
       (key: string, vars?: Record<string, unknown>) =>
@@ -298,7 +300,7 @@ describe("RecordChatterPane", () => {
     expect(screen.getByRole("button", { name: "👍 reaction, 2" })).toBeTruthy();
   });
 
-  test("deletes through the mutation keyed by message id", () => {
+  test("deletes through the mutation keyed by message id", async () => {
     mocks.threadData = threadPayload([
       message({ id: "msg_editable", can_edit: true, can_delete: true }),
     ]);
@@ -306,12 +308,13 @@ describe("RecordChatterPane", () => {
     render(<RecordChatterPane context={context} />);
     fireEvent.click(screen.getByRole("button", { name: "Delete message" }));
 
-    expect(
+    // The verb confirms first (answered yes by the mock), then fires.
+    await waitFor(() => expect(
       mocks.mutateCalls.some(
         (call) =>
           call.op === "MessagingDeleteRecordMessage" && call.vars.messageId === "msg_editable",
       ),
-    ).toBe(true);
+    ).toBe(true));
   });
 
   test("shows the not-enabled state for a record without a thread", () => {

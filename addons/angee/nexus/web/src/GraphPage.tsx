@@ -1,7 +1,7 @@
 import { TIMELINE_TAB_ID } from "@angee/timeline";
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import { Chip, Button, EmptyState, ErrorBanner, GraphView, LoadingPanel, Page, PageBody, PageHeader, RailPanel, RelationPicker, SegmentedControl, NavLink, useChatter, useChatterContent, useResourceRecordHrefLookup, useRouteHref, useRouteSearch, updateRouteSearch, useInAppNavigator, type ChatterContent, type ResourceRecordHrefLookup, type RouteHref } from "@angee/ui";
+import { Chip, Button, EmptyState, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, MiniCard, Page, PageBody, PageHeader, RailPanel, RelationPicker, SegmentedControl, NavLink, formatNumber, useChatter, useChatterContent, useResourceRecordHrefLookup, useRouteHref, useRouteSearch, updateRouteSearch, useInAppNavigator, type ChatterContent, type ResourceRecordHrefLookup, type RouteHref } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
 import { NexusGraphParties, NexusPartyGraph } from "./documents";
@@ -14,7 +14,7 @@ import {
   type NexusEdge,
   type NexusNode,
 } from "./graph-data";
-import { useNexusT } from "./i18n";
+import { useNexusT, type NexusT } from "./i18n";
 
 const ROOT_LIMIT = 200;
 const GRAPH_LIMIT = 60;
@@ -124,7 +124,7 @@ export function GraphPage(): React.ReactElement {
   useChatterContent(inspector);
 
   if (roots.isFetching && options.length === 0) return <LoadingPanel />;
-  if (roots.error) return <EmptyState fill icon="triangle-alert" title={roots.error.message} />;
+  if (roots.error) return <div className="p-5"><ErrorBanner title={t("graph.rootsUnavailable")} description={roots.error.message} /></div>;
   if (options.length === 0) {
     return <EmptyState fill icon="users" title={t("graph.empty.title")} description={t("graph.empty.description")} />;
   }
@@ -230,21 +230,20 @@ function Inspector({
           {nodes.map((node) => {
             const path = nodePath(recordHref, node);
             return (
-              <div key={node.id} className="rounded-6 border border-border-subtle bg-sheet p-3">
-                <div className="font-medium text-fg">{node.title}</div>
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  <Chip tone="neutral">{node.kind}</Chip>
-                  {node.meta?.cadence?.cadence_days ? (
-                    <Chip tone="warning">{t("graph.cadenceDays", { count: node.meta.cadence.cadence_days })}</Chip>
-                  ) : null}
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {path ? <Button asChild size="sm"><NavLink href={path} variant="inline">{t("graph.openRecord")}</NavLink></Button> : null}
+              <MiniCard
+                key={node.id}
+                title={node.title}
+                primaryTag={{ label: nodeKindLabel(t, node.kind), tone: "neutral" }}
+                tags={node.meta?.cadence?.cadence_days ? (
+                  <Chip tone="warning">{t("graph.cadenceDays", { count: node.meta.cadence.cadence_days })}</Chip>
+                ) : undefined}
+                meta={<span className="flex flex-wrap gap-2">
+                  {path ? <Button asChild size="sm" variant="link"><NavLink href={path} variant="inline">{t("graph.openRecord")}</NavLink></Button> : null}
                   {isPartyNode(node) || isCircleNode(node) ? (
-                    <Button size="sm" variant="ghost" onClick={() => openTimeline(node)}>{t("graph.openTimeline")}</Button>
+                    <Button size="sm" variant="link" onClick={() => openTimeline(node)}>{t("graph.openTimeline")}</Button>
                   ) : null}
-                </div>
-              </div>
+                </span>}
+              />
             );
           })}
           {nodes.length === 2 && mergeHref ? (
@@ -254,7 +253,7 @@ function Inspector({
               </NavLink>
             </Button>
           ) : (
-            <p className="text-12 text-fg-muted">{t("graph.mergeHint")}</p>
+            <InlineEmpty label={t("graph.mergeHint")} />
           )}
         </div>
       ) : null}
@@ -276,10 +275,10 @@ function EdgeDetails({
     : null;
   return (
     <div className="grid gap-2 text-13">
-      <div className="font-medium text-fg">{relationshipLabel ?? edge.label ?? edge.kind}</div>
+      <div className="font-medium text-fg">{relationshipLabel ?? edge.label ?? edgeKindLabel(t, edge.kind)}</div>
       <div className="flex flex-wrap gap-1.5">
-        <Chip tone={edge.kind === "tie_fading" ? "warning" : "neutral"}>{edge.kind.replaceAll("_", " ")}</Chip>
-        {typeof edge.meta?.gravity === "number" ? <Chip tone="brand">{t("ties.gravity")} {edge.meta.gravity.toFixed(2)}</Chip> : null}
+        <Chip tone={edge.kind === "tie_fading" ? "warning" : "neutral"}>{edgeKindLabel(t, edge.kind)}</Chip>
+        {typeof edge.meta?.gravity === "number" ? <Chip tone="brand">{t("ties.gravity")} {formatNumber(edge.meta.gravity, { maximumFractionDigits: 2 })}</Chip> : null}
       </div>
       {path ? <Button asChild size="sm"><NavLink href={path} variant="inline">{t("graph.openRecord")}</NavLink></Button> : null}
     </div>
@@ -301,6 +300,29 @@ function edgePath(
   const model = typeof edge.meta?.model === "string" ? edge.meta.model : "";
   const recordId = typeof edge.meta?.record_id === "string" ? edge.meta.record_id : "";
   return recordHref(model, recordId);
+}
+
+/** The graph's node kinds and edge kinds as copy; the wire kind never reaches the chip. */
+function nodeKindLabel(t: NexusT, kind: NexusNode["kind"]): string {
+  switch (kind) {
+    case "root": return t("graph.node.root");
+    case "party": return t("graph.node.party");
+    case "circle": return t("graph.node.circle");
+    case "identity": return t("graph.node.identity");
+    case "relationship_target": return t("graph.node.relationshipTarget");
+  }
+}
+
+function edgeKindLabel(t: NexusT, kind: NexusEdge["kind"]): string {
+  switch (kind) {
+    case "tie_weak": return t("graph.edge.tieWeak");
+    case "tie_medium": return t("graph.edge.tieMedium");
+    case "tie_strong": return t("graph.edge.tieStrong");
+    case "tie_fading": return t("graph.edge.tieFading");
+    case "relationship": return t("graph.edge.relationship");
+    case "membership": return t("graph.edge.membership");
+    case "identity": return t("graph.edge.identity");
+  }
 }
 
 function isLens(value: unknown): value is GraphLens {
