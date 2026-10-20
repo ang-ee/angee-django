@@ -8,11 +8,26 @@ export { setHumanDateLocale } from "../lib/human-locale";
 export type DateWidgetValue = string | Date | null;
 export type DateFormatValue = DateWidgetValue | number | undefined;
 
+/**
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export const DATE_STORAGE_FORMAT = "yyyy-MM-dd";
+/**
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export const DATETIME_STORAGE_FORMAT = "yyyy-MM-dd'T'HH:mm";
+/**
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export const TIME_INPUT_FORMAT = "HH:mm";
 
-/** Parse a widget value to a valid `Date`, or null for empty/invalid input. */
+/** Parse a widget value to a valid `Date`, or null for empty/invalid input.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function dateFromValue(value: DateFormatValue): Date | null {
   if (isDate(value)) return isValid(value) ? value : null;
   if (typeof value === "number") {
@@ -35,7 +50,10 @@ export function dateFromUnknown(value: unknown): Date | null {
   return null;
 }
 
-/** The raw value as a stable title/string (the ISO form for a `Date`). */
+/** The raw value as a stable title/string (the ISO form for a `Date`).
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function valueLabel(value: DateFormatValue): string {
   if (isDate(value)) return isValid(value) ? value.toISOString() : "";
   if (typeof value === "number") return String(value);
@@ -57,7 +75,10 @@ function localeCode(locale?: string | Locale): string {
   return typeof locale === "string" ? locale : locale?.code ?? getHumanLocale();
 }
 
-/** Compact calendar date, including the year only outside the current year. */
+/** Compact calendar date, including the year only outside the current year.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function formatDate(value: DateFormatValue, options: HumanDateOptions = {}): string {
   const date = dateFromValue(value);
   if (!date) return "";
@@ -73,7 +94,10 @@ export function formatDate(value: DateFormatValue, options: HumanDateOptions = {
   }).format(date);
 }
 
-/** Compact endpoints separated by an en dash; callers may add a time to each endpoint. */
+/** Compact endpoints separated by an en dash; callers may add a time to each endpoint.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function formatDateRange(
   start: DateFormatValue,
   end: DateFormatValue,
@@ -89,7 +113,10 @@ export function formatDateRange(
   return first && last ? `${first} – ${last}` : first || last;
 }
 
-/** Human elapsed time using date-fns distance for its locales and Intl for app language tags. */
+/** Human elapsed time using date-fns distance for its locales and Intl for app language tags.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function formatRelativeTime(
   value: DateFormatValue,
   options: HumanDateOptions & { addSuffix?: boolean } = {},
@@ -122,7 +149,10 @@ export function formatRelativeTime(
   }).format(amount, unit);
 }
 
-/** Localized numeric duration, compact in tables and full in prose. */
+/** Localized numeric duration, compact in tables and full in prose.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function formatDuration(
   value: number | null | undefined,
   unit: "day" | "week" | "month" | "year",
@@ -145,7 +175,10 @@ export function formatDuration(
   });
 }
 
-/** Full timestamp; explicit zones retain seconds, while local widget labels omit them. */
+/** Full timestamp; explicit zones retain seconds, while local widget labels omit them.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function formatDateTime(
   value: DateFormatValue,
   options: HumanDateOptions = {},
@@ -161,18 +194,27 @@ export function formatDateTime(
   }).format(date);
 }
 
-/** Format a value for a native `type=time` control. */
+/** Format a value for a native `type=time` control.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function formatTimeInput(value: DateFormatValue): string {
   const date = dateFromValue(value);
   return date ? format(date, TIME_INPUT_FORMAT) : "";
 }
 
-/** Format a selected calendar day for storage. */
+/** Format a selected calendar day for storage.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function formatDateStorage(value: Date | null): string | null {
   return value ? format(value, DATE_STORAGE_FORMAT) : null;
 }
 
-/** Format a selected date-time for storage. */
+/** Format a selected date-time for storage.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function formatDateTimeStorage(value: Date): string {
   return format(value, DATETIME_STORAGE_FORMAT);
 }

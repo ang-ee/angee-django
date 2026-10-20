@@ -8,6 +8,9 @@ import { Badge } from "../ui/badge";
 import { IconTile } from "../ui/icon-tile";
 import { textRoleVariants } from "../ui/text";
 
+/**
+ * @kind token
+ */
 export const recordHeaderVariants = tv({
   slots: {
     main: "min-w-0 flex-1 space-y-1",
@@ -44,6 +47,10 @@ export type RecordHeaderProps = Omit<
     type?: React.ReactNode;
   };
 
+/**
+ * @kind region
+ * @region record-header
+ */
 export const RecordHeader = React.forwardRef<HTMLElement, RecordHeaderProps>(
   function RecordHeader(
     {

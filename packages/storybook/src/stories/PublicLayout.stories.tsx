@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { Button, Glyph, Input, Label, PublicLayout } from "@angee/ui";
 
 const meta = {
-  title: "Layout/PublicLayout",
+  title: "Layouts/PublicLayout",
   component: PublicLayout,
   parameters: {
     layout: "fullscreen",

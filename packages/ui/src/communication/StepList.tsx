@@ -16,7 +16,9 @@ export interface StepListItem {
   children?: ReactNode;
 }
 
-/** Vertical steps with muted future paths and a connector to the next entry. */
+/** Vertical steps with muted future paths and a connector to the next entry.
+ * @kind surface
+ */
 export function StepList({ items }: { items: readonly StepListItem[] }): ReactElement {
   const t = useUiT();
   return <ol className="min-w-0">{items.map((item, index) => {

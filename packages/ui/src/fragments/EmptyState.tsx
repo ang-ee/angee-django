@@ -20,6 +20,9 @@ export type EmptyStateProps = Omit<
   title: React.ReactNode;
 };
 
+/**
+ * @kind token
+ */
 export const emptyStateVariants = tv({
   slots: {
     // `flex-1` fills a flex parent, `min-h-full` a grid/block one — both inert in
@@ -36,6 +39,9 @@ export const emptyStateVariants = tv({
   },
 });
 
+/**
+ * @kind fragment
+ */
 export const EmptyState = React.forwardRef<HTMLElement, EmptyStateProps>(
   function EmptyState(
     { actions, className, description, fill, icon, title, ...props },

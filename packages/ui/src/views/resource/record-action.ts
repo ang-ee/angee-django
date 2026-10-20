@@ -55,7 +55,9 @@ export function recordActionId(context: ActionContext): string | undefined {
   return typeof id === "string" && id !== "" ? id : undefined;
 }
 
-/** Build an `<Action run>` callback for actions that target the current record id. */
+/** Build an `<Action run>` callback for actions that target the current record id.
+ * @owner RecordActionBar
+ */
 export function useRecordAction(
   run: RecordActionRunner,
   options: UseRecordActionOptions = {},
@@ -86,6 +88,7 @@ export function useRecordAction(
  * Compose single-id `ActionResult` mutations into a record form action.
  *
  * The returned `run` callback can be passed directly to `<Action run={...} />`.
+ * @owner RecordActionBar
  */
 export function useRecordActionMutation<TField extends string = string>(
   field: TField,
@@ -159,6 +162,7 @@ export type ActionResultMutation = (
  * Bound to no context, so it serves a verb rendered anywhere. A verb rendered in
  * record chrome takes {@link useRecordChromeActionMutation}, which reads the
  * record's own facts from that context instead of restating them here.
+ * @owner ActionTrigger
  */
 export function useActionResultMutation<TField extends string = string>(
   field: TField,
@@ -185,6 +189,7 @@ export function useActionResultMutation<TField extends string = string>(
  * its own outcome handling — a typed-args `ActionFormDialog` binds
  * `validationErrors` to its inputs and toasts on `ok` itself — composes this
  * instead, so the outcome is neither toasted twice nor swallowed.
+ * @owner ActionTrigger
  */
 export function useActionOutcomeMutation<TField extends string = string>(
   field: TField,
@@ -226,6 +231,7 @@ export interface UseRecordChromeActionMutationOptions {
  * whose caches the verb also moves — so a contributing addon declares only the
  * field it fires and never re-spells the mapping. It is
  * {@link useActionResultMutation} with those facts filled in from the context.
+ * @owner RecordActionBar
  */
 export function useRecordChromeActionMutation<TField extends string = string>(
   field: TField,
@@ -249,6 +255,9 @@ export interface AuthoredRecordChromeAction {
   idArgument: string;
 }
 
+/**
+ * @owner RecordActionBar
+ */
 export function useRecordChromeActionOutcome<TField extends string = string>(
   field: TField,
   options?: UseRecordChromeActionMutationOptions,

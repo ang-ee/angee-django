@@ -4,7 +4,7 @@ import { ConsoleLayout } from "@angee/ui";
 import { LayoutStoryBody } from "./chrome-fixtures";
 
 const meta = {
-  title: "Layout/ConsoleLayout",
+  title: "Layouts/ConsoleLayout",
   component: ConsoleLayout,
   parameters: {
     layout: "fullscreen",

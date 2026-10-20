@@ -55,7 +55,9 @@ const LOGO_OPTIONS = [
   ["corner", "theme.customization.logo.corner"],
 ] as const;
 
-/** Shared editor for themes using createThemeCustomizationOptions. */
+/** Shared editor for themes using createThemeCustomizationOptions.
+ * @kind surface
+ */
 export function ThemeCustomizationEditor({
   definition,
   value,

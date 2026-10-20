@@ -4,7 +4,9 @@ import { useBlocker, type ShouldBlockFn } from "@tanstack/react-router";
 import { useConfirm } from "../../feedback";
 import { useUiT } from "../../i18n";
 
-/** Owns both in-app and before-unload protection for a dirty editable form. */
+/** Owns both in-app and before-unload protection for a dirty editable form.
+ * @owner FormView
+ */
 export function useUnsavedChangesNavigationGuard({
   isDirty,
   isDirtyNow,

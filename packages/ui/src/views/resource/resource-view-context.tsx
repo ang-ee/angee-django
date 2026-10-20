@@ -206,6 +206,10 @@ type ResourceViewNavigate = (options: {
   state: true;
 }) => Promise<void> | void;
 
+/**
+ * @kind null
+ * @reason Provider infrastructure: ResourceView context.
+ */
 export function ResourceViewProvider({
   children,
   initialState,
@@ -243,7 +247,10 @@ export function ResourceViewProvider({
   );
 }
 
-/** Mount under an ambient view when allowed, otherwise create the one state owner. */
+/** Mount under an ambient view when allowed, otherwise create the one state owner.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function withResourceViewScope({
   ambient,
   resource,
@@ -804,6 +811,9 @@ function useResourceViewContextValue({
   return { value, selectionOwner };
 }
 
+/**
+ * @owner ResourceViewProvider
+ */
 export function useResourceView(): ResourceViewContextValue {
   const value = useContext(ResourceViewContext);
   if (!value) {
@@ -812,6 +822,9 @@ export function useResourceView(): ResourceViewContextValue {
   return value;
 }
 
+/**
+ * @owner ResourceViewProvider
+ */
 export function useResourceViewMaybe(): ResourceViewContextValue | null {
   return useContext(ResourceViewContext);
 }

@@ -20,6 +20,9 @@ import {
   type FieldRootProps,
 } from "./field";
 
+/**
+ * @kind token
+ */
 export const formVariants = tv({
   base: "min-w-0",
   variants: {
@@ -136,6 +139,9 @@ const FormField = React.forwardRef<HTMLDivElement, FormFieldProps>(
 );
 FormField.displayName = "FormField";
 
+/**
+ * @kind primitive
+ */
 export const FormRoot = Object.assign(FormRootBase, {
   Field: FormField,
   FieldRoot,

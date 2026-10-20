@@ -45,6 +45,7 @@ export interface ChatterProps {
  * surfaces; a drill-in (`strip: false`) shows one object in the strip's place,
  * reached from a line with a target and addressable through the URL, with the way
  * back above it. Every pane renders into its own toolbar host.
+ * @kind surface
  */
 export function Chatter({
   tabs,
@@ -266,7 +267,9 @@ function ChatterPanel({ tab }: { tab: ChatterTab }): React.ReactElement {
   );
 }
 
-/** The current route and record context, shared by the aside and shell drawers. */
+/** The current route and record context, shared by the aside and shell drawers.
+ * @owner Chatter
+ */
 export function useActiveChatterView(): ChatterViewContext {
   const routes = useAppRuntime().chatterRoutes ?? [];
   const match = useMatches({ select: leafMatch });

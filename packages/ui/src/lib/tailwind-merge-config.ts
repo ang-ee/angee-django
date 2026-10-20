@@ -126,6 +126,8 @@ const Z_INDEX_TOKENS = [
  * `rounded` extension would only cover the all-corners group and leave the
  * side/corner subgroups blind to the tokens. Default keys (`none`/`full`/the
  * Tailwind named scale) are preserved because this is `extend`, not `override`.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export const ANGEE_TW_MERGE_CONFIG = {
   extend: {

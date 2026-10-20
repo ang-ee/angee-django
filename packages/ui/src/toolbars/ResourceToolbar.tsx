@@ -125,6 +125,10 @@ export interface ResourceViewSwitcherProps<TView extends string = ResourceViewKi
 
 const DEFAULT_SWITCHER_KINDS: readonly ResourceViewKind[] = ["list", "board"];
 
+/**
+ * @kind region
+ * @region page-toolbar
+ */
 export function ResourceToolbar(props: ResourceToolbarProps): ReactElement {
   return props.pane ? <PaneResourceToolbar {...props} /> : <FullResourceToolbar {...props} />;
 }
@@ -319,6 +323,9 @@ function ResourceViewControls({
   );
 }
 
+/**
+ * @owner ResourceToolbar
+ */
 export function ResourceViewSwitcher<TView extends string = ResourceViewKind>({
   view,
   onViewChange,

@@ -18,7 +18,9 @@ import { ContainerOutlet, containerHasContent } from "@angee/ui/lib/container-ou
 import { safeRedirectPath } from "./safe-redirect";
 import { UsernamePasswordForm } from "./UsernamePasswordForm";
 
-/** The login page's containers: sign-in methods and password help. */
+/** The login page's containers: sign-in methods and password help.
+ * @kind contribution
+ */
 export const LOGIN_CONTAINERS: readonly CoreContainer[] = [
   { address: "auth.login#method" },
   { address: "auth.login#password-help" },
@@ -46,6 +48,9 @@ export interface LoginPageProps {
   backgroundImageUrl?: string;
 }
 
+/**
+ * @kind page
+ */
 export function LoginPage({
   brand,
   methods,

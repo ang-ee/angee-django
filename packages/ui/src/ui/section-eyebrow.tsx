@@ -3,6 +3,9 @@ import * as React from "react";
 import { toneText } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const sectionEyebrowVariants = tv({
   base: "m-0 uppercase",
   variants: {
@@ -81,6 +84,9 @@ export type SectionEyebrowProps = Omit<
     htmlFor?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const SectionEyebrow = React.forwardRef<HTMLElement, SectionEyebrowProps>(
   function SectionEyebrow(
     {

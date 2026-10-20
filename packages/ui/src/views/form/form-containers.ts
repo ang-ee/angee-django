@@ -5,6 +5,7 @@ import type { CoreContainer } from "../../runtime";
  * `<model>#…` children show on that model and its MTI children. Record verbs go
  * in `#actions` (the toolbar) or `#actions-menu` (the overflow menu); a
  * bridge's per-implementation verb is a `variant` of the verb it specialises.
+ * @kind contribution
  */
 export const FORM_CONTAINERS: readonly CoreContainer[] = [
   { address: "form#sections", models: true },

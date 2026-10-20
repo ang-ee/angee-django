@@ -110,6 +110,9 @@ function ColumnMarker<
   return null;
 }
 
+/**
+ * @kind contribution
+ */
 export const Column = Object.assign(ColumnMarker, {
   [PAGE_ELEMENT_SLOT]: "column" as const,
 });

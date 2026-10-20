@@ -1,6 +1,10 @@
 // English fallback strings for @angee/ui primitives. The host runtime owns
 // the active translations; these are the defaults used when a key is missing.
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const enUiMessages: Record<string, string> = {
   "timeline.scope.all": "All",
   "timeline.scope.needsMe": "Needs you",
@@ -739,4 +743,8 @@ export const enUiMessages: Record<string, string> = {
   "trash.loadFailed": "Removed records could not be loaded.",
 };
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const enUiBundle = { ui: enUiMessages } as const;

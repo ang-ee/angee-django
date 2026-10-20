@@ -7,6 +7,9 @@ export interface DeletePreviewTreeProps {
   nodes: readonly DeletePreviewNode[];
 }
 
+/**
+ * @kind surface
+ */
 export function DeletePreviewTree({
   nodes,
 }: DeletePreviewTreeProps): React.ReactElement {

@@ -11,6 +11,9 @@ import type {
 import { tv, type VariantProps } from "../lib/variants";
 import { interactiveSurface } from "./widget-control";
 
+/**
+ * @kind token
+ */
 export const toolbarVariants = tv({
   slots: {
     root: "flex min-w-0 items-center gap-2",
@@ -88,6 +91,9 @@ export type ToolbarRootProps = Omit<BaseToolbarRootProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Toolbar
+ */
 export const ToolbarRoot = React.forwardRef<HTMLDivElement, ToolbarRootProps>(
   function ToolbarRoot({ className, surface = "plain", ...props }, ref) {
     const styles = toolbarVariants({ surface });
@@ -108,6 +114,9 @@ export type ToolbarGroupProps = Omit<BaseToolbarGroupProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Toolbar
+ */
 export const ToolbarGroup = React.forwardRef<HTMLDivElement, ToolbarGroupProps>(
   function ToolbarGroup({ className, surface = "plain", ...props }, ref) {
     const styles = toolbarVariants({ surface });
@@ -128,6 +137,9 @@ export type ToolbarButtonProps = Omit<BaseToolbarButtonProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Toolbar
+ */
 export const ToolbarButton = React.forwardRef<
   HTMLButtonElement,
   ToolbarButtonProps
@@ -150,6 +162,9 @@ export type ToolbarInputProps = Omit<BaseToolbarInputProps, "className"> & {
   className?: string;
 };
 
+/**
+ * @owner Toolbar
+ */
 export const ToolbarInput = React.forwardRef<
   HTMLInputElement,
   ToolbarInputProps
@@ -172,6 +187,9 @@ export type ToolbarSeparatorProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner Toolbar
+ */
 export const ToolbarSeparator = React.forwardRef<
   HTMLDivElement,
   ToolbarSeparatorProps
@@ -191,6 +209,9 @@ export type ToolbarSpacerProps = React.HTMLAttributes<HTMLDivElement> & {
   className?: string;
 };
 
+/**
+ * @owner Toolbar
+ */
 export const ToolbarSpacer = React.forwardRef<
   HTMLDivElement,
   ToolbarSpacerProps
@@ -200,6 +221,9 @@ export const ToolbarSpacer = React.forwardRef<
 });
 ToolbarSpacer.displayName = "ToolbarSpacer";
 
+/**
+ * @kind primitive
+ */
 export const Toolbar = Object.assign(ToolbarRoot, {
   Root: ToolbarRoot,
   Group: ToolbarGroup,

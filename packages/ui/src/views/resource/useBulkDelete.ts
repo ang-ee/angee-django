@@ -52,6 +52,9 @@ export interface UseBulkDeleteResult {
   onCancel: () => void;
 }
 
+/**
+ * @owner ListView
+ */
 export function useBulkDelete(
   resource: string,
   selectedIds: ReadonlySet<string>,

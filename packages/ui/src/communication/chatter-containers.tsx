@@ -1,9 +1,14 @@
 import type { ChatterTabContent, ChatterViewContext, CoreContainer } from "../runtime";
 import { RelatedPane } from "./RelatedPane";
 
-/** The Related tab's id in `record#aside`. */
+/** The Related tab's id in `record#aside`.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const RELATED_TAB_ID = "related";
-/** The container the Related tab lists: one child per edge, declared by the edge's owner. */
+/** The container the Related tab lists: one child per edge, declared by the edge's owner.
+ * @kind contribution
+ */
 export const RELATED_GROUPS_CONTAINER = "related#groups";
 
 /**
@@ -12,6 +17,7 @@ export const RELATED_GROUPS_CONTAINER = "related#groups";
  * time; the framework declares the Related tab, whose groups are the
  * `related#groups` children the edge owners (files, pages, sources) declare.
  * The timeline addon owns the first tab.
+ * @kind contribution
  */
 export const CHATTER_CONTAINERS: readonly CoreContainer[] = [
   {

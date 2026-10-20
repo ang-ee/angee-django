@@ -1,7 +1,9 @@
 import { useUiT } from "../i18n";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 
-/** Neutral first-paint shape shared by public and console entry routes. */
+/** Neutral first-paint shape shared by public and console entry routes.
+ * @kind fragment
+ */
 export function AppBootSkeleton() {
   const t = useUiT();
   return (

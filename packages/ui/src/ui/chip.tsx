@@ -8,6 +8,9 @@ import { toneClass, type Fill, type Tone } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 import { Button } from "./button";
 
+/**
+ * @kind token
+ */
 export const chipVariants = tv({
   base: "inline-flex max-w-full shrink-0 items-center gap-1 truncate whitespace-nowrap border font-medium leading-none",
   variants: {
@@ -63,6 +66,9 @@ export type ChipProps = Omit<
     color?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(
   function Chip(
     {
@@ -109,6 +115,7 @@ export type RemovableChipProps = ChipProps & {
  * A `Chip` carrying a trailing remove button — the single owner for the removable
  * chips widgets and pages hand-rolled (value lists, facet filters). The body
  * truncates; the remove affordance and its localized aria copy live here once.
+ * @kind primitive
  */
 export const RemovableChip = React.forwardRef<HTMLSpanElement, RemovableChipProps>(
   function RemovableChip(
@@ -156,6 +163,7 @@ export interface ChipListProps {
 /**
  * A field value's items as one wrapping row of chips — the single owner for the
  * value lists widgets and cells render (related records, tags, string arrays).
+ * @owner Chip
  */
 export function ChipList({ items, onRemove, className }: ChipListProps): React.ReactElement {
   return (

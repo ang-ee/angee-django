@@ -9,6 +9,9 @@ import { tv, type VariantProps } from "../lib/variants";
 import { Spinner, type SpinnerSize } from "./spinner";
 import { interactiveSurfaceVariants } from "./widget-control";
 
+/**
+ * @kind token
+ */
 export const buttonVariants = tv({
   extend: interactiveSurfaceVariants,
   base: "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-6 border font-medium leading-none [&_.glyph]:size-3.5",
@@ -79,6 +82,9 @@ export type ButtonProps = Omit<
     pending?: boolean;
   };
 
+/**
+ * @kind primitive
+ */
 export const Button = React.forwardRef<HTMLElement, ButtonProps>(function Button(
   {
     variant = "secondary",

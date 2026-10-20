@@ -61,6 +61,8 @@ const DEFAULT_TOAST_DURATIONS: Record<ToastTone, number> = {
 /**
  * Thin wrapper over Base UI's Toast.Provider; Base UI owns the queue, while
  * ModalsHost owns its own confirm queue. The suffix difference is deliberate.
+ * @kind null
+ * @reason Provider infrastructure: Toast context.
  */
 export function ToastProvider({
   children,
@@ -73,7 +75,9 @@ export function ToastProvider({
   );
 }
 
-/** Must be rendered under ToastProvider so Base UI can provide the toast manager. */
+/** Must be rendered under ToastProvider so Base UI can provide the toast manager.
+ * @owner ToastProvider
+ */
 export function useToast(): ToastApi {
   const { add, close } = BaseToast.useToastManager<ToastData>();
 

@@ -36,7 +36,9 @@ export interface MessageFeedProps extends HTMLAttributes<HTMLUListElement> {
  *  Deliberately non-virtualized: a record chatter thread is bounded (≤50 messages),
  *  so a plain list is correct and cheaper than a virtualizer. An unbounded surface
  *  (a channel conversation transcript) must wire `useVirtualizer` instead — the
- *  `@tanstack/react-virtual` owner — rather than reaching for this feed. */
+ *  `@tanstack/react-virtual` owner — rather than reaching for this feed.
+ * @kind fragment
+ */
 export function MessageFeed({ label, busy, className, children, ...props }: MessageFeedProps): ReactElement {
   return (
     <ul
@@ -59,7 +61,9 @@ export interface MessageDaySeparatorProps extends HTMLAttributes<HTMLElement> {
 
 /** An optional day-group separator row: a centered, muted label dividing the feed into
  *  day buckets. Pure presentation — the consumer decides where the day boundaries fall
- *  and formats the label. */
+ *  and formats the label.
+ * @kind fragment
+ */
 export function MessageDaySeparator({ children, className, as: Component = "li", ...props }: MessageDaySeparatorProps): ReactElement {
   return (
     <Component className={cn("flex items-center gap-2 py-1", className)} {...props}>
@@ -100,7 +104,9 @@ export interface MessageRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "ti
  *  an optional channel/direction affordance, a `RelativeTime`, the body, and the
  *  attachments / reactions / actions slots. The row is a `group`, so a
  *  `MessageActions` slot reveals on hover/focus. Pure presentation — every slot is
- *  composed by the consumer. */
+ *  composed by the consumer.
+ * @kind fragment
+ */
 export function MessageRow({
   avatar,
   author,
@@ -191,7 +197,9 @@ export interface MessagePartsViewProps extends Omit<HTMLAttributes<HTMLDivElemen
 /** Renders a message's ordered MIME/JMAP part list: title/body/quote/signature text
  *  plus inline images and attachment chips. Presentation only — consumers pass the
  *  already ordered parts and a file-URL resolver; no transport or GraphQL detail lives
- *  here. */
+ *  here.
+ * @kind fragment
+ */
 export function MessagePartsView({
   parts,
   resolveFileUrl = defaultMessagePartFileUrl,
@@ -496,6 +504,8 @@ export interface ReactionGroupCopy {
  * contract. The caller supplies translated copy formatters so the shared owner
  * keeps the name/no-name grammar while every product routes wording through its
  * own statically discoverable i18n keys.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function reactionsFromGroups(
   groups: readonly ReactionGroup[],
@@ -580,7 +590,9 @@ export interface ReactionBarProps {
 /** The reaction pills under a message: one toggle button per reaction group. Each pill
  *  carries an accessible name (`"👍 reaction, 3"`) so the glyph + count read correctly to
  *  assistive tech, and `aria-pressed` reflects the current user's own reaction. Pure
- *  presentation — the consumer owns the reaction mutation via `onToggle`. */
+ *  presentation — the consumer owns the reaction mutation via `onToggle`.
+ * @kind fragment
+ */
 export function ReactionBar({ reactions, onToggle, busy, label, className }: ReactionBarProps): ReactElement | null {
   if (reactions.length === 0) return null;
   return (
@@ -618,7 +630,9 @@ export interface ReactionPickerProps {
  *  one per offered emoji, each toggling the current user's reaction. Shares `ReactionPill`
  *  so the pill markup and the accessible-name convention never diverge from the bar — the
  *  consumer no longer hand-rolls a divergent pill. Pure presentation; the consumer owns the
- *  reaction mutation via `onToggle`. */
+ *  reaction mutation via `onToggle`.
+ * @kind fragment
+ */
 export function ReactionPicker({
   options,
   active,
@@ -657,7 +671,9 @@ export interface MessageActionsProps extends Omit<HTMLAttributes<HTMLDivElement>
 /** A presentational action row under a message (copy, reply, edit, …). Reveals on
  *  hover/focus of the enclosing `group` message and aligns per `align`. Transport-
  *  agnostic: the consumer composes plain buttons or a binding's action controls inside
- *  it. */
+ *  it.
+ * @kind fragment
+ */
 export function MessageActions({ align = "start", className, children, ...props }: MessageActionsProps): ReactElement {
   return (
     <div
@@ -690,7 +706,9 @@ export interface MessageComposerProps extends HTMLAttributes<HTMLDivElement> {
 
 /** Composer frame: an optional attachment chip row, then an input slot (a textarea, or a
  *  binding's input primitive), above a footer row carrying the hint and the send/cancel
- *  actions. */
+ *  actions.
+ * @kind fragment
+ */
 export function MessageComposer({
   input,
   actions,
@@ -724,7 +742,9 @@ export interface MessageComposerHintProps {
 }
 
 /** The keyboard-shortcut affordance under a composer; defaults to "⏎ send · ⇧⏎ newline".
- *  Pure presentation — the real keybindings live with the input the composer renders. */
+ *  Pure presentation — the real keybindings live with the input the composer renders.
+ * @owner MessageComposer
+ */
 export function MessageComposerHint({ children, className, submitKey = "enter" }: MessageComposerHintProps): ReactElement {
   const t = useUiT();
   const modEnter = submitKey === "mod-enter";
@@ -746,7 +766,9 @@ export function MessageComposerHint({ children, className, submitKey = "enter" }
 }
 
 /** The shared textarea class for a message composer input — lets a consumer style a
- *  binding's input primitive like the default `<Textarea>`. */
+ *  binding's input primitive like the default `<Textarea>`.
+ * @kind token
+ */
 export const messageComposerInputClassName = textareaVariants({ size: "md", resize: "none" });
 
 export interface MessageAttachmentChipProps {
@@ -765,7 +787,9 @@ export interface MessageAttachmentChipProps {
 /** A composer attachment chip: a leading icon, a truncated label, and an optional remove
  *  control. Presentation only — the consumer supplies the icon glyph and wires the remove
  *  binding (or a plain button) into the `remove` slot; an `onClick` makes the label a
- *  button (the view-record chip uses it to open an inspector). */
+ *  button (the view-record chip uses it to open an inspector).
+ * @kind fragment
+ */
 export function MessageAttachmentChip({
   icon,
   children,

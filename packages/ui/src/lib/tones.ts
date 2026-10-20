@@ -11,6 +11,9 @@
 // @theme bridge in styles/index.css); the tailwind-merge groups that let `cn()`
 // de-dupe these classes live in lib/tailwind-merge-config.ts.
 
+/**
+ * @kind token
+ */
 export const TONES = [
   "neutral",
   "brand",
@@ -25,7 +28,9 @@ export const TONES = [
 
 export type Tone = (typeof TONES)[number];
 
-/** The feedback intents that carry a status glyph (a curated subset of the tones). */
+/** The feedback intents that carry a status glyph (a curated subset of the tones).
+ * @kind token
+ */
 export const FEEDBACK_INTENTS = [
   "info",
   "success",
@@ -37,12 +42,18 @@ export const FEEDBACK_INTENTS = [
 export type FeedbackIntent = (typeof FEEDBACK_INTENTS)[number];
 
 /** Whether `value` is one of the known tones — the membership guard at the boundary
- *  where an untyped value (Refine meta, JSON) must be narrowed to a `Tone`. */
+ *  where an untyped value (Refine meta, JSON) must be narrowed to a `Tone`.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isTone(value: unknown): value is Tone {
   return TONES.includes(value as Tone);
 }
 
-/** Whether `value` is a feedback tone that carries a status glyph. */
+/** Whether `value` is a feedback tone that carries a status glyph.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isFeedbackIntent(value: unknown): value is FeedbackIntent {
   return (FEEDBACK_INTENTS as readonly unknown[]).includes(value);
 }
@@ -71,6 +82,9 @@ export function isMenuTone(value: unknown): value is MenuTone {
   return (MENU_TONES as readonly unknown[]).includes(value);
 }
 
+/**
+ * @kind token
+ */
 export const FILLS = ["solid", "soft", "surface", "outline", "ghost"] as const;
 
 export type Fill = (typeof FILLS)[number];
@@ -158,7 +172,9 @@ export function toneGlyph(tone: Tone): string {
   return GLYPH_TONE[tone];
 }
 
-/** (tone × fill) → Tailwind classes. The single source for both axes. */
+/** (tone × fill) → Tailwind classes. The single source for both axes.
+ * @kind token
+ */
 export const toneFill: Record<Tone, Record<Fill, string>> = {
   neutral: {
     solid: `${SOLID_BG.neutral} text-fg-inverse border-neutral`,
@@ -225,7 +241,9 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
   },
 };
 
-/** The (tone × fill) class string. The one accessor every recipe routes through. */
+/** The (tone × fill) class string. The one accessor every recipe routes through.
+ * @kind token
+ */
 export function toneClass(tone: Tone, fill: Fill = "soft"): string {
   return toneFill[tone][fill];
 }
@@ -234,6 +252,7 @@ export function toneClass(tone: Tone, fill: Fill = "soft"): string {
  * The canonical icon-registry glyph name for each feedback intent. One owner for
  * "which glyph means this intent", shared by Alert, StatusIcon, and Toast so they
  * cannot drift (they previously disagreed: info was "help" vs "info").
+ * @kind token
  */
 export const INTENT_GLYPHS: Record<FeedbackIntent, string> = {
   info: "info",
@@ -257,6 +276,8 @@ export type ToneValueBuckets = Partial<Record<Tone, readonly string[]>>;
  * lowercase), else `brand`, and `neutral` for an empty value. A pure mechanism —
  * `buckets` carries the product vocabulary, so the framework holds no domain
  * status names.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function stateToneFromValue(
   value: string | undefined,

@@ -10,7 +10,10 @@ export type ResourceViewLookup = Partial<Record<FilterOperator, FilterValue>>;
 export type ResourceViewGroup = GroupSpec;
 export type ResourceViewResourceOrder = Record<string, ResourceViewOrderDirection>;
 
-/** Default free-text declaration for local rows without a model representation. */
+/** Default free-text declaration for local rows without a model representation.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const DEFAULT_TEXT_FILTER_FIELD = "title";
 
 export interface ResourceViewSort {

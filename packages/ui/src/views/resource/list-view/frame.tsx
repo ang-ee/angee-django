@@ -33,6 +33,9 @@ import { ResourceQueryError } from "../ResourceQueryError";
 import { validateResourceViewState } from "../model/state";
 import { ErrorBanner } from "../../../fragments/ErrorBanner";
 import { DashboardCollectionSurface } from "../../../dashboard/surface";
+/**
+ * @kind surface
+ */
 export function ListView<TRow extends Row = Row>(
   props: ListViewProps<TRow>,
 ): React.ReactElement {

@@ -6,6 +6,9 @@ import { Tag } from "../ui/badge";
 import { IconTile } from "../ui/icon-tile";
 import { textRoleVariants } from "../ui/text";
 
+/**
+ * @kind token
+ */
 export const surfaceHeaderVariants = tv({
   slots: {
     main: "min-w-0 flex-1",
@@ -51,6 +54,10 @@ export type SurfaceHeaderProps = Omit<
   title: React.ReactNode;
 };
 
+/**
+ * @kind region
+ * @region record-header
+ */
 export const SurfaceHeader = React.forwardRef<HTMLElement, SurfaceHeaderProps>(
   function SurfaceHeader(
     {

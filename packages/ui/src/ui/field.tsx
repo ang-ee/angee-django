@@ -14,6 +14,9 @@ import { tv, type VariantProps } from "../lib/variants";
 import { OptionalHint, RequiredMark } from "./label";
 import { widgetControlSurface } from "./widget-control";
 
+/**
+ * @kind token
+ */
 export const fieldVariants = tv({
   slots: {
     root: "grid min-w-0 gap-1.5",
@@ -116,6 +119,9 @@ export type FieldLabelProps = Omit<BaseFieldLabelProps, "className"> &
     requiredIndicator?: React.ReactNode;
   };
 
+/**
+ * @kind primitive
+ */
 export const FieldLabel = React.forwardRef<HTMLLabelElement, FieldLabelProps>(
   function FieldLabel(
     {
@@ -157,6 +163,9 @@ export type FieldDescriptionProps = Omit<
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const FieldDescription = React.forwardRef<
   HTMLParagraphElement,
   FieldDescriptionProps
@@ -177,6 +186,9 @@ export type FieldErrorProps = Omit<BaseFieldErrorProps, "className"> &
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const FieldError = React.forwardRef<HTMLDivElement, FieldErrorProps>(
   function FieldError({ className, size = "md", ...props }, ref) {
     const styles = fieldVariants({ size });
@@ -199,6 +211,9 @@ export type FieldControlProps = Omit<
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const FieldControl = React.forwardRef<
   HTMLInputElement,
   FieldControlProps
@@ -224,6 +239,9 @@ export type FieldControlFrameProps = React.HTMLAttributes<HTMLDivElement> &
     className?: string;
   };
 
+/**
+ * @owner FieldControl
+ */
 export const FieldControlFrame = React.forwardRef<
   HTMLDivElement,
   FieldControlFrameProps
@@ -258,6 +276,9 @@ export type FieldItemProps = Omit<
     disabled?: boolean;
   };
 
+/**
+ * @kind primitive
+ */
 export const FieldItem = React.forwardRef<HTMLDivElement, FieldItemProps>(
   function FieldItem({ className, size = "md", ...props }, ref) {
     const styles = fieldVariants({ size });
@@ -272,6 +293,9 @@ export const FieldItem = React.forwardRef<HTMLDivElement, FieldItemProps>(
 );
 FieldItem.displayName = "FieldItem";
 
+/**
+ * @kind primitive
+ */
 export const FieldRoot = Object.assign(FieldRootBase, {
   Label: FieldLabel,
   Description: FieldDescription,

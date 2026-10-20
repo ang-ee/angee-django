@@ -246,7 +246,7 @@ export function TimelinePage({ entries, eligible, initial = null, narrow = false
 }
 
 const meta = {
-  title: "Communication/Timeline + drill-in asides (whiteboard)",
+  title: "Explorations/2026-10-19 Timeline and drill-ins — context aside ruling",
   component: TimelinePage,
   excludeStories: ["TimelinePage"],
   parameters: { layout: "fullscreen" },

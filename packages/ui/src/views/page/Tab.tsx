@@ -53,6 +53,9 @@ function TabMarker(_props: TabProps): null {
   return null;
 }
 
+/**
+ * @kind contribution
+ */
 export const Tab = Object.assign(TabMarker, {
   [PAGE_ELEMENT_SLOT]: "tab" as const,
 });

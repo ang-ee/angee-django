@@ -18,6 +18,7 @@ import { optionToken } from "./types";
  * danger = failed/hard-down · neutral = dormant/inert. The run-state axis the colored
  * dot shows maps stopped→neutral (grey), running→success (green), error→danger (red),
  * warning→warning (amber); see `docs/guidelines.md`.
+ * @kind token
  */
 export const STATUS_TONES = {
   success: [
@@ -57,6 +58,7 @@ export interface StatusToneOptions {
  * keyed on the value exactly as it reads (the same exact-case lookup the cells apply) —
  * then composed addon tones, the shared `STATUS_TONES` convention, else `brand`.
  * Pure transforms pass their vocabulary explicitly; React surfaces use `useStatusTone`.
+ * @kind token
  */
 export function statusTone(
   value: string | null | undefined,

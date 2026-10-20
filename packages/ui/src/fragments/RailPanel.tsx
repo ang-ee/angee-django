@@ -15,6 +15,9 @@ export interface RailPanelProps {
   className?: string;
 }
 
+/**
+ * @kind fragment
+ */
 export function RailPanel({
   title,
   count,

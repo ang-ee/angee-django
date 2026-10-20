@@ -88,8 +88,13 @@ const jsonWidget = lazyWidget(() => import("./json").then((m) => m.jsonWidget), 
   edit: true,
   cell: true,
 });
-/** Lazy shared JSON presentations for authored surfaces outside descriptor forms. */
+/** Lazy shared JSON presentations for authored surfaces outside descriptor forms.
+ * @kind surface
+ */
 export const JsonValueView = jsonWidget.read;
+/**
+ * @kind surface
+ */
 export const JsonEditor = jsonWidget.edit!;
 export {
   isJsonObject,
@@ -125,6 +130,9 @@ const listWidget = lazyWidget(
   { edit: true },
 );
 
+/**
+ * @kind contribution
+ */
 export const defaultWidgets = {
   visibility: visibilityWidget,
   text: textWidget,
@@ -163,18 +171,28 @@ export const defaultWidgets = {
   list: listWidget,
 } satisfies WidgetMap;
 
+/**
+ * @owner defaultWidgets
+ */
 export function useResolvedWidget(
   id: string,
 ): WidgetDefinition | undefined {
   return asWidgetDefinition(useWidget(id));
 }
 
+/**
+ * @kind contribution
+ */
 export function asWidgetDefinition(
   value: unknown,
 ): WidgetDefinition | undefined {
   return isWidgetDefinition(value) ? value : undefined;
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isWidgetDefinition(value: unknown): value is WidgetDefinition {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<PropertyKey, unknown>;

@@ -228,7 +228,9 @@ export interface ComposeAddonsOptions {
   canonicalModelLabel: (spelling: string) => string;
 }
 
-/** Brand an object as an addon manifest, giving one greppable declaration site. */
+/** Brand an object as an addon manifest, giving one greppable declaration site.
+ * @kind contribution
+ */
 export function defineAddon(manifest: Omit<AddonManifest, "menus"> & { menus?: readonly MenuItem[] }):
   Omit<AddonManifest, "menus"> & { menus?: readonly MenuItem[] };
 export function defineAddon(manifest: Omit<AddonManifest, "menus"> & { menus: MenuDeclarations }):
@@ -287,6 +289,8 @@ function assertUnclaimed(
 /**
  * Fold addon manifests into one runtime. Registry facts must be unique; ordered
  * contribution lists are merged by key and sorted by sequence.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function composeAddons(
   addons: readonly AddonManifest[],

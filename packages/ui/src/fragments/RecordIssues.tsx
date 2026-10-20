@@ -22,7 +22,9 @@ export interface RecordIssuesProps {
   onFocusField?: (field: string, options?: RecordFieldFocusOptions) => void;
 }
 
-/** Render issue messages with shared tones and optional focus or routed links. */
+/** Render issue messages with shared tones and optional focus or routed links.
+ * @kind fragment
+ */
 export function RecordIssues({ items, onFocusField }: RecordIssuesProps): ReactElement | null {
   const recordHref = useResourceRecordHrefLookup();
   if (!items.length) return null;

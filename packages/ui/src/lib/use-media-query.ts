@@ -1,12 +1,17 @@
 import { useCallback, useSyncExternalStore } from "react";
 
-/** Tailwind's `lg` boundary, owned here for JS-driven responsive behavior. */
+/** Tailwind's `lg` boundary, owned here for JS-driven responsive behavior.
+ * @kind token
+ */
 export const LARGE_VIEWPORT_QUERY = "(min-width: 64rem)";
 
 /** Handheld layout boundary, kept in sync with Tailwind's `sm` boundary. */
 export const MOBILE_VIEWPORT_QUERY = "(max-width: 39.999rem)";
 
-/** Subscribe to one browser media query without mirroring it through effects. */
+/** Subscribe to one browser media query without mirroring it through effects.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useMediaQuery(query: string): boolean {
   const subscribe = useCallback(
     (onChange: () => void) => {

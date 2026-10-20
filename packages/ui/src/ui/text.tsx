@@ -12,6 +12,9 @@ import { tv, type VariantProps } from "../lib/variants";
 // `numeric`/`mono` add tabular figures or monospaced text, and `truncate` adds
 // the shared overflow treatment. Call sites compose this recipe instead of
 // re-spelling size/weight/color literals.
+/**
+ * @kind token
+ */
 export const textRoleVariants = tv({
   variants: {
     role: {

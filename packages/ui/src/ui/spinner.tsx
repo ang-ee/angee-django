@@ -2,6 +2,9 @@ import * as React from "react";
 
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const spinnerVariants = tv({
   base: "inline-block shrink-0 rounded-full border-2 border-current border-r-transparent align-middle motion-safe:animate-spin",
   variants: {
@@ -36,6 +39,9 @@ export type SpinnerProps = Omit<
     label?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const Spinner = React.forwardRef<HTMLSpanElement, SpinnerProps>(
   function Spinner(
     { className, label, size = "sm", tone = "current", ...props },

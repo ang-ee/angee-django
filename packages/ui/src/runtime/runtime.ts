@@ -34,8 +34,20 @@ import type { ThemeContribution } from "../theme";
 import type { StatusToneMap } from "../widgets/status-tones";
 import { setHumanDateLocale } from "../widgets/date-format";
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const DEFAULT_LOGIN_PATH = "/login";
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const HOME_PATH_PREFERENCE_KEY = "homePath";
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const ROUTE_SHORTCUTS_PREFERENCE_KEY = "chrome.routeShortcuts";
 
 const FALLBACK_I18N = createAngeeI18nInstance({});
@@ -48,7 +60,10 @@ export interface RuntimeRouteShortcut {
   icon?: string;
 }
 
-/** Read generic dynamic route shortcuts without importing an addon's domain types. */
+/** Read generic dynamic route shortcuts without importing an addon's domain types.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function readRuntimeRouteShortcuts(
   preferences: RuntimeUserPreferences | null | undefined,
 ): readonly RuntimeRouteShortcut[] {
@@ -168,6 +183,8 @@ const NOTHING_PERMITTED: readonly string[] = [];
 /**
  * The `requires` refs a session holds: none without an identity (signed out or
  * resolving); `undefined` for an identity read without them, where declarations stand.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function sessionPermitted(
   user: Pick<RuntimeAuthUser, "permitted"> | null | undefined,
@@ -179,6 +196,8 @@ export function sessionPermitted(
  * Whether something declaring `requires` is present for a session holding
  * `permitted`. Presence only: the server still decides data, row verbs and
  * field values.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function isPresent(requires: string | undefined, permitted: readonly string[] | undefined): boolean {
   return requires === undefined || permitted === undefined || permitted.includes(requires);
@@ -275,7 +294,10 @@ const EMPTY_RUNTIME: AppRuntime = {
 
 const RuntimeContext = makeContext<AppRuntime>("AppRuntime");
 
-/** Provide the runtime, filling any unset registry with its empty default. */
+/** Provide the runtime, filling any unset registry with its empty default.
+ * @kind null
+ * @reason Provider infrastructure: AppRuntime context.
+ */
 export function AppRuntimeProvider(props: {
   runtime: Partial<AppRuntime>;
   children: React.ReactNode;
@@ -302,32 +324,45 @@ export function AppRuntimeProvider(props: {
   return RuntimeContext.Provider({ value, children: props.children });
 }
 
-/** The merged runtime, or the empty runtime when unprovided. */
+/** The merged runtime, or the empty runtime when unprovided.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useAppRuntime(): AppRuntime {
   return RuntimeContext.useMaybe() ?? EMPTY_RUNTIME;
 }
 
-/** The selected app's identity, if any. */
+/** The selected app's identity, if any.
+ * @owner AppBrand
+ */
 export function useRuntimeBrand(): RuntimeBrand | null {
   return useAppRuntime().brand ?? null;
 }
 
-/** Preview state injected by the app; absent injection leaves preview inactive. */
+/** Preview state injected by the app; absent injection leaves preview inactive.
+ * @owner ViewAsPicker
+ */
 export function useRuntimeViewAs(): RuntimeViewAs {
   return useRuntimeAuth().viewAs ?? NO_VIEW_AS;
 }
 
-/** The dashboard registry composed once by the app owner. */
+/** The dashboard registry composed once by the app owner.
+ * @owner DashboardView
+ */
 export function useDashboardRegistry(): DashboardRegistry {
   return useAppRuntime().dashboards ?? EMPTY_RUNTIME.dashboards;
 }
 
-/** Look up a contributed widget by id. */
+/** Look up a contributed widget by id.
+ * @owner defaultWidgets
+ */
 export function useWidget(id: string): unknown {
   return useAppRuntime().widgets[id];
 }
 
-/** Look up an addon-contributed legacy create override or complete form. */
+/** Look up an addon-contributed legacy create override or complete form.
+ * @owner FormView
+ */
 export function useFormOverride(resource: string): FormOverrideMap[string] | undefined {
   // `?.` guards a `Partial<AppRuntime>` provider that spread `forms: undefined`.
   return useAppRuntime().forms?.[resource];
@@ -337,6 +372,7 @@ export function useFormOverride(resource: string): FormOverrideMap[string] | und
  * The collection route base path for a resource (e.g. `"integrate.OAuthClient"` →
  * `"/integrate/providers"`), or `undefined` when no route lists it. Drives the
  * relation-follow affordance; a resource without a routed list offers no link.
+ * @owner RecordReference
  */
 export function useResourceRoute(resource: string): string | undefined {
   const route = useResourceRoutes(resource);
@@ -358,7 +394,9 @@ function useResourceRoutes(resource: string): RuntimeResourceRoutes | undefined 
   return useAppRuntime().routesByResource?.[canonicalResource];
 }
 
-/** Build record hrefs from a resource's composed collection route, when routed. */
+/** Build record hrefs from a resource's composed collection route, when routed.
+ * @owner RecordReference
+ */
 export function useResourceRecordHref(
   resource: string,
 ): ((id: string, row?: Readonly<Record<string, unknown>>) => string | undefined) | undefined {
@@ -378,13 +416,17 @@ export function useResourceRecordHref(
   );
 }
 
-/** Row projections needed to choose an app-owned record destination. */
+/** Row projections needed to choose an app-owned record destination.
+ * @owner RecordReference
+ */
 export function useResourceRecordMatchFields(resource: string): readonly string[] {
   const routes = useResourceRoutes(resource);
   return useMemo(() => [...new Set(routes?.recordDestinations?.map(({ match }) => match.field) ?? [])], [routes]);
 }
 
-/** Resolve any resource-backed record href, degrading when its addon is absent. */
+/** Resolve any resource-backed record href, degrading when its addon is absent.
+ * @owner RecordReference
+ */
 export function useResourceRecordHrefLookup(): ResourceRecordHrefLookup {
   const metadata = useSchemaFieldMetadata();
   const { routesByResource, routeHref } = useAppRuntime();
@@ -422,12 +464,18 @@ function recordDestination(
   return matching[0]?.record ?? routes.recordFallback;
 }
 
-/** The app-composed, fail-fast route href builder. */
+/** The app-composed, fail-fast route href builder.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function useRouteHref(): RouteHref {
   return RuntimeContext.use().routeHref;
 }
 
-/** Resolve the active declaration by the router's matched path. */
+/** Resolve the active declaration by the router's matched path.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function useActiveRoute<T extends { path: string }>(routes: readonly T[]): T | undefined {
   const matches = useMatches();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -438,37 +486,55 @@ export function useActiveRoute<T extends { path: string }>(routes: readonly T[])
   );
 }
 
-/** The app-owned login destination used by shell and IAM surfaces. */
+/** The app-owned login destination used by shell and IAM surfaces.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useLoginPath(): string {
   return useAppRuntime().loginPath ?? DEFAULT_LOGIN_PATH;
 }
 
-/** The shell-readable auth state supplied by the app-owned auth provider. */
+/** The shell-readable auth state supplied by the app-owned auth provider.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useRuntimeAuth(): RuntimeAuthState {
   return useAppRuntime().auth ?? ANONYMOUS_RUNTIME_AUTH;
 }
 
-/** The shell-readable logout action supplied by the app-owned auth provider. */
+/** The shell-readable logout action supplied by the app-owned auth provider.
+ * @owner UserMenu
+ */
 export function useRuntimeLogoutAction(): RuntimeLogoutAction {
   return useAppRuntime().logoutAction ?? EMPTY_RUNTIME.logoutAction;
 }
 
-/** User preferences persisted by the app-owned auth provider. */
+/** User preferences persisted by the app-owned auth provider.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useRuntimeUserPreferences(): RuntimeUserPreferencesState {
   return useAppRuntime().userPreferences ?? EMPTY_RUNTIME.userPreferences;
 }
 
-/** The addon-contributed file-preview renderers, in composed order. */
+/** The addon-contributed file-preview renderers, in composed order.
+ * @owner PreviewPane
+ */
 export function usePreviews(): readonly PreviewContribution[] {
   return useAppRuntime().previews;
 }
 
-/** The route metadata Chatter uses to build the active view envelope. */
+/** The route metadata Chatter uses to build the active view envelope.
+ * @owner Chatter
+ */
 export function useChatterRoutes(): readonly ChatterRoute[] {
   return useAppRuntime().chatterRoutes ?? [];
 }
 
-/** A translator bound to one namespace; resolves keys against merged i18n. */
+/** A translator bound to one namespace; resolves keys against merged i18n.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useT(namespace: string): (key: string, vars?: MessageVars) => string {
   const { i18n } = useAppRuntime();
   return useMemo(() => {
@@ -493,6 +559,8 @@ export function useT(namespace: string): (key: string, vars?: MessageVars) => st
  * component renders its English even before its runtime bundle is mounted
  * (unit tests, storybook, provider-less embeds). Stable identity (memoized on
  * the namespace translator) for use in dependency arrays.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function useNamespaceT(
   namespace: string,

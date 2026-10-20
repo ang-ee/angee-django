@@ -110,13 +110,19 @@ export interface TypedPageRowActionDeclaration<TRow extends Row>
 const alwaysVisible = (): boolean => true;
 const alwaysEnabled = (): boolean => false;
 
-/** The shared variables projector for the common `$id` authored mutation. */
+/** The shared variables projector for the common `$id` authored mutation.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function rowIdVariables<TRow extends { id: string }>(row: TRow): {
   id: string;
 } {
   return { id: row.id };
 }
 
+/**
+ * @kind contribution
+ */
 export function defineRowAction<
   TRow extends Row,
   TDocument extends AuthoredDocument,
@@ -170,7 +176,9 @@ export interface DescriptorRowActionsOptions<TRow extends Row> {
   pendingPolicy?: RowActionPendingPolicy;
 }
 
-/** Adapt typed record descriptors to the existing RowActions and dialog lifecycle. */
+/** Adapt typed record descriptors to the existing RowActions and dialog lifecycle.
+ * @owner Action
+ */
 export function useDescriptorRowActions<TRow extends Row>(
   actions: readonly ActionDescriptor[],
   options: DescriptorRowActionsOptions<TRow> = {},

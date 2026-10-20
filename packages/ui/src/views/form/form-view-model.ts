@@ -575,7 +575,10 @@ export function gridFieldClass(field: FieldDescriptor): string | undefined {
   return fieldWidgetId(field) === "tagInput" ? "col-span-full" : undefined;
 }
 
-/** Whether a descriptor owns structured child controls through a template. */
+/** Whether a descriptor owns structured child controls through a template.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isCompositeFieldDescriptor(field: FieldDescriptor): boolean {
   return Boolean(field.objectTemplate || field.itemTemplate || ("rowTemplate" in field && field.rowTemplate));
 }
@@ -584,6 +587,8 @@ export function isCompositeFieldDescriptor(field: FieldDescriptor): boolean {
  * Exact-field messages stay bare. With a root path, descendants keep their full
  * dotted paths for nested routing; an empty root produces relative paths.
  * Omit the root to leave every message unprefixed.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function fieldErrorMessages(errors: readonly unknown[], path?: string): string[] {
   return errors.flatMap((error) => nestedFieldErrorMessages(error, path, path));

@@ -2,6 +2,9 @@ import * as React from "react";
 
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const pageBodyVariants = tv({
   base: "min-h-0 min-w-0 flex-1 bg-canvas",
   variants: {
@@ -31,6 +34,9 @@ export type PageBodyProps = React.HTMLAttributes<HTMLElement> &
     className?: string;
   };
 
+/**
+ * @owner Page
+ */
 export const PageBody = React.forwardRef<HTMLElement, PageBodyProps>(
   function PageBody(
     { as = "div", className, gutter = "comfortable", scroll = "auto", ...props },

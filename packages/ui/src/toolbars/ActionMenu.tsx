@@ -25,6 +25,9 @@ export interface ActionTriggerProps
   variant?: ButtonVariant;
 }
 
+/**
+ * @kind primitive
+ */
 export const ActionTrigger = React.forwardRef<
   HTMLButtonElement,
   ActionTriggerProps
@@ -94,7 +97,9 @@ export interface ActionMenuProps {
   className?: string;
 }
 
-/** A toolbar menu whose contributed dialogs survive item activation and closing. */
+/** A toolbar menu whose contributed dialogs survive item activation and closing.
+ * @kind primitive
+ */
 export function ActionMenu({
   children,
   label,

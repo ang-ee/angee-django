@@ -12,7 +12,7 @@ import {
   type ChatterContent,
 } from "@angee/ui";
 
-import { RuntimeRegistryFixture } from "../runtime-fixtures";
+import { RuntimeRegistryFixture } from "../../stories/runtime-fixtures";
 import { Related } from "./Related";
 import { accountById, circles, fragments, platformLabel, senderById,
   senderName, snippet, type Message } from "./fixtures";

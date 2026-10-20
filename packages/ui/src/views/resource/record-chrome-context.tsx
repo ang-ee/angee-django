@@ -38,19 +38,27 @@ export interface RecordChromeContext {
 
 const binding = makeContext<RecordChromeContext>("RecordChromeContext");
 
-/** Provides the record-chrome context around the record containers. */
+/** Provides the record-chrome context around the record containers.
+ * @kind null
+ * @reason Provider infrastructure: RecordChrome context.
+ */
 export const RecordChromeProvider = binding.Provider;
 
 /**
  * Read the saved-record toolbar context. Throws outside the provider — a
  * child always renders inside one of `FormView`'s record toolbar containers.
+ * @owner RecordActionBar
  */
 export const useRecordChromeContext = binding.use;
 
-/** Read an enclosing saved record from a nested collection, when present. */
+/** Read an enclosing saved record from a nested collection, when present.
+ * @owner RecordActionBar
+ */
 export const useRecordChromeContextMaybe = binding.useMaybe;
 
-/** Shared outlet for saved forms and custom record surfaces: the `form#chrome` children for this record's models. */
+/** Shared outlet for saved forms and custom record surfaces: the `form#chrome` children for this record's models.
+ * @owner RecordActionBar
+ */
 export function RecordChrome({ value }: { value: RecordChromeContext }): ReactElement {
   const models = useMemo(
     () => modelChain(value.canonicalResource, value.resource),

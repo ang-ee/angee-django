@@ -48,7 +48,9 @@ export interface FilterClauseRowProps {
   className?: string;
 }
 
-/** Shared field/operator/value controls; parents own clause identity and collection structure. */
+/** Shared field/operator/value controls; parents own clause identity and collection structure.
+ * @kind surface
+ */
 export function FilterClauseRow({ fields, value, onChange, onSubmit, error, readOnly = false, className }: FilterClauseRowProps): React.ReactElement {
   const t = useUiT();
   const errorId = React.useId();
@@ -118,7 +120,9 @@ export interface FilterClauseEditorProps {
 
 /** Submit one typed clause. Uncontrolled mode clears the operand after adding;
  * controlled mode leaves reset, identity, and collection updates to the caller.
- * ResourceQuery remains responsible for executable field/operator validation. */
+ * ResourceQuery remains responsible for executable field/operator validation.
+ * @kind surface
+ */
 export function FilterClauseEditor({ fields, onSubmit, value, onChange, submitLabel, readOnly = false, className }: FilterClauseEditorProps): React.ReactElement {
   const t = useUiT();
   const [draft, setDraft] = React.useState<FilterClauseDraft>({ fieldId: "", operator: "contains", value: "" });

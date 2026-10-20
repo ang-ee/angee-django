@@ -69,6 +69,9 @@ export interface AppChooserProps {
   triggerLabel?: string;
 }
 
+/**
+ * @owner AppRail
+ */
 export function AppChooser({ menuItems, ...props }: AppChooserProps): ReactElement {
   return <ChromePlaceProvider menuItems={menuItems}><AppChooserBody {...props} /></ChromePlaceProvider>;
 }

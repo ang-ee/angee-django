@@ -94,7 +94,9 @@ export interface RelationPickerOptionsResult extends RelationOptionsResult {
   searchState: RelationSearchState;
 }
 
-/** Resolve a selected identity independently of the option page or search. */
+/** Resolve a selected identity independently of the option page or search.
+ * @owner RelationFieldWidget
+ */
 export function useRelationSelectedOption(
   relation: RelationFieldInfo | null,
   value: string | null | undefined,
@@ -197,7 +199,9 @@ export function useRelationPickerOptions(
   );
 }
 
-/** Search executable text fields on the server, otherwise labels in the loaded page. */
+/** Search executable text fields on the server, otherwise labels in the loaded page.
+ * @owner RelationFieldWidget
+ */
 export function useRelationOptions(
   relation: RelationFieldInfo | null,
   config: RelationOptionsConfig = {},
@@ -343,6 +347,8 @@ export function useRelationOptions(
  * `{ id, <labelField> }` object), reusing the shared labeling rule so the
  * trigger shows the label with no extra round-trip. Returns `undefined` when the
  * value carries no readable row (for example an inaccessible bare id).
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function relationSelectedOption(
   value: unknown,
@@ -358,6 +364,10 @@ export function relationSelectedOption(
   return { value: id, label: relationOptionLabel(row, labelField, id), ...relationOptionColor(row, colorField) };
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function relationOptionsFromRows(
   rows: readonly Row[],
   labelField: string,

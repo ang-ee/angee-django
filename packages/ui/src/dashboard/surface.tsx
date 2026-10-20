@@ -69,7 +69,10 @@ function definitionForTarget(registry: DashboardRegistry, target: DashboardTarge
   return undefined;
 }
 
-/** The committed layout presented by a ready dashboard, including a newer declaration. */
+/** The committed layout presented by a ready dashboard, including a newer declaration.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function visibleDashboardSnapshot(
   registry: DashboardRegistry,
   target: DashboardTarget,
@@ -81,6 +84,9 @@ export function visibleDashboardSnapshot(
     ? baseline : state.snapshot;
 }
 
+/**
+ * @kind surface
+ */
 export function DashboardSurface(props: DashboardSurfaceProps): React.ReactElement {
   const registry = useDashboardRegistry();
   const definition = props.definition ?? definitionForTarget(registry, props.target);
@@ -662,6 +668,9 @@ function AddWidgetButton({ snapshot, registry, pageScope, onAdd }: {
   );
 }
 
+/**
+ * @kind surface
+ */
 export function DashboardCollectionSurface({
   resource,
   filter,

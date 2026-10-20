@@ -9,6 +9,9 @@ import type {
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const avatarVariants = tv({
   slots: {
     root: "inline-flex shrink-0 overflow-hidden rounded-full bg-avatar-default-bg font-semibold text-on-brand",
@@ -29,6 +32,9 @@ export const avatarVariants = tv({
   },
 });
 
+/**
+ * @kind token
+ */
 export const avatarStackVariants = tv({
   base: "inline-flex [&>*+*]:-ml-1.5 [&>*+*]:ring-2 [&>*+*]:ring-sheet",
 });
@@ -42,6 +48,9 @@ export type AvatarImageProps = Omit<BaseAvatarImageProps, "className"> & {
   className?: string;
 };
 
+/**
+ * @owner Avatar
+ */
 export const AvatarImage = React.forwardRef<HTMLImageElement, AvatarImageProps>(
   function AvatarImage({ className, ...props }, ref) {
     const styles = avatarVariants();
@@ -63,6 +72,9 @@ export type AvatarFallbackProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner Avatar
+ */
 export const AvatarFallback = React.forwardRef<
   HTMLSpanElement,
   AvatarFallbackProps
@@ -93,6 +105,10 @@ export type AvatarProps = Omit<
     src?: string;
   };
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function hashAvatarColor(seed: string): AvatarColorSlot {
   let hash = 0;
   for (const char of seed) {
@@ -101,6 +117,10 @@ export function hashAvatarColor(seed: string): AvatarColorSlot {
   return ((hash % 8) + 1) as AvatarColorSlot;
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function avatarInitials(label: string): string {
   const parts = label.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
@@ -110,6 +130,9 @@ export function avatarInitials(label: string): string {
     .join("");
 }
 
+/**
+ * @kind primitive
+ */
 export const Avatar = React.forwardRef<HTMLSpanElement, AvatarProps>(
   function Avatar(
     {
@@ -161,6 +184,9 @@ export type AvatarStackProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner Avatar
+ */
 export const AvatarStack = React.forwardRef<HTMLDivElement, AvatarStackProps>(
   function AvatarStack({ className, ...props }, ref) {
     return (

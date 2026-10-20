@@ -20,6 +20,9 @@ function FacetMarker(_props: FacetProps): null {
   return null;
 }
 
+/**
+ * @kind contribution
+ */
 export const Facet = Object.assign(FacetMarker, {
   [PAGE_ELEMENT_SLOT]: "facet" as const,
 });

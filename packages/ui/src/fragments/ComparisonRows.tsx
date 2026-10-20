@@ -26,7 +26,9 @@ export interface ComparisonRowsProps {
   className?: string;
 }
 
-/** A compact, accessible before/after surface shared by review workflows. */
+/** A compact, accessible before/after surface shared by review workflows.
+ * @kind fragment
+ */
 export function ComparisonRows({
   rows,
   beforeLabel,

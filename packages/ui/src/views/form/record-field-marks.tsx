@@ -42,7 +42,10 @@ const Dispatch = createContext<{
   setForm: (owner: symbol, form: ActiveRecordForm | null) => void;
 } | null>(null);
 
-/** Shared by the form and its pane; carries presentation only, never record values. */
+/** Shared by the form and its pane; carries presentation only, never record values.
+ * @kind null
+ * @reason Provider infrastructure: RecordFieldMarks context.
+ */
 export function RecordFieldMarksProvider({ children }: { children: ReactNode }) {
   const [revealed, setRevealed] = useState<RevealedField | null>(null);
   const [publications, setPublications] = useState(new Map<symbol, readonly MarkPublication[]>());
@@ -64,6 +67,9 @@ export function RecordFieldMarksProvider({ children }: { children: ReactNode }) 
   return <Dispatch.Provider value={dispatch}><State.Provider value={state}>{children}</State.Provider></Dispatch.Provider>;
 }
 
+/**
+ * @owner FormView
+ */
 export function useRecordFieldMarks(publications: readonly MarkPublication[]) {
   const bridge = useContext(Dispatch);
   const publish = bridge?.publish;
@@ -74,8 +80,14 @@ export function useRecordFieldMarks(publications: readonly MarkPublication[]) {
   }, [publish, publications]);
 }
 
+/**
+ * @owner FormView
+ */
 export function useRevealedRecordField() { return useContext(State)?.revealed; }
 
+/**
+ * @owner FormView
+ */
 export function useActiveRecordForm() { return useContext(State)?.form ?? null; }
 
 export function usePublishActiveRecordForm(form: ActiveRecordForm | null) {
@@ -106,7 +118,9 @@ export function useRecordFieldMarksForField(field: string) {
   }) ?? []), [bridge?.marks, field, record, setRevealed]);
 }
 
-/** Every native form field placement composes attention, provenance, and access marks once. */
+/** Every native form field placement composes attention, provenance, and access marks once.
+ * @kind fragment
+ */
 export function RecordFieldMarkControl({ field, label, restricted = false }: {
   field: string;
   label?: ReactNode;

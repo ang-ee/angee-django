@@ -22,7 +22,9 @@ export interface LoadingPanelProps {
 
 const PAGE_ROW_WIDTHS = ["w-2/3", "w-1/2", "w-3/4", "w-2/5", "w-3/5", "w-1/2"] as const;
 
-/** Unboxed pending status for boundaries that cannot know the final layout; the router's page fallback takes the page shape. */
+/** Unboxed pending status for boundaries that cannot know the final layout; the router's page fallback takes the page shape.
+ * @kind fragment
+ */
 export function LoadingPanel({
   message,
   density = "page",

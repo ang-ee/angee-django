@@ -13,6 +13,10 @@ const twMergeCustom = extendTailwindMerge(ANGEE_TW_MERGE_CONFIG);
 
 type ClassValue = string | number | null | undefined | false | ClassValue[];
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function cn(...inputs: ClassValue[]): string {
   return twMergeCustom(flatten(inputs).join(" "));
 }

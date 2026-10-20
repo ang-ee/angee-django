@@ -93,7 +93,9 @@ export interface GraphViewNodeStyle {
   type?: "default" | "input" | "output";
 }
 
-/** Project theme colors and node chrome into the GraphView style contract. */
+/** Project theme colors and node chrome into the GraphView style contract.
+ * @kind token
+ */
 export function graphNodeStyle(
   borderColor: string,
   badgeTone: GraphViewNodeStyle["badgeTone"],
@@ -234,6 +236,9 @@ function nodeColor(node: Node): string {
   return node.style?.borderColor ?? "var(--border-strong)";
 }
 
+/**
+ * @kind surface
+ */
 export function GraphView<
   TNodeKind extends string = string,
   TEdgeKind extends string = string,

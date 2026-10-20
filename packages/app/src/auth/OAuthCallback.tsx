@@ -67,6 +67,7 @@ const completionRequests = new Map<string, Promise<CallbackOutcome>>();
  * success or renders the error frame. The sign-in (`@angee/iam`) and
  * account-connect (`@angee/integrate`) callbacks render this with their own
  * `complete` and `copy`.
+ * @kind page
  */
 export function OAuthCallback({
   redirectUri,

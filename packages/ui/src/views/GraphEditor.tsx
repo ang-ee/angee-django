@@ -76,7 +76,9 @@ export interface GraphEditorProps {
 const DEFAULT_NODE_STYLE = graphNodeStyle("var(--border-strong)", "neutral", { height: 100 });
 const EMPTY_SELECTION: GraphEditorSelection = { nodes: [], link: null };
 
-/** Controlled graph editing. Connection policy and every data mutation belong to the caller. */
+/** Controlled graph editing. Connection policy and every data mutation belong to the caller.
+ * @kind surface
+ */
 export function GraphEditor({
   nodes, links, layout, layoutOptions, canLink, onLink, onUnlink, onDelete, onLayoutChange, onLayoutResolved,
   onInsertOnLink, onAddFromPort, nodeActions, status, nodeStyles, ariaLabel, className, initialView, miniMap,

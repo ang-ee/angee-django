@@ -48,7 +48,13 @@ export interface AppRailProps {
   navigationTarget?: string | null;
 }
 
+/**
+ * @kind token
+ */
 export const APP_RAIL_COLLAPSED_WIDTH = "var(--spacing-rail-w)";
+/**
+ * @kind token
+ */
 export const APP_RAIL_EXPANDED_WIDTH = "var(--spacing-rail-expanded-w)";
 
 const RAIL_BUTTON =
@@ -64,6 +70,8 @@ const RAIL_BUTTON_ACTIVE =
  * drawer. Desktop expansion toggles sit at the expanded header's edge and the
  * rail's foot, outside the scrolling list. Both rail modes reorder the app
  * roots and set the default app through one `RailSortable`.
+ * @kind region
+ * @region navigation-rail
  */
 export function AppRail({ menuItems, ...props }: AppRailProps): ReactElement {
   return <ChromePlaceProvider menuItems={menuItems}><AppRailBody {...props} /></ChromePlaceProvider>;

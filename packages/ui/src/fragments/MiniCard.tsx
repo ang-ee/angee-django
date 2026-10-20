@@ -25,6 +25,9 @@ export type MiniCardProps = Omit<
   title: React.ReactNode;
 };
 
+/**
+ * @kind token
+ */
 export const miniCardVariants = tv({
   slots: {
     root: "bg-canvas px-3 py-2 shadow-none",
@@ -37,6 +40,9 @@ export const miniCardVariants = tv({
   },
 });
 
+/**
+ * @kind fragment
+ */
 export const MiniCard = React.forwardRef<HTMLElement, MiniCardProps>(
   function MiniCard(
     { className, icon, meta, primaryTag, tags, title, ...props },

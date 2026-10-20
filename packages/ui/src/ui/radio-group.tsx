@@ -11,6 +11,9 @@ import {
 
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const radioGroupVariants = tv({
   slots: {
     root: "min-w-0",
@@ -76,6 +79,9 @@ export type RadioGroupRootProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner RadioGroup
+ */
 export const RadioGroupRoot = React.forwardRef<
   HTMLDivElement,
   RadioGroupRootProps
@@ -111,6 +117,9 @@ export type RadioGroupRadioProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner RadioGroup
+ */
 export const RadioGroupRadio = React.forwardRef<
   HTMLSpanElement,
   RadioGroupRadioProps
@@ -137,6 +146,9 @@ export type RadioGroupIndicatorProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner RadioGroup
+ */
 export const RadioGroupIndicator = React.forwardRef<
   HTMLSpanElement,
   RadioGroupIndicatorProps
@@ -168,6 +180,9 @@ export type RadioGroupItemProps = Omit<
     value: BaseRadioRootProps["value"];
   };
 
+/**
+ * @owner RadioGroup
+ */
 export const RadioGroupItem = React.forwardRef<
   HTMLLabelElement,
   RadioGroupItemProps
@@ -233,6 +248,9 @@ export const RadioGroupItem = React.forwardRef<
 });
 RadioGroupItem.displayName = "RadioGroupItem";
 
+/**
+ * @kind primitive
+ */
 export const RadioGroup = Object.assign(RadioGroupRoot, {
   Root: RadioGroupRoot,
   Radio: RadioGroupRadio,

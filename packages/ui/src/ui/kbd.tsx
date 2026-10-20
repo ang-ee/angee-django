@@ -2,6 +2,9 @@ import * as React from "react";
 
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const kbdVariants = tv({
   base: "inline-flex items-center justify-center border border-b-2 font-mono font-medium leading-none",
   variants: {
@@ -35,6 +38,9 @@ export type KbdProps = Omit<
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const Kbd = React.forwardRef<HTMLElement, KbdProps>(function Kbd(
   { className, size = "md", tone = "default", ...props },
   ref,

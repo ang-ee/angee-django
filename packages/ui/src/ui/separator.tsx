@@ -8,6 +8,9 @@ import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { sectionEyebrowVariants } from "./section-eyebrow";
 
+/**
+ * @kind token
+ */
 export const separatorVariants = tv({
   base: "shrink-0 bg-border",
   variants: {
@@ -42,6 +45,9 @@ export type SeparatorProps = Omit<
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const Separator = React.forwardRef<HTMLDivElement, SeparatorProps>(
   function Separator(
     {
@@ -74,6 +80,10 @@ export type DividerProps = Omit<
     className?: string;
   };
 
+/**
+ * @kind primitive
+ * @deprecated Lane 2 deletion candidate; migrate callers to the canonical owner.
+ */
 export function Divider({
   label,
   className,

@@ -24,6 +24,7 @@ const BUILT_IN_KINDS: Readonly<Record<BuiltInResourceViewKind, { labelKey: strin
  * such as `nexus.graph`; layers narrow either with `only` and `hide` (G-18).
  * `#utilities` holds collection utilities beside the toolbar.
  * `#search` holds shortcut declarations and page extras; the box is never a child.
+ * @kind contribution
  */
 export const RESOURCE_CONTAINERS: readonly CoreContainer[] = [
   {
@@ -43,15 +44,22 @@ const ResourceViewKindsContext = React.createContext<ReadonlyMap<string, Resourc
     [kind, { labelKey, icon, capabilities: RESOURCE_VIEW_KIND_CAPABILITIES[kind as BuiltInResourceViewKind] }])),
 );
 
-/** The offered kinds' switcher label, glyph, capabilities and (for contributed kinds) body. */
+/** The offered kinds' switcher label, glyph, capabilities and (for contributed kinds) body.
+ * @kind null
+ * @reason Provider infrastructure: ResourceViewKinds context.
+ */
 export const ResourceViewKindsProvider = ResourceViewKindsContext.Provider;
 
-/** Every kind the enclosing collection offers, by id. */
+/** Every kind the enclosing collection offers, by id.
+ * @owner ResourceList
+ */
 export function useResourceViewKinds(): ReadonlyMap<string, ResourceViewKindContent> {
   return React.useContext(ResourceViewKindsContext);
 }
 
-/** One kind's declaration, as the enclosing collection offers it. */
+/** One kind's declaration, as the enclosing collection offers it.
+ * @owner ResourceList
+ */
 export function useResourceViewKindContent(kind: ResourceViewKind | undefined): ResourceViewKindContent | undefined {
   const kinds = React.useContext(ResourceViewKindsContext);
   return kind === undefined ? undefined : kinds.get(kind);
@@ -61,6 +69,7 @@ export function useResourceViewKindContent(kind: ResourceViewKind | undefined): 
  * The kinds a collection offers, in container order: the `resource#views`
  * children its enclosing `ResourceViewKindsProvider` resolved, keeping a
  * built-in kind only where the page declares the data it needs.
+ * @owner ResourceList
  */
 export function useOfferedResourceViewKinds(
   declared: Parameters<typeof availableResourceViewKinds>[0],

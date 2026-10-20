@@ -12,7 +12,9 @@ export interface ResourceConditionEditorProps {
   readOnly?: boolean;
 }
 
-/** Edit persisted Hasura conditions using resource-owned capabilities and wire rules. */
+/** Edit persisted Hasura conditions using resource-owned capabilities and wire rules.
+ * @kind surface
+ */
 export function ResourceConditionEditor({ resource, value, onChange, readOnly = false }: ResourceConditionEditorProps) {
   const metadata = useModelMetadata(resource);
   const t = useUiT();

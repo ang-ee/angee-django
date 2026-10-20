@@ -27,7 +27,9 @@ export interface ThemePreviewFrameProps {
   variant?: "full" | "card";
 }
 
-/** Isolated preview document using the host's compiled presentation assets. */
+/** Isolated preview document using the host's compiled presentation assets.
+ * @kind surface
+ */
 export function ThemePreviewFrame({ title, themeId, colorScheme, tokens, logo, children, className, variant = "full" }: ThemePreviewFrameProps): ReactNode {
   const frame = useRef<HTMLIFrameElement>(null);
   const [target, setTarget] = useState<Document | null>(null);
@@ -104,7 +106,9 @@ function ThemeSpecimenChrome({ compact = false, logo, controls, children }: {
   </div>;
 }
 
-/** Shared controls and data surfaces used to review every installed theme. */
+/** Shared controls and data surfaces used to review every installed theme.
+ * @kind surface
+ */
 export function ThemeSpecimenSurface({ logo }: { logo?: ThemeCustomizationLogo } = {}): ReactNode {
   return <ThemeSpecimenChrome logo={logo} controls={<><Button variant="primary">Primary action</Button><Button variant="secondary">Secondary</Button></>}>
     <div className="grid gap-1"><SectionEyebrow as="span">Theme specimen</SectionEyebrow><h2 className={textRoleVariants({ role: "display" })}>Workspace overview</h2><p className="text-13 text-fg-muted">Typography, controls, status, fields and tabular surfaces use the active token contract.</p></div>

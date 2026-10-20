@@ -16,7 +16,9 @@ export interface RecordReferenceProps extends RecordTargetSearch {
   label?: ReactNode;
 }
 
-/** Display a record through its metadata and follow its registered record route. */
+/** Display a record through its metadata and follow its registered record route.
+ * @kind fragment
+ */
 export function RecordReference({ model, id, label, tab, search }: RecordReferenceProps): ReactElement {
   const recordHref = useResourceRecordHrefLookup();
   const content = label || <RecordReferenceLabel model={model} id={id} />;
@@ -31,7 +33,9 @@ export interface RecordReferenceRowProps extends Pick<RecordReferenceProps, "mod
   references: readonly Pick<RecordReferenceProps, "model" | "id">[];
 }
 
-/** A record pointer with metadata-owned labels, batched per model without changing list order. */
+/** A record pointer with metadata-owned labels, batched per model without changing list order.
+ * @owner RecordReference
+ */
 export function RecordReferenceRow({ model, id, references, tab, search, icon = "link", ...props }: RecordReferenceRowProps): ReactElement {
   const metadata = useModelMetadata(model);
   const ids = useMemo(() => [...new Set(references.filter((reference) => reference.model === model)

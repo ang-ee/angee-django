@@ -72,6 +72,10 @@ export function useGroupOperation(
   return useResourceOperation(resource, "groups", "groups");
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useDeletePreviewOperation(
   resource: DataResourceMetadata | null,
 ): ResourceOperation {
@@ -88,6 +92,7 @@ export interface UseDeleteWithPreviewResult extends UseAngeeDeletePreviewResult 
  * invalidation tail. Domain callers retain their own confirmation copy and any
  * related-resource invalidations, while the generated operation/document seam
  * stays in one place.
+ * @owner DeletePreviewDialog
  */
 export function useDeleteWithPreview(
   resource: DataResourceMetadata | null,

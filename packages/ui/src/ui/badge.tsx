@@ -11,6 +11,9 @@ import {
 import { tv, type VariantProps } from "../lib/variants";
 import { StatusDot, StatusIcon } from "./status-icon";
 
+/**
+ * @kind token
+ */
 export const badgeVariants = tv({
   base: "inline-flex min-w-0 items-center gap-1 whitespace-nowrap",
   variants: {
@@ -55,6 +58,9 @@ const COUNT_BADGE_TONES = {
   danger: toneFill.danger.soft,
 } as const;
 
+/**
+ * @kind token
+ */
 export const countBadgeVariants = tv({
   base: "inline-flex min-w-4 items-center justify-center rounded-full border px-1.5 text-2xs font-semibold leading-none tabular-nums",
   variants: {
@@ -89,6 +95,9 @@ export type BadgeProps = Omit<
     variant?: Fill;
   };
 
+/**
+ * @kind primitive
+ */
 export const Badge = React.forwardRef<HTMLSpanElement, BadgeProps>(function Badge(
   {
     tone = "neutral",
@@ -126,6 +135,10 @@ Badge.displayName = "Badge";
 
 export type TagProps = BadgeProps;
 
+/**
+ * @kind primitive
+ * @deprecated Lane 2 deletion candidate; migrate callers to the canonical owner.
+ */
 export function Tag(props: TagProps) {
   return <Badge {...props} />;
 }
@@ -149,6 +162,9 @@ function formatCount(value: number | string | undefined, max: number | undefined
   return value;
 }
 
+/**
+ * @kind primitive
+ */
 export const CountBadge = React.forwardRef<HTMLSpanElement, CountBadgeProps>(
   function CountBadge(
     {

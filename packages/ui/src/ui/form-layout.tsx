@@ -4,6 +4,9 @@ import { tv, type VariantProps } from "../lib/variants";
 import { RequiredMark } from "./label";
 import { SectionEyebrow } from "./section-eyebrow";
 
+/**
+ * @kind token
+ */
 export const formLayoutVariants = tv({
   slots: {
     grid: "grid min-w-0",
@@ -104,6 +107,9 @@ export type FormGridProps = React.HTMLAttributes<HTMLDivElement> &
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const FormGrid = React.forwardRef<HTMLDivElement, FormGridProps>(
   function FormGrid(
     {
@@ -139,6 +145,9 @@ export type FormActionsProps = React.HTMLAttributes<HTMLDivElement> &
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const FormActions = React.forwardRef<HTMLDivElement, FormActionsProps>(
   function FormActions(
     { align = "end", className, density = "comfortable", ...props },
@@ -159,6 +168,9 @@ export type FormFooterProps = React.HTMLAttributes<HTMLElement> &
     noteClassName?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const FormFooter = React.forwardRef<HTMLElement, FormFooterProps>(
   function FormFooter(
     {
@@ -202,6 +214,9 @@ export type FieldRowProps = Omit<
     requiredIndicator?: React.ReactNode;
   };
 
+/**
+ * @kind primitive
+ */
 export const FieldRow = React.forwardRef<HTMLLabelElement, FieldRowProps>(
   function FieldRow(
     {

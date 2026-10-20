@@ -88,6 +88,10 @@ export interface FormSubmitAcknowledgement {
   }) => FormValues;
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function acknowledgeFormSubmit(
   record: Row,
   values: FormValues,

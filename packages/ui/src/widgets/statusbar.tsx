@@ -54,7 +54,9 @@ function Statusbar({ value, onChange, field, readOnly }: WidgetRenderProps<strin
     value={value} onChange={onChange} readOnly={readOnly} fill={field?.fill} containerWidth={field?.containerWidth} />;
 }
 
-/** A bar-shaped loading state with the same chevron rhythm as loaded steps. */
+/** A bar-shaped loading state with the same chevron rhythm as loaded steps.
+ * @kind fragment
+ */
 export function StatusbarSkeleton({ count = 4, fill = false, twoLine = false, label }: {
   count?: number; fill?: boolean; twoLine?: boolean; label?: string;
 }): React.ReactElement {
@@ -65,7 +67,9 @@ export function StatusbarSkeleton({ count = 4, fill = false, twoLine = false, la
   </SkeletonStatus>;
 }
 
-/** The shared chevron statusbar. Owners supply path and selectability facts. */
+/** The shared chevron statusbar. Owners supply path and selectability facts.
+ * @kind surface
+ */
 export function StatusbarSteps({ steps, value, onChange, onEditDates, dateEditor, readOnly, fill = false, containerWidth,
   offPath, "aria-label": ariaLabel }: StatusbarStepsProps): React.ReactElement {
   const t = useUiT();

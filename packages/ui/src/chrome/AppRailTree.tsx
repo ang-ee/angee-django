@@ -33,6 +33,9 @@ function useRail(): DeveloperRail {
   return rail;
 }
 
+/**
+ * @kind token
+ */
 export const appRailTreeVariants = tv({
   slots: {
     root: "flex min-w-0 flex-col text-on-rail",
@@ -81,7 +84,9 @@ export interface AppRailTreeProps {
   sorting?: RailSorting | undefined;
 }
 
-/** Accordion navigation rendered as the expanded state of the app rail. */
+/** Accordion navigation rendered as the expanded state of the app rail.
+ * @owner AppRail
+ */
 export function AppRailTree({
   className,
   flat = false,

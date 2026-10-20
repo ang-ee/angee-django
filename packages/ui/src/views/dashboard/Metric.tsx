@@ -25,7 +25,9 @@ export interface MetricProps {
   href?: string;
 }
 
-/** Render-less marker; `DashboardView` collects these into one prominent metric strip. */
+/** Render-less marker; `DashboardView` collects these into one prominent metric strip.
+ * @kind contribution
+ */
 export function Metric(_props: MetricProps): null {
   return null;
 }

@@ -95,7 +95,9 @@ export type DescriptorFieldListProps = {
   | { fields?: never; resolvedFields: readonly DescriptorField[] }
 );
 
-/** Render descriptors in the existing React Hook Form provider's value tree. */
+/** Render descriptors in the existing React Hook Form provider's value tree.
+ * @kind surface
+ */
 export function DescriptorFieldList({ fields, resolvedFields, readOnly = false }: DescriptorFieldListProps): React.ReactElement {
   const form = useFormContext<Record<string, unknown>>();
   if (!form) throw new Error("DescriptorFieldList requires a React Hook Form FormProvider.");
@@ -163,6 +165,7 @@ export function resolveDescriptorFields(
 /**
  * Field chrome for one descriptor: label, description, invalid state, and
  * messages around the bare registry-rendering {@link FieldDescriptorControl}.
+ * @kind surface
  */
 export function LabeledDescriptorField({
   field,

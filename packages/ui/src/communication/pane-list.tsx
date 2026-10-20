@@ -47,6 +47,9 @@ export interface PaneRowProps {
 
 const ROW_CLASS = "group/row flex w-full gap-2 rounded-6 px-1 py-1.5 text-left hover:bg-canvas/70 aria-[current=true]:bg-canvas";
 
+/**
+ * @kind fragment
+ */
 export function PaneRow({
   icon, tone = "muted", leading, title, detail, meta, sub, verb, needsMe = false, selected, href, target, rel, onOpen, label, className,
 }: PaneRowProps): React.ReactElement {
@@ -95,7 +98,9 @@ export function PaneRow({
   return <button type="button" {...common} className={cn(ROW_CLASS, className)} onClick={onOpen}>{glyph}{body}</button>;
 }
 
-/** The rows of one pane list. */
+/** The rows of one pane list.
+ * @owner PaneRow
+ */
 export function PaneRows({ children, className, ...rest }: React.HTMLAttributes<HTMLUListElement>): React.ReactElement {
   return <ul className={cn("flex flex-col", className)} {...rest}>{children}</ul>;
 }
@@ -111,7 +116,9 @@ export interface PaneLabelProps {
   className?: string;
 }
 
-/** A day or section label above rows: 12px, muted, with an optional count, fold and verb. */
+/** A day or section label above rows: 12px, muted, with an optional count, fold and verb.
+ * @kind fragment
+ */
 export function PaneLabel({ children, count, folded, onToggle, action, className }: PaneLabelProps): React.ReactElement {
   const text = (
     <>
@@ -130,7 +137,9 @@ export function PaneLabel({ children, count, folded, onToggle, action, className
   );
 }
 
-/** A label's verb: a small link-coloured button with a glyph. */
+/** A label's verb: a small link-coloured button with a glyph.
+ * @owner PaneLabel
+ */
 export function PaneLabelAction({ icon, children, className, ...props }: React.ComponentPropsWithRef<"button"> & { icon?: string }): React.ReactElement {
   return (
     <button type="button" {...props} className={cn("flex items-center gap-0.5 rounded-6 px-1 text-12 font-normal text-link hover:bg-canvas disabled:opacity-50", className)}>
@@ -139,7 +148,9 @@ export function PaneLabelAction({ icon, children, className, ...props }: React.C
   );
 }
 
-/** A group's small action picker, using the native popover's controlled or uncontrolled lifetime. */
+/** A group's small action picker, using the native popover's controlled or uncontrolled lifetime.
+ * @owner PaneLabel
+ */
 export function PaneLabelPopover({ icon, label, children, ...props }: Pick<PopoverRootProps, "open" | "onOpenChange"> & {
   icon: string;
   label: string;
@@ -163,7 +174,9 @@ export interface ScopeChipProps {
   onClick: () => void;
 }
 
-/** A pane toolbar's scope chip: pressed = the active filter; the count rides inside. */
+/** A pane toolbar's scope chip: pressed = the active filter; the count rides inside.
+ * @kind fragment
+ */
 export function ScopeChip({ label, count, active, tone, onClick }: ScopeChipProps): React.ReactElement {
   return (
     <button type="button" aria-pressed={active} onClick={onClick} className="rounded-full">

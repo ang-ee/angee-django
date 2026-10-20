@@ -2,6 +2,9 @@ import * as React from "react";
 
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const pageVariants = tv({
   base: "flex min-h-0 flex-col bg-canvas text-fg",
   variants: {
@@ -35,6 +38,7 @@ export type PageProps = React.HTMLAttributes<HTMLDivElement> &
  * `overflow="visible"` so the region keeps owning the scroll and canvas
  * background; use the `fill`/`viewport` heights only when the page owns its own
  * viewport.
+ * @kind page
  */
 export const Page = React.forwardRef<HTMLDivElement, PageProps>(function Page(
   { className, height = "fill", overflow = "hidden", ...props },

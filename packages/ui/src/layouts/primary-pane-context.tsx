@@ -35,6 +35,10 @@ const PrimaryPaneContext = createContext<PrimaryPaneContextValue>({
   setNode: () => undefined,
 });
 
+/**
+ * @kind null
+ * @reason Provider infrastructure: PrimaryPane context.
+ */
 export function PrimaryPaneProvider({
   children,
 }: {
@@ -68,7 +72,9 @@ export function PrimaryPaneProvider({
 }
 
 /** Read the published primary-pane node (and the publish seam). The shell reads
- * `node`; tests can render it into a thin host to assert what a page published. */
+ * `node`; tests can render it into a thin host to assert what a page published.
+ * @owner ScopedExplorerPane
+ */
 export function usePrimaryPaneContent(): PrimaryPaneContextValue {
   return useContext(PrimaryPaneContext);
 }
@@ -81,6 +87,7 @@ export function usePrimaryPaneContent(): PrimaryPaneContextValue {
  * Pass a **memoized** node (like `NotePage` memoizes its chatter content with
  * `useMemo`) — the publish effect re-runs whenever `node`'s identity changes, so
  * an inline `<Explorer />` would republish every render.
+ * @owner ScopedExplorerPane
  */
 export function usePrimaryPane(node: ReactNode | null): void {
   const ownerRef = useRef<symbol | null>(null);
@@ -94,7 +101,9 @@ export function usePrimaryPane(node: ReactNode | null): void {
 }
 
 /** Rendered twin of `usePrimaryPane` for page tests and shared page shells.
- * Pass a memoized `node`; inline elements republish on every render. */
+ * Pass a memoized `node`; inline elements republish on every render.
+ * @owner ScopedExplorerPane
+ */
 export function PrimaryPanePublisher({
   node,
 }: {

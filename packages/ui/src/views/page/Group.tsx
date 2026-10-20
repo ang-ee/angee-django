@@ -56,6 +56,9 @@ function GroupMarker(_props: GroupProps): null {
   return null;
 }
 
+/**
+ * @kind contribution
+ */
 export const Group = Object.assign(GroupMarker, {
   [PAGE_ELEMENT_SLOT]: "group" as const,
 });

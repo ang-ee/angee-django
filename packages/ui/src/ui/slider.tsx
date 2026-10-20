@@ -12,6 +12,9 @@ import type {
 import { toneSolidBg } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const sliderVariants = tv({
   slots: {
     root: "flex w-full min-w-0 items-center gap-3",
@@ -75,6 +78,9 @@ export type SliderRootProps<
     className?: string;
   };
 
+/**
+ * @owner Slider
+ */
 export const SliderRoot = React.forwardRef<HTMLDivElement, SliderRootProps>(
   function SliderRoot(
     {
@@ -104,6 +110,9 @@ export type SliderControlProps = Omit<BaseSliderControlProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Slider
+ */
 export const SliderControl = React.forwardRef<
   HTMLDivElement,
   SliderControlProps
@@ -127,6 +136,9 @@ export type SliderTrackProps = Omit<BaseSliderTrackProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Slider
+ */
 export const SliderTrack = React.forwardRef<HTMLDivElement, SliderTrackProps>(
   function SliderTrack(
     { className, orientation = "horizontal", size = "md", tone = "brand", ...props },
@@ -152,6 +164,9 @@ export type SliderIndicatorProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner Slider
+ */
 export const SliderIndicator = React.forwardRef<
   HTMLDivElement,
   SliderIndicatorProps
@@ -175,6 +190,9 @@ export type SliderThumbProps = Omit<BaseSliderThumbProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Slider
+ */
 export const SliderThumb = React.forwardRef<HTMLDivElement, SliderThumbProps>(
   function SliderThumb(
     {
@@ -205,6 +223,9 @@ export type SliderValueProps = Omit<BaseSliderValueProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Slider
+ */
 export const SliderValue = React.forwardRef<HTMLOutputElement, SliderValueProps>(
   function SliderValue(
     { className, orientation = "horizontal", size = "md", tone = "brand", ...props },
@@ -239,6 +260,9 @@ export type SliderProps = Omit<SliderRootProps, "children"> & {
   valueClassName?: string;
 };
 
+/**
+ * @kind primitive
+ */
 export const Slider = React.forwardRef<HTMLDivElement, SliderProps>(
   function Slider(
     {

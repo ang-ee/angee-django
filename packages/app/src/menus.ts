@@ -61,7 +61,10 @@ export interface MenuDeclarationItem extends BaseMenuItem, Pick<MenuEntry, "moun
   children?: readonly MenuDeclarationItem[];
 }
 
-/** Whether an addon authored its menus as the legacy declaration list rather than the dict. */
+/** Whether an addon authored its menus as the legacy declaration list rather than the dict.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isMenuDeclarationList(
   menus: readonly MenuDeclarationItem[] | MenuDeclarations | undefined,
 ): menus is readonly MenuDeclarationItem[] {

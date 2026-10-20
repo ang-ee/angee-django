@@ -13,7 +13,9 @@ export interface SectionHeadingProps {
   className?: string;
 }
 
-/** Shared heading for record sections, tab bodies, and rail groups. */
+/** Shared heading for record sections, tab bodies, and rail groups.
+ * @kind fragment
+ */
 export function SectionHeading({
   label,
   count,

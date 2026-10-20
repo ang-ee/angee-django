@@ -4,6 +4,9 @@ import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { widgetControlSurfaceVariants, widgetControlPresentationProps } from "./widget-control";
 
+/**
+ * @kind token
+ */
 export const textareaVariants = tv({
   extend: widgetControlSurfaceVariants,
   base: "w-full text-fg placeholder:text-fg-subtle",
@@ -38,6 +41,9 @@ export type TextareaProps = Omit<
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
   function Textarea(
     {

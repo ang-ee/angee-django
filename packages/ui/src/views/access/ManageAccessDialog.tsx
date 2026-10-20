@@ -96,7 +96,9 @@ export interface ManageAccessDialogProps {
   onRemovePerson?: (person: AccessPerson) => Promise<void>;
 }
 
-/** Direct access for one record or a selection, over the shared collection owners. */
+/** Direct access for one record or a selection, over the shared collection owners.
+ * @kind surface
+ */
 export function ManageAccessDialog(props: ManageAccessDialogProps): React.ReactElement {
   const t = useUiT();
   const label = props.label ?? t("access.selection", { count: props.targetIds.length });

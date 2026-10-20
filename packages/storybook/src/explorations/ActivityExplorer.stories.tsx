@@ -102,7 +102,7 @@ export function ActivityExplorer({ entries, eligible, title = "Activity", dense 
 /* ------------------------------------------------------------------------------------------ */
 
 const meta = {
-  title: "Communication/Activity explorer (whiteboard)",
+  title: "Explorations/2026-10-19 Activity explorer — context aside ruling",
   component: ActivityExplorer,
   excludeStories: ["ActivityExplorer"],
   parameters: { layout: "padded" },

@@ -102,6 +102,9 @@ function AngeeLogoIcon({
   });
 }
 
+/**
+ * @kind token
+ */
 export const baseIcons = {
   activity: Activity,
   agent: AgentGlyph,
@@ -186,6 +189,9 @@ export const baseIcons = {
   x: X,
 } satisfies Readonly<Record<string, IconComponent>>;
 
+/**
+ * @owner Glyph
+ */
 export function useIcon(name: string): IconComponent | null {
   const { icons } = useAppRuntime();
   // Fall back to the static base set when the runtime registry lacks the name, so
@@ -196,6 +202,9 @@ export function useIcon(name: string): IconComponent | null {
   return getIcon(icons, name) ?? getIcon(baseIcons, name);
 }
 
+/**
+ * @kind token
+ */
 export function getIcon(
   icons: Readonly<Record<string, unknown>>,
   name: string,

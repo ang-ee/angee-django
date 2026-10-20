@@ -61,6 +61,7 @@ export interface RelationFieldWidgetProps {
  * (model, display field, create) from the SDL and the selected record's label
  * from its own read. Opening the picker starts the bounded option read, and
  * typing searches that collection on the server.
+ * @kind contribution
  */
 export function RelationFieldWidget(props: RelationFieldWidgetProps): ReactElement {
   if (props.readOnly) return props.value ? <RecordReference

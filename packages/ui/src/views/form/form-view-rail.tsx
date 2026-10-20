@@ -32,7 +32,9 @@ export interface ContributedRailGroup extends RecordRailGroupProps {
   containerChild?: string;
 }
 
-/** Declaration consumed from the record rail container (`form#rail`, `<model>#rail`). */
+/** Declaration consumed from the record rail container (`form#rail`, `<model>#rail`).
+ * @kind contribution
+ */
 export function RecordRailGroup(_props: RecordRailGroupProps): null {
   return null;
 }

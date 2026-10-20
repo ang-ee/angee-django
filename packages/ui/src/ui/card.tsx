@@ -5,6 +5,9 @@ import { useRender, type UseRenderRenderProp } from "../lib/slot";
 import { tv, type VariantProps } from "../lib/variants";
 import { textRoleVariants } from "./text";
 
+/**
+ * @kind token
+ */
 export const cardVariants = tv({
   base: "rounded-6 border bg-sheet text-fg shadow-xs transition-colors",
   variants: {
@@ -32,6 +35,9 @@ export const cardVariants = tv({
   },
 });
 
+/**
+ * @kind token
+ */
 export const cardHeaderVariants = tv({
   base: "flex flex-col gap-1.5",
   variants: {
@@ -46,6 +52,9 @@ export const cardHeaderVariants = tv({
   },
 });
 
+/**
+ * @kind token
+ */
 export const cardTitleVariants = tv({
   base: "text-sm font-semibold leading-tight text-fg",
   variants: {
@@ -60,6 +69,9 @@ export const cardTitleVariants = tv({
   },
 });
 
+/**
+ * @kind token
+ */
 export const cardDescriptionVariants = tv({
   base: cn(textRoleVariants({ role: "meta" }), "leading-snug"),
   variants: {
@@ -74,6 +86,9 @@ export const cardDescriptionVariants = tv({
   },
 });
 
+/**
+ * @kind token
+ */
 export const cardContentVariants = tv({
   base: "text-fg",
   variants: {
@@ -88,6 +103,9 @@ export const cardContentVariants = tv({
   },
 });
 
+/**
+ * @kind token
+ */
 export const cardFooterVariants = tv({
   base: "flex items-center gap-2",
   variants: {
@@ -122,17 +140,26 @@ export type CardProps = Omit<
     render?: UseRenderRenderProp<CardState>;
   };
 
+/**
+ * @kind token
+ */
 export const CARD_BASE = cardVariants({
   density: "md",
   interactive: false,
   variant: "default",
 });
+/**
+ * @kind token
+ */
 export const CARD_INTERACTIVE_BASE = cardVariants({
   density: "md",
   interactive: true,
   variant: "default",
 });
 
+/**
+ * @kind primitive
+ */
 export const Card = React.forwardRef<HTMLElement, CardProps>(function Card(
   {
     asChild = false,
@@ -192,6 +219,9 @@ type CardPartProps<TElement extends HTMLElement> = Omit<
 };
 
 export type CardHeaderProps = CardPartProps<HTMLDivElement>;
+/**
+ * @owner Card
+ */
 export const CardHeader = React.forwardRef<HTMLDivElement, CardHeaderProps>(
   function CardHeader({ className, density = "md", ...props }, ref) {
     return (
@@ -206,6 +236,9 @@ export const CardHeader = React.forwardRef<HTMLDivElement, CardHeaderProps>(
 CardHeader.displayName = "CardHeader";
 
 export type CardTitleProps = CardPartProps<HTMLHeadingElement>;
+/**
+ * @owner Card
+ */
 export const CardTitle = React.forwardRef<HTMLHeadingElement, CardTitleProps>(
   function CardTitle({ className, density = "md", ...props }, ref) {
     return (
@@ -220,6 +253,9 @@ export const CardTitle = React.forwardRef<HTMLHeadingElement, CardTitleProps>(
 CardTitle.displayName = "CardTitle";
 
 export type CardDescriptionProps = CardPartProps<HTMLParagraphElement>;
+/**
+ * @owner Card
+ */
 export const CardDescription = React.forwardRef<
   HTMLParagraphElement,
   CardDescriptionProps
@@ -235,6 +271,9 @@ export const CardDescription = React.forwardRef<
 CardDescription.displayName = "CardDescription";
 
 export type CardContentProps = CardPartProps<HTMLDivElement>;
+/**
+ * @owner Card
+ */
 export const CardContent = React.forwardRef<HTMLDivElement, CardContentProps>(
   function CardContent({ className, density = "md", ...props }, ref) {
     return (
@@ -249,6 +288,9 @@ export const CardContent = React.forwardRef<HTMLDivElement, CardContentProps>(
 CardContent.displayName = "CardContent";
 
 export type CardFooterProps = CardPartProps<HTMLDivElement>;
+/**
+ * @owner Card
+ */
 export const CardFooter = React.forwardRef<HTMLDivElement, CardFooterProps>(
   function CardFooter({ className, density = "md", ...props }, ref) {
     return (

@@ -56,17 +56,71 @@ export interface ThemeCustomizationConfiguration {
 export interface ThemeDefinition<TOptions = Record<string, never>> { contractVersion: 1; id: string; legacyIds?: readonly string[]; labelKey: string; descriptionKey: string; revision: number; tokens: ThemeTokenLayers; stylesheets?: readonly string[]; options?: ThemeOptionsDefinition<TOptions> }
 export interface ResolvedThemeOptions<TOptions = unknown> { version: number; value: TOptions; tokens: ThemeTokenLayers }
 export interface SerializableThemeMetadata { contractVersion: 1; id: string; legacyIds: readonly string[]; labelKey: string; descriptionKey: string; revision: number; optionsVersion: number | null; optionDefaults: unknown; optionsCapability: ThemeOptionsCapability | null }
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const THEME_CONTRACT_VERSION: 1;
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const THEME_ID_PATTERN: RegExp;
+/**
+ * @kind token
+ */
 export const THEME_TOKEN_NAMES: readonly ThemeTokenName[];
+/**
+ * @kind contribution
+ */
 export function defineTheme<TOptions>(definition: ThemeDefinition<TOptions>): ThemeDefinition<TOptions>;
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function assertThemeDefinition(value: unknown): ThemeDefinition<unknown>;
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function assertThemeCatalogue(definitions: readonly ThemeDefinition<unknown>[]): ThemeDefinition<unknown>[];
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function resolveThemeOptions<TOptions>(definition: ThemeDefinition<TOptions>, envelope?: ThemeOptionsEnvelope | null): ResolvedThemeOptions<TOptions>;
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function createThemeCustomizationOptions(defaults: ThemeCustomization, configuration?: ThemeCustomizationConfiguration): ThemeOptionsDefinition<ThemeCustomization>;
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isThemeCustomizationOptions(options: ThemeOptionsDefinition<unknown> | undefined): options is ThemeOptionsDefinition<ThemeCustomization> & { capability: "palette-customization" };
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function migrateThemeCustomization(value: unknown, defaults: ThemeCustomization): ThemeCustomization;
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function migrateThemeCustomizationFromV1(value: unknown, fromVersion: number, defaults: ThemeCustomization): ThemeCustomization;
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function parseThemeCustomization(value: unknown): ThemeCustomization;
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function compileThemeCss(definitions: readonly ThemeDefinition<unknown>[]): string;
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function serializableThemeMetadata(definition: ThemeDefinition<unknown>): SerializableThemeMetadata;

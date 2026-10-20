@@ -3,6 +3,8 @@ import { modelLabelSegment, type ModelEnumValueMetadata, type ModelMetadata } fr
 
 /**
  * Humanize a bare enum/state member name for display (`IN_REVIEW` -> `In Review`).
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
  */
 export function statusLabel(value: string): string {
   return titleCase(value.toLowerCase());

@@ -86,6 +86,7 @@ export interface FieldDescriptorControlProps {
  * Render one declarative page field through the widget registry. FormView and
  * dialog forms share this owner so field descriptors resolve widgets, labels,
  * and options the same way wherever an addon renders mutation inputs.
+ * @kind surface
  */
 export function FieldDescriptorControl(props: FieldDescriptorControlProps): React.ReactElement {
   const model = useModelMetadata(props.resource ?? "");

@@ -22,7 +22,10 @@ export interface ControlBandProviderProps {
   inherit?: boolean;
 }
 
-/** Provide the control-band host (`area-control`) for the bands rendered below. */
+/** Provide the control-band host (`area-control`) for the bands rendered below.
+ * @kind null
+ * @reason Provider infrastructure: ControlBand context.
+ */
 export const ControlBandProvider: (
   props: ControlBandProviderProps,
 ) => React.ReactElement = band.Provider;
@@ -38,6 +41,8 @@ export interface ControlBandProps {
  * Renders its children as the page's flush control band in the layout's
  * `area-control` row. Under a `ConsoleLayout` it portals into that row; with no
  * layout above (standalone/test) it renders the band inline.
+ * @kind region
+ * @region control-band
  */
 export function ControlBand({ wrap = false, className, ...props }: ControlBandProps): React.ReactElement | React.ReactPortal | null {
   return (

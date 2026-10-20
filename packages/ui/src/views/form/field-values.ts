@@ -1,6 +1,9 @@
 import type { FieldDescriptor } from "../page";
 
-/** Normalize scalar text without interpreting domain-specific objects. */
+/** Normalize scalar text without interpreting domain-specific objects.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function textValue(value: unknown): string {
   return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
 }
@@ -46,7 +49,10 @@ function invalidDescriptorConstraint(field: FieldDescriptor, value: unknown): bo
   return false;
 }
 
-/** Return exact dotted paths violating a structured FormSpec declaration. */
+/** Return exact dotted paths violating a structured FormSpec declaration.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function structuredFieldErrorPaths(
   field: FieldDescriptor,
   value: unknown,

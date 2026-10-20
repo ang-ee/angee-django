@@ -11,6 +11,9 @@ import type {
 import { createVariantContext } from "../lib/variant-context";
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const tabsVariants = tv({
   slots: {
     root: "w-full min-w-0",
@@ -69,6 +72,9 @@ export type TabsRootProps = Omit<BaseTabsRootProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Tabs
+ */
 export const TabsRoot = React.forwardRef<HTMLDivElement, TabsRootProps>(
   function TabsRoot({ className, variant = "card", ...props }, ref) {
     const styles = tabsVariants({ variant });
@@ -91,6 +97,9 @@ export type TabsListProps = Omit<BaseTabsListProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Tabs
+ */
 export const TabsList = React.forwardRef<HTMLDivElement, TabsListProps>(
   function TabsList({ className, variant, ...props }, ref) {
     const resolvedVariant = useTabsVariant(variant);
@@ -113,6 +122,9 @@ export type TabsTabProps = Omit<BaseTabsTabProps, "className" | "render"> &
     render?: BaseTabsTabProps["render"];
   };
 
+/**
+ * @owner Tabs
+ */
 export const TabsTab = React.forwardRef<HTMLElement, TabsTabProps>(
   function TabsTab({ className, icon, children, variant, ...props }, ref) {
     const resolvedVariant = useTabsVariant(variant);
@@ -139,6 +151,9 @@ export type TabsIndicatorProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner Tabs
+ */
 export const TabsIndicator = React.forwardRef<
   HTMLSpanElement,
   TabsIndicatorProps
@@ -160,6 +175,9 @@ export type TabsPanelProps = Omit<BaseTabsPanelProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Tabs
+ */
 export const TabsPanel = React.forwardRef<HTMLDivElement, TabsPanelProps>(
   function TabsPanel({ className, variant, ...props }, ref) {
     const resolvedVariant = useTabsVariant(variant);
@@ -179,6 +197,9 @@ export type TabsCountProps = React.HTMLAttributes<HTMLSpanElement> & {
   className?: string;
 };
 
+/**
+ * @owner Tabs
+ */
 export const TabsCount = React.forwardRef<HTMLSpanElement, TabsCountProps>(
   function TabsCount({ className, ...props }, ref) {
     const styles = tabsVariants();
@@ -189,6 +210,9 @@ export const TabsCount = React.forwardRef<HTMLSpanElement, TabsCountProps>(
 );
 TabsCount.displayName = "TabsCount";
 
+/**
+ * @kind primitive
+ */
 export const Tabs = Object.assign(TabsRoot, {
   List: TabsList,
   Tab: TabsTab,

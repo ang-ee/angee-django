@@ -20,7 +20,10 @@ const contextSchema = v.strictObject({
   }),
 });
 
-/** Decode only query facts bound to this active model and schema. Invalid links have no pager. */
+/** Decode only query facts bound to this active model and schema. Invalid links have no pager.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function parseRecordNavigationScope(
   search: Record<string, unknown>,
   resource: DataResourceMetadata | null | undefined,
@@ -39,7 +42,10 @@ export function parseRecordNavigationScope(
   }
 }
 
-/** Preserve the collection search verbatim, replacing only the record's navigation context. */
+/** Preserve the collection search verbatim, replacing only the record's navigation context.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function recordNavigationSearch(
   search: Record<string, unknown>,
   resource: DataResourceMetadata | null | undefined,
@@ -57,14 +63,20 @@ export function recordNavigationSearch(
   return next;
 }
 
-/** Merge flat route-search keys while preserving every key the caller does not own. */
+/** Merge flat route-search keys while preserving every key the caller does not own.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function updateRouteSearch(
   patch: Readonly<Record<string, unknown>>,
 ): (search: Record<string, unknown>) => Record<string, unknown> {
   return (search) => ({ ...search, ...patch });
 }
 
-/** Read one string from the app's flat route-search object. */
+/** Read one string from the app's flat route-search object.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function routeSearchParam(
   search: Readonly<Record<string, unknown>>,
   key: string,
@@ -79,7 +91,10 @@ export interface RecordTargetSearch {
   search?: Readonly<Record<string, string | null>>;
 }
 
-/** Set or clear the portable detail context shared by canonical record links. */
+/** Set or clear the portable detail context shared by canonical record links.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function recordTargetSearch(
   search: Readonly<Record<string, unknown>>,
   target: RecordTargetSearch,
@@ -94,14 +109,20 @@ export function recordTargetSearch(
   return next;
 }
 
-/** Add an exact tab and declared detail state to a composed canonical record href. */
+/** Add an exact tab and declared detail state to a composed canonical record href.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function recordTargetHref(href: string, target: RecordTargetSearch): string {
   const url = new URL(href, "https://angee.invalid");
   const query = routeSearchString(recordTargetSearch(Object.fromEntries(url.searchParams), target));
   return `${url.pathname}${query ? `?${query}` : ""}${url.hash}`;
 }
 
-/** Use the app's flat route-search codec for copied and modified-click links. */
+/** Use the app's flat route-search codec for copied and modified-click links.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function recordNavigationHref(
   href: string,
   resource: DataResourceMetadata | null | undefined,

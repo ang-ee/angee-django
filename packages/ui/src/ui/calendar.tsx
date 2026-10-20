@@ -11,6 +11,9 @@ import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { sectionEyebrowVariants } from "./section-eyebrow";
 
+/**
+ * @kind token
+ */
 export const calendarVariants = tv({
   slots: {
     root: "relative p-2",
@@ -73,6 +76,9 @@ export type CalendarProps = DayPickerProps &
     classNames?: Partial<CalendarClassNames>;
   };
 
+/**
+ * @kind token
+ */
 export function calendarClassNames(
   props?: CalendarRecipeProps,
 ): Partial<CalendarClassNames> {
@@ -147,6 +153,9 @@ function CalendarChevron({
   );
 }
 
+/**
+ * @kind primitive
+ */
 export function Calendar({
   classNames,
   components,

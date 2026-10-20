@@ -1,15 +1,48 @@
-/** Record-route sentinel for a blank create form, never a persisted row. */
+/** Record-route sentinel for a blank create form, never a persisted row.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const REFINE_CREATE_ID = "new";
 
-/** Query keys owned by shared record routing; addon detail state declares its own keys. */
+/** Query keys owned by shared record routing; addon detail state declares its own keys.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const RECORD_NAVIGATION_SEARCH_KEY = "recordNav";
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const RECORD_TAB_SEARCH_KEY = "recordTab";
-/** The context aside's navigation state: the tab, a drill-in's target, a focus inside it, the tab it was opened from. */
+/** The context aside's navigation state: the tab, a drill-in's target, a focus inside it, the tab it was opened from.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const CHATTER_TAB_SEARCH_KEY = "chatterTab";
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const CHATTER_TARGET_SEARCH_KEY = "chatterTarget";
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const CHATTER_FOCUS_SEARCH_KEY = "chatterFocus";
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const CHATTER_FROM_SEARCH_KEY = "chatterFrom";
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const CHATTER_SEARCH_KEYS: readonly string[] = [CHATTER_TAB_SEARCH_KEY, CHATTER_TARGET_SEARCH_KEY, CHATTER_FOCUS_SEARCH_KEY, CHATTER_FROM_SEARCH_KEY];
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const RECORD_SEARCH_KEYS: readonly string[] = [RECORD_NAVIGATION_SEARCH_KEY, RECORD_TAB_SEARCH_KEY, ...CHATTER_SEARCH_KEYS];
 
 /** The route facts a rendered consumer may ask the composed app for. */
@@ -35,7 +68,10 @@ export interface RecordMatch {
   equals: string | readonly string[];
 }
 
-/** The values a record match accepts. */
+/** The values a record match accepts.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function recordMatchValues(match: RecordMatch): readonly string[] {
   return typeof match.equals === "string" ? [match.equals] : match.equals;
 }
@@ -63,7 +99,10 @@ export interface RouteHref {
   ): string | undefined;
 }
 
-/** A route spelling absent from the composed app. */
+/** A route spelling absent from the composed app.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export class UnknownRouteError extends Error {
   readonly routeName: string;
 
@@ -78,6 +117,8 @@ export class UnknownRouteError extends Error {
  * Compile the app's composed route descriptors into its runtime href owner.
  * Route names and parameter sets are exact: unknown routes, missing params, and
  * extra params are composition/authoring defects and fail at the call site.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function createRouteHref(
   descriptors: readonly RuntimeRouteDescriptor[],
@@ -146,6 +187,8 @@ export function createRouteHref(
  * mounted route's names build the alias family's (`iam.users` → `x.people`,
  * `iam.users.record` → `x.people.record`), so a borrowed page's own links stay
  * in the borrowing app; every other name builds unchanged.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function aliasRouteHref(
   routeHref: RouteHref,
@@ -170,7 +213,10 @@ function routeParameterNames(template: string): string[] {
     });
 }
 
-/** Parse one complete TanStack `$param` segment. */
+/** Parse one complete TanStack `$param` segment.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function routeParameterName(segment: string): string | undefined {
   return /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(segment)?.[1];
 }
@@ -185,7 +231,10 @@ function validateRouteTemplate(descriptor: RuntimeRouteDescriptor): void {
   }
 }
 
-/** Serialize flat search values for both runtime hrefs and the app router. */
+/** Serialize flat search values for both runtime hrefs and the app router.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function routeSearchString(
   search: string | Readonly<Record<string, unknown>> | undefined,
 ): string {

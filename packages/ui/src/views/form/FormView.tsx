@@ -123,7 +123,9 @@ function FormViewComponent(props: FormViewProps): React.ReactElement {
   />;
 }
 
-/** Existing public FormView export also exposes form-owned declaration seams. */
+/** Existing public FormView export also exposes form-owned declaration seams.
+ * @kind surface
+ */
 export const FormView = Object.assign(FormViewComponent, {
   RailGroup: RecordRailGroup,
   SectionHeading,
