@@ -1,5 +1,5 @@
 import { useAuthoredQuery, useAuthoredQueryBatch, useInvalidateAuthoredModels } from "@angee/refine";
-import { useCallback, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
   EmptyState, InlineTextAction, LoadingPanel, PaneToolbarMenu, ScopedExplorerPane, TreeView,
   useConfirm, useLatestRef, type FieldDescriptor, type ScopedExplorerController,
@@ -11,6 +11,7 @@ import {
 } from "../data/documents";
 import { ALL_SCOPE, STORAGE_FILE_DND, TRASH_SCOPE, folderTreeRows, type FileDragData, type StorageTreeRow } from "../data/file-rows";
 import type { FileActions } from "../data/use-file-actions";
+import type { StorageUpload } from "../data/use-upload";
 import { useFolderActions } from "../data/use-folder-actions";
 import { useStorageT } from "../i18n";
 
@@ -41,13 +42,15 @@ function expandedFolderKey(drive: string, parent: string): string {
 }
 
 /** Storage's lazy folder tree and folder verbs, composed into the shared explorer. */
-export function StorageExplorer({ openFile, openFileId, folderScope, selectScope, openFileRoute, fileActions, children }: {
+export function StorageExplorer({ openFile, openFileId, folderScope, selectScope, openFileRoute, fileActions, uploads, children }: {
   openFile: StorageFile | null;
   openFileId: string | null;
   folderScope: string;
   selectScope: (scope: string | null) => void;
   openFileRoute: (id: string) => void;
   fileActions: FileActions;
+  /** The upload owner; present on the files page, where "New" offers Upload. */
+  uploads?: StorageUpload;
   children: (controller: StorageExplorerController) => ReactNode;
 }): ReactElement {
   const t = useStorageT();
@@ -214,43 +217,15 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
     }),
     [driveCreateFields, refetchDrives, t],
   );
-  const renderTree = useCallback(
-    (controller: StorageExplorerController) => (
-      <TreeView<StorageTreeRow>
-        rows={controller.treeRows}
-        parent="parent"
-        label="name"
-        rowKey="id"
-        icon="icon"
-        hasChildren="hasChildren"
-        loading="loading"
-        onExpand={handleExpandFolder}
-        selectedId={openFileId ?? (controller.selectedId ?? ALL_SCOPE)}
-        onSelect={(row) => {
-          if (row.kind === "file") {
-            openFileRoute(row.id);
-            return;
-          }
-          // Writes the scope to the URL (via onSelectedIdChange) and lands on the
-          // list route, closing any open preview.
-          controller.setSelectedId(row.id);
-        }}
-        dropAccept={STORAGE_FILE_DND}
-        canDropOnNode={(_nodeId, row) => row.kind !== "file"}
-        onNodeDrop={(nodeId, payload) =>
-          handleFileDrop(nodeId, payload.data as FileDragData)
-        }
-        className="min-h-0 flex-1 overflow-auto"
-      />
-    ),
-    [handleExpandFolder, handleFileDrop, openFileId, openFileRoute],
-  );
-  // The toolbar's folder verbs: New folder opens the inline name field below the
-  // tree, Rename opens it prefilled, Delete confirms first. The field closes on submit.
+  // The folder verbs happen where the user looks: New folder is typed as a row in
+  // the tree under the selected folder; Rename edits the selected folder's own row.
   const [folderEdit, setFolderEdit] = useState<"create" | "rename" | null>(null);
-  const renderNavigatorFooter = useCallback(
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  // The upload owner is read live so the published navigator stays stable across renders.
+  const uploadsRef = useLatestRef(uploads);
+  const canUpload = uploads !== undefined;
+  const renderTree = useCallback(
     (controller: StorageExplorerController) => {
-      if (!folderEdit) return null;
       const effectiveScope = controller.selectedId ?? ALL_SCOPE;
       const selectedFolder =
         effectiveScope !== ALL_SCOPE && effectiveScope !== TRASH_SCOPE
@@ -268,12 +243,12 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
         }
         setFolderEdit(null);
       };
-      return (
+      const field = (value?: string): ReactNode => (
         <InlineTextAction
           key={`${folderEdit}:${selectedFolder?.id ?? ""}`}
           open
           onOpenChange={(next) => { if (!next) setFolderEdit(null); }}
-          value={folderEdit === "rename" ? selectedFolder?.name : undefined}
+          value={value}
           busy={folderActions.busy}
           onSubmit={submit}
           inputLabel={folderEdit === "rename" ? t("folder.nameLabel") : t("newFolder.nameLabel")}
@@ -283,8 +258,63 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
           inputClassName="min-w-0 flex-1"
         />
       );
+      return (
+        <>
+          <TreeView<StorageTreeRow>
+            rows={controller.treeRows}
+            parent="parent"
+            label="name"
+            rowKey="id"
+            icon="icon"
+            hasChildren="hasChildren"
+            loading="loading"
+            onExpand={handleExpandFolder}
+            selectedId={openFileId ?? (controller.selectedId ?? ALL_SCOPE)}
+            onSelect={(row) => {
+              if (row.kind === "file") {
+                openFileRoute(row.id);
+                return;
+              }
+              // Writes the scope to the URL (via onSelectedIdChange) and lands on the
+              // list route, closing any open preview.
+              controller.setSelectedId(row.id);
+            }}
+            renderRow={folderEdit === "rename" && selectedFolder
+              ? (row) => (row.id === selectedFolder.id ? field(selectedFolder.name) : row.name)
+              : undefined}
+            insertion={folderEdit === "create"
+              ? { parentId: selectedFolder ? effectiveScope : null, node: field() }
+              : null}
+            dropAccept={STORAGE_FILE_DND}
+            canDropOnNode={(_nodeId, row) => row.kind !== "file"}
+            onNodeDrop={(nodeId, payload) =>
+              handleFileDrop(nodeId, payload.data as FileDragData)
+            }
+            className="min-h-0 flex-1 overflow-auto"
+          />
+          {canUpload ? (
+            <input
+              ref={uploadInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              aria-label={t("upload.chooseFiles")}
+              onChange={(event) => {
+                const files = event.target.files;
+                if (files && files.length > 0 && controller.rootId) {
+                  uploadsRef.current?.upload(Array.from(files), {
+                    driveId: controller.rootId,
+                    folderId: selectedFolder ? effectiveScope : null,
+                  });
+                }
+                event.target.value = "";
+              }}
+            />
+          ) : null}
+        </>
+      );
     },
-    [folderActions.busy, folderActionsRef, folderEdit, t],
+    [canUpload, folderActions.busy, folderActionsRef, folderEdit, handleExpandFolder, handleFileDrop, openFileId, openFileRoute, t, uploadsRef],
   );
   const explorerToolbar = useCallback(
     (controller: StorageExplorerController) => {
@@ -306,8 +336,15 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
           .remove(effectiveScope)
           .then(() => controller.setSelectedId(ALL_SCOPE));
       };
+      const busy = folderActions.busy || !controller.rootId;
       return {
-        actions: [{ icon: "folder", label: t("newFolder.button"), disabled: folderActions.busy || !controller.rootId, onClick: () => setFolderEdit("create") }],
+        actions: [{
+          icon: "plus", label: t("new.menu"), text: true, disabled: busy,
+          items: [
+            { icon: "folder", label: t("new.folder"), onClick: () => setFolderEdit("create") },
+            ...(canUpload ? [{ icon: "upload", label: t("new.upload"), onClick: () => uploadInputRef.current?.click() }] : []),
+          ],
+        }],
         overflow: selectedFolder ? (
           <PaneToolbarMenu items={[
             { icon: "pencil", label: t("folder.rename"), disabled: folderActions.busy, onClick: () => setFolderEdit("rename") },
@@ -316,7 +353,7 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
         ) : undefined,
       };
     },
-    [confirm, folderActions.busy, folderActionsRef, t],
+    [canUpload, confirm, folderActions.busy, folderActionsRef, t],
   );
   const handleRootChange = useCallback(
     (rootId: string) => {
@@ -346,7 +383,6 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
       onRootChange={handleRootChange}
       renderTree={renderTree}
       toolbar={explorerToolbar}
-      renderNavigatorFooter={renderNavigatorFooter}
       renderContentWithoutRoots={openFileId !== null}
       loading={drivesQuery.isFetching && drives.length === 0}
       loadingContent={<LoadingPanel message={t("loading")} />}

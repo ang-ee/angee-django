@@ -5,7 +5,7 @@ import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import type { BaseMenuItem } from "@angee/ui";
 import { Tab, useRecordChromeContext, useRouteSearch } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import { ArchiveRestore, Download, HardDrive, Image, Pencil } from "lucide-react";
+import { ArchiveRestore, Download, HardDrive, Image, Pencil, Upload } from "lucide-react";
 
 import { enStorageMessages } from "./i18n";
 import { fileAttachedToGroup } from "./FileAttachedToPane";
@@ -72,6 +72,7 @@ const storage = defineBaseAddon({
     download: Download,
     restore: ArchiveRestore,
     edit: Pencil,
+    upload: Upload,
   },
   // Rich file renderers (PDF, media, HEIC) contributed to `PreviewPane`.
   previews: storagePreviews,

@@ -44,7 +44,15 @@ export const enStorageMessages: Record<string, string> = {
   "folder.delete": "Delete folder",
   "folder.nameLabel": "Folder name",
   "folder.save": "Save",
-  "newFolder.button": "New folder",
+  "new.menu": "New",
+  "new.folder": "Folder",
+  "new.upload": "Upload",
+  "file.eyebrow": "File",
+  "file.facts": "{type} · {size} · uploaded {date} by {by}",
+  "file.factsAnonymous": "{type} · {size} · uploaded {date}",
+  "file.inTrash": "In trash",
+  "file.trashTitle": 'Move "{name}" to the trash?',
+  "file.trashBody": "You can restore it from the drive's Trash.",
   "newFolder.placeholder": "Folder name",
   "newFolder.nameLabel": "New folder name",
   "newFolder.create": "Create",
@@ -85,7 +93,6 @@ export const enStorageMessages: Record<string, string> = {
   "file.unknownType": "Unknown type",
   // File preview pane header subtitle: mime label · formatted size (formatSize
   // already carries the unit, e.g. "1.4 MB").
-  "file.subtitle": "{type} · {size}",
 
   // File detail record form — section + field labels.
   "file.details": "Details",

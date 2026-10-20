@@ -11,6 +11,7 @@ import {
 import { StorageFileById } from "../data/documents";
 import { ALL_SCOPE, FOLDER_SCOPE_PARAM, folderScopeFromSearch, folderScopeToParam, type StorageFileRow } from "../data/file-rows";
 import { useFileActions } from "../data/use-file-actions";
+import { useStorageT } from "../i18n";
 import { useStorageUpload } from "../data/use-upload";
 import { FilePreviewFrame } from "./FilePreviewFrame";
 import { filePreviewPageFromSearch } from "./FilePreview";
@@ -92,19 +93,19 @@ export function StoragePage(): ReactElement {
     },
     [navigate, routeHref, fileResource],
   );
-  const uploads = useStorageUpload();
   const refreshOpenFile = useCallback(() => {
     if (openFileId) openFileQuery.refetch();
   }, [openFileId, openFileQuery.refetch]);
   const fileActions = useFileActions({ onChanged: refreshOpenFile });
+  const uploads = useStorageUpload();
 
   return <StorageExplorer openFile={openFile} openFileId={openFileId} folderScope={folderScope}
-    selectScope={selectScope} openFileRoute={openFileRoute} fileActions={fileActions}>
+    selectScope={selectScope} openFileRoute={openFileRoute} fileActions={fileActions} uploads={uploads}>
     {(controller) => <ResourceViewProvider resource={FILE_MODEL} initialState={{ ...FILE_LIST_INITIAL_STATE,
       groupStack: (controller.selectedId ?? ALL_SCOPE) === ALL_SCOPE ? [ALL_FILES_DEFAULT_GROUP] : [],
     }}>
       <StoragePageContent controller={controller} fileResource={fileResource} navigationScope={navigationScope}
-        openFileId={openFileId} openFilePreviewPage={openFilePreviewPage}
+        openFile={openFile} openFileId={openFileId} openFilePreviewPage={openFilePreviewPage}
         uploads={uploads} fileActions={fileActions} closeDetail={closeDetail} onOpenFile={openFileRoute} />
     </ResourceViewProvider>}
   </StorageExplorer>;
@@ -112,6 +113,7 @@ export function StoragePage(): ReactElement {
 
 function StoragePageContent({
   controller,
+  openFile,
   openFileId,
   openFilePreviewPage,
   fileResource,
@@ -122,6 +124,7 @@ function StoragePageContent({
   onOpenFile,
 }: {
   controller: StorageExplorerController;
+  openFile: { folder?: string | null } | null;
   openFileId: string | null;
   openFilePreviewPage: number | null;
   fileResource: DataResourceMetadata | undefined;
@@ -140,7 +143,20 @@ function StoragePageContent({
     recordId: openFileId,
     onSelect: onOpenFile,
   });
-  return openFileId ? <FilePreviewFrame id={openFileId} page={openFilePreviewPage}
+  const t = useStorageT();
+  // The eyebrow: the drive, then the open file's folder path as far as the tree has loaded it.
+  const crumbs = useMemo(() => {
+    const drive = controller.rootOptions.find((option) => option.value === controller.rootId)?.label;
+    const path: string[] = [];
+    let folder = openFile?.folder ? controller.treeRows.find((row) => row.id === openFile.folder) : undefined;
+    while (folder) {
+      path.unshift(String(folder.name));
+      const parent = folder.parent;
+      folder = parent ? controller.treeRows.find((row) => row.id === parent) : undefined;
+    }
+    return [t("file.eyebrow"), [drive, ...path].filter(Boolean).join(" / ")].filter(Boolean).join(" · ");
+  }, [controller.rootId, controller.rootOptions, controller.treeRows, openFile?.folder, t]);
+  return openFileId ? <FilePreviewFrame id={openFileId} page={openFilePreviewPage} crumbs={crumbs}
     fileActions={fileActions} closeDetail={closeDetail} fileNavigation={fileNavigation} /> :
     <StorageListContent controller={controller} fileResource={fileResource} navigationScope={navigationScope}
       uploads={uploads} fileActions={fileActions} onListStateChange={onListStateChange} />;

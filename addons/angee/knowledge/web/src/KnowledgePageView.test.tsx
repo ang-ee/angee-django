@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { ControlBandProvider, formatDateTime } from "@angee/ui";
+import { ControlBandProvider, formatDate } from "@angee/ui";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -93,7 +93,7 @@ describe("KnowledgePageView", () => {
     expect(sdk.query).toHaveBeenCalledWith(KnowledgePage, { id: "pg_guide" }, { models: PAGE_READ_MODELS });
     expect(screen.getByRole("heading", { name: "Guide" })).toBeTruthy();
     expect(screen.getByText("Published instructions")).toBeTruthy();
-    expect(screen.getByText(`Updated ${formatDateTime(detail().updated_at)}`)).toBeTruthy();
+    expect(screen.getByText(`edited ${formatDate(detail().updated_at)} by Author · 2 words`)).toBeTruthy();
     expect(screen.queryByRole("navigation")).toBeNull();
   });
 

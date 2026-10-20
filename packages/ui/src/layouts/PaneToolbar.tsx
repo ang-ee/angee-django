@@ -58,6 +58,8 @@ export interface PaneToolbarAction {
   /** A count on the icon button (unread, needs you). */
   badge?: number;
   disabled?: boolean;
+  /** Make the action a menu: the button opens these items instead of running `onClick`. */
+  items?: readonly PaneToolbarMenuItem[];
 }
 
 export interface PaneToolbarProps {
@@ -87,7 +89,12 @@ export function PaneToolbar({ scope, selector, search = false, onSearch, actions
       {scope ? <div className="flex min-w-0 items-center gap-1 overflow-hidden [&>*]:shrink-0">{scope}</div> : null}
       <span className="ml-auto flex shrink-0 items-center gap-0.5">
         {search === true ? <PaneToolbarIconButton icon="search" label="Search" onClick={onSearch} /> : search || null}
-        {Array.isArray(actions) ? (actions as readonly PaneToolbarAction[]).map((action) => action.text ? (
+        {Array.isArray(actions) ? (actions as readonly PaneToolbarAction[]).map((action) => action.items ? (
+          <PaneToolbarMenu key={action.label} label={action.label} items={action.items}
+            trigger={action.text
+              ? <Button size="sm" variant="ghost" disabled={action.disabled} className="h-6 whitespace-nowrap px-1.5 text-12"><Glyph name={action.icon} /> {action.label}<Glyph name="chevron-down" className="glyph opacity-60" /></Button>
+              : <PaneToolbarIconButton icon={action.icon} label={action.label} badge={action.badge} disabled={action.disabled} />} />
+        ) : action.text ? (
           <Button key={action.label} size="sm" variant={action.tone === "danger" ? "danger" : "ghost"} disabled={action.disabled} onClick={action.onClick} className="h-6 whitespace-nowrap px-1.5 text-12">
             <Glyph name={action.icon} /> {action.label}
           </Button>
@@ -153,16 +160,18 @@ export interface PaneToolbarMenuRadioGroup {
 /** The toolbar's overflow: one menu behind the shared icon, with the pane's secondary verbs.
  * @owner PaneToolbar
  */
-export function PaneToolbarMenu({ label, items = [], groups = [] }: {
+export function PaneToolbarMenu({ label, items = [], groups = [], trigger }: {
   label?: string;
   items?: readonly PaneToolbarMenuItem[];
   groups?: readonly PaneToolbarMenuRadioGroup[];
+  /** The menu's button; the shared overflow icon when omitted. */
+  trigger?: React.ReactElement;
 }): React.ReactElement | null {
   const t = useUiT();
   if (items.length === 0 && groups.length === 0) return null;
   return (
     <DropdownMenu.Root>
-      <DropdownMenu.Trigger render={<PaneToolbarIconButton icon="more-horizontal" label={label ?? t("paneToolbar.more")} />} />
+      <DropdownMenu.Trigger render={trigger ?? <PaneToolbarIconButton icon="more-horizontal" label={label ?? t("paneToolbar.more")} />} />
       <DropdownMenu.Portal>
         <DropdownMenu.Positioner sideOffset={4} align="end">
           <DropdownMenu.Content className="w-52">

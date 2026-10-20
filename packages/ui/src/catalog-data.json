@@ -1209,6 +1209,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "CommandBand",
+    "source": "packages/ui/src/views/resource/CommandBand.tsx",
+    "kind": "region",
+    "region": "command-band",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "CommandEmpty",
     "source": "packages/ui/src/ui/command.tsx",
     "kind": "primitive",
@@ -4677,6 +4686,15 @@
     "source": "packages/ui/src/views/resource/trash.tsx",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "TREE_INSERTION_ID",
+    "source": "packages/ui/src/views/tree/TreeView.tsx",
+    "kind": "surface",
+    "owner": "@angee/ui:TreeView",
     "status": "stable",
     "storyId": null
   },

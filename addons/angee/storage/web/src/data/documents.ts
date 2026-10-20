@@ -117,6 +117,7 @@ export const StorageFileById = graphql(`
   query StorageFileById($id: String!) {
     files_by_pk(id: $id) {
       id
+      permissions
       filename
       title
       size_bytes

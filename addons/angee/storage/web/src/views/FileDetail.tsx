@@ -39,6 +39,8 @@ export function FileDetail({
       returning={[...SUBTITLE_FIELDS]}
       submitLabel={t("file.rename")}
       onSaved={onChanged}
+      // The page's command band owns the record chrome; this form is the Details section.
+      hideRecordChrome
     >
       <Field name="title" widget="text" title placeholder={filename} />
       <Group label={t("file.details")} columns={2}>
