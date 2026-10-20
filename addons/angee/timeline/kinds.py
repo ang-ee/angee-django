@@ -96,7 +96,11 @@ class TimelineKind(ABC):
 
     @abstractmethod
     def eligible(self, model: type[models.Model]) -> bool:
-        """Whether rows of ``model`` can carry this kind at all."""
+        """Whether rows of ``model`` can carry this kind at all.
+
+        A kind that projects onto any touched record composes
+        :func:`timeline_subject` so a model's own opt-out holds on write and on read.
+        """
 
     @abstractmethod
     def rows(self) -> Iterable[models.Model]:
@@ -190,3 +194,14 @@ class Cursor:
             | Q(at=self.at, kind__gt=self.kind)
             | Q(at=self.at, kind=self.kind, pk__lt=self.pk)
         )
+
+
+def timeline_subject(model: type[models.Model]) -> bool:
+    """Whether a model's rows have a timeline of their own.
+
+    A record declares ``timeline_subject = False`` when its rows are bookkeeping read
+    through another record (a sync link's history is evidence on its target), so no kind
+    writes events about them and no read admits any.
+    """
+
+    return bool(getattr(model, "timeline_subject", True))

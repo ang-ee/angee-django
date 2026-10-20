@@ -9,7 +9,7 @@ from django.apps import apps
 from django.db import models
 
 from angee.models import record_history
-from angee.timeline.kinds import EventData, TimelineKind, actor_label
+from angee.timeline.kinds import EventData, TimelineKind, actor_label, timeline_subject
 
 
 class ChangeKind(TimelineKind):
@@ -21,7 +21,7 @@ class ChangeKind(TimelineKind):
     explicit_publication = True
 
     def eligible(self, model: type[models.Model]) -> bool:
-        return record_history(model) is not None
+        return record_history(model) is not None and timeline_subject(model)
 
     def rows(self) -> Iterable[models.Model]:
         model = apps.get_model("provenance", "Changeset")
@@ -38,6 +38,10 @@ class ChangeKind(TimelineKind):
         label = actor_label(changeset.actor)
         records = type(changeset).objects.filter(pk=changeset.pk).records_touched()
         for model, pk in records:
+            # The read admits this kind only on records with a readable history; a row that
+            # has none (sync bookkeeping such as a record link) gets no event written either.
+            if not self.eligible(model):
+                continue
             yield EventData(
                 kind=self.id, target=changeset, record=(model, pk), at=changeset.occurred_at,
                 title=f"{changeset.get_action_display()} · {changeset.get_activity_display()}",
