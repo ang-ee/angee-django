@@ -122,7 +122,8 @@ export function ReportPage({
         )}
       </PageBody>
       {parameters && open ? (
-        <ActionFormDialog action={parameters} context={PAGE_CONTEXT} open onOpenChange={setOpen} />
+        // The dialog's verb runs the report; the trigger's label names the parameters.
+        <ActionFormDialog action={{ submitLabel: t("reportPage.run"), ...parameters }} context={PAGE_CONTEXT} open onOpenChange={setOpen} />
       ) : null}
     </Page>
   );

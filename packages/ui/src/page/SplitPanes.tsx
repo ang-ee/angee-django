@@ -115,10 +115,16 @@ function PersistentGroup({
     storage,
     ...(panelIds != null ? { panelIds } : {}),
   });
+  // A layout with a collapsed pane is a moment's state (a page folded the aside, a drag hit
+  // the edge), never the remembered one: the stored layout always reopens every pane.
+  const remember = React.useCallback<NonNullable<ResizableGroupProps["onLayoutChanged"]>>((...args) => {
+    if (Object.values(args[0]).some((size) => size === 0)) return;
+    onLayoutChanged(...args);
+  }, [onLayoutChanged]);
   return (
     <ResizableGroup
       defaultLayout={defaultLayout}
-      onLayoutChanged={persistLayout ? onLayoutChanged : undefined}
+      onLayoutChanged={persistLayout ? remember : undefined}
       {...groupProps}
     />
   );

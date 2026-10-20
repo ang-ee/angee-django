@@ -56,10 +56,16 @@ export function RunsList({ baseFilter, embedded = false }: {
       <Column field="finished_at" header={t("run.finished")} />
       <Column field="outcome_label" header={t("run.outcome")} />
     </List>
-    <Form readOnly eyebrow={t("run.eyebrow")} returning={["can_cancel", "can_reprocess", "subject_model", "subject_id"]}
+    <Form readOnly eyebrow={t("run.eyebrow")}
+      returning={["can_cancel", "can_reprocess", "subject_model", "subject_id", "version.workflow.name", "created_at"]}
+      // The run's subject is its workflow; the start time is a fact, never part of the title.
+      title={({ record }) => {
+        const name = record ? rowValueAtPath(record, "version.workflow.name") : undefined;
+        return typeof name === "string" && name ? name : typeof record?.display_name === "string" ? record.display_name : t("run.eyebrow");
+      }}
+      contextFields={["created_at"]}
       headerExtras={({ record }) => typeof record?.subject_id === "string" && typeof record.subject_model === "string"
         ? <RecordReference model={record.subject_model} id={record.subject_id} /> : null}>
-      <Field name="display_name" title readOnly />
       <Field name="status" widget="statusbar" status />
       <Group label={t("run.facts")} columns={2}>
         <Field name="outcome" hidden readOnly />

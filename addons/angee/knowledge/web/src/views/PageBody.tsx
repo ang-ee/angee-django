@@ -40,14 +40,30 @@ export function PageBody({ detail, pages, onOpenPage, onNewPageHere, onEdit }: {
       </div>
     );
   }
+  // A page's children are its own: they list under the body (or in place of the empty state).
+  const children = pages.length ? (
+    <PaneRows>
+      {pages.map((page) => (
+        <PaneRow key={page.id} icon={pageIcon(page.kind)} title={page.title}
+          meta={formatDate(page.updated_at)} sub={page.created_by_label ?? undefined}
+          onOpen={onOpenPage ? () => onOpenPage(page.id) : undefined} />
+      ))}
+    </PaneRows>
+  ) : null;
   return (
     <div className="mx-auto min-h-0 w-full max-w-prose flex-1 overflow-auto p-6">
       {body && Preview ? (
         <Preview value={body} field={{ label: detail.title }} readOnly />
-      ) : (
+      ) : children ? null : (
         <EmptyState icon="note" title={t("page.emptyTitle")} description={t("page.emptyDescription")}
           actions={onEdit ? <Button type="button" size="sm" variant="primary" onClick={onEdit}><Glyph name="edit" />{t("page.edit")}</Button> : undefined} />
       )}
+      {children ? <div className={body ? "mt-6" : undefined}>{children}</div> : null}
+      {children && onNewPageHere ? (
+        <Button type="button" size="sm" variant="ghost" className="mt-2" onClick={onNewPageHere}>
+          <Glyph name="plus" />{t("folder.newPageHere")}
+        </Button>
+      ) : null}
     </div>
   );
 }

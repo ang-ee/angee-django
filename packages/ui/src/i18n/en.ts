@@ -230,6 +230,7 @@ export const enUiMessages: Record<string, string> = {
   "pager.customPageSize": "Custom page size",
   "reportPage.views": "Report views",
   "reportPage.unconfigured": "Choose the report parameters to run it.",
+  "reportPage.run": "Run report",
   "pager.apply": "Apply",
   "pager.records": "Records",
   "pager.groups": "Groups",

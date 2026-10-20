@@ -123,7 +123,6 @@ function PageSubject({ detail, onDelete, frame }: {
         end={active ? <SaveBadge status={editor.status} /> : null}
       />
       <RecordHeader
-          density="compact"
           headingLevel={active ? null : 1}
           crumbs={frame?.crumbs}
           title={active ? (

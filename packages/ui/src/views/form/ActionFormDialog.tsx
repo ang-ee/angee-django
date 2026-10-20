@@ -136,7 +136,7 @@ function ActionArgsDialog({
       submitting={submitting}
       disabled={saveConflict}
       danger={action.danger}
-      label={action.label}
+      label={action.submitLabel ?? action.label}
       onSubmit={inline ? run : undefined}
     />
   );

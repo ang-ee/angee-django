@@ -48,6 +48,7 @@ import {
 import type { FormViewSurface } from "./form-view-surface";
 import { directDottedPathMessages } from "./validation-errors";
 import { SectionHeading } from "./SectionHeading";
+import { AbsoluteTime } from "../../fragments/AbsoluteTime";
 import { RecordHeader } from "../../fragments/RecordHeader";
 import { RecordFieldMarkControl } from "./record-field-marks";
 
@@ -599,12 +600,18 @@ function RecordFactsLine({
     updated_by: updatedByLabel,
     updated_by_label: updatedByLabel,
   } as const;
+  // "created by admin · Oct 20": the by-field leads, its stamp follows as an absolute date.
+  const stampFor = (prefix: string) => attributionFields.find((field) => field.name === `${prefix}_at`);
   const attributionParts = record == null ? [] : attributionFields.flatMap((field) => {
+    if (field.name.endsWith("_at")) return [];
     const value = rowValueAtPath(record, field.name);
     if (value == null || value === "") return [];
+    const stamp = stampFor(field.name.replace(/_by(_label)?$/, ""));
+    const stampValue = stamp ? rowValueAtPath(record, stamp.name) : undefined;
     return [<span key={field.name} className="inline-flex min-w-0 items-center gap-1">
       <span>{labels[field.name as keyof typeof labels]}</span>
       <FieldDescriptorControl resource={resource} field={field} value={value} row={record} readOnly />
+      {typeof stampValue === "string" && stampValue ? <AbsoluteTime display="date" value={stampValue} /> : null}
     </span>];
   });
   const parts = [...valueParts, ...attributionParts, ...technicalParts];

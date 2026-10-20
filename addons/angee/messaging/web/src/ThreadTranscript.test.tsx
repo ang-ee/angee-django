@@ -39,6 +39,13 @@ vi.mock("@angee/ui", async (importOriginal) => {
       (_namespace: string, messages: Record<string, string>) =>
       (key: string) =>
         messages[key] ?? key,
+    // The jump-to-date control is the runtime's date widget; the suite stands in a plain field for it.
+    useResolvedWidget: (key: string) => key === "date" ? {
+      edit: ({ value, onChange, field }: { value: unknown; onChange?: (next: unknown) => void; field?: { label?: string } }) => (
+        <input aria-label={field?.label} value={typeof value === "string" ? value : ""}
+          onChange={(event) => onChange?.(event.target.value || null)} />
+      ),
+    } : undefined,
   };
 });
 

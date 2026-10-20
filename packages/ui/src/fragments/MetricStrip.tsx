@@ -144,7 +144,8 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
         detail={detail}
         label={
           density === "prominent" ? (
-            <Chip tone={tone ?? "neutral"}>{label}</Chip>
+            // The label sits as a grid item of the stacked pair: a pill must not stretch to the tile.
+            <Chip tone={tone ?? "neutral"} className="justify-self-start">{label}</Chip>
           ) : (
             label
           )

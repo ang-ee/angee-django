@@ -8,7 +8,6 @@ import {
   EmptyState,
   ErrorBanner,
   Glyph,
-  Input,
   LoadingPanel,
   MessageDaySeparator,
   MessagePartsView,
@@ -18,6 +17,7 @@ import {
   avatarInitials,
   formatDayLabel,
   useReactionGroups,
+  useResolvedWidget,
   type MessagePart,
 } from "@angee/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -85,16 +85,20 @@ export function ThreadTranscript({
   const [allCopies, setAllCopies] = React.useState(false);
   const t = useMessagingT();
   const jumpDate = anchor.startsWith("date:") ? anchor.slice(5).split("@")[0] : "";
+  // Jump to date is the one date field; it stores a day, the anchor carries the zone.
+  const DateEdit = useResolvedWidget("date")?.edit;
+  const jumpField = React.useMemo(() => ({ name: "jump", label: t("transcript.jumpDate") }), [t]);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PaneToolbar
         scope={onAnchorChange ? (
           <>
-            <Input
-              type="date" size="sm" value={jumpDate} aria-label={t("transcript.jumpDate")}
-              onChange={(event) =>
-                onAnchorChange(event.target.value ? `date:${event.target.value}${timezone ? `@${timezone}` : ""}` : "")}
-            />
+            {DateEdit ? (
+              <DateEdit
+                value={jumpDate || null} field={jumpField}
+                onChange={(next) => onAnchorChange(typeof next === "string" && next ? `date:${next}${timezone ? `@${timezone}` : ""}` : "")}
+              />
+            ) : null}
             {anchor ? <ScopeChip active label={t("transcript.latest")} onClick={() => onAnchorChange("")} /> : null}
           </>
         ) : undefined}

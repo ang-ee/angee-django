@@ -1,5 +1,7 @@
 import * as React from "react";
-import { rowPublicId, useModelMetadata } from "@angee/metadata";
+import { rowPublicId, rowValueAtPath, useModelMetadata, type Row } from "@angee/metadata";
+import { EMPTY_VALUE } from "../lib/empty-value";
+import { enumValueLabel } from "../lib/labels";
 import * as v from "valibot";
 import { MetricTile } from "../fragments/MetricStrip";
 import { ErrorBanner } from "../fragments/ErrorBanner";
@@ -18,6 +20,7 @@ import { useAppRuntime } from "../runtime/runtime";
 import { useUiT } from "../i18n";
 import type { ColumnDescriptor } from "../views/page";
 import { cellContent } from "../views/resource/list-body/cell-utils";
+import { StatusBadge } from "../widgets/statusBadge";
 import { useResourceRecordHrefLookup, useRouteHref } from "../runtime/runtime";
 
 function DataState({ data, children, skeleton }: DashboardWidgetRenderProps & { children: React.ReactNode; skeleton: React.ReactNode }): React.ReactElement {
@@ -78,7 +81,17 @@ function TableWidget(props: DashboardWidgetRenderProps): React.ReactElement {
     if (!parsed.success) return { columns: [], error: new v.ValiError(parsed.issues) };
     const columns = (parsed.output ?? defaultColumns).map(({ path, label }) => {
       const queryField = props.data.queryFields[path];
-      const column: ColumnDescriptor = { field: queryField?.row?.path ?? path, header: fieldLabel(path, metadata?.fields[path], label ?? titleCase(path)), queryField };
+      const field = queryField?.row?.path ?? path;
+      const enumValues = (queryField ?? metadata?.fields[path])?.kind === "enum" ? (queryField ?? metadata?.fields[path])?.values : undefined;
+      const column: ColumnDescriptor = {
+        field, header: fieldLabel(path, metadata?.fields[path], label ?? titleCase(path)), queryField,
+        // A status value reads as the one status pill, never as a plain word.
+        ...(enumValues ? { render: (row: Row) => {
+          const value = rowValueAtPath(row, field);
+          return value == null || value === "" ? EMPTY_VALUE : <StatusBadge value={String(value)}
+            options={enumValues.map((item) => ({ value: item.value, label: enumValueLabel(item) }))} />;
+        } } : {}),
+      };
       return { path, column };
     });
     return { columns, error: null };
