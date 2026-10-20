@@ -72,7 +72,7 @@ function PartyFieldProvenance() {
   }}><FormProvider {...form}>
     <div className="w-96 rounded-12 border border-border bg-sheet p-5">
       <DescriptorFieldList fields={fields} />
-      <p className="mt-4 text-xs text-fg-muted">
+      <p className="mt-4 text-12 text-fg-muted">
         Hover the Correction badge for its origin; follow it to the applied statement.
       </p>
     </div>

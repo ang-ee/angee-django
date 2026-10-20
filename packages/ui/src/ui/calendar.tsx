@@ -50,14 +50,14 @@ export const calendarVariants = tv({
     disabled: "[&_button]:cursor-not-allowed [&_button]:text-fg-subtle",
     rangeStart: "[&_button]:rounded-r-none",
     rangeMiddle:
-      "[&_button]:rounded-none [&_button]:bg-brand-soft [&_button]:text-brand-soft-text",
+      "[&_button]:rounded-none [&_button]:selected",
     rangeEnd: "[&_button]:rounded-l-none",
   },
   variants: {
     size: {
       sm: {
         weekday: "h-btn-sm",
-        day: "size-btn-sm text-xs",
+        day: "size-btn-sm text-12",
         dayButton: "size-btn-sm",
       },
       md: "",

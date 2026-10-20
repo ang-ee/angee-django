@@ -10,7 +10,7 @@ import { tv } from "../lib/variants";
 export const logStreamVariants = tv({
   slots: {
     root: "flex min-h-0 flex-col overflow-hidden rounded-6 border border-border-subtle bg-inset",
-    viewport: "min-h-0 flex-1 overflow-auto p-3 font-mono text-xs leading-5 text-fg",
+    viewport: "min-h-0 flex-1 overflow-auto p-3 font-mono text-12 leading-5 text-fg",
     line: "whitespace-pre-wrap break-all",
     empty: "text-fg-muted",
   },

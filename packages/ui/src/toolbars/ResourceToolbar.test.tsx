@@ -201,7 +201,7 @@ test("shared utilities stay between query controls and pager; wrapping is opt-in
   expect(share.parentElement?.className).toContain("resource-toolbar-utilities");
   expect(filter.compareDocumentPosition(share) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(share.compareDocumentPosition(screen.getByLabelText("Previous page")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(filter.closest("section")?.className).toContain("resource-toolbar-wrap");
+  expect(filter.closest(".resource-toolbar")?.className).toContain("resource-toolbar-wrap");
 });
 
 test("providers without writable preferences keep the complete box reachable", () => {

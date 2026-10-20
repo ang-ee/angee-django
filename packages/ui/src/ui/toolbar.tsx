@@ -3,13 +3,12 @@ import { Toolbar as BaseToolbar } from "@base-ui/react/toolbar";
 import type {
   ToolbarButtonProps as BaseToolbarButtonProps,
   ToolbarGroupProps as BaseToolbarGroupProps,
-  ToolbarInputProps as BaseToolbarInputProps,
   ToolbarRootProps as BaseToolbarRootProps,
   ToolbarSeparatorProps as BaseToolbarSeparatorProps,
 } from "@base-ui/react/toolbar";
 
 import { tv, type VariantProps } from "../lib/variants";
-import { interactiveSurface } from "./widget-control";
+import { Button, type ButtonProps } from "./button";
 
 /**
  * @kind token
@@ -18,16 +17,6 @@ export const toolbarVariants = tv({
   slots: {
     root: "flex min-w-0 items-center gap-2",
     group: "flex min-w-0 items-center gap-2",
-    // The toolbar button dims at opacity-50 in BOTH the native `:disabled` and
-    // base-ui `data-[disabled]` modes — a deliberate exception to the L0 owner's
-    // single-mode opacity-60 dimming, so those stay local; only the focus
-    // ring / outline / transition fragment is composed from L0.
-    button: `inline-flex items-center justify-center gap-1.5 rounded-6 text-13 font-medium text-fg-2 hover:bg-inset hover:text-fg disabled:cursor-not-allowed disabled:opacity-50 data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50 [&_.glyph]:size-3.5 ${interactiveSurface(
-      { focus: "visible" },
-    )}`,
-    input: `h-8 min-w-0 rounded-6 border border-border bg-sheet px-2 text-13 text-fg placeholder:text-fg-subtle focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-50 ${interactiveSurface(
-      { focus: "self" },
-    )}`,
     separator: "shrink-0 bg-border-subtle data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-5 data-[orientation=vertical]:h-5 data-[orientation=vertical]:w-px",
     spacer: "min-w-0 flex-1",
   },
@@ -55,36 +44,14 @@ export const toolbarVariants = tv({
       },
       plain: "",
     },
-    buttonSize: {
-      sm: { button: "h-7 px-2 text-13" },
-      md: { button: "h-8 px-2.5 text-13" },
-      iconSm: { button: "size-icon-btn-sm px-0" },
-      iconMd: { button: "size-icon-btn-md px-0" },
-    },
-    buttonTone: {
-      ghost: { button: "text-fg-2 hover:bg-inset hover:text-fg" },
-      secondary: {
-        button:
-          "border border-border-strong bg-inset text-fg hover:bg-sheet",
-      },
-      primary: {
-        button: "bg-brand text-on-brand hover:bg-brand-hover",
-      },
-    },
   },
   defaultVariants: {
     surface: "plain",
-    buttonSize: "sm",
-    buttonTone: "ghost",
   },
 });
 
 export type ToolbarRecipeProps = VariantProps<typeof toolbarVariants>;
 export type ToolbarSurface = NonNullable<ToolbarRecipeProps["surface"]>;
-export type ToolbarButtonSize =
-  NonNullable<ToolbarRecipeProps["buttonSize"]>;
-export type ToolbarButtonTone =
-  NonNullable<ToolbarRecipeProps["buttonTone"]>;
 
 export type ToolbarRootProps = Omit<BaseToolbarRootProps, "className"> &
   Pick<ToolbarRecipeProps, "surface"> & {
@@ -133,52 +100,32 @@ export const ToolbarGroup = React.forwardRef<HTMLDivElement, ToolbarGroupProps>(
 ToolbarGroup.displayName = "ToolbarGroup";
 
 export type ToolbarButtonProps = Omit<BaseToolbarButtonProps, "className"> &
-  Pick<ToolbarRecipeProps, "buttonSize" | "buttonTone"> & {
+  Pick<ButtonProps, "variant" | "size" | "pressed" | "badge" | "active" | "loading"> & {
     className?: string;
   };
 
 /**
+ * A toolbar item: the one `Button` recipe (a ghost `sm` by default; a ghost
+ * `iconSm` is the icon control) registered with the toolbar's roving focus.
  * @owner Toolbar
  */
 export const ToolbarButton = React.forwardRef<
   HTMLButtonElement,
   ToolbarButtonProps
 >(function ToolbarButton(
-  { buttonSize = "sm", buttonTone = "ghost", className, ...props },
+  { variant = "ghost", size = "sm", pressed, badge, active, loading, className, render, ...props },
   ref,
 ) {
-  const styles = toolbarVariants({ buttonSize, buttonTone });
+  // A caller's `render` is the item itself (a select trigger, a toggle); the Button is the default.
   return (
     <BaseToolbar.Button
       ref={ref}
-      className={styles.button({ className })}
+      render={render ?? <Button variant={variant} size={size} pressed={pressed} badge={badge} active={active} loading={loading} className={className} />}
       {...props}
     />
   );
 });
 ToolbarButton.displayName = "ToolbarButton";
-
-export type ToolbarInputProps = Omit<BaseToolbarInputProps, "className"> & {
-  className?: string;
-};
-
-/**
- * @owner Toolbar
- */
-export const ToolbarInput = React.forwardRef<
-  HTMLInputElement,
-  ToolbarInputProps
->(function ToolbarInput({ className, ...props }, ref) {
-  const styles = toolbarVariants();
-  return (
-    <BaseToolbar.Input
-      ref={ref}
-      className={styles.input({ className })}
-      {...props}
-    />
-  );
-});
-ToolbarInput.displayName = "ToolbarInput";
 
 export type ToolbarSeparatorProps = Omit<
   BaseToolbarSeparatorProps,
@@ -228,7 +175,6 @@ export const Toolbar = Object.assign(ToolbarRoot, {
   Root: ToolbarRoot,
   Group: ToolbarGroup,
   Button: ToolbarButton,
-  Input: ToolbarInput,
   Separator: ToolbarSeparator,
   Spacer: ToolbarSpacer,
 });

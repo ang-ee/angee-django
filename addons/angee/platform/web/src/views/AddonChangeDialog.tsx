@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { Alert, Badge, Button, Dialog, Glyph, LoadingPanel } from "@angee/ui";
+import { Alert, Chip, Button, Dialog, Glyph, LoadingPanel } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import type { AddonChangePreviewData } from "../documents";
@@ -136,9 +136,9 @@ function AddonImpactItem({ addon }: { addon: AddonChangeImpact }): ReactElement 
         ) : null}
       </span>
       {addon.root ? (
-        <Badge tone="info">{t("apps.preview.root")}</Badge>
+        <Chip tone="info">{t("apps.preview.root")}</Chip>
       ) : (
-        <Badge tone="neutral">{t("apps.preview.dependency")}</Badge>
+        <Chip tone="neutral">{t("apps.preview.dependency")}</Chip>
       )}
     </li>
   );

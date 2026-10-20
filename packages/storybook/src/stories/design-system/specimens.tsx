@@ -21,19 +21,16 @@ export function Pills() {
       <code className={U.textRoleVariants({ role: "caption", className: "w-20" })}>{tone}</code>
       {[...U.FILLS].sort().map(variant => <div key={variant} className="flex items-center gap-1">
         <U.Chip tone={tone} variant={variant}>{variant}</U.Chip>
-        <U.Badge tone={tone} variant={variant}>{variant}</U.Badge>
       </div>)}
     </div>)}
     {U.recipeAxes(U.chipVariants).shape.map(shape => <div key={shape} className="flex flex-wrap items-center gap-3">
       {U.recipeAxes(U.chipVariants).size.map(size => <U.Chip key={size} shape={shape} size={size}>{shape} · {size}</U.Chip>)}
     </div>)}
-    {U.recipeAxes(U.badgeVariants).shape.map(shape => <div key={shape} className="flex flex-wrap items-center gap-3">
-      {U.recipeAxes(U.badgeVariants).density.map(density => <U.Badge key={density} shape={shape} density={density} tone="info">{shape} · {density}</U.Badge>)}
-    </div>)}
-    <div className="flex flex-wrap gap-3">{U.recipeAxes(U.badgeVariants).mark.map(mark => <U.Tag key={mark} tone="success" mark={mark}>{mark}</U.Tag>)}</div>
+    <div className="flex flex-wrap gap-3">{U.recipeAxes(U.chipVariants).mark.map(mark => <U.Chip key={mark} tone="success" mark={mark}>{mark}</U.Chip>)}</div>
+    <div className="flex flex-wrap gap-3"><U.Chip size="sm" tone="muted" pressed>pressed</U.Chip><U.Chip size="sm" tone="muted" pressed={false}>not pressed</U.Chip></div>
     <U.RemovableChip removeLabel="Example" onRemove={noop}>Example</U.RemovableChip>
     <U.ChipList items={[{ id: "one", label: "First" }, { id: "two", label: "Second" }]} />
-    <div className="flex flex-wrap gap-3">{U.recipeAxes(U.countBadgeVariants).tone.map(tone => U.recipeAxes(U.countBadgeVariants).size.map(size =>
+    <div className="flex flex-wrap gap-3">{[...U.TONES].sort().map(tone => U.recipeAxes(U.countBadgeVariants).size.map(size =>
       <U.CountBadge key={`${tone}-${size}`} tone={tone} size={size} value={42} />))}</div>
   </div>;
 }
@@ -73,11 +70,11 @@ export function Tabs() {
 export function Toolbars() {
   return <div className="grid gap-4">{U.recipeAxes(U.toolbarVariants).surface.map(surface =>
     <U.Toolbar key={surface} surface={surface} aria-label={`${surface} toolbar`}>
-      {U.recipeAxes(U.toolbarVariants).buttonTone.map(buttonTone => <U.Toolbar.Group key={buttonTone}>
-        {U.recipeAxes(U.toolbarVariants).buttonSize.map(buttonSize => <U.Toolbar.Button key={buttonSize} buttonSize={buttonSize} buttonTone={buttonTone} aria-label={buttonSize.startsWith("icon") ? `${surface} ${buttonTone} ${buttonSize}` : undefined}>
-          {buttonSize.startsWith("icon") ? <U.Glyph name="plus" /> : buttonSize}
+      {(["ghost", "secondary", "primary"] as const).map(variant => <U.Toolbar.Group key={variant}>
+        {(["sm", "md", "iconSm", "iconMd"] as const).map(size => <U.Toolbar.Button key={size} variant={variant} size={size} aria-label={size.startsWith("icon") ? `${surface} ${variant} ${size}` : undefined}>
+          {size.startsWith("icon") ? <U.Glyph name="plus" /> : size}
         </U.Toolbar.Button>)}
-      </U.Toolbar.Group>)}<U.Toolbar.Separator /><U.Toolbar.Spacer /><U.Toolbar.Input aria-label={`${surface} search`} placeholder={surface} />
+      </U.Toolbar.Group>)}<U.Toolbar.Separator /><U.Toolbar.Spacer /><U.SearchInput size="sm" aria-label={`${surface} search`} placeholder={surface} />
     </U.Toolbar>)}</div>;
 }
 export function PaneRows() {
@@ -103,7 +100,7 @@ export function PaneToolbar() {
     <U.PaneToolbar
       scope={<U.ScopeChip label="All" active count={3} onClick={noop} />}
       search onSearch={() => setSearch(!search)}
-      actions={[{ icon: "plus", label: "Add", onClick: noop }]}
+      actions={[{ icon: "plus", label: "Add", onClick: noop }, { icon: "bell", label: "Needs you · 2", badge: 2, onClick: noop }, { icon: "plus", label: "New", text: true, items: [{ label: "Page", icon: "file", onClick: noop }] }]}
       overflow={<U.PaneToolbarMenu items={[{ label: "Refresh", icon: "refresh", onClick: noop }]} />}
     />
     {search && <U.SearchInput aria-label="Search related" placeholder="Search related" />}
@@ -124,7 +121,7 @@ export function Facts() {
   return <div className="grid gap-4">
     <dl className="grid gap-4">{U.recipeAxes(U.definitionPairVariants).density.map(density => <U.DefinitionPair key={density} density={density}
       label="Owner" value="Alex Morgan" detail={density} action={<U.Button size="sm">Edit</U.Button>} />)}</dl>
-    <U.MetaGrid rows={[["Owner", "Alex Morgan"], ["State", <U.Badge key="state" tone="success">Active</U.Badge>]]} />
+    <U.MetaGrid rows={[["Owner", "Alex Morgan"], ["State", <U.Chip key="state" tone="success">Active</U.Chip>]]} />
     <U.ComparisonRows beforeLabel="Before" afterLabel="After" rows={[{ key: "title", label: "Title", before: "Draft", after: "Published", changed: true }]} />
     <U.RelativeTime value="2026-10-19T12:00:00Z" />
     <U.RecordReference model="notes.Note" id="sample" label="Project handbook" />
@@ -189,9 +186,6 @@ export function Statusline() {
   return <U.Statusline><U.StatusSegment icon="check" tone="success">Saved</U.StatusSegment><U.StatuslineSpacer />
     <U.StatusSegment>8 records</U.StatusSegment></U.Statusline>;
 }
-export function TimelineEntry() {
-  return <U.PaneRows><U.TimelineEntry title="Published" timestamp="2026-10-19T12:00:00Z" body="The record is available." /></U.PaneRows>;
-}
 
 function DialogActions() {
   const confirm = U.useConfirm();
@@ -229,7 +223,7 @@ export function Controls() {
     <U.Select aria-label="Collection" value={value} onValueChange={setValue} options={[{ value: "first", label: "First" }, { value: "second", label: "Second" }]} />
     <U.Tooltip label="A shared tooltip"><U.Button>Hover or focus</U.Button></U.Tooltip>
     <U.Pager page={page} pageSize={10} total={80} onPageChange={setPage} />
-    <U.Separator /><U.Divider>More</U.Divider>
+    <U.Separator />
     <U.ScrollArea className="h-28"><U.Tree nodes={[{ id: "root", label: "Library", children: [{ id: "child", label: "Handbook" }] }]} /></U.ScrollArea>
     <U.UploadDropTarget onFiles={noop}><U.EmptyState title="Drop a file" description="The upload owner handles drag state." /></U.UploadDropTarget>
     <U.Spinner /><U.Skeleton />
@@ -276,24 +270,24 @@ export type CatalogExportName = keyof typeof U | keyof typeof import("@angee/app
 export const specimens = {
   FILLS: ToneMatrix, TONES: ToneMatrix, baseIcons: GlyphMatrix, textRoleVariants: TypeRoleMatrix,
   ActionMenu: RecordVerbs, ActionTrigger: RecordVerbs, Alert: Alerts, Avatar: Avatars, AvatarStack: Avatars,
-  Badge: Pills, Button: Buttons, Chatter: ContextAside, Chip: Pills, ChipList: Pills,
+  Button: Buttons, Chatter: ContextAside, Chip: Pills, ChipList: Pills,
   ComparisonRows: Facts, ControlBand: RecordVerbs, CountBadge: Pills, DefinitionPair: Facts,
   DetailSection: Settings, DetailSurface: Settings, EmptyState: States, ErrorBanner: States,
   InlineEmpty: States, LazyBoundary: States, LoadingPanel: States, MetaGrid: Facts,
   PaneLabel: PaneRows, PaneLabelAction: PaneRows, PaneLabelPopover: PaneRows, PaneRow: PaneRows, PaneRows,
-  PaneToolbar, PaneToolbarHost: PaneToolbar, PaneToolbarIconButton: PaneToolbar, PaneToolbarMenu: PaneToolbar,
+  PaneToolbar, PaneToolbarHost: PaneToolbar, PaneToolbarMenu: PaneToolbar,
   RecordActionBar: RecordVerbs, RecordPager: Facts, RecordReference: Facts, RecordReferenceRow: Facts,
   RelatedPane: Related, RelativeTime: Facts, RemovableChip: Pills, SaveDiscardActions: RecordVerbs,
   ScopeChip: PaneRows, SettingsSection: Settings, SettingsShell: Settings, SkeletonStatus: States,
   SkeletonText: States, StatusDot: StatusIcons, StatusIcon: StatusIcons, StatusSegment: Statusline,
   Statusline, StatuslineSpacer: Statusline, StepList: Steps, SurfacePanel: Settings,
   Tabs, TabsCount: Tabs, TabsIndicator: Tabs, TabsList: Tabs, TabsPanel: Tabs, TabsRoot: Tabs, TabsTab: Tabs,
-  Tag: Pills, TimelineEntry, TimelineRail: Timeline, Toolbar: Toolbars, ToolbarButton: Toolbars,
-  ToolbarGroup: Toolbars, ToolbarInput: Toolbars, ToolbarRoot: Toolbars, ToolbarSeparator: Toolbars, ToolbarSpacer: Toolbars,
+  TimelineRail: Timeline, Toolbar: Toolbars, ToolbarButton: Toolbars,
+  ToolbarGroup: Toolbars, ToolbarRoot: Toolbars, ToolbarSeparator: Toolbars, ToolbarSpacer: Toolbars,
   AppBootSkeleton: Displays, Checkbox: Controls, CheckboxVisual: Controls, DeveloperMenu: ShellRegions, DeveloperModeMenuItem: ShellRegions,
   Dialog: Dialogs, DialogBackdrop: Dialogs, DialogBody: Dialogs, DialogClose: Dialogs, DialogContent: Dialogs,
   DialogDescription: Dialogs, DialogFooter: Dialogs, DialogHeader: Dialogs, DialogPortal: Dialogs, DialogRoot: Dialogs,
-  DialogTitle: Dialogs, DialogTrigger: Dialogs, Divider: Controls, DrawerOverlay: Drawers, DrawerRail: Drawers,
+  DialogTitle: Dialogs, DialogTrigger: Dialogs, DrawerOverlay: Drawers, DrawerRail: Drawers,
   FieldDescription: Controls, FolderTree: Controls, LogStream: Displays, Pager: Controls, PreviewSkeleton: Displays,
   RemovedDisclosure: Displays, RemovedItem: Displays, ScrollArea: Controls, SectionHeading: Displays, Select: Controls,
   Separator: Controls, Skeleton: Controls, Spinner: Controls, Switch: Controls, ThemeLogo: Displays,
@@ -308,7 +302,7 @@ export const specimens = {
   RemovedRecords: Collections, ResourceCreate: Resources, ResourceEdit: Resources, ResourceShow: Resources, RowsField: Editors,
   SwitchRoot: Controls, SwitchRow: Controls, SwitchThumb: Controls, Tab: Forms,
   ThemeCustomizationEditor: ThemeSurfaces, ThemePreviewFrame: ThemeSurfaces, ThemeSpecimenSurface: ThemeSurfaces,
-  TimelineView: Charts, UsernamePasswordForm: Authentication, VisibilityControl: Editors,
+  UsernamePasswordForm: Authentication, VisibilityControl: Editors,
   useActionOutcomeMutation: Hooks, useActionResultMutation: Hooks, useActionSelectionLimit: Hooks,
   useEnumOptions: Hooks, useFormSpecFields: Hooks, useFormViewValues: Forms,
   useImplCategory: Hooks, useImplChoices: Hooks, useImplConfigFields: Hooks, useImplPrefill: Hooks,

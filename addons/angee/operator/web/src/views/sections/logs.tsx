@@ -1,4 +1,4 @@
-import { Alert, Badge, Card, CardContent, CardHeader, CardTitle, LogStream } from "@angee/ui";
+import { Alert, Chip, Card, CardContent, CardHeader, CardTitle, LogStream } from "@angee/ui";
 import { isFatalGraphQLWsCloseCode } from "@angee/refine";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -176,9 +176,9 @@ function LogPanel({
     <Card className="flex min-h-0 flex-1 flex-col">
       <CardHeader className="flex flex-row items-center justify-between gap-2">
         <CardTitle>{title}</CardTitle>
-        <Badge density="compact" shape="pill" tone={status.tone}>
+        <Chip tone={status.tone}>
           {status.label}
-        </Badge>
+        </Chip>
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col gap-2">
         {logs.error ? <Alert tone="danger">{logs.error.message}</Alert> : null}

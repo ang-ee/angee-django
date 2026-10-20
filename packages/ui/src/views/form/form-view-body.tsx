@@ -5,7 +5,7 @@ import { rowValueAtPath } from "@angee/metadata";
 // Render-only bindings for the headless FormView surface.
 
 import { Textarea } from "../../ui/textarea";
-import { Badge } from "../../ui/badge";
+import { Chip } from "../../ui/chip";
 import {
   FieldDescription,
   FieldLabel,
@@ -15,7 +15,6 @@ import { FormGrid } from "../../ui/form-layout";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import { Collapsible } from "../../ui/collapsible";
 import { useDeveloperFieldTitle } from "../../chrome/DeveloperMode";
-import { sectionEyebrowVariants } from "../../ui/section-eyebrow";
 import { textRoleVariants } from "../../ui/text";
 import { cn } from "../../lib/cn";
 import { optionLabel, relationValueId } from "../../widgets/types";
@@ -66,12 +65,6 @@ const EDITABLE_FIELD_CONTROL_CLASS = cn(
 );
 const READONLY_FIELD_CONTROL_CLASS = "min-h-8 text-13 text-fg";
 const FIELD_ROOT_CLASS = "block min-w-0";
-const FIELD_LABEL_CLASS = sectionEyebrowVariants({
-  className: "flex min-h-4 items-center justify-between gap-2",
-  size: "sm",
-  spacing: "field",
-  weight: "medium",
-});
 const FIELD_CONTROL_CLASS = "min-w-0";
 
 function WrappingTitleEditor({
@@ -216,9 +209,9 @@ export function FormViewRecordHeader({
     {statusRestricted ? <span className="text-13 text-fg-muted">{currentStatusField.label}</span>
       : <Controller control={form.control} name={currentStatusField.name} render={({ field: controller }) =>
       compactStatus ? (
-        typeof controller.value === "string" && controller.value ? <Badge
-          tone={statusTone(controller.value)} density="compact" shape="pill" className="justify-self-start"
-        >{optionLabel(currentStatusField.options, controller.value)}</Badge> : <span aria-hidden />
+        typeof controller.value === "string" && controller.value ? <Chip
+          tone={statusTone(controller.value)} className="justify-self-start"
+        >{optionLabel(currentStatusField.options, controller.value)}</Chip> : <span aria-hidden />
       ) : <FieldDescriptorControl
         controlRef={controller.ref}
         field={{ ...currentStatusField, containerWidth: statusContainerWidth }}
@@ -321,7 +314,7 @@ export function FormViewRecordHeader({
       technicalParts={subtitleParts} loading={loading} loadingLabel={t("form.loading")}
       createdByLabel={t("form.createdBy")} updatedByLabel={t("form.updatedBy")} />;
   const messages = titleField && titleFieldMessages.length > 0 ? (
-    <p className="text-xs leading-5 text-danger-text">{titleFieldMessages.join(", ")}</p>
+    <p className="text-12 leading-5 text-danger-text">{titleFieldMessages.join(", ")}</p>
   ) : null;
   return (
     <RecordHeader
@@ -741,7 +734,7 @@ function BoundFieldRow({
       invalid={displayedMessages.length > 0}
       className={cn(FIELD_ROOT_CLASS, gridFieldClass(field), rail && "grid grid-cols-[minmax(0,5.5rem)_minmax(0,1fr)] items-start gap-x-2")}
     >
-      <div className="flex items-center gap-1"><FieldLabel className={cn(FIELD_LABEL_CLASS, rail && "mb-0 min-h-8 normal-case tracking-normal")}
+      <div className="flex items-center gap-1"><FieldLabel variant="eyebrow" className={cn(rail && "mb-0 min-h-8 normal-case tracking-normal")}
         title={developerTitle(field.name, field.widget)}>
         {field.label ?? field.name}
       </FieldLabel>
@@ -857,7 +850,7 @@ function FieldFooter({
     <>
       {description ? <FieldDescription>{description}</FieldDescription> : null}
       {errors.length > 0 ? (
-        <p className="text-xs leading-5 text-danger-text">{errors.join(", ")}</p>
+        <p className="text-12 leading-5 text-danger-text">{errors.join(", ")}</p>
       ) : null}
     </>
   );

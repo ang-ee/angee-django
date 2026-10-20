@@ -48,7 +48,7 @@ export function DeveloperMenu(): ReactElement | null {
       <Tooltip label={<DeveloperSummary />} side="bottom" align="end">
         <Button
           type="button"
-          variant="icon"
+          variant="ghost"
           size="iconSm"
           aria-label={t("developer.composition")}
           aria-haspopup="dialog"
@@ -102,7 +102,7 @@ function CompositionDialog({ onClose }: { onClose: () => void }): ReactElement {
               <Dialog.Close />
             </div>
           </Dialog.Header>
-          <Dialog.Body className="space-y-3 text-xs">
+          <Dialog.Body className="space-y-3 text-12">
             <DeveloperSummary />
             {composition ? <CompositionSections composition={composition} /> : <p>{t("developer.noComposition")}</p>}
           </Dialog.Body>

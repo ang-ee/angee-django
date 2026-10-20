@@ -756,14 +756,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "Badge",
-    "source": "packages/ui/src/ui/badge.tsx",
-    "kind": "primitive",
-    "status": "stable",
-    "storyId": "primitives-badge--counts"
-  },
-  {
-    "package": "@angee/ui",
     "name": "Banner",
     "source": "packages/ui/src/ui/alert.tsx",
     "kind": "primitive",
@@ -1046,16 +1038,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "ChatHeaderAction",
-    "source": "packages/ui/src/communication/chat/index.tsx",
-    "kind": "region",
-    "owner": "@angee/ui:ChatHeader",
-    "region": "aside-head",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "ChatTypingIndicator",
     "source": "packages/ui/src/communication/chat/index.tsx",
     "kind": "fragment",
@@ -1196,6 +1178,167 @@
     "name": "Column",
     "source": "packages/ui/src/views/page/Column.tsx",
     "kind": "contribution",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "Combobox",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxChip",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxChips",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxCollection",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxEmpty",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxGroup",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxGroupLabel",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxIcon",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxInput",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxItem",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxItemIndicator",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxItemText",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxList",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxPopup",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxRoot",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxSearch",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxTrigger",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ComboboxValue",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:Combobox",
     "status": "stable",
     "storyId": null
   },
@@ -1556,7 +1699,7 @@
   {
     "package": "@angee/ui",
     "name": "CountBadge",
-    "source": "packages/ui/src/ui/badge.tsx",
+    "source": "packages/ui/src/ui/count-badge.tsx",
     "kind": "primitive",
     "status": "stable",
     "storyId": null
@@ -1726,14 +1869,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "DebouncedSearchInput",
-    "source": "packages/ui/src/ui/input.tsx",
-    "kind": "primitive",
-    "status": "deprecated",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "DefinitionPair",
     "source": "packages/ui/src/fragments/DefinitionPair.tsx",
     "kind": "fragment",
@@ -1752,7 +1887,8 @@
     "package": "@angee/ui",
     "name": "DeletePreviewTree",
     "source": "packages/ui/src/views/tree/DeletePreviewTree.tsx",
-    "kind": "surface",
+    "kind": "primitive",
+    "owner": "@angee/ui:Tree",
     "status": "stable",
     "storyId": null
   },
@@ -1918,14 +2054,6 @@
     "kind": "primitive",
     "owner": "@angee/ui:Dialog",
     "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "Divider",
-    "source": "packages/ui/src/ui/separator.tsx",
-    "kind": "primitive",
-    "status": "deprecated",
     "storyId": null
   },
   {
@@ -2435,14 +2563,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "FieldRow",
-    "source": "packages/ui/src/ui/form-layout.tsx",
-    "kind": "primitive",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "Filter",
     "source": "packages/ui/src/views/resource/model/filter.ts",
     "kind": null,
@@ -2704,14 +2824,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "Label",
-    "source": "packages/ui/src/ui/label.tsx",
-    "kind": "primitive",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "LabeledDescriptorField",
     "source": "packages/ui/src/views/form/DescriptorFieldList.tsx",
     "kind": "surface",
@@ -2733,6 +2845,14 @@
     "kind": "surface",
     "status": "stable",
     "storyId": "library-owners--collections"
+  },
+  {
+    "package": "@angee/ui",
+    "name": "ListStatusMessage",
+    "source": "packages/ui/src/fragments/ListStatusMessage.tsx",
+    "kind": "fragment",
+    "status": "stable",
+    "storyId": null
   },
   {
     "package": "@angee/ui",
@@ -3010,8 +3130,9 @@
   {
     "package": "@angee/ui",
     "name": "OptionalHint",
-    "source": "packages/ui/src/ui/label.tsx",
+    "source": "packages/ui/src/ui/field.tsx",
     "kind": "primitive",
+    "owner": "@angee/ui:FieldLabel",
     "status": "stable",
     "storyId": null
   },
@@ -3027,14 +3148,6 @@
   {
     "package": "@angee/ui",
     "name": "POPUP_BASE",
-    "source": "packages/ui/src/ui/popover.tsx",
-    "kind": "token",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "POPUP_INPUT",
     "source": "packages/ui/src/ui/popover.tsx",
     "kind": "token",
     "status": "stable",
@@ -3180,16 +3293,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "PaneToolbarIconButton",
-    "source": "packages/ui/src/layouts/PaneToolbar.tsx",
-    "kind": "region",
-    "owner": "@angee/ui:PaneToolbar",
-    "region": "pane-toolbar-band",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "PaneToolbarMenu",
     "source": "packages/ui/src/layouts/PaneToolbar.tsx",
     "kind": "region",
@@ -3245,15 +3348,6 @@
   {
     "package": "@angee/ui",
     "name": "PopoverDescription",
-    "source": "packages/ui/src/ui/popover.tsx",
-    "kind": "primitive",
-    "owner": "@angee/ui:Popover",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "PopoverInput",
     "source": "packages/ui/src/ui/popover.tsx",
     "kind": "primitive",
     "owner": "@angee/ui:Popover",
@@ -3642,7 +3736,8 @@
     "package": "@angee/ui",
     "name": "RecordPager",
     "source": "packages/ui/src/views/resource/RecordPager.tsx",
-    "kind": "fragment",
+    "kind": "primitive",
+    "owner": "@angee/ui:Pager",
     "status": "stable",
     "storyId": null
   },
@@ -3770,8 +3865,9 @@
   {
     "package": "@angee/ui",
     "name": "RequiredMark",
-    "source": "packages/ui/src/ui/label.tsx",
+    "source": "packages/ui/src/ui/field.tsx",
     "kind": "primitive",
+    "owner": "@angee/ui:FieldLabel",
     "status": "stable",
     "storyId": null
   },
@@ -4841,22 +4937,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "Tag",
-    "source": "packages/ui/src/ui/badge.tsx",
-    "kind": "primitive",
-    "status": "deprecated",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "TextInput",
-    "source": "packages/ui/src/ui/input.tsx",
-    "kind": "primitive",
-    "status": "deprecated",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "Textarea",
     "source": "packages/ui/src/ui/textarea.tsx",
     "kind": "primitive",
@@ -4897,27 +4977,11 @@
   },
   {
     "package": "@angee/ui",
-    "name": "TimelineEntry",
-    "source": "packages/ui/src/fragments/TimelineEntry.tsx",
-    "kind": "fragment",
-    "status": "deprecated",
-    "storyId": "library-owners--timeline-entry"
-  },
-  {
-    "package": "@angee/ui",
     "name": "TimelineRail",
     "source": "packages/ui/src/communication/TimelineRail.tsx",
     "kind": "surface",
     "status": "stable",
     "storyId": "library-owners--timeline"
-  },
-  {
-    "package": "@angee/ui",
-    "name": "TimelineView",
-    "source": "packages/ui/src/views/TimelineView.tsx",
-    "kind": "surface",
-    "status": "deprecated",
-    "storyId": null
   },
   {
     "package": "@angee/ui",
@@ -4999,15 +5063,6 @@
   {
     "package": "@angee/ui",
     "name": "ToolbarGroup",
-    "source": "packages/ui/src/ui/toolbar.tsx",
-    "kind": "primitive",
-    "owner": "@angee/ui:Toolbar",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "ToolbarInput",
     "source": "packages/ui/src/ui/toolbar.tsx",
     "kind": "primitive",
     "owner": "@angee/ui:Toolbar",
@@ -5452,14 +5507,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "badgeVariants",
-    "source": "packages/ui/src/ui/badge.tsx",
-    "kind": "token",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "barVariants",
     "source": "packages/ui/src/layouts/bar.ts",
     "kind": "token",
@@ -5667,6 +5714,14 @@
   },
   {
     "package": "@angee/ui",
+    "name": "comboboxVariants",
+    "source": "packages/ui/src/ui/combobox.tsx",
+    "kind": "token",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "commandVariants",
     "source": "packages/ui/src/ui/command.tsx",
     "kind": "token",
@@ -5738,7 +5793,7 @@
   {
     "package": "@angee/ui",
     "name": "countBadgeVariants",
-    "source": "packages/ui/src/ui/badge.tsx",
+    "source": "packages/ui/src/ui/count-badge.tsx",
     "kind": "token",
     "status": "stable",
     "storyId": null
@@ -6181,7 +6236,25 @@
   },
   {
     "package": "@angee/ui",
-    "name": "formatDuration",
+    "name": "formatDayLabel",
+    "source": "packages/ui/src/widgets/date-format.ts",
+    "kind": null,
+    "reason": "Format utility: converts data to display or storage text.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "formatJson",
+    "source": "packages/ui/src/widgets/json-format.ts",
+    "kind": null,
+    "reason": "Format utility: converts data to display or storage text.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "formatMonth",
     "source": "packages/ui/src/widgets/date-format.ts",
     "kind": null,
     "reason": "Format utility: converts data to display or storage text.",
@@ -6217,6 +6290,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "formatTime",
+    "source": "packages/ui/src/widgets/date-format.ts",
+    "kind": null,
+    "reason": "Format utility: converts data to display or storage text.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "formatTimeInput",
     "source": "packages/ui/src/widgets/date-format.ts",
     "kind": null,
@@ -6237,6 +6319,15 @@
     "name": "graphNodeStyle",
     "source": "packages/ui/src/views/GraphView.tsx",
     "kind": "token",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "gridCellStyle",
+    "source": "packages/ui/src/ui/form-layout.tsx",
+    "kind": null,
+    "reason": "Layout utility: computes a style, renders nothing.",
     "status": "stable",
     "storyId": null
   },
@@ -6472,14 +6563,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "labelVariants",
-    "source": "packages/ui/src/ui/label.tsx",
-    "kind": "token",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "languageForFile",
     "source": "packages/ui/src/preview/model.ts",
     "kind": null,
@@ -6529,6 +6612,14 @@
     "source": "packages/ui/src/views/form/editable-lines.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "listStatusMessageVariants",
+    "source": "packages/ui/src/fragments/ListStatusMessage.tsx",
+    "kind": "token",
     "status": "stable",
     "storyId": null
   },
@@ -7404,6 +7495,14 @@
     "source": "packages/ui/src/lib/human-locale.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "shortcutVariants",
+    "source": "packages/ui/src/ui/kbd.tsx",
+    "kind": "token",
     "status": "stable",
     "storyId": null
   },

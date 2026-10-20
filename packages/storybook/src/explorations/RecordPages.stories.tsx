@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Badge } from "@angee/ui";
+import { Chip } from "@angee/ui";
 import { RecordPage, type RecordPageProps } from "./record-page/RecordPage";
 import { BodyTabs, Field, FieldGrid, LinesTable, Placeholder } from "./record-page/Subject";
 
@@ -35,7 +35,7 @@ const INVOICE: RecordPageProps = {
       <FieldGrid>
         <Field label="Supplier" value="Cloudflare, Inc." mark="Correction" /><Field label="Invoice date" value="Oct 14, 2026" /><Field label="Accounting date" value="Oct 14, 2026" />
         <Field label="Bill number" value="SYN-UBL-9506" /><Field label="Journal" value="Vendor Bills" /><Field label="Payment term" value="—" />
-        <Field label="Currency" value="EUR — Euro" /><Field label="Payment status" value={<Badge tone="warning" variant="soft">Not paid</Badge>} /><Field label="Bank account" value="—" />
+        <Field label="Currency" value="EUR — Euro" /><Field label="Payment status" value={<Chip tone="warning" variant="soft">Not paid</Chip>} /><Field label="Bank account" value="—" />
       </FieldGrid>
       <BodyTabs tabs={["Invoice lines", "Journal items"]} active="Invoice lines" />
       <LinesTable rows={[["Remote consulting, October", "2", "100.00", "€200.00"], ["Printed manual", "3", "35.71", "€107.14"]]} />

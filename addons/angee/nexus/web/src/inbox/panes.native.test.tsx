@@ -69,7 +69,7 @@ function fixture(pane: "navigator" | "results" | "related", initialSearch = "") 
 
 test("navigator pane controls keep finder state in s and preserve the results scope", async () => {
   const f = fixture("navigator", "?message=retained&c.page=3");
-  await screen.findByRole("button", { name: /Ada.*Results/ });
+  await screen.findByRole("button", { name: /Ada/ });
   expect(screen.queryByRole("table")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "More" }));
   const order = await screen.findByRole("menuitemradio", { name: "Name, ascending" });
@@ -90,14 +90,14 @@ test("navigator pane controls keep finder state in s and preserve the results sc
 test("result pane labels expand native groups and page members independently", async () => {
   const f = fixture("results");
   fireEvent.click(await screen.findByRole("button", { name: "Conversation 1 · 60" }));
-  const row = await screen.findByRole("button", { name: /Message page 1.*Read/ });
-  expect(screen.getAllByRole("button", { name: /Message page 1.*Read/ })).toHaveLength(1);
+  const row = await screen.findByRole("button", { name: /Message page 1/ });
+  expect(screen.getAllByRole("button", { name: /Message page 1/ })).toHaveLength(1);
   expect(screen.queryByRole("button", { name: /A conversation/ })).toBeNull();
   expect(row.closest("ul")).toBeTruthy();
   expect(screen.queryByRole("table")).toBeNull();
   const pager = screen.getByRole("navigation", { name: /Conversation 1/ });
   fireEvent.click(within(pager).getByRole("button", { name: /Next/ }));
-  await screen.findByRole("button", { name: /Message page 2.*Read/ });
+  await screen.findByRole("button", { name: /Message page 2/ });
   expect(f.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxResults
     && request.meta.gqlVariables?.page === 2 && request.meta.gqlVariables?.size === 3)).toBe(true);
   expect(f.view.state.pagination.pageIndex).toBe(0);
@@ -108,7 +108,7 @@ test("result pane labels expand native groups and page members independently", a
 
 test("related pointers open their message while its pager stays in r", async () => {
   const f = fixture("related", "?related=file:one&sender=party:ada&c.page=3");
-  const row = await screen.findByRole("button", { name: /A message.*Read/ });
+  const row = await screen.findByRole("button", { name: /A message/ });
   fireEvent.click(screen.getByRole("button", { name: "Next page" }));
   await waitFor(() => expect(f.view.state.pagination.pageIndex).toBe(1));
   expect(f.router.state.location.search).toMatchObject({ "r.page": 2, "c.page": 3, sender: "party:ada" });
@@ -120,7 +120,7 @@ test("related pointers open their message while its pager stays in r", async () 
 test("circle labels leave focus and activation to the tree", async () => {
   const f = fixture("navigator", "?finder=circles");
   const tree = await screen.findByRole("treeitem", { name: /Ada/ });
-  expect(within(tree).queryByRole("button", { name: /Ada.*Results/ })).toBeNull();
+  expect(within(tree).queryByRole("button", { name: /Ada/ })).toBeNull();
   tree.focus();
   fireEvent.keyDown(tree, { key: "Enter" });
   await waitFor(() => expect(f.router.state.location.search).toHaveProperty("circle", "root"));

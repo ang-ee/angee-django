@@ -4,6 +4,19 @@ import { StatusIcon } from "../ui/status-icon";
 import { RelativeTime } from "../fragments/RelativeTime";
 import { toneText, type Tone } from "../lib/tones";
 import { useUiT } from "../i18n";
+import { statusTone } from "../widgets/status-tones";
+import type { StatusIconTone } from "../ui/status-icon";
+
+/** Each step state's status word, so the shared status vocabulary decides its tone. */
+const STEP_STATUS: Record<StepListItem["state"], string> = {
+  trigger: "started", done: "done", current: "pending", planned: "scheduled", optional: "scheduled", stopped: "stopped",
+};
+
+function stepIconTone(item: StepListItem, planned: boolean): StatusIconTone {
+  const tone = item.tone ?? statusTone(STEP_STATUS[item.state]);
+  if (planned || item.state === "stopped") return "muted";
+  return tone === "info" || tone === "success" || tone === "warning" || tone === "danger" ? tone : "muted";
+}
 
 export interface StepListItem {
   id: string;
@@ -23,9 +36,7 @@ export function StepList({ items }: { items: readonly StepListItem[] }): ReactEl
   const t = useUiT();
   return <ol className="min-w-0">{items.map((item, index) => {
     const planned = item.state === "planned" || item.state === "optional";
-    const tone = (item.tone === "info" || item.tone === "success" || item.tone === "warning" || item.tone === "danger" ? item.tone
-      : item.tone ? "muted" : undefined) ?? (planned || item.state === "stopped" ? "muted"
-      : item.state === "current" ? "warning" : item.state === "trigger" ? "info" : "success");
+    const tone = stepIconTone(item, planned);
     return <li key={item.id} aria-current={item.state === "current" ? "step" : undefined} className="grid min-w-0 gap-x-3" style={{ gridTemplateColumns: "1.25rem minmax(0,1fr)" }}>
       <div className="flex flex-col items-center" aria-hidden>
         <StatusIcon tone={tone} icon={item.state === "stopped" ? "stop" : planned ? "circle" : item.state === "current" ? "help" : item.state === "trigger" ? "activity" : "check"} />

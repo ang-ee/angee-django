@@ -3,6 +3,7 @@ import type { ModelMetadata } from "@angee/metadata";
 import { useContainerQuery } from "../lib/use-container-query";
 import { SearchControls } from "../views/resource/search/SearchControls";
 import { useSearchShortcuts, type ListSearchDeclaration } from "../views/resource/search/shortcuts";
+import type * as React from "react";
 import type { ReactElement, ReactNode } from "react";
 import type { SortingState } from "@tanstack/react-table";
 import { ScopeChip } from "../communication/pane-list";
@@ -14,6 +15,7 @@ import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
 import { Select } from "../ui/select";
 import { Pager, type PagerState } from "../ui/pager";
+import { ToolbarRoot } from "../ui/toolbar";
 import { textRoleVariants } from "../ui/text";
 import {
   SegmentedControl,
@@ -202,8 +204,8 @@ function FullResourceToolbar({
   const capabilities = resourceViewKindCapabilities(view, useResourceViewKindContent(view)?.capabilities);
   const groupControls = capabilities.grouping && search.groupingEnabled;
   return (
-    <section
-      ref={toolbarRef}
+    <ToolbarRoot
+      ref={toolbarRef as React.Ref<HTMLDivElement>}
       aria-label={t("resourceToolbar.controls")}
       className={cn(
         "resource-toolbar min-h-11 border-b border-border-subtle bg-sheet px-3 py-2",
@@ -248,7 +250,7 @@ function FullResourceToolbar({
         ) : null}
         {chrome?.viewSwitcher !== false ? viewSwitcher : null}
       </div>
-    </section>
+    </ToolbarRoot>
   );
 }
 
@@ -258,6 +260,14 @@ export function ResourceToolbarPager({ pager, pagerSubject, pagerTotalUnit, page
   return <Pager {...pager} subject={pagerSubject} unit={pagerTotalUnit}
     pageSizeOptions={pagerPageSizeOptions} maxPageSize={pagerMaxPageSize}
     onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} />;
+}
+
+/** A pane list's footer row: the resource pager under the rows, right-aligned.
+ * @owner ResourceToolbar
+ */
+export function ResourcePaneFooter(toolbar: ResourceToolbarProps): ReactElement | null {
+  if (toolbar.chrome?.pager === false) return null;
+  return <div className="flex shrink-0 justify-end border-t border-border-subtle px-2 py-1"><ResourceToolbarPager {...toolbar} /></div>;
 }
 
 /** A collection's create command, in the toolbar or an embedded list's heading row. */

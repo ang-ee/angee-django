@@ -1,5 +1,12 @@
+/**
+ * The one owner of human dates and times. The rule: every list, row, facts line
+ * and day label is absolute (`formatDate`, `formatDateTime`, `formatTime`,
+ * `formatDayLabel`, `formatMonth`); relative time (`formatRelativeTime`,
+ * `RelativeTime`) belongs only to a live header — a chat, a running job — whose
+ * value keeps moving while the page is open. Never `toLocale*`, never a date-fns
+ * `format` with a literal pattern, never a raw ISO string as user text.
+ */
 import { format, formatDistance, isDate, isValid, parseISO, type Locale } from "date-fns";
-import { formatNumber } from "../lib/format-number";
 import { getHumanLocale } from "../lib/human-locale";
 
 export { setHumanDateLocale } from "../lib/human-locale";
@@ -69,6 +76,8 @@ export interface HumanDateOptions {
   now?: Date;
   /** List cells omit the current year; full labels retain it for record reads and hover. */
   density?: "list" | "full";
+  /** Lead with the weekday ("Monday, Sep 28, 2026"): a period title, never a cell. */
+  weekday?: boolean;
 }
 
 function localeCode(locale?: string | Locale): string {
@@ -87,6 +96,7 @@ export function formatDate(value: DateFormatValue, options: HumanDateOptions = {
     ? (value: Date) => new Intl.DateTimeFormat("en", { year: "numeric", timeZone: options.timeZone }).format(value)
     : (value: Date) => String(value.getFullYear());
   return new Intl.DateTimeFormat(localeCode(options.locale), {
+    ...(options.weekday ? { weekday: "long" } : {}),
     month: "short",
     day: "numeric",
     ...(options.density === "full" || year(date) !== year(now) ? { year: "numeric" } : {}),
@@ -149,30 +159,68 @@ export function formatRelativeTime(
   }).format(amount, unit);
 }
 
-/** Localized numeric duration, compact in tables and full in prose.
+/** Clock time without seconds ("1:45 PM", "13:45"), for a row whose day a label already names.
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */
-export function formatDuration(
-  value: number | null | undefined,
-  unit: "day" | "week" | "month" | "year",
-  options: { locale?: string | Locale; style?: "compact" | "full" } = {},
-): string {
-  if (value == null || !Number.isFinite(value)) return "";
+export function formatTime(value: DateFormatValue, options: HumanDateOptions = {}): string {
+  const date = dateFromValue(value);
+  if (!date) return "";
+  return new Intl.DateTimeFormat(localeCode(options.locale), {
+    timeStyle: "short",
+    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+  }).format(date);
+}
+
+/** Month and year ("September 2026"), for a month bucket.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
+export function formatMonth(value: DateFormatValue, options: HumanDateOptions = {}): string {
+  const date = dateFromValue(value);
+  if (!date) return "";
+  return new Intl.DateTimeFormat(localeCode(options.locale), {
+    month: "long",
+    year: "numeric",
+    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+  }).format(date);
+}
+
+/** The calendar day of an instant in a zone, as a sortable key ("2026-09-30"). */
+function calendarDay(date: Date, timeZone?: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    year: "numeric", month: "2-digit", day: "2-digit",
+    ...(timeZone ? { timeZone } : {}),
+  }).format(date);
+}
+
+/**
+ * The label of a day bucket: "Today", "Yesterday", the weekday within the last
+ * week, then the compact date. One owner for every day separator, so two rows
+ * on the same calendar day (in the given zone) always share one label.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
+export function formatDayLabel(value: DateFormatValue, options: HumanDateOptions = {}): string {
+  const date = dateFromValue(value);
+  if (!date) return "";
+  const now = options.now ?? new Date();
   const locale = localeCode(options.locale);
-  const language = locale.split("-")[0];
-  // Intl's English short unit is "wks"; the compact table vocabulary uses "wk".
-  if (options.style !== "full" && language === "en") {
-    const unitLabel = { day: "d", week: "wk", month: "mo", year: "yr" }[unit];
-    return `${formatNumber(value, { locale, maximumFractionDigits: 2 })} ${unitLabel}`;
+  const day = calendarDay(date, options.timeZone);
+  const elapsedDays = Math.round(
+    (Date.parse(calendarDay(now, options.timeZone)) - Date.parse(day)) / 86_400_000,
+  );
+  if (elapsedDays === 0 || elapsedDays === 1) {
+    const label = new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(-elapsedDays, "day");
+    return label.charAt(0).toLocaleUpperCase(locale) + label.slice(1);
   }
-  return formatNumber(value, {
-    locale,
-    style: "unit",
-    unit,
-    unitDisplay: options.style === "full" ? "long" : "short",
-    maximumFractionDigits: 2,
-  });
+  if (elapsedDays > 1 && elapsedDays < 7) {
+    return new Intl.DateTimeFormat(locale, {
+      weekday: "long",
+      ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+    }).format(date);
+  }
+  return formatDate(date, { ...options, now });
 }
 
 /** Full timestamp; explicit zones retain seconds, while local widget labels omit them.

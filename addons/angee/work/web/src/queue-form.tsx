@@ -1,14 +1,4 @@
-import {
-  Badge,
-  Field,
-  Form,
-  Group,
-  useEnumOptions,
-  type ContainerEntry,
-  type EditableLineField,
-  type EditableLineSupplementalColumn,
-  type FormProps,
-} from "@angee/ui";
+import { Chip, Field, Form, Group, useEnumOptions, type ContainerEntry, type EditableLineField, type EditableLineSupplementalColumn, type FormProps } from "@angee/ui";
 import * as React from "react";
 
 import { useWorkT } from "./i18n";
@@ -116,7 +106,7 @@ export function useQueueFormDeclaration(props: Omit<FormProps, "resource" | "chi
     align: "left",
     render: (row) => (
       <div className="flex h-8 flex-wrap items-center gap-1">
-        {row.rule_owned ? <Badge tone="info" density="compact">{t("stage.ruleOwned")}</Badge> : null}
+        {row.rule_owned ? <Chip tone="info">{t("stage.ruleOwned")}</Chip> : null}
       </div>
     ),
   }], [t]);

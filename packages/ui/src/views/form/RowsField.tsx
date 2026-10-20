@@ -22,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "../../ui/table";
-import { RequiredMark } from "../../ui/label";
+import { RequiredMark } from "../../ui/field";
 import { titleCase } from "../../lib/titleCase";
 import type {
   WidgetDefinition,

@@ -34,7 +34,7 @@ function RecordSmartButtons({
           key={button.id}
           type="button"
           disabled={button.disabled}
-          className="inline-flex items-center gap-1.5 bg-sheet px-3 text-xs leading-none text-fg outline-none transition-colors hover:bg-sheet-2 focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-60 [&_.glyph]:size-[13px] [&_.glyph]:text-brand"
+          className="inline-flex items-center gap-1.5 bg-sheet px-3 text-12 leading-none text-fg outline-none transition-colors hover:bg-sheet-2 focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-60 [&_.glyph]:size-[13px] [&_.glyph]:text-brand"
           onClick={button.onClick}
         >
           <span className="inline-flex items-center gap-1 font-semibold leading-none">

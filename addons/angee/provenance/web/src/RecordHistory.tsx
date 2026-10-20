@@ -1,27 +1,6 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useAuthoredQuery } from "@angee/refine";
-import {
-  Badge,
-  Button,
-  Chip,
-  Code,
-  CodeBlock,
-  ComparisonRows,
-  EmptyState,
-  ErrorBanner,
-  LoadingPanel,
-  PaneRow,
-  PaneRows,
-  PaneToolbar,
-  RecordActionBar,
-  RecordReference,
-  formatDateTime,
-  optionToken,
-  titleCase,
-  useActionResultMutation,
-  type ActionDescriptor,
-  type ComparisonRow,
-} from "@angee/ui";
+import { Chip, Button, Code, CodeBlock, ComparisonRows, EmptyState, ErrorBanner, LoadingPanel, PaneRow, PaneRows, PaneToolbar, RecordActionBar, RecordReference, formatDateTime, optionToken, titleCase, useActionResultMutation, type ActionDescriptor, type ComparisonRow } from "@angee/ui";
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 import {
@@ -305,9 +284,9 @@ function StatementVersions({ statements, record, t }: {
       <ul className="grid gap-1">
         {statements.map((statement, index) => (
           <li key={`${statement.id}:${index}`} className="flex min-w-0 flex-wrap items-center gap-1.5 text-13">
-            <Badge tone={statementVerb(statement) === "withdrawn" ? "warning" : "neutral"}>
+            <Chip tone={statementVerb(statement) === "withdrawn" ? "warning" : "neutral"}>
               {statementVerbLabel(t, statementVerb(statement))}
-            </Badge>
+            </Chip>
             <span className="font-medium text-fg">{statement.aspect}</span>
             <Chip size="sm" tone="info">{titleCase(optionToken(statement.source_kind))}</Chip>
             {statement.source ? <StatementReference reference={statement.source} record={record} />

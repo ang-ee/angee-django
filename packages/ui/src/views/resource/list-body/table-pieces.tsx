@@ -7,9 +7,9 @@ import { Glyph } from "../../../chrome/Glyph";
 import { useDeveloperFieldTitle } from "../../../chrome/DeveloperMode";
 import { useUiT } from "../../../i18n";
 import { type DndPayload } from "../../../lib/dnd";
-import { Button } from "../../../ui/button";
 import { CheckboxVisual } from "../../../ui/checkbox";
 import { DropdownMenu } from "../../../ui/dropdown-menu";
+import { ActionMenu } from "../../../toolbars/ActionMenu";
 import { SelectionBar as SelectionBarPrimitive } from "../../../ui/selection-bar";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "../../../ui/table";
 import type { ResourceViewContextValue } from "../resource-view-context";
@@ -23,7 +23,10 @@ import { ALIGN_CLASS, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT } from "./types";
 import type { GroupMeasure, VisibleFieldOption } from "./types";
 import { useVirtualWindow, VirtualPaddingRow } from "./virtualization";
 import { useRuntimeViewAs } from "../../../runtime";
-export function SelectionBar({
+/** The list's bulk-selection band over the shared `SelectionBar`, flush with the table top.
+ * @owner SelectionBar
+ */
+export function ListSelectionBar({
   count,
   onClear,
   onDelete,
@@ -402,44 +405,25 @@ export function VisibleFieldsMenu({
 }): React.ReactElement {
   const t = useUiT();
   return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger
-        render={
-          <Button
-            type="button"
-            variant="ghost"
-            size="iconSm"
-            aria-label={t("list.visibleFields")}
-            className="justify-self-end"
+    <ActionMenu label={null} aria-label={t("list.visibleFields")} glyph="columns" size="iconSm" align="end" className="justify-self-end">
+      <DropdownMenu.Group>
+        <DropdownMenu.Label>{t("list.visibleFields")}</DropdownMenu.Label>
+        {fields.map((field) => (
+          <DropdownMenu.CheckboxItem
+            key={field.id}
+            inset={false}
+            checked={field.visible}
+            disabled={field.disabled}
+            onCheckedChange={(checked) => {
+              if (field.disabled && !checked) return;
+              onToggle?.(field.id, checked);
+            }}
           >
-            <Glyph name="columns" />
-          </Button>
-        }
-      />
-      <DropdownMenu.Portal>
-        <DropdownMenu.Positioner sideOffset={6} align="end">
-          <DropdownMenu.Content className="w-56">
-            <DropdownMenu.Group>
-              <DropdownMenu.Label>{t("list.visibleFields")}</DropdownMenu.Label>
-              {fields.map((field) => (
-                <DropdownMenu.CheckboxItem
-                  key={field.id}
-                  inset={false}
-                  checked={field.visible}
-                  disabled={field.disabled}
-                  onCheckedChange={(checked) => {
-                    if (field.disabled && !checked) return;
-                    onToggle?.(field.id, checked);
-                  }}
-                >
-                  <CheckboxVisual checked={field.visible} />
-                  <span className="min-w-0 truncate">{field.label}</span>
-                </DropdownMenu.CheckboxItem>
-              ))}
-            </DropdownMenu.Group>
-          </DropdownMenu.Content>
-        </DropdownMenu.Positioner>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+            <CheckboxVisual checked={field.visible} />
+            <span className="min-w-0 truncate">{field.label}</span>
+          </DropdownMenu.CheckboxItem>
+        ))}
+      </DropdownMenu.Group>
+    </ActionMenu>
   );
 }

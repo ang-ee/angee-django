@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, ChatBar, ChatBubble, ChatCommandEmpty, ChatCommandItem, ChatCommandList, ChatHeader, ChatHeaderAction, ChatTypingIndicator, ContextBlock, Glyph, MessageReasoningFrame, SessionRail, SessionRailItem, StatusDot, ToolFallback } from "@angee/ui";
+import { Button, ChatBar, ChatBubble, ChatCommandEmpty, ChatCommandItem, ChatCommandList, ChatHeader, ChatTypingIndicator, ContextBlock, Glyph, MessageReasoningFrame, SessionRail, SessionRailItem, StatusDot, ToolFallback } from "@angee/ui";
 
 import { StorySurface } from "./chrome-fixtures";
 
@@ -23,9 +23,9 @@ export const Header: Story = {
         statusTone="success"
         actions={
           <>
-            <ChatHeaderAction>⚙</ChatHeaderAction>
-            <ChatHeaderAction>Clear</ChatHeaderAction>
-            <ChatHeaderAction>Reconnect</ChatHeaderAction>
+            <Button size="sm" variant="ghost">⚙</Button>
+            <Button size="sm" variant="ghost">Clear</Button>
+            <Button size="sm" variant="ghost">Reconnect</Button>
           </>
         }
       />

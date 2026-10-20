@@ -11,7 +11,7 @@ export const sectionEyebrowVariants = tv({
   variants: {
     size: {
       xs: "text-2xs",
-      sm: "text-xs",
+      sm: "text-12",
     },
     tone: {
       muted: "text-fg-muted",

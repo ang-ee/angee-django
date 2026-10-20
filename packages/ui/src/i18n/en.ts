@@ -9,7 +9,6 @@ export const enUiMessages: Record<string, string> = {
   "timeline.scope.all": "All",
   "timeline.scope.needsMe": "Needs you",
   "timeline.scope.more": "More kinds",
-  "timeline.scope.moreCount": "{count} more",
   "timeline.loading": "Loading the timeline…",
   "timeline.empty.title": "Nothing yet",
   "timeline.empty.description": "Nothing has happened on this record in this scope.",
@@ -242,6 +241,7 @@ export const enUiMessages: Record<string, string> = {
   "resourceToolbar.createResource": "New {resource}",
   "resourceToolbar.groupBy": "Group by",
   "paneToolbar.more": "More",
+  "paneToolbar.search": "Search",
   "resourceToolbar.order": "Order",
   "resourceToolbar.sortAscending": "{label}, ascending",
   "resourceToolbar.sortDescending": "{label}, descending",
@@ -462,7 +462,6 @@ export const enUiMessages: Record<string, string> = {
   "auth.hero.composable.headline": "One surface for real product work.",
   "auth.hero.composable.body":
     "Compose Django, React, permissions, data views, and agent workflows into a deterministic product surface that stays clear as it grows.",
-  "timeline.emptySnapshot": "No snapshot.",
   "chatter.label": "Context",
   "related.empty.title": "Nothing related",
   "related.empty.description": "Files, pages and sources attached to this record appear here.",

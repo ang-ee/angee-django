@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import * as React from "react";
-import { Badge, Button, Chip, CountBadge, EmptyState, MessageFeed, MessageRow } from "@angee/ui";
+import { Chip, Button, CountBadge, EmptyState, MessageFeed, MessageRow } from "@angee/ui";
 import { ActorAvatar, EntryBody, KIND_META, KindTag, billEntries, dayLabel, fileEntries, partyEntries, titleOf, type Entry, type Kind } from "./activity-explorer.mocks";
 
 /**
@@ -80,7 +80,7 @@ export function ActivityExplorer({ entries, eligible, title = "Activity", dense 
         <MessageFeed label={group.day} className={isDense ? "gap-2" : "gap-4"}>
           {group.items.map((entry) => <MessageRow key={entry.id} avatar={<ActorAvatar actor={entry.actor} />} author={entry.actor.name}
             timestamp={entry.at} channel={<KindTag kind={entry.kind} />}
-            meta={entry.needsMe ? <Badge tone="warning" variant="soft">needs you</Badge> : null}
+            meta={entry.needsMe ? <Chip tone="warning" variant="soft">needs you</Chip> : null}
             actions={entry.kind === "comment" ? <span className="flex gap-1"><Button size="sm" variant="ghost">Reply</Button><Button size="sm" variant="ghost">React</Button><Button size="sm" variant="ghost">Star</Button></span> : null}>
             {entry.kind !== "run" && !isDense ? <span className="text-13 font-medium">{titleOf(entry)}</span> : null}
             <div className={entry.kind !== "run" && !isDense ? "mt-1" : ""}><EntryBody entry={entry} dense={isDense} /></div>

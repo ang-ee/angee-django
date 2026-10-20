@@ -3,7 +3,6 @@ import * as React from "react";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
-import { useDebouncedText } from "../lib/use-debounced-text";
 import { tv, type VariantProps } from "../lib/variants";
 import {
   WIDGET_CONTROL_DATA_READONLY_CLASS,
@@ -20,7 +19,7 @@ export const inputVariants = tv({
   base: "w-full text-fg placeholder:text-fg-subtle",
   variants: {
     size: {
-      sm: "h-btn-sm px-2 text-xs",
+      sm: "h-btn-sm px-2 text-12",
       md: "h-input-h px-2 text-13",
       lg: "h-input-h-lg px-3 text-sm",
     },
@@ -70,9 +69,9 @@ export const searchInputVariants = tv({
   variants: {
     size: {
       sm: {
-        root: "h-btn-sm gap-1.5 pl-2 pr-1 text-xs",
+        root: "h-btn-sm gap-1.5 pl-2 pr-1 text-12",
         icon: "size-3",
-        input: "h-btn-sm text-xs",
+        input: "h-btn-sm text-12",
         clear: "size-5",
         clearIcon: "size-3",
       },
@@ -158,34 +157,6 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Inp
 });
 
 Input.displayName = "Input";
-
-export interface DebouncedSearchInputProps extends Omit<SearchInputProps, "value" | "onChange" | "onClear"> {
-  value: string;
-  onValueChange: (value: string) => void;
-}
-
-/** SearchInput with the same commit/blur/Enter behavior as ResourceToolbar.
- * @kind primitive
- * @deprecated Lane 2 deletion candidate; migrate callers to the canonical owner.
- */
-export function DebouncedSearchInput({ value, onValueChange, onBlur, onKeyDown, ...props }: DebouncedSearchInputProps) {
-  const { draft, setDraft, commit } = useDebouncedText(value, onValueChange);
-  return <SearchInput {...props} value={draft}
-    onChange={event => { setDraft(event.target.value); commit(event.target.value); }}
-    onClear={() => { setDraft(""); commit(""); commit.flush(); }}
-    onBlur={event => { commit(event.currentTarget.value); commit.flush(); onBlur?.(event); }}
-    onKeyDown={event => { if (event.key === "Enter") { commit(event.currentTarget.value); commit.flush(); } onKeyDown?.(event); }} />;
-}
-
-export type TextInputProps = InputProps;
-
-/**
- * @kind primitive
- * @deprecated Lane 2 deletion candidate; migrate callers to the canonical owner.
- */
-export function TextInput(props: TextInputProps): React.ReactElement {
-  return <Input {...props} />;
-}
 
 export type SearchInputProps = Omit<
   React.InputHTMLAttributes<HTMLInputElement>,

@@ -1,5 +1,5 @@
 import { defineBaseAddon } from "@angee/app";
-import { Label, Select } from "@angee/ui";
+import { FieldLabel, FieldRoot, Select } from "@angee/ui";
 import {
   defineThemeContribution,
   type ThemeOptionsEditorProps,
@@ -10,9 +10,10 @@ import { themes } from "./themes.mjs";
 function PaperOptionsEditor({ value, disabled, onChange }: ThemeOptionsEditorProps) {
   const options = themes[0].options!.parse(value?.value ?? themes[0].options!.defaults);
   return (
-    <Label>
-      Paper tint
+    <FieldRoot>
+      <FieldLabel>Paper tint</FieldLabel>
       <Select
+        aria-label="Paper tint"
         disabled={disabled}
         value={options.paperTint}
         onValueChange={(paperTint) => onChange({ version: 1, value: { paperTint } })}
@@ -21,7 +22,7 @@ function PaperOptionsEditor({ value, disabled, onChange }: ThemeOptionsEditorPro
           { label: "White", value: "white" },
         ]}
       />
-    </Label>
+    </FieldRoot>
   );
 }
 

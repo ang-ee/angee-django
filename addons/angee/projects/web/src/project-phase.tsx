@@ -159,7 +159,7 @@ export function ProjectPhaseControl({ value, row, field, readOnly = false }: Wid
       }}
     />
     {dateRow && editingDates && canEditDates && holdsPermission(dateRow, "write") ? <div
-      className="mt-2 flex flex-wrap items-end gap-2 rounded-6 border border-border-subtle bg-sheet p-2 text-xs">
+      className="mt-2 flex flex-wrap items-end gap-2 rounded-6 border border-border-subtle bg-sheet p-2 text-12">
       <span className="w-full font-medium">{dateRow.name}</span>
       {dateFields(dateRow)}
       <Button type="button" variant="ghost" size="sm" onClick={() => { setOpenDate(null); setEditingDates(null); }}>

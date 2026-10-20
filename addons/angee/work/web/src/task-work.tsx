@@ -48,7 +48,7 @@ export function WorkTaskCard({
   const title = String(task.title ?? "").trim();
   return (
     <div className="grid gap-2">
-      <div className="flex items-center justify-between gap-3 text-xs text-fg-muted">
+      <div className="flex items-center justify-between gap-3 text-12 text-fg-muted">
         <span className="font-semibold tabular-nums">
           {workKey || t("task.card.unnumbered")}
         </span>

@@ -95,7 +95,7 @@ function ProviderMark({ label }: { label: string }): ReactNode {
   return (
     <span
       aria-hidden="true"
-      className="flex size-7 shrink-0 items-center justify-center rounded-6 border border-border-subtle bg-accent-soft text-xs font-semibold text-accent-soft-text"
+      className="flex size-7 shrink-0 items-center justify-center rounded-6 border border-border-subtle bg-accent-soft text-12 font-semibold text-accent-soft-text"
     >
       {initial || <Glyph name="auth" className="size-4" />}
     </span>

@@ -70,7 +70,7 @@ test("writers default to Studio while readers open their first pane without auth
   expect(studioPanel.className).toContain("overflow-hidden");
   expect(studioPanel.className).not.toContain("max-w-[1100px]");
   // Full-bleed panes keep the document header, so switching panes never moves the header or strip.
-  expect(screen.getByRole("heading", { name: "Record review" }).className).toContain("text-28");
+  expect(screen.getByRole("heading", { name: "Record review" }).className).toContain("text-22");
   fireEvent.click(await screen.findByTestId("rf__node-entry"));
   fireEvent.change(await screen.findByRole("textbox", { name: "Key" }), { target: { value: "retained" } });
   fireEvent.click(screen.getByRole("tab", { name: "Versions" }));

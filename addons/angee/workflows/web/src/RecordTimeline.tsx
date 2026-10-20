@@ -3,11 +3,7 @@ import type { DocumentType } from "@angee/gql/console";
 import * as v from "valibot";
 import { DecisionCard } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
-import {
-  Alert, Badge, Button, Chip, CountBadge, ErrorBanner, InlineEmpty, LoadingPanel, PaneToolbar, RecordActionBar, RecordIssues, RecordReference,
-  SegmentedControl, StepList, optionToken, titleCase, useActiveRecordForm, useStatusTone,
-  formatDateTime, textRoleVariants, type StepListItem,
-} from "@angee/ui";
+import { Alert, Chip, Button, CountBadge, ErrorBanner, InlineEmpty, LoadingPanel, PaneToolbar, RecordActionBar, RecordIssues, RecordReference, SegmentedControl, StepList, optionToken, titleCase, useActiveRecordForm, useStatusTone, formatDateTime, textRoleVariants, type StepListItem } from "@angee/ui";
 import { RecordTimelineDocument, RUN_MODELS } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 import { useStepRetryActions } from "./step-retry";
@@ -175,7 +171,7 @@ function RunStatus({ run, compact = false }: { run: TimelineRun; compact?: boole
     : status === "succeeded" ? "plan_complete" : status === "running" ? "plan_running"
     : status === "waiting" ? holds.includes("error") ? "error" : holds.includes("run") ? "run"
       : holds.includes("decision") ? "decision" : "waiting" : "unknown";
-  const badge = <Badge tone={state === "unknown" ? "neutral" : resolveTone(state)}>{state === "plan_complete" && run.outcome_label || t(`timeline.status.${state}`)}</Badge>;
+  const badge = <Chip tone={state === "unknown" ? "neutral" : resolveTone(state)}>{state === "plan_complete" && run.outcome_label || t(`timeline.status.${state}`)}</Chip>;
   if (compact) return badge;
   return <div className="grid gap-1">{badge}
     {status === "failed" && run.failure_reason ? <p className="text-13 text-danger-text">{run.failure_reason}</p> : null}</div>;

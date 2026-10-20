@@ -1,11 +1,6 @@
 import { holdsPermission } from "@angee/metadata";
 import { extractActionOutcome } from "@angee/refine";
-import {
-  Avatar, Badge, Button, FieldDescriptorControl, FormView, Glyph, Select, Table, TableBody,
-  NavLink, TableCell, TableHead, TableHeader, TableRow, Textarea, VisibilityControl,
-  avatarInitials, canonicalOptionValue, errorMessage, optionLabel, useAuthoredResourceMutation,
-  useEnumOptions, useRuntimeAuth, useRuntimeViewAs, type FieldDescriptor, type WidgetOption,
-} from "@angee/ui";
+import { Avatar, Chip, Button, FieldDescriptorControl, FormView, Glyph, Select, Table, TableBody, NavLink, TableCell, TableHead, TableHeader, TableRow, Textarea, VisibilityControl, avatarInitials, canonicalOptionValue, errorMessage, optionLabel, useAuthoredResourceMutation, useEnumOptions, useRuntimeAuth, useRuntimeViewAs, type FieldDescriptor, type WidgetOption } from "@angee/ui";
 import * as React from "react";
 
 import type { ComparisonAnswer, ComparisonProposal, ComparisonTopic } from "./comparison-data";
@@ -151,7 +146,7 @@ function ProposalHeader({ proposal, href, content, answers, options }: {
         {content !== undefined ? content : href ? <NavLink href={href} variant="inline">{label}</NavLink> : label}
       </span>
     </div>
-    {audience ? <div className="ml-8 mt-1 text-xs font-normal text-fg-muted">{t("comparison.visibility", { visibility: audience })}</div> : null}
+    {audience ? <div className="ml-8 mt-1 text-12 font-normal text-fg-muted">{t("comparison.visibility", { visibility: audience })}</div> : null}
   </TableHead>;
 }
 
@@ -164,7 +159,7 @@ function ComparisonRowHeader({ row, t }: {
   return <TableHead scope="row" className="sticky left-0 z-sticky-col h-auto min-w-56 border-r border-border-subtle bg-sheet px-4 py-3 align-top text-fg">
     <div className="text-13 font-semibold text-fg">{label}</div>
     {row.kind === "topic" && !isEmptyComparisonValue(row.topic.hint)
-      ? <div className="mt-1 text-xs text-fg-muted">
+      ? <div className="mt-1 text-12 text-fg-muted">
           <FieldDescriptorControl field={{ name: "hint", widget: "markdown.preview" }}
             value={row.topic.hint} row={row.topic} readOnly />
         </div> : null}
@@ -199,7 +194,7 @@ function AnswerAudience({ answer, options }: {
       && choices.some((value) => canonicalOptionValue(options, value) === option.value));
   return canChange
     ? <ManageAnswerAudience answer={answer} options={options} />
-    : <Badge tone="neutral" density="compact" shape="pill">{answerAudience(answer, options, t)}</Badge>;
+    : <Chip tone="neutral">{answerAudience(answer, options, t)}</Chip>;
 }
 
 function ManageAnswerAudience({ answer, options }: {
@@ -214,9 +209,9 @@ function ManageAnswerAudience({ answer, options }: {
       answer: answer.id, revision: answer.revision,
       visibility: value.toUpperCase() as "ROUND" | "RESPONDER" | "SEALED",
     }), "set_proposal_answer_visibility")} />
-    {answer.shared_with_responders === true ? <Badge tone="neutral" density="compact" shape="pill">
+    {answer.shared_with_responders === true ? <Chip tone="neutral">
       {t("comparison.visibility.shared")}
-    </Badge> : null}
+    </Chip> : null}
   </span>;
 }
 
@@ -267,7 +262,7 @@ function EditableAnswerCell({ row, proposal, answer, options }: {
     <Textarea value={body} onChange={(event) => setBody(event.target.value)}
       aria-label={t("comparison.writePrompt", { subject })} placeholder={t("comparison.writePrompt", { subject })}
       rows={3} />
-    <div className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
+    <div className="flex flex-wrap items-center gap-2 text-12 text-fg-muted">
       <span>{t("comparison.postingTo")}</span>
       <Select size="sm" className="min-w-36 w-auto" aria-label={t("comparison.postingTo")}
         options={choices.map((option) => ({ value: option.value, label: option.label }))}
@@ -278,7 +273,7 @@ function EditableAnswerCell({ row, proposal, answer, options }: {
       <Button type="button" variant="ghost" size="sm" disabled={writer.pending}
         onClick={() => setEditing(false)}>{t("comparison.cancel")}</Button>
     </div>
-    {failure ? <p role="alert" className="text-xs text-danger-text">{failure}</p> : null}
+    {failure ? <p role="alert" className="text-12 text-danger-text">{failure}</p> : null}
   </form>;
 }
 

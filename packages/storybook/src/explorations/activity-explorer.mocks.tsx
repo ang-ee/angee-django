@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Avatar, Badge, Button, Chip, StatusIcon, StepList, type StepListItem } from "@angee/ui";
+import { Avatar, Chip, Button, StatusIcon, StepList, formatDayLabel, formatTime, type StepListItem } from "@angee/ui";
 
 /** Shared whiteboard mocks for the Activity explorer and the timeline + drill-in stories. Not wired to sources. */
 
@@ -116,16 +116,11 @@ export const partyEntries: readonly Entry[] = [
 /* ------------------------------------------------------------------------------------------ */
 
 export function dayLabel(iso: string): string {
-  const d = new Date(iso);
-  const today = new Date(2026, 9, 19);
-  const diff = Math.round((today.getTime() - new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()) / 86_400_000);
-  if (diff === 0) return "Today";
-  if (diff === 1) return "Yesterday";
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return formatDayLabel(iso, { now: new Date(2026, 9, 19) });
 }
 
 export function time(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return formatTime(iso);
 }
 
 export function ActorAvatar({ actor }: { actor: Actor }): React.ReactElement {
@@ -180,7 +175,7 @@ export function RunEntry({ entry, dense }: { entry: Entry; dense: boolean }): Re
   return <div className={dense ? "" : "rounded-8 border border-border-subtle bg-canvas/40 p-3"}>
     <div className="mb-2 flex flex-wrap items-center gap-2">
       <span className="text-13 font-semibold">{run.name}</span>
-      <Badge tone={statusTone} variant="soft">{run.status}</Badge>
+      <Chip tone={statusTone} variant="soft">{run.status}</Chip>
       <span className="text-11 text-fg-muted">started {time(entry.at)}</span>
       <Button size="sm" variant="ghost" className="ml-auto">Open run</Button>
       {run.status === "Waiting" || run.status === "Running" ? <Button size="sm" variant="danger">Stop</Button> : null}

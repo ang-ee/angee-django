@@ -33,10 +33,10 @@ export const Controls: Story = {
         end={
           <>
             <Toolbar surface="inline" aria-label="View mode">
-              <Toolbar.Button buttonSize="iconSm" aria-label="List view">
+              <Toolbar.Button size="iconSm" aria-label="List view">
                 <Glyph name="list" />
               </Toolbar.Button>
-              <Toolbar.Button buttonSize="iconSm" aria-label="Starred view">
+              <Toolbar.Button size="iconSm" aria-label="Starred view">
                 <Glyph name="star" />
               </Toolbar.Button>
             </Toolbar>

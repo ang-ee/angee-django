@@ -34,7 +34,7 @@ export const sliderVariants = tv({
         control: "py-1.5",
         track: "h-1",
         thumb: "size-3.5",
-        value: "text-xs",
+        value: "text-12",
       },
       md: "",
       lg: {

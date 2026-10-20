@@ -14,16 +14,17 @@ import { Button } from "../ui/button";
 import {
   PopoverClose,
   PopoverContent,
-  PopoverInput,
   PopoverPortal,
   PopoverPositioner,
   type PopoverPositionerProps,
   PopoverRoot,
   PopoverTrigger,
 } from "../ui/popover";
+import { SearchInput } from "../ui/input";
 import { SectionEyebrow } from "../ui/section-eyebrow";
 import { textRoleVariants } from "../ui/text";
 import { Tooltip } from "../ui/tooltip";
+import { CountBadge } from "../ui/count-badge";
 import { Glyph } from "./Glyph";
 import {
   type ChromeMenuGroup,
@@ -140,7 +141,7 @@ function AppChooserBody({
             className="w-[min(45rem,calc(100vw-2rem))] p-5"
           >
             <div className="mb-4 flex items-center gap-3">
-              <span className="grid size-7 shrink-0 place-content-center rounded-6 bg-brand-soft text-brand-soft-text">
+              <span className={cn("grid size-7 shrink-0 place-content-center rounded-6", toneFillClass("brand", "soft"))}>
                 <Glyph name="angee" size={18} />
               </span>
               <div className="min-w-0 flex-1">
@@ -155,7 +156,7 @@ function AppChooserBody({
                 render={
                   <Button
                     type="button"
-                    variant="icon"
+                    variant="ghost"
                     size="iconSm"
                     aria-label={t("chrome.closeAppChooser")}
                   >
@@ -165,17 +166,16 @@ function AppChooserBody({
               />
             </div>
 
-            <label className="mb-4 flex h-10 items-center gap-2 rounded-8 border border-transparent bg-inset px-4 focus-within:border-border-focus focus-within:focus-ring">
-              <Glyph name="search" className="shrink-0 text-fg-muted" />
-              <PopoverInput
-                type="search"
-                value={query}
-                onChange={(event) => setQuery(event.currentTarget.value)}
-                placeholder={resolvedSearchPlaceholder}
-                aria-label={t("chrome.searchAppsLabel")}
-                className="min-w-0 flex-1 px-0 text-sm"
-              />
-            </label>
+            <SearchInput
+              size="lg"
+              surface="inset"
+              className="mb-4"
+              value={query}
+              onChange={(event) => setQuery(event.currentTarget.value)}
+              onClear={() => setQuery("")}
+              placeholder={resolvedSearchPlaceholder}
+              aria-label={t("chrome.searchAppsLabel")}
+            />
 
             <div className="grid gap-4">
               <AppChooserGroup
@@ -302,9 +302,7 @@ function AppChooserTile({
           <span className="text-base font-semibold">{item.label[0]}</span>
         )}
         {typeof item.badge === "number" && item.badge > 0 ? (
-          <span className="absolute right-0 top-0 grid min-w-4 place-content-center rounded-full border-2 border-sheet bg-danger px-1 text-2xs font-semibold text-on-brand">
-            {item.badge}
-          </span>
+          <CountBadge placement="overlay" tone="danger" variant="solid" value={item.badge} />
         ) : null}
       </span>
       <span className="min-w-0 text-center text-13 font-semibold text-fg">

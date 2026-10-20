@@ -6,6 +6,7 @@ import {
 
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
+import { CountBadge } from "./count-badge";
 import { Spinner, type SpinnerSize } from "./spinner";
 import { interactiveSurfaceVariants } from "./widget-control";
 
@@ -26,19 +27,18 @@ export const buttonVariants = tv({
       danger:
         "border-danger bg-danger text-on-danger hover:border-danger-hover hover:bg-danger-hover active:border-danger-active active:bg-danger-active",
       link: "border-transparent bg-transparent text-link hover:text-brand",
-      icon: "border-transparent bg-transparent text-fg-2 hover:bg-inset hover:text-fg",
     },
     size: {
-      sm: "h-btn-sm px-2 text-xs",
+      sm: "h-btn-sm px-2 text-12",
       md: "h-btn-md px-3 text-13",
       lg: "h-btn-lg px-4 text-sm",
-      iconSm: "size-icon-btn-sm px-0 text-xs [&_.glyph]:size-3.5",
+      iconSm: "size-icon-btn-sm px-0 text-12 [&_.glyph]:size-3.5",
       iconMd: "size-icon-btn-md px-0 text-13 [&_.glyph]:size-4",
       iconLg: "size-icon-btn-lg px-0 text-sm [&_.glyph]:size-4",
     },
+    // The one selected surface (`selected` in styles/index.css); hover keeps it.
     active: {
-      true:
-        "bg-brand-soft text-brand-soft-text hover:bg-brand-soft hover:text-brand-soft-text",
+      true: "selected hover:selected",
       false: "",
     },
     loading: {
@@ -80,6 +80,10 @@ export type ButtonProps = Omit<
     loading?: boolean;
     loadingText?: React.ReactNode;
     pending?: boolean;
+    /** A toggle button's state: sets `aria-pressed` and the selected treatment. */
+    pressed?: boolean;
+    /** A count riding on the button's corner (needs you, unread); nothing when 0. */
+    badge?: number;
   };
 
 /**
@@ -93,6 +97,8 @@ export const Button = React.forwardRef<HTMLElement, ButtonProps>(function Button
     loading = false,
     loadingText,
     pending = false,
+    pressed,
+    badge,
     asChild = false,
     className,
     children,
@@ -114,11 +120,13 @@ export const Button = React.forwardRef<HTMLElement, ButtonProps>(function Button
     <BaseButton
       ref={ref}
       className={cn(
-        buttonVariants({ variant, size, active, loading: isLoading }),
+        buttonVariants({ variant, size, active: active || pressed === true, loading: isLoading }),
+        badge ? "relative" : undefined,
         className,
       )}
       data-loading={isLoading ? "" : undefined}
       data-pending={pending ? "" : undefined}
+      aria-pressed={pressed}
       aria-busy={isLoading || undefined}
       disabled={disabled || isLoading}
       nativeButton={asChild ? (nativeButton ?? false) : nativeButton}
@@ -135,6 +143,9 @@ export const Button = React.forwardRef<HTMLElement, ButtonProps>(function Button
             />
           ) : null}
           {buttonContent}
+          {badge ? (
+            <CountBadge value={badge} tone="warning" variant="solid" size="xs" placement="overlay" />
+          ) : null}
         </>
       )}
     </BaseButton>

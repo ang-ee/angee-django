@@ -166,7 +166,7 @@ function LoadedPublicWebform({
       <Alert ref={successRef} tabIndex={-1} tone="success" title={<Heading>{description.success.title ?? t("webform.successTitle")}</Heading>}>
         <p>{description.success.body ?? t(showReceipt ? "webform.successBody" : "webform.successBodyNoReceipt")}</p>
         {showReceipt ? (
-          <div className="mt-3 rounded-6 bg-inset px-3 py-2 font-mono text-xs text-fg" data-testid="webform-receipt">
+          <div className="mt-3 rounded-6 bg-inset px-3 py-2 font-mono text-12 text-fg" data-testid="webform-receipt">
             {receiptId}
           </div>
         ) : null}

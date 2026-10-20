@@ -288,10 +288,10 @@ export function RemovedItem({
         <span className="truncate text-13 font-medium text-fg">{label}</span>
         {children}
         {trashedByLabel ? (
-          <span className="text-xs text-fg-muted">{t("trash.removedBy", { name: trashedByLabel })}</span>
+          <span className="text-12 text-fg-muted">{t("trash.removedBy", { name: trashedByLabel })}</span>
         ) : null}
         {trashReason ? (
-          <span className="text-xs text-fg-muted">{t("trash.removedReason", { reason: trashReason })}</span>
+          <span className="text-12 text-fg-muted">{t("trash.removedReason", { reason: trashReason })}</span>
         ) : null}
       </div>
       {onRestore ? (

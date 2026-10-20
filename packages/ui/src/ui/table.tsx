@@ -15,7 +15,7 @@ export const tableVariants = tv({
     footer: "border-t border-border bg-sheet font-medium",
     row: "border-b border-border-subtle transition-colors",
     head:
-      "h-10 border-b border-border bg-sheet px-3 py-0 text-left align-middle text-xs font-semibold leading-5 text-fg-muted whitespace-nowrap",
+      "h-10 border-b border-border bg-sheet px-3 py-0 text-left align-middle text-12 font-semibold leading-5 text-fg-muted whitespace-nowrap",
     cell: "h-10 px-3 align-middle",
     caption: cn(textRoleVariants({ role: "meta" }), "mt-4"),
   },
@@ -25,7 +25,7 @@ export const tableVariants = tv({
       false: "",
     },
     selected: {
-      true: { row: "bg-brand-soft hover:bg-brand-soft" },
+      true: { row: "selected hover:selected" },
       false: "",
     },
     sticky: {

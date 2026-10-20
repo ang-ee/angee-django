@@ -36,7 +36,7 @@ describe("MessageFeed", () => {
   test("renders a day separator between day groups", () => {
     render(
       <MessageFeed label="Comments">
-        <MessageDaySeparator>Today</MessageDaySeparator>
+        <MessageDaySeparator date={new Date()} />
         <MessageRow author="Ada">Hi</MessageRow>
       </MessageFeed>,
     );

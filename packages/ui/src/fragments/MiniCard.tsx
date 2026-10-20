@@ -3,7 +3,7 @@ import * as React from "react";
 import { cn } from "../lib/cn";
 import { type Tone } from "../lib/tones";
 import { tv } from "../lib/variants";
-import { Tag } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import { Card } from "../ui/card";
 import { IconTile } from "../ui/icon-tile";
 import { textRoleVariants } from "../ui/text";
@@ -66,7 +66,7 @@ export const MiniCard = React.forwardRef<HTMLElement, MiniCardProps>(
             {meta ? <p className={styles.meta()}>{meta}</p> : null}
           </div>
           {primaryTag ? (
-            <Tag tone={primaryTag.tone}>{primaryTag.label}</Tag>
+            <Chip tone={primaryTag.tone}>{primaryTag.label}</Chip>
           ) : null}
         </div>
         {tags ? <div className={styles.tags()}>{tags}</div> : null}

@@ -1,14 +1,4 @@
-import {
-  Badge,
-  Button,
-  RowsListView,
-  defineRowAction,
-  textRoleVariants,
-  useConfirm,
-  usePrompt,
-  type ListColumn,
-  type RowActionDeclaration,
-} from "@angee/ui";
+import { Chip, Button, RowsListView, defineRowAction, textRoleVariants, useConfirm, usePrompt, type ListColumn, type RowActionDeclaration } from "@angee/ui";
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
@@ -110,9 +100,9 @@ export function SecretsPage(): ReactNode {
         field: "hasValue",
         header: t("secrets.column.hasValue"),
         render: (secret) => (
-          <Badge density="compact" shape="pill" tone={secret.hasValue ? "success" : "neutral"}>
+          <Chip tone={secret.hasValue ? "success" : "neutral"}>
             {secret.hasValue ? t("secrets.value.set") : t("secrets.value.empty")}
-          </Badge>
+          </Chip>
         ),
       },
       {
@@ -120,14 +110,12 @@ export function SecretsPage(): ReactNode {
         header: t("secrets.column.required"),
         render: (secret) =>
           secret.required ? (
-            <Badge
-              density="compact"
-              shape="pill"
+            <Chip
               tone="warning"
               title={t("secrets.protected.hint")}
             >
               {t("secrets.yes")}
-            </Badge>
+            </Chip>
           ) : secret.generated ? (
             <span
               className={textRoleVariants({ role: "meta" })}

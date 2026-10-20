@@ -88,7 +88,7 @@ function NavigationToggleButton({
     <Tooltip label={t("chrome.primaryNav")}>
       <Button
         type="button"
-        variant="icon"
+        variant="ghost"
         size="iconSm"
         active={navigation.open}
         aria-label={t("chrome.primaryNav")}
@@ -116,7 +116,7 @@ function PrimaryPaneToggleButton({
     <Tooltip label={label}>
       <Button
         type="button"
-        variant="icon"
+        variant="ghost"
         size="iconSm"
         active={open}
         aria-label={label}
@@ -145,7 +145,7 @@ function ChatterToggleButton({
     <Tooltip label={label}>
       <Button
         type="button"
-        variant="icon"
+        variant="ghost"
         size="iconSm"
         active={open}
         aria-label={label}

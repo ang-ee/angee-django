@@ -1,9 +1,5 @@
 import * as React from "react";
-import {
-  AppRuntimeProvider, Avatar, Badge, Button, CHATTER_CONTAINERS, Chip, CountBadge, EmptyState, Glyph,
-  PaneLabelPopover, PaneRow, PaneRows, Popover, RelatedPane as FrameworkRelatedPane, Select,
-  StatusIcon, StepList, Tabs, containersFromChildren, type ChatterViewContext, type RelatedGroupContent, type StepListItem,
-} from "@angee/ui";
+import { AppRuntimeProvider, Avatar, Chip, Button, CHATTER_CONTAINERS, CountBadge, EmptyState, Glyph, PaneLabelPopover, PaneRow, PaneRows, Popover, RelatedPane as FrameworkRelatedPane, Select, StatusIcon, StepList, Tabs, containersFromChildren, type ChatterViewContext, type RelatedGroupContent, type StepListItem } from "@angee/ui";
 import { DecisionCardMock, billEntries, time } from "../activity-explorer.mocks";
 import { PaneToolbar, ScopeRow } from "./PaneToolbar";
 import { KIND_PRESENTATION, type AsideData, type AsideTab, type Message, type RelatedGroup, type TaskItem, type TimelineLine } from "./types";
@@ -155,7 +151,7 @@ export function RunDrillIn({ onBack }: { onBack?: () => void }): React.ReactElem
   const run = billEntries[0]!;
   return (
     <>
-      <PaneToolbar back={{ label: "Timeline", onClick: onBack }} title={<span className="flex items-center gap-2">Bill import <Badge tone="warning" variant="soft" className="text-12">Waiting</Badge></span>} search={false}
+      <PaneToolbar back={{ label: "Timeline", onClick: onBack }} title={<span className="flex items-center gap-2">Bill import <Chip tone="warning" variant="soft" className="text-12">Waiting</Chip></span>} search={false}
         actions={[{ icon: "arrow-up-right", label: "Open run page" }, { icon: "x", label: "Stop", tone: "danger", text: true }]} />
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
         <p className="mb-2 text-12 text-fg-muted">started {time(run.at)} by Bill import · on this bill · 9 of 13 steps done</p>

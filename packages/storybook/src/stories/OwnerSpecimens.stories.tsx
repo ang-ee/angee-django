@@ -46,5 +46,4 @@ export const Steps: Story = { args: { owner: "StepList" }, parameters: { owner: 
 export const Tabs: Story = { args: { owner: "Tabs" }, parameters: { owner: U.Tabs } };
 export const ThemeSurfaces: Story = { args: { owner: "ThemePreviewFrame" }, parameters: { owner: U.ThemePreviewFrame } };
 export const Timeline: Story = { args: { owner: "TimelineRail" }, parameters: { owner: U.TimelineRail } };
-export const TimelineEntry: Story = { args: { owner: "TimelineEntry" }, parameters: { owner: U.TimelineEntry } };
 export const Toolbars: Story = { args: { owner: "Toolbar" }, parameters: { owner: U.Toolbar } };

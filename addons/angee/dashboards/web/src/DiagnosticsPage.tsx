@@ -27,7 +27,7 @@ export function DashboardDiagnosticsPage(): React.ReactElement {
         <DiagnosticCard label={t("diagnostics.persistence")} value={registry.store ? t("diagnostics.installed") : t("diagnostics.unavailable")} />
       </div>
       <Card className="p-4">
-        <h2 className="mb-2 text-14 font-semibold text-fg">{t("diagnostics.registered")}</h2>
+        <h2 className="mb-2 text-sm font-semibold text-fg">{t("diagnostics.registered")}</h2>
         <ul className="space-y-1 text-13 text-fg-muted">
           {Object.values(registry.definitions).map((definition) => (
             <li key={definition.key}><span className="font-medium text-fg">{definition.title}</span> · {definition.key} · {t("diagnostics.revision", { revision: definition.revision })}</li>

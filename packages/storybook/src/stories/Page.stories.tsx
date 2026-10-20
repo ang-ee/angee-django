@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Badge, Button, Glyph, Page, PageBody, PageFooter, PageHeader, PageToolbar, SearchInput, SectionNav, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Toolbar, useStatusTone, type SectionNavItem } from "@angee/ui";
+import { Chip, Button, Glyph, Page, PageBody, PageFooter, PageHeader, PageToolbar, SearchInput, SectionNav, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Toolbar, useStatusTone, type SectionNavItem } from "@angee/ui";
 
 import { ConsoleContentStoryShell, PageStoryShell } from "./chrome-fixtures";
 
@@ -70,10 +70,10 @@ export const Frame: Story = {
           end={
             <>
               <Toolbar surface="inline" aria-label="View">
-                <Toolbar.Button buttonSize="iconSm" aria-label="List view">
+                <Toolbar.Button size="iconSm" aria-label="List view">
                   <Glyph name="list" />
                 </Toolbar.Button>
-                <Toolbar.Button buttonSize="iconSm" aria-label="Starred view">
+                <Toolbar.Button size="iconSm" aria-label="Starred view">
                   <Glyph name="star" />
                 </Toolbar.Button>
               </Toolbar>
@@ -101,7 +101,7 @@ export const Frame: Story = {
                 <TableRow key={title} interactive>
                   <TableCell className="font-medium">{title}</TableCell>
                   <TableCell>
-                    <Badge tone={statusTone(status)}>{status}</Badge>
+                    <Chip tone={statusTone(status)}>{status}</Chip>
                   </TableCell>
                   <TableCell>{owner}</TableCell>
                   <TableCell className="text-right tabular-nums">
@@ -162,7 +162,7 @@ export const InContentRegion: Story = {
                 <TableRow key={title} interactive>
                   <TableCell className="font-medium">{title}</TableCell>
                   <TableCell>
-                    <Badge tone={statusTone(status)}>{status}</Badge>
+                    <Chip tone={statusTone(status)}>{status}</Chip>
                   </TableCell>
                   <TableCell>{owner}</TableCell>
                   <TableCell className="text-right tabular-nums">

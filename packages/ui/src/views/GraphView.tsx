@@ -27,7 +27,7 @@ import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { useValueStable } from "../lib/use-value-stable";
 import { type Tone } from "../lib/tones";
-import { Badge } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import { Code } from "../ui/code";
 import { textRoleVariants } from "../ui/text";
 
@@ -727,11 +727,11 @@ function GraphNodeLabel<TKind extends string>({
         <span className="min-w-0 flex-1 truncate text-13 font-semibold text-fg">
           {node.title}
         </span>
-        {kindLabel !== node.title ? <Badge className="max-w-[50%]" density="compact" tone={style.badgeTone ?? "neutral"}>
+        {kindLabel !== node.title ? <Chip className="max-w-[50%]" tone={style.badgeTone ?? "neutral"}>
           <span className="min-w-0 truncate">{kindLabel}</span>
-        </Badge> : null}
+        </Chip> : null}
       </div>
-      {status ? <Badge className="absolute -top-3 right-2" tone={status.tone ?? "neutral"} density="compact">{status.label}</Badge> : null}
+      {status ? <Chip className="absolute -top-3 right-2" tone={status.tone ?? "neutral"}>{status.label}</Chip> : null}
       {node.code ? (
         <Code truncate tone="muted">
           {node.code}

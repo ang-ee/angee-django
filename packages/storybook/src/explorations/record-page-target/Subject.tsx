@@ -1,7 +1,7 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import {
-  AppRuntimeProvider, Avatar, AvatarStack, Button, Chip, DropdownMenu, EditableLines, Field, FieldRow,
+  AppRuntimeProvider, Avatar, AvatarStack, Button, Chip, DropdownMenu, EditableLines, Field, FieldLabel, FieldRoot,
   FormGrid, FormView, Glyph, Group, MessageFeed, MessageRow, PaneLabel,
   PaneRow, PaneRows, Popover, PreviewPane, StatusbarSteps, Tabs, Tooltip, cn,
   parsePageGroups, statusTone, textRoleVariants, type PreviewProvider, type WidgetDefinition,
@@ -139,10 +139,10 @@ const fileFields = <Group columns={3}>
 /** Field and Group declarations use their shipped parser and layout primitives. */
 function FieldGrid({ declaration, marks = false }: { declaration: ReactNode; marks?: boolean }) {
   return <>{parsePageGroups(declaration).map((group, index) => <FormGrid key={index} columns={group.columns === 3 ? "three" : "two"} className="gap-x-6 gap-y-5">
-    {group.fields.map((field) => <FieldRow key={field.name} label={field.label}
-      meta={marks && (field.name === "supplier" || field.name === "number") ? <Chip size="micro" tone="info" variant="soft">{field.name === "supplier" ? "Correction" : "Source"}</Chip> : undefined}>
+    {group.fields.map((field) => <FieldRoot key={field.name}>
+      <FieldLabel variant="eyebrow" meta={marks && (field.name === "supplier" || field.name === "number") ? <Chip size="micro" tone="info" variant="soft">{field.name === "supplier" ? "Correction" : "Source"}</Chip> : undefined}>{field.label}</FieldLabel>
       <span className={textRoleVariants({ role: "value" })}>{field.name === "payment" ? <Chip size="sm" tone={statusTone("pending")} variant="soft">{bill.payment}</Chip> : String(field.defaultValue)}</span>
-    </FieldRow>)}
+    </FieldRoot>)}
   </FormGrid>)}</>;
 }
 

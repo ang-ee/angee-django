@@ -12,7 +12,7 @@ export function RecordChrome(): ReactElement | null {
     <div className="flex items-center">
       <Button
         type="button"
-        variant="icon"
+        variant="ghost"
         size="iconMd"
         aria-label={t("record.star")}
         className="text-warning-text hover:text-warning-text"

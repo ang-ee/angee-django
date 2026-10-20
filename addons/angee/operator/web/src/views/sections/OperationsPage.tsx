@@ -1,21 +1,4 @@
-import {
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  Badge,
-  LogStream,
-  RowsListView,
-  defineRowAction,
-  useStatusTone,
-  textRoleVariants,
-  useConfirm,
-  useToast,
-  errorMessage,
-  type ListColumn,
-  type RowActionDeclaration,
-} from "@angee/ui";
+import { Button, Card, CardContent, CardHeader, CardTitle, Chip, LogStream, RowsListView, defineRowAction, useStatusTone, textRoleVariants, useConfirm, useToast, errorMessage, type ListColumn, type RowActionDeclaration } from "@angee/ui";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
@@ -137,9 +120,9 @@ export function OperationsPage(): ReactNode {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2">
             <CardTitle>{operation.rootJob}</CardTitle>
-            <Badge density="compact" shape="pill" tone={statusTone(operation.status)}>
+            <Chip tone={statusTone(operation.status)}>
               {operation.status.toLowerCase()}
-            </Badge>
+            </Chip>
           </CardHeader>
           <CardContent>
             <LogStream lines={[...operation.nodes.map((node) => `${node.kind.toLowerCase()} ${node.name}: ${node.status.toLowerCase()}${node.message ? ` — ${node.message}` : ""}`), ...(operation.output ? operation.output.split("\n") : []), ...(operation.error ? [operation.error] : [])]} />

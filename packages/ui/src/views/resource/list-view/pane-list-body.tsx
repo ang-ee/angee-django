@@ -1,9 +1,10 @@
 import * as React from "react";
 import type { Row } from "@angee/metadata";
 import { PaneLabel, PaneRows } from "../../../communication/pane-list";
+import { ListStatusMessage } from "../../../fragments/ListStatusMessage";
 import { LoadingPanel } from "../../../fragments/LoadingPanel";
 import { useUiT } from "../../../i18n";
-import { ResourceToolbarPager, type ResourceToolbarProps } from "../../../toolbars/ResourceToolbar";
+import { ResourcePaneFooter, type ResourceToolbarProps } from "../../../toolbars/ResourceToolbar";
 import { GroupedScopePager } from "../GroupedScopePager";
 import { groupedRowLabel, ListEmpty } from "../resource-view-list-body";
 import type { ResourceViewGroup } from "../resource-view-model";
@@ -49,17 +50,14 @@ export function PaneListBody<TRow extends Row>({ surface, renderRow, renderGroup
                 {!item.expandable ? <li className="px-1 text-12 text-fg-muted">{item.unavailableMessage}</li> : null}
               </React.Fragment>;
               case "skeleton": return <li key={item.itemKey}><LoadingPanel density="inline" /></li>;
-              case "status": return <li key={item.itemKey}><div role={item.tone === "danger" ? "alert" : "status"}
-                className={item.tone === "danger" ? "text-13 text-danger-text" : "text-13 text-fg-muted"}>{item.message}</div></li>;
+              case "status": return <li key={item.itemKey}><ListStatusMessage tone={item.tone}>{item.message}</ListStatusMessage></li>;
               default: return assertNever(item);
             }
           })}
       </PaneRows>
       )}
     </div>
-    {toolbar && toolbar.chrome?.pager !== false ? <div className="flex shrink-0 justify-end border-t border-border-subtle px-2 py-1">
-      <ResourceToolbarPager {...toolbar} />
-    </div> : null}
+    {toolbar ? <ResourcePaneFooter {...toolbar} /> : null}
     </>
   );
 }

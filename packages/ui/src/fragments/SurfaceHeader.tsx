@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { tv } from "../lib/variants";
 import { PageHeader, type PageHeaderProps } from "../page";
-import { Tag } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import { IconTile } from "../ui/icon-tile";
 import { textRoleVariants } from "../ui/text";
 
@@ -91,7 +91,7 @@ export const SurfaceHeader = React.forwardRef<HTMLElement, SurfaceHeaderProps>(
           <div className={styles.titleRow()}>
             {icon ? <IconTile icon={icon} size="lg" tone="brand" /> : null}
             <Heading className={styles.title()}>{title}</Heading>
-            {fetching ? <Tag tone="info">Refreshing</Tag> : null}
+            {fetching ? <Chip tone="info">Refreshing</Chip> : null}
           </div>
           {subtitle ? <p className={styles.subtitle()}>{subtitle}</p> : null}
         </div>

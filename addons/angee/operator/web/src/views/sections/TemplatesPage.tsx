@@ -1,4 +1,4 @@
-import { Badge, Code, type ResourceToolbarGroupOption, type ListColumn } from "@angee/ui";
+import { Chip, Code, type ResourceToolbarGroupOption, type ListColumn } from "@angee/ui";
 import { ResourceQuery } from "@angee/metadata";
 import { useMemo, type ReactNode } from "react";
 
@@ -34,7 +34,7 @@ export function TemplatesPage(): ReactNode {
         field: "kind",
         header: t("templates.column.kind"),
         render: (template) => (
-          <Badge density="compact" shape="pill" tone="neutral">{template.kind}</Badge>
+          <Chip tone="neutral">{template.kind}</Chip>
         ),
       },
       {
@@ -81,17 +81,15 @@ function TemplateInputs({ template }: { template: TemplateDescriptor }): ReactNo
   return (
     <span className="flex flex-wrap items-center gap-1">
       {shown.map((input) => (
-        <Badge
+        <Chip
           key={input.name}
-          density="compact"
-          shape="pill"
           tone={input.required ? "warning" : "neutral"}
         >
           {input.name}
-        </Badge>
+        </Chip>
       ))}
       {overflow > 0 ? (
-        <Badge density="compact" shape="pill" tone="neutral">{`+${overflow}`}</Badge>
+        <Chip tone="neutral">{`+${overflow}`}</Chip>
       ) : null}
     </span>
   );

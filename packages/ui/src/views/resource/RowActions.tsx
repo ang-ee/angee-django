@@ -6,10 +6,10 @@ import type {
   DocumentData,
 } from "@angee/refine";
 
-import { errorMessage, useConfirm, useToast } from "../../feedback";
+import { errorMessage, useConfirm } from "../../feedback";
 import { Glyph } from "../../chrome/Glyph";
 import { Button, type ButtonVariant } from "../../ui/button";
-import { DropdownMenu } from "../../ui/dropdown-menu";
+import { ActionMenu, ActionTrigger } from "../../toolbars/ActionMenu";
 import { useUiT } from "../../i18n";
 import { useAuthoredResourceMutation } from "./authored-resource-mutation";
 import { useRuntimeViewAs } from "../../runtime";
@@ -25,8 +25,9 @@ export interface RowActionConfirmCopy<TRow extends Row> {
   cancel?: (row: TRow) => React.ReactNode;
 }
 
+/** The outcome copy a row verb toasts: the title on success and failure, the description as the failure reason. */
 export interface RowActionToastCopy<TRow extends Row> {
-  title: (row: TRow) => React.ReactNode;
+  title: (row: TRow) => string;
   description: (row: TRow) => string;
 }
 
@@ -359,14 +360,9 @@ function VisibleRowActions<TRow extends Row>({
       {secondary.length > 0 ? <span className="inline-flex gap-1 opacity-0 group-hover/record:opacity-100 group-focus-within/record:opacity-100 focus-within:opacity-100">
         {secondary.map((action) => renderAction(action))}
       </span> : null}
-      {menu.length > 0 ? <DropdownMenu.Root>
-        <DropdownMenu.Trigger render={<Button type="button" size="iconSm" variant="ghost" aria-label={t("list.actions")}>
-          <Glyph name="more-vertical" decorative />
-        </Button>} />
-        <DropdownMenu.Portal><DropdownMenu.Positioner sideOffset={6} align="end">
-          <DropdownMenu.Content className="w-52">{menu.map((action) => renderAction(action, true))}</DropdownMenu.Content>
-        </DropdownMenu.Positioner></DropdownMenu.Portal>
-      </DropdownMenu.Root> : null}
+      {menu.length > 0 ? <ActionMenu label={null} aria-label={t("list.actions")} size="iconSm" align="end">
+        {menu.map((action) => renderAction(action, true))}
+      </ActionMenu> : null}
     </div>
   );
 }
@@ -404,7 +400,7 @@ function AuthoredRowActionButton<TRow extends Row>({
 }: AuthoredRowActionButtonProps<TRow>): React.ReactElement {
   const confirmAction = useRowActionConfirmation(action, row);
   const preview = useLatestRef(useRuntimeViewAs());
-  const toast = useToast();
+  const settle = useActionResultRun();
   const mutationOptions = React.useMemo(
     () => ({
       invalidateModels: action.invalidateModels,
@@ -423,21 +419,23 @@ function AuthoredRowActionButton<TRow extends Row>({
       if (action.confirm && !await confirmAction()) return;
       if (preview.current.viewAs || preview.current.pending) return;
       controller.commit(action.id, row);
-      // The unexported declaration brand proves this document and projector
-      // were paired by defineRowAction before the heterogeneous array erased TDocument.
-      const result = await mutate(action.variables(row) as never);
-      if (!action.succeeded(result)) {
-        throw new Error(action.toast.description(row));
-      }
-    } catch (cause) {
-      toast.danger({
-        title: action.toast.title(row),
-        description: errorMessage(cause, action.toast.description(row)),
+      // The settle owner toasts the outcome: the declared copy titles it, its
+      // description is the failure reason.
+      await settle(async () => {
+        const failed = (reason: string) => ({ ok: false, message: action.toast.title(row), validationErrors: { outcome: [reason] } });
+        try {
+          // The unexported declaration brand proves this document and projector
+          // were paired by defineRowAction before the heterogeneous array erased TDocument.
+          const result = await mutate(action.variables(row) as never);
+          return action.succeeded(result) ? { ok: true, message: action.toast.title(row) } : failed(action.toast.description(row));
+        } catch (cause) {
+          return failed(errorMessage(cause, action.toast.description(row)));
+        }
       });
     } finally {
       controller.release(action.id, row);
     }
-  }, [action, confirmAction, controller, mutate, preview, row, toast]);
+  }, [action, confirmAction, controller, mutate, preview, row, settle]);
 
   return (
     <RowActionButton
@@ -521,11 +519,12 @@ function RowActionButton<TRow extends Row>({
   const presentation = action.presentation ?? "label";
   const showIcon = presentation !== "label" && Boolean(action.icon);
   const showLabel = presentation !== "icon" || !action.icon;
-  if (menuItem) return <DropdownMenu.Item
-    variant={action.variant === "danger" ? "danger" : "default"}
+  if (menuItem) return <ActionTrigger
+    glyph={action.icon}
+    variant={action.variant === "danger" ? "danger" : "secondary"}
     disabled={blocked || busy || action.disabled(row)}
     onClick={(event) => { event.stopPropagation(); if (!blocked && !busy && !action.disabled(row)) onSelect(); }}
-  >{action.icon ? <Glyph decorative name={action.icon} /> : null}{action.label}</DropdownMenu.Item>;
+  >{action.label}</ActionTrigger>;
   return (
     <Button
       type="button"

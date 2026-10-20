@@ -1,7 +1,7 @@
 import * as React from "react";
 import { ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
-import { cn } from "../../../lib/cn";
+import { ListStatusMessage } from "../../../fragments/ListStatusMessage";
 import { Skeleton, SkeletonStatus } from "../../../ui/skeleton";
 import { columnTone, type ColumnDescriptor } from "../../page";
 import { GroupedScopePager } from "../GroupedScopePager";
@@ -96,10 +96,7 @@ export function GroupedBoardBody<TRow extends Row>({
           </SkeletonStatus>);
           break;
         case "status":
-          children.push(<p key={item.itemKey} role={item.tone === "danger" ? "alert" : "status"}
-            className={cn("py-3 text-13", item.tone === "danger" ? "text-danger-text" : "text-fg-muted")}>
-            {item.message}
-          </p>);
+          children.push(<ListStatusMessage key={item.itemKey} tone={item.tone} density="row">{item.message}</ListStatusMessage>);
           break;
       }
     }

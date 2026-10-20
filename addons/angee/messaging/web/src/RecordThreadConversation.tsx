@@ -2,7 +2,7 @@ import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
 import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
-import { Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, RelativeTime, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, Skeleton, SkeletonStatus, Tag, Textarea, avatarInitials, cn, createClientKey, errorMessage, reactionsFromGroups, textRoleVariants, useRuntimeViewAs, useTrashPrompt, useUiT } from "@angee/ui";
+import { Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, RelativeTime, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, Skeleton, SkeletonStatus, Textarea, avatarInitials, cn, createClientKey, errorMessage, reactionsFromGroups, textRoleVariants, useRuntimeViewAs, useTrashPrompt, useUiT } from "@angee/ui";
 import {
   StorageUploadTasks,
   useStorageUpload,
@@ -794,14 +794,14 @@ function ComposerRecipients({
             <Chip key={option.id} tone="neutral" size="md" className="gap-1.5">
               <span className="min-w-0 max-w-40 truncate">{option.label}</span>
               {option.follower ? (
-                <Tag tone="neutral" density="micro">
+                <Chip tone="neutral">
                   {t("composer.follower")}
-                </Tag>
+                </Chip>
               ) : null}
               {option.suggested ? (
-                <Tag tone="info" density="micro">
+                <Chip tone="info">
                   {option.reason || t("composer.suggested")}
-                </Tag>
+                </Chip>
               ) : null}
               <button
                 type="button"
@@ -914,8 +914,8 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
       className={streamMode && message.is_reply ? "ml-3 border-l-2 border-border-subtle pl-3" : undefined}
       channel={streamMode ? <>
         {audience ? <Chip tone="neutral" size="md">{audience}</Chip> : null}
-        {streamKind ? <Tag tone="info" density="micro">{streamKind}</Tag> : null}
-      </> : directionTag ? <Tag tone="info" density="micro">{directionTag}</Tag> : undefined}
+        {streamKind ? <Chip tone="info">{streamKind}</Chip> : null}
+      </> : directionTag ? <Chip tone="info">{directionTag}</Chip> : undefined}
       meta={streamVerb || edited ? <>
         {streamVerb ? <span>{streamVerb}</span> : null}
         {edited ? <>{streamVerb ? " · " : null}{t("chatter.editedMeta")}

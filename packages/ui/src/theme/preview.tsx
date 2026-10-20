@@ -3,12 +3,11 @@ import { createPortal } from "react-dom";
 
 import { barVariants } from "../layouts/bar";
 import { cn } from "../lib/cn";
-import { Badge } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Checkbox } from "../ui/checkbox";
-import { Input } from "../ui/input";
-import { Label } from "../ui/label";
+import { FieldControl, FieldLabel, FieldRoot } from "../ui/field";
 import { SectionEyebrow } from "../ui/section-eyebrow";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { textRoleVariants } from "../ui/text";
@@ -112,9 +111,9 @@ function ThemeSpecimenChrome({ compact = false, logo, controls, children }: {
 export function ThemeSpecimenSurface({ logo }: { logo?: ThemeCustomizationLogo } = {}): ReactNode {
   return <ThemeSpecimenChrome logo={logo} controls={<><Button variant="primary">Primary action</Button><Button variant="secondary">Secondary</Button></>}>
     <div className="grid gap-1"><SectionEyebrow as="span">Theme specimen</SectionEyebrow><h2 className={textRoleVariants({ role: "display" })}>Workspace overview</h2><p className="text-13 text-fg-muted">Typography, controls, status, fields and tabular surfaces use the active token contract.</p></div>
-    <div className="flex flex-wrap items-center gap-2"><Button variant="ghost">Quiet action</Button><Badge tone="success">On track</Badge><Badge tone="warning">Needs review</Badge></div>
-    <Card><CardHeader><CardTitle>Project details</CardTitle><CardDescription>Interactive fields remain inside this preview document.</CardDescription></CardHeader><CardContent className="grid gap-4 sm:grid-cols-2"><Label>Project name<Input defaultValue="Northstar" /></Label><Label>Owner<Input defaultValue="Alex Morgan" /></Label><Checkbox defaultChecked>Send a weekly summary</Checkbox></CardContent></Card>
-    <Table><TableHeader><TableRow><TableHead>Item</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Value</TableHead></TableRow></TableHeader><TableBody><TableRow><TableCell>Design review</TableCell><TableCell><Badge tone="info">Active</Badge></TableCell><TableCell className="text-right">72%</TableCell></TableRow><TableRow><TableCell>Release prep</TableCell><TableCell><Badge>Queued</Badge></TableCell><TableCell className="text-right">18%</TableCell></TableRow></TableBody></Table>
+    <div className="flex flex-wrap items-center gap-2"><Button variant="ghost">Quiet action</Button><Chip tone="success">On track</Chip><Chip tone="warning">Needs review</Chip></div>
+    <Card><CardHeader><CardTitle>Project details</CardTitle><CardDescription>Interactive fields remain inside this preview document.</CardDescription></CardHeader><CardContent className="grid gap-4 sm:grid-cols-2"><FieldRoot><FieldLabel>Project name</FieldLabel><FieldControl defaultValue="Northstar" /></FieldRoot><FieldRoot><FieldLabel>Owner</FieldLabel><FieldControl defaultValue="Alex Morgan" /></FieldRoot><Checkbox defaultChecked>Send a weekly summary</Checkbox></CardContent></Card>
+    <Table><TableHeader><TableRow><TableHead>Item</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Value</TableHead></TableRow></TableHeader><TableBody><TableRow><TableCell>Design review</TableCell><TableCell><Chip tone="info">Active</Chip></TableCell><TableCell className="text-right">72%</TableCell></TableRow><TableRow><TableCell>Release prep</TableCell><TableCell><Chip>Queued</Chip></TableCell><TableCell className="text-right">18%</TableCell></TableRow></TableBody></Table>
   </ThemeSpecimenChrome>;
 }
 

@@ -1,6 +1,15 @@
 import * as React from "react";
 
+import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
+import { textRoleVariants } from "./text";
+
+/** The right-aligned shortcut hint beside a menu or palette item.
+ * @kind token
+ */
+export const shortcutVariants = tv({
+  base: cn(textRoleVariants({ role: "caption" }), "ml-auto"),
+});
 
 /**
  * @kind token
@@ -11,7 +20,7 @@ export const kbdVariants = tv({
     size: {
       sm: "h-4 min-w-4 rounded-4 px-1 text-2xs",
       md: "h-kbd-h min-w-kbd-h rounded-6 px-1.5 text-2xs",
-      lg: "h-btn-sm min-w-btn-sm rounded-6 px-2 text-xs",
+      lg: "h-btn-sm min-w-btn-sm rounded-6 px-2 text-12",
     },
     tone: {
       default: "border-border-subtle bg-inset text-fg-muted",

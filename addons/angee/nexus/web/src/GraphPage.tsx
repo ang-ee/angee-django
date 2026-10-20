@@ -1,32 +1,7 @@
 import { TIMELINE_TAB_ID } from "@angee/timeline";
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import {
-  Badge,
-  Button,
-  EmptyState,
-  ErrorBanner,
-  GraphView,
-  LoadingPanel,
-  Page,
-  PageBody,
-  PageHeader,
-  RailPanel,
-  RelationPicker,
-  SegmentedControl,
-  Tag,
-  NavLink,
-  useChatter,
-  useChatterContent,
-  useResourceRecordHrefLookup,
-  useRouteHref,
-  useRouteSearch,
-  updateRouteSearch,
-  useInAppNavigator,
-  type ChatterContent,
-  type ResourceRecordHrefLookup,
-  type RouteHref,
-} from "@angee/ui";
+import { Chip, Button, EmptyState, ErrorBanner, GraphView, LoadingPanel, Page, PageBody, PageHeader, RailPanel, RelationPicker, SegmentedControl, NavLink, useChatter, useChatterContent, useResourceRecordHrefLookup, useRouteHref, useRouteSearch, updateRouteSearch, useInAppNavigator, type ChatterContent, type ResourceRecordHrefLookup, type RouteHref } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
 import { NexusGraphParties, NexusPartyGraph } from "./documents";
@@ -217,7 +192,7 @@ export function GraphPage(): React.ReactElement {
               />
             )}
             {graph.data?.party_graph?.truncated ? (
-              <Badge className="absolute left-3 top-3" tone="warning">{t("graph.truncated")}</Badge>
+              <Chip className="absolute left-3 top-3" tone="warning">{t("graph.truncated")}</Chip>
             ) : null}
           </div>
         )}
@@ -258,9 +233,9 @@ function Inspector({
               <div key={node.id} className="rounded-6 border border-border-subtle bg-sheet p-3">
                 <div className="font-medium text-fg">{node.title}</div>
                 <div className="mt-1 flex flex-wrap gap-1.5">
-                  <Tag tone="neutral">{node.kind}</Tag>
+                  <Chip tone="neutral">{node.kind}</Chip>
                   {node.meta?.cadence?.cadence_days ? (
-                    <Tag tone="warning">{t("graph.cadenceDays", { count: node.meta.cadence.cadence_days })}</Tag>
+                    <Chip tone="warning">{t("graph.cadenceDays", { count: node.meta.cadence.cadence_days })}</Chip>
                   ) : null}
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -303,8 +278,8 @@ function EdgeDetails({
     <div className="grid gap-2 text-13">
       <div className="font-medium text-fg">{relationshipLabel ?? edge.label ?? edge.kind}</div>
       <div className="flex flex-wrap gap-1.5">
-        <Tag tone={edge.kind === "tie_fading" ? "warning" : "neutral"}>{edge.kind.replaceAll("_", " ")}</Tag>
-        {typeof edge.meta?.gravity === "number" ? <Tag tone="brand">{t("ties.gravity")} {edge.meta.gravity.toFixed(2)}</Tag> : null}
+        <Chip tone={edge.kind === "tie_fading" ? "warning" : "neutral"}>{edge.kind.replaceAll("_", " ")}</Chip>
+        {typeof edge.meta?.gravity === "number" ? <Chip tone="brand">{t("ties.gravity")} {edge.meta.gravity.toFixed(2)}</Chip> : null}
       </div>
       {path ? <Button asChild size="sm"><NavLink href={path} variant="inline">{t("graph.openRecord")}</NavLink></Button> : null}
     </div>

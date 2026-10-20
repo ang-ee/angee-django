@@ -217,7 +217,6 @@ export {
   type UseScopedTreeExplorerOptions,
 } from "./tree/useScopedTreeExplorer";
 export { GalleryView, type GalleryViewProps } from "./GalleryView";
-export { TimelineView, type TimelineViewProps } from "./TimelineView";
 export {
   CalendarView,
   type CalendarViewProps,

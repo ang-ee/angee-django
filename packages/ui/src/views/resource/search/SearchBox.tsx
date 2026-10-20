@@ -3,17 +3,15 @@ import { useDebounce } from "use-debounce";
 import { Glyph } from "../../../chrome/Glyph";
 import { useUiT, type UiTranslate } from "../../../i18n";
 import { cn } from "../../../lib/cn";
-import { toneClass } from "../../../lib/tones";
 import { useMediaQuery } from "../../../lib/use-media-query";
 import { useOverflowCount } from "../../../lib/use-overflow-count";
 import { Button } from "../../../ui/button";
-import { CountBadge } from "../../../ui/badge";
-import { RemovableChip, chipVariants } from "../../../ui/chip";
+import { CountBadge } from "../../../ui/count-badge";
+import { Chip, RemovableChip } from "../../../ui/chip";
 import { Combobox } from "../../../ui/combobox";
 import { Input } from "../../../ui/input";
 import { Toolbar } from "../../../ui/toolbar";
-import { PopoverRoot, PopoverTrigger, PopoverPortal, PopoverPositioner, PopoverContent,
-  POPUP_BASE, POPUP_ITEM, PORTALED_CONTROL_LAYER } from "../../../ui/popover";
+import { PopoverRoot, PopoverTrigger, PopoverPortal, PopoverPositioner, PopoverContent } from "../../../ui/popover";
 import { textRoleVariants } from "../../../ui/text";
 import { FilterClauseEditor } from "../../../toolbars/FilterClauseEditor";
 import { QueryConditionEditor } from "../../../toolbars/ResourceConditionEditor";
@@ -24,8 +22,10 @@ import type { ResourceSearch, SearchActiveItem, SearchFacet, SearchFacetOption }
 
 /** The three-column panel is 48rem wide; below this viewport width it stacks. */
 const SEARCH_PANEL_ROOMY_QUERY = "(min-width: 52rem)";
-/** "+N" for the chips that do not fit wears the chip recipe, so its measured copy matches it. */
-const MORE_CHIP = cn(chipVariants({ size: "sm" }), toneClass("brand", "soft"), "cursor-pointer outline-none focus-visible:focus-ring");
+/** "+N" for the chips that do not fit: a brand chip, pressed to open the panel; its measured copy is the same chip. */
+function MoreChip({ count, ...props }: { count: number } & Omit<React.ComponentProps<typeof Chip>, "children">): React.ReactElement {
+  return <Chip tone="brand" variant="soft" size="sm" {...props}>+{count}</Chip>;
+}
 
 type SearchSuggestion = { id: `suggest:${string}`; kind: "suggest"; label: string; apply: () => void };
 type SearchItem = SearchActiveItem | SearchSuggestion;
@@ -67,7 +67,7 @@ function RelationSuggestionRead({ facet, searchText, children }: {
     return bucket ? [bucket] : [];
   });
   const t = useUiT();
-  return <>{children({ facet, options })}{searchText && result.list.error ? <p role="alert" className="text-xs text-danger-text">
+  return <>{children({ facet, options })}{searchText && result.list.error ? <p role="alert" className="text-12 text-danger-text">
     {result.list.error}<Button variant="ghost" size="sm" onClick={result.list.refetch}>{t("collection.retry")}</Button>
   </p> : null}</>;
 }
@@ -97,14 +97,14 @@ function SearchBoxContent({ search, box, toolbar, remote, inputValue, setInputVa
   const shown = collapsed ? active : active.filter((_, index) => visible.includes(index));
   const hidden = active.length - shown.length;
   const input = <Combobox.Chips ref={collapsed ? undefined : rowRef} aria-label={t("search.active")}
-    className={cn("flex min-w-0 flex-1 items-center gap-1", collapsed ? "flex-wrap" : "flex-nowrap")}>
+    className={cn("flex-1", collapsed ? "flex-wrap" : "flex-nowrap")}>
     {shown.map((item) => <Combobox.Chip key={item.id} render={<ActiveChip item={item} search={search}
       onRemove={() => { search.clear(item.id); inputRef.current?.focus(); }} />} />)}
-    {hidden ? <PopoverTrigger className={MORE_CHIP} aria-label={t("search.moreActive", { count: hidden })}
-      title={t("search.moreActive", { count: hidden })}>+{hidden}</PopoverTrigger> : null}
+    {hidden ? <PopoverTrigger render={<MoreChip count={hidden} pressed={false} />} aria-label={t("search.moreActive", { count: hidden })}
+      title={t("search.moreActive", { count: hidden })} /> : null}
     <Combobox.Input ref={inputRef} aria-label={t("resourceToolbar.filterRecords")}
       placeholder={t("resourceToolbar.filterPlaceholder")}
-      className="h-7 min-w-28 flex-1 border-0 bg-transparent text-13 text-fg outline-none placeholder:text-fg-muted" />
+      className="h-control-xs min-w-28" />
   </Combobox.Chips>;
   return <PopoverRoot open={panelOpen} onOpenChange={(open) => {
     setPanelOpen(open);
@@ -134,28 +134,26 @@ function SearchBoxContent({ search, box, toolbar, remote, inputValue, setInputVa
             <div ref={measurementRef} className="flex w-max items-center gap-1">
               {active.map((item) => <ActiveChip key={item.id} item={item} search={search} onRemove={() => undefined} />)}
               <span className="w-28 shrink-0" />
-              <span className={MORE_CHIP}>+{active.length}</span>
+              <MoreChip count={active.length} />
             </div>
           </div>
           <Glyph name="search" className="size-3.5 shrink-0 text-fg-muted" />{input}
         </> : null}
-        <PopoverTrigger render={toolbar ? <Toolbar.Button /> : undefined} aria-label={t("search.panel")} className="inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-6 px-1 text-fg-muted outline-none hover:bg-sheet focus-visible:focus-ring">
+        <PopoverTrigger render={toolbar ? <Toolbar.Button /> : undefined} aria-label={t("search.panel")} className="inline-flex h-control-xs shrink-0 items-center justify-center gap-1 rounded-6 px-1 text-fg-muted outline-none hover:bg-sheet focus-visible:focus-ring">
           <Glyph name={collapsed ? "filter" : "chevron-down"} className="size-3.5" />
           {collapsed && active.length > 0 ? <CountBadge tone="brand">{active.length}</CountBadge> : null}
         </PopoverTrigger>
       </div>
-      <Combobox.Portal><Combobox.Positioner sideOffset={4} className={PORTALED_CONTROL_LAYER}>
-        <Combobox.Popup className={cn(POPUP_BASE, "max-h-80 min-w-[min(24rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] overflow-y-auto p-1")}>
-          <Combobox.List>
-            {groups.map((group) => <Combobox.Group key={group.label} items={group.items}>
-              <Combobox.GroupLabel className="px-2 py-1 text-2xs font-semibold text-fg-muted">{group.label}</Combobox.GroupLabel>
-              <Combobox.Collection>{(item: SearchSuggestion) => <Combobox.Item key={item.id} value={item} className={POPUP_ITEM}>
-                {item.label}
-              </Combobox.Item>}</Combobox.Collection>
-            </Combobox.Group>)}
-          </Combobox.List>
-        </Combobox.Popup>
-      </Combobox.Positioner></Combobox.Portal>
+      <Combobox.Popup className="min-w-[min(24rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)]">
+        <Combobox.List className="max-h-80">
+          {groups.map((group) => <Combobox.Group key={group.label} items={group.items}>
+            <Combobox.GroupLabel>{group.label}</Combobox.GroupLabel>
+            <Combobox.Collection>{(item: SearchSuggestion) => <Combobox.Item key={item.id} value={item}>
+              {item.label}
+            </Combobox.Item>}</Combobox.Collection>
+          </Combobox.Group>)}
+        </Combobox.List>
+      </Combobox.Popup>
       <PopoverPortal><PopoverPositioner anchor={hostRef} sideOffset={6} align="start">
         <PopoverContent aria-label={t("search.panel")} initialFocus={collapsed ? inputRef : undefined}
           className={cn("grid max-h-[min(36rem,calc(100dvh-5rem))] max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain",
@@ -325,8 +323,8 @@ function PickerColumn({ stacked, icon, title, children }: {
 function PickerButton({ active = false, muted = false, children, onClick }: {
   active?: boolean; muted?: boolean; children: React.ReactNode; onClick?: () => void;
 }): React.ReactElement {
-  return <button type="button" className={cn("flex h-7 min-w-0 items-center gap-2 rounded-6 px-2 text-left text-13 outline-none transition-colors focus-visible:focus-ring",
-    active ? "bg-brand-soft font-medium text-brand-soft-text" : muted ? "text-fg-muted hover:bg-inset hover:text-fg" : "text-fg hover:bg-inset")}
+  return <button type="button" className={cn("flex h-control-xs min-w-0 items-center gap-2 rounded-6 px-2 text-left text-13 outline-none transition-colors focus-visible:focus-ring",
+    active ? "selected font-medium" : muted ? "text-fg-muted hover:bg-inset hover:text-fg" : "text-fg hover:bg-inset")}
     aria-pressed={active} onClick={onClick}>{children}</button>;
 }
 function PickerDivider(): React.ReactElement { return <div className="my-1 border-t border-border-subtle" />; }

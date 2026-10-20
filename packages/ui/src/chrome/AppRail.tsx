@@ -367,7 +367,7 @@ function RailExpansionToggle({
       <Button
         ref={buttonRef}
         type="button"
-        variant="icon"
+        variant="ghost"
         size="iconSm"
         aria-label={label}
         aria-expanded={expanded}

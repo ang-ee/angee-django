@@ -29,7 +29,11 @@ export interface PaneRowProps {
   meta?: React.ReactNode;
   /** The muted second line: actor, folded summary, assignee. */
   sub?: React.ReactNode;
-  /** The row's one verb, at the end of the second line, revealed on hover. */
+  /**
+   * The row's one verb at the end of the row, revealed on hover. A string names
+   * what opening the row does (a hint beside the row's own control); a node is
+   * the verb's own control, rendered beside the row's link or button.
+   */
   verb?: React.ReactNode;
   /** Draws the warning dot and emphasises the title: this row waits on the viewer. */
   needsMe?: boolean;
@@ -45,7 +49,9 @@ export interface PaneRowProps {
   className?: string;
 }
 
-const ROW_CLASS = "group/row flex w-full gap-2 rounded-6 px-1 py-1.5 text-left hover:bg-canvas/70 aria-[current=true]:bg-canvas";
+// The row's own control carries `aria-current`; the wrapper reads it for the selected fill.
+const ROW_CLASS = "group/row flex w-full gap-2 rounded-6 px-1 py-1.5 text-left hover:bg-canvas/70 has-[[aria-current=true]]:selected";
+const TARGET_CLASS = "flex min-w-0 flex-1 gap-2 rounded-4 text-left outline-none focus-visible:focus-ring";
 
 /**
  * @kind fragment
@@ -69,33 +75,27 @@ export function PaneRow({
         </span>
         {meta ? <span className="shrink-0 text-12 tabular-nums text-fg-muted">{meta}</span> : null}
       </span>
-      {sub || verb ? (
-        <span className="flex items-center gap-1 text-12 text-fg-muted">
-          <span className="min-w-0 truncate">{sub}</span>
-          {verb ? <span className="ml-auto flex shrink-0 items-center text-link opacity-0 group-hover/row:opacity-100 group-focus-visible/row:opacity-100">{verb}</span> : null}
+      {sub ? <span className="block min-w-0 truncate text-12 text-fg-muted">{sub}</span> : null}
+    </span>
+  );
+  const common = { title: label, "aria-current": selected ? true : undefined } as const;
+  // The leading control and the verb are interactive on their own, so they sit
+  // beside the row's link or button rather than inside it.
+  const control = href
+    ? <a href={href} target={target} rel={rel} {...common} {...link} className={TARGET_CLASS}>{leading ? null : glyph}{body}</a>
+    : onOpen ? <button type="button" {...common} className={TARGET_CLASS} onClick={onOpen}>{leading ? null : glyph}{body}</button>
+      : <span {...common} className={TARGET_CLASS}>{leading ? null : glyph}{body}</span>;
+  return (
+    <span className={cn(ROW_CLASS, className)}>
+      {leading ? <span className="mt-0.5 shrink-0">{leading}</span> : null}
+      {control}
+      {verb ? (
+        <span className="flex shrink-0 items-end text-12 text-link opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 [&>*]:rounded-4 [&>*]:hover:bg-canvas">
+          {typeof verb === "string" ? <span aria-hidden="true">{verb}</span> : verb}
         </span>
       ) : null}
     </span>
   );
-  const common = { title: label, "aria-current": selected ? true : undefined } as const;
-  // A custom leading control is interactive on its own, so it sits beside the
-  // row's link or button rather than inside it.
-  if (leading) {
-    return (
-      <span className={cn(ROW_CLASS, className)}>
-        <span className="mt-0.5 shrink-0">{leading}</span>
-        {href
-          ? <a href={href} target={target} rel={rel} {...common} {...link} className="flex min-w-0 flex-1 text-left">{body}</a>
-          : onOpen ? <button type="button" {...common} className="flex min-w-0 flex-1 text-left" onClick={onOpen}>{body}</button>
-            : body}
-      </span>
-    );
-  }
-  if (href) {
-    return <a href={href} target={target} rel={rel} {...common} {...link} className={cn(ROW_CLASS, className)}>{glyph}{body}</a>;
-  }
-  if (!onOpen) return <span {...common} className={cn(ROW_CLASS, className)}>{glyph}{body}</span>;
-  return <button type="button" {...common} className={cn(ROW_CLASS, className)} onClick={onOpen}>{glyph}{body}</button>;
 }
 
 /** The rows of one pane list.
@@ -175,15 +175,13 @@ export interface ScopeChipProps {
   onClick: () => void;
 }
 
-/** A pane toolbar's scope chip: pressed = the active filter; the count rides inside.
+/** A pane toolbar's scope chip: the pressed `Chip`; the count rides inside.
  * @kind fragment
  */
 export function ScopeChip({ label, count, active, tone, onClick }: ScopeChipProps): React.ReactElement {
   return (
-    <button type="button" aria-pressed={active} onClick={onClick} className="rounded-full">
-      <Chip size="sm" tone={active ? "brand" : tone ?? "muted"} variant={active ? "solid" : "soft"} className="cursor-pointer whitespace-nowrap">
-        {label}{typeof count === "number" ? <span className={active ? "ml-1 opacity-80" : "ml-1 text-fg-muted"}>{count}</span> : null}
-      </Chip>
-    </button>
+    <Chip size="sm" tone={tone ?? "muted"} pressed={active} onClick={onClick} className="whitespace-nowrap">
+      {label}{typeof count === "number" ? <span className="ml-1 tabular-nums opacity-70">{count}</span> : null}
+    </Chip>
   );
 }

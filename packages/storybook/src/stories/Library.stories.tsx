@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import {
-  Badge, Button, Card, CardContent, CardHeader, CardTitle, EmptyState, MetaGrid,
-  ModalsHost, SearchInput, SectionHeading, Skeleton, textRoleVariants, useAppearance,
-} from "@angee/ui";
+import { Chip, Button, Card, CardContent, CardHeader, CardTitle, EmptyState, MetaGrid, ModalsHost, SearchInput, SectionHeading, Skeleton, textRoleVariants, useAppearance } from "@angee/ui";
 import { COMPONENT_KINDS, componentCatalog, type CatalogEntry } from "@angee/ui/catalog";
 import { useDebouncedText } from "@angee/ui/lib/use-debounced-text";
 import { specimens } from "./design-system/specimens";
@@ -32,7 +29,7 @@ function ComponentCard({ entry, globals }: { entry: CatalogEntry; globals: strin
     <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
       <CardTitle>{entry.name}</CardTitle>
       <div className="flex flex-wrap items-center gap-2">
-        <Badge tone={entry.status === "stable" ? "neutral" : "warning"}>{entry.status}</Badge>
+        <Chip tone={entry.status === "stable" ? "neutral" : "warning"}>{entry.status}</Chip>
         {href && <Button asChild size="sm" variant="link"><a href={href} target="_top">Owner story ↗</a></Button>}
       </div>
     </CardHeader>

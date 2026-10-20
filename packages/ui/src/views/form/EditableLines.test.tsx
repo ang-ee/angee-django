@@ -239,8 +239,8 @@ describe("EditableLines", () => {
     // A drag handle per row; the `position` column renders no header/cell.
     expect(screen.getAllByLabelText("Reorder row")).toHaveLength(2);
     expect(screen.queryByText("Position")).toBeNull();
-    expect(screen.getByText("Label")).toBeTruthy();
-    expect(screen.getByText("Quantity")).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Label" })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Quantity" })).toBeTruthy();
     expect(screen.getAllByRole("textbox", { name: "Label" })).toHaveLength(2);
     expect(screen.getAllByRole("textbox", { name: "Quantity" })).toHaveLength(2);
     expect(screen.getByRole("table").tagName).toBe("TABLE");

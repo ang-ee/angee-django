@@ -13,12 +13,11 @@ import type {
 } from "@base-ui/react/menu";
 
 import { Glyph } from "../chrome/Glyph";
-import { cn } from "../lib/cn";
 import { useInAppLink } from "../lib/in-app-link";
 import { tv, type VariantProps } from "../lib/variants";
 import { POPUP_BASE } from "./popover";
 import { sectionEyebrowVariants } from "./section-eyebrow";
-import { textRoleVariants } from "./text";
+import { shortcutVariants } from "./kbd";
 
 // DropdownMenu and ContextMenu are the same styled-part set over Base UI's
 // shared Menu parts — Base UI's ContextMenu re-exports Menu's Item/Popup/
@@ -41,7 +40,7 @@ const MENU_SLOTS = {
     tracking: "normal",
   }),
   separator: "-mx-1 my-1 h-px bg-border-subtle",
-  shortcut: cn(textRoleVariants({ role: "caption" }), "ml-auto"),
+  shortcut: shortcutVariants(),
   submenuIcon:
     "ml-auto flex size-3.5 items-center justify-center text-fg-muted transition-transform data-[open]:rotate-90 [&_.glyph]:size-3.5",
 } as const;

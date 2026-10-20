@@ -22,7 +22,7 @@ export const avatarVariants = tv({
     size: {
       sm: { root: "size-avatar-sm text-2xs" },
       md: { root: "size-avatar-md text-2xs" },
-      lg: { root: "size-avatar-lg text-xs" },
+      lg: { root: "size-avatar-lg text-12" },
       xl: { root: "size-avatar-xl text-base" },
       xxl: { root: "size-avatar-xxl text-22 font-bold" },
     },

@@ -1,6 +1,5 @@
 import { useCallback, useRef, useState, type ReactElement, type ReactNode } from "react";
-import {
-  Badge, Button, Chip, Glyph, errorMessage, useStatusTone, textRoleVariants, useAuthoredResourceMutation, useToast, type CardActionContext, type Tone } from "@angee/ui";
+import { Chip, Button, Glyph, errorMessage, useStatusTone, textRoleVariants, useAuthoredResourceMutation, useToast, type CardActionContext, type Tone } from "@angee/ui";
 import { useAuthoredQuery } from "@angee/refine";
 import type { AddonKind } from "@angee/gql/console/graphql";
 
@@ -84,12 +83,12 @@ export function AddonCard({ row }: { row: AddonResourceRow }): ReactElement {
         </span>
       ) : null}
       <span className="flex flex-wrap items-center gap-1">
-        <Badge tone={statusTone(row.state, STATE_TONES)}>{addonEnumLabel(t, "state", row.state)}</Badge>
-        <Badge tone={statusTone(row.source, SOURCE_TONES, { unknownTone: "neutral" })}>
+        <Chip tone={statusTone(row.state, STATE_TONES)}>{addonEnumLabel(t, "state", row.state)}</Chip>
+        <Chip tone={statusTone(row.source, SOURCE_TONES, { unknownTone: "neutral" })}>
           {addonEnumLabel(t, "source", row.source)}
-        </Badge>
-        {row.forced ? <Badge tone="info">{t("apps.required")}</Badge> : null}
-        {row.pending ? <Badge tone="warning">{t("apps.pending")}</Badge> : null}
+        </Chip>
+        {row.forced ? <Chip tone="info">{t("apps.required")}</Chip> : null}
+        {row.pending ? <Chip tone="warning">{t("apps.pending")}</Chip> : null}
       </span>
     </div>
   );

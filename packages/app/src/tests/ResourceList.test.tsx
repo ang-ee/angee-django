@@ -893,7 +893,7 @@ describe("ResourceList", () => {
     });
     expect(visibleFieldsButton.closest("thead")).not.toBeNull();
     expect(
-      visibleFieldsButton.closest('section[aria-label="Data controls"]'),
+      visibleFieldsButton.closest('[role="toolbar"][aria-label="Data controls"]'),
     ).toBeNull();
 
     fireEvent.click(
@@ -924,7 +924,7 @@ describe("ResourceList", () => {
     expect(within(row).getByRole("button", { name: "Import" })).toBeTruthy();
     fireEvent.click(within(row).getByRole("button", { name: "New note" }));
     expect(onCreate).toHaveBeenCalledOnce();
-    expect(screen.queryByRole("region", { name: "Data controls" })).toBeNull();
+    expect(screen.queryByRole("toolbar", { name: "Data controls" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Search options" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Next page" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Board view" })).toBeNull();
@@ -936,7 +936,7 @@ describe("ResourceList", () => {
     render(<TestUrlState><ListView resource="notes.Note" columns={columns} presentation="embedded"
       pageSize={2} /></TestUrlState>);
     expect(await screen.findByText("First")).toBeTruthy();
-    const controls = screen.getByRole("region", { name: "Data controls" });
+    const controls = screen.getByRole("toolbar", { name: "Data controls" });
     expect(within(controls).getByRole("button", { name: "Search options" })).toBeTruthy();
     expect(within(controls).getByRole("button", { name: "Next page" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Board view" })).toBeNull();
@@ -1295,7 +1295,7 @@ describe("ResourceList", () => {
     );
 
     expect(await screen.findByText("First")).toBeTruthy();
-    expect(screen.getByText("Status")).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Status" })).toBeTruthy();
   });
 
   test("initializes the full metadata sort order, including its secondary field", async () => {

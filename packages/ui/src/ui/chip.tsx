@@ -4,9 +4,11 @@ import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { hexColor, readableInk } from "../lib/hex-color";
-import { toneClass, type Fill, type Tone } from "../lib/tones";
+import { isFeedbackIntent, toneClass, type Fill, type Tone } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 import { Button } from "./button";
+import { StatusDot, StatusIcon } from "./status-icon";
+import { interactiveSurface } from "./widget-control";
 
 /**
  * @kind token
@@ -23,15 +25,28 @@ export const chipVariants = tv({
       sm: "h-5 px-2 text-2xs",
       md: "h-6 px-2.5 text-13",
     },
+    // A dot mark turns the pill into a plain status row: the dot carries the tone.
+    mark: {
+      none: "",
+      dot: "h-auto border-transparent bg-transparent px-0 text-inherit",
+      icon: "",
+    },
     mono: {
       true: "font-mono",
+      false: "",
+    },
+    // The toggle mode: a pressed chip wears the shared selected surface.
+    interactive: {
+      true: cn(interactiveSurface({ focus: "visible", disabled: "pseudo" }), "cursor-pointer hover:bg-inset hover:text-fg aria-pressed:selected aria-pressed:border-brand aria-pressed:hover:selected"),
       false: "",
     },
   },
   defaultVariants: {
     shape: "pill",
     size: "micro",
+    mark: "none",
     mono: false,
+    interactive: false,
   },
 });
 
@@ -39,63 +54,95 @@ export type ChipRecipeProps = VariantProps<typeof chipVariants>;
 
 export type ChipShape = NonNullable<ChipRecipeProps["shape"]>;
 export type ChipSize = NonNullable<ChipRecipeProps["size"]>;
+export type ChipMark = NonNullable<ChipRecipeProps["mark"]>;
 
-/** Chip-local tones outside the semantic palette: `muted` (quiet) and `inherit`
- *  (adopts the surrounding text color). Palette tones route through the matrix. */
-export type ChipTone = Tone | "muted" | "inherit";
+/** The palette tones plus `inherit`, which adopts the surrounding text colour. */
+export type ChipTone = Tone | "inherit";
 
-const CHIP_LOCAL_TONES = {
-  muted: "border-transparent bg-sheet text-fg-muted",
-  inherit: "border-current/20 bg-transparent text-current",
-} as const;
+const INHERIT_TONE = "border-current/20 bg-transparent text-current";
 
 function chipToneClass(tone: ChipTone, variant: Fill): string {
-  if (tone === "muted" || tone === "inherit") return CHIP_LOCAL_TONES[tone];
-  return toneClass(tone, variant);
+  return tone === "inherit" ? INHERIT_TONE : toneClass(tone, variant);
 }
 
 export type ChipProps = Omit<
-  React.HTMLAttributes<HTMLSpanElement>,
+  React.HTMLAttributes<HTMLElement>,
   "className" | "color"
 > &
-  ChipRecipeProps & {
+  Omit<ChipRecipeProps, "interactive"> & {
     className?: string;
     tone?: ChipTone;
     variant?: Fill;
     /** A record's own `#rrggbb` colour as the fill, with readable ink; replaces the tone. */
     color?: string;
+    /**
+     * The toggle mode: renders a `<button aria-pressed>` (a scope chip, a reaction).
+     * A chip with `onClick` alone is a button too; without either it is a span.
+     */
+    pressed?: boolean;
+    disabled?: boolean;
+    title?: string;
   };
 
 /**
+ * The one pill: tone × fill × size × shape, with a status mark and a toggle mode.
  * @kind primitive
  */
-export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(
+export const Chip = React.forwardRef<HTMLElement, ChipProps>(
   function Chip(
     {
       className,
       mono = false,
       shape = "pill",
       size = "micro",
+      mark = "none",
       tone = "neutral",
       variant = "soft",
       color,
+      pressed,
+      disabled,
       style,
+      children,
+      onClick,
       ...props
     },
     ref,
   ) {
     const fill = hexColor(color);
+    const interactive = pressed !== undefined || onClick !== undefined;
+    const classes = cn(
+      chipVariants({ mono, shape, size, mark, interactive }),
+      fill || mark === "dot" ? undefined : chipToneClass(tone, variant),
+      className,
+    );
+    const inlineStyle = fill ? { backgroundColor: fill, color: readableInk(fill), ...style } : style;
+    const content = (
+      <>
+        {mark === "dot" && tone !== "inherit" ? <StatusDot tone={tone} size="md" /> : null}
+        {mark === "icon" && isFeedbackIntent(tone) ? <StatusIcon tone={tone} size="sm" /> : null}
+        {children}
+      </>
+    );
+    if (interactive) {
+      return (
+        <button
+          ref={ref as React.Ref<HTMLButtonElement>}
+          type="button"
+          aria-pressed={pressed}
+          disabled={disabled}
+          className={classes}
+          style={inlineStyle}
+          onClick={onClick}
+          {...(props as React.ButtonHTMLAttributes<HTMLButtonElement>)}
+        >
+          {content}
+        </button>
+      );
+    }
     return (
-      <span
-        ref={ref}
-        className={cn(
-          chipVariants({ mono, shape, size }),
-          fill ? undefined : chipToneClass(tone, variant),
-          className,
-        )}
-        style={fill ? { backgroundColor: fill, color: readableInk(fill), ...style } : style}
-        {...props}
-      />
+      <span ref={ref as React.Ref<HTMLSpanElement>} className={classes} style={inlineStyle} {...props}>
+        {content}
+      </span>
     );
   },
 );
@@ -117,7 +164,7 @@ export type RemovableChipProps = ChipProps & {
  * truncates; the remove affordance and its localized aria copy live here once.
  * @kind primitive
  */
-export const RemovableChip = React.forwardRef<HTMLSpanElement, RemovableChipProps>(
+export const RemovableChip = React.forwardRef<HTMLElement, RemovableChipProps>(
   function RemovableChip(
     { children, className, onRemove, removeLabel, ...props },
     ref,

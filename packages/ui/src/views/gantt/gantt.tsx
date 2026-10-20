@@ -1695,7 +1695,7 @@ function splitOptions<TData>(props: Record<string, unknown>): {
 
 /**
  * Root provider + container. Composition contract:
- * <Gantt><GanttNav/><GanttToolbar/><GanttView/></Gantt>
+ * <Gantt><GanttNav/><GanttToolbar/><GanttGrid/></Gantt>
  */
 function Gantt<TData = unknown>({
   calendar,
@@ -1744,7 +1744,7 @@ function Gantt<TData = unknown>({
     // size, so one class here (or on the consumer's className) rescales the
     // whole component - e.g. className="text-sm" for a roomier grid
     className: cn(
-      "text-fg flex min-h-0 min-w-0 flex-col text-xs",
+      "text-fg flex min-h-0 min-w-0 flex-col text-12",
       className
     ),
     children: (

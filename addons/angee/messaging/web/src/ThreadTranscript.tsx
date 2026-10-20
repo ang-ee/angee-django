@@ -13,6 +13,7 @@ import {
   RelativeTime,
   SectionEyebrow,
   cn,
+  formatDayLabel,
   reactionsFromGroups,
   textRoleVariants,
   type ChatBubbleRole,
@@ -124,10 +125,6 @@ function TranscriptBody({
   const messages = React.useMemo(
     () => messageFeedRows(transcript.data).reverse(),
     [transcript.data],
-  );
-  const dayFormat = React.useMemo(
-    () => new Intl.DateTimeFormat(undefined, { timeZone: timezone }),
-    [timezone],
   );
   const hasOlder = transcript.hasNextPage;
   const conversation = order === "conversation";
@@ -280,13 +277,10 @@ function TranscriptBody({
             const message = messages[item.index];
             if (message === undefined) return null;
             const previous = messages[item.index - 1];
-            const day = dayFormat.format(
-              new Date(message.sent_at ?? message.created_at),
-            );
+            const sentAt = message.sent_at ?? message.created_at;
+            const day = formatDayLabel(sentAt, { timeZone: timezone });
             const previousDay = previous
-              ? dayFormat.format(
-                  new Date(previous.sent_at ?? previous.created_at),
-                )
+              ? formatDayLabel(previous.sent_at ?? previous.created_at, { timeZone: timezone })
               : null;
             return (
               <li
@@ -299,7 +293,7 @@ function TranscriptBody({
                 }}
               >
                 {day !== previousDay ? (
-                  <MessageDaySeparator as="div">{day}</MessageDaySeparator>
+                  <MessageDaySeparator as="div" date={sentAt} timeZone={timezone} />
                 ) : null}
                 <TranscriptMessage
                   message={message}

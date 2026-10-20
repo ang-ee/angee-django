@@ -1,12 +1,7 @@
 import { useMemo, type ReactElement } from "react";
 
 import { useAuthoredQuery } from "@angee/refine";
-import {
-  NavLink,
-  Badge, Code, CodeBlock, DetailSection, DetailSurface, ErrorBanner, FieldDescription, FieldLabel, FieldRoot,
-  InlineEmpty, JsonValueView, LabeledDescriptorField, Tabs,
-  deserializeFormSpec, errorMessage, jsonObjectFromUnknown, useAppRuntime, useRouteHref, useRouteRecordId,
-} from "@angee/ui";
+import { NavLink, Chip, Code, CodeBlock, DetailSection, DetailSurface, ErrorBanner, FieldDescription, FieldLabel, FieldRoot, InlineEmpty, JsonValueView, LabeledDescriptorField, Tabs, deserializeFormSpec, errorMessage, jsonObjectFromUnknown, useAppRuntime, useRouteHref, useRouteRecordId } from "@angee/ui";
 
 import { PlatformImplementation, type PlatformImplementationData } from "../documents";
 import { usePlatformT } from "../i18n";
@@ -40,7 +35,7 @@ function ImplementationSettings({ implementation }: { implementation: PlatformIm
               const value = Object.hasOwn(config, field.name) ? config[field.name] : field.defaultValue;
               return (
                 <div key={field.name} className="min-w-0 space-y-2">
-                  <Badge>{field.kind}</Badge>
+                  <Chip>{field.kind}</Chip>
                   {hasDefault
                     ? <LabeledDescriptorField field={field} value={value} readOnly onChange={ignoreChange} />
                     : <FieldRoot>

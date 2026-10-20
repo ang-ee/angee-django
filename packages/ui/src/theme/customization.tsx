@@ -3,7 +3,7 @@ import { useId, type ReactElement } from "react";
 import { useUiT } from "../i18n";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Label } from "../ui/label";
+import { FieldLabel, FieldRoot } from "../ui/field";
 import { Select } from "../ui/select";
 import { SectionEyebrow } from "../ui/section-eyebrow";
 import type { ThemeOptionsEditorProps } from "./index";
@@ -155,8 +155,8 @@ function ThemeColorField({
   onChange: (value: string) => void;
 }): ReactElement {
   const id = useId();
-  return <div className="grid gap-1.5">
-    <Label htmlFor={id}>{label}</Label>
+  return <FieldRoot>
+    <FieldLabel htmlFor={id}>{label}</FieldLabel>
     <div className="flex items-center gap-2 rounded-6 border border-border bg-sheet p-1">
       <Input
         id={id}
@@ -168,7 +168,7 @@ function ThemeColorField({
       />
       <code className="text-12 uppercase text-fg-muted">{value}</code>
     </div>
-  </div>;
+  </FieldRoot>;
 }
 
 function ThemeSelect({
@@ -186,8 +186,8 @@ function ThemeSelect({
 }): ReactElement {
   const t = useUiT();
   const id = useId();
-  return <div className="grid gap-1.5">
-    <Label htmlFor={id}>{label}</Label>
+  return <FieldRoot>
+    <FieldLabel htmlFor={id}>{label}</FieldLabel>
     <Select
       id={id}
       disabled={disabled}
@@ -195,7 +195,7 @@ function ThemeSelect({
       onValueChange={onChange}
       options={choices.map(([choice, labelKey]) => ({ value: choice, label: t(labelKey) }))}
     />
-  </div>;
+  </FieldRoot>;
 }
 
 function sameCustomization(left: ThemeCustomization, right: ThemeCustomization): boolean {

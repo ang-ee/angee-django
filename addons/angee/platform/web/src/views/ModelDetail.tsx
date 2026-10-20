@@ -1,6 +1,6 @@
 import { type ReactElement } from "react";
 
-import { NavLink, Badge, Code, DetailSection, DetailSurface, useRouteHref, useRouteRecordId } from "@angee/ui";
+import { NavLink, Chip, Code, DetailSection, DetailSurface, useRouteHref, useRouteRecordId } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import { platformScopeSearch } from "../lib/paths";
@@ -33,7 +33,7 @@ export function ModelDetail(): ReactElement {
           <>
             <Code tone="muted">{model.label}</Code>
             <NavLink href={routeHref("platform.addons.record", { id: model.addon_id })} variant="inline">
-              <Badge tone="info">{model.addon_label}</Badge>
+              <Chip tone="info">{model.addon_label}</Chip>
             </NavLink>
           </>
         ) : null

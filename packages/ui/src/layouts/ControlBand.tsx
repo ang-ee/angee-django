@@ -1,10 +1,12 @@
 import type * as React from "react";
 
 import { cn } from "../lib/cn";
+import { ToolbarRoot } from "../ui/toolbar";
 import { barVariants } from "./bar";
 import { createLayoutBand } from "./layout-band";
 
-const band = createLayoutBand("div", "");
+// The band is a `Toolbar`: one roving-focus row for the page's verbs and controls.
+const band = createLayoutBand(ToolbarRoot, "");
 
 export const controlBandItemClassName =
   "h-full min-h-0 min-w-0 flex-1 border-b-0 bg-transparent px-0 py-0";

@@ -4,7 +4,7 @@ import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { type Tone } from "../lib/tones";
 import { PageHeader, type PageHeaderProps } from "../page";
-import { Badge } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import { IconTile } from "../ui/icon-tile";
 import { textRoleVariants } from "../ui/text";
 
@@ -109,11 +109,11 @@ export const RecordHeader = React.forwardRef<HTMLElement, RecordHeaderProps>(
             {icon ? <IconTile icon={icon} size="lg" tone="brand" /> : null}
             <Heading className={styles.title()}>{title}</Heading>
             {titleAdornments}
-            {type ? <Badge>{type}</Badge> : null}
+            {type ? <Chip>{type}</Chip> : null}
             {status ? (
               React.isValidElement(status)
                 ? <div className="ml-auto flex min-w-0 flex-auto justify-end">{status}</div>
-                : <Badge tone={status.tone ?? "neutral"}>{status.label}</Badge>
+                : <Chip tone={status.tone ?? "neutral"}>{status.label}</Chip>
             ) : null}
           </div>
           {meta ? <div className={styles.meta()}>{meta}</div> : null}

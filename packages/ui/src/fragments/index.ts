@@ -30,6 +30,7 @@ export {
   type EmptyStateProps,
 } from "./EmptyState";
 export { ErrorBanner, type ErrorBannerProps } from "./ErrorBanner";
+export { ListStatusMessage, listStatusMessageVariants, type ListStatusMessageProps } from "./ListStatusMessage";
 export {
   InfoRow,
   infoRowVariants,
@@ -94,4 +95,3 @@ export {
   surfaceHeaderVariants,
   type SurfaceHeaderProps,
 } from "./SurfaceHeader";
-export { TimelineEntry, type TimelineEntryProps } from "./TimelineEntry";

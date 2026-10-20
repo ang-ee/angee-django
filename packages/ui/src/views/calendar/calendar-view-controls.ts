@@ -1,6 +1,7 @@
 import { addDays, addMonths, addWeeks, format, startOfWeek } from "date-fns";
 
 import type { UiTranslate } from "../../i18n";
+import { formatDate, formatMonth } from "../../widgets/date-format";
 import {
   CALENDAR_ANCHOR_FORMAT,
   CALENDAR_VIEW_MODES,
@@ -8,8 +9,8 @@ import {
 } from "../resource/resource-view-model";
 
 // The calendar kind's period-nav math and labels, derived from mode + anchor —
-// no FullCalendar imperative API. The date formats mirror the resource-view
-// date-group labels so a period reads the same across the app.
+// no FullCalendar imperative API. Period titles come from the shared date owner,
+// so a period reads the same as the resource-view date-group labels.
 
 /** Parse a `yyyy-MM-dd` anchor into a local `Date` (a bare day never crosses UTC). */
 export function calendarAnchorToDate(anchor: string): Date {
@@ -45,11 +46,11 @@ export function calendarPeriodTitle(
   t: UiTranslate,
 ): string {
   const date = calendarAnchorToDate(anchor);
-  if (mode === "month") return format(date, "MMMM yyyy");
+  if (mode === "month") return formatMonth(date);
   if (mode === "week") {
-    return t("calendar.weekOf", { date: format(startOfWeek(date), "MMM d, yyyy") });
+    return t("calendar.weekOf", { date: formatDate(startOfWeek(date), { density: "full" }) });
   }
-  return format(date, "EEEE, MMM d, yyyy");
+  return formatDate(date, { density: "full", weekday: true });
 }
 
 /** The mode-switch segmented options, labelled through the ui translator. */

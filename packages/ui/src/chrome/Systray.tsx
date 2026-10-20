@@ -26,7 +26,7 @@ export function Systray({
       {onNotifications ? <Tooltip label={notifications}>
         <Button
           type="button"
-          variant="icon"
+          variant="ghost"
           size="iconSm"
           aria-label={notifications}
           onClick={onNotifications}
@@ -38,7 +38,7 @@ export function Systray({
       {onHelp ? <Tooltip label={help}>
         <Button
           type="button"
-          variant="icon"
+          variant="ghost"
           size="iconSm"
           aria-label={help}
           onClick={onHelp}

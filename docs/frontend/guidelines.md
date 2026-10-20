@@ -177,8 +177,8 @@ Token owners are visible in the live sheets:
 [tones and fills](../../packages/storybook/src/stories/TonesAndFills.stories.tsx) (story id `foundations-tones-and-fills--default`),
 [geometry](../../packages/storybook/src/stories/GeometryTokens.stories.tsx) (story id `foundations-radius-spacing-and-control-heights--default`)
 and [glyphs](../../packages/storybook/src/stories/Glyphs.stories.tsx) (story id `foundations-glyphs--default`).
-The “no owner” badges preserve the inventory's unused-token and unresolved-class
-findings for repair or deletion; a specimen does not count as production use.
+The unused tokens and unresolved classes the inventory found were deleted or
+repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 
 ## Rules
 
@@ -476,10 +476,85 @@ findings for repair or deletion; a specimen does not count as production use.
   existing FormSpec descriptors, and keep absent defaults distinct from explicit
   `false`, zero, or empty values.
 - Color is two orthogonal axes (`lib/tones.ts` is the owner): `tone` (the palette
-  — `neutral`/`brand`/`info`/`success`/`warning`/`danger`) × `variant`/fill
-  (`solid`/`soft`/`surface`/`outline`/`ghost`). Drive recipe color through
-  `toneClass(tone, fill)`; never hand-type a soft/solid tone triple, and never use
-  the retired `default`/`error` names (they are `neutral`/`danger`).
+  — `neutral`/`muted`/`brand`/`accent`/`info`/`success`/`warning`/`danger`/`purple`/`pink`)
+  × `variant`/fill (`solid`/`soft`/`surface`/`outline`/`ghost`). `muted` is the quiet
+  tone for inert and not-yet states (planned steps, idle rows); no component keeps a
+  private muted treatment. Drive recipe color through `toneClass(tone, fill)`; never
+  hand-type a soft/solid tone triple, and never use the retired `default`/`error`
+  names (they are `neutral`/`danger`).
+- **One pill: `Chip`** (`ui/chip.tsx`): tone × fill × size (`micro`/`sm`/`md`) ×
+  shape, a status `mark` (`dot`/`icon`) and a `pressed` toggle mode that renders a
+  `<button aria-pressed>` (scope chips, reactions, type filters). `CountBadge`
+  (`ui/count-badge.tsx`) is the one numeric count pill (tab counts, overlay counts on
+  icon buttons and app tiles, tree counts) and formats through `formatNumber`.
+  `Badge` and `Tag` no longer exist. A status value renders through `StatusBadge`
+  (`widgets/statusBadge.tsx`), never a local label or tone map.
+- **One toolbar: `Toolbar`** (`ui/toolbar.tsx`, Base UI, roving focus) is the root of
+  every bar: `ControlBand` and so `CommandBand`, the `PaneToolbar` band, the full
+  `ResourceToolbar`, `PageToolbar`, `ChatBar`. `Toolbar.Button` is the one `Button`
+  recipe registered with the bar; a bar never spells its own row or button chrome.
+- **One icon button: `Button` at `iconSm`/`iconMd`/`iconLg`** (a ghost `iconSm`, 28px,
+  is every pane, band and header control) with `pressed` (`aria-pressed` + the selected
+  treatment) and `badge` (a `CountBadge` on the corner: needs you, unread). The three
+  `form#chrome` controls, pane toolbar descriptors, the aside search toggle and the
+  dashboard widget controls all render it; `PaneToolbarIconButton`, `ChatHeaderAction`
+  and the `icon` button variant no longer exist. `SelectionBarAction` remains the one
+  wrapper, because the selection bar's surface recolours the button.
+- **One verb menu: `ActionMenu` + `ActionTrigger`** (`toolbars/ActionMenu.tsx`) behind
+  every `⋮`: the record band, row menus, `PaneToolbarMenu` (descriptor items and
+  radio groups over the same owner), the visible-fields menu, the dashboard widget
+  menu, the collapsed statusbar. Field choices inside such a menu stay native items;
+  verbs are `ActionTrigger`s. Every fire → toast flow settles through
+  `useActionResultRun`; row verbs included.
+- **Time is absolute; relative time is a live header's.** Every list, row, facts
+  line and period title formats through `date-format.ts`: `formatDate`,
+  `formatDateTime`, `formatTime` (a row whose day label already names the day),
+  `formatDayLabel` (Today, Yesterday, a weekday, then the date — every day
+  separator: `PaneLabel` in `TimelineRail`, `MessageDaySeparator`, list date
+  groups) and `formatMonth`. `RelativeTime` / `formatRelativeTime` belong only to
+  a header whose value keeps moving while the page is open (a chat, a running
+  job). Never `toLocale*`, never a date-fns `format` with a literal pattern,
+  never a raw ISO string as user text. Numbers and counts format through
+  `formatNumber`; JSON through `formatJson` (`widgets/json-format.ts`).
+- **One option list with a query: `Combobox`** (`ui/combobox.tsx`, Base UI) — a
+  `field`-shaped trigger or a `Chips` row with an inline `Input` and a `caret`
+  trigger, one `Popup` on the control layer, `Search` as the popup head, and a
+  `List`/`Item`/`Empty` sharing the `Select` recipe. The `combobox` and
+  `many2many` widgets and the resource `SearchBox` compose it; `Command` (cmdk)
+  stays the palette's engine. `SearchInput` is the one standalone search field
+  (toolbars, pickers, the app chooser).
+- **One label: `FieldLabel`** (`ui/field.tsx`), `standard` in dialogs and
+  settings, `variant="eyebrow"` on the form sheet, with `meta` for a compact
+  note at its end; `FieldRoot` takes `span`/`area` to sit in a `FormGrid`.
+  `RequiredMark` and `OptionalHint` live beside it. `Label` and `FieldRow` no
+  longer exist.
+- **One indentation: `depthIndent`** (`ui/tree.tsx`) computes every nested row's
+  inset (`Tree`, grouped lists, the gantt sidebar); `DeletePreviewTree` is a
+  `Tree` over the delete preview. **One prose: `Markdown`**
+  (`widgets/markdown-prose.tsx`) renders every read-only markdown surface, the
+  file preview included. `Avatar` renders every initials circle (`userRef`,
+  `ownerCell`). `TimelineView`, `TimelineEntry`, `Divider`, `TextInput`,
+  `DebouncedSearchInput`, `PopoverInput` and `ToolbarInput` no longer exist.
+- **One pager: `Pager`** (`ui/pager.tsx`) in `range` mode (lists) or `record` mode
+  ("n / N" over a navigator's order; `RecordPager` is that mode behind a `nav`), with
+  `formatNumber` as its default. A pane list's pager footer is `ResourcePaneFooter`.
+- **A disabled reason is a tooltip.** A band verb that cannot run carries its
+  `disabledReason` as a `Tooltip` and stays focusable while disabled; a menu item
+  keeps the reason as its description row inside the menu (links stay usable). The
+  band never renders reason sentences.
+- **The pane row's verb is a control beside the row**, not text inside its button
+  or link: `PaneRow.verb` as a node renders the pane's own button or link next to the
+  row's control, revealed on hover or focus; a string is a hint of what the row opens.
+  The aside's scope overflow is the pane menu's radio group (`PaneToolbarMenu
+  groups`), with the active overflow kind shown as a clearable scope chip, never a
+  native `<select>` or an "N more" button.
+- **One selected surface: the `selected` utility** (`styles/index.css`), composed
+  through variants — `data-[pressed]:selected`, `aria-[current=true]:selected`,
+  `data-[active]:selected` — by trees, toggles, tabs, pagers, section nav, pane rows
+  and pressed chips. Never spell `bg-brand-soft text-brand-soft-text` by hand.
+- **One in-flow list message: `ListStatusMessage`** (`fragments/ListStatusMessage.tsx`)
+  for a group's error or empty note inside a table, board or pane list; `ErrorBanner`,
+  `EmptyState` and `InlineEmpty` own every other error and empty surface.
 - **Status → tone is owned once** by
   [`statusTone`](../../packages/ui/src/widgets/status-tones.ts). Framework defaults
   contain only neutral vocabulary. Addons contribute product values through
@@ -494,7 +569,7 @@ findings for repair or deletion; a specimen does not count as production use.
   colors one column without claiming a global status word; its option label
   remains the displayed text. Bare enum columns use `statusBadge`, and scalar
   stages can declare it. A field's backend `status_display` metadata selects the
-  `pill` (default), `dot`, or `text` Badge recipe everywhere that field renders;
+  `pill` (default), `dot`, or `text` `StatusBadge` display everywhere that field renders;
   `<Column statusDisplay>` and `<Field statusDisplay>` are explicit authored
   overrides; there is no separate dot widget. A run
   state — stopped/running/error/warning — therefore uses the dot display (grey/green/red/amber);
@@ -639,7 +714,7 @@ findings for repair or deletion; a specimen does not count as production use.
   `GanttViewSpec.lane` selects its own fields and returns a linked title, optional
   secondary line, named people, and a short note after the last scheduled bar.
   Empty parts are omitted; the lane heading uses the lane resource vocabulary.
-  Human dates, ranges, relative times and durations come from the shared
+  Human dates, ranges and times come from the shared
   [`date-format`](../../packages/ui/src/widgets/date-format.ts) owner. The app
   runtime i18n provider sets the default language for pure formatters; explicit
   locales override it. Gantt passes its configured time zone to date ranges
@@ -906,7 +981,8 @@ findings for repair or deletion; a specimen does not count as production use.
   with lazy branches, concrete indices and literal keys; schema owners resolve references.
 - A labeled control is a page element or a `FieldRoot`. Reach for `FieldRoot` /
   `FieldLabel` (the stacked label-over-control owner, e.g. for an ephemeral
-  composer not bound to a model record) before hand-rolling a `<label>` wrapper.
+  composer not bound to a model record) before hand-rolling a `<label>` wrapper;
+  `FieldRoot.Control` is the bound input when the form is not a FormView.
   A native input pairs `FieldLabel htmlFor` with the control `id`; a button-trigger
   control (a `Select`) labels via `FieldLabel nativeLabel={false} render={<span/>}`
   + the control's `aria-labelledby`.
@@ -1491,7 +1567,7 @@ Hard-won traps — the wise learn from others' mistakes
   and editable lines alike. Both render it through `relationListFieldInfo` +
   `RelationMultiFieldWidget`: when editable, one field-shaped line holding the
   picked records as removable chips, an inline search over the related model
-  (Base UI's multiple `Combobox`) and a caret; linked chips when read-only. A
+  (the multiple `Combobox` primitive) and a caret; linked chips when read-only. A
   related model whose `color` field is a colour (`recordColorField`) fills its
   chips with each record's colour, in forms and list cells alike. Inline create
   derives from the related model's metadata by the same rule as the to-one picker
@@ -1806,6 +1882,17 @@ Hard-won traps — the wise learn from others' mistakes
   `text-<tone>-text` map or a phantom `text-brand-text` (use `text-brand` /
   `text-brand-soft-text`). A `*-text` token is a foreground color, never a
   background — use `toneSolidBg`/`bg-<tone>` for fills.
+- **One type scale, one name per size:** `text-2xs` (11), `text-12`, `text-13`,
+  `text-sm` (14), `text-15`, `text-base` (16), `text-lg` (18), `text-22`, `text-28`,
+  `text-34` — every step reads a public `--fs-*`/`--lh-*` theme token. Tailwind's
+  `text-xs` is not bridged; 12px is `text-12`. No arbitrary `text-[Npx]`.
+- **Control heights are tokens:** `h-control-xs` (28px) is the pane control — tabs,
+  toggles, pane toolbar buttons, tree rows, select triggers; `h-btn-sm/md/lg` are
+  26/30/36. Never a raw `h-7`/`size-7` on a control.
+- **Brand-adjacent tokens derive from `--brand`:** link, focus border, brand line,
+  brand tint and `--chart-1` follow a theme's brand without separate overrides; the
+  rail hover and kbd-on-rail overlays and the whole `--fs/--lh` scale are public
+  theme tokens (`THEME_TOKEN_NAMES`).
 - **One radius scale: `rounded-N`** (the pixel-token scale `2/4/6/8/10/12`). Do not
   introduce the legacy `rounded`/`rounded-sm|md|lg|xl` aliases in new or rewritten
   markup.

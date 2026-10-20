@@ -8,7 +8,8 @@ import { toneGlyph } from "../lib/tones";
 import { tv } from "../lib/variants";
 import { barVariants } from "../layouts/bar";
 import { Accordion } from "../ui/accordion";
-import { Badge, CountBadge } from "../ui/badge";
+import { Chip } from "../ui/chip";
+import { CountBadge } from "../ui/count-badge";
 import { Tooltip } from "../ui/tooltip";
 import { NavLink } from "../ui/nav-link";
 import { railLinkToggleProps } from "./app-rail-model";
@@ -364,9 +365,9 @@ function MenuItemMetadata({
         <CountBadge value={item.badge!} tone={item.tone ?? "neutral"} />
       ) : null}
       {item.status === "future" ? (
-        <Badge density="micro" tone={item.tone ?? "neutral"}>
+        <Chip tone={item.tone ?? "neutral"}>
           {t("chrome.future")}
-        </Badge>
+        </Chip>
       ) : null}
     </span>
   );

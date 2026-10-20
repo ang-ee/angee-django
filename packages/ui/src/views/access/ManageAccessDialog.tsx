@@ -11,6 +11,7 @@ import { InlineEmpty } from "../../fragments/InlineEmpty";
 import { Glyph } from "../../chrome/Glyph";
 import { useUiT } from "../../i18n";
 import { ControlBandProvider } from "../../layouts/ControlBand";
+import { Avatar, AvatarStack, avatarInitials } from "../../ui/avatar";
 import { Button } from "../../ui/button";
 import { FieldLabel, FieldRoot } from "../../ui/field";
 import { sectionEyebrowVariants } from "../../ui/section-eyebrow";
@@ -105,19 +106,17 @@ export function ManageAccessDialog(props: ManageAccessDialogProps): React.ReactE
   const trigger = props.trigger === undefined ? (
     <Button
       type="button"
-      variant={props.compact || props.people?.length ? "ghost" : "icon"}
-      size={props.compact || props.people?.length ? "sm" : "iconMd"}
+      variant="ghost"
+      size={props.compact ? "sm" : "iconSm"}
       aria-label={t(props.compact ? "access.people" : "access.share")}
+      title={props.compact ? undefined : t("access.share")}
       disabled={props.targetIds.length === 0}
     >
       <Glyph name="share" />
       {props.compact ? <span>{t("access.people")}{props.peopleLoaded ? ` · ${props.people?.length ?? 0}` : null}</span> : null}
-      {props.people && props.people.length > 0 ? <span aria-hidden="true" className="ml-1 inline-flex -space-x-1">
-        {props.people.slice(0, 3).map((person) => <span key={person.subject}
-          className="inline-flex size-5 items-center justify-center rounded-full border border-surface bg-surface-raised text-[10px] font-semibold">
-          {person.label.charAt(0).toUpperCase()}
-        </span>)}
-      </span> : null}
+      {props.people && props.people.length > 0 ? <AvatarStack aria-hidden="true" className="ml-1">
+        {props.people.slice(0, 3).map((person) => <Avatar key={person.subject} size="sm" initials={avatarInitials(person.label)} />)}
+      </AvatarStack> : null}
     </Button>
   ) : props.trigger;
   return (
@@ -301,12 +300,12 @@ function PeopleContents({
         <Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" />
       </div> : people.length === 0 ? <InlineEmpty label={t("access.noReaders")} /> : people.map((person) => {
         return <div key={person.subject} className="flex items-center gap-3 border-b border-border-subtle py-2 last:border-b-0">
-          <span aria-hidden="true" className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-surface-raised font-semibold">
+          <span aria-hidden="true" className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-sheet-2 font-semibold">
             {person.label.charAt(0).toUpperCase()}
           </span>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium">{person.label}{person.you ? <span className="ml-1 text-xs text-fg-muted">{t("access.you")}</span> : null}</div>
-            {person.roleLabel ? <div className="text-xs text-fg-muted">{person.roleLabel}</div> : null}
+            <div className="truncate text-sm font-medium">{person.label}{person.you ? <span className="ml-1 text-12 text-fg-muted">{t("access.you")}</span> : null}</div>
+            {person.roleLabel ? <div className="text-12 text-fg-muted">{person.roleLabel}</div> : null}
           </div>
           {person.following ? <span title={t("access.following")} aria-label={t("access.following")}><Glyph name="bell" /></span> : null}
           {person.removable && onRemovePerson ? <Button type="button" size="sm" variant="ghost"
@@ -358,7 +357,7 @@ function PeopleContents({
             onValueChange={async (value) => { if (value) await policy.onSelect?.(value); }} />
             : <span className="text-sm">{policy.options?.find((option) => option.value === policy.value)?.label ?? policy.value}</span>}
         </div>
-        <p className="text-xs text-fg-muted">{policy.consequence}</p>
+        <p className="text-12 text-fg-muted">{policy.consequence}</p>
       </div>)}
     </section> : null}
   </div>;

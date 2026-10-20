@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { Button } from "../../ui/button";
 import type { Tone } from "../../lib/tones";
-import { Badge } from "../../ui/badge";
+import { Chip } from "../../ui/chip";
 import { Tooltip } from "../../ui/tooltip";
 import { RecordReference } from "../relation/RecordReference";
 import { Glyph } from "../../chrome/Glyph";
@@ -145,9 +145,9 @@ function RecordFieldMarkItem({ mark, field, label }: {
   label?: ReactNode;
 }) {
   const ariaLabel = `${mark.label}: ${typeof label === "string" ? label : field}`;
-  const badge = <Badge tone={mark.tone} density="compact">
+  const badge = <Chip tone={mark.tone}>
     {mark.icon ? <Glyph decorative name={mark.icon} /> : null}{mark.label}
-  </Badge>;
+  </Chip>;
   if (mark.target) {
     return <Tooltip label={mark.origin}>
       <span className="inline-flex"><RecordReference {...mark.target} label={badge} /></span>

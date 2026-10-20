@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 
 import { Button } from "../../ui/button";
 import { DropdownMenu } from "../../ui/dropdown-menu";
+import { Tooltip } from "../../ui/tooltip";
 import { Glyph } from "../../chrome/Glyph";
 import { errorMessage, useConfirm, usePrompt, useToast } from "../../feedback";
 import { ActionFormDialog } from "./ActionFormDialog";
@@ -211,7 +212,7 @@ export function RecordActionBar({
         onClick={() => void runAction(action)}>
         {action.label}
       </ActionTrigger>
-      {reason ? <div id={reasonId} className="px-2 pb-1 text-xs text-fg-muted">{reason}</div> : null}
+      {reason ? <div id={reasonId} className="px-2 pb-1 text-12 text-fg-muted">{reason}</div> : null}
     </React.Fragment>;
   };
 
@@ -237,13 +238,17 @@ export function RecordActionBar({
       </> : <>
         {menuPlacement === "leading" ? actionMenu : null}
         {toolbarActions.map((action, index) => { const reason = disabledReason(action); return (
-          <React.Fragment key={action.id}><Button type="button" size="sm"
-            variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
-            disabled={disabled(action)} aria-describedby={reason ? `${descriptionId}-${action.id}` : undefined}
-            loading={pendingId === action.id} onClick={() => void runAction(action)}>
-            {action.icon ? <Glyph name={action.icon} /> : null}
-            {action.label}
-          </Button>{reason ? <span id={`${descriptionId}-${action.id}`} className="text-xs text-fg-muted">{reason}</span> : null}</React.Fragment>
+          // A band verb's disabled reason is its tooltip: the verb stays focusable while
+          // disabled so keyboard users reach the reason too.
+          <Tooltip key={action.id} label={reason} side="bottom">
+            <Button type="button" size="sm"
+              variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
+              disabled={disabled(action)} focusableWhenDisabled={Boolean(reason)}
+              loading={pendingId === action.id} onClick={() => void runAction(action)}>
+              {action.icon ? <Glyph name={action.icon} /> : null}
+              {action.label}
+            </Button>
+          </Tooltip>
         ); })}
         {menuPlacement === "trailing" ? actionMenu : null}
         {formAction && !formAction.fromMenu ? formDialog : null}

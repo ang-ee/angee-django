@@ -47,7 +47,7 @@ export const accordionVariants = tv({
         item: "contents",
         header: "contents",
         trigger:
-          "h-10 px-3 text-xs font-semibold text-fg-2 hover:bg-sheet-2",
+          "h-10 px-3 text-12 font-semibold text-fg-2 hover:bg-sheet-2",
         icon: "size-3 text-fg-subtle [&_.glyph]:size-3",
         panel: "contents",
       },

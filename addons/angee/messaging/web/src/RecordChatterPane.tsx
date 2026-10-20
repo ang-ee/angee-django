@@ -1,7 +1,7 @@
 import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
 import {
-  Button, Checkbox, Dialog, EmptyState, FieldRoot, PaneToolbar, PaneToolbarIconButton, PaneToolbarMenu, ScopeChip, SearchInput, Select,
+  Button, Checkbox, Dialog, EmptyState, FieldRoot, Glyph, PaneToolbar, PaneToolbarMenu, ScopeChip, SearchInput, Select,
   errorMessage, textRoleVariants,
 } from "@angee/ui";
 import type { ChatterSelection, ChatterViewContext } from "@angee/ui/runtime";
@@ -94,10 +94,10 @@ function DiscussionHead({ payload, markRead, markReadPending, reportError, searc
         scope={SCOPES.map((entry) => (
           <ScopeChip key={entry.id} label={t(entry.key)} active={scope === entry.id} onClick={() => onScope(entry.id)} />
         ))}
-        search={<PaneToolbarIconButton icon="search" label={t("chatter.search")} active={searchOpen || Boolean(search)} onClick={() => {
+        search={<Button type="button" variant="ghost" size="iconSm" aria-label={t("chatter.search")} title={t("chatter.search")} pressed={searchOpen || Boolean(search)} onClick={() => {
           if (searchOpen) setSearch("");
           setSearchOpen((open) => !open);
-        }} />}
+        }}><Glyph name="search" /></Button>}
         actions={unreadCount > 0 ? [{ icon: "check", label: t("chatter.markRead"), badge: unreadCount, disabled: markReadPending, onClick: () => void markRead() }] : undefined}
         overflow={isFollowing ? <PaneToolbarMenu label={t("chatter.more")} items={[{ icon: "bell", label: t("chatter.notificationSettings"), onClick: () => setSettingsOpen(true) }]} /> : false}
       />

@@ -3,6 +3,7 @@ import * as React from "react";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
+import { formatNumber as formatHumanNumber } from "../lib/format-number";
 import { tv } from "../lib/variants";
 import { Button } from "./button";
 import { NumberField } from "./number-field";
@@ -23,6 +24,12 @@ export interface PagerState {
 }
 
 export interface PagerProps extends PagerState {
+  /**
+   * `range` (the default) reads "1-20 / 120 records" over pages of `pageSize`;
+   * `record` reads "n / N" over single records (a record page's pager), with
+   * `page` the current position and no page size.
+   */
+  mode?: "range" | "record";
   disabled?: boolean;
   onPageChange?: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
@@ -55,7 +62,7 @@ export const pagerVariants = tv({
 });
 
 function defaultFormatNumber(value: number): string {
-  return String(value);
+  return formatHumanNumber(value);
 }
 
 function pagerRangeLabel({
@@ -88,6 +95,7 @@ function pagerRangeLabel({
  * @kind primitive
  */
 export function Pager({
+  mode = "range",
   page,
   pageSize,
   total,
@@ -111,16 +119,18 @@ export function Pager({
   const [customPageSize, setCustomPageSize] = React.useState<number | null>(
     null,
   );
-  const pageLabel = pagerRangeLabel({
-    page,
-    pageSize,
-    total,
-    unit,
-    formatNumber,
-  });
+  const pageLabel = mode === "record"
+    ? `${page > 0 ? formatNumber(page) : ""} / ${total !== undefined ? formatNumber(total) : "?"}`.trimStart()
+    : pagerRangeLabel({ page, pageSize, total, unit, formatNumber });
   const canPrev = hasPrev ?? page > 1;
   const canNext = hasNext ?? (total !== undefined && page * pageSize < total);
-  const label = labelElement === "button" && onPageSizeChange
+  const label = mode === "record"
+    ? (
+      <span className={cn(pagerVariants({ label: "span" }), "whitespace-nowrap text-13 text-fg-muted", labelClassName)}>
+        {page > 0 ? <><span className="font-medium text-fg">{formatNumber(page)}</span> / {total !== undefined ? formatNumber(total) : "?"}</> : pageLabel}
+      </span>
+    )
+    : labelElement === "button" && onPageSizeChange
     ? (
       <PageSizePicker
         disabled={disabled}
@@ -159,9 +169,11 @@ export function Pager({
         type="button"
         variant="ghost"
         size="iconSm"
-        aria-label={previousLabel ?? t("pager.prev")}
+        aria-label={previousLabel ?? t(mode === "record" ? "recordPager.prev" : "pager.prev")}
         disabled={disabled || !canPrev}
-        onClick={() => onPageChange?.(Math.max(1, page - 1))}
+        // Record mode reports the step (page − 1) even from an unknown position (0), so the
+        // record pager can tell the way from the number.
+        onClick={() => onPageChange?.(mode === "record" ? page - 1 : Math.max(1, page - 1))}
       >
         <Glyph name="chevron-left" />
       </Button>
@@ -169,7 +181,7 @@ export function Pager({
         type="button"
         variant="ghost"
         size="iconSm"
-        aria-label={nextLabel ?? t("pager.next")}
+        aria-label={nextLabel ?? t(mode === "record" ? "recordPager.next" : "pager.next")}
         disabled={disabled || !canNext}
         onClick={() => onPageChange?.(page + 1)}
       >
@@ -237,9 +249,9 @@ function PageSizePicker({
                   disabled={disabled}
                   type="button"
                   className={cn(
-                    "h-7 rounded-6 px-2 text-13 tabular-nums outline-none transition-colors focus-visible:focus-ring",
+                    "h-control-xs rounded-6 px-2 text-13 tabular-nums outline-none transition-colors focus-visible:focus-ring",
                     value === pageSize
-                      ? "bg-brand-soft font-medium text-brand-soft-text"
+                      ? "selected font-medium"
                       : "text-fg hover:bg-inset",
                   )}
                   onClick={() => applyPageSize(value)}

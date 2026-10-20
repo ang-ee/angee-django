@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import { cn } from "../lib/cn";
-import { Badge } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import { Card } from "../ui/card";
 import { textRoleVariants } from "../ui/text";
 
@@ -35,8 +35,8 @@ export function RailPanel({
         <div className="mb-3 flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
             <h3 className="truncate text-sm font-semibold text-fg">{title}</h3>
-            {count !== undefined ? <Badge>{count}</Badge> : null}
-            {fetching ? <Badge tone="info">Refreshing</Badge> : null}
+            {count !== undefined ? <Chip>{count}</Chip> : null}
+            {fetching ? <Chip tone="info">Refreshing</Chip> : null}
           </div>
           {actions ? (
             <div className="flex shrink-0 items-center gap-1">{actions}</div>

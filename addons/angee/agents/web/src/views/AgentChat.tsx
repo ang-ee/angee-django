@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ActionMenu, ActionTrigger, Alert, Badge, ChatBar, ChatBubble, ChatHeaderAction, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, Glyph, InfoRow, LazyBoundary, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, useStatusTone, textRoleVariants } from "@angee/ui";
+import { ActionMenu, ActionTrigger, Alert, Chip, Button, ChatBar, ChatBubble, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, Glyph, InfoRow, LazyBoundary, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, useStatusTone, textRoleVariants } from "@angee/ui";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -365,7 +365,7 @@ function RecordAttachmentChip({
   const context = useRenderedContext(renderContext, open);
 
   if (!attached) {
-    return <ChatHeaderAction type="button" onClick={attachRecord}>{t("chat.attachView")}</ChatHeaderAction>;
+    return <Button type="button" size="sm" variant="ghost" onClick={attachRecord}>{t("chat.attachView")}</Button>;
   }
 
   return (
@@ -412,7 +412,7 @@ function AssistantMessage(): React.ReactElement {
         <MessagePrimitive.Parts
           components={{ Text: AssistantText, Reasoning: ReasoningPart, tools: { Fallback: ToolPart } }}
         />
-        {failed ? <Badge tone="danger" density="compact" role="status">{t("chat.failed")}</Badge> : null}
+        {failed ? <Chip tone="danger" role="status">{t("chat.failed")}</Chip> : null}
         {/* Pre-token "thinking" dots: only on the last assistant turn that has started but has no
             content yet, and only while the thread is running. `hasContent` flips true the moment
             the first text/reasoning/tool part streams in, which removes the indicator. */}

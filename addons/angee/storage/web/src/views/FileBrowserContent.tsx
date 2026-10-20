@@ -1,19 +1,7 @@
 import { useRef, type ReactElement } from "react";
 
 import type { ResourceFilter } from "@angee/metadata";
-import {
-  Badge,
-  Button,
-  Column,
-  Glyph,
-  List,
-  UploadDropTarget,
-  formatSize,
-  useStatusTone,
-  useRuntimeViewAs,
-  type ListProps,
-  type ResourceListSnapshot,
-} from "@angee/ui";
+import { Chip, Button, Column, Glyph, List, UploadDropTarget, formatSize, useStatusTone, useRuntimeViewAs, type ListProps, type ResourceListSnapshot } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 import { fileDragPayload, type StorageFileRow } from "../data/file-rows";
@@ -124,9 +112,9 @@ export function FileBrowserContent({
         field="upload_state"
         header={t("column.stage")}
         render={(row) => (
-          <Badge tone={statusTone(row.upload_state, undefined, { unknownTone: "neutral" })}>
+          <Chip tone={statusTone(row.upload_state, undefined, { unknownTone: "neutral" })}>
             {fileStageLabel(row.upload_state, t)}
-          </Badge>
+          </Chip>
         )}
       />
       <Column<StorageFileRow>

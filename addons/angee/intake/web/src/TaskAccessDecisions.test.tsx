@@ -23,7 +23,7 @@ vi.mock("@angee/ui", async () => {
   return {
     Avatar: ({ initials }: { initials: string }) => React.createElement("span", {}, initials),
     InlineEmpty: ({ label }: { label: string }) => React.createElement("p", {}, label),
-    Badge: box("span"), Card: box("article"), CardContent: box("div"),
+    Chip: box("span"), Card: box("article"), CardContent: box("div"),
     CardFooter: box("div"), CardHeader: box("div"),
     Skeleton: box("div"), SkeletonText: box("div"),
     NavLink: ({ href, children }: { href: string; children: ReactNode }) =>

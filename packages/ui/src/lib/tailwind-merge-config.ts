@@ -12,7 +12,7 @@ const FONT_SIZE_TOKENS = ["2xs", "12", "13", "15", "22", "28", "34"];
 // the same TONES constant so this inventory can't drift from the matrix. (This
 // file is plain runtime config — NOT Tailwind-scanned — so interpolation is
 // safe here, unlike the literal matrix in lib/tones.ts.)
-const VIVID_TONES = TONES.filter((tone) => tone !== "neutral");
+const VIVID_TONES = TONES.filter((tone) => tone !== "neutral" && tone !== "muted");
 
 const FG_COLOR_TOKENS = [
   "fg",
@@ -73,6 +73,7 @@ const BORDER_COLOR_TOKENS = [
   "border-strong",
   "border-focus",
   "border-on-rail",
+  "fg-muted",
   "brand",
   "brand-hover",
   "brand-active",

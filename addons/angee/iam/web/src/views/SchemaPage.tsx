@@ -1,5 +1,5 @@
 import { useAuthoredQuery, type MessageVars } from "@angee/refine";
-import { Alert, Badge, Code, GraphView, InlineEmpty, LoadingPanel, PrimaryPanePublisher, RailPanel, SearchInput, TreeView, barVariants, cn, routeSearchParam, textRoleVariants, titleCase, updateRouteSearch, useChatterContent, useRouteSearch, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
+import { Alert, Chip, Code, GraphView, InlineEmpty, LoadingPanel, PrimaryPanePublisher, RailPanel, SearchInput, TreeView, barVariants, cn, routeSearchParam, textRoleVariants, titleCase, updateRouteSearch, useChatterContent, useRouteSearch, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import { type ReactElement, type ReactNode, useCallback, useEffect, useMemo, useState, } from "react";
 
@@ -220,7 +220,7 @@ function ResourceTypeList({
         renderRow={(resource) => (
           <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
             <span className="min-w-0 truncate">{resourceLabel(resource.resource_type)}</span>
-            <Badge>{resource.relations.length + resource.permissions.length}</Badge>
+            <Chip>{resource.relations.length + resource.permissions.length}</Chip>
           </span>
         )}
       />
@@ -263,9 +263,9 @@ function SchemaGraphCanvas({
             {resource.resource_type}
           </Code>
         </div>
-        <Badge tone="info">
+        <Chip tone="info">
           {t("schema.nodeCount", { count: graph.nodes.length })}
-        </Badge>
+        </Chip>
       </header>
       <GraphView
         nodes={graph.nodes}
@@ -372,7 +372,7 @@ function InspectorSection({
     <section className="min-w-0">
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="m-0 text-13 font-semibold text-fg">{title}</h3>
-        <Badge>{count}</Badge>
+        <Chip>{count}</Chip>
       </div>
       <div className="grid gap-2">{children}</div>
     </section>
@@ -414,9 +414,9 @@ function ChipList({
   return (
     <div className="flex min-w-0 flex-wrap gap-1">
       {values.map((value) => (
-        <Badge key={value} tone="neutral">
+        <Chip key={value} tone="neutral">
           {value}
-        </Badge>
+        </Chip>
       ))}
     </div>
   );
