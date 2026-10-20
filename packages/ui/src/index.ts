@@ -71,6 +71,7 @@ export * from "./ui/scroll-area";
 export * from "./ui/toolbar";
 export * from "./ui/form-layout";
 export * from "./ui/upload-drop-target";
+export * from "./ui/file-picker";
 
 // Widgets — the field renderers + the default widget registry — and the
 // feedback surface (modals, toasts, the Refine notification bridge).
