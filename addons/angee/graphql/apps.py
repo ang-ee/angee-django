@@ -23,9 +23,7 @@ class GraphQLConfig(AppConfig):
         # before any schema resource resolves them.
         from angee.graphql import field_types  # noqa: F401
         from angee.graphql.checks import check_graphql_schemas
-        from angee.graphql.publishing import connect_change_broadcast_receiver
         from angee.graphql.schema import GraphQLSchemas
 
         checks.register(check_graphql_schemas)
-        connect_change_broadcast_receiver()
         GraphQLSchemas.from_discovery().connect_change_publishers()

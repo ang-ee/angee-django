@@ -38,7 +38,7 @@ def capture_tasks(*, error: Exception | None = None) -> Iterator[list[tuple[str,
 
 @contextmanager
 def observe(model: type[Any]) -> Iterator[list[Any]]:
-    """Collect committed change publications for one concrete model."""
+    """Collect local owner change publications for one concrete model."""
     published: list[Any] = []
 
     def collect(sender: type[Any], payload: Any, **kwargs: Any) -> None:

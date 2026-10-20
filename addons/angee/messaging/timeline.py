@@ -1,4 +1,4 @@
-"""Chatter messages and source conversations on the record timeline."""
+"""Chatter and source conversations project their own saved target identities."""
 
 from __future__ import annotations
 
@@ -7,99 +7,109 @@ from typing import Any
 
 from django.apps import apps
 from django.db import models
-from rebac import to_subject_ref
+from rebac.managers import RebacQuerySet
 
-from angee.identity import public_id_of
 from angee.messaging.models import ThreadedModelMixin
-from angee.timeline.events import target_ref
-from angee.timeline.kinds import EventData, TimelineKind, actor_label
-
-COMMENT_KIND = "messaging.comment"
-CONVERSATION_KIND = "messaging.conversation"
-THREAD_MODEL = "messaging.Thread"
+from angee.refs import generic_pointer_model
+from angee.timeline.kinds import EventData, TimelineKind, target_scope
 
 
-def _chatter_attachment(thread: Any) -> Any | None:
-    """The chatter edge of a thread, through the merged canonical thread when there is one."""
+class CommentKind(TimelineKind):
+    """Record chatter has the transcript's record policy, not an independent inbox policy."""
 
-    attachment_model = apps.get_model("messaging", "ThreadAttachment")
-    canonical = thread.canonical() if thread.merged_into_id is not None else thread
-    return attachment_model._base_manager.select_related("thread").filter(thread=canonical, role="chatter").first()
-
-
-class CommentKind:
-    """The record's own chatter: comments, notes and emails on its thread."""
-
-    id = COMMENT_KIND
+    id = "messaging.comment"
     sequence = 40
-    models = ("messaging.Message",)
+    source_models = {
+        "messaging.Message": ("thread", "is_trashed", "preview", "sent_at", "created_at", "created_by",
+                              "subtype", "message_type"),
+        "messaging.ThreadAttachment": ("thread", "role"),
+        "messaging.Thread": ("merged_into",),
+    }
 
     def eligible(self, model: type[models.Model]) -> bool:
         return issubclass(model, ThreadedModelMixin)
 
+    def readable(self, actor: Any) -> models.Q:
+        scope = models.Q(pk__in=())
+        for model in apps.get_models():
+            if not self.eligible(model) or generic_pointer_model(model) is not model:
+                continue
+            rows = model._default_manager.all()
+            if isinstance(rows, RebacQuerySet):
+                rows = rows.with_actor(actor).with_action(model.thread_read_access).scoped()
+            scope |= models.Q(
+                record_content_type__app_label=model._meta.app_label,
+                record_content_type__model=model._meta.model_name,
+            ) & models.Q(models.Exists(rows.filter(pk=models.OuterRef("record_object_id"))))
+        return scope
+
     def rows(self) -> Iterable[models.Model]:
-        message_model = apps.get_model("messaging", "Message")
         return (
-            message_model._base_manager.filter(thread__attachments__role="chatter", is_trashed=False)
-            .distinct().order_by("pk").iterator()
+            apps.get_model("messaging", "Message")._base_manager
+            .filter(thread__attachments__role="chatter").distinct().order_by("pk").iterator()
         )
 
-    def events(self, message: models.Model) -> Iterable[EventData]:
+    def targets(self, row: Any) -> Iterable[models.Model]:
+        if row._meta.label == "messaging.Message":
+            return (row,)
+        if row._meta.label == "messaging.ThreadAttachment" and row.role != "chatter":
+            return ()
+        thread = row.thread if row._meta.label == "messaging.ThreadAttachment" else row
+        return apps.get_model("messaging", "Message").objects.for_thread(thread)
+
+    def events(self, message: Any) -> Iterable[EventData]:
         if message.is_trashed or message.thread_id is None:
             return []
-        attachment = _chatter_attachment(message.thread)
-        record = attachment.target if attachment is not None else None
+        # Messaging owns both the canonical thread and its chatter record.
+        record = message.threaded_record_ref()
         if record is None:
             return []
-        target_model, target_id = target_ref(message)
-        sender = message.sender
-        created_by = message.created_by
+        actor, actor_label = message.authorship()
         return [EventData(
-            key=f"{COMMENT_KIND}:{target_id}:1", kind=COMMENT_KIND,
-            at=message.sent_at or message.created_at, record=record,
-            target_model=target_model, target_id=target_id,
+            kind=self.id, target=message, record=(apps.get_model(record.model_label), record.object_id),
+            at=message.sent_at or message.created_at,
             title=message.preview,
             detail=message.subtype.name if message.subtype_id else message.get_message_type_display(),
-            actor=str(to_subject_ref(created_by)) if created_by is not None else "",
-            actor_label=(sender.display_name or str(sender)) if sender is not None else actor_label(created_by),
+            actor=actor, actor_label=actor_label,
         )]
 
 
-class ConversationKind:
-    """Conversations the record came from: the source-role thread attachments."""
+class ConversationKind(TimelineKind):
+    """One source attachment per record, subject to the edge and conversation read gates."""
 
-    id = CONVERSATION_KIND
+    id = "messaging.conversation"
     sequence = 70
-    models = ("messaging.ThreadAttachment", "messaging.Thread")
+    source_models = ("messaging.ThreadAttachment", "messaging.Thread")
 
     def eligible(self, model: type[models.Model]) -> bool:
         return True
 
-    def rows(self) -> Iterable[models.Model]:
-        attachment_model = apps.get_model("messaging", "ThreadAttachment")
-        return attachment_model._base_manager.filter(role="source").select_related("thread").order_by("pk").iterator()
+    def readable(self, actor: Any) -> models.Q:
+        threads = apps.get_model("messaging", "Thread").objects.with_actor(actor).scoped().values("pk")
+        attachments = apps.get_model("messaging", "ThreadAttachment").objects.with_actor(actor)
+        return target_scope(attachments.filter(thread_id__in=threads))
 
-    def events(self, row: models.Model) -> Iterable[EventData]:
-        attachment_model = apps.get_model("messaging", "ThreadAttachment")
-        if isinstance(row, attachment_model):
-            attachments = [row] if row.role == "source" else []
-        else:
-            edges = attachment_model._base_manager.filter(thread=row, role="source")
-            attachments = list(edges.select_related("thread"))
-        events: list[EventData] = []
-        for attachment in attachments:
-            record = attachment.target
-            if record is None:
-                continue
-            thread = attachment.thread
-            events.append(EventData(
-                key=f"{CONVERSATION_KIND}:{public_id_of(attachment)}:1", kind=CONVERSATION_KIND,
-                at=attachment.created_at, record=record,
-                target_model=THREAD_MODEL, target_id=public_id_of(thread),
-                title=thread.title.text if thread.title_id else (attachment.label or "Conversation"),
-                detail=f"{thread.message_count} messages",
-            ))
-        return events
+    def rows(self) -> Iterable[models.Model]:
+        model = apps.get_model("messaging", "ThreadAttachment")
+        return model._base_manager.filter(role="source").order_by("pk").iterator()
+
+    def targets(self, row: Any) -> Iterable[models.Model]:
+        if row._meta.label == "messaging.ThreadAttachment":
+            return (row,)
+        return apps.get_model("messaging", "ThreadAttachment")._base_manager.filter(thread=row, role="source")
+
+    def events(self, attachment: Any) -> Iterable[EventData]:
+        if attachment.role != "source":
+            return []
+        model = attachment.content_type.model_class()
+        if model is None:
+            return []
+        thread = attachment.thread
+        return [EventData(
+            kind=self.id, target=attachment, record=(model, attachment.object_id), at=attachment.created_at,
+            title=thread.title.text if thread.title_id else (attachment.label or "Conversation"),
+            detail=f"{thread.message_count} messages",
+        )]
 
 
 def timeline_kinds() -> tuple[TimelineKind, ...]:

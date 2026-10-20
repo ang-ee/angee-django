@@ -8,7 +8,7 @@ from typing import Any
 import strawberry
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db.models import Count
+from django.db.models import BooleanField, Case, Count, Value, When
 
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.iam.permissions import request_from_info
@@ -46,7 +46,6 @@ class TimelineKindType:
 
     id: str
     count: int
-    models: list[str]
 
 
 @strawberry.type
@@ -61,13 +60,19 @@ class TimelinePageType:
 
 
 def _record(info: strawberry.Info, model: str, id: PublicID) -> tuple[Any, Any, Any]:
-    actor = request_from_info(info).user
+    request = request_from_info(info)
+    cache = request.__dict__.setdefault("_timeline_records", {})
+    key = (model, str(id))
+    if key in cache:
+        return cache[key]
+    actor = request.user
     try:
         record_model = apps.get_model(model)
     except (LookupError, ValueError) as error:
         raise ValidationError(f"Unknown model {model!r}.", code="invalid") from error
     record = require_instance_for_id(record_model, str(id), queryset=record_model.objects.with_actor(actor))
-    return actor, record_model, record
+    cache[key] = actor, record_model, record
+    return cache[key]
 
 
 @strawberry.type
@@ -92,42 +97,37 @@ class TimelineQuery:
         except ValueError as error:
             raise ValidationError(str(error), code="invalid") from error
         event_model = apps.get_model("timeline", "Event")
-        # The record was read under the actor; the ledger is its index.
-        lines = event_model.objects.for_record(record).top_level()
         eligible = [kind for kind in timeline_kinds() if kind.eligible(record_model)]
-        counts = dict(lines.values_list("kind").annotate(n=Count("pk")).values_list("kind", "n"))
-        waiting = lines.needing(actor).count() if actor is not None and actor.pk else 0
+        events = event_model.objects.for_record(record).for_reader(actor).eligible_for(record_model)
+        lines = events.top_level(actor)
+        counts = dict(lines.order_by().values_list("kind").annotate(n=Count("pk")).values_list("kind", "n"))
+        waiting = lines.needing(actor).count()
         if kinds:
             lines = lines.filter(kind__in=kinds)
         if needs_me:
             lines = lines.needing(actor)
         if cursor is not None:
             lines = lines.filter(cursor.predicate())
-        page = list(lines.order_by("-at", "kind", "-pk")[: limit + 1])
+        page = list(lines.annotate(_needs_me=Case(
+            When(lines.waiting_on(actor), then=Value(True)), default=Value(False), output_field=BooleanField(),
+        )).order_by("-at", "kind", "-pk")[: limit + 1])
         more = len(page) > limit
         page = page[:limit]
-        children: dict[int, list[TimelineKindCount]] = {}
-        for parent_id, kind, n in (
-            event_model.objects.filter(parent__in=[event.pk for event in page])
-            .values_list("parent_id", "kind").annotate(n=Count("pk")).values_list("parent_id", "kind", "n")
-            .order_by("parent_id", "kind")
-        ):
-            children.setdefault(parent_id, []).append(TimelineKindCount(kind=kind, count=n))
-        mine = set(
-            event_model.needs.through.objects.filter(event_id__in=[event.pk for event in page], user_id=actor.pk)
-            .values_list("event_id", flat=True)
-        ) if actor is not None and actor.pk else set()
+        children = events.folded_counts(page, actor)
         return TimelinePageType(
             entries=[
                 TimelineEntryType(
                     key=event.key, at=event.at, kind=event.kind, title=event.title, actor=event.actor_label,
-                    detail=event.detail, needs_me=event.pk in mine, target_model=event.target_model,
-                    target_id=PublicID(event.target_id), children=children.get(event.pk, []),
+                    detail=event.detail, needs_me=event._needs_me, target_model=event.target_model,
+                    target_id=PublicID(event.target_id), children=[
+                        TimelineKindCount(kind=kind, count=count)
+                        for kind, count in children.get((event.target_model, event.target_pk), [])
+                    ],
                 )
                 for event in page
             ],
             kinds=[
-                TimelineKindType(id=kind.id, count=counts.get(kind.id, 0), models=list(kind.models))
+                TimelineKindType(id=kind.id, count=counts.get(kind.id, 0))
                 for kind in eligible
             ],
             needs_me=waiting,
@@ -139,10 +139,9 @@ class TimelineQuery:
     def timeline_attention(self, info: strawberry.Info, model: str, id: PublicID) -> int:
         """How many lines on the record wait on the viewer."""
 
-        actor, _record_model, record = _record(info, model, id)
-        if actor is None or not actor.pk:
-            return 0
-        return int(apps.get_model("timeline", "Event").objects.for_record(record).top_level().needing(actor).count())
+        actor, record_model, record = _record(info, model, id)
+        return int(apps.get_model("timeline", "Event").objects.for_record(record).eligible_for(record_model)
+                   .top_level(actor).needing(actor).count())
 
 
 schemas: dict[str, dict[str, list[Any]]] = {"console": {"query": [TimelineQuery]}}

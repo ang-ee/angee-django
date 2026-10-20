@@ -92,7 +92,7 @@ from angee.models import (
     TrashMixin,
 )
 from angee.parties.models import Handle
-from angee.refs import MergePolicy, RecordRefMixin, RetainedGenericRelation, generic_pointer_model
+from angee.refs import MergePolicy, RecordRef, RecordRefMixin, RetainedGenericRelation, generic_pointer_model
 from angee.resources.mixins import ResourceLoadMixin
 from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
@@ -1512,7 +1512,7 @@ class ThreadAttachment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel)
     def record_edge_roles(cls, target: type[models.Model]) -> tuple[str, ...]:
         """Only a threaded model keeps chatter; any declared target retains source conversations."""
 
-        return (cls.AttachmentRole.CHATTER.value,) if issubclass(target, ThreadedModelMixin) else ()
+        return (str(cls.AttachmentRole.CHATTER),) if issubclass(target, ThreadedModelMixin) else ()
 
     @classmethod
     def teardown_for_target(cls, target: models.Model) -> None:
@@ -2280,6 +2280,16 @@ class Message(
         exact gate the update/delete mutations enforce.
         """
 
+        reference = self.threaded_record_ref()
+        if reference is None:
+            return None
+        return apps.get_model(reference.model_label)._base_manager.using(self._state.db).filter(
+            pk=reference.object_id,
+        ).first()
+
+    def threaded_record_ref(self) -> RecordRef | None:
+        """The chatter host's identity, without loading its document body."""
+
         if self.thread_id is None:
             return None
         attachment = (
@@ -2292,8 +2302,8 @@ class Message(
         )
         if attachment is None:
             return None
-        target = attachment.target
-        return target if isinstance(target, ThreadedModelMixin) else None
+        model = attachment.content_type.model_class()
+        return attachment.record_ref if model is not None and issubclass(model, ThreadedModelMixin) else None
 
     def sender_name(self) -> str:
         """Return the actor-visible sender label, using its selected SQL value."""
@@ -2365,6 +2375,15 @@ class Message(
             .first()
             or ""
         )
+
+    def authorship(self) -> tuple[str, str]:
+        """The sender's subject and label, falling back to the recorded author."""
+
+        sender = self.sender
+        author = sender if sender is not None else self.created_by
+        if author is None:
+            return "", ""
+        return str(to_subject_ref(author)), (sender.display_name or str(sender)) if sender is not None else str(author)
 
     def title(self) -> str:
         """Return this message's title text — its ``TITLE`` part's fragment, or ``""``.

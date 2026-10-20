@@ -1432,6 +1432,20 @@ def test_provision_post_build_runs_remaining_steps_in_order_without_respawning(
     assert "angee provision: ok" not in messages
 
 
+def test_provision_runs_declared_installed_addon_commands_after_migrations(monkeypatch) -> None:
+    calls = []
+    command = Command()
+    monkeypatch.setattr(command, "_run_step", calls.append)
+    monkeypatch.setattr(
+        "angee.compose.management.commands.angee.get_commands", lambda: {"timeline_backfill": "timeline"},
+    )
+    command._handle_provision(_provision_options(
+        post_build=True, after_if_installed=["timeline_backfill", "absent_addon_command"],
+    ))
+    assert calls[-1] == ["timeline_backfill"]
+    assert calls.index(["migrate", "--noinput", "--skip-checks"]) < len(calls) - 1
+
+
 def test_provision_post_build_aborts_on_the_first_failed_step(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

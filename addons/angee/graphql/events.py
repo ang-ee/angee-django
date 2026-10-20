@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, cast
 from uuid import uuid4
 
@@ -87,6 +87,12 @@ class ChangePayload:
     during_ingestion: bool = False
     """Whether the change happened inside a sync ingestion context; not part of the wire message."""
 
+    instance: models.Model | None = field(default=None, compare=False, repr=False)
+    """Source row available during synchronous local delivery, including deletes; never serialized."""
+
+    broadcasts: bool = True
+    """Whether this occurrence reaches the channel layer; local observers still receive it."""
+
     @classmethod
     def from_instance(
         cls,
@@ -96,6 +102,7 @@ class ChangePayload:
         update_fields: Iterable[str] | None,
         readable_fields: ReadableFields = (),
         during_ingestion: bool = False,
+        broadcasts: bool = True,
     ) -> ChangePayload:
         """Return the channel payload for a saved or deleted model instance."""
 
@@ -107,8 +114,8 @@ class ChangePayload:
         resource_id = None
         if model_resource_type(type(instance)):
             resource_id = model_resource_id(instance)
-        read_resource = _change_read_resource(instance)
-        related_records = _change_related_records(instance)
+        read_resource = _change_read_resource(instance) if broadcasts else None
+        related_records = _change_related_records(instance) if broadcasts else ()
         return cls(
             model=instance._meta.label,
             id=public_id_of(instance),
@@ -121,6 +128,8 @@ class ChangePayload:
             read_resource_id=None if read_resource is None else read_resource.resource_id,
             related_records=related_records,
             during_ingestion=during_ingestion,
+            instance=instance,
+            broadcasts=broadcasts,
         )
 
     @classmethod

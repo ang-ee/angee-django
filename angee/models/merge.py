@@ -37,7 +37,7 @@ system verb that folds a duplicate has no actor to authorize and calls it direct
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import cache
@@ -472,15 +472,42 @@ class MergeableMixin(models.Model):
         and the caller gates what it then reads from the survivor.
         """
 
-        rows = type(self)._base_manager.using(self._state.db)
-        seen = set()
-        record = self
-        while record.merged_into_id is not None:
-            if record.pk in seen:
-                raise ValidationError("A merge redirect contains a cycle.")
-            seen.add(record.pk)
-            record = rows.get(pk=record.merged_into_id)
-        return record
+        if self.merged_into_id is None:
+            return self
+        pk = type(self).canonical_ids((self.merged_into_id,), using=self._state.db).get(self.merged_into_id)
+        if pk is None:
+            raise type(self).DoesNotExist("The merge survivor no longer exists.")
+        return type(self)._base_manager.using(self._state.db).get(pk=pk)
+
+    @classmethod
+    def canonical_ids(cls, ids: Iterable[Any], *, using: str | None = None) -> dict[Any, Any]:
+        """Resolve existing identities in batches, without loading record bodies.
+
+        Missing records are omitted; corrupt redirects fail closed, as on the
+        instance read. One query per redirect depth serves the entire input.
+        """
+
+        pending = set(ids)
+        redirects: dict[Any, Any] = {}
+        roots = pending.copy()
+        rows = cls._base_manager.using(using)
+        while pending:
+            found = dict(rows.filter(pk__in=pending).values_list("pk", "merged_into_id"))
+            redirects.update(found)
+            pending = {pk for pk in found.values() if pk is not None and pk not in redirects}
+        result = {}
+        for root in roots:
+            pk, seen = root, set()
+            while pk in redirects:
+                if pk in seen:
+                    raise ValidationError("A merge redirect contains a cycle.")
+                seen.add(pk)
+                target = redirects[pk]
+                if target is None:
+                    result[root] = pk
+                    break
+                pk = target
+        return result
 
     def retains(self, merged: Self) -> bool:
         """Whether retiring ``merged`` keeps it as a redirect rather than deleting it.
@@ -668,7 +695,7 @@ def reference_blockers(model: type[models.Model]) -> tuple[tuple[Q, str], ...]:
 
     return tuple(
         (Q(reference.pointing(model)), f"{reference.label} still refer to it.")
-        for reference in references(model)
+        for reference in references(cast(Any, model))
         if reference.policy == MergePolicy.BLOCK
     )
 
@@ -730,7 +757,7 @@ def fold_records(
                         raise ValidationError(refusal)
         carry()
         moving = [
-            reference for reference in references(model)
+            reference for reference in references(cast(Any, model))
             if move_references and reference.policy == MergePolicy.MOVE
         ]
         with system_context(reason=MERGE_REASON):

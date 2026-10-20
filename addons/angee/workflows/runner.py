@@ -110,7 +110,8 @@ class Runner:
         """
         step_runs = run.step_runs
         with system_context(reason="workflows.advance"):
-            if run.is_terminal and settlement is None:
+            terminal = run.is_terminal
+            if terminal and settlement is None:
                 return
             output: Any
             try:
@@ -130,7 +131,7 @@ class Runner:
                                 step_runs.filter(pk=step_run.pk).update(notes=[*step_run.notes, *notes])
                 # A preserved IO sibling may settle after failure. Its evidence
                 # changes, but the terminal run and graph plan stay untouched.
-                if not run.is_terminal:
+                if not terminal:
                     with transaction.atomic():
                         # The reverse manager needs its connecting FK to populate
                         # Django's known-related-object cache without one query per row.
@@ -195,14 +196,16 @@ class Runner:
                         )
                         if recorded_on_attempt or timed_out and closed:
                             run_error = ""
-                if not run.is_terminal:
+                if not terminal:
                     with _record_failure("run state"):
                         self.run_model.objects._write_state(
                             run, status=RunStatus.FAILED, outcome=ERROR_OUTCOME, output={}, error=run_error,
                         )
-            with _record_failure("run change publication"):
-                run.refresh_from_db()
-                publish_change(run, action="update", update_fields=None)
+            if terminal:
+                # Preserved IO evidence changed without a run state transition.
+                with _record_failure("run change publication"):
+                    run.refresh_from_db()
+                    publish_change(run, action="update", update_fields=None)
 
     def execute(self, step_run_id: int) -> bool:
         """Claim once; DATABASE bodies share the claim transaction, IO bodies do not."""

@@ -11,6 +11,7 @@ from django.db.models.functions import Now
 from rebac import actor_context, current_actor, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
+from angee.graphql.publishing import change_published
 from angee.workflows import runner as runner_module
 from angee.workflows.managers import StepRunQuerySet
 from angee.workflows.runner import runner
@@ -32,20 +33,17 @@ def step_row(run):
 @pytest.mark.parametrize("mode, expected", [(StepMode.IO, ["running", "succeeded"]),
                                            (StepMode.DATABASE, ["succeeded"])])
 def test_io_claim_publishes_running_before_body_and_database_only_publishes_advance(
-    execution, register_step, monkeypatch, mode, expected,
+    execution, register_step, mode, expected,
 ):
     """A committed IO claim is observable while its external body is still running."""
     actor, _ = execution
     publications = []
-    original = runner_module.publish_change
 
-    def publish(run, **kwargs):
+    def publish(sender, payload, **kwargs):
         assert connection.in_atomic_block
         committed = len(publications)
-        transaction.on_commit(lambda: publications.append(step_row(run).status))
-        result = original(run, **kwargs)
+        transaction.on_commit(lambda: publications.append(step_row(payload.instance).status))
         assert len(publications) == committed
-        return result
 
     class Observed(Echo):
         def run(self, ctx):
@@ -56,8 +54,11 @@ def test_io_claim_publishes_running_before_body_and_database_only_publishes_adva
     register_step(Observed)
     workflow = load_workflow(document("entry"), actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
-    monkeypatch.setattr(runner_module, "publish_change", publish)
-    assert runner.execute(step_row(run).pk)
+    change_published.connect(publish, sender=WorkflowRun)
+    try:
+        assert runner.execute(step_row(run).pk)
+    finally:
+        change_published.disconnect(publish, sender=WorkflowRun)
     assert publications == expected
 
 

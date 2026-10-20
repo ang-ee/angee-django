@@ -246,6 +246,15 @@ def current_changeset(*, required: bool = False, record: bool = False) -> Change
     return boundary.capture(record=record) if required or record else boundary.row().instance
 
 
+def require_changeset(*, record: bool = False) -> ChangesetLike:
+    """Return attribution for an operation that cannot run without its storage."""
+
+    context = current_changeset(required=True, record=record)
+    if context is None:
+        raise ChangesetRequired(_required_message())
+    return context
+
+
 def mark_changeset_failed() -> None:
     """Record a handled failure on the open boundary; its changesets close as failed."""
 

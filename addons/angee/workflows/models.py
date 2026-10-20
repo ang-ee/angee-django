@@ -453,6 +453,23 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
         ]
 
 
+class WorkflowDecision(models.Model):
+    """Contribute retained requesting runs to the decision owner's reference seam."""
+
+    extends: str | None = "decisions.Decision"
+
+    class Meta:
+        abstract = True
+
+    def requesting_records(self) -> Iterable[models.Model]:
+        yield from cast(Any, super()).requesting_records()
+        runs = apps.get_model("workflows", "StepRun")._base_manager.using(self._state.db).filter(
+            decision_id=self.pk,
+        ).order_by("run_id").values_list("run_id", flat=True).distinct()
+        model = apps.get_model("workflows", "WorkflowRun")
+        yield from (model(pk=pk) for pk in runs)
+
+
 class StepRun(AngeeDataModel):
     """One graph node's state and input, with its claim counter as the fence.
 
@@ -498,6 +515,23 @@ class StepRun(AngeeDataModel):
     notes = models.JSONField(default=list)
 
     objects = StepRunManager()
+
+    @classmethod
+    def change_batch_targets(cls, instances: Iterable[Any], *, update_fields: Iterable[str]) -> Iterable[models.Model]:
+        """Publish newly retained questions; run advancement owns run publication.
+
+        Local bulk observers coalesce the step rows to their own targets. Sending
+        another run change here would publish its intermediate, unadvanced state.
+        """
+
+        rows = tuple(instances)
+        if not rows:
+            return ()
+        using = rows[0]._state.db
+        decisions = apps.get_model("decisions", "Decision")._base_manager.using(using).filter(
+            pk__in={row.decision_id for row in rows if row.decision_id},
+        ).defer("proposal", "context", "verdict", "verdict_values") if "decision_id" in update_fields else ()
+        return decisions
 
     def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
         """A step changes both its run graph and that run's record timelines."""

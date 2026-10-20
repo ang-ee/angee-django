@@ -64,7 +64,7 @@ from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.actors import actor_user_id
-from angee.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
+from angee.changesets import changeset, changeset_model, creation_fingerprint, require_changeset
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.graphql.publishing import mute_changes
 from angee.identity import instances_from_public_ids
@@ -2518,8 +2518,8 @@ class MessageQuerySet(MergeableQuerySet[Any], TrashQuerySet[Any], AngeeQuerySet[
     def involving_parties(self, parties: Any) -> MessageQuerySet:
         """Return messages any of ``parties``' resolved handles participated in.
 
-        Timeline reads pass either a lazy actor-scoped Party queryset (a circle
-        subtree) or a concrete iterable (one party). Participants are Handle-keyed
+        Inbox scopes and correspondence projections pass either a lazy Party
+        queryset (a circle subtree) or a concrete iterable. Participants are Handle-keyed
         and ``Handle.party`` is the resolution-materialised owner, so one join
         answers "every message exchanged with these parties across channels".
         The participant subquery preserves one row per message even when several
@@ -2715,7 +2715,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 if queued:
                     reply.deliver()
             if idempotency_key is not None:
-                current_changeset(required=True).record_created(reply)
+                require_changeset().record_created(reply)
         return reply.with_actor(actor)
 
     def cancel_delivery(self, message: Any) -> None:
@@ -3412,7 +3412,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             message._meta.get_field("thread").set_cached_value(message, thread)
             message_ingested.send(sender=self.model, instance=message)
             if idempotency_key is not None:
-                current_changeset(required=True).record_created(message)
+                require_changeset().record_created(message)
         return message
 
     def set_reaction(self, message: Any, *, reaction: str, action: str = "toggle", user: Any) -> Any:

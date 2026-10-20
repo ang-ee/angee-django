@@ -28,12 +28,14 @@ from angee.actors import actor_user_id
 from angee.evidence import EvidenceReference, readable_records
 from angee.fields import ModelLabelField
 from angee.graphql.events import ChangeRelatedRecord
-from angee.graphql.publishing import publish_change
+from angee.graphql.publishing import changes_muted, mute_changes, publish_change
 from angee.identity import public_id_of
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
 from angee.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet, StaleRevisionError, require_revision
+from angee.models.query import by_key
 from angee.serialization import canonical_json_sha256, strip_null_bytes
+from angee.signals import bulk_updated
 from angee.workflows.definition import (
     MAP_BODY_SUFFIX,
     Body,
@@ -711,6 +713,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 
                 transaction.on_commit(cancel_children, robust=True)
             enqueue_task("workflows.wake_run", kwargs={"run_id": run.pk}, robust=True)
+        with _record_failure("run change publication"):
+            run.refresh_from_db()
+            publish_change(run, action="update", update_fields=None)
 
     def cancel_abandoned(self, run_id: int) -> None:
         """Close unawaited owned children after the parent's terminal write commits."""
@@ -742,8 +747,6 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                         actor=run.run_as,
                     )
                     run.step_runs.cancel_open()
-                    run.refresh_from_db()
-                    publish_change(run, action="update", update_fields=None)
                     interrupted += 1
         return interrupted
 
@@ -752,10 +755,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         steps = children = 0
         canceled = bool(runs and not runs[0].is_terminal)
         for index, run in enumerate(runs):
-            if run.stopped_at is None and (not run.is_terminal or run.status == RunStatus.FAILED):
+            stopped = run.stopped_at is None and (not run.is_terminal or run.status == RunStatus.FAILED)
+            if stopped:
                 self.filter(pk=run.pk).update(stopped_at=Now(), updated_at=Now())
                 run.refresh_from_db(fields=["stopped_at"])
-                publish_change(run, action="update", update_fields=["stopped_at"])
             transitioning = not run.is_terminal
             if transitioning:
                 children += bool(index)
@@ -764,9 +767,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             # Cleanup locks sessions and turns before cancel_open deletes their watches.
             changed = run.step_runs.cancel_open()
             steps += changed
-            if changed or transitioning:
-                run.refresh_from_db()
-                publish_change(run, action="update", update_fields=None)
+            if not transitioning and (changed or stopped):
+                with _record_failure("run change publication"):
+                    run.refresh_from_db()
+                    publish_change(run, action="update", update_fields=None)
         return Cancellation(canceled, steps, children)
 
     def cancel_on_commit(self, run: Any, actor: Any) -> None:
@@ -814,7 +818,6 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         if (subject := self._lock_subject(run)) is not None:
             subject.admit_run(run)
         self._write_state(run, status=str(RunStatus.RUNNING), outcome="", output={})
-        run.refresh_from_db()
         from angee.workflows.runner import runner
 
         runner.advance(run)
@@ -927,6 +930,19 @@ class StepWatchManager(AngeeManager):
 
 class StepRunQuerySet(AngeeQuerySet):
     """Own conditional step transitions and database-clock candidate scopes."""
+
+    def _write_transition(self, **values: Any) -> int:
+        """Publish affected targets after a conditional state write, retaining its fence."""
+
+        with transaction.atomic(using=self.db):
+            keys = list(self.lock_if_supported().order_by("pk").values_list("pk", flat=True))
+            changed = sum(batch.update(**values) for batch in by_key(self, keys))
+            if changed and not changes_muted():
+                rows = self.model._base_manager.using(self.db).defer("input", "output", "state", "notes")
+                for batch in by_key(rows, keys):
+                    bulk_updated.send_robust(sender=self.model, instances=tuple(batch),
+                                            update_fields=frozenset(values), using=self.db)
+            return changed
 
     def nodes(self) -> Any:
         """Read declared nodes with bounded map progress, excluding item rows."""
@@ -1044,7 +1060,8 @@ class StepRunQuerySet(AngeeQuerySet):
 
     def _record_settlement(self, step_run: Any, attempt: Any) -> None:
         """Persist one eligible claim and close its attempt through shared policy."""
-        changed = attempt.settlement.transition(self, step_run, attempt)
+        with mute_changes():
+            changed = attempt.settlement.transition(self, step_run, attempt)
         if changed != 1:
             raise Superseded
         if not attempt.settlement.keeps_watches:
@@ -1053,7 +1070,9 @@ class StepRunQuerySet(AngeeQuerySet):
             attempt.result, attempt.diagnostic_error or attempt.error, attempt.stacktrace,
         ) != 1:
             raise Superseded
-        publish_change(step_run, action="update", update_fields=None)
+        current = self.model._base_manager.using(self.db).defer("input", "output", "state", "notes").get(pk=step_run.pk)
+        bulk_updated.send_robust(sender=self.model, instances=(current,),
+                                update_fields=frozenset(("status", "decision_id")), using=self.db)
 
     def to_waiting(
         self, *, until: Any = None, state: Any = None, retries: int | None = None,
@@ -1062,7 +1081,7 @@ class StepRunQuerySet(AngeeQuerySet):
         """Park running rows, preserving retries unless a failure consumed one."""
         if kind == WaitingKind.ERROR and not reason:
             raise ValueError("An operator wait requires its reason.")
-        return self.filter(status__in=(StepRunStatus.RUNNING, StepRunStatus.READY)).update(
+        return self.filter(status__in=(StepRunStatus.RUNNING, StepRunStatus.READY))._write_transition(
             **(self._cleared_wait() | {
                 "waiting_kind": kind, "wake_at": until, "wait_reason": reason if kind == WaitingKind.ERROR else "",
             }),
@@ -1076,7 +1095,9 @@ class StepRunQuerySet(AngeeQuerySet):
         acknowledged_by_id: Any = None, next_page: bool = False, reset_dispatches: bool = False,
     ) -> int:
         """Wake waiting rows and clear wait/deadline state; delivery is commit-owned."""
-        return self.filter(status__in=(StepRunStatus.WAITING, StepRunStatus.FAILED, StepRunStatus.RUNNING)).update(
+        return self.filter(
+            status__in=(StepRunStatus.WAITING, StepRunStatus.FAILED, StepRunStatus.RUNNING),
+        )._write_transition(
             **self._cleared_wait(), status=StepRunStatus.READY, dispatched_at=Now(),
             state=F("state") if state is None else state, retries=0 if reset_retries else F("retries"),
             outcome="", output={}, retry_acknowledged_by_id=acknowledged_by_id,
@@ -1091,7 +1112,7 @@ class StepRunQuerySet(AngeeQuerySet):
         attempts = self.model._meta.get_field("attempts").related_model
         attempts.objects.filter(step_run__in=opened).close(AttemptResult.SUPERSEDED)
         apps.get_model("workflows", "StepWatch").objects.filter(step_run__in=opened).delete()
-        return opened.update(
+        return opened._write_transition(
             **self._cleared_wait(),
             status=StepRunStatus.CANCELED,
         )

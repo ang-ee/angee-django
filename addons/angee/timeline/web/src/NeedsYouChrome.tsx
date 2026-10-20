@@ -1,9 +1,8 @@
-import { useAuthoredQuery } from "@angee/refine";
 import { PaneToolbarIconButton, useChatter, useRecordChromeContext } from "@angee/ui";
 import * as React from "react";
 
-import { TimelineAttentionDocument } from "./documents.console";
 import { TIMELINE_FOCUS_NEEDS_ME, TIMELINE_TAB_ID } from "./RecordTimelinePane";
+import { useTimelinePages } from "./useTimelinePages";
 
 /**
  * The record-header Needs you control: how many lines on this record wait on
@@ -14,13 +13,8 @@ export function NeedsYouChrome(): React.ReactElement | null {
   const record = useRecordChromeContext();
   const { setActiveTab, setCollapsed } = useChatter();
   const model = record.canonicalResource;
-  const variables = React.useMemo(() => ({ model, id: record.recordId }), [model, record.recordId]);
-  const query = useAuthoredQuery(TimelineAttentionDocument, variables, {
-    enabled: Boolean(model && record.recordId),
-    models: ["timeline.Event"],
-    records: [{ model, id: record.recordId }],
-  });
-  const count = query.data?.timeline_attention ?? 0;
+  const [query] = useTimelinePages({ model, id: record.recordId });
+  const count = query?.data?.timeline.needs_me ?? 0;
   if (!count) return null;
   return (
     <PaneToolbarIconButton

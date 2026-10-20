@@ -1,4 +1,3 @@
-import { useAuthoredQueryBatch } from "@angee/refine";
 import {
   TIMELINE_SCOPE_ALL,
   TIMELINE_SCOPE_NEEDS_ME,
@@ -11,15 +10,14 @@ import { useContainer, useResourceRecordHrefLookup, type ChatterSelection, type 
 import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
-import { TimelineDocument, type TimelinePageEntry } from "./documents.console";
+import type { TimelinePageEntry } from "./documents.console";
+import { useTimelinePages } from "./useTimelinePages";
 
 export const TIMELINE_TAB_ID = "timeline.rail";
 export const TIMELINE_KINDS_CONTAINER = "timeline#kinds";
 
-const PAGE_SIZE = 25;
-
 /**
- * The Timeline tab: the union read, paged by keyset cursor, drawn by the rail.
+ * The Timeline tab: the ledger read, paged by keyset cursor, drawn by the rail.
  * Each kind's presentation (label, glyph, verb, where it leads) is the
  * `timeline#kinds` child its owner declared; a line's verb opens the kind's
  * drill-in with the line's target, or navigates to the target's page.
@@ -43,23 +41,9 @@ export function RecordTimelinePane({ context, selection }: { context: ChatterVie
 
   const kindFilter = scope === TIMELINE_SCOPE_ALL || scope === TIMELINE_SCOPE_NEEDS_ME ? null : [scope];
   const needsMe = scope === TIMELINE_SCOPE_NEEDS_ME;
-  const enabled = Boolean(model && id);
-  // The first page names the kinds and their live interests; later pages reuse them.
-  const [models, setModels] = React.useState<readonly string[]>([]);
-  const scopes = React.useMemo(() => cursors.map((before, index) => ({
-    key: `page-${index}`,
-    document: TimelineDocument,
-    variables: { model, id, kinds: kindFilter, needsMe, before, limit: PAGE_SIZE },
-    models,
-  })), [cursors, model, id, kindFilter, needsMe, models]);
-  const results = useAuthoredQueryBatch(scopes, { enabled });
-  const pages = cursors.map((_, index) => results.get(`page-${index}`));
+  const pages = useTimelinePages({ model, id, kinds: kindFilter, needsMe }, cursors);
   const first = pages[0];
   const kinds = first?.data?.timeline.kinds;
-  React.useEffect(() => {
-    const next = [...new Set((kinds ?? []).flatMap((kind) => kind.models))].sort();
-    setModels((current) => current.length === next.length && current.every((value, index) => value === next[index]) ? current : next);
-  }, [kinds]);
 
   const entries = React.useMemo<readonly TimelineRailEntry[]>(() => {
     const seen = new Set<string>();

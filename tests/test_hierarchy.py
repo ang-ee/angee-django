@@ -62,6 +62,16 @@ def test_ancestors_of_is_exclusive_of_self() -> None:
 
 
 @pytest.mark.django_db
+def test_ancestors_of_batches_shared_paths_in_one_query() -> None:
+    with system_context(reason="test batched hierarchy ancestors"):
+        nodes = _tree()
+        with CaptureQueriesContext(connection) as queries:
+            ancestors = list(HierNode.objects.ancestors_of([nodes["D"], nodes["E"]]).order_by("path"))
+        assert ancestors == [nodes["A"], nodes["B"], nodes["C"]]
+        assert len(queries) == 1
+
+
+@pytest.mark.django_db
 def test_create_under_parent_derives_path_shape() -> None:
     """A created node's path is the parent path plus a zero-padded pk segment."""
 

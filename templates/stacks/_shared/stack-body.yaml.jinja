@@ -260,13 +260,13 @@ jobs:
 {% if stack_flavor == "instance" %}      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"
-{% endif %}{% if runtime_mode == "process" %}    command: ["sh", "-c", "uv run python -m angee.compose.bootstrap && uv sync && exec uv run python manage.py angee provision --demo --force-rebac"]
+{% endif %}{% if runtime_mode == "process" %}    command: ["sh", "-c", "uv run python -m angee.compose.bootstrap && uv sync && exec uv run python manage.py angee provision --demo --force-rebac --after-if-installed timeline_backfill"]
     depends_on: [deps, operator]
 {% else %}    command:
       - sh
       - "-c"
       - >-
-        {{ python_bootstrap }}exec python manage.py angee provision {% if stack_flavor == "framework" %}{% if effective_serve_mode == "production" %}--force-rebac{% else %}--demo --force-rebac{% endif %}{% else %}--bootstrap-admin{% endif %}
+        {{ python_bootstrap }}exec python manage.py angee provision {% if stack_flavor == "framework" %}{% if effective_serve_mode == "production" %}--force-rebac{% else %}--demo --force-rebac{% endif %}{% else %}--bootstrap-admin{% endif %} --after-if-installed timeline_backfill
     depends_on: [{% if postgres_mode == "external" %}{% else %}postgres, {% endif %}operator{% if stack_flavor == "framework" %}, deps{% endif %}]
 {% endif %}
 

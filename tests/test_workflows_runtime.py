@@ -16,6 +16,7 @@ from rebac import RelationshipTuple, actor_context, system_context, to_object_re
 from rebac.roles import grant as grant_role
 
 from angee.models import StaleRevisionError
+from angee.workflows import managers as managers_module
 from angee.workflows import runner as runner_module
 from angee.workflows.definition import Definition, DefinitionInvalid
 from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunManager
@@ -374,7 +375,9 @@ def test_wait_and_retry_in_place(execution, step_key):
     workflow = load_workflow(document("entry", step=step_key), key=step_key, actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     row = StepRun.system_queryset().get(run=run)
-    assert runner.execute(row.pk)
+    with observe(WorkflowRun) as publications:
+        assert runner.execute(row.pk)
+    assert len(publications) == 1  # Claims stay silent; the run owner publishes complete advancement.
     assert StepRun.system_queryset().get(pk=row.pk).status == StepRunStatus.WAITING
     assert runner.wake() == 1
     assert runner.execute(row.pk)
@@ -1262,7 +1265,7 @@ def test_failure_recording_database_errors_preserve_successful_body(
     if failure_write == "state":
         monkeypatch.setattr(WorkflowRunManager, "_write_state", invalid_write)
     else:
-        monkeypatch.setattr(runner_module, "publish_change", invalid_write)
+        _fail_run_publication(monkeypatch, workflow)
     assert runner.execute(step_run.pk)
     assert Workflow.system_queryset().get(pk=workflow.pk).name == "Successful body retained"
     assert StepRun.system_queryset().get(pk=step_run.pk).status == StepRunStatus.SUCCEEDED
@@ -1319,6 +1322,18 @@ def test_soft_time_limit_during_settlement_belongs_to_open_attempt(execution, re
     assert retained_run.status == RunStatus.FAILED and retained_run.error == ""
 
 
+def _fail_run_publication(monkeypatch, workflow):
+    """Break the run owner's notification without breaking step settlement."""
+    original = managers_module.publish_change
+
+    def publish(instance, **kwargs):
+        if isinstance(instance, WorkflowRun):
+            Workflow.objects.filter(pk=workflow.pk).update(key=None)
+        return original(instance, **kwargs)
+
+    monkeypatch.setattr(managers_module, "publish_change", publish)
+
+
 def test_publication_database_error_keeps_successful_outcome(execution, register_step, monkeypatch, caplog):
     """Notification failure is logged without undoing a completed run or its body."""
     actor, _ = execution
@@ -1326,11 +1341,8 @@ def test_publication_database_error_keeps_successful_outcome(execution, register
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = StepRun.system_queryset().get(run=run)
 
-    def invalid_write(*args, **kwargs):
-        Workflow.objects.filter(pk=workflow.pk).update(key=None)
-
     register_step(RetainedBody)
-    monkeypatch.setattr(runner_module, "publish_change", invalid_write)
+    _fail_run_publication(monkeypatch, workflow)
     assert runner.execute(step_run.pk)
     assert Workflow.system_queryset().get(pk=workflow.pk).name == "Successful body retained"
     retained_run = WorkflowRun.system_queryset().get(pk=run.pk)

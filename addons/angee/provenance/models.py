@@ -35,6 +35,7 @@ from angee.actors import instance_actor
 from angee.changesets import changeset, current_changeset, discard_changeset_claim
 from angee.errors import CreationKeyConflict
 from angee.fields import StateField
+from angee.graphql.publishing import publish_change
 from angee.models import (
     AngeeDataModel,
     AngeeManager,
@@ -49,7 +50,6 @@ from angee.models import (
 )
 from angee.refs import MergePolicy, RecordRefMixin
 from angee.serialization import canonical_json, canonical_json_sha256, json_safe
-from angee.timeline.events import sync_events
 
 ProvenanceRole = role_anchor("provenance/role")
 
@@ -109,7 +109,7 @@ class Rule(StatementPrincipal):
 
     runtime = True
     sqid_prefix = "rul_"
-    statement_source_kind = SourceKind.RULE
+    statement_source_kind = cast(SourceKind, SourceKind.RULE)
 
     class Meta(StatementPrincipal.Meta):
         abstract = True
@@ -121,7 +121,7 @@ class Seed(StatementPrincipal):
 
     runtime = True
     sqid_prefix = "sed_"
-    statement_source_kind = SourceKind.SEED
+    statement_source_kind = cast(SourceKind, SourceKind.SEED)
 
     class Meta(StatementPrincipal.Meta):
         abstract = True
@@ -234,7 +234,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             return False
         return self.pk in record.revertable_changesets((self,), actor=actor)
 
-    def proposed_relationships(self) -> Mapping[str, tuple[SubjectRef, ...]]:
+    def proposed_relationships(self, *, using: str | None = None) -> Mapping[str, tuple[SubjectRef, ...]]:
         """Promise the actor tuple that this owner persists immediately after insert."""
 
         if not self.actor:
@@ -286,7 +286,8 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         """Close persisted attribution as model bookkeeping, outside actor gates.
 
         Closing writes one row and never re-reads the boundary's history: the
-        document digest belongs to export (:meth:`document`).
+        document digest belongs to export (:meth:`document`). The published
+        change lets observers queue independent projections after commit.
         """
 
         self.state = self.State(self.State.CLOSED)
@@ -298,9 +299,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             touched=self.touched,
             counts=self.counts,
         )
-        # A queryset write fires no save signal: project the closed changeset onto
-        # the timeline of every record it touched here.
-        sync_events(self)
+        publish_change(self, action="update", update_fields=("state", "outcome", "touched", "counts"), broadcast=False)
 
     def history_rows(self) -> Any:
         """Yield touched owners and their native versions in deterministic order."""
@@ -369,7 +368,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             changeset(fresh=True, activity="revert", origin=self),
         ):
             histories = []
-            subjects = {}
+            subjects: dict[tuple[type[models.Model], Any], Any] = {}
             for model, _ in self.history_rows():
                 history = model_history(model)
                 if history is None:
@@ -424,7 +423,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
                 for index, row in enumerate(snapshots)
                 for field in row._meta.concrete_fields if field.unique
             }
-            graph = {index: set() for index in range(len(batch))}
+            graph: dict[int, set[int]] = {index: set() for index in range(len(batch))}
             for index, row in enumerate(snapshots):
                 for field in row._meta.concrete_fields:
                     if not field.is_relation or not field.many_to_one and not field.one_to_one:

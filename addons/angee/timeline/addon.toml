@@ -1,6 +1,11 @@
 [addon]
 name = "angee.timeline"
-description = "One chronology per record: addons contribute one-line events, the timeline read unions them behind one cursor"
+description = "One ledger per record, projected from committed owner changes and read through target policies"
 keywords = ["timeline", "activity", "history"]
 category = "Foundation"
-depends_on = ["angee.graphql"]
+depends_on = ["angee.graphql", "angee.jobs"]
+
+[[migrations]]
+name = "rebuild_ledger"
+app_label = "timeline"
+module = "runtime_migrations.rebuild_ledger"

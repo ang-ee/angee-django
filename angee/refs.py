@@ -394,13 +394,15 @@ def record_edges_by_target() -> dict[type[models.Model], tuple[type[RecordRefMix
 
     The inverse of :meth:`RecordRefMixin.accepted_target_models`: the polymorphic
     edges a record can carry, keyed by the canonical model
-    :func:`rebac.generic_target` names it by. An edge without a REBAC definition
-    accepts no target types.
+    :func:`rebac.generic_target` names it by. Infrastructure edges can explicitly
+    accept every canonical target without declaring an independent row policy.
     """
 
     index: dict[type[models.Model], list[type[RecordRefMixin]]] = {}
     for edge in sorted(apps.get_models(), key=lambda model: model._meta.label):
-        if not issubclass(edge, RecordRefMixin) or effective_rebac_definition(edge) is None:
+        if not issubclass(edge, RecordRefMixin):
+            continue
+        if not edge.accepts_any_record_target and effective_rebac_definition(edge) is None:
             continue
         for target in edge.accepted_target_models().values():
             index.setdefault(target, []).append(edge)
@@ -446,8 +448,8 @@ def reference_blocks_target_delete(reference: Reference, target: type[models.Mod
     """Return whether a live reference must prevent deleting its target.
 
     Ordinary foreign keys and undeclared generic pointers remain blockers. A
-    record edge participates only when its schema declares this target, or the
-    target exposes the edge's retained reverse relation for custom teardown.
+    record edge participates when its schema or open-target declaration accepts
+    this target, or the target exposes its retained reverse relation for custom teardown.
     The core receiver applies that same policy to ordinary deletion and creation
     undo alike.
     """

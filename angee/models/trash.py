@@ -19,8 +19,9 @@ from rebac import (
 from angee.actors import actor_user_id, instance_actor
 from angee.data.field_classification import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD
 from angee.models.identity import auto_now_stamps, update_fields_with_auto_now
-from angee.models.query import SystemQuerysetMixin
+from angee.models.query import SystemQuerysetMixin, by_key
 from angee.serialization import strip_null_bytes
+from angee.signals import bulk_updated
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _ArchiveModelT = TypeVar("_ArchiveModelT", bound=models.Model)
@@ -255,7 +256,7 @@ class TrashQuerySet(models.QuerySet[_TrashModelT]):
         mergeable model's ``canonical()`` reads the same on every model.
         """
 
-        return cast(Self, super().canonical().untrashed())  # type: ignore[misc]
+        return cast(Self, super().canonical().untrashed())
 
     def trash_targets(self) -> Self:
         """Return the rows the shared trash verbs may address.
@@ -276,13 +277,13 @@ class TrashQuerySet(models.QuerySet[_TrashModelT]):
         """
 
         now = timezone.now()
-        return self.untrashed().update(
+        return self.untrashed()._update_trash({
             **auto_now_stamps(self.model, now),
-            is_trashed=True,
-            trashed_at=at or now,
-            trashed_by_id=actor_user_id(current_actor()),
-            trash_reason=clean_trash_reason(reason),
-        )
+            "is_trashed": True,
+            "trashed_at": at or now,
+            "trashed_by_id": actor_user_id(current_actor()),
+            "trash_reason": clean_trash_reason(reason),
+        })
 
     def restore(self) -> int:
         """Bulk-restore this set's trashed rows; the caller has authorized every row.
@@ -290,4 +291,21 @@ class TrashQuerySet(models.QuerySet[_TrashModelT]):
         The protected counterpart of :meth:`trash`, with the same contract.
         """
 
-        return self.trashed().update(**auto_now_stamps(self.model, timezone.now()), **TrashMixin.UNTRASHED_VALUES)
+        return self.trashed()._update_trash({
+            **auto_now_stamps(self.model, timezone.now()), **TrashMixin.UNTRASHED_VALUES,
+        })
+
+    def _update_trash(self, values: Mapping[str, Any]) -> int:
+        """Freeze authorized keys, update through history, then publish bounded batches."""
+
+        with transaction.atomic(using=self.db):
+            keys = list(self.select_for_update().values_list("pk", flat=True))
+            if not keys:
+                return 0
+            changed = sum(batch.update(**values) for batch in by_key(self, keys))
+            if bulk_updated.has_listeners(self.model):
+                for batch in by_key(self.model._base_manager.using(self.db), keys):
+                    bulk_updated.send_robust(
+                        sender=self.model, instances=tuple(batch), update_fields=frozenset(values), using=self.db,
+                    )
+            return changed

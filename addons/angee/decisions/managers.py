@@ -39,6 +39,12 @@ class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
     def open(self) -> Any:
         return self.filter(verdict__isnull=True)
 
+    def waiting_on(self, actor: Any) -> Any:
+        """Open questions assigned to this actor, retaining this queryset's read scope."""
+
+        identity = actor_user_id(to_subject_ref(actor)) if actor is not None else None
+        return self.none() if identity is None else self.open().filter(assignees=identity)
+
     def open_for(self, *records: Any) -> Any:
         return self.open().for_records(*records)
 

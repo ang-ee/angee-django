@@ -10,6 +10,7 @@ from django.db import DataError, OperationalError, connection
 from django.db.models.functions import Now
 from rebac import system_context
 
+from angee.graphql.publishing import change_published
 from angee.workflows import managers
 from angee.workflows import runner as runner_module
 from angee.workflows.managers import StepRunQuerySet, WorkflowRunQuerySet
@@ -430,25 +431,30 @@ def test_artifacts_commit_only_with_successful_attempt_evidence(execution, regis
         assert len(publications) == after_cancel[0]
 
 
-def test_reprocess_origin_is_present_at_its_first_change_publication(execution, monkeypatch):
+def test_reprocess_origin_is_present_at_its_first_change_publication(execution):
     """Observers never receive a replacement run whose admission still looks manual."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key="published_reprocess_origin", actor=actor)
     predecessor = WorkflowRun.objects.start(workflow, actor=actor)
     assert runner.execute(retained_step(predecessor).pk)
     observations = []
-    original = runner_module.publish_change
 
-    def observe(run, **kwargs):
+    def observe(sender, payload, **kwargs):
+        run = payload.instance
         observations.append((
-            run.pk, run.origin, run.reprocess_of_id,
+            payload.action, run.pk, run.origin, run.reprocess_of_id,
             WorkflowRun.system_queryset().get(pk=run.pk).reprocess_of_id,
         ))
-        return original(run, **kwargs)
 
-    monkeypatch.setattr(runner_module, "publish_change", observe)
-    replacement = WorkflowRun.objects.reprocess(predecessor, actor=actor)
-    assert observations == [(replacement.pk, "reprocess", predecessor.pk, predecessor.pk)]
+    change_published.connect(observe, sender=WorkflowRun)
+    try:
+        replacement = WorkflowRun.objects.reprocess(predecessor, actor=actor)
+    finally:
+        change_published.disconnect(observe, sender=WorkflowRun)
+    assert observations == [
+        (action, replacement.pk, "reprocess", predecessor.pk, predecessor.pk)
+        for action in ("create", "update")
+    ]
 
 
 def test_cancel_authorizes_once_before_acquiring_the_run_lock(execution, monkeypatch):

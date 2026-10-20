@@ -257,6 +257,7 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "django.contrib.auth.apps.AuthConfig",
         "django.contrib.sessions.apps.SessionsConfig",
         "angee.iam.apps.IAMConfig",
+        "angee.timeline.apps.TimelineConfig",
         "angee.provenance",
         "angee.integrate.apps.IntegrateConfig",
         "angee.integrate_vcs.apps.IntegrateVcsConfig",

@@ -140,11 +140,20 @@ class CircleQuerySet(HierarchyQuerySet, AngeeQuerySet):
         """Readable memberships in these readable circles, optionally confirmed only."""
 
         member_model = apps.get_model("parties", "CircleMember")
-        members = member_model.objects.all().with_actor(self.actor() or current_actor()).scoped_for_aggregate()
+        members = member_model.objects.all()
+        if actor := self.actor():
+            members = members.with_actor(actor)
+        members = members.scoped_for_aggregate()
         members = members.filter(circle_id__in=Subquery(self.scoped_for_aggregate().order_by().values("pk")))
         if confirmed_only:
             members = members.filter(is_confirmed=True, is_dismissed=False)
         return members
+
+    def containing_parties(self, parties: Any, *, confirmed_only: bool = False) -> Self:
+        """Readable circles containing these parties through readable memberships."""
+
+        members = self.memberships(confirmed_only=confirmed_only).filter(party__in=parties)
+        return self.filter(pk__in=Subquery(members.order_by().values("circle_id")))
 
     def with_member_counts(self) -> Self:
         """Annotate each circle with its distinct-party count across its subtree."""
@@ -732,10 +741,11 @@ class PartyQuerySet(MergeableQuerySet, StatementSubjectQuerySet):
         """Return canonical parties in ``circle`` or any of its descendants."""
 
         circle_model = apps.get_model("parties", "Circle")
+        circles = circle_model.objects.all()
+        if actor := self.actor():
+            circles = circles.with_actor(actor)
         visible_subtree_membership = (
-            circle_model.objects.all()
-            .with_actor(self.actor() or current_actor())
-            .subtree_of(circle)
+            circles.subtree_of(circle)
             .memberships(confirmed_only=confirmed_only)
             .filter(party_id=OuterRef("pk"))
         )

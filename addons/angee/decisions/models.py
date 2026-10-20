@@ -1,5 +1,6 @@
 """One question, its immutable proposal, and its final verdict."""
 
+from collections.abc import Iterable
 from typing import Any
 
 from django.conf import settings
@@ -9,7 +10,8 @@ from rebac import system_context
 
 from angee.decisions.managers import DecisionManager, DecisionRecordManager
 from angee.graphql.events import ChangeRelatedRecord
-from angee.models import AngeeDataModel, AppendOnlyModel, DerivedFrom, OptimisticLockMixin
+from angee.models import AngeeDataModel, AppendOnlyModel, OptimisticLockMixin
+from angee.models.derived import DerivedFrom
 
 
 class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
@@ -31,6 +33,11 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
     )
     answered_at = models.DateTimeField(null=True, blank=True)
     objects = DecisionManager()
+
+    def requesting_records(self) -> Iterable[models.Model]:
+        """Owner records retaining this question, contributed by asking capabilities."""
+
+        return ()
 
     def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
         """Publish the question's retained concern identities with its verdict."""

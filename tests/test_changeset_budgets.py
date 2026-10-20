@@ -22,6 +22,13 @@ from angee.serialization import canonical_json_sha256
 from tests.conftest import create_user
 
 
+@pytest.fixture(autouse=True)
+def history_bookkeeping_only(settings: Any) -> None:
+    """Measure the history owner; committed addon projections have their own live tests."""
+
+    settings.ANGEE_TIMELINE_KINDS = []
+
+
 def _changeset_model() -> Any:
     return apps.get_model(changeset_model_label())
 

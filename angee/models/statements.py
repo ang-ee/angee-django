@@ -183,9 +183,9 @@ def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
         readable_sources.update({
             (model, id_attr, str(getattr(row, id_attr))): row for row in visible
         })
-    for row, source in sources_by_row:
-        row._asserting_source_readable = source in readable_sources
-        row._readable_asserting_source = readable_sources.get(source) if source is not None else None
+    for row, source_key in sources_by_row:
+        row._asserting_source_readable = source_key in readable_sources
+        row._readable_asserting_source = readable_sources.get(source_key) if source_key is not None else None
 
 
 class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type: ignore[misc]
@@ -299,7 +299,7 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
         refs = validate_value(list[EvidenceReference], list(evidence), field="evidence")
         if kind == self.model.SourceKind.PERSON:
             readable_records(refs, (source,))
-        members = declaration.coerce_members(self.model, source, member_key, kind=kind)
+        members = declaration.coerce_members(self.model, source, member_key, kind=SourceKind(kind))
         defaults = {name: values.get(name) for name in declaration.fields}
         defaults.update(
             snak=snak,

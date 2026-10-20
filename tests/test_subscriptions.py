@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -367,7 +368,7 @@ def test_change_gate_omits_an_unreadable_related_parent(monkeypatch) -> None:
 
 
 def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
-    """``publish_change`` drops a row whose ``broadcasts_changes()`` returns False.
+    """``publish_change`` keeps opted-out rows off the subscription transport.
 
     The emission mirror of a read scope that hides rows: a model isolates some rows
     (record chatter) to a record-scoped surface, so their changes never reach the
@@ -383,9 +384,8 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
     monkeypatch.setattr(
         publishing.ChangePayload,
         "from_instance",
-        classmethod(lambda cls, instance, **kwargs: stub_payload),
+        classmethod(lambda cls, instance, **kwargs: replace(stub_payload, broadcasts=kwargs["broadcasts"])),
     )
-    publishing.connect_change_broadcast_receiver()
 
     class Row:
         """Minimal instance carrying only the broadcast opt-out decision."""

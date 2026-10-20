@@ -24,6 +24,8 @@ def test_revert_document_creation_removes_children_before_the_parent_and_keeps_h
     project_id, milestone_id = project.pk, milestone.pk
     creation = project.history.get(history_type="+").changeset
     assert milestone.history.get(history_type="+").changeset_id == creation.pk
+    events = apps.get_model("timeline", "Event").objects
+    assert events.for_record(project).exists() and events.for_record(milestone).exists()
 
     with actor_context(owner):
         reverted = creation.with_actor(owner).revert()
@@ -31,6 +33,7 @@ def test_revert_document_creation_removes_children_before_the_parent_and_keeps_h
     assert reverted.activity == "revert"
     assert not Milestone._base_manager.filter(pk=milestone_id).exists()
     assert not Project._base_manager.filter(pk=project_id).exists()
+    assert not events.for_record(project).exists() and not events.for_record(milestone).exists()
     assert Project.history.filter(id=project_id, history_type="+", changeset=creation).exists()
     assert Project.history.filter(id=project_id, history_type="-", changeset=reverted).exists()
     versions = Milestone.history.filter(id=milestone_id, project_id=project_id)

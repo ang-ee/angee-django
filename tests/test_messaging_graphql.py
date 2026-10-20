@@ -3359,8 +3359,11 @@ def test_channel_teardown_mutes_per_row_change_broadcasts(composed_tables: None)
     def _spy(sender: Any, payload: Any, **kwargs: Any) -> None:
         captured.append(payload)
 
-    connect_publishers(messaging_models.Message)
-    connect_publishers(messaging_models.Thread)
+    already_wired = {
+        model: disconnect_publishers(model) for model in (messaging_models.Message, messaging_models.Thread)
+    }
+    for model in already_wired:
+        connect_publishers(model)
     change_published.connect(_spy, dispatch_uid="test-channel-mute-spy", weak=False)
     try:
         # Positive control: an unmuted delete DOES broadcast, proving the wiring is live.
@@ -3374,8 +3377,10 @@ def test_channel_teardown_mutes_per_row_change_broadcasts(composed_tables: None)
         assert captured == []
     finally:
         change_published.disconnect(dispatch_uid="test-channel-mute-spy")
-        disconnect_publishers(messaging_models.Message)
-        disconnect_publishers(messaging_models.Thread)
+        for model, was_wired in already_wired.items():
+            disconnect_publishers(model)
+            if was_wired:
+                connect_publishers(model)
 
     assert not messaging_models.Message._base_manager.filter(pk=keep.pk).exists()
     assert not messaging_models.Thread._base_manager.filter(pk=thread.pk).exists()

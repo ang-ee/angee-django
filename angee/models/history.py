@@ -47,7 +47,6 @@ class ChangesetQuerySet(AngeeQuerySet[Any]):
         """Return changesets belonging to ``record``'s declared history document."""
 
         using = record._state.db
-        tables = record.history_tables()
         rows = [
             table.history.using(using)
             .filter(predicate, changeset_id__isnull=False)
@@ -56,16 +55,78 @@ class ChangesetQuerySet(AngeeQuerySet[Any]):
             for table, predicate in record.history_scopes().items()
         ]
         membership = Q(pk__in=models.Subquery(rows[0].union(*rows[1:]))) if rows else Q(pk__in=())
+        return self.filter(membership | self._merge_touching(record))
+
+    @staticmethod
+    def _merge_touching(record: HistoryMixin) -> Q:
         content_types = [
             ContentType.objects.db_manager(hints={"instance": record}).get_for_model(table)
-            for table in tables
+            for table in record.history_tables()
         ]
-        merge = Q(
+        return Q(
             activity="merge",
             origin_content_type__in=content_types,
             origin_object_id=str(record.pk),
         )
-        return self.filter(membership | merge)
+
+    def records_touched(self) -> Iterable[tuple[type[models.Model], Any]]:
+        """Yield only identities of existing records whose history documents we touch.
+
+        This is the inverse of ``touching``: the same history scopes cover MTI,
+        owned lines, pairs and their statements, plus an unchanged merge survivor.
+        SQL selects identities, never live/history bodies. The touched-model index
+        avoids probing documents whose tables cannot intersect these boundaries.
+        """
+
+        touched = {
+            label for labels in self.order_by().values_list("touched", flat=True) for label in labels
+        }
+        boundaries = self.order_by().values("pk")
+        merges: dict[int, set[int]] = {}
+        for content_type_id, pk in self.filter(activity="merge").values_list(
+            "origin_content_type_id", "origin_object_id",
+        ):
+            if content_type_id is not None and pk is not None:
+                merges.setdefault(content_type_id, set()).add(int(pk))
+        identities: dict[tuple[type[models.Model], str], set[Any]] = {}
+
+        def touched_ids(table: type[models.Model], column: str) -> set[Any]:
+            key = table, column
+            if key not in identities:
+                identities[key] = set(table.history.using(self.db).filter(
+                    changeset_id__in=boundaries,
+                ).order_by().values_list(column, flat=True))
+            return identities[key]
+
+        for model in sorted(apps.get_models(), key=lambda model: model._meta.label_lower):
+            if not issubclass(model, HistoryMixin) or model_history(model) is None:
+                continue
+            record = model()
+            ids: set[Any] = set()
+            for table, columns in record.history_identity_columns().items():
+                if table._meta.label_lower in touched:
+                    for column in columns:
+                        ids.update(touched_ids(table, column))
+                for statement in getattr(table, "statement_models", lambda: ())():
+                    if statement._meta.label_lower not in touched:
+                        continue
+                    subjects = touched_ids(statement, "subject_id")
+                    if table in record.history_tables():
+                        ids.update(subjects)
+                    elif subjects:
+                        # Deleted/moved owned rows still identify every document
+                        # their statements belong to through retained snapshots.
+                        history = table.history.using(self.db).filter(**{
+                            f"{table._meta.pk.attname}__in": subjects,
+                        })
+                        for column in columns:
+                            ids.update(history.order_by().values_list(column, flat=True))
+            if merges:
+                content_types = ContentType.objects.db_manager(self.db).get_for_models(*record.history_tables())
+                for content_type in content_types.values():
+                    ids.update(merges.get(content_type.pk, ()))
+            rows = model._base_manager.using(self.db).filter(pk__in=ids)
+            yield from ((model, pk) for pk in rows.order_by("pk").values_list("pk", flat=True))
 
 
 class _ChangesetHistory(models.Model):
@@ -605,10 +666,16 @@ class HistoryMixin(models.Model):
 
         return tuple(table for table in concrete_lineage(type(self)) if model_history(table) is not None)
 
-    def history_scope(self) -> dict[type[models.Model], Q]:
-        """Snapshot predicates for this record's concrete tables and owned lines."""
+    def history_identity_columns(self) -> dict[type[models.Model], tuple[str, ...]]:
+        """Columns in each retained history table identifying this document.
 
-        scopes = {table: Q(**{table._meta.pk.attname: self.pk}) for table in self.history_tables()}
+        Both the forward document scope and its changeset inverse compose this
+        declaration, including concrete ancestors, owned rows and pair endpoints.
+        """
+
+        columns: dict[type[models.Model], tuple[str, ...]] = {
+            table: (table._meta.pk.attname,) for table in self.history_tables()
+        }
         for name in self.history_relations:
             relation = self._meta.get_field(name)
             if not relation.one_to_many or relation.field.remote_field.parent_link:
@@ -616,15 +683,24 @@ class HistoryMixin(models.Model):
             child = relation.related_model
             if model_history(child) is None:
                 raise ImproperlyConfigured(f"{child._meta.label}: an owned history relation must keep history.")
-            predicate = Q(**{relation.field.attname: self.pk})
-            scopes[child] = scopes[child] | predicate if child in scopes else predicate
+            columns[child] = (*columns.get(child, ()), relation.field.attname)
         for owner in self.history_tables():
             pair_models = getattr(owner, "pair_models", None)
             if pair_models is None:
                 continue
             for pair in pair_models():
-                predicate = Q(left_id=self.pk) | Q(right_id=self.pk)
-                scopes[pair] = scopes[pair] | predicate if pair in scopes else predicate
+                columns[pair] = (*columns.get(pair, ()), "left_id", "right_id")
+        return columns
+
+    def history_scope(self) -> dict[type[models.Model], Q]:
+        """Snapshot predicates for this record's concrete tables and owned lines."""
+
+        scopes = {}
+        for table, columns in self.history_identity_columns().items():
+            scope = Q()
+            for column in columns:
+                scope |= Q(**{column: self.pk})
+            scopes[table] = scope
         return scopes
 
     def history_scopes(self) -> dict[type[models.Model], Q]:

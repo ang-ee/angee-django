@@ -18,7 +18,7 @@ from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.core.checks.registry import registry
-from django.db import connection, models
+from django.db import connection, models, transaction
 from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext, isolate_apps
 from django.utils import timezone
@@ -128,8 +128,9 @@ def test_connect_publishers_is_idempotent() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_parent_save_publishes_existing_child_view(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Canonical writes reach the child channel without broadcasting nonexistent siblings."""
+@pytest.mark.parametrize("include_parents", [True, False])
+def test_publisher_parent_views_are_explicit(monkeypatch: pytest.MonkeyPatch, include_parents: bool) -> None:
+    """Child views mirror parent writes; native observers publish only the saved class."""
     with isolate_apps():
         class Parent(models.Model):
             name = models.CharField(max_length=50)
@@ -144,16 +145,20 @@ def test_parent_save_publishes_existing_child_view(monkeypatch: pytest.MonkeyPat
         sent = []
         monkeypatch.setattr(publishing, "_send_change", lambda model, payload: sent.append((model, payload)))
         with model_tables((Parent, Child)):
-            publishing.connect_publishers(Child, readable_fields=("name",))
+            publishing.connect_publishers(Child, readable_fields=("name",), include_parents=include_parents)
             try:
                 child = Child.objects.create(name="Before")
+                assert len(sent) == 1 and sent[0][0] is Child
                 sent.clear()
                 parent = Parent.objects.get(pk=child.pk)
                 parent.name = "After"
                 parent.save(update_fields=("name",))
-                assert len(sent) == 1
-                assert sent[0][0] is Child
-                assert sent[0][1].changed_values == {"name": "After"}
+                if include_parents:
+                    assert len(sent) == 1
+                    assert sent[0][0] is Child
+                    assert sent[0][1].changed_values == {"name": "After"}
+                else:
+                    assert sent == []
                 sent.clear()
                 Parent.objects.create(name="No child")
                 assert sent == []
@@ -182,7 +187,6 @@ def test_publish_uses_public_id_and_changed_values(
         "on_commit",
         lambda callback, **kwargs: callback(),
     )
-    publishing.connect_change_broadcast_receiver()
     group = Group(id=7, name="editors")
 
     publishing.publish_change(
@@ -271,9 +275,9 @@ def test_partial_update_payload_is_captured_before_commit(
     """The commit callback retains values captured when the signal ran."""
 
     callbacks: list[Any] = []
-    sent: list[ChangePayload] = []
+    sent: list[dict[str, Any]] = []
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callbacks.append(callback))
-    monkeypatch.setattr(publishing, "_send_change", lambda model, payload, **kwargs: sent.append(payload))
+    monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append(payload))
     group = Group(id=9, name="before")
 
     publishing.publish_change(
@@ -283,9 +287,25 @@ def test_partial_update_payload_is_captured_before_commit(
         readable_fields=lambda: ("name",),
     )
     group.name = "after"
+    assert sent == []
     callbacks[0]()
 
-    assert sent[0].changed_values == {"name": "before"}
+    assert sent[0]["changed_values"] == {"name": "before"}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_commit_broadcast_failure_is_logged_without_escaping(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Django's robust callback can name and log a failed transport after commit."""
+
+    def fail(model: Any, payload: Any) -> None:
+        raise RuntimeError("Transport unavailable")
+
+    monkeypatch.setattr(publishing, "_broadcast", fail)
+    with transaction.atomic():
+        publishing.publish_change(Group(id=9, name="committed"), action="update", update_fields=None)
+    assert "Transport unavailable" in caplog.text
 
 
 def test_change_signal_receiver_sees_broadcast_payload(
@@ -303,7 +323,6 @@ def test_change_signal_receiver_sees_broadcast_payload(
 
     monkeypatch.setattr(publishing, "_broadcast", lambda model, event: broadcasts.append((model, event)))
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
-    publishing.connect_change_broadcast_receiver()
     publishing.change_published.connect(
         receiver,
         dispatch_uid="tests.change_signal_receiver_sees_broadcast_payload",
@@ -322,10 +341,10 @@ def test_change_signal_receiver_sees_broadcast_payload(
     assert broadcasts == [(Group, payloads[0].as_message())]
 
 
-def test_publish_change_suppresses_non_broadcasting_rows(
+def test_publish_change_keeps_silent_rows_local(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Rows that opt out of generic broadcasts reach no signal receiver."""
+    """Local projections see silent rows; the broadcast policy still gates transport."""
 
     class SilentRow(models.Model):
         """Concrete row that opts out of generic change publication."""
@@ -339,12 +358,14 @@ def test_publish_change_suppresses_non_broadcasting_rows(
             return False
 
     payloads: list[ChangePayload] = []
+    broadcasts: list[dict[str, Any]] = []
 
     def receiver(sender: type[models.Model], payload: ChangePayload, **kwargs: object) -> None:
         del sender, kwargs
         payloads.append(payload)
 
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
+    monkeypatch.setattr(publishing, "_broadcast", lambda model, event: broadcasts.append(event))
     publishing.change_published.connect(
         receiver,
         dispatch_uid="tests.publish_change_suppresses_non_broadcasting_rows",
@@ -357,7 +378,10 @@ def test_publish_change_suppresses_non_broadcasting_rows(
             dispatch_uid="tests.publish_change_suppresses_non_broadcasting_rows",
         )
 
-    assert payloads == []
+    assert len(payloads) == 1
+    assert payloads[0].instance == row
+    assert not payloads[0].broadcasts
+    assert broadcasts == []
 
 
 def test_publish_change_marks_sync_ingestion_and_still_broadcasts(
@@ -374,7 +398,6 @@ def test_publish_change_marks_sync_ingestion_and_still_broadcasts(
 
     monkeypatch.setattr(publishing, "_broadcast", lambda model, event: broadcasts.append(event))
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
-    publishing.connect_change_broadcast_receiver()
     publishing.change_published.connect(
         receiver,
         dispatch_uid="tests.publish_change_suppresses_sync_ingestion",

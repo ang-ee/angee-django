@@ -43,10 +43,11 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
             return cast(Self, self.none())
         return cast(Self, self.filter(path__startswith=node.path))
 
-    def ancestors_of(self, node: HierarchyMixin) -> Self:
-        """Return every proper ancestor of ``node`` (EXCLUSIVE of ``node``)."""
+    def ancestors_of(self, node: HierarchyMixin | Iterable[HierarchyMixin]) -> Self:
+        """Return proper ancestors of one node or a batch, in one query."""
 
-        return cast(Self, self.filter(path__in=node.ancestor_paths()))
+        nodes = (node,) if isinstance(node, HierarchyMixin) else node
+        return cast(Self, self.filter(path__in={path for item in nodes for path in item.ancestor_paths()}))
 
     def update(self, **kwargs: Any) -> int:
         """Keep parent moves and derived paths on the saved-row owner."""
@@ -108,14 +109,15 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
         with transaction.atomic(using=using), write_group():
             # Below the hierarchy guard and the history capture: the creation version
             # below records each row with its parent and path.
-            super(_AngeeQuerySetMixin, self).bulk_create(rows)
+            super(_AngeeQuerySetMixin, cast(_AngeeQuerySetMixin, self)).bulk_create(rows)
             for row in order:
                 parent = parents[id(row)]
                 row.parent = parent
                 row.path = row._hierarchy_path(parent)
             for chunk in batched(rows, 500):
                 # The caller's queryset carries its authority (a sudo) to this write.
-                super(_AngeeQuerySetMixin, self.filter(pk__in=[row.pk for row in chunk])).update(
+                batch = cast(_AngeeQuerySetMixin, self.filter(pk__in=[row.pk for row in chunk]))
+                super(_AngeeQuerySetMixin, batch).update(
                     parent_id=models.Case(
                         *(models.When(pk=row.pk, then=models.Value(row.parent_id)) for row in chunk),
                         output_field=field.target_field,
@@ -361,7 +363,7 @@ class HierarchyMixin(models.Model):
                 if history is not None:
                     # Below the hierarchy guard and the history capture: the
                     # creation version records the path with the row.
-                    super(_AngeeQuerySetMixin, rows).update(path=new_path)
+                    super(_AngeeQuerySetMixin, cast(_AngeeQuerySetMixin, rows)).update(path=new_path)
                 else:
                     self._write_hierarchy_path(rows, new_path)
                 self.path = new_path

@@ -8,7 +8,15 @@ from typing import Any
 from django.apps import apps
 from django.db import connections, router
 from django.db.models import Model
-from django.db.models.signals import ModelSignal, class_prepared
+from django.db.models.signals import class_prepared
+from django.dispatch import Signal
+
+bulk_updated = Signal()
+"""An owning bulk verb changed a batch of rows (instances, update_fields, using).
+
+Observers receive persisted rows without pretending they were individually saved:
+the queryset already owns history and authorization for the write.
+"""
 
 
 def migrated_model(*, app_config: object, using: str, app_label: str, model_name: str) -> type[Model] | None:
@@ -40,11 +48,12 @@ def has_table(using: str, model: type[Model]) -> bool:
 
 
 def connect_for_models(
-    signal: ModelSignal,
+    signal: Signal,
     receiver: Callable[..., Any],
     *,
     applies: Callable[[type[Model]], bool],
     dispatch_uid: str,
+    prepare: Callable[[type[Model]], None] | None = None,
 ) -> None:
     """Connect ``receiver`` to each concrete model ``applies`` admits, now and as models prepare.
 
@@ -58,6 +67,8 @@ def connect_for_models(
     def bind(model: type[Model]) -> None:
         if model._meta.abstract or model._meta.apps is not apps or not applies(model):
             return
+        if prepare is not None:
+            prepare(model)
         signal.connect(receiver, sender=model, dispatch_uid=f"{dispatch_uid}.{model._meta.label_lower}")
 
     for model in apps.get_models():

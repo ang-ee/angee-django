@@ -1034,6 +1034,28 @@ and current contracts before applying a historical example to a new deployment.
 - **Derived columns have two drift classes and two owners.** Signals own instance
   saves/deletes, cascades, and queryset deletes; idempotent repair passes own
   `bulk_create` and queryset `update` paths, where signals do not run.
+- **Committed projections subscribe to the owner's change seam.**
+  [`publish_change` / `change_published`](../../addons/angee/graphql/publishing.py)
+  delivers local observations inside the transaction; receivers defer effects
+  with `transaction.on_commit`. A verb that completes a bulk or conditional
+  queryset write publishes once after its related rows are ready. Transport
+  suppression does not suppress local observers. The
+  [timeline reconciler](../../addons/angee/timeline/events.py) coalesces targets
+  and reloads committed state in independent transactions, so projection failure
+  cannot roll back the owner. The publisher queues transport after these local
+  callbacks; background projections invalidate records when they finish. Local observation
+  never enables a transport feed; completed projections also invalidate their
+  related records through those records' declared feeds. Backfill uses that
+  same locked projection contract. Kinds declare the source fields they read so an
+  unrelated partial save never walks dependent targets; inherited sources are
+  observed through their concrete descendants too. Core bulk-trash verbs emit
+  bounded `bulk_updated` batches, which the change publisher adapts without
+  replaying save signals or duplicating history. A model's `change_batch_targets`
+  can coalesce publications (steps publish newly retained decisions; run
+  advancement publishes the completed run state). Local bulk observers retain
+  the original batch and coalesce projection targets independently.
+  Large projection fan-outs use bounded Celery tasks; the timeline addon declares
+  its dependency on `angee.jobs` and submits through `enqueue_task`.
 - **`MembershipDecisionMixin` owns plain roster decisions, not provenance.**
   A subclass that needs REBAC side effects overrides the transition; never add
   REBAC writes to the shared mixin.
@@ -1789,7 +1811,8 @@ bridge advisory lock as polling and delivery settlement.
   as an error hold for retry. Non-workflow askers apply synchronously inside the
   verdict transaction; refused application rolls the answer back.
 - **Conditional queryset updates send no model signals.** Workflow owners
-  explicitly call `publish_change` after their writes. Dispatch locks ready
+  publish completed run writes through `publish_change` and step transitions
+  through bounded `bulk_updated` batches. Dispatch locks ready
   rows with `skip_locked` and uses `enqueue_task` to send after commit; callers
   do not infer publication or task delivery from `post_save`.
 
@@ -1863,7 +1886,10 @@ chooses a transport or moves channel occurrences.
 reverse-FK collections, such as dashboard widgets or project milestones. These
 rows keep their own history and read gates; document history groups their deltas
 with record identity. `history_tables()` is the one concrete-table inventory.
-`HistoryMixin.admits_revert(changeset)` is the one document-membership admission;
+`ChangesetQuerySet.touching(record)` and its inverse `records_touched()` own
+document membership, including MTI, pairs and generated statements. Projections
+consume these scopes instead of rediscovering documents from history rows.
+`HistoryMixin.admitted_reverts(changesets)` owns complete-boundary admission;
 `Changeset.revertable(record, actor=...)` then checks the record's declared
 `history_revert_permission`. An entry may revert from that record only when its
 complete write boundary belongs to the document, or it is the record's
@@ -1877,8 +1903,9 @@ an independent capability.
 
 The [Changeset](../../addons/angee/provenance/models.py) owns atomic pre-boundary
 revert and deterministic lossless export. Closing a boundary writes one bookkeeping
-row; `document()` computes and records the hash through the one hash owner, so a
-request never re-reads its history. Revert uses native history ordering and
+row; `document()` computes and records the hash through the one hash owner.
+Closure publishes a change; committed projections read history independently
+through its scopes. Revert uses native history ordering and
 diffs, refuses later touches, retains withdrawn/superseded statements, and reuses
 trash for created subjects. Without trash, retained references block removal.
 Restoring database state does not undo HTTP effects; record sync detects the

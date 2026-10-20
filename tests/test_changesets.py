@@ -21,7 +21,7 @@ from graphql import GraphQLError
 from rebac import actor_context, system_context, to_subject_ref
 from strawberry.types import ExecutionResult
 
-from angee.changesets import ChangesetRequired, changeset, changeset_model_label, current_changeset
+from angee.changesets import ChangesetRequired, changeset, changeset_model_label, current_changeset, require_changeset
 from angee.compose import manage
 from angee.graphql.views import AngeeGraphQLView
 from angee.middleware import ChangesetMiddleware, ChangesetScopeMiddleware
@@ -44,6 +44,16 @@ def changesets() -> list[Any]:
 
 def changeset_of(row: Any) -> Any:
     return row.history.get(history_type="+").changeset
+
+
+def test_require_changeset_refuses_missing_storage_and_returns_the_open_owner(settings) -> None:
+    with pytest.raises(ChangesetRequired):
+        require_changeset()
+    with changeset(), system_context(reason="required changeset"):
+        assert require_changeset() is current_changeset()
+    settings.ANGEE_CHANGESET_MODEL = ""
+    with changeset(), pytest.raises(ChangesetRequired):
+        require_changeset()
 
 
 @pytest.mark.parametrize("command", sorted(manage.SERVER_COMMANDS))

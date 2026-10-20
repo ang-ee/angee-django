@@ -46,7 +46,7 @@ from angee.agents.testing.drivers import update_chunk as _chunk
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceModel
 from angee.agents_runtime_pydantic import runner as pydantic_runner
 from angee.errors import RecordAccessSubjectRefused
-from angee.graphql.publishing import connect_change_broadcast_receiver, connect_publishers, disconnect_publishers
+from angee.graphql.publishing import connect_publishers, disconnect_publishers
 from tests.conftest import create_platform_admin
 from tests.test_agents import _provider
 
@@ -59,7 +59,6 @@ def chat(composed_tables: None, capture_tasks: list[Any], monkeypatch: pytest.Mo
     monkeypatch.setattr(settings, "ALLOWED_HOSTS", ["*"])
     monkeypatch.setattr(settings, "DEBUG", False)
     monkeypatch.setattr(settings, "CSRF_TRUSTED_ORIGINS", [])
-    connect_change_broadcast_receiver()
     connect_publishers(AgentTurn)
     try:
         with actor_context(owner):

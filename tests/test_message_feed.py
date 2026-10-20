@@ -1,4 +1,4 @@
-"""Native Django/REBAC contracts for stable messaging and Nexus feed cursors."""
+"""Native message-feed cursors and Nexus record-ledger scopes."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 from rebac.backends import backend
@@ -22,16 +22,18 @@ from angee.messaging.testing.models import (
     Fragment,
     Handle,
     Message,
-    MessageEdge,
     Part,
     Participant,
     Party,
     Reaction,
     Thread,
 )
+from angee.nexus.timeline import CorrespondenceKind
+from angee.timeline.events import sync_events
 from tests.conftest import Backend, Drive, File, MimeType, execute_schema, result_data
 from tests.test_messaging import ThreadedTicket
 from tests.test_nexus import _grant, _schema
+from tests.test_timeline import read_timeline
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
 
@@ -268,59 +270,61 @@ def _party_scope(owner: Any, rows: list[Any]) -> tuple[Any, Any, Any]:
                 created_by=owner,
             )
         circle = Circle._base_manager.create(name="Feed circle", created_by=owner)
-        member = CircleMember._base_manager.create(circle=circle, party=party, created_by=owner)
+        member = CircleMember._base_manager.create(circle=circle, party=party, created_by=owner, is_confirmed=True)
     return party, circle, member
 
 
-def test_party_and_circle_feeds_share_order_but_keep_cursor_scopes_separate() -> None:
-    """Both timeline owners expose the same page contract and canonical order."""
+def _correspondence_page(owner: Any, record: Any, **variables: Any) -> dict[str, Any]:
+    """Backfill in this rollback-only fixture, then exercise the real ledger read."""
+    kind = CorrespondenceKind()
+    with system_context(reason="test nexus ledger backfill"):
+        for row in Message._base_manager.all():
+            sync_events(row, kinds=(kind,))
+    return read_timeline(record, owner, kinds=[kind.id], **variables)["timeline"]
 
+
+@override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"])
+def test_nexus_party_and_circle_use_record_ledger_pages() -> None:
     owner = User.objects.create_user(username="feed-nexus")
     thread, rows = _messages(owner)
     party, circle, _ = _party_scope(owner, rows)
-    party_page = _page("party", owner, party)
-    circle_page = _page("circle", owner, circle)
-    thread_page = _page("thread", owner, thread)
-    assert _ids(party_page) == _ids(circle_page) == _ids(thread_page)
-    assert len({party_page["older_cursor"], circle_page["older_cursor"], thread_page["older_cursor"]}) == 3
-    assert _query("circle", owner, circle, before=party_page["older_cursor"]).errors
-    older = _page("party", owner, party, before=party_page["older_cursor"])
-    assert _ids(older) == [str(rows[2].sqid), str(rows[1].sqid)]
+    party_page = _correspondence_page(owner, party, limit=2)
+    circle_page = _correspondence_page(owner, circle, limit=2)
+    expected = _ids(_page("thread", owner, thread))
+    assert [row["target_id"] for row in party_page["entries"]] == expected
+    assert [row["target_id"] for row in circle_page["entries"]] == expected
+    assert party_page["entries"][0]["key"] != circle_page["entries"][0]["key"]
+    older = _correspondence_page(owner, party, limit=2, before=party_page["next_before"])
+    assert [row["target_id"] for row in older["entries"]] == [str(rows[2].sqid), str(rows[1].sqid)]
 
 
-def test_circle_membership_is_rechecked_for_every_page() -> None:
-    """A root-bound cursor does not retain parties that have left its circle."""
-
+@override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"])
+def test_nexus_circle_membership_is_rechecked_for_every_ledger_page() -> None:
     owner = User.objects.create_user(username="feed-circle-membership")
     _, rows = _messages(owner)
     party, circle, member = _party_scope(owner, rows)
-    first = _page("circle", owner, circle)
+    first = _correspondence_page(owner, circle, limit=2)
     with system_context(reason="test remove circle membership"):
         member.delete()
-    second = _page("circle", owner, circle, before=first["older_cursor"])
-    assert second["messages"] == []
-    assert second["count"] == 0
-    assert _page("party", owner, party)["count"] == 5
+    second = _correspondence_page(owner, circle, before=first["next_before"])
+    assert second["entries"] == []
+    assert second["kinds"][0]["count"] == 0
+    assert _correspondence_page(owner, party)["kinds"][0]["count"] == 5
 
 
-def test_party_participant_and_handle_visibility_are_not_bypassed() -> None:
-    """A readable message reaches a party feed only through visible scope edges."""
-
+@override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"])
+def test_nexus_ledger_preserves_message_visibility_and_current_party_links() -> None:
     owner = User.objects.create_user(username="feed-party-edges")
     other = User.objects.create_user(username="feed-party-edges-other")
     thread, rows = _messages(owner)
     _, private_rows = _messages(other, size=1)
     party, _, _ = _party_scope(owner, [*rows, *private_rows])
-    with system_context(reason="test participant attribution retains parent access"):
-        Participant._base_manager.filter(message=rows[-1]).update(created_by=other)
-        hidden_edge = MessageEdge._base_manager.create(src=rows[-1], dst=private_rows[0], created_by=owner)
-    assert _ids(_page("party", owner, party)) == [str(rows[4].sqid), str(rows[3].sqid)]
-    assert _page("party", owner, party)["count"] == 5
-    assert not Participant.objects.with_actor(owner).scoped().filter(message=private_rows[0]).exists()
-    assert not MessageEdge.objects.with_actor(owner).scoped().filter(pk=hidden_edge.pk).exists()
-    with system_context(reason="test hidden party feed handle"):
-        Handle._base_manager.filter(party=party).update(created_by=other)
-    assert not _page("party", owner, party)["messages"]
+    page = _correspondence_page(owner, party)
+    assert [row["target_id"] for row in page["entries"]] == [str(row.sqid) for row in reversed(rows)]
+    assert page["kinds"][0]["count"] == 5
+    with system_context(reason="test remove party association"):
+        Handle._base_manager.filter(party=party).update(party=None)
+    assert not _correspondence_page(owner, party)["entries"]
     assert _page("thread", owner, thread)["count"] == 5
 
 
@@ -408,13 +412,12 @@ def test_fixed_head_window_enumerates_all_arrivals_and_rejects_foreign_lower_cut
     assert _query("thread", owner, thread, after=cut, through=cut).errors
 
 
-@pytest.mark.parametrize("kind", ["thread", "party", "circle"])
-def test_revalidation_partitions_current_scope_search_and_moved_rows(kind: str) -> None:
+def test_revalidation_partitions_current_scope_search_and_moved_rows() -> None:
+    kind = "thread"
     owner = User.objects.create_user(username=f"feed-revalidate-{kind}")
     other = User.objects.create_user(username=f"feed-revalidate-other-{kind}")
     thread, rows = _messages(owner)
-    party, circle, _ = _party_scope(owner, rows)
-    root = {"thread": thread, "party": party, "circle": circle}[kind]
+    root = thread
     ids = [str(row.sqid) for row in rows]
     with system_context(reason="test retained row changes"):
         private = Thread._base_manager.create(created_by=other, platform="email")
@@ -434,30 +437,25 @@ def test_revalidation_partitions_current_scope_search_and_moved_rows(kind: str) 
     assert _revalidate(kind, owner, root, ids).errors
 
 
-def test_revalidation_rechecks_circle_membership_and_visible_participant_edges() -> None:
-    owner = User.objects.create_user(username="feed-revalidate-edges")
-    other = User.objects.create_user(username="feed-revalidate-edges-other")
-    thread, rows = _messages(owner)
-    _, private_rows = _messages(other, size=1)
-    party, circle, member = _party_scope(owner, [*rows, *private_rows])
-    ids = [str(row.sqid) for row in rows]
-    with system_context(reason="test retained participant attribution"):
-        Participant._base_manager.filter(message=rows[-1]).update(created_by=other)
-    result = result_data(_revalidate("party", owner, party, ids))["result"]
-    assert result["absent_ids"] == []
-    assert _ids(result) == list(reversed(ids))
-    private_id = str(private_rows[0].sqid)
-    result = result_data(_revalidate("party", owner, party, [*ids, private_id]))["result"]
-    assert result["absent_ids"] == [private_id]
-    assert _ids(result) == list(reversed(ids))
-    assert not Participant.objects.with_actor(owner).scoped().filter(message=private_rows[0]).exists()
-    with system_context(reason="test retained handle visibility"):
-        Handle._base_manager.filter(party=party).update(created_by=other)
-    assert result_data(_revalidate("party", owner, party, ids))["result"]["absent_ids"] == ids
-    with system_context(reason="test retained membership loss"):
+@override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"])
+@pytest.mark.parametrize("kind", ["party", "circle"])
+def test_nexus_ledger_rechecks_current_message_scope(kind: str) -> None:
+    owner = User.objects.create_user(username=f"ledger-current-{kind}")
+    other = User.objects.create_user(username=f"ledger-private-{kind}")
+    _, rows = _messages(owner)
+    party, circle, member = _party_scope(owner, rows)
+    root = party if kind == "party" else circle
+    assert _correspondence_page(owner, root)["kinds"][0]["count"] == 5
+    with system_context(reason="test ledger retained row changes"):
+        private = Thread._base_manager.create(created_by=other, platform="email")
+        rows[0].delete()
+        Message._base_manager.filter(pk=rows[1].pk).update(thread=private, created_by=other)
+    page = _correspondence_page(owner, root)
+    assert [row["target_id"] for row in page["entries"]] == [str(row.sqid) for row in rows[:1:-1]]
+    with system_context(reason="test ledger membership loss"):
         member.delete()
-    assert result_data(_revalidate("circle", owner, circle, ids))["result"]["absent_ids"] == ids
-    assert len(result_data(_revalidate("thread", owner, thread, ids))["result"]["messages"]) == 5
+    assert not _correspondence_page(owner, circle)["entries"]
+    assert _correspondence_page(owner, party)["kinds"][0]["count"] == 3
 
 
 def test_revalidation_enforces_submitted_limit_and_empty_partition() -> None:

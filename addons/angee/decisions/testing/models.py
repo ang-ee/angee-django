@@ -1,9 +1,10 @@
 """Concrete decision resources for isolated tests."""
 
 from angee.decisions import models as sources
+from angee.workflows.models import WorkflowDecision
 
 
-class Decision(sources.Decision):
+class Decision(WorkflowDecision, sources.Decision):
     class Meta(sources.Decision.Meta):
         abstract = False
         app_label = "decisions"

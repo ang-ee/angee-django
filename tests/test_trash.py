@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError
 from rebac import actor_context
 
 from angee.models import TRASH_REASON_MAX_LENGTH
+from angee.signals import bulk_updated
 from tests.conftest import create_user
 from tests.core_persistence import TrashRow
 
@@ -83,3 +84,29 @@ def test_bulk_trash_stamps_rows_trashed_together():
     TrashRow.objects.filter(pk=second.pk).trash(at=first.trashed_at)
     second.refresh_from_db()
     assert second.trashed_at == first.trashed_at
+
+
+def test_bulk_trash_and_restore_publish_only_changed_rows_in_bounded_batches(monkeypatch):
+    rows = [TrashRow.objects.create(title=str(index)) for index in range(5)]
+    rows[0].trash()
+    batches = []
+
+    def observed(sender, *, instances, update_fields, using, **kwargs):
+        assert sender is TrashRow and using == "default"
+        assert "is_trashed" in update_fields
+        batches.append([(row.pk, row.is_trashed) for row in instances])
+
+    monkeypatch.setattr("angee.models.query.query_batch_size", lambda *args, **kwargs: 2)
+    bulk_updated.connect(observed, sender=TrashRow)
+    try:
+        assert TrashRow.objects.all().trash() == 4
+        assert [len(batch) for batch in batches] == [2, 2]
+        assert {pk for batch in batches for pk, trashed in batch if trashed} == {row.pk for row in rows[1:]}
+        batches.clear()
+        assert TrashRow.objects.all().trash() == 0
+        assert batches == []
+        assert TrashRow.objects.all().restore() == 5
+        assert [len(batch) for batch in batches] == [2, 2, 1]
+        assert {pk for batch in batches for pk, trashed in batch if not trashed} == {row.pk for row in rows}
+    finally:
+        bulk_updated.disconnect(observed, sender=TrashRow)

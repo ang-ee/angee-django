@@ -258,11 +258,14 @@ def test_relation_without_actor_scoping_is_a_contract_value_error():
 def test_admission_publishes_once_with_its_concern_records(records, monkeypatch):
     events = []
     monkeypatch.setattr("angee.graphql.publishing._send_change", lambda model, payload: events.append(payload))
+    already_wired = disconnect_publishers(Decision)
     connect_publishers(Decision)
     try:
         decision = admit(records, records[3][:2])
     finally:
         disconnect_publishers(Decision)
+        if already_wired:
+            connect_publishers(Decision)
     assert len(events) == 1
     assert events[0].id == decision.sqid
     assert {(ref.model, ref.id) for ref in events[0].related_records} == {

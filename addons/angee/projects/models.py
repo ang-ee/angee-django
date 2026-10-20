@@ -26,7 +26,7 @@ from rebac.backends import backend
 from rebac.field_backing import canonical_model
 
 from angee.actors import actor_user_id
-from angee.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
+from angee.changesets import ChangesetLike, changeset, changeset_model, creation_fingerprint, current_changeset
 from angee.errors import RecordAccessSubjectRefused
 from angee.fields import FractionalRankField, StateField
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
@@ -148,7 +148,7 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
                 locked.require_revision(expected_revision)
             result = project if project is not None else self.from_task(locked)
             result.apply_setup(**configuration)
-            current_changeset(required=True).record_created(result)
+            cast(ChangesetLike, current_changeset(required=True)).record_created(result)
             if actor is not None:
                 result.with_actor(actor)
             return result
@@ -226,6 +226,14 @@ class TaskQuerySet(
     OwnerQuerySet[Any], AngeeQuerySet[Any],
 ):
     """Task rows with hierarchy, merge, trash, and ownership contracts."""
+
+    def waiting_on(self, actor: Any) -> Any:
+        """Open, untrashed tasks assigned to this actor, within the caller's scope."""
+
+        identity = actor_user_id(to_subject_ref(actor)) if actor is not None else None
+        return self.none() if identity is None else self.untrashed().filter(
+            status=self.model.TaskStatus.OPEN, assignee_id=identity,
+        )
 
     def for_record(self, record: Any, *, include_done: bool = True) -> Any:
         """Return ``record``'s tasks this queryset reads: open first, then by due date and title.

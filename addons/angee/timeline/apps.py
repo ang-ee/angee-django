@@ -1,13 +1,6 @@
-"""Django identity for the record timeline: the ledger follows its kinds' models."""
-
-from __future__ import annotations
-
-from typing import Any
+"""Register kind source models with the shared model-change seam."""
 
 from django.apps import AppConfig
-from django.db.models.signals import m2m_changed, post_save
-
-M2M_ACTIONS = ("post_add", "post_remove", "post_clear")
 
 
 class TimelineConfig(AppConfig):
@@ -15,19 +8,18 @@ class TimelineConfig(AppConfig):
     name = "angee.timeline"
 
     def ready(self) -> None:
-        # Kinds name their models by label, and composed test projects register
-        # those models after app population: match senders at dispatch, not here.
-        from angee.timeline.events import kinds_for, sync_events
+        from angee.graphql.publishing import change_published, connect_observers
+        from angee.signals import bulk_updated, connect_for_models
+        from angee.timeline.events import kinds_for, queue_change, queue_updates
 
-        def resync(sender: Any, instance: Any, **kwargs: Any) -> None:
-            if kwargs.get("raw") or kwargs.get("reverse"):
-                return
-            action = kwargs.get("action")
-            if action is not None and action not in M2M_ACTIONS:
-                return
-            kinds = kinds_for(type(instance))
-            if kinds:
-                sync_events(instance, kinds=kinds)
-
-        post_save.connect(resync, weak=False, dispatch_uid="timeline.sync")
-        m2m_changed.connect(resync, weak=False, dispatch_uid="timeline.sync.m2m")
+        connect_for_models(
+            change_published, queue_change, applies=lambda model: bool(kinds_for(model)),
+            prepare=lambda model: connect_observers(model)
+            if any(not kind.explicit_publication for kind in kinds_for(model)) else None,
+            dispatch_uid="timeline.sync",
+        )
+        connect_for_models(
+            bulk_updated, queue_updates,
+            applies=lambda model: bool(kinds_for(model)) and callable(getattr(model, "change_batch_targets", None)),
+            dispatch_uid="timeline.batch",
+        )
