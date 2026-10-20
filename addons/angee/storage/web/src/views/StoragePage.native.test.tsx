@@ -103,7 +103,7 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
     forms.get("file-a")!.resolve({ data: records[0]! });
   });
   await screen.findByDisplayValue("Alpha");
-  const header = screen.getAllByRole("heading", { level: 2, name: "Alpha" })[0]!;
+  const header = screen.getAllByRole("heading", { level: 1, name: "Alpha" })[0]!;
   const frame = header.closest("header")?.parentElement ?? header.parentElement!.parentElement!;
   const tree = screen.getByRole("tree");
   const pager = screen.getByRole("navigation", { name: "Record navigation" });
@@ -118,7 +118,7 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   expect(screen.queryByDisplayValue("Alpha")).toBeNull();
   expect(screen.getByRole("tree")).toBe(tree);
   expect(screen.getByRole("navigation", { name: "Record navigation" })).toBe(pager);
-  expect(screen.getByRole("heading", { level: 2, name: "Loading file" })).toBe(header);
+  expect(screen.getByRole("heading", { level: 1, name: "Loading file" })).toBe(header);
   expect(frame.isConnected).toBe(true);
   expect(screen.getByRole("button", { name: "Trash" })).toBe(trash);
   expect(trash.disabled).toBe(true);

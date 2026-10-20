@@ -436,7 +436,7 @@ describe("StoragePage explorer wiring", () => {
       "file-a",
     );
     expect(screen.getByTestId("preview-pane").textContent).toBe("alpha.txt");
-    expect(screen.getByText("XML · 128 B")).toBeTruthy();
+    expect(screen.getByText(/^XML · 128 B · uploaded /)).toBeTruthy();
   });
 
   test("uses the open file drive for a direct link", () => {

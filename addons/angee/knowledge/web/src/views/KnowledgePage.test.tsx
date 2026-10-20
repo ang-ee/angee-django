@@ -75,18 +75,20 @@ vi.mock("@angee/ui", async (importOriginal) => {
     ), LoadingPanel: ({ message }: { message: string }) => (
       <section data-testid="loading">{message}</section>
     ), TreeView: ({
-      rows, rowKey, label, selectedId, onSelect, }: {
+      rows, rowKey, label, selectedId, onSelect, insertion, }: {
       rows: readonly Record<string, string>[];
       rowKey: string;
       label: string;
       selectedId?: string;
       onSelect?: (row: Record<string, string>) => void;
+      insertion?: { parentId: string | null; node: React.ReactNode } | null;
     }) => (
       <div
         data-testid="tree"
         data-row-ids={rows.map((row) => row[rowKey]).join(", ")}
         data-selected={selectedId ?? ""}
       >
+        {insertion?.node}
         {rows.map((row) => (
           <button
             key={row[rowKey]}
@@ -106,10 +108,18 @@ vi.mock("@angee/ui", async (importOriginal) => {
 vi.mock("../data/use-page-actions", () => ({
   usePageActions: () => pageActionMocks, }));
 
-vi.mock("./PageEditor", () => ({
-  PageEditor: ({ detail }: { detail: { id: string } }) => (
-    <section data-testid="page-editor" data-page-id={detail.id} />
-  ), }));
+vi.mock("../data/use-page-editor", () => ({
+  usePageEditor: (_id: string, initial: { title: string; body: string }) => ({
+    title: initial.title, body: initial.body, status: "idle",
+    setTitle: () => undefined, commitTitle: () => undefined, setBody: () => undefined,
+  }),
+}));
+
+vi.mock("./PageBody", () => ({
+  PageBody: () => <section data-testid="page-body" />,
+  PageBodyEditor: () => <section data-testid="page-editor" />,
+  SaveBadge: () => null,
+}));
 
 // The explorer pane composes RelationPicker through its own module import, so
 // the picker double mocks the subpath module (same resolved id), not the barrel.
@@ -215,9 +225,7 @@ describe("KnowledgePage explorer wiring", () => {
     expect(treeAttribute("data-selected")).toBe("page-b");
     expect(screen.getByRole("heading", { name: "Page B" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    expect(screen.getByTestId("page-editor").getAttribute("data-page-id")).toBe(
-      "page-b",
-    );
+    expect(screen.getByTestId("page-editor")).toBeTruthy();
     // Backlinks and bindings are Related groups on the page's record, not page-published tabs.
     expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe("");
   });
@@ -231,7 +239,7 @@ describe("KnowledgePage explorer wiring", () => {
     expect(screen.queryByTestId("page-editor")).toBeNull();
   });
 
-  test("publishes the navigator into the primary pane", () => {
+  test("publishes the navigator into the primary pane", async () => {
     renderPage();
 
     // The vault switcher + tree live in the shell's primary pane host.
@@ -239,8 +247,9 @@ describe("KnowledgePage explorer wiring", () => {
     expect(primary.getByTestId("tree")).toBeTruthy();
     expect(primary.getByLabelText("Vault")).toBeTruthy();
     expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe("");
-    // The create verbs sit in the pane toolbar and open the inline title field.
-    fireEvent.click(primary.getByRole("button", { name: "New note" }));
+    // "New" is one labeled menu in the pane toolbar; a page is typed as a row in the tree.
+    fireEvent.click(primary.getByRole("button", { name: "New" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Page" }));
     expect(primary.getByRole("textbox", { name: "New page title" })).toBeTruthy();
   });
 

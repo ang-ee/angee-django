@@ -30,7 +30,7 @@ export function pageDragPayload(
 }
 
 /** Registry glyph for a page's kind. */
-function pageIcon(kind: string): string {
+export function pageIcon(kind: string): string {
   switch (kind) {
     case "folder":
       return "folder";
@@ -130,4 +130,40 @@ export function isSelfOrAncestor(
     current = byId.get(parentId);
   }
   return false;
+}
+
+/** A folder's live pages, folders first then by title: the folder body and the insertion scope. */
+export function childPages(
+  pages: readonly KnowledgePageRow[],
+  vaultId: string,
+  parentId: string | null,
+): KnowledgePageRow[] {
+  return pages
+    .filter((page) => page.vault === vaultId && !page.is_trashed && (page.parent ?? null) === parentId)
+    .slice()
+    .sort(comparePages);
+}
+
+/** The vault's live page ids in tree (reading) order: the pager walks this. */
+export function pageOrder(pages: readonly KnowledgePageRow[], vaultId: string): string[] {
+  const order: string[] = [];
+  const visit = (parentId: string | null): void => {
+    for (const page of childPages(pages, vaultId, parentId)) {
+      order.push(page.id);
+      visit(page.id);
+    }
+  };
+  visit(null);
+  return order;
+}
+
+/** The titles of a page's ancestors, outermost first: the eyebrow's container path. */
+export function pagePath(pages: readonly KnowledgePageRow[], page: KnowledgePageRow | null): string[] {
+  const titles: string[] = [];
+  let current = page?.parent ? pageById(pages, page.parent) : null;
+  while (current) {
+    titles.unshift(current.title);
+    current = current.parent ? pageById(pages, current.parent) : null;
+  }
+  return titles;
 }

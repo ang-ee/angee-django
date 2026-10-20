@@ -189,7 +189,7 @@ export {
   DashboardView,
   type DashboardViewProps,
 } from "./dashboard/DashboardView";
-export { TreeView, type TreeViewProps } from "./tree/TreeView";
+export { TreeView, TREE_INSERTION_ID, type TreeViewProps } from "./tree/TreeView";
 export {
   RelationFieldWidget,
   type RelationFieldWidgetProps,
@@ -395,6 +395,7 @@ export {
   type ActionResultRunOptions,
 } from "./resource/action-result-run";
 export { RecordPager, type RecordNavigation } from "./resource/RecordPager";
+export { CommandBand, type CommandBandProps } from "./resource/CommandBand";
 export {
   useRelationFacets,
   type RelationFacets,

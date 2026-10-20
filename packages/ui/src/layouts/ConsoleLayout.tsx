@@ -42,7 +42,7 @@ export interface ConsoleLayoutProps {
  * @kind page
  */
 export function ConsoleLayout(props: ConsoleLayoutProps): React.ReactElement {
-  return <ChromePlaceProvider><ChatterProvider defaultCollapsed><BreadcrumbLabelProvider>
+  return <ChromePlaceProvider><ChatterProvider><BreadcrumbLabelProvider>
     <RecordFieldMarksProvider><ConsoleLayoutBody {...props} /></RecordFieldMarksProvider>
   </BreadcrumbLabelProvider></ChatterProvider></ChromePlaceProvider>;
 }
@@ -320,7 +320,6 @@ function ConsoleWorkbench({
         className="area-content"
         autoSave="console.workbench.v2"
         scrollMode="contained"
-        secondaryDefaultCollapsed
         primary={
           desktopPrimary != null ? (
             <ControlBandProvider host={undefined}>

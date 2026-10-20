@@ -16,7 +16,7 @@ export const recordHeaderVariants = tv({
     main: "min-w-0 flex-1 space-y-1",
     crumbs: textRoleVariants({ role: "caption" }),
     titleRow: "flex min-w-0 flex-wrap items-center gap-2",
-    title: cn(textRoleVariants({ role: "heading", truncate: true }), "min-w-0 leading-tight"),
+    title: cn(textRoleVariants({ role: "display" }), "min-w-0 leading-tight [overflow-wrap:anywhere]"),
     meta: cn(textRoleVariants({ role: "meta" }), "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1"),
     description: cn(textRoleVariants({ role: "description" }), "max-w-prose leading-relaxed"),
     actions: "flex shrink-0 flex-wrap items-center justify-end gap-2",
@@ -25,7 +25,7 @@ export const recordHeaderVariants = tv({
 
 type RecordHeaderRecipeProps = VariantProps<typeof recordHeaderVariants>;
 type RecordHeaderHeadingLevel = NonNullable<PageHeaderProps["headingLevel"]>;
-type RecordHeaderHeadingTag = `h${RecordHeaderHeadingLevel}`;
+type RecordHeaderHeadingTag = `h${RecordHeaderHeadingLevel}` | "div";
 
 export interface RecordHeaderStatus {
   label: React.ReactNode;
@@ -34,15 +34,18 @@ export interface RecordHeaderStatus {
 
 export type RecordHeaderProps = Omit<
   PageHeaderProps,
-  "actions" | "children" | "crumbs" | "description" | "eyebrow" | "title"
+  "actions" | "children" | "crumbs" | "description" | "eyebrow" | "headingLevel" | "title"
 > &
   Pick<RecordHeaderRecipeProps, never> & {
+    /** The title's heading level; `null` while the title is an editable field. */
+    headingLevel?: RecordHeaderHeadingLevel | null;
     actions?: React.ReactNode;
     crumbs?: React.ReactNode;
     description?: React.ReactNode;
     icon?: React.ReactNode | string;
     meta?: React.ReactNode;
-    status?: RecordHeaderStatus;
+    /** A lifecycle badge, or the record's own status control (a statusbar). */
+    status?: RecordHeaderStatus | React.ReactElement;
     title: React.ReactNode;
     type?: React.ReactNode;
   };
@@ -71,7 +74,8 @@ export const RecordHeader = React.forwardRef<HTMLElement, RecordHeaderProps>(
     ref,
   ) {
     const styles = recordHeaderVariants();
-    const Heading = `h${headingLevel}` as RecordHeaderHeadingTag;
+    // `headingLevel: null` renders the title row without a heading: an editable title is a field.
+    const Heading = (headingLevel === null ? "div" : `h${headingLevel}`) as RecordHeaderHeadingTag;
 
     return (
       <PageHeader
@@ -88,7 +92,9 @@ export const RecordHeader = React.forwardRef<HTMLElement, RecordHeaderProps>(
             <Heading className={styles.title()}>{title}</Heading>
             {type ? <Badge>{type}</Badge> : null}
             {status ? (
-              <Badge tone={status.tone ?? "neutral"}>{status.label}</Badge>
+              React.isValidElement(status)
+                ? <span className="ml-auto">{status}</span>
+                : <Badge tone={status.tone ?? "neutral"}>{status.label}</Badge>
             ) : null}
           </div>
           {meta ? <div className={styles.meta()}>{meta}</div> : null}
