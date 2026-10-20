@@ -61,6 +61,8 @@ const INVOICE: RecordPageProps = {
     tasks: [{ title: "Verify the printed bank account", due: "Oct 21", who: "Walker Member" }, { title: "Chase the credit note", due: "Oct 23", who: "admin" }, { title: "Resolve the company", due: "Oct 18", who: "Bill import", done: true }],
     related: [
       { id: "files", label: "Files", count: 1, verb: "Upload", rows: [{ label: "v8-cloudflare-9506-po-deviation.xml", meta: "UBL · 6 KB" }] },
+      { id: "pages", label: "Pages", count: 1, verb: "Bind", rows: [{ label: "October close", meta: "related" }] },
+      { id: "contract", label: "Contract", count: 1, verb: "Bind", rows: [{ label: "Cloudflare, Inc. agreement", meta: "contract" }] },
       { id: "sources", label: "Sources", count: 1, rows: [{ label: "Odoo · us.apexive.com · vendor bill 1402", meta: "synced Oct 17" }] },
       { id: "conversations", label: "Conversations", count: 1, rows: [{ label: "Re: Invoice SYN-UBL-9506", meta: "AP Inbox · 3" }] },
     ],
@@ -76,11 +78,11 @@ const FILE: RecordPageProps = {
   },
   subject: {
     eyebrow: "File · AP drive / 2026 / October", title: "v8-cloudflare-9506-po-deviation.xml", subtitle: "UBL · 6 KB · uploaded Oct 18, 2026 by admin",
-    lifecycle: [], menu: ["Download", "Read again (import bill)", "Move…", "Rename", "Trash"],
+    lifecycle: [{ label: "Download" }, { label: "Trash", tone: "danger" }], menu: ["Read again (import bill)", "Move…", "Rename"],
     controls: { access: ["AD", "WM"], following: false, needsMe: 0, pager: "4 / 12" },
     body: <>
       <Placeholder label="rendered e-invoice · the body is the file" h="24rem" />
-      <BodyTabs tabs={["Details", "Versions"]} active="Details" />
+      <h2 className="mt-6 text-13 font-semibold">Details</h2>
       <div className="mt-4"><FieldGrid><Field label="Type" value="application/xml" /><Field label="Size" value="6 KB" /><Field label="Checksum" value="sha256 · 9f3a…" /><Field label="Uploaded" value="Oct 18, 2026 · admin" /><Field label="Drive" value="AP drive" /><Field label="Folder" value="2026 / October" /></FieldGrid></div>
     </>,
   },
@@ -107,11 +109,10 @@ const PAGE: RecordPageProps = {
   },
   subject: {
     eyebrow: "Knowledge page · Accounts Payable / Supplier contracts", title: "Cloudflare, Inc. agreement", subtitle: "edited Oct 18, 2026 by admin · published",
-    lifecycle: [{ label: "Publish" }], menu: ["Move…", "Duplicate", "Export", "Trash"],
+    lifecycle: [{ label: "Edit" }, { label: "Delete", tone: "danger" }], menu: ["Move…", "Duplicate", "Export"],
     controls: { access: ["AD", "WM", "AP"], following: true, needsMe: 0, pager: "2 / 6" },
     body: <>
       <p className="text-13 leading-6">Scope: remote consulting billed per hour at <b>EUR 90.00</b>, printed manuals at list price. Purchase order PO/2026/00001 implements this agreement for October 2026. Deviations from the agreed hourly rate are reviewed before posting.</p>
-      <div className="mt-4"><Placeholder label="editor · the body is the page" h="18rem" /></div>
     </>,
   },
   aside: {
@@ -187,9 +188,11 @@ export const InvoiceRunOpen: Story = { args: { ...INVOICE, drillIn: "run" } };
 export const InvoiceDiscussion: Story = { args: { ...INVOICE, tab: "discussion" } };
 /** Related: the owner's verb per group, one row grammar for every linked thing. */
 export const InvoiceRelated: Story = { args: { ...INVOICE, tab: "related" } };
-/** File: the drive tree explores, the preview is the body, Details a body tab; no Discussion, no Tasks; Related shows what it is attached to. */
+/** File: the drive tree explores, the preview and Details form the body; Related shows what it is attached to. */
 export const File: Story = { args: FILE };
-/** Knowledge page: the vault tree explores, the editor is the body; Related shows what the page is bound to and its backlinks. */
+export const FileRelated: Story = { args: { ...FILE, tab: "related" } };
+/** Knowledge page: the vault tree explores, the reader is the body, and Edit/Delete sit on the control band. */
 export const KnowledgePage: Story = { args: PAGE };
+export const KnowledgeRelated: Story = { args: { ...PAGE, tab: "related" } };
 /** Person: the parties navigator with its lenses explores, Network is a body tab, correspondence is a Timeline kind; parties are not discussable. */
 export const Person: Story = { args: PERSON };

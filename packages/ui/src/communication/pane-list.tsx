@@ -2,7 +2,9 @@ import * as React from "react";
 
 import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
+import { useInAppLink } from "../lib/in-app-link";
 import { Chip } from "../ui/chip";
+import { Popover, type PopoverRootProps } from "../ui/popover";
 import { StatusIcon, type StatusIconTone } from "../ui/status-icon";
 
 /**
@@ -32,8 +34,11 @@ export interface PaneRowProps {
   /** Draws the warning dot and emphasises the title: this row waits on the viewer. */
   needsMe?: boolean;
   selected?: boolean;
-  /** An in-app href makes the row a link (copy, open in new tab); without one it is a button. */
+  /** A destination makes the row a native link, with the host's navigation and preload behavior. */
   href?: string;
+  target?: React.HTMLAttributeAnchorTarget;
+  rel?: string;
+  /** For rows that open an action without a destination. Otherwise the row is non-interactive. */
   onOpen?: () => void;
   /** The native tooltip, usually the verb. */
   label?: string;
@@ -43,8 +48,9 @@ export interface PaneRowProps {
 const ROW_CLASS = "group/row flex w-full gap-2 rounded-6 px-1 py-1.5 text-left hover:bg-canvas/70 aria-[current=true]:bg-canvas";
 
 export function PaneRow({
-  icon, tone = "muted", leading, title, detail, meta, sub, verb, needsMe = false, selected, href, onOpen, label, className,
+  icon, tone = "muted", leading, title, detail, meta, sub, verb, needsMe = false, selected, href, target, rel, onOpen, label, className,
 }: PaneRowProps): React.ReactElement {
+  const link = useInAppLink(href);
   const glyph = (
     <span className="relative mt-0.5 shrink-0">
       <StatusIcon tone={tone} icon={icon ?? "activity"} size="sm" />
@@ -76,14 +82,16 @@ export function PaneRow({
       <span className={cn(ROW_CLASS, className)}>
         <span className="mt-0.5 shrink-0">{leading}</span>
         {href
-          ? <a href={href} {...common} className="flex min-w-0 flex-1 text-left" onClick={onOpen ? (event) => { event.preventDefault(); onOpen(); } : undefined}>{body}</a>
-          : <button type="button" {...common} className="flex min-w-0 flex-1 text-left" onClick={onOpen}>{body}</button>}
+          ? <a href={href} target={target} rel={rel} {...common} {...link} className="flex min-w-0 flex-1 text-left">{body}</a>
+          : onOpen ? <button type="button" {...common} className="flex min-w-0 flex-1 text-left" onClick={onOpen}>{body}</button>
+            : body}
       </span>
     );
   }
   if (href) {
-    return <a href={href} {...common} className={cn(ROW_CLASS, className)} onClick={onOpen ? (event) => { event.preventDefault(); onOpen(); } : undefined}>{glyph}{body}</a>;
+    return <a href={href} target={target} rel={rel} {...common} {...link} className={cn(ROW_CLASS, className)}>{glyph}{body}</a>;
   }
+  if (!onOpen) return <span {...common} className={cn(ROW_CLASS, className)}>{glyph}{body}</span>;
   return <button type="button" {...common} className={cn(ROW_CLASS, className)} onClick={onOpen}>{glyph}{body}</button>;
 }
 
@@ -123,12 +131,28 @@ export function PaneLabel({ children, count, folded, onToggle, action, className
 }
 
 /** A label's verb: a small link-coloured button with a glyph. */
-export function PaneLabelAction({ icon, children, onClick, disabled }: { icon?: string; children: React.ReactNode; onClick?: () => void; disabled?: boolean }): React.ReactElement {
+export function PaneLabelAction({ icon, children, className, ...props }: React.ComponentPropsWithRef<"button"> & { icon?: string }): React.ReactElement {
   return (
-    <button type="button" onClick={onClick} disabled={disabled} className="flex items-center gap-0.5 rounded-6 px-1 text-12 font-normal text-link hover:bg-canvas disabled:opacity-50">
+    <button type="button" {...props} className={cn("flex items-center gap-0.5 rounded-6 px-1 text-12 font-normal text-link hover:bg-canvas disabled:opacity-50", className)}>
       {icon ? <Glyph name={icon} /> : null}{children}
     </button>
   );
+}
+
+/** A group's small action picker, using the native popover's controlled or uncontrolled lifetime. */
+export function PaneLabelPopover({ icon, label, children, ...props }: Pick<PopoverRootProps, "open" | "onOpenChange"> & {
+  icon: string;
+  label: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return <Popover.Root {...props}>
+    <Popover.Trigger render={<PaneLabelAction icon={icon}>{label}</PaneLabelAction>} />
+    <Popover.Portal>
+      <Popover.Positioner align="end" sideOffset={4}>
+        <Popover.Content aria-label={label} className="flex w-64 flex-col gap-2 p-3 text-13">{children}</Popover.Content>
+      </Popover.Positioner>
+    </Popover.Portal>
+  </Popover.Root>;
 }
 
 export interface ScopeChipProps {

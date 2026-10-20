@@ -39,12 +39,14 @@ type SurfaceHeaderHeadingTag = `h${SurfaceHeaderHeadingLevel}`;
 
 export type SurfaceHeaderProps = Omit<
   PageHeaderProps,
-  "actions" | "children" | "crumbs" | "description" | "eyebrow" | "title"
+  "actions" | "children" | "crumbs" | "description" | "eyebrow" | "headingLevel" | "title"
 > & {
   actions?: React.ReactNode;
   children?: React.ReactNode;
   fetching?: boolean;
   icon?: React.ReactNode | string;
+  /** null when the title is a labelled editing control rather than a heading. */
+  headingLevel?: SurfaceHeaderHeadingLevel | null;
   subtitle?: React.ReactNode;
   title: React.ReactNode;
 };
@@ -67,7 +69,7 @@ export const SurfaceHeader = React.forwardRef<HTMLElement, SurfaceHeaderProps>(
     ref,
   ) {
     const styles = surfaceHeaderVariants({ density });
-    const Heading = `h${headingLevel}` as SurfaceHeaderHeadingTag;
+    const Heading = headingLevel === null ? "div" : `h${headingLevel}` as SurfaceHeaderHeadingTag;
     const headerActions = actions ?? children;
 
     return (

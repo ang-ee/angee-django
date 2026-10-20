@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { formatDateTime } from "@angee/ui";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { ControlBandProvider, formatDateTime } from "@angee/ui";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const sdk = vi.hoisted(() => ({
@@ -139,8 +140,28 @@ describe("KnowledgePageView", () => {
     render(<KnowledgePageView pageId="pg_guide" />);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Page title" }));
+    expect(screen.getByRole("textbox", { name: "Page title" }).closest("h1, h2, h3")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit" }));
+  });
+
+  test("reader and editor publish their verbs into the shell control band and preserve focus", () => {
+    const onDelete = vi.fn();
+    function Shell() {
+      const [host, setHost] = useState<HTMLDivElement | null>(null);
+      return <><div ref={setHost} data-testid="control-band" />
+        <ControlBandProvider host={host}><main><KnowledgePageView pageId="pg_guide" onDelete={onDelete} /></main></ControlBandProvider>
+      </>;
+    }
+    render(<Shell />);
+    const controls = within(screen.getByTestId("control-band"));
+    expect(within(screen.getByRole("main")).queryByRole("button", { name: "Edit" })).toBeNull();
+    fireEvent.click(controls.getByRole("button", { name: "Edit" }));
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Page title" }));
+    fireEvent.click(controls.getByRole("button", { name: "Move page to trash" }));
+    expect(onDelete).toHaveBeenCalledOnce();
+    fireEvent.click(controls.getByRole("button", { name: "Done" }));
+    expect(document.activeElement).toBe(controls.getByRole("button", { name: "Edit" }));
   });
 
   test("a failed background refetch preserves the mounted editor and unsaved draft", () => {

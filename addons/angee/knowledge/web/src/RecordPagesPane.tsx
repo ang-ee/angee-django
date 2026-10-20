@@ -1,9 +1,8 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
-  Button, EmptyState, ErrorBanner, PaneRow, PaneRows, RecordReference, Select, Skeleton, SkeletonStatus, errorMessage,
-  useRouteHref, useRuntimeViewAs, type ChatterViewContext, type ContainerChild, type RelatedGroupContent,
+  Button, EmptyState, ErrorBanner, PaneLabelPopover, PaneRow, PaneRows, RecordReferenceRow, Select, Skeleton, SkeletonStatus, errorMessage,
+  useRelatedGroups, useRouteHref, useRuntimeViewAs, type ChatterViewContext, type ContainerChild, type RelatedGroupContent, type RelatedGroupLabel,
 } from "@angee/ui";
-import { useNavigate } from "@tanstack/react-router";
 import { useMemo, useState, type ReactElement } from "react";
 
 import {
@@ -14,29 +13,33 @@ import { useKnowledgeT } from "./i18n";
 
 const BINDING_MODELS = [RECORD_BINDING_MODEL] as const;
 
-/** The Related group's record, as the pane expects it. */
+export interface RecordPagesTarget { modelLabel: string; recordId: string }
+
+/** Shared target identity for bound page groups and dated note streams. */
 export function recordPagesTarget(context: ChatterViewContext): RecordPagesTarget {
-  return {
-    modelLabel: context.route?.modelLabel ?? "",
-    recordId: context.view.kind === "record" ? context.view.sqid ?? "" : "",
-  };
+  return { modelLabel: context.route?.modelLabel ?? "", recordId: context.view.kind === "record" ? context.view.sqid ?? "" : "" };
 }
 
+/** Knowledge owns role claims; the framework owns edge eligibility. */
+interface RecordPagesGroupContent extends RelatedGroupContent {
+  bindingRole?: string;
+}
+
+/** All groups observe one cached read per record, then partition only on the client. */
 function useRecordPagesRead(context: ChatterViewContext, role?: string) {
+  const preview = useRuntimeViewAs();
   const { modelLabel, recordId } = recordPagesTarget(context);
-  const variables = useMemo(() => ({ modelLabel, recordId, role: role ?? null }), [modelLabel, recordId, role]);
-  return useAuthoredQuery(KnowledgeRecordPages, variables, {
+  const groups = useRelatedGroups<RecordPagesGroupContent>(context);
+  const claimedRoles = new Set(groups.flatMap(({ content }) =>
+    content.edge?.model === RECORD_BINDING_MODEL && content.bindingRole !== undefined ? [content.bindingRole] : []));
+  const variables = useMemo(() => ({ modelLabel, recordId, role: null }), [modelLabel, recordId]);
+  const query = useAuthoredQuery(KnowledgeRecordPages, variables, {
     enabled: Boolean(modelLabel && recordId), models: BINDING_MODELS,
   });
-}
-
-function useRecordPagesCount(context: ChatterViewContext, role?: string): number | undefined {
-  return useRecordPagesRead(context, role).data?.record_knowledge_bindings.filter((binding) => binding.page !== null).length;
-}
-
-/** Bind is offered where the record's type declares a binding arm the actor may write. */
-function useRecordPagesVerb(context: ChatterViewContext, role?: string): boolean {
-  return useRecordPagesRead(context, role).data?.record_knowledge_can_bind ?? false;
+  const bindings = query.data?.record_knowledge_bindings.filter((binding) => binding.page !== null
+    && (role === undefined ? !claimedRoles.has(binding.role) : binding.role === role));
+  const canWrite = Boolean(query.data?.record_knowledge_can_bind && !preview.viewAs && !preview.pending);
+  return { query, bindings, canWrite, canBind: canWrite && (role !== undefined || !claimedRoles.has("related")) };
 }
 
 export interface RecordPagesGroupOptions {
@@ -46,101 +49,92 @@ export interface RecordPagesGroupOptions {
   when?: RelatedGroupContent["when"];
 }
 
-/** A role-scoped Pages group of the Related tab, for `related#groups` or a `<model>#groups` address. */
-export function recordPagesGroup(options: RecordPagesGroupOptions = {}): ContainerChild<RelatedGroupContent> {
+/** A role-scoped Pages group, for related#groups or a model's groups address. */
+export function recordPagesGroup(options: RecordPagesGroupOptions = {}): ContainerChild<RecordPagesGroupContent> {
   const { label = "Pages", role, sequence = 20, when } = options;
   return {
     sequence,
     content: {
       label,
-      // A record of a type whose schema lets it carry bindings.
-      when: (context) => (context.route?.recordEdges?.includes(RECORD_BINDING_MODEL) ?? false) && (when?.(context) ?? true),
-      useCount: (context) => useRecordPagesCount(context, role),
-      useVerb: (context) => useRecordPagesVerb(context, role),
-      render: (context) => <RecordPagesPane target={recordPagesTarget(context)} role={role} />,
+      edge: { model: RECORD_BINDING_MODEL },
+      bindingRole: role,
+      when,
+      useCount: (context) => useRecordPagesRead(context, role).bindings?.length,
+      useVerb: (context) => useRecordPagesRead(context, role).canBind,
+      render: (context, label) => <RecordPagesGroup key={context.view.sqid} context={context} role={role} label={label} />,
     },
   };
 }
 
-/** The record whose page bindings a pane lists. */
-export interface RecordPagesTarget { modelLabel: string; recordId: string }
-
-/** Page bindings as rows linking to the reader, unbind as each row's verb, and the
- *  writer-gated bind control as the group's one verb. */
-export function RecordPagesPane({ target, role }: { target: RecordPagesTarget; role?: string }): ReactElement {
+/** The picker and rows share mutation state without a second binding or provider. */
+function RecordPagesGroup({ context, role, label }: { context: ChatterViewContext; role?: string; label: RelatedGroupLabel }): ReactElement {
   const t = useKnowledgeT();
-  const preview = useRuntimeViewAs();
   const routeHref = useRouteHref();
-  const navigate = useNavigate();
-  const { modelLabel, recordId } = target;
-  const variables = useMemo(() => ({ modelLabel, recordId, role: role ?? null }), [modelLabel, recordId, role]);
-  const bindingsQuery = useAuthoredQuery(KnowledgeRecordPages, variables, {
-    enabled: Boolean(modelLabel && recordId), models: BINDING_MODELS,
-  });
-  const canBind = bindingsQuery.data?.record_knowledge_can_bind ?? false;
+  const { query, bindings, canWrite, canBind } = useRecordPagesRead(context, role);
   const pagesQuery = useAuthoredQuery(KnowledgePages, { limit: KNOWLEDGE_LIST_LIMIT, offset: 0 }, {
     enabled: canBind, models: [PAGE_MODEL],
   });
   const [bind] = useAuthoredMutation(KnowledgeBindRecord, { invalidateModels: BINDING_MODELS });
   const [unbind] = useAuthoredMutation(KnowledgeUnbindRecord, { invalidateModels: BINDING_MODELS });
+  const [open, setOpen] = useState(false);
   const [pageToBind, setPageToBind] = useState("");
   const [busy, setBusy] = useState(false);
-  const [writeError, setWriteError] = useState<string | null>(null);
-  const bindings = bindingsQuery.data?.record_knowledge_bindings.filter((binding) => binding.page !== null) ?? [];
-  const writablePages = pagesQuery.data?.pages?.filter((page) => page.permissions.includes("write")) ?? [];
-  const unboundPages = writablePages.filter((page) => !bindings.some((binding) => binding.page === page.id && binding.role === (role ?? "related")));
+  const [bindError, setBindError] = useState<string | null>(null);
+  const [unbindError, setUnbindError] = useState<string | null>(null);
+  const unboundPages = pagesQuery.data?.pages?.filter((page) => page.permissions.includes("write")
+    && !bindings?.some((binding) => binding.page === page.id && binding.role === (role ?? "related"))) ?? [];
   const chosenPage = unboundPages.some((page) => page.id === pageToBind) ? pageToBind : unboundPages[0]?.id ?? "";
-  const writesEnabled = !preview.viewAs && !preview.pending;
 
   async function changeBinding(page: string, remove: boolean, bindingRole = role ?? "related"): Promise<void> {
+    if (!(remove ? canWrite : canBind) || busy) return;
     setBusy(true);
-    setWriteError(null);
+    const setError = remove ? setUnbindError : setBindError;
+    setError(null);
     try {
+      const { modelLabel, recordId } = recordPagesTarget(context);
       const input = { model_label: modelLabel, record_id: recordId, page, role: bindingRole };
       if (remove) await unbind({ input });
-      else await bind({ input });
+      else {
+        await bind({ input });
+        setOpen(false);
+        setPageToBind("");
+      }
     } catch (error) {
-      setWriteError(errorMessage(error, t("record.writeError")));
+      setError(errorMessage(error, t("record.writeError")));
     } finally {
       setBusy(false);
     }
   }
 
-  if (bindingsQuery.isPending && !bindingsQuery.data) return <SkeletonStatus label={t("record.loading")} className="space-y-2 p-2">
-    <Skeleton className="h-8" /><Skeleton className="h-8" />
-  </SkeletonStatus>;
-  if (bindingsQuery.error && !bindingsQuery.data) return <ErrorBanner description={bindingsQuery.error.message} />;
-
-  return <div className="flex min-h-0 flex-col">
-    {writeError ? <ErrorBanner description={writeError} /> : null}
-    {pagesQuery.error && canBind ? <ErrorBanner description={pagesQuery.error.message} /> : null}
-    {bindings.length ? <PaneRows>
-      {bindings.map((binding) => {
-        const href = routeHref("knowledge.page", { id: binding.page ?? "" });
-        const unbindable = canBind && binding.page_can_write && writesEnabled;
-        return <li key={binding.id} className="flex items-center gap-1">
-          <PaneRow
-            icon="note"
-            title={binding.page_title || binding.page}
-            sub={role ? undefined : binding.role}
-            href={href}
-            onOpen={() => void navigate({ href } as never)}
-          />
-          {unbindable ? <Button type="button" size="sm" variant="ghost" className="shrink-0"
-            disabled={busy} aria-label={`${t("record.unbind")} ${binding.page_title || binding.page}${role ? "" : ` (${binding.role})`}`}
-            onClick={() => binding.page && void changeBinding(binding.page, true, binding.role)}>{t("record.unbind")}</Button> : null}
-        </li>;
-      })}
-    </PaneRows> : <EmptyState icon="knowledge" title={t("record.empty")} className="min-h-24 p-3" />}
-    {canBind && writesEnabled ? <div className="flex items-center gap-2 px-1 py-1">
-      {pagesQuery.isPending && !pagesQuery.data ? <SkeletonStatus label={t("record.loadingPages")} className="flex-1"><Skeleton className="h-7" /></SkeletonStatus> :
-        <Select aria-label={t("record.choosePage")} className="min-w-0 flex-1" value={chosenPage}
+  return <>
+    {label(<PaneLabelPopover icon="plus" label={t("record.bind")} open={open} onOpenChange={setOpen}>
+      {bindError ? <ErrorBanner description={bindError} /> : null}
+      {pagesQuery.error ? <ErrorBanner description={pagesQuery.error.message} /> : null}
+      {pagesQuery.isPending && !pagesQuery.data ? <SkeletonStatus label={t("record.loadingPages")}><Skeleton className="h-7" /></SkeletonStatus> :
+        <Select aria-label={t("record.choosePage")} value={chosenPage}
           options={unboundPages.map((page) => ({ value: page.id, label: page.title }))}
           placeholder={t("record.choosePage")} onValueChange={setPageToBind} />}
-      <Button type="button" size="sm" variant="ghost" disabled={!chosenPage || busy}
+      <Button type="button" size="sm" variant="secondary" disabled={!chosenPage || busy || !canBind}
         onClick={() => void changeBinding(chosenPage, false)}>{t("record.bind")}</Button>
-    </div> : null}
-  </div>;
+    </PaneLabelPopover>)}
+    <li>
+      {query.isPending && !query.data ? <SkeletonStatus label={t("record.loading")} className="space-y-2 p-2">
+        <Skeleton className="h-8" /><Skeleton className="h-8" />
+      </SkeletonStatus> : query.error && !query.data ? <ErrorBanner description={query.error.message} /> :
+        <div className="flex min-h-0 flex-col">
+          {unbindError ? <ErrorBanner description={unbindError} /> : null}
+          {bindings?.length ? <PaneRows>
+            {bindings.map((binding) => <li key={binding.id} className="flex items-center gap-1">
+              <PaneRow icon="note" title={binding.page_title || binding.page} sub={role ? undefined : binding.role}
+                href={routeHref("knowledge.page", { id: binding.page ?? "" })} />
+              {canWrite && binding.page_can_write ? <Button type="button" size="sm" variant="ghost" className="shrink-0"
+                disabled={busy} aria-label={`${t("record.unbind")} ${binding.page_title || binding.page}${role ? "" : ` (${binding.role})`}`}
+                onClick={() => binding.page && void changeBinding(binding.page, true, binding.role)}>{t("record.unbind")}</Button> : null}
+            </li>)}
+          </PaneRows> : <EmptyState icon="knowledge" title={t("record.empty")} className="min-h-24 p-3" />}
+        </div>}
+    </li>
+  </>;
 }
 
 /** The pages that link to the open page: a `knowledge.Page#groups` child. */
@@ -149,7 +143,7 @@ export const pageBacklinksGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: "Backlinks",
     useCount: (context) => usePageDetail(context).data?.pages_by_pk?.backlinks.length,
-    render: (context) => <PageBacklinks context={context} />,
+    render: (context, label) => <>{label()}<li><PageBacklinks context={context} /></li></>,
   },
 };
 
@@ -159,7 +153,7 @@ export const pageBoundToGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: "Bound to",
     useCount: (context) => usePageRecordBindings(context).data?.page_record_bindings.length,
-    render: (context) => <PageBoundTo context={context} />,
+    render: (context, label) => <>{label()}<li><PageBoundTo context={context} /></li></>,
   },
 };
 
@@ -180,16 +174,15 @@ function usePageRecordBindings(context: ChatterViewContext) {
 function PageBacklinks({ context }: { context: ChatterViewContext }): ReactElement {
   const t = useKnowledgeT();
   const routeHref = useRouteHref();
-  const navigate = useNavigate();
   const query = usePageDetail(context);
   const backlinks = query.data?.pages_by_pk?.backlinks ?? [];
+  if (query.isPending && !query.data) return <SkeletonStatus label={t("page.loading")}><Skeleton className="h-8" /></SkeletonStatus>;
   if (query.error) return <ErrorBanner description={query.error.message} />;
-  if (!backlinks.length) return <EmptyState icon="link" title={t("backlinks.emptyTitle")} description={t("backlinks.emptyDescription")} className="min-h-24 p-3" />;
   return <PaneRows>
     {backlinks.map((backlink) => {
       const href = routeHref("knowledge.page", { id: backlink.page });
       return <li key={`${backlink.page}:${backlink.display_text}`}>
-        <PaneRow icon="note" title={backlink.title} sub={backlink.display_text || undefined} href={href} onOpen={() => void navigate({ href } as never)} />
+        <PaneRow icon="note" title={backlink.title} sub={backlink.display_text || undefined} href={href} />
       </li>;
     })}
   </PaneRows>;
@@ -198,13 +191,14 @@ function PageBacklinks({ context }: { context: ChatterViewContext }): ReactEleme
 function PageBoundTo({ context }: { context: ChatterViewContext }): ReactElement {
   const t = useKnowledgeT();
   const query = usePageRecordBindings(context);
-  const bindings = query.data?.page_record_bindings ?? [];
+  const bindings = query.data?.page_record_bindings.map((binding) => ({
+    key: binding.id, model: binding.model_label, id: binding.record_id, role: binding.role,
+  })) ?? [];
+  if (query.isPending && !query.data) return <SkeletonStatus label={t("page.loading")}><Skeleton className="h-8" /></SkeletonStatus>;
   if (query.error) return <ErrorBanner description={query.error.message} />;
-  if (!bindings.length) return <EmptyState icon="link" title={t("boundTo.empty")} className="min-h-24 p-3" />;
   return <PaneRows>
-    {bindings.map((binding) => <li key={binding.id} className="flex items-baseline gap-2 px-1 py-1.5 text-13">
-      <span className="min-w-0 flex-1 truncate"><RecordReference model={binding.model_label} id={binding.record_id} /></span>
-      <span className="shrink-0 text-12 text-fg-muted">{binding.role}</span>
+    {bindings.map((binding) => <li key={binding.key}>
+      <RecordReferenceRow model={binding.model} id={binding.id} meta={binding.role} references={bindings} />
     </li>)}
   </PaneRows>;
 }

@@ -1,5 +1,9 @@
 import * as React from "react";
-import { Avatar, Badge, Button, Chip, CountBadge, Glyph, StatusIcon, StepList, Tabs, type StepListItem } from "@angee/ui";
+import {
+  AppRuntimeProvider, Avatar, Badge, Button, CHATTER_CONTAINERS, Chip, CountBadge, EmptyState, Glyph,
+  PaneLabelPopover, PaneRow, PaneRows, Popover, RelatedPane as FrameworkRelatedPane, Select,
+  StatusIcon, StepList, Tabs, containersFromChildren, type ChatterViewContext, type RelatedGroupContent, type StepListItem,
+} from "@angee/ui";
 import { DecisionCardMock, billEntries, time } from "../activity-explorer.mocks";
 import { PaneToolbar, ScopeRow } from "./PaneToolbar";
 import { KIND_PRESENTATION, type AsideData, type AsideTab, type Message, type RelatedGroup, type TaskItem, type TimelineLine } from "./types";
@@ -115,23 +119,34 @@ export function TasksPane({ tasks }: { tasks: readonly TaskItem[] }): React.Reac
 /* Related -------------------------------------------------------------------------------- */
 
 export function RelatedPane({ groups }: { groups: readonly RelatedGroup[] }): React.ReactElement {
-  return (
-    <>
-      <PaneToolbar scope={<ScopeRow active={groups[0]?.id ?? ""} items={groups.map((g) => ({ id: g.id, label: g.label, count: g.count }))} />} />
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
-        {groups.map((g) => (
-          <section key={g.id} className="py-2">
-            <div className="flex items-center gap-1 px-1 text-12 font-medium text-fg-muted">
-              <span>{g.label}</span><span className="tabular-nums">{g.count}</span>
-              {g.verb ? <button type="button" className="ml-auto flex items-center gap-0.5 rounded-6 px-1 text-12 text-link hover:bg-canvas"><Glyph name="plus" />{g.verb}</button> : null}
-            </div>
-            {g.rows.length ? <ul>{g.rows.map((r) => <li key={r.label}><a href="#" className="flex items-baseline gap-2 rounded-6 px-1 py-1 hover:bg-canvas/70"><span className="min-w-0 flex-1 truncate text-13">{r.label}</span><span className="shrink-0 text-12 text-fg-muted">{r.meta}</span></a></li>)}</ul>
-              : <p className="px-1 py-1 text-13 text-fg-muted">None yet.</p>}
-          </section>
-        ))}
-      </div>
-    </>
-  );
+  const containers = React.useMemo(() => containersFromChildren(CHATTER_CONTAINERS, {
+    "related#groups": Object.fromEntries(groups.map((group, sequence) => [group.id, { sequence, content: {
+      label: group.label,
+      useCount: () => group.count,
+      useVerb: () => Boolean(group.verb),
+      render: (_context, label) => <>{label(group.verb ? <RelatedAction verb={group.verb} /> : null)}
+        <li>{group.rows.length ? <PaneRows>{group.rows.map((row) => <li key={row.label}>
+        <PaneRow icon={group.id === "files" ? "file" : "link"} title={row.label} meta={row.meta} href="#" />
+      </li>)}</PaneRows> : <EmptyState icon="link" title="None yet" className="min-h-24 p-3" />}</li></>,
+    } satisfies RelatedGroupContent } ])),
+  }), [groups]);
+  return <AppRuntimeProvider runtime={{ containers }}><FrameworkRelatedPane context={RELATED_CONTEXT} /></AppRuntimeProvider>;
+}
+
+const RELATED_CONTEXT: ChatterViewContext = {
+  pathname: "/example/record", params: {}, view: { kind: "record", type: "example/record", sqid: "record" },
+};
+
+function RelatedAction({ verb }: { verb: string }): React.ReactElement {
+  const upload = verb === "Upload";
+  const [value, setValue] = React.useState("default");
+  return <PaneLabelPopover icon="plus" label={verb}>
+    {upload ? <input type="file" multiple aria-label="Choose files" className="min-w-0 text-13" /> : <>
+      <Select aria-label="Choose a page" value={value} onValueChange={setValue}
+        options={[{ value: "default", label: "AP policy" }]} />
+      <Popover.Close render={<Button size="sm" variant="secondary">Bind</Button>} />
+    </>}
+  </PaneLabelPopover>;
 }
 
 /* Drill-in --------------------------------------------------------------------------------- */

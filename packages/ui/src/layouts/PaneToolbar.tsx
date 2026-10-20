@@ -94,7 +94,7 @@ export function PaneToolbar({ scope, selector, search = false, onSearch, actions
   );
 }
 
-export interface PaneToolbarIconButtonProps {
+export interface PaneToolbarIconButtonProps extends Omit<React.ComponentPropsWithRef<"button">, "children" | "onClick"> {
   icon: string;
   label: string;
   onClick?: () => void;
@@ -105,9 +105,10 @@ export interface PaneToolbarIconButtonProps {
 }
 
 /** The toolbar's 28px icon button, with an optional count badge (needs you). */
-export function PaneToolbarIconButton({ icon, label, onClick, tone, active, badge, disabled }: PaneToolbarIconButtonProps): React.ReactElement {
+export function PaneToolbarIconButton({ icon, label, onClick, tone, active, badge, disabled, className, ...props }: PaneToolbarIconButtonProps): React.ReactElement {
   return (
     <button
+      {...props}
       type="button"
       aria-label={label}
       title={label}
@@ -117,6 +118,7 @@ export function PaneToolbarIconButton({ icon, label, onClick, tone, active, badg
       className={cn(
         "relative grid size-7 place-items-center rounded-6 disabled:opacity-50",
         active ? "bg-canvas text-fg" : tone === "danger" ? "text-danger-text hover:bg-danger-bg" : "text-fg-muted hover:bg-canvas hover:text-fg",
+        className,
       )}
     >
       <Glyph name={icon} />

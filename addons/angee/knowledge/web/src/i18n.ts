@@ -37,10 +37,6 @@ export const enKnowledgeMessages: Record<string, string> = {
   "page.lastUpdated": "Updated {value}",
   "page.emptyTitle": "This page is empty",
   "page.emptyDescription": "Edit the page to add content.",
-  "backlinks.emptyTitle": "No backlinks",
-  "backlinks.emptyDescription":
-    "Pages that link to this one show up here.",
-  "boundTo.empty": "Not bound to any record",
   "newPage.newNote": "New note",
   "newPage.newFolder": "New folder",
   "newPage.folderPlaceholder": "Folder name",

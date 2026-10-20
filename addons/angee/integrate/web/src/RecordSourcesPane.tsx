@@ -54,12 +54,12 @@ export const recordSourcesGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 70,
   content: {
     label: enIntegrateMessages["sources.title"] ?? "Sources",
-    when: ({ route }) => route?.recordEdges?.includes(RECORD_LINK_MODEL) === true,
+    edge: { model: RECORD_LINK_MODEL },
     useCount: (context) => {
       const query = useRecordSources(context);
       return query.data ? sourceRows(query.data).length : undefined;
     },
-    render: (context) => <RecordSourcesPane context={context} />,
+    render: (context, label) => <>{label()}<li><RecordSourcesPane context={context} /></li></>,
   },
 };
 
@@ -82,7 +82,7 @@ export function RecordSourcesPane({ context }: { context: ChatterViewContext }):
         meta={source.status}
         sub={`${source.external_key} · ${source.last_seen_at ? formatDateTime(source.last_seen_at) : t("sources.never")}`}
         href={source.source_url ?? undefined}
-        onOpen={source.source_url ? () => window.open(source.source_url ?? "", "_blank", "noopener") : undefined}
+        target="_blank" rel="noopener"
       />
     </li>)}
   </PaneRows>;

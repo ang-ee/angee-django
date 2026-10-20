@@ -194,7 +194,7 @@ export {
   RelationFieldWidget,
   type RelationFieldWidgetProps,
 } from "./relation/RelationFieldWidget";
-export { RecordReference, type RecordReferenceProps } from "./relation/RecordReference";
+export { RecordReference, RecordReferenceRow, type RecordReferenceProps, type RecordReferenceRowProps } from "./relation/RecordReference";
 export {
   RelationMultiFieldWidget,
   type RelationMultiFieldWidgetProps,

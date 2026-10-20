@@ -114,6 +114,7 @@ export type {
   ChatterSelection,
   TimelineKindContent,
   RelatedGroupContent,
+  RelatedGroupLabel,
   ComposedMenuItem,
   DrawerContribution,
   DrawerEdge,

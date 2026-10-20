@@ -216,10 +216,7 @@ describe("integrate addon manifest", () => {
     const source = (integrate.containers?.["related#groups"] as Record<string, ContainerChild<RelatedGroupContent>> | undefined)?.[RECORD_SOURCES_GROUP_ID];
     expect(integrate.containers?.["record#aside"]).toBeUndefined();
     expect(source).toMatchObject({ sequence: 70, content: { label: "Sources" } });
-    expect(source && "content" in source && source.content.when?.({
-      pathname: "/notes/nte_1", params: { id: "nte_1" },
-      route: { name: "notes.record", path: "/notes/$id", viewType: "notes/note", modelLabel: "notes.Note", recordEdges: [RECORD_LINK_MODEL] },
-      view: { kind: "record", type: "notes/note", sqid: "nte_1" },
-    })).toBe(true);
+    expect(source?.content.edge).toEqual({ model: RECORD_LINK_MODEL });
+    expect(source?.content.when).toBeUndefined();
   });
 });

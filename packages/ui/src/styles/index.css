@@ -328,9 +328,11 @@
   --font-weight-bold:     var(--fw-bold);
 
   /* Theme bridges for custom scale keys and Tailwind's text-lg.
-     12/14/16 align with text-xs/text-sm/text-base already. */
+     Pane typography uses text-12 and text-13; larger roles use textRoleVariants. */
   --text-2xs:               var(--fs-11); /* 11px */
   --text-2xs--line-height:  var(--lh-11); /* 16px */
+  --text-12:                var(--fs-12); /* 12px: the pane scale's meta size */
+  --text-12--line-height:   var(--lh-12); /* 16px */
   --text-13:                var(--fs-13); /* 13px */
   --text-13--line-height:   var(--lh-13); /* 20px */
   --text-15:                var(--fs-15); /* 15px */

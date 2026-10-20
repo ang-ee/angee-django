@@ -5,6 +5,8 @@
 import { graphql, type DocumentType } from "@angee/gql/console";
 
 export const STORAGE_CATALOGUE_LIMIT = 500;
+/** The record edge declared by attachment-capable resource metadata. */
+export const FILE_ATTACHMENT_MODEL = "storage.FileAttachment";
 
 export const StorageFileUploadBegin = graphql(`
   mutation StorageFileUploadBegin($input: FileUploadBeginInput!) {
@@ -147,6 +149,12 @@ export const StorageRecordFiles = graphql(`
         file { id filename title size_bytes created_by_label }
       }
     }
+  }
+`);
+
+export const StorageFileAttachments = graphql(`
+  query StorageFileAttachments($file: ID!) {
+    file_attachments(file: $file) { id model_label record_id }
   }
 `);
 

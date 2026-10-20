@@ -245,14 +245,18 @@ export interface TimelineKindContent {
  */
 export interface RelatedGroupContent {
   when?: (context: ChatterViewContext) => boolean;
+  /** Eligible only where the record's metadata declares this edge. */
+  edge?: { model: string };
   label: ReactNode;
   /** Rows the group has on this record, for the tab's count and the group's label. */
   useCount?: (context: ChatterViewContext) => number | undefined;
   /** Whether the group offers its one verb (upload, bind) on this record; a group with neither rows nor a verb is absent. */
   useVerb?: (context: ChatterViewContext) => boolean;
-  /** The group's rows and its verb, rendered under its label. */
-  render: (context: ChatterViewContext) => ReactNode;
+  /** One component owns the action and rows; label(action?) supplies the counted PaneLabel. */
+  render: (context: ChatterViewContext, label: RelatedGroupLabel) => ReactNode;
 }
+
+export type RelatedGroupLabel = (action?: ReactNode) => ReactNode;
 
 /**
  * A file-preview renderer contributed at build time; merges by `id` (fail-fast

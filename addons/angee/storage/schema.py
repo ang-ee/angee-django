@@ -27,7 +27,7 @@ from angee.graphql.ids import (
     require_instance_for_id,
 )
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import actor_scoped_public_id
+from angee.graphql.relations import RecordReferenceNode, actor_scoped_public_id, with_record_reference_access
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.permissions import RolePermission, request_from_info
@@ -148,13 +148,23 @@ class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
         return str(row.download_url())
 
 
-@strawberry.type
-class RecordFileAttachmentType:
-    """An actor-readable attachment and its independently authorized file."""
+@strawberry_django.type(FileAttachment)
+class FileAttachmentType(RecordReferenceNode):
+    """An actor-readable file edge, with its target identity redacted when unreadable."""
 
-    id: strawberry.ID
-    label: str
+    label: auto
     file: FileType
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["label", "file_id"],
+        description=NODE_DISPLAY_NAME_DESCRIPTION,
+    )
+
+    model_label: str | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
+    )
+    record_id: PublicID | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
+    )
 
 
 @strawberry.type
@@ -162,12 +172,21 @@ class RecordFilesType:
     """The upload capability and visible edges of one readable record."""
 
     can_upload: bool
-    attachments: list[RecordFileAttachmentType]
+    attachments: list[FileAttachmentType]
 
 
 @strawberry.type
 class StorageQuery:
     """Record-scoped attachment reads shared by public and console schemas."""
+
+    @strawberry.field(name="file_attachments")
+    def file_attachments(self, file: PublicID) -> list[FileAttachmentType]:
+        """Read one file's edges through the shared target-access projection."""
+
+        source = instance_for_id(File, file)
+        if source is None:
+            return []
+        return list(with_record_reference_access(source.attachments.select_related("file")))
 
     @strawberry.field(name="record_files")
     def record_files(self, model_label: str, record_id: PublicID) -> RecordFilesType:
@@ -190,10 +209,7 @@ class StorageQuery:
         manager = FileAttachment._default_manager
         return RecordFilesType(
             can_upload=manager.has_record_arm(generic_target(record)) and record.has_access("write"),
-            attachments=[
-                RecordFileAttachmentType(id=strawberry.ID(str(edge.sqid)), label=edge.label, file=edge.file)
-                for edge in manager.for_record(record)
-            ],
+            attachments=list(with_record_reference_access(manager.for_record(record))),
         )
 
 
@@ -537,7 +553,7 @@ _SHARED_TYPES = [
     DriveType,
     FolderType,
     FileType,
-    RecordFileAttachmentType,
+    FileAttachmentType,
     RecordFilesType,
     FileUploadBeginPayload,
     FileUploadFinalizePayload,

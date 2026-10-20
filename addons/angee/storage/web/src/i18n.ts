@@ -8,6 +8,7 @@ export const enStorageMessages: Record<string, string> = {
   "record.loading": "Loading attached files",
   "record.loadingDrives": "Loading upload destinations",
   "record.empty": "No files attached",
+  "attachedTo.loading": "Loading attached records",
   "upload.retry": "Retry",
   // Browser-level loading and empty states.
   "loading": "Loading files…",
@@ -56,6 +57,7 @@ export const enStorageMessages: Record<string, string> = {
   "list.emptyUpload": "Drop files here or use Upload.",
   "list.empty": "No files here yet",
   "upload.button": "Upload",
+  "upload.chooseFiles": "Choose files",
   "upload.dropOverlay": "Drop to upload",
   "upload.heading": "Uploads",
   "upload.clearFinished": "Clear finished",

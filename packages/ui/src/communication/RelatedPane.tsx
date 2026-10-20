@@ -6,14 +6,16 @@ import { modelChain, useContainer, type ChatterViewContext, type ComposedContain
 import { PaneLabel, PaneRows } from "./pane-list";
 
 /** The groups eligible on this view, in composed order. */
-export function useRelatedGroups(context: ChatterViewContext): readonly ComposedContainerChild<RelatedGroupContent>[] {
+export function useRelatedGroups<T extends RelatedGroupContent = RelatedGroupContent>(context: ChatterViewContext): readonly ComposedContainerChild<T>[] {
   const models = React.useMemo(
     () => modelChain(context.route?.canonicalLabel, context.route?.modelLabel),
     [context.route?.canonicalLabel, context.route?.modelLabel],
   );
-  const children = useContainer<RelatedGroupContent>("related#groups", { models });
+  const children = useContainer<T>("related#groups", { models });
   return React.useMemo(
-    () => children.filter((child) => context.view.kind === "record" && (child.content.when?.(context) ?? true)),
+    () => children.filter(({ content }) => context.view.kind === "record"
+      && (!content.edge || context.route?.recordEdges?.includes(content.edge.model))
+      && (content.when?.(context) ?? true)),
     [children, context],
   );
 }
@@ -57,10 +59,6 @@ function RelatedGroup({ group, context }: { group: ComposedContainerChild<Relate
   const verb = group.content.useVerb?.(context) ?? false;
   // A group with neither rows nor a verb is absent, not empty.
   if (count === 0 && !verb) return null;
-  return (
-    <>
-      <PaneLabel count={count}>{group.content.label}</PaneLabel>
-      <li>{group.content.render(context)}</li>
-    </>
-  );
+  return <>{group.content.render(context, (action) =>
+    <PaneLabel count={count} action={verb ? action : null}>{group.content.label}</PaneLabel>)}</>;
 }

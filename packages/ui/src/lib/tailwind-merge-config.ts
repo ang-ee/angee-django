@@ -4,7 +4,7 @@ import { TONES } from "./tones";
 
 type TailwindMergeConfig = Parameters<typeof extendTailwindMerge>[0];
 
-const FONT_SIZE_TOKENS = ["2xs", "13", "15", "22", "28", "34"];
+const FONT_SIZE_TOKENS = ["2xs", "12", "13", "15", "22", "28", "34"];
 
 // The two-axis fill matrix (lib/tones.ts) emits, per vivid palette: `bg-P`
 // (solid) / `bg-P-tint` (surface), `border-P` (solid) / `border-P-soft` /

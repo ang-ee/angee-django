@@ -9,7 +9,7 @@ import { pageBacklinksGroup, pageBoundToGroup, recordPagesGroup } from "./Record
 import { vaultCreateForm } from "./views/vault-form";
 
 export { KnowledgePageView, type KnowledgePageViewProps } from "./KnowledgePageView";
-export { RecordPagesPane, recordPagesGroup, recordPagesTarget, type RecordPagesGroupOptions, type RecordPagesTarget } from "./RecordPagesPane";
+export { recordPagesGroup, recordPagesTarget, type RecordPagesGroupOptions, type RecordPagesTarget } from "./RecordPagesPane";
 export { RecordNotesStream, recordNotesTab, type RecordNotesStreamProps, type RecordNotesTabOptions } from "./RecordNotesStream";
 
 const KNOWLEDGE_ID = "knowledge";

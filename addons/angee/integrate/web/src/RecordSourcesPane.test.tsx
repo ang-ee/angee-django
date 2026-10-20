@@ -3,7 +3,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import type { ChatterViewContext } from "@angee/ui";
+import { AppRuntimeProvider, CHATTER_CONTAINERS, RelatedPane, containersFromChildren, type ChatterViewContext } from "@angee/ui";
 
 const mocks = vi.hoisted(() => ({ query: vi.fn() }));
 
@@ -13,7 +13,7 @@ vi.mock("@angee/refine", async (original) => ({
 }));
 
 import { RecordSourcesDocument } from "./documents";
-import { RecordSourcesPane, recordSourcesGroup } from "./RecordSourcesPane";
+import { recordSourcesGroup } from "./RecordSourcesPane";
 
 const context: ChatterViewContext = {
   pathname: "/bills/bil_1",
@@ -52,9 +52,9 @@ beforeEach(() => {
 afterEach(cleanup);
 
 test("the Sources group counts and lists each source as a row linking to its outbound URL", () => {
-  expect(recordSourcesGroup.content.when?.(context)).toBe(true);
-  function Count() { return <span>Count {recordSourcesGroup.content.useCount?.(context)}</span>; }
-  render(<><Count /><RecordSourcesPane context={context} /></>);
+  render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
+    "related#groups": { "integrate.sources": recordSourcesGroup },
+  }) }}><RelatedPane context={context} /></AppRuntimeProvider>);
 
   expect(mocks.query).toHaveBeenCalledWith(RecordSourcesDocument, {
     modelLabel: "accounting.Bill",
@@ -64,9 +64,11 @@ test("the Sources group counts and lists each source as a row linking to its out
     models: ["integrate.RecordLink"],
     records: [{ model: "accounting.Bill", id: "bil_1" }],
   });
-  expect(screen.getByText("Count 1")).toBeTruthy();
+  expect(screen.getByText("Sources").closest("li")?.textContent).toBe("Sources· 1");
   const row = screen.getByRole("link", { name: /Accounting source/ });
   expect(row.getAttribute("href")).toBe("https://source.test/42");
+  expect(row.getAttribute("target")).toBe("_blank");
+  expect(row.getAttribute("rel")).toBe("noopener");
   expect(row.textContent).toContain("bills · company-1");
   expect(row.textContent).toContain("CURRENT");
   expect(row.textContent).toContain("account.move:42");

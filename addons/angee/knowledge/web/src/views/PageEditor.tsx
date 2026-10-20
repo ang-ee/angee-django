@@ -1,7 +1,9 @@
 import { useMemo, type ReactElement } from "react";
 
 import {
-  Button, EmptyState, Glyph, Skeleton, SkeletonStatus, cn, formatDate as formatBaseDate, textRoleVariants, useResolvedWidget, type WidgetField } from "@angee/ui";
+  Button, ControlBand, EmptyState, Glyph, Skeleton, SkeletonStatus, SurfaceHeader, cn,
+  formatDate as formatBaseDate, textRoleVariants, useResolvedWidget, type WidgetField,
+} from "@angee/ui";
 import { useKnowledgeT } from "../i18n";
 import type { KnowledgePageDetail } from "../data/documents";
 import { usePageEditor, type SaveStatus } from "../data/use-page-editor";
@@ -44,64 +46,35 @@ export function PageEditor({
   );
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-[820px] flex-col gap-4 overflow-auto px-8 py-8">
-      <header className="grid gap-1">
-        <div className="flex items-center gap-2">
-          <Glyph
-            decorative
-            name={detail.kind === "folder" ? "folder" : "note"}
-            className="shrink-0 text-fg-muted"
-          />
-          <input
-            autoFocus
-            value={editor.title}
-            placeholder={t("editor.titlePlaceholder")}
-            aria-label={t("editor.titleLabel")}
-            className="min-w-0 flex-1 border-0 bg-transparent text-28 font-semibold leading-9 text-fg outline-none placeholder:text-fg-subtle"
-            onChange={(event) => editor.setTitle(event.currentTarget.value)}
-            onBlur={editor.commitTitle}
-          />
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            onClick={onDone}
-          >
-            <Glyph name="check" />
-            {t("editor.done")}
+    <div className="flex h-full min-h-0 flex-col bg-canvas">
+      <ControlBand>
+        <Button type="button" size="sm" variant="secondary" onClick={onDone}>
+          <Glyph name="check" />
+          {t("editor.done")}
+        </Button>
+        {onDelete ? (
+          <Button type="button" size="iconSm" variant="ghost" aria-label={t("editor.deleteLabel")} onClick={onDelete}>
+            <Glyph name="trash" />
           </Button>
-          {onDelete ? (
-            <Button
-              type="button"
-              size="iconMd"
-              variant="ghost"
-              aria-label={t("editor.deleteLabel")}
-              onClick={onDelete}
-            >
-              <Glyph name="trash" />
-            </Button>
-          ) : null}
-        </div>
-        <div className={cn(textRoleVariants({ role: "meta" }), "flex items-center gap-2 pl-6 font-mono")}>
-          <span>{metaLine(detail, t)}</span>
-          <SaveBadge status={editor.status} t={t} />
-        </div>
-      </header>
-
-      {isNote && Body ? (
-        <Body
-          value={editor.body}
-          field={bodyField}
-          onChange={(next) => editor.setBody(typeof next === "string" ? next : "")}
-        />
-      ) : (
-        <EmptyState
-          fill
-          icon="folder"
-          title={t("editor.folderTitle")}
-          description={t("editor.folderDescription")}
-        />
-      )}
+        ) : null}
+        <div className="ml-auto text-12 text-fg-muted"><SaveBadge status={editor.status} t={t} /></div>
+      </ControlBand>
+      <SurfaceHeader density="compact" headingLevel={null} icon={detail.kind === "folder" ? "folder" : "note"}
+        title={<input autoFocus value={editor.title} placeholder={t("editor.titlePlaceholder")} aria-label={t("editor.titleLabel")}
+          className={cn(textRoleVariants({ role: "title" }), "min-w-0 w-full border-0 bg-transparent outline-none placeholder:text-fg-subtle")}
+          onChange={(event) => editor.setTitle(event.currentTarget.value)} onBlur={editor.commitTitle} />}
+        subtitle={metaLine(detail, t)} />
+      <div className="mx-auto min-h-0 w-full max-w-[820px] flex-1 overflow-auto p-6">
+        {isNote && Body ? (
+          <Body
+            value={editor.body}
+            field={bodyField}
+            onChange={(next) => editor.setBody(typeof next === "string" ? next : "")}
+          />
+        ) : (
+          <EmptyState fill icon="folder" title={t("editor.folderTitle")} description={t("editor.folderDescription")} />
+        )}
+      </div>
     </div>
   );
 }

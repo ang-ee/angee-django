@@ -740,9 +740,9 @@ shared UI copy through an addon bundle.
   and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
 - **Records have one chronology.** The timeline addon owns the `Timeline`
   tab, the `timeline.Event` ledger and the `timeline` read that pages it
-  behind one cursor; each addon contributes a Python timeline kind (its id,
-  sequence, source models, eligibility, rows and the projection of a row's
-  events, synced on every save) and a `timeline#kinds` presentation (label,
+  behind one cursor; each addon contributes a Python
+  [timeline kind](../../addons/angee/timeline/kinds.py), reconciled through the
+  owner's committed change publications, and a `timeline#kinds` presentation (label,
   glyph, verb, target). A line is a pointer: one sentence, actor, time, one
   verb, never a body, never an action. A run folds its decisions and changes
   into its line; the run drill-in shows one run with its own Stop. The same
@@ -1092,6 +1092,9 @@ optionally `when`, `count`/`useCount`, `target` and `panelClassName`. Every
 pane renders into the shell's `PaneToolbar` band (scope · selector · search ·
 actions · overflow; back and title first on a drill-in) instead of its own
 header row; the same band heads explorer panes on the left.
+Collections in these panes keep their native resource query/state owner and use
+`ListView.renderPaneRow` for pointer rows and `renderToolbar` for the pane band;
+group expansion and paging still belong to the shared collection surface.
 
 **Four tabs are in the strip, in this order**, each only where its capability
 exists. A tab serves a recurring record-wide job (reading what happened,
@@ -1104,7 +1107,7 @@ drill-in:
 | `timeline.rail` | 10 | the view is a model-backed record with at least one eligible kind | one chronology, newest first, one line per event, scope chips with counts | timeline |
 | `messaging.discussion` | 20 | the model composes the chatter thread (`messaging.ThreadAttachment:chatter` in `recordEdges`) and the body is not itself the conversation | the record's thread: comments, internal notes, emails sent from here, the composer | messaging |
 | `projects.tasks` | 30 | `projects.Task` in `recordEdges` and the body does not own the task plan | open tasks about the record, schedule and assign, a folded Completed section | projects |
-| `related` | 40 | at least one `related#groups` or `<model>#groups` child is eligible | groups Files (upload), Pages (bind), Sources (external links), Conversations (source threads); reverse edges (Backlinks, Bound to) on pages | framework tab; storage, knowledge, integrate, messaging own the groups |
+| `related` | 40 | at least one `related#groups` or `<model>#groups` child is eligible | groups Files (upload), Pages (bind), Sources (external links), Conversations (source threads); Attached to on files; Backlinks and Bound to on pages | framework tab; storage, knowledge, integrate, messaging own the groups |
 
 A tab earns the strip by creating things; everything else is a **drill-in**: a
 `record#aside` child with `strip: false` that renders one object named by its
@@ -1117,9 +1120,15 @@ destination from the strip never unregisters its drill-in. The record's own
 state belongs in the header and sheet; a drill-in acts on the record's process
 (answer, stop, revert) and never edits its content.
 
+Messaging's [`messaging.conversation`](../../addons/angee/messaging/web/src/index.tsx)
+drill-in targets a `ThreadAttachment`. Its pane resolves the thread through the
+authorized `record_source_threads` read and composes `ThreadTranscript`.
+Conversation rows in Related continue linking to the thread page.
+
 A tab that lists one polymorphic edge (files, pages, sources, the chatter
-thread, tasks) shows only where the record's type can carry it: its `when`
-checks the edge's model label in `context.route.recordEdges`, the resource
+thread, tasks) shows only where the record's type can carry it: Related groups
+declare `edge.model`; other tabs check it in `when`. The framework checks the
+edge's model label in `context.route.recordEdges`, the resource
 metadata the backend derives from each edge's schema target relations. Timeline
 sources use the same fact to decline unsupported records; workflow run evidence
 accepts any canonical REBAC record. Never let a pane report the edge
@@ -1128,32 +1137,54 @@ with neither rows nor a verb is absent, not empty.
 
 Each `related#groups` child (or `<model>#groups` for one model's pages) is one
 group of the framework's Related tab, declared by the addon that owns the edge.
-The tab draws the group's label with its count; the group renders its rows and
-its one verb through the shared pane row anatomy:
+The tab draws the group's label, count and action; the group supplies its rows
+through the shared pane row anatomy:
 
 ```ts
 interface RelatedGroupContent {
   when?: (context: ChatterViewContext) => boolean;
+  edge?: { model: string };
   label: ReactNode;
   useCount?: (context: ChatterViewContext) => number | undefined;
-  useVerb?: (context: ChatterViewContext) => boolean; // offers its one verb here
-  render: (context: ChatterViewContext) => ReactNode;
+  useVerb?: (context: ChatterViewContext) => boolean;
+  render: (context: ChatterViewContext, label: (action?: ReactNode) => ReactNode) => ReactNode;
 }
 ```
 
-A group with neither rows nor a verb is absent, not empty.
+A group with neither rows nor a verb is absent, not empty. `useVerb` is the
+presence rule, including write restrictions such as view-as. `render(context,
+label)` returns one component with local state. It calls `label(action)` for the
+framework's counted `PaneLabel` and places its row content in a sibling `li`.
+Only when `useVerb` is true does the label show the action. Compose
+`PaneLabelPopover` for a small Upload or Bind picker; the component's upload or
+mutation state survives the popover closing. Count and presence probes never
+mount that component or its write state.
+
+`edge.model` makes a group eligible only when that exact model is declared in
+the route's `recordEdges`; `when` adds optional narrowing. Addons own role claims
+through typed content extending `RelatedGroupContent` and use
+`useRelatedGroups(context)` to find eligible siblings after model scope,
+container narrowing and `when`. A generic group excludes those roles from both its
+rows and count; a role-specific group lists its own role. Knowledge's generic
+Pages group therefore includes `related` and unclaimed roles while a Contract
+group owns `contract`, without counting that binding twice.
 
 **Every pane list composes one row anatomy** (`PaneRow`, `PaneRows`,
-`PaneLabel` in `@angee/ui`): glyph, `title · detail`, a right meta, a muted
+`PaneLabel`, `PaneLabelAction`, `PaneLabelPopover` in `@angee/ui`): glyph, `title · detail`, a right meta, a muted
 second line and one hover verb, on the 13/12 scale; a row is a link when its
-target has a page and a button when it opens something beside it. Day and
+target has a page and a button when it opens something beside it. Rows without
+either remain non-interactive. `PaneRow` composes `useInAppLink` for host navigation,
+preloading and native modified clicks. Reverse record pointers use
+`RecordReferenceRow`, supplying the list's references so labels share one bounded
+query per model without changing row order. Day and
 section labels sit above rows, folded sections open from their label. A pane
 never picks its own font size, card or header row.
 
 Each `timeline#kinds` child presents one kind a Python timeline kind
-implements (the kind declares `id`, `sequence`, `models`, `eligible`, `rows`
-and `events`; see `angee.timeline.kinds`). The owner projects its rows into
-the `timeline.Event` ledger on every save; the read pages that one table:
+implements; [the kind contract](../../addons/angee/timeline/kinds.py) owns its
+source models, projections, read policy and live attention predicate. Published
+owner changes reconcile the `timeline.Event` ledger after commit; the read pages
+that table through the record's and each target owner's read policies:
 
 ```ts
 interface TimelineKindContent {
@@ -1165,14 +1196,16 @@ interface TimelineKindContent {
 }
 ```
 
-The rail composes lines from the union read and these presentations. Semantic
+The rail composes lines from the ledger read and these presentations. Semantic
 grouping (a run's decisions and changes counted on the run's line) is the
-read's: the source returns `group_id` and the read nests before it pages, so a
-group never splits across pages and a parent outside the window still carries
-its counts. The rail owns the visual part once: day separators, filtering,
-keyset paging, loading, empty, partial-failure and error states. `target.focus`
-names the focus kind (`message`, `decision`, `field`); the focused id travels
-in `chatterFocus`. The back strip is labelled with the origin tab's label. Follow subscribes to timeline kinds; the messaging
+read's: kinds name a fold target, and readable events on the same record are
+counted beneath lines targeting that row. Top-level lines page independently of
+their children. The rail owns day separators, filtering, keyset paging, loading,
+empty and error states. `target.focus`
+names the focus kind (`message`, `decision`, `field`), carried in `chatterFocus`;
+the target's public id travels in `chatterTarget`. A strip tab opened from a
+Timeline line receives the same `ChatterSelection` as a drill-in. The back strip
+is labelled with the origin tab's label. Follow subscribes to timeline kinds; the messaging
 tracking subtypes that mirrored provenance and workflows are retired.
 
 Tabs a page publishes with `useChatterContent` are runtime children of the same
