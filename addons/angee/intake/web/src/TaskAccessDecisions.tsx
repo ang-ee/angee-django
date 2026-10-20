@@ -14,7 +14,7 @@ const STATE_COPY = {
   approved: { pill: "access.state.approved", sentence: "access.copy.approved" },
   denied: { pill: "access.state.denied", sentence: "access.copy.denied" },
   pending: { pill: "access.state.pending", sentence: "access.copy.pending" },
-  unavailable: { pill: "access.state.unavailable", sentence: "access.copy.unavailable" },
+  unknown: { pill: "access.state.unknown", sentence: "access.copy.unknown" },
 } as const;
 
 /** Render the Need owner's current access decision without another collection surface. */
@@ -34,15 +34,14 @@ export function TaskAccessDecisions({
     const verdict = Array.isArray(need.access_verdict) ? need.access_verdict : null;
     const stateKey = verdict?.includes("intake.approve") ? "approved"
       : verdict?.includes("intake.deny") ? "denied"
-        : need.access_decision?.is_open ? "pending" : "unavailable";
+        : need.access_decision?.is_open ? "pending" : "unknown";
     const state = STATE_COPY[stateKey];
     return <Card key={need.id}>
       <CardHeader className="flex-row flex-wrap items-center gap-2">
         <Avatar size="sm" src={need.party?.display_avatar?.url || undefined} initials={avatarInitials(name)} />
         <span className="font-medium">{name}</span>
         {email ? <span className="text-fg-muted">{email}</span> : null}
-        {/* approved, denied and pending read their tones from the framework vocabulary; the
-            manifest adds `unavailable`. */}
+        {/* approved, denied, pending and unknown read their tones from the framework vocabulary. */}
         <StatusBadge value={stateKey}>{t(state.pill)}</StatusBadge>
       </CardHeader>
       <CardContent className={textRoleVariants({ role: "meta", className: "pt-0" })}>

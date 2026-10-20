@@ -29,7 +29,6 @@ const intake = defineBaseAddon({
   i18n: { intake: enIntakeMessages },
   icons: { "intake-needs": MessageSquareQuote },
   // The access verdict words beyond the framework's: no decision at all reads as inert.
-  statusTones: { unavailable: "neutral" },
   containers: {
     [`${TASK_MODEL}#access-roles`]: {
       "intake.requester": { content: TaskRequesterAccessRole },

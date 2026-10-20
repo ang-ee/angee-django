@@ -483,3 +483,4 @@ export {
   useResourceViewKindContent,
   useResourceViewKinds,
 } from "./resource/resource-view-kinds";
+export { RecordVerb } from "./form/RecordVerb";

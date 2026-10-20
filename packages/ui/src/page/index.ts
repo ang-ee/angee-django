@@ -35,3 +35,4 @@ export {
   type SectionNavItem,
   type SectionNavProps,
 } from "./SectionNav";
+export { ReportPage, type ReportPageProps } from "./ReportPage";

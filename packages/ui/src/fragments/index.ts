@@ -95,3 +95,8 @@ export {
   surfaceHeaderVariants,
   type SurfaceHeaderProps,
 } from "./SurfaceHeader";
+export {
+  OverflowChipList,
+  type OverflowChipListItem,
+  type OverflowChipListProps,
+} from "./OverflowChipList";
