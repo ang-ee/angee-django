@@ -43,6 +43,7 @@ const OPTIONAL_ADDON_ROOTS = [
 // UX ontology guard covers them when present, the layering guards stay in-repo.
 const CONSUMER_ADDON_ROOTS = [
   resolve(MONOREPO_ROOT, "../angee-arp/addons"),
+  resolve(MONOREPO_ROOT, "../angee-odoo/addons"),
   resolve(MONOREPO_ROOT, "../angee-phrogg/addons"),
 ] as const;
 // Parsing every framework, tooling, and addon source file grows with the tree,

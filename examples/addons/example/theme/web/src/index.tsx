@@ -1,5 +1,5 @@
 import { defineBaseAddon } from "@angee/app";
-import { FieldLabel, FieldRoot, Select } from "@angee/ui";
+import { FieldLabel, FieldRoot, Select, useT } from "@angee/ui";
 import {
   defineThemeContribution,
   type ThemeOptionsEditorProps,
@@ -8,18 +8,19 @@ import {
 import { themes } from "./themes.mjs";
 
 function PaperOptionsEditor({ value, disabled, onChange }: ThemeOptionsEditorProps) {
+  const t = useT("themes");
   const options = themes[0].options!.parse(value?.value ?? themes[0].options!.defaults);
   return (
     <FieldRoot>
-      <FieldLabel>Paper tint</FieldLabel>
+      <FieldLabel>{t("paper.tint")}</FieldLabel>
       <Select
-        aria-label="Paper tint"
+        aria-label={t("paper.tint")}
         disabled={disabled}
         value={options.paperTint}
         onValueChange={(paperTint) => onChange({ version: 1, value: { paperTint } })}
         options={[
-          { label: "Cream", value: "cream" },
-          { label: "White", value: "white" },
+          { label: t("paper.tint.cream"), value: "cream" },
+          { label: t("paper.tint.white"), value: "white" },
         ]}
       />
     </FieldRoot>
@@ -38,6 +39,9 @@ export default defineBaseAddon({
     themes: {
       "paper.label": "Paper",
       "paper.description": "A consumer theme with a bundled texture and one bounded option.",
+      "paper.tint": "Paper tint",
+      "paper.tint.cream": "Cream",
+      "paper.tint.white": "White",
     },
   },
 });

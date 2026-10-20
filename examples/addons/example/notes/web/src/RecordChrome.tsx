@@ -8,17 +8,10 @@ export function RecordChrome(): ReactElement | null {
   const t = useNotesT();
   const record = useRecordChromeContext();
   if (record.resource !== "notes.Note") return null;
+  // A header control is the one icon button, like Follow and Share beside it.
   return (
-    <div className="flex items-center">
-      <Button
-        type="button"
-        variant="ghost"
-        size="iconMd"
-        aria-label={t("record.star")}
-        className="text-warning-text hover:text-warning-text"
-      >
-        <Glyph name="star" className="fill-current" />
-      </Button>
-    </div>
+    <Button type="button" variant="ghost" size="iconSm" aria-label={t("record.star")}>
+      <Glyph name="star" />
+    </Button>
   );
 }

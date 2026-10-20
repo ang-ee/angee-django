@@ -128,8 +128,7 @@ export function NotePage(): React.ReactElement {
           </StatusSegment>
         ) : null}
         <StatuslineSpacer />
-        <StatusSegment>notes.Note</StatusSegment>
-        <StatusSegment icon="grid">console</StatusSegment>
+        <StatusSegment icon="grid">{t("status.surface")}</StatusSegment>
       </Statusline>
     </div>
   );
