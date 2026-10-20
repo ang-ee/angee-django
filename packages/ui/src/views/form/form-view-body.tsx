@@ -49,14 +49,9 @@ import {
 import type { FormViewSurface } from "./form-view-surface";
 import { directDottedPathMessages } from "./validation-errors";
 import { SectionHeading } from "./SectionHeading";
+import { RecordHeader } from "../../fragments/RecordHeader";
 import { RecordFieldMarkControl } from "./record-field-marks";
 
-const TITLE_TEXT_CLASS =
-  "block w-full min-w-0 break-words text-28 font-semibold leading-9 text-fg";
-const TITLE_EDITOR_CLASS =
-  "min-h-9 overflow-hidden rounded-none border-0 bg-transparent px-0 py-0 shadow-none " +
-  "text-28 font-semibold leading-9 hover:border-transparent focus:border-transparent " +
-  "focus:bg-transparent focus-visible:border-transparent placeholder:text-fg-subtle";
 const EDITABLE_FIELD_CONTROL_CLASS = cn(
   "-mx-2 min-h-8 rounded-6 border border-transparent bg-transparent px-2",
   "transition-colors hover:border-border-subtle hover:bg-inset",
@@ -117,14 +112,16 @@ function WrappingTitleEditor({
 export const FORM_VIEW_COLUMN_CLASS =
   "mx-auto w-full max-w-[1100px] px-6 sm:px-8";
 
-/** @kind region
- * @region record-header
+/** The form's record header on the shared `RecordHeader`: eyebrow · title (read, editable, or a
+ * relation) with its marks · statusbar on the title row · facts line · header extras.
+ * @owner RecordHeader
  */
 export function FormViewRecordHeader({
   surface,
   compact = false,
   awaiting = false,
   title,
+  eyebrow,
   extra,
   contextLine,
 }: {
@@ -133,6 +130,8 @@ export function FormViewRecordHeader({
   /** The saved record has not arrived yet: render the header's shape. */
   awaiting?: boolean;
   title?: React.ReactNode;
+  /** The eyebrow above the title: the record's kind and container. */
+  eyebrow?: React.ReactNode;
   extra?: React.ReactNode;
   contextLine?: React.ReactNode;
 }): React.ReactElement {
@@ -196,20 +195,21 @@ export function FormViewRecordHeader({
     observer.observe(container);
     return () => observer.disconnect();
   }, [awaiting, compact, currentStatusField]);
+  const density = compact ? "compact" : "comfortable";
   if (awaiting) {
     return (
-      <header className={cn("grid", compact ? "gap-1" : "gap-4")}>
+      <RecordHeader density={density} className="border-b-0 px-0" title={
         <SkeletonStatus label={t("form.loading")} className={cn("grid", compact ? "gap-1" : "gap-3")}>
           {statusField && !compact ? <Skeleton className="h-6 w-72" /> : null}
-          <Skeleton shape="text" className={compact ? "h-5 w-1/2" : "h-9 w-2/3"} />
+          <Skeleton shape="text" className={compact ? "h-5 w-1/2" : "h-7 w-2/3"} />
           {!compact ? <Skeleton shape="text" className="h-3 w-64" /> : null}
         </SkeletonStatus>
-      </header>
+      } />
     );
   }
   const statusMark = currentStatusField ? <RecordFieldMarkControl field={currentStatusField.name} label={currentStatusField.label}
     restricted={statusRestricted} /> : null;
-  const status = currentStatusField ? <><div ref={compactStatus ? undefined : statusContainerRef} className={cn(
+  const status = currentStatusField ? <div ref={compactStatus ? undefined : statusContainerRef} className={cn(
     compactStatus ? "contents" : "flex min-w-0 flex-wrap items-center gap-3",
     statusOnTitleRow ? "flex-auto justify-end" : "w-full",
   )}>
@@ -234,113 +234,108 @@ export function FormViewRecordHeader({
         onCommit={() => commitFieldInteraction(currentStatusField.name)}
       />
     } />}
-    {statusOnTitleRow ? statusMark : null}
-  </div>{!statusOnTitleRow ? statusMark : null}</> : null;
+    {statusMark}
+  </div> : null;
+  const editorClass = cn(textRoleVariants({ role: "display" }), "min-h-7 w-full min-w-0 overflow-hidden rounded-none border-0 bg-transparent px-0 py-0 shadow-none hover:border-transparent focus:border-transparent focus:bg-transparent focus-visible:border-transparent placeholder:text-fg-subtle");
+  // The title: a given node, the restricted label, the read-only value, a relation picker, or the editor.
+  let titleNode: React.ReactNode;
+  let editable = false;
+  if (title !== undefined) {
+    titleNode = title;
+  } else if (currentTitleField) {
+    titleNode = (
+      <Controller
+        control={form.control}
+        name={currentTitleField.name}
+        render={({ field: controller }) =>
+          titleRestricted ? (
+            <>{currentTitleField.label ?? t("form.record")}</>
+          ) : fieldReadOnly(currentTitleField) ? (
+            <>{titleText(
+              titleRelation
+                ? titleSelectedOption?.label ?? relationValueId(controller.value)
+                : controller.value,
+              t("form.untitled"),
+            )}</>
+          ) : titleRelation ? (
+            <RelationFieldWidget
+              controlRef={controller.ref}
+              value={relationValueId(controller.value) || null}
+              onChange={(next) => {
+                startFieldInteraction(currentTitleField.name);
+                clearServerFieldError(currentTitleField.name);
+                controller.onChange(next);
+                afterFieldChange(currentTitleField, next);
+              }}
+              onCommit={() => commitFieldInteraction(currentTitleField.name)}
+              relation={titleRelation}
+              filters={currentTitleField.filters}
+              selectedOption={titleSelectedOption}
+              placeholder={currentTitleField.placeholder ?? t("form.untitled")}
+              aria-label={fieldAriaLabel(currentTitleField)}
+            />
+          ) : (
+            <WrappingTitleEditor
+              controlRef={controller.ref}
+              data-form-title="true"
+              value={String(controller.value ?? "")}
+              placeholder={currentTitleField.placeholder ?? t("form.untitled")}
+              aria-label={fieldAriaLabel(currentTitleField)}
+              className={editorClass}
+              onChange={(event) => {
+                startFieldInteraction(currentTitleField.name);
+                clearServerFieldError(currentTitleField.name);
+                controller.onChange(event.currentTarget.value);
+                afterFieldChange(currentTitleField, event.currentTarget.value);
+              }}
+              onBlur={() => commitFieldInteraction(currentTitleField.name)}
+            />
+          )
+        }
+      />
+    );
+    editable = !titleRestricted && !fieldReadOnly(currentTitleField);
+  } else {
+    titleNode = titleText(recordRepresentationValue(displayRecord, modelMetadata), t("form.record"));
+  }
+  const adornments = <>
+    {currentTitleField ? <RecordFieldMarkControl field={currentTitleField.name} label={currentTitleField.label}
+      restricted={titleRestricted} /> : null}
+    {titlePlacementField && displayRecord && !titlePlacementRestricted ? <FieldDescriptorControl
+      field={titlePlacementField}
+      value={displayRecord[titlePlacementField.name]}
+      row={displayRecord}
+      readOnly={fieldReadOnly(titlePlacementField)}
+    /> : null}
+    {titlePlacementField && titlePlacementRestricted ? <span className="inline-flex items-center gap-2 text-13 text-fg-muted">
+      <span>{titlePlacementField.label ?? titlePlacementField.name}</span>
+      <RecordFieldMarkControl field={titlePlacementField.name} label={titlePlacementField.label} restricted />
+    </span> : null}
+  </>;
+  // The metadata-owned facts line is the default. A declared context line
+  // remains the deliberate escape hatch for a domain-specific sentence.
+  const meta = contextLine
+    ? <span className="break-words">{contextLine}</span>
+    : compact ? undefined : <RecordFactsLine resource={modelMetadata?.resource.modelLabel}
+      record={displayRecord} fields={contextFields} attributionFields={attributionFields}
+      technicalParts={subtitleParts} loading={loading} loadingLabel={t("form.loading")}
+      createdByLabel={t("form.createdBy")} updatedByLabel={t("form.updatedBy")} />;
+  const messages = titleField && titleFieldMessages.length > 0 ? (
+    <p className="text-xs leading-5 text-danger-text">{titleFieldMessages.join(", ")}</p>
+  ) : null;
   return (
-    <header className={cn(statusOnTitleRow ? "flex flex-wrap items-start gap-x-6 gap-y-4" : "grid", compact ? "gap-1" : !statusOnTitleRow && "gap-4")}>
-      {!statusOnTitleRow ? status : null}
-      <div className={cn("min-w-0 flex-1 self-start", statusOnTitleRow && "basis-64")}>
-        {/* The title keeps a readable width; its adornments (mark, title-placed field) wrap below it. */}
-        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-form-title-row="true">
-          <div className="min-w-0 flex-[1_1_16rem]">
-        {title !== undefined ? (
-          <h1 className={compact ? "break-words text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>{title}</h1>
-        ) : currentTitleField ? (
-          <Controller
-            control={form.control}
-            name={currentTitleField.name}
-            render={({ field: controller }) =>
-              titleRestricted ? (
-                <h1 className={compact ? "break-words text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>
-                  {currentTitleField.label ?? t("form.record")}
-                </h1>
-              ) : fieldReadOnly(currentTitleField) ? (
-                <h1 className={compact ? "break-words text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>
-                  {titleText(
-                    titleRelation
-                      ? titleSelectedOption?.label ?? relationValueId(controller.value)
-                      : controller.value,
-                    t("form.untitled"),
-                  )}
-                </h1>
-              ) : titleRelation ? (
-                <div className={compact ? "min-w-0 break-words text-base font-semibold" : TITLE_TEXT_CLASS}>
-                  <RelationFieldWidget
-                    controlRef={controller.ref}
-                    value={relationValueId(controller.value) || null}
-                    onChange={(next) => {
-                      startFieldInteraction(currentTitleField.name);
-                      clearServerFieldError(currentTitleField.name);
-                      controller.onChange(next);
-                      afterFieldChange(currentTitleField, next);
-                    }}
-                    onCommit={() => commitFieldInteraction(currentTitleField.name)}
-                    relation={titleRelation}
-                    filters={currentTitleField.filters}
-                    selectedOption={titleSelectedOption}
-                    placeholder={currentTitleField.placeholder ?? t("form.untitled")}
-                    aria-label={fieldAriaLabel(currentTitleField)}
-                  />
-                </div>
-              ) : (
-                <WrappingTitleEditor
-                  controlRef={controller.ref}
-                  data-form-title="true"
-                  value={String(controller.value ?? "")}
-                  placeholder={currentTitleField.placeholder ?? t("form.untitled")}
-                  aria-label={fieldAriaLabel(currentTitleField)}
-                  className={cn(
-                    compact ? "min-h-8 overflow-hidden border-0 bg-transparent px-0 text-base font-semibold shadow-none" : cn(TITLE_TEXT_CLASS, TITLE_EDITOR_CLASS),
-                  )}
-                  onChange={(event) => {
-                    startFieldInteraction(currentTitleField.name);
-                    clearServerFieldError(currentTitleField.name);
-                    controller.onChange(event.currentTarget.value);
-                    afterFieldChange(currentTitleField, event.currentTarget.value);
-                  }}
-                  onBlur={() => commitFieldInteraction(currentTitleField.name)}
-                />
-              )
-            }
-          />
-        ) : (
-          <h1 className={compact ? "break-words text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>
-            {titleText(
-              recordRepresentationValue(displayRecord, modelMetadata),
-              t("form.record"),
-            )}
-          </h1>
-        )}
-          </div>
-          {currentTitleField ? <RecordFieldMarkControl field={currentTitleField.name} label={currentTitleField.label}
-            restricted={titleRestricted} /> : null}
-          {titlePlacementField && displayRecord && !titlePlacementRestricted ? <FieldDescriptorControl
-            field={titlePlacementField}
-            value={displayRecord[titlePlacementField.name]}
-            row={displayRecord}
-            readOnly={fieldReadOnly(titlePlacementField)}
-          /> : null}
-          {titlePlacementField && titlePlacementRestricted ? <span className="inline-flex items-center gap-2 text-13 text-fg-muted">
-            <span>{titlePlacementField.label ?? titlePlacementField.name}</span>
-            <RecordFieldMarkControl field={titlePlacementField.name} label={titlePlacementField.label} restricted />
-          </span> : null}
-        </div>
-        {titleField && titleFieldMessages.length > 0 ? (
-          <p className="mt-1 text-xs leading-5 text-danger-text">
-            {titleFieldMessages.join(", ")}
-          </p>
-        ) : null}
-        {/* The metadata-owned facts line is the default. A declared context line
-            remains the deliberate escape hatch for a domain-specific sentence. */}
-        {!compact && !contextLine ? <RecordFactsLine resource={modelMetadata?.resource.modelLabel}
-          record={displayRecord} fields={contextFields} attributionFields={attributionFields}
-          technicalParts={subtitleParts} loading={loading} loadingLabel={t("form.loading")}
-          createdByLabel={t("form.createdBy")} updatedByLabel={t("form.updatedBy")} /> : null}
-        {contextLine ? <div className="mt-1 break-words text-xs text-fg-muted">{contextLine}</div> : null}
-      </div>
-      {statusOnTitleRow ? status : null}
-      {extra ? <div className={cn(compact && "pt-1", statusOnTitleRow && "w-full")}>{extra}</div> : null}
-    </header>
+    <RecordHeader
+      density={density}
+      className="border-b-0 px-0"
+      headingLevel={editable ? null : 1}
+      crumbs={eyebrow}
+      lead={!statusOnTitleRow ? status : undefined}
+      title={titleNode}
+      titleAdornments={adornments}
+      status={statusOnTitleRow && status ? status : undefined}
+      meta={meta}
+      extra={messages || extra ? <>{messages}{extra}</> : undefined}
+    />
   );
 }
 

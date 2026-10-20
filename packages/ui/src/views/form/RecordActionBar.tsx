@@ -51,6 +51,7 @@ export function RecordActionBar({
   deleteAction,
   contributedActions,
   blocked: blockedByForm = false,
+  menuPlacement = "trailing",
 }: {
   record: Row | null;
   actions: readonly RecordActionDescriptor[];
@@ -61,6 +62,8 @@ export function RecordActionBar({
   contributedActions?: React.ReactNode;
   /** A dirty or pending form must be saved before acting on its persisted record. */
   blocked?: boolean;
+  /** Where the Actions menu sits: an icon-only `⋮` before the verbs (the command band), or a labeled menu after them. */
+  menuPlacement?: "leading" | "trailing";
 }): React.ReactElement | null {
   const preview = useRuntimeViewAs();
   const t = useUiT();
@@ -212,6 +215,18 @@ export function RecordActionBar({
     </React.Fragment>;
   };
 
+  const actionMenu = menuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null || formAction?.fromMenu ? (
+    <ActionMenu blocked={blocked} loading={pendingId !== null}
+      {...(menuPlacement === "leading" ? { label: null, "aria-label": t("list.actions"), size: "iconSm" as const } : {})}>
+      {deleteTrigger}
+      {visibleDeleteAction !== undefined && menuActions.length > 0 ? (
+        <DropdownMenu.Separator />
+      ) : null}
+      {menuActions.map(renderAction)}
+      {contributedActions}
+      {formAction?.fromMenu ? formDialog : null}
+    </ActionMenu>
+  ) : null;
   return (
     <>
       {menu ? <>
@@ -220,6 +235,7 @@ export function RecordActionBar({
         {contributedActions}
         {formDialog}
       </> : <>
+        {menuPlacement === "leading" ? actionMenu : null}
         {toolbarActions.map((action, index) => { const reason = disabledReason(action); return (
           <React.Fragment key={action.id}><Button type="button" size="sm"
             variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
@@ -229,15 +245,7 @@ export function RecordActionBar({
             {action.label}
           </Button>{reason ? <span id={`${descriptionId}-${action.id}`} className="text-xs text-fg-muted">{reason}</span> : null}</React.Fragment>
         ); })}
-        {menuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null || formAction?.fromMenu ? <ActionMenu blocked={blocked} loading={pendingId !== null}>
-          {deleteTrigger}
-          {visibleDeleteAction !== undefined && menuActions.length > 0 ? (
-            <DropdownMenu.Separator />
-          ) : null}
-          {menuActions.map(renderAction)}
-          {contributedActions}
-          {formAction?.fromMenu ? formDialog : null}
-        </ActionMenu> : null}
+        {menuPlacement === "trailing" ? actionMenu : null}
         {formAction && !formAction.fromMenu ? formDialog : null}
       </>}
     </>
