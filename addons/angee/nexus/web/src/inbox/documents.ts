@@ -10,7 +10,6 @@ export const InboxMessageFields = graphql(`
     status
     sent_at
     created_at
-    starred
     sender {
       ...MessageSenderFields
     }
@@ -19,7 +18,6 @@ export const InboxMessageFields = graphql(`
       title {
         text
       }
-      modality
     }
     channel {
       id

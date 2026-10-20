@@ -1,6 +1,5 @@
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  Button,
   Filter,
   RelationFieldWidget,
   Select,
@@ -14,7 +13,6 @@ import {
 import { InboxAccounts } from "./documents";
 import { INBOX_SOURCE_MODELS } from "./state";
 import {
-  COVERAGE_FIELDS,
   COVERAGE_KINDS,
   DIRECT_MAIL_PRESET,
   InboxFilter,
@@ -23,43 +21,6 @@ import {
   type ResultLens,
 } from "./contract";
 import { useNexusT } from "../i18n";
-
-/** Sort writes the same native collection state as the sortable column headers. */
-export function InboxOrder({ navigator = false }: { navigator?: boolean }) {
-  const t = useNexusT();
-  const view = useResourceView();
-  const options = navigator
-    ? [
-        { value: "latest", label: t("inbox.recent") },
-        { value: "label", label: t("inbox.name") },
-        { value: "count", label: t("inbox.count") },
-        { value: "first", label: t("inbox.first") },
-      ]
-    : [
-        { value: "latest", label: t("inbox.latest") },
-        { value: "oldest", label: t("inbox.oldest") },
-      ];
-  const sort = view.state.sorting?.[0];
-  return (
-    <Select
-      size="sm"
-      aria-label={t("inbox.order")}
-      className="w-36"
-      options={options}
-      value={
-        !navigator && sort?.desc === false ? "oldest" : (sort?.id ?? "latest")
-      }
-      onValueChange={(value) =>
-        view.setSorting([
-          {
-            id: value === "oldest" ? "latest" : value,
-            desc: value === "latest" || value === "count",
-          },
-        ])
-      }
-    />
-  );
-}
 
 /**
  * Single-select editor for the shared conversation-kind coverage. Each choice
@@ -95,7 +56,7 @@ export function InboxCoverageKind({
     <Select
       size="sm"
       aria-label={t("inbox.kind")}
-      className="w-44"
+      className="min-w-0 w-28"
       options={[
         { value: "any", label: t("inbox.anyKind") },
         ...COVERAGE_KINDS.flatMap((kind) =>
@@ -307,40 +268,4 @@ export function useNavigatorControls(lens: NavigatorLens) {
       ]
     : [];
   return { filterOptions, customFilterFields };
-}
-
-/** Clear controls operate on the native filter object and preserve the other collection facts. */
-export function InboxClearFilters({ finder = false }: { finder?: boolean }) {
-  const t = useNexusT();
-  const view = useResourceView();
-  const filter = Filter.from(view.state.filter);
-  if (!filter.hasEntries()) return null;
-  if (finder)
-    return (
-      <Button size="sm" variant="ghost" onClick={() => view.setFilter({})}>
-        {t("inbox.clearFinder")}
-      </Button>
-    );
-  return (
-    <>
-      {Filter.from(filter.onlyFields(COVERAGE_FIELDS)).hasEntries() ? (
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => view.setFilter(filter.withoutFields(COVERAGE_FIELDS))}
-        >
-          {t("inbox.clearCoverage")}
-        </Button>
-      ) : null}
-      {Filter.from(filter.withoutFields(COVERAGE_FIELDS)).hasEntries() ? (
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => view.setFilter(filter.onlyFields(COVERAGE_FIELDS))}
-        >
-          {t("inbox.clearMessages")}
-        </Button>
-      ) : null}
-    </>
-  );
 }

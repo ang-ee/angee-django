@@ -1,6 +1,6 @@
 import * as React from "react";
 import { senderAvatarUrl, senderDisplayName, type SenderIdentity } from "@angee/parties";
-import { Avatar, Glyph, RelativeTime, avatarInitials } from "@angee/ui";
+import { Avatar, Glyph, PaneRow, RelativeTime, avatarInitials, type PaneRowProps } from "@angee/ui";
 
 import { useMessagingT } from "./i18n";
 
@@ -13,6 +13,18 @@ export interface MessageSummaryData {
   created_at: string;
   sender?: SenderIdentity | null;
   channel?: { display_name: string } | null;
+}
+
+/** Messaging's compact pointer for a pane; the caller owns its destination. */
+export function MessagePaneRow({ message, ...props }: {
+  message: MessageSummaryData & { platform?: string | null };
+} & Pick<PaneRowProps, "onOpen" | "href" | "selected" | "detail" | "sub" | "meta" | "icon" | "verb">): React.ReactElement {
+  const t = useMessagingT();
+  return <PaneRow icon="channel" title={message.title || message.preview}
+    detail={message.channel?.display_name || message.platform}
+    meta={<RelativeTime value={message.sent_at || message.created_at} />}
+    sub={senderDisplayName(message.sender, t("message.unknownSender"))} verb={t("message.read")}
+    {...props} />;
 }
 
 /** The leaf paths a resource list selects so its rows can render as `MessageSummary`. */

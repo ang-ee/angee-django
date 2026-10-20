@@ -754,9 +754,10 @@ shared UI copy through an addon bundle.
   open decisions and tags marked for attention in one badge cluster. An
   attention tag's normalized name is its `statusTones` key, declared once by
   the addon that owns that vocabulary; there is no attention-column tone map.
-  Sources declare their live-update interests; the timeline fragment keeps no
-  list of foreign models. Run, step and question feeds retain concern
-  identities for scoped invalidation, without polling.
+  The ledger invalidates related records through their declared change feeds
+  after reconciliation; the timeline fragment subscribes to its exact record,
+  with no list of foreign source models. Batched authored reads carry the same
+  exact-record interests as singleton reads, without polling.
 - **Unreadable projected fields remain legible as restrictions.** A record row's
   existing `redacted_fields` ledger lets `RecordFieldMarkControl` show the field
   label and a lock without its value. Compose that projection; never issue a
@@ -1093,8 +1094,9 @@ pane renders into the shell's `PaneToolbar` band (scope · selector · search ·
 actions · overflow; back and title first on a drill-in) instead of its own
 header row; the same band heads explorer panes on the left.
 Collections in these panes keep their native resource query/state owner and use
-`ListView.renderPaneRow` for pointer rows and `renderToolbar` for the pane band;
-group expansion and paging still belong to the shared collection surface.
+`ListView.renderPaneRow` for pointer rows and `pane` for the selector and scope.
+The shared resource toolbar publishes search, chips, ordering, grouping and
+utilities into the pane band; the list body owns group expansion and paging.
 
 **Four tabs are in the strip, in this order**, each only where its capability
 exists. A tab serves a recurring record-wide job (reading what happened,

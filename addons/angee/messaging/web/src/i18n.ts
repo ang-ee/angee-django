@@ -58,6 +58,7 @@ export const enMessagingMessages: Record<string, string> = {
   "conversations.untitled": "Conversation",
   "conversations.messages": "{count} messages",
   "conversations.open": "Open conversation",
+  "conversations.unavailable": "This conversation is no longer available.",
   "chatter.search": "Search comments",
   "chatter.feedLabel": "Comments",
   "chatter.results": "{count} results",
@@ -106,6 +107,7 @@ export const enMessagingMessages: Record<string, string> = {
   // MessageSummary and MessageReader — a message read like an email.
   "message.label": "Message",
   "message.unknownSender": "Unknown sender",
+  "message.read": "Read",
   "message.starred": "Starred",
   "message.to": "To",
   "message.cc": "Cc",

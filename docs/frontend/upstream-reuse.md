@@ -94,13 +94,15 @@ send/create time and database PK. Django-signed cursors bind the current actor,
 root scope, search and order version. Each request reapplies current REBAC scope;
 the cursor does not grant access or require its original row still to exist.
 
-Use `thread_message_feed`, `party_message_feed` or `circle_message_feed`. Pass
+Use `thread_message_feed`. Pass
 `older_cursor` back as `before_cursor`, or `newer_cursor` as `after_cursor`. Both
 directions return newest-first messages, with `has_older`/`has_newer`; page sizes
 are bounded to 200. Clients use those flags and render server order. A row moving
 between requests can repeat, so row overlap alone is not an exhaustion signal.
 
 Record-attached chatter retains its separate record-gated paging contract.
+Party and circle correspondence uses the shared Timeline ledger, contributed by
+Nexus's `nexus.correspondence` kind; it has no separate message-feed endpoint.
 
 ## History retention
 

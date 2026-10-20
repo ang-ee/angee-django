@@ -4,7 +4,7 @@ import {
   Button, Checkbox, Dialog, EmptyState, FieldRoot, PaneToolbar, PaneToolbarIconButton, PaneToolbarMenu, ScopeChip, SearchInput, Select,
   errorMessage, textRoleVariants,
 } from "@angee/ui";
-import type { ChatterViewContext } from "@angee/ui/runtime";
+import type { ChatterSelection, ChatterViewContext } from "@angee/ui/runtime";
 
 import { useMessagingT, type MessagingT } from "./i18n";
 import { READ_MODELS, SetRecordFollowingDocument, type RecordThreadPayload } from "./documents";
@@ -16,6 +16,7 @@ import {
 
 export interface RecordChatterPaneProps {
   context: ChatterViewContext;
+  selection?: ChatterSelection;
   submitKey?: RecordThreadConversationProps["submitKey"];
   messageLimit?: RecordThreadConversationProps["messageLimit"];
 }
@@ -29,7 +30,7 @@ const SCOPES = [
 type ScopeId = (typeof SCOPES)[number]["id"];
 
 /** The record's Discussion: its thread, the pane toolbar and composer. Discuss rooms compose the same conversation owner. */
-export function RecordChatterPane({ context, submitKey, messageLimit }: RecordChatterPaneProps): React.ReactElement {
+export function RecordChatterPane({ context, selection, submitKey, messageLimit }: RecordChatterPaneProps): React.ReactElement {
   const t = useMessagingT();
   const modelLabel = context.route?.modelLabel;
   const recordId = context.view.kind === "record" ? context.view.sqid : undefined;
@@ -49,6 +50,7 @@ export function RecordChatterPane({ context, submitKey, messageLimit }: RecordCh
     <RecordThreadConversation
       modelLabel={modelLabel}
       recordId={recordId}
+      around={selection?.focus === "message" ? selection.target : undefined}
       submitKey={submitKey}
       messageLimit={messageLimit}
       searchPlacement="header"

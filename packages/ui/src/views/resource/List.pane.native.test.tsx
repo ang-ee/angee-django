@@ -22,7 +22,7 @@ const resource = testDataResource("notes.Note", {
   query: ResourceQuery.forRows({ fields: { id: { scalar: "ID" }, title: { scalar: "String" } } }).contract,
 });
 const { Provider, clearClients } = createUiTestProviders({
-  apiUrl: "test://ordered-items", resources: [resource],
+  apiUrl: "test://pane-rows", resources: [resource],
   queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
 });
 afterEach(() => { cleanup(); clearClients(); });
@@ -43,7 +43,7 @@ function fixture({ state, mode }: { state?: ResourceViewInitialState; mode?: "lo
     <AppRuntimeProvider runtime={{ icons: baseIcons }}><ModalsHost><ToastProvider>
       <ResourceViewProvider resource={resource.modelLabel} scope="local" initialState={{ pageSize: 2, ...state }}>
         <ResourceList resource={resource.modelLabel} scope="inherit" presentation="embedded" hideCreate>
-          <List renderItem={(row) => <h3>{String(row.title)}</h3>} emptyContent="No notes">
+          <List renderPaneRow={(row) => <h3>{String(row.title)}</h3>} emptyContent="No notes">
             <Column field="title" />
           </List>
         </ResourceList>
@@ -53,19 +53,17 @@ function fixture({ state, mode }: { state?: ResourceViewInitialState; mode?: "lo
   return getList;
 }
 
-test("List item declarations retain native paging and ordered list semantics", async () => {
+test("List pane declarations retain native paging and list semantics", async () => {
   const getList = fixture();
   await screen.findByRole("heading", { name: "First note" });
   const list = screen.getByRole("list");
-  expect(list.tagName).toBe("OL");
-  expect(list.getAttribute("start")).toBe("1");
+  expect(list.tagName).toBe("UL");
   expect(within(list).getAllByRole("listitem")).toHaveLength(2);
   expect(screen.queryByRole("table")).toBeNull();
   expect(screen.queryByRole("checkbox")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Next page" }));
   await screen.findByRole("heading", { name: "Third note" });
   expect(screen.queryByRole("heading", { name: "First note" })).toBeNull();
-  expect(screen.getByRole("list").getAttribute("start")).toBe("3");
   expect(getList.mock.calls.at(-1)?.[0].pagination).toMatchObject({ currentPage: 2, pageSize: 2 });
 });
 
@@ -79,10 +77,9 @@ test.each(["loading", "empty", "error"] as const)("item collections retain the s
 
 test.each([
   { view: "board" as const },
-  { groupStack: [{ field: "title" }] },
 ])("unsupported item view state blocks reads and resets through the resource owner", async (state) => {
   const getList = fixture({ state });
-  expect((await screen.findByRole("alert")).textContent).toContain("Ordered item lists");
+  expect((await screen.findByRole("alert")).textContent).toContain("Pane lists");
   expect(getList).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Reset filters, sorting and grouping" }));
   expect(await screen.findByRole("heading", { name: "First note" })).toBeTruthy();

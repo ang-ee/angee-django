@@ -1,5 +1,7 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
-import type { ChatterTabContent, ContainerChild } from "@angee/ui";
+import { Tab, type ContainerChild, type TimelineKindContent } from "@angee/ui";
+import { isValidElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 
 import nexus from "./index";
@@ -50,28 +52,20 @@ describe("nexus addon manifest", () => {
     }
   });
 
-  test("declares canonical model and record scopes for chatter tabs", () => {
-    const containers = (nexus.containers ?? {}) as Record<string, Record<string, ContainerChild<ChatterTabContent>>>;
-    const chatter = ["parties.Party#aside", "parties.Circle#aside"].flatMap((address) =>
-      Object.entries(containers[address] ?? {}).map(([id, child]) => ({ id, address, ...child })));
-    expect(chatter.map(({ id, sequence, address }) => ({ id, sequence, address }))).toEqual([
-      { id: "nexus.correspondence", sequence: 30, address: "parties.Party#aside" },
-      { id: "nexus.network", sequence: 31, address: "parties.Party#aside" },
-      { id: "nexus.feed", sequence: 32, address: "parties.Circle#aside" },
-    ]);
-    const recordContext = {
-      pathname: "/parties/people/abc",
-      params: { id: "abc" },
-      view: { kind: "record" as const, type: "list", sqid: "abc" },
-    };
-    const dashboardContext = {
-      pathname: "/parties/people",
-      params: {},
-      view: { kind: "dashboard" as const, type: "list" },
-    };
-    for (const { content } of chatter) {
-      expect(content.when?.(recordContext)).toBe(true);
-      expect(content.when?.(dashboardContext)).toBe(false);
-    }
+  test("contributes correspondence to Timeline and Network to the record body", () => {
+    const containers = nexus.containers ?? {};
+    expect(containers).not.toHaveProperty("parties.Party#aside");
+    expect(containers).not.toHaveProperty("parties.Circle#aside");
+    const kinds = containers["timeline#kinds"] as Record<string, ContainerChild<TimelineKindContent>>;
+    expect(kinds["nexus.correspondence"]).toEqual({ content: {
+      label: "Correspondence", icon: "channel", verb: "Open message", target: { page: true },
+    } });
+    const sections = containers["parties.Party#sections"] as Record<string, ContainerChild>;
+    const network = sections["nexus.network"]?.content;
+    expect(isValidElement(network)).toBe(true);
+    if (!isValidElement<{ id: string; label: React.ReactNode }>(network)) throw new Error("Missing Network tab");
+    expect(network.type).toBe(Tab);
+    expect(network.props.id).toBe("network");
+    expect(renderToStaticMarkup(<>{network.props.label}</>)).toBe("Network");
   });
 });

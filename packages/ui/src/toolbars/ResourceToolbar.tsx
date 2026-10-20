@@ -4,6 +4,10 @@ import { useContainerQuery } from "../lib/use-container-query";
 import { SearchControls } from "../views/resource/search/SearchControls";
 import { useSearchShortcuts, type ListSearchDeclaration } from "../views/resource/search/shortcuts";
 import type { ReactElement, ReactNode } from "react";
+import type { SortingState } from "@tanstack/react-table";
+import { ScopeChip } from "../communication/pane-list";
+import { PaneToolbar, PaneToolbarMenu, type PaneToolbarProps } from "../layouts/PaneToolbar";
+import { SearchActiveLabel } from "../views/resource/search/SearchBox";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
@@ -25,6 +29,7 @@ import type {
 } from "../views/resource/resource-view-model";
 import {
   resourceViewKindCapabilities,
+  resourceViewGroupsEqual,
 } from "../views/resource/resource-view-model";
 import { useResourceViewKindContent, useResourceViewKinds } from "../views/resource/resource-view-kinds";
 
@@ -36,6 +41,11 @@ export interface ResourceToolbarChrome {
 }
 
 export interface ResourceToolbarProps {
+  /** Pane chrome presents the same resource state in the host's shared band. */
+  pane?: Pick<PaneToolbarProps, "selector" | "scope">;
+  sortOptions?: readonly { value: string; label: string }[];
+  sorting?: SortingState;
+  onSortingChange?: (sorting: SortingState) => void;
   search: ResourceSearch;
   pager: PagerState;
   chrome?: ResourceToolbarChrome;
@@ -115,7 +125,61 @@ export interface ResourceViewSwitcherProps<TView extends string = ResourceViewKi
 
 const DEFAULT_SWITCHER_KINDS: readonly ResourceViewKind[] = ["list", "board"];
 
-export function ResourceToolbar({
+export function ResourceToolbar(props: ResourceToolbarProps): ReactElement {
+  return props.pane ? <PaneResourceToolbar {...props} /> : <FullResourceToolbar {...props} />;
+}
+
+/** The pane presentation owns no query state; all commands belong to the resource. */
+function PaneResourceToolbar({ search, pane, searchDeclaration, modelMetadata, sortOptions = [], sorting,
+  onSortingChange, chrome, view, onViewChange, availableViews, viewSwitcher, actions, utilityActions,
+  onCreate, createLabel, viewControls }: ResourceToolbarProps): ReactElement {
+  const t = useUiT();
+  const shortcuts = useSearchShortcuts(searchDeclaration, modelMetadata);
+  const order = sorting?.[0];
+  const firstGroup = search.groupStack[0];
+  const groups = [
+    ...(sortOptions.length && onSortingChange ? [{
+      label: t("resourceToolbar.order"),
+      value: order ? `${order.id}:${order.desc ? "desc" : "asc"}` : "",
+      onValueChange: (value: string) => {
+        const option = sortOptions.flatMap(({ value: field }) => [
+          { value: `${field}:asc`, sorting: [{ id: field, desc: false }] },
+          { value: `${field}:desc`, sorting: [{ id: field, desc: true }] },
+        ]).find((option) => option.value === value);
+        if (option) onSortingChange(option.sorting);
+      },
+      items: sortOptions.flatMap(({ value, label }) => [
+        { value: `${value}:asc`, label: t("resourceToolbar.sortAscending", { label }) },
+        { value: `${value}:desc`, label: t("resourceToolbar.sortDescending", { label }) },
+      ]),
+    }] : []),
+    ...(search.groupingEnabled ? [{
+      label: t("resourceToolbar.groupBy"),
+      value: !firstGroup ? "" : search.groupStack.length === 1
+        ? search.catalog.curatedGroups.find((item) => resourceViewGroupsEqual(item.group, firstGroup))?.id ?? "custom"
+        : "custom",
+      onValueChange: (value: string) => {
+        const selected = search.catalog.curatedGroups.find((item) => item.id === value);
+        if (!value || selected) search.setGroupStack(selected ? [selected.group] : []);
+      },
+      items: [{ value: "", label: t("resourceToolbar.noGrouping") },
+        ...search.catalog.curatedGroups.map((item) => ({ value: item.id, label: item.label }))],
+    }] : []),
+  ];
+  return <PaneToolbar selector={pane?.selector}
+    scope={<>{pane?.scope}{search.active.map((item) => <ScopeChip key={item.id} active
+      label={<SearchActiveLabel item={item} search={search} />} onClick={() => search.clear(item.id)} />)}</>}
+    search={chrome?.search !== false ? <SearchControls search={{ ...search, groupingEnabled: false }}
+      shortcuts={shortcuts} box="collapsed" /> : undefined}
+    actions={<>{onCreate ? <ResourceCreateButton label={createLabel} onCreate={onCreate} /> : null}
+      {actions}{viewControls ? <ResourceViewControls {...viewControls} /> : null}{utilityActions}
+      {view && onViewChange && chrome?.viewSwitcher !== false ? <ResourceViewSwitcher view={view}
+        kinds={availableViews} favorites={search.catalog.favorites} onFavoriteSelect={(favorite) => search.applyFavorite(favorite.id)}
+        onViewChange={onViewChange} /> : null}{chrome?.viewSwitcher !== false ? viewSwitcher : null}</>}
+    overflow={<PaneToolbarMenu groups={groups} />} />;
+}
+
+function FullResourceToolbar({
   search, pager, chrome, view, searchDeclaration, modelMetadata, createLabel, onCreate, actions,
   utilityActions, viewControls, availableViews, viewSwitcher, onPageChange,
   onPageSizeChange, pagerPageSizeOptions, pagerMaxPageSize, onViewChange,
@@ -180,6 +244,14 @@ export function ResourceToolbar({
       </div>
     </section>
   );
+}
+
+/** The resource pager, placed by the toolbar or by the pane's list body. */
+export function ResourceToolbarPager({ pager, pagerSubject, pagerTotalUnit, pagerPageSizeOptions,
+  pagerMaxPageSize, onPageChange, onPageSizeChange }: ResourceToolbarProps): ReactElement {
+  return <Pager {...pager} subject={pagerSubject} unit={pagerTotalUnit}
+    pageSizeOptions={pagerPageSizeOptions} maxPageSize={pagerMaxPageSize}
+    onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} />;
 }
 
 /** A collection's create command, in the toolbar or an embedded list's heading row. */

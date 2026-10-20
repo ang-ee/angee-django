@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { Glyph } from "../chrome/Glyph";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
 import { DropdownMenu } from "../ui/dropdown-menu";
@@ -29,7 +30,7 @@ export interface PaneToolbarHostProps extends Pick<React.HTMLAttributes<HTMLDivE
 export function PaneToolbarHost({ children, back, title, className, ...rest }: PaneToolbarHostProps): React.ReactElement {
   const [host, setHost] = React.useState<HTMLElement | null>(null);
   return (
-    <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)} {...rest}>
+    <div className={cn("flex h-full min-h-0 min-w-0 flex-1 flex-col", className)} {...rest}>
       {/* The row shows only while something sits in it: a way back, a title or a published band. */}
       <div className="hidden h-8 shrink-0 items-center gap-1 border-b border-border-subtle bg-sheet px-2 has-[>*:not(:empty)]:flex">
         {back ? (
@@ -135,15 +136,34 @@ export interface PaneToolbarMenuItem {
   disabled?: boolean;
 }
 
+export interface PaneToolbarMenuRadioGroup {
+  label: string;
+  value: string;
+  onValueChange: (value: string) => void;
+  items: readonly { value: string; label: React.ReactNode; disabled?: boolean }[];
+}
+
 /** The toolbar's overflow: one menu behind the shared icon, with the pane's secondary verbs. */
-export function PaneToolbarMenu({ label = "More", items }: { label?: string; items: readonly PaneToolbarMenuItem[] }): React.ReactElement | null {
-  if (items.length === 0) return null;
+export function PaneToolbarMenu({ label, items = [], groups = [] }: {
+  label?: string;
+  items?: readonly PaneToolbarMenuItem[];
+  groups?: readonly PaneToolbarMenuRadioGroup[];
+}): React.ReactElement | null {
+  const t = useUiT();
+  if (items.length === 0 && groups.length === 0) return null;
   return (
     <DropdownMenu.Root>
-      <DropdownMenu.Trigger render={<PaneToolbarIconButton icon="more-horizontal" label={label} />} />
+      <DropdownMenu.Trigger render={<PaneToolbarIconButton icon="more-horizontal" label={label ?? t("paneToolbar.more")} />} />
       <DropdownMenu.Portal>
         <DropdownMenu.Positioner sideOffset={4} align="end">
           <DropdownMenu.Content className="w-52">
+            {groups.map((group) => <DropdownMenu.RadioGroup key={group.label} aria-label={group.label}
+              value={group.value} onValueChange={group.onValueChange}>
+              <DropdownMenu.Label>{group.label}</DropdownMenu.Label>
+              {group.items.map((item) => <DropdownMenu.RadioItem key={item.value} value={item.value} disabled={item.disabled}>
+                <DropdownMenu.RadioItemIndicator /><span>{item.label}</span>
+              </DropdownMenu.RadioItem>)}
+            </DropdownMenu.RadioGroup>)}
             {items.map((item) => (
               <DropdownMenu.Item key={item.label} disabled={item.disabled} variant={item.tone === "danger" ? "danger" : undefined} onClick={item.onClick}>
                 {item.icon ? <Glyph name={item.icon} decorative /> : null}{item.label}

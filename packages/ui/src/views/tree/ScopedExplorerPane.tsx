@@ -90,7 +90,6 @@ export function ScopedExplorerPane<
   const navigator = React.useMemo(
     () => (
       <PaneToolbarHost
-        className="h-full"
         role="navigation"
         aria-label={navigatorLabel}
       >

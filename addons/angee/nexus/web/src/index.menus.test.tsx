@@ -25,7 +25,7 @@ const upstream = [
   defineBaseAddon({ id: "posts", menus: [{ id: "posts", label: "Posts", route: "posts.feeds" }],
     routes: [{ name: "posts.feeds", path: "/posts/feeds", layout: "console" }] }),
 ];
-const addons = [...upstream, { ...nexus, dependsOn: upstream.map(({ id }) => id) }];
+const addons = [timeline, ...upstream, { ...nexus, dependsOn: ["timeline", ...upstream.map(({ id }) => id)] }];
 const ownChildren = ["nexus.inbox", "nexus.graph", "nexus.ties", "nexus.cadences"];
 const included = ["messaging", "parties", "spaces", "posts"];
 const composed = composeAddons(addons, { canonicalModelLabel: (label) => label });

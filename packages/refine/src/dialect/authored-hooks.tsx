@@ -74,13 +74,12 @@ export interface AuthoredQueryOptions extends AuthoredOperationOptions {
 }
 
 /** One authored read in a dynamic batch, addressed by a caller-stable key. */
-export interface AuthoredQueryBatchScope<TDocument extends AuthoredDocument> {
+export interface AuthoredQueryBatchScope<TDocument extends AuthoredDocument>
+  extends Pick<AuthoredQueryOptions, "models" | "records" | "relatedModels"> {
   /** Result label only; document/provider/variables own query identity. */
   key: string;
   document: TDocument;
   variables?: AuthoredVariables<TDocument>;
-  /** Canonical model labels whose changes invalidate this read. */
-  models?: readonly string[];
 }
 
 export function useAuthoredQuery<TDocument extends AuthoredDocument>(
@@ -118,7 +117,9 @@ export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
   const dataProvider = useDataProvider();
   const client = useQueryClient();
   const queries = scopes.map((scope) => {
-    const configured = authoredQueryOptions(client, dataProvider, provider, scope.document, scope.variables, scope.models);
+    const configured = authoredQueryOptions(
+      client, dataProvider, provider, scope.document, scope.variables, scope.models, scope.records, scope.relatedModels,
+    );
     return {
       ...configured, enabled: options.enabled ?? true,
     };

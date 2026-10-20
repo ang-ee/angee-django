@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { containerChildren } from "@angee/app/testing";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import type { ChatterViewContext } from "@angee/ui/runtime";
+import type { ChatterTabContent, ChatterViewContext } from "@angee/ui/runtime";
 import type { RecordMessageRow } from "./documents";
 
 const mocks = vi.hoisted(() => ({
@@ -57,6 +58,7 @@ vi.mock("@angee/storage", () => ({
 }));
 
 import { RecordChatterPane } from "./RecordChatterPane";
+import messaging from "./index";
 
 function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
   return {
@@ -138,9 +140,71 @@ beforeEach(() => {
   });
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("RecordChatterPane", () => {
+  test("a Timeline selection clears retained filters and focuses the message when its window arrives", async () => {
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+    const discussion = containerChildren(messaging, "record#aside").find(([id]) => id === "messaging.discussion")?.[1].content as ChatterTabContent;
+    mocks.threadData = threadPayload([message()]);
+    const view = render(<>{discussion.render?.(context)}</>);
+    fireEvent.click(screen.getByRole("button", { name: "Notes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Search comments" }));
+    fireEvent.change(screen.getByLabelText("Search comments", { selector: "input" }), { target: { value: "unrelated" } });
+    await waitFor(() => {
+      const last = mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread").at(-1);
+      expect(last?.[1]).toMatchObject({ search: "unrelated", messageTypes: ["notification"] });
+    });
+
+    const selection = { target: "msg_older", focus: "message" };
+    mocks.threadData = threadPayload([]);
+    mocks.useAuthoredQuery.mockClear();
+    view.rerender(<>{discussion.render?.(context, selection)}</>);
+    const reads = mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread");
+    expect(reads.length).toBeGreaterThan(0);
+    for (const [, variables] of reads) {
+      expect(variables).toMatchObject({ around: "msg_older", search: "", messageTypes: [] });
+    }
+    expect(screen.getByRole("button", { name: "All" }).getAttribute("aria-pressed")).toBe("true");
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    mocks.threadData = threadPayload([message({ id: "msg_older", can_edit: true }), message({ id: "msg_newer" })]);
+    view.rerender(<>{discussion.render?.(context, selection)}</>);
+    const focused = document.getElementById("message-msg_older");
+    expect(focused?.getAttribute("aria-current")).toBe("true");
+    expect(document.getElementById("message-msg_newer")?.hasAttribute("aria-current")).toBe(false);
+    expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({ block: "center" });
+    expect(scrollIntoView.mock.instances[0]).toBe(focused);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+    expect(document.getElementById("message-msg_older")?.getAttribute("aria-current")).toBe("true");
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+
+    view.rerender(<>{discussion.render?.(context, { target: "msg_newer", focus: "message" })}</>);
+    expect(document.getElementById("message-msg_older")?.hasAttribute("aria-current")).toBe(false);
+    expect(document.getElementById("message-msg_newer")?.getAttribute("aria-current")).toBe("true");
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
+    expect(scrollIntoView.mock.instances[1]).toBe(document.getElementById("message-msg_newer"));
+  });
+
+  test.each([
+    undefined,
+    { focus: "message" },
+    { target: "msg_1", focus: "field" },
+    { target: "msg_1" },
+  ])("does not focus a message without a message selection: %j", (selection) => {
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+    mocks.threadData = threadPayload([message()]);
+    render(<RecordChatterPane context={context} selection={selection} />);
+    const last = mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread").at(-1);
+    expect(last?.[1].around).toBeUndefined();
+    expect(document.getElementById("message-msg_1")?.hasAttribute("aria-current")).toBe(false);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
   test("renders the feed with author and the composer", () => {
     mocks.threadData = threadPayload([message()]);
 

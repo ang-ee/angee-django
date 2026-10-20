@@ -1,3 +1,4 @@
+import { TIMELINE_TAB_ID } from "@angee/timeline";
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import {
@@ -126,7 +127,7 @@ export function GraphPage(): React.ReactElement {
     [navigate],
   );
   const openTimeline = React.useCallback((node: NexusNode) => {
-    setActiveTab(isCircleNode(node) ? "nexus.feed" : "nexus.correspondence");
+    setActiveTab(TIMELINE_TAB_ID);
     setCollapsed(false);
     const path = nodePath(recordHref, node);
     if (path) {
@@ -278,7 +279,7 @@ function Inspector({
               </NavLink>
             </Button>
           ) : (
-            <p className="text-2xs text-fg-muted">{t("graph.mergeHint")}</p>
+            <p className="text-12 text-fg-muted">{t("graph.mergeHint")}</p>
           )}
         </div>
       ) : null}

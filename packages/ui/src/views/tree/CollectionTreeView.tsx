@@ -9,10 +9,12 @@ import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import { TreeView } from "./TreeView";
 import { ResourceListFrame } from "../resource/ResourceListFrame";
 import { useResourceView } from "../resource/resource-view-context";
+import { ResourceViewUtilities } from "../resource/resource-view-utilities";
 import { useResourceViewSurface } from "../resource/resource-view-surface";
 import { useSearchCatalog } from "../resource/search/catalog";
 import { useResourceSearch } from "../resource/search/use-resource-search";
 import type { ResourceToolbarProps } from "../../toolbars";
+import { ResourceToolbarPager } from "../../toolbars/ResourceToolbar";
 import {
   useCollectionQueryBatch,
   type CollectionSource,
@@ -29,6 +31,7 @@ export interface CollectionTreeViewProps<TRow extends Row> extends Pick<
   | "customFilterFields"
   | "toolbarActions"
   | "toolbarWrap"
+  | "pane"
   | "textFilterField"
   | "onRowClick"
   | "emptyContent"
@@ -129,9 +132,18 @@ export function CollectionTreeView<TRow extends Row>(
   });
   const search = useResourceSearch({ resourceView: view, catalog, groupingEnabled: false });
   const toolbar: ResourceToolbarProps = {
+    pane: props.pane,
+    sortOptions: props.columns.flatMap((column) => column.field && column.sortable !== false
+      ? [{ value: column.field, label: typeof column.header === "string" ? column.header : column.field }] : []),
+    sorting: view.state.sorting, onSortingChange: view.setSorting,
     search, searchDeclaration: props.search, pager: surface.list, view: "list", availableViews: ["list"],
     onPageChange: view.setPage, onPageSizeChange: view.setPageSize,
     actions: props.toolbarActions, wrap: props.toolbarWrap,
+    utilityActions: <ResourceViewUtilities modelBacked={false} value={{
+      resource: props.resource, filter: view.state.filter, selectable: false,
+      fields: props.columns.flatMap((column) => column.field ? [column.field] : []),
+      refresh: () => void surface.list.refetch(),
+    }} />,
   };
   return (
     <ResourceListFrame
@@ -212,6 +224,7 @@ export function CollectionTreeView<TRow extends Row>(
           );
         }}
       />}
+      {props.pane ? <div className="flex shrink-0 justify-end border-t border-border-subtle px-2 py-1"><ResourceToolbarPager {...toolbar} /></div> : null}
     </ResourceListFrame>
   );
 }

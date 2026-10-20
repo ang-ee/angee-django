@@ -1,37 +1,17 @@
 import { useMemo } from "react";
-import { senderAvatarUrl } from "@angee/parties";
 import {
-  Avatar,
-  Button,
-  CollectionTreeView,
-  Glyph,
-  ListView,
-  PageHeader,
-  RelativeTime,
-  Select,
-  Tag,
-  avatarInitials,
-  useResourceView,
+  CollectionTreeView, ListView, PaneLabelAction, PaneRow, PaneToolbarHost,
+  RelativeTime, ScopeChip, Select, useResourceView,
   type ResourceViewFilter,
 } from "@angee/ui";
 import { InboxFilter, NAVIGATOR_LENSES, navigatorAxes } from "./contract";
-import {
-  InboxOrder,
-  InboxClearFilters,
-  InboxCoverageKind,
-  useNavigatorControls,
-} from "./Controls";
+import { InboxCoverageKind, useNavigatorControls } from "./Controls";
 import { navigatorSource } from "./sources";
 import type { InboxNavigatorRow } from "./documents";
 import type { InboxNavigation } from "./state";
 import { useNexusT } from "../i18n";
 
-export function InboxNavigatorPane({
-  coverage,
-  onCoverage,
-  timezone,
-  navigation,
-}: {
+export function InboxNavigatorPane({ coverage, onCoverage, timezone, navigation }: {
   coverage: ResourceViewFilter;
   onCoverage: (next: ResourceViewFilter) => void;
   timezone: string;
@@ -47,175 +27,58 @@ export function InboxNavigatorPane({
     () => navigatorSource({ coverage, timezone, lens, groupField, fading, t }),
     [coverage, timezone, lens, groupField, fading, t],
   );
-  const columns = useMemo(
-    () => [
-      {
-        field: "label",
-        header: t(`inbox.${lens}`),
-        headerVisuallyHidden: true,
-        sortable: false,
-        render: (row: InboxNavigatorRow) => (
-          <NavigatorRow row={row} selected={navigation.sender === row.id} />
-        ),
-      },
-    ],
-    [lens, navigation.sender, t],
-  );
+  const columns = useMemo(() => [
+    { field: "label", header: t("inbox.name") }, { field: "latest", header: t("inbox.recent") },
+    { field: "count", header: t("inbox.count") }, { field: "first", header: t("inbox.first") },
+  ], [t]);
   const select = (row: InboxNavigatorRow) => {
     if (row.thread) navigation.conversation(row.thread.id);
     else if (row.circle) navigation.select(undefined, row.circle.id);
     else navigation.select(row.id);
   };
-  const toolbarActions = (
-    <>
-      <InboxOrder navigator />
-      <InboxClearFilters finder />
-    </>
+  const renderRow = (row: InboxNavigatorRow, interactive = true) => (
+    <PaneRow icon={row.circle ? "users" : row.thread ? "channel" : "user"}
+      title={row.label || t("inbox.conversation")} detail={row.count}
+      meta={row.latest ? <RelativeTime value={row.latest} /> : undefined}
+      sub={[row.handle?.value, row.preview].filter(Boolean).join(" · ")}
+      selected={navigation.sender === row.id || Boolean(row.circle && navigation.circle === row.circle.id)}
+      verb={row.thread ? t("inbox.openConversation") : t("inbox.results")}
+      onOpen={interactive ? () => select(row) : undefined} />
   );
+  const pane = {
+      selector: <>
+        <Select size="sm" className="min-w-0 w-24" aria-label={t("inbox.navigatorLens")} value={lens}
+          options={NAVIGATOR_LENSES.map((value) => ({ value, label: t(`inbox.${value}`) }))}
+          onValueChange={(finder) => {
+            const selected = NAVIGATOR_LENSES.find((lens) => lens === finder);
+            if (selected) navigation.changeNavigator(selected, view.state);
+          }} />
+        <InboxCoverageKind coverage={coverage} onCoverage={onCoverage} />
+      </>,
+      scope: <ScopeChip label={t("inbox.everyone")} active={!navigation.sender && !navigation.circle} onClick={() => navigation.select()} />,
+  };
   return (
-    <section
-      aria-label={t("inbox.navigator")}
-      className="flex h-full min-h-0 flex-col"
-    >
-      <PageHeader
-        density="compact"
-        headingLevel={2}
-        title={
-          <Select
-            size="sm"
-            aria-label={t("inbox.navigatorLens")}
-            value={lens}
-            options={NAVIGATOR_LENSES.map((value) => ({
-              value,
-              label: t(`inbox.${value}`),
-            }))}
-            onValueChange={(finder) => {
-              const selected = NAVIGATOR_LENSES.find((lens) => lens === finder);
-              if (selected) navigation.changeNavigator(selected, view.state);
-            }}
-          />
-        }
-        actions={
-          <>
-            <InboxCoverageKind coverage={coverage} onCoverage={onCoverage} />
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => navigation.select()}
-            >
-              {t("inbox.everyone")}
-            </Button>
-          </>
-        }
-      />
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {lens === "circles" ? (
-          <CollectionTreeView
-            presentation="workspace"
-            resource="nexus.InboxNavigator"
-            source={source}
-            columns={columns}
-            rowKey="id"
-            parent="parent_id"
-            label="label"
-            hasChildren="has_children"
-            badge="count"
-            selectedId={
-              navigation.circle ? `circle:${navigation.circle}` : undefined
-            }
-            onRowClick={select}
-            toolbarWrap
-            textFilterField="text"
-            {...controls}
-            toolbarActions={toolbarActions}
-            emptyContent={t("inbox.noCircles")}
-          />
-        ) : (
-          <ListView
-            presentation="workspace"
-            tableLayout="fixed"
-            headerVisibility="visually-hidden"
-            selectable={false}
-            resource="nexus.InboxNavigator"
-            source={source}
-            columns={columns}
-            availableViews={["list"]}
-            toolbarWrap
-            textFilterField="text"
-            maxGroupDepth={1}
-            defaultExpandedGroups="none"
-            {...controls}
-            groupOptions={navigatorAxes(lens).map((axis) => ({
-              id: axis,
-              label: t(`inbox.axis.${axis}`),
-              group: { field: `by_${axis}` },
-            }))}
-            toolbarActions={toolbarActions}
-            onRowClick={select}
-            emptyContent={t("inbox.noSenders")}
-            renderGroupLabel={
-              groupField === "by_circle" || groupField === "by_group"
-                ? ({ label, bucket }) => {
-                    const id = bucket.key?.[groupField];
-                    return typeof id === "string" ? (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="min-w-0 justify-start px-0"
-                        onClick={() =>
-                          groupField === "by_circle"
-                            ? navigation.select(undefined, id)
-                            : navigation.conversation(id)
-                        }
-                      >
-                        {label}
-                        <Glyph name="chevron-right" />
-                      </Button>
-                    ) : (
-                      label
-                    );
-                  }
-                : undefined
-            }
-          />
-        )}
-      </div>
-    </section>
-  );
-}
-
-function NavigatorRow({
-  row,
-  selected,
-}: {
-  row: InboxNavigatorRow;
-  selected: boolean;
-}) {
-  const t = useNexusT();
-  // Untitled conversations with no known people arrive unlabelled.
-  const label = row.label || t("inbox.conversation");
-  return (
-    <div
-      className={`flex min-w-0 items-start gap-2 py-2 ${selected ? "text-brand" : ""}`}
-    >
-      <Avatar size="sm" src={senderAvatarUrl(row.handle)} initials={avatarInitials(label)} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate font-medium">{label}</span>
-          <Tag className="ml-auto">{row.count}</Tag>
-        </div>
-        {row.handle ? (
-          <p className="truncate text-2xs text-fg-muted">{row.handle.value}</p>
-        ) : null}
-        <p className="line-clamp-2 whitespace-normal text-2xs text-fg-muted">
-          {row.preview}
-        </p>
-        {row.latest ? (
-          <span className="text-2xs text-fg-muted">
-            <RelativeTime value={row.latest} />
-          </span>
-        ) : null}
-      </div>
-    </div>
+    <PaneToolbarHost role="region" aria-label={t("inbox.navigator")}>
+      {lens === "circles" ? (
+        <CollectionTreeView presentation="workspace" resource="nexus.InboxNavigator" source={source}
+          columns={columns} rowKey="id" parent="parent_id" label="label" hasChildren="has_children"
+          selectedId={navigation.circle ? `circle:${navigation.circle}` : undefined}
+          onRowClick={select} renderRow={(row) => renderRow(row, false)}
+          textFilterField="text" {...controls} pane={pane} emptyContent={t("inbox.noCircles")} />
+      ) : (
+        <ListView presentation="workspace" selectable={false} resource="nexus.InboxNavigator" source={source}
+          columns={columns} availableViews={["list"]} textFilterField="text" maxGroupDepth={1}
+          defaultExpandedGroups="none" {...controls}
+          groupOptions={navigatorAxes(lens).map((axis) => ({ id: axis, label: t(`inbox.axis.${axis}`), group: { field: `by_${axis}` } }))}
+          pane={pane} renderPaneRow={renderRow} emptyContent={t("inbox.noSenders")}
+          renderGroupLabel={groupField === "by_circle" || groupField === "by_group" ? ({ bucket }) => {
+            const id = bucket.key?.[groupField];
+            return typeof id === "string" ? <PaneLabelAction icon="chevron-right"
+              onClick={() => groupField === "by_circle" ? navigation.select(undefined, id) : navigation.conversation(id)}>
+              {t(groupField === "by_circle" ? "inbox.results" : "inbox.openConversation")}
+            </PaneLabelAction> : null;
+          } : undefined} />
+      )}
+    </PaneToolbarHost>
   );
 }

@@ -11,6 +11,7 @@ import type { RecordThreadConversationProps } from "./RecordThreadConversation";
 import { RecordChatterPane } from "./RecordChatterPane";
 import { FollowRecordChrome } from "./FollowRecordChrome";
 import { RecordConversationsGroup, useRecordConversationsCount } from "./RecordConversationsGroup";
+import { RecordConversationPane } from "./RecordConversationPane";
 import { THREAD_ATTACHMENT_MODEL, THREAD_CHATTER_EDGE } from "./documents";
 
 export { CHANNEL_MODEL } from "./documents";
@@ -64,6 +65,7 @@ export {
 export {
   MESSAGE_SUMMARY_FIELDS,
   MessageSummary,
+  MessagePaneRow,
   type MessageSummaryData,
 } from "./MessageSummary";
 export { MessageReader, type MessageReaderProps } from "./MessageReader";
@@ -114,13 +116,19 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
     // Comments and source conversations on the Timeline; Discussion is the record's thread.
     "timeline#kinds": {
       "messaging.comment": { content: { label: "Comments", icon: "comments", tone: "info", verb: "Open in Discussion", target: { tab: "messaging.discussion", focus: "message" } } },
-      "messaging.conversation": { content: { label: "Conversations", icon: "channel", tone: "muted", verb: "Open conversation", target: { page: true } } },
+      "messaging.conversation": { content: { label: "Conversations", icon: "channel", tone: "muted", verb: "Open conversation", target: { tab: "messaging.conversation" } } },
     },
     "record#aside": {
+      "messaging.conversation": { sequence: 19, content: {
+        label: "Conversation", icon: "channel", panelClassName: "p-0", strip: false,
+        target: { model: THREAD_ATTACHMENT_MODEL },
+        render: (context, selection) => <RecordConversationPane context={context} attachmentId={selection?.target} />,
+      } },
       "messaging.discussion": { sequence: 20, content: {
         label: "Discussion", icon: "comments", panelClassName: "p-0",
         when: (context) => context.route?.recordEdges?.includes(THREAD_CHATTER_EDGE) ?? false,
-        render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
+        // A newly targeted message starts with clear scope/search filters.
+        render: (context, selection) => <RecordChatterPane key={selection?.target} context={context} selection={selection} submitKey={submitKey} />,
       } },
     },
     // Follow is a record-header control; what to be told about sits behind the Discussion's overflow.
@@ -131,9 +139,9 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
     "related#groups": {
       "messaging.conversations": { sequence: 40, content: {
         label: "Conversations",
-        when: (context) => context.route?.recordEdges?.some((edge) => edge.startsWith(THREAD_ATTACHMENT_MODEL)) ?? false,
+        edge: { model: THREAD_ATTACHMENT_MODEL },
         useCount: useRecordConversationsCount,
-        render: (context) => <RecordConversationsGroup context={context} />,
+        render: (context, label) => <>{label()}<li><RecordConversationsGroup context={context} /></li></>,
       } },
     },
   },

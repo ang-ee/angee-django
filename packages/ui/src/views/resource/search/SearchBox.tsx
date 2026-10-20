@@ -216,11 +216,12 @@ function ActiveChip({ item, search, className, ...props }: { item: SearchActiveI
   const label = activeLabel(item, t);
   return <RemovableChip {...props} tone="brand" size="sm" className={cn("max-w-64 focus-visible:focus-ring", className)}
     aria-label={label} title={label} removeLabel={item.kind === "group" ? groupLevelLabel(item, t) : label}>
-    <ActiveLabel item={item} search={search} />
+    <SearchActiveLabel item={item} search={search} />
   </RemovableChip>;
 }
 
-function ActiveLabel({ item, search }: { item: SearchActiveItem; search: ResourceSearch }): React.ReactElement {
+/** The search owner's complete label, also used by pane scope chips. */
+export function SearchActiveLabel({ item, search }: { item: SearchActiveItem; search: ResourceSearch }): React.ReactElement {
   const t = useUiT();
   if (item.kind === "group") return <>{t(item.index === 0 ? "resourceToolbar.groupBy" : "search.then")}: <GroupLevelLabel item={item} /></>;
   if (item.kind === "text") return <>{item.label}: {item.value}</>;

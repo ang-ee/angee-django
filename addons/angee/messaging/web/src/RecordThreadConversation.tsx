@@ -86,6 +86,8 @@ export interface RecordThreadConversationProps {
   searchPlacement?: "inline" | "header";
   /** Message types the chatter transcript narrows to (server values: `comment`, `notification`); empty lists all. */
   messageTypes?: readonly string[];
+  /** Read the existing window around this public message id and focus its row. */
+  around?: string;
   /** Already translated consumer copy; omitted entries use messaging defaults. */
   composerCopy?: { audience?: string; help?: string };
   /** Per-app composer shortcut; Enter sends by default, or Ctrl/Cmd+Enter sends. */
@@ -127,6 +129,7 @@ export function RecordThreadConversation({
   header,
   searchPlacement = "inline",
   messageTypes,
+  around,
   composerCopy,
   submitKey = "enter",
   messageLimit = MESSAGE_PAGE_SIZE,
@@ -146,9 +149,10 @@ export function RecordThreadConversation({
       recordId,
       search: activeSearch,
       messageLimit,
+      around,
       messageTypes: stream ? [...(stream.messageTypes ?? [])] : [...(messageTypes ?? [])],
     }),
-    [modelLabel, recordId, activeSearch, messageLimit, stream?.messageTypes, messageTypes, Boolean(stream)],
+    [modelLabel, recordId, activeSearch, messageLimit, around, stream?.messageTypes, messageTypes, Boolean(stream)],
   );
   const threadQuery = useAuthoredQuery(RecordThreadDocument, variables, {
     enabled,
@@ -233,6 +237,12 @@ export function RecordThreadConversation({
   const messageResultCount = threadPayload?.message_result_count ?? 0;
   // Messages arrive server-ordered (chronological ascending); render them verbatim.
   const messages = threadPayload?.messages ?? [];
+  const focusedMessageId = messages.find((message) => message.id === around)?.id;
+  const conversationRef = React.useCallback((element: HTMLDivElement | null) => {
+    if (focusedMessageId) {
+      element?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "center" });
+    }
+  }, [focusedMessageId]);
 
   // Drop local reply / editing state the moment its message leaves the feed (a
   // delete elsewhere, a filtered search) so we never edit or reply to a ghost row.
@@ -457,7 +467,7 @@ export function RecordThreadConversation({
     onDismiss={() => setError(null)} />;
 
   return (
-    <div className={cn("flex flex-col gap-4", stream ? "min-h-0" : "min-h-72")}>
+    <div ref={conversationRef} className={cn("flex flex-col gap-4", stream ? "min-h-0" : "min-h-72")}>
       {header?.(chrome)}
       {(stream ? Boolean(stream.search) : searchPlacement === "inline") ? <SearchInput
         value={search}
@@ -477,6 +487,7 @@ export function RecordThreadConversation({
             {messages.map((message) => <MessageFeedRow
                 key={`message:${message.id}`}
                 message={message}
+                focused={message.id === around}
                 editing={editingMessageId === message.id}
                 canReply={canPost}
                 readOnly={readOnly}
@@ -820,6 +831,7 @@ function ComposerRecipients({
 
 interface MessageFeedRowProps {
   message: RecordMessageRow;
+  focused: boolean;
   editing: boolean;
   canReply: boolean;
   readOnly: boolean;
@@ -841,6 +853,7 @@ interface MessageFeedRowProps {
 
 const MessageFeedRow = React.memo(function MessageFeedRow({
   message,
+  focused,
   editing,
   canReply,
   readOnly,
@@ -879,6 +892,8 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
   if (editing) {
     return (
       <MessageRow
+        id={`message-${message.id}`}
+        aria-current={focused || undefined}
         avatar={<Avatar size="sm" initials={avatarInitials(author)} alt={author} />}
         author={author}
         className={streamMode && message.is_reply ? "ml-3 border-l-2 border-border-subtle pl-3" : undefined}
@@ -895,6 +910,8 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
 
   return (
     <MessageRow
+      id={`message-${message.id}`}
+      aria-current={focused || undefined}
       avatar={<Avatar size="sm" initials={avatarInitials(author)} alt={author} />}
       author={author}
       timestamp={timestamp}

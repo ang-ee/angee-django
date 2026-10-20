@@ -90,7 +90,7 @@ function MatchWindow({
         <div className="font-medium text-13">
           {matches?.thread.conversation_label || t("inbox.conversation")}
         </div>
-        <div className="flex items-center gap-2 text-2xs text-fg-muted">
+        <div className="flex items-center gap-2 text-12 text-fg-muted">
           <span className="mr-auto">
             {matches
               ? t("inbox.transcriptCount", {
