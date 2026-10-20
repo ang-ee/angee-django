@@ -4,6 +4,7 @@ import { EmptyState } from "../fragments/EmptyState";
 import { useUiT } from "../i18n";
 import { modelChain, useContainer, type ChatterViewContext, type ComposedContainerChild, type RelatedGroupContent } from "../runtime";
 import { PaneLabel, PaneRows } from "./pane-list";
+import { ChatterCountProbe, useChatterCounts, type CountProbeProps } from "./count-probe";
 
 /** The groups eligible on this view, in composed order. */
 export function useRelatedGroups<T extends RelatedGroupContent = RelatedGroupContent>(context: ChatterViewContext): readonly ComposedContainerChild<T>[] {
@@ -20,19 +21,23 @@ export function useRelatedGroups<T extends RelatedGroupContent = RelatedGroupCon
   );
 }
 
-/**
- * The Related tab's count: the sum of its groups' counts. The groups of one view
- * are fixed for the probe's life (the aside keys its probes by view), so each
- * group's hook runs in the same order on every render.
- */
-export function useRelatedCount(context: ChatterViewContext): number | undefined {
+/** Sum independently mounted group readers; route and permission changes can
+ * change the eligible groups without changing any reader's hook order. */
+export function RelatedCountProbe({ id, context, onCount }: CountProbeProps): React.ReactElement {
   const groups = useRelatedGroups(context);
-  let total: number | undefined;
-  for (const group of groups) {
-    const count = group.content.useCount?.(context);
-    if (count !== undefined) total = (total ?? 0) + count;
-  }
-  return total;
+  const [counts, publishCount] = useChatterCounts();
+  const total = groups.reduce<number | undefined>((sum, group) => {
+    const count = counts[group.id];
+    return count === undefined ? sum : (sum ?? 0) + count;
+  }, undefined);
+  React.useEffect(() => {
+    onCount(id, total);
+    return () => onCount(id, undefined);
+  }, [id, total, onCount]);
+  return <>{groups.map((group) => group.content.useCount ? (
+    <ChatterCountProbe key={group.id} id={group.id} useCount={group.content.useCount}
+      context={context} onCount={publishCount} />
+  ) : null)}</>;
 }
 
 /** The Related tab: every eligible group, its label with count and verb, then its rows. */

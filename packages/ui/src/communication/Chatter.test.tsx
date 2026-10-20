@@ -65,6 +65,16 @@ const tab = (content: ChatterTabContent, sequence?: number): ContainerChild<Chat
 const onRoute = (...routes: string[]) => ({ apps: [], routes });
 
 describe("Chatter", () => {
+  test("a create route has no persisted record capabilities", async () => {
+    const useCount = vi.fn(() => 1);
+    renderChatter({ containers: aside({ "record#aside": {
+      tasks: tab({ label: "Tasks", useCount, render: () => <span>Tasks</span> }),
+    } }) }, { recordId: "new" });
+    expect(await screen.findByText("Aside hidden")).toBeTruthy();
+    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(useCount).not.toHaveBeenCalled();
+  });
+
   test("a layer's only on the route narrows the tabs before they render or count", async () => {
     const excludedRender = vi.fn(() => <span>Excluded content</span>);
     const excludedCount = vi.fn(() => 9);
@@ -193,6 +203,14 @@ describe("Chatter", () => {
     expect(commentsTab.textContent).not.toContain("2");
   });
 
+  test("a declared Related count overrides the framework's group aggregation", async () => {
+    renderChatter({ containers: aside({
+      "record#aside": { related: tab({ label: "Related", useCount: () => 9, render: () => <span>Related content</span> }) },
+      "related#groups": { files: tab({ label: "Files", useCount: () => 2, render: () => null }) },
+    }) });
+    expect(await screen.findByRole("tab", { name: /Related\s*9/ })).toBeTruthy();
+  });
+
   test("model tabs follow the record's canonical and concrete models, scoped before rendering", async () => {
     const hiddenCount = vi.fn(() => 9);
     const hiddenRender = vi.fn(() => <span>Wrong model</span>);
@@ -262,7 +280,7 @@ type TestRuntime = Partial<AppRuntime>;
 
 function renderChatter(
   runtime: TestRuntime,
-  { record = true, search = "", defaultTab = "agents", children }: { record?: boolean; search?: string; defaultTab?: string; children?: React.ReactNode } = {},
+  { record = true, recordId = "rec_1", search = "", defaultTab = "agents", children }: { record?: boolean; recordId?: string; search?: string; defaultTab?: string; children?: React.ReactNode } = {},
 ): void {
   function VisibilityProbe() { return <span>{useChatterPresentation().visible ? "Aside available" : "Aside hidden"}</span>; }
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -281,7 +299,7 @@ function renderChatter(
   });
   const router = createRouter({
     routeTree: rootRoute.addChildren([recordRoute]),
-    history: createMemoryHistory({ initialEntries: [`${record ? "/records/rec_1" : "/records"}${search}`] }),
+    history: createMemoryHistory({ initialEntries: [`${record ? `/records/${recordId}` : "/records"}${search}`] }),
   });
 
   render(<RouterProvider router={router} />);

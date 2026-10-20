@@ -8,7 +8,7 @@ import { AppRuntimeProvider, containersFromChildren, type ChatterViewContext, ty
 import { Popover } from "../ui/popover";
 import { CHATTER_CONTAINERS } from "./chatter-containers";
 import { PaneLabelPopover, PaneRow, PaneRows } from "./pane-list";
-import { RelatedPane, useRelatedCount } from "./RelatedPane";
+import { RelatedPane, RelatedCountProbe } from "./RelatedPane";
 
 afterEach(cleanup);
 
@@ -25,7 +25,29 @@ function Example({ content, probe = false }: { content: RelatedGroupContent; pro
   </AppRuntimeProvider>;
 }
 
-function Count() { return <span>Related {useRelatedCount(context)}</span>; }
+function Count() {
+  const [count, setCount] = React.useState<number>();
+  const publish = React.useCallback((_: string, next: number | undefined) => setCount(next), []);
+  return <><RelatedCountProbe id="related" context={context} onCount={publish} /><span>Related {count}</span></>;
+}
+
+test("changing eligible groups preserves independent count-hook lifetimes", () => {
+  const groups = {
+    first: { content: { label: "First", edge: { model: "example.Edge" },
+      useCount: () => React.useMemo(() => 2, []), render: () => null } },
+    second: { content: { label: "Second", edge: { model: "other.Edge" },
+      useCount: () => React.useState(3)[0], render: () => null } },
+  };
+  const containers = containersFromChildren(CHATTER_CONTAINERS, { "related#groups": groups });
+  const onCount = vi.fn();
+  const view = (edges: string[]) => <AppRuntimeProvider runtime={{ containers }}>
+    <RelatedCountProbe id="related" context={{ ...context, route: { ...context.route!, recordEdges: edges } }} onCount={onCount} />
+  </AppRuntimeProvider>;
+  const rendered = render(view(["example.Edge", "other.Edge"]));
+  expect(onCount).toHaveBeenLastCalledWith("related", 5);
+  rendered.rerender(view(["other.Edge"]));
+  expect(onCount).toHaveBeenLastCalledWith("related", 3);
+});
 
 test("one group component owns the label popover and rows across popover lifetimes", async () => {
   const mounted = vi.fn();

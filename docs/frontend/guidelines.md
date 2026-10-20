@@ -1086,7 +1086,8 @@ and `iam#access-visibility`.
 
 The context aside is the shell's right region: what is around the record. Its
 children are `record#aside` and `<model>#aside` contributions. A `record#aside`
-child shows on model-backed record views; a model-level child shows on that
+child shows on saved model-backed record views; the shared create-route sentinel
+does not identify a record. A model-level child shows on that
 model's pages and may narrow itself further with its content's `when`. A
 `ChatterTabContent` carries `label`, `icon`, `render` and `strip`, and
 optionally `when`, `count`/`useCount`, `target` and `panelClassName`. Every
@@ -1108,7 +1109,7 @@ drill-in:
 |---|---|---|---|---|
 | `timeline.rail` | 10 | the view is a model-backed record with at least one eligible kind | one chronology, newest first, one line per event, scope chips with counts | timeline |
 | `messaging.discussion` | 20 | the model composes the chatter thread (`messaging.ThreadAttachment:chatter` in `recordEdges`) and the body is not itself the conversation | the record's thread: comments, internal notes, emails sent from here, the composer | messaging |
-| `projects.tasks` | 30 | `projects.Task` in `recordEdges` and the body does not own the task plan | open tasks about the record, schedule and assign, a folded Completed section | projects |
+| `projects.tasks` | 30 | `projects.Task` in `recordEdges` and the body does not own the task plan | tasks about the record in Planned and Done scopes, schedule and assign | projects |
 | `related` | 40 | at least one `related#groups` or `<model>#groups` child is eligible | groups Files (upload), Pages (bind), Sources (external links), Conversations (source threads); Attached to on files; Backlinks and Bound to on pages | framework tab; storage, knowledge, integrate, messaging own the groups |
 
 A tab earns the strip by creating things; everything else is a **drill-in**: a
@@ -1136,6 +1137,11 @@ sources use the same fact to decline unsupported records; workflow run evidence
 accepts any canonical REBAC record. Never let a pane report the edge
 "unavailable" or offer writes on a type whose schema declares no arm. A section
 with neither rows nor a verb is absent, not empty.
+
+Mount count hooks in independent keyed readers. Route and permission changes
+can change the eligible groups while the aside stays mounted; aggregating hooks
+in a loop changes their order. The [Related count owner](../../packages/ui/src/communication/RelatedPane.tsx)
+sums the results published by each group reader.
 
 Each `related#groups` child (or `<model>#groups` for one model's pages) is one
 group of the framework's Related tab, declared by the addon that owns the edge.

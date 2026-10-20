@@ -70,6 +70,8 @@ function RecordFilesGroup({ context, label }: { context: ChatterViewContext; lab
     {label(<PaneLabelPopover icon="plus" label={t("upload.button")}>
       {drivesQuery.isPending ? <SkeletonStatus label={t("record.loadingDrives")}><Skeleton className="h-7" /></SkeletonStatus> : null}
       {drivesQuery.error ? <ErrorBanner description={drivesQuery.error.message} /> : null}
+      {drivesQuery.data && !drives.length ? <EmptyState icon="drive" title={t("drives.emptyTitle")}
+        description={t("drives.emptyDescription")} className="p-3" /> : null}
       {drives.length > 1 ? <Select aria-label={t("drive.label")} value={selectedDriveId}
         options={drives.map((drive) => ({ value: drive.id, label: drive.name }))}
         placeholder={t("drive.placeholder")} onValueChange={setDriveId} /> : null}

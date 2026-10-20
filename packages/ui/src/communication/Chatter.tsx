@@ -10,7 +10,8 @@ import { EmptyState } from "../fragments/EmptyState";
 import { useUiT } from "../i18n";
 import { PaneToolbarHost } from "../layouts/PaneToolbar";
 import { RELATED_TAB_ID } from "./chatter-containers";
-import { useRelatedGroups } from "./RelatedPane";
+import { RelatedCountProbe, useRelatedGroups } from "./RelatedPane";
+import { ChatterCountProbe, useChatterCounts } from "./count-probe";
 import { cn } from "../lib/cn";
 import {
   useAppRuntime,
@@ -28,6 +29,7 @@ import {
   CHATTER_FROM_SEARCH_KEY,
   CHATTER_TAB_SEARCH_KEY,
   CHATTER_TARGET_SEARCH_KEY,
+  REFINE_CREATE_ID,
 } from "../runtime/route-href";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tabs } from "../ui/tabs";
@@ -69,23 +71,7 @@ export function Chatter({
   const requestIdentity = useRouterState({
     select: (state) => state.location.href,
   });
-  const [counts, setCounts] = React.useState<Record<string, number>>({});
-  const publishCount = React.useCallback(
-    (id: string, count: number | undefined) => {
-      setCounts((current) => {
-        const currentCount = current[id];
-        if (count === undefined) {
-          if (currentCount === undefined) return current;
-          const next = { ...current };
-          delete next[id];
-          return next;
-        }
-        if (currentCount === count) return current;
-        return { ...current, [id]: count };
-      });
-    },
-    [],
-  );
+  const [counts, publishCount] = useChatterCounts();
   const selection = React.useMemo<ChatterSelection | undefined>(
     () => requested.target || requested.focus ? { target: requested.target, focus: requested.focus } : undefined,
     [requested.target, requested.focus],
@@ -152,6 +138,13 @@ export function Chatter({
             key={`${viewContext.pathname}:${contribution.id}`}
             id={contribution.id}
             useCount={contribution.content.useCount}
+            context={viewContext}
+            onCount={publishCount}
+          />
+        ) : contribution.id === RELATED_TAB_ID ? (
+          <RelatedCountProbe
+            key={`${viewContext.pathname}:${contribution.id}`}
+            id={contribution.id}
             context={viewContext}
             onCount={publishCount}
           />
@@ -287,9 +280,9 @@ export function useActiveChatterView(): ChatterViewContext {
       route?.recordParam && params[route.recordParam]
         ? params[route.recordParam]
         : undefined;
-    // A record view names a model's row; a route whose param names no model
-    // (a dashboard key, a board, a merge pair) has no record and no aside.
-    const record = selectedId !== undefined && Boolean(route?.modelLabel);
+    // A record view names a saved model row. The create sentinel, a dashboard
+    // key, a board or a merge pair has no record capabilities.
+    const record = selectedId !== undefined && selectedId !== REFINE_CREATE_ID && Boolean(route?.modelLabel);
     const view: ChatterView = {
       kind: record ? "record" : "dashboard",
       type: route?.viewType ?? viewTypeFromPath(pathname),
@@ -353,27 +346,6 @@ function tabsFromContributions(
       children,
     }];
   });
-}
-
-interface ChatterCountProbeProps {
-  id: string;
-  useCount: (context: ChatterViewContext) => number | undefined;
-  context: ChatterViewContext;
-  onCount: (id: string, count: number | undefined) => void;
-}
-
-function ChatterCountProbe({
-  id,
-  useCount,
-  context,
-  onCount,
-}: ChatterCountProbeProps): null {
-  const count = useCount(context);
-  React.useEffect(() => {
-    onCount(id, count);
-    return () => onCount(id, undefined);
-  }, [id, count, onCount]);
-  return null;
 }
 
 // Merge tab groups by id (last wins): a same-id tab replaces its predecessor in

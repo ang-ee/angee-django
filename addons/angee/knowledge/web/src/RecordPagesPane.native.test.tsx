@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import { useCallback, useState } from "react";
 import { createUiTestProviders } from "@angee/ui/testing";
 import {
-  AppRuntimeProvider, CHATTER_CONTAINERS, RelatedPane, containersFromChildren, createRouteHref, useRelatedCount, type ChatterViewContext,
+  AppRuntimeProvider, CHATTER_CONTAINERS, RelatedPane, RelatedCountProbe, containersFromChildren, createRouteHref, type ChatterViewContext,
 } from "@angee/ui";
 
 import { KnowledgeRecordPages } from "./data/documents";
@@ -18,7 +19,11 @@ const context: ChatterViewContext = {
   view: { kind: "record", type: "example/record", sqid: "rec_1" },
 };
 
-function Count() { return <span>Related {useRelatedCount(context)}</span>; }
+function Count() {
+  const [count, setCount] = useState<number>();
+  const publish = useCallback((_: string, next: number | undefined) => setCount(next), []);
+  return <><RelatedCountProbe id="related" context={context} onCount={publish} /><span>Related {count}</span></>;
+}
 
 test("generic and role groups share one unfiltered request across counts, presence and rows", async () => {
   const custom = vi.fn(async () => ({ data: {

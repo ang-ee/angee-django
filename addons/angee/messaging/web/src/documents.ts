@@ -19,9 +19,8 @@ export const THREAD_ATTACHMENT_MODEL = "messaging.ThreadAttachment";
 /** The `recordEdges` entry of a type that keeps chatter: the edge's chatter role, which only threaded models carry. */
 export const THREAD_CHATTER_EDGE = `${THREAD_ATTACHMENT_MODEL}:chatter`;
 
-// The models a record thread reads: the live-refresh keys for the thread
-// queries and the invalidation set every chatter mutation republishes. One owner,
-// shared by both chatter panes.
+// Messaging-owned read dependencies and mutation invalidation keys. The shared
+// useRecordThreadQuery also observes the parent record's ledger refreshes.
 export const READ_MODELS = [
   "parties.Handle",
   "messaging.Thread",
