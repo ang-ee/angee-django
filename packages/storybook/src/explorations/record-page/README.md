@@ -1,1 +1,0 @@
-2026-10-19 — fed the four-region ruling (explorer, subject, context aside, tools). Shipped owners: ConsoleLayout, FormView, RecordActionBar, ScopedExplorerPane, Chatter, PaneToolbar, PaneRow and DrawerRail. A unified RecordPage owner: none yet.

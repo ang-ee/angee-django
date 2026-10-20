@@ -77,6 +77,14 @@ public vault id. See the [knowledge addon](../../addons/angee/knowledge/README.m
 - Layering and unconsumed-owner guardrails are Vitest checks over the locked
   package graph. Do not add a boundary-lint dependency without updating
   [the opinionated stack](../stack.md) and the manifests together.
+- **Guards.** The UX component ontology is executable: `packages/app/src/ux-ontology-guard.ts`
+  (run by the architecture guardrails test over every addon and consumer root) fails on raw
+  `<button>`/`<input>`/`<select>`/`<textarea>`/`<table>`/`<dialog>`/`<form>` elements, lucide
+  icons rendered outside the manifest `icons` block, hand-spelled selected surfaces, deleted
+  class names and raw pixel or control sizes, `toLocale*`/`Intl` formatters and literal
+  date-fns patterns, imports of deleted owners, local `tv()` recipes beside a composed owner,
+  and local status→tone maps. An exception is an allowlist entry with the file, the rule and
+  the owner-level reason, never a workaround in the addon.
 
 ### One-way rules
 
@@ -150,10 +158,11 @@ violations.
 **The shipped owner is the only Storybook authority.** Authoritative stories
 render real `@angee/ui`, `@angee/app` shell owners and shipped addon components,
 with fixture data and providers. They never invent substitute anatomy. A study
-needing its own markup belongs under `Explorations/<YYYY-MM-DD> <name>`, names
-the ruling it fed and its superseding owner, and is deleted once that owner
-exists. Explorations sort last and never enter the Library or the shipped
-composition tree.
+needing its own markup belongs under `Explorations/<YYYY-MM-DD> <name>` (a
+`packages/storybook/src/explorations/` folder with its own story glob in
+`.storybook/main.mjs`; none exists today), names the ruling it fed and its
+superseding owner, and is deleted once that owner exists. Explorations sort last
+and never enter the Library or the shipped composition tree.
 
 The `@angee/ui/catalog` subpath audits runtime exports, including aliases; the
 root entry does not load it. Type-only exports are contracts, not rendered
@@ -409,7 +418,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   to no app. A `record#aside` child appears only on model-backed record views;
   a route whose param names no model has no aside. See the
   [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
-  Shipped examples: [context aside](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--context-aside`),
+  Shipped examples: [command band](../../packages/storybook/src/stories/CommandBand.stories.tsx) (story id `page-commandband--default`),
+  [record header](../../packages/storybook/src/stories/RecordHeader.stories.tsx) (story id `fragments-recordheader--default`),
+  [context aside](../../packages/storybook/src/stories/Chatter.stories.tsx) (story id `communication-chatter--default`),
   [explorer pane](../../packages/storybook/src/stories/ScopedExplorerPane.stories.tsx) (story id `views-scopedexplorerpane--pane`),
   and [tool drawers](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--drawers`).
 - Human-in-the-loop queues use the resource page shell for filtering, grouping,
@@ -488,24 +499,31 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   (`ui/count-badge.tsx`) is the one numeric count pill (tab counts, overlay counts on
   icon buttons and app tiles, tree counts) and formats through `formatNumber`.
   `Badge` and `Tag` no longer exist. A status value renders through `StatusBadge`
-  (`widgets/statusBadge.tsx`), never a local label or tone map.
+  (`widgets/statusBadge.tsx`), never a local label or tone map. Owner stories:
+  [pills](../../packages/storybook/src/stories/Chip.stories.tsx) (story id `primitives-chip--playground`) and
+  [count pills](../../packages/storybook/src/stories/CountBadge.stories.tsx) (story id `primitives-countbadge--default`).
 - **One toolbar: `Toolbar`** (`ui/toolbar.tsx`, Base UI, roving focus) is the root of
   every bar: `ControlBand` and so `CommandBand`, the `PaneToolbar` band, the full
   `ResourceToolbar`, `PageToolbar`, `ChatBar`. `Toolbar.Button` is the one `Button`
   recipe registered with the bar; a bar never spells its own row or button chrome.
+  Owner stories: [command band](../../packages/storybook/src/stories/CommandBand.stories.tsx) (story id `page-commandband--default`),
+  [control band](../../packages/storybook/src/stories/ControlBand.stories.tsx) (story id `page-controlband--default`) and
+  [toolbars](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--toolbars`).
 - **One icon button: `Button` at `iconSm`/`iconMd`/`iconLg`** (a ghost `iconSm`, 28px,
   is every pane, band and header control) with `pressed` (`aria-pressed` + the selected
   treatment) and `badge` (a `CountBadge` on the corner: needs you, unread). The three
   `form#chrome` controls, pane toolbar descriptors, the aside search toggle and the
   dashboard widget controls all render it; `PaneToolbarIconButton`, `ChatHeaderAction`
   and the `icon` button variant no longer exist. `SelectionBarAction` remains the one
-  wrapper, because the selection bar's surface recolours the button.
+  wrapper, because the selection bar's surface recolours the button. Owner story:
+  [icon controls](../../packages/storybook/src/stories/Button.stories.tsx) (story id `primitives-button--icon-controls`).
 - **One verb menu: `ActionMenu` + `ActionTrigger`** (`toolbars/ActionMenu.tsx`) behind
   every `⋮`: the record band, row menus, `PaneToolbarMenu` (descriptor items and
   radio groups over the same owner), the visible-fields menu, the dashboard widget
   menu, the collapsed statusbar. Field choices inside such a menu stay native items;
   verbs are `ActionTrigger`s. Every fire → toast flow settles through
-  `useActionResultRun`; row verbs included.
+  `useActionResultRun`; row verbs included. Owner story:
+  [action menu](../../packages/storybook/src/stories/ActionMenu.stories.tsx) (story id `toolbars-actionmenu--default`).
 - **Time is absolute; relative time is a live header's.** Every list, row, facts
   line and period title formats through `date-format.ts`: `formatDate`,
   `formatDateTime`, `formatTime` (a row whose day label already names the day),
@@ -522,12 +540,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `List`/`Item`/`Empty` sharing the `Select` recipe. The `combobox` and
   `many2many` widgets and the resource `SearchBox` compose it; `Command` (cmdk)
   stays the palette's engine. `SearchInput` is the one standalone search field
-  (toolbars, pickers, the app chooser).
+  (toolbars, pickers, the app chooser). Owner story:
+  [combobox](../../packages/storybook/src/stories/Combobox.stories.tsx) (story id `primitives-combobox--default`).
 - **One label: `FieldLabel`** (`ui/field.tsx`), `standard` in dialogs and
   settings, `variant="eyebrow"` on the form sheet, with `meta` for a compact
   note at its end; `FieldRoot` takes `span`/`area` to sit in a `FormGrid`.
   `RequiredMark` and `OptionalHint` live beside it. `Label` and `FieldRow` no
-  longer exist.
+  longer exist. Owner story:
+  [field label](../../packages/storybook/src/stories/FieldLabel.stories.tsx) (story id `primitives-fieldlabel--default`).
 - **One indentation: `depthIndent`** (`ui/tree.tsx`) computes every nested row's
   inset (`Tree`, grouped lists, the gantt sidebar); `DeletePreviewTree` is a
   `Tree` over the delete preview. **One prose: `Markdown`**
@@ -535,26 +555,34 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   file preview included. `Avatar` renders every initials circle (`userRef`,
   `ownerCell`). `TimelineView`, `TimelineEntry`, `Divider`, `TextInput`,
   `DebouncedSearchInput`, `PopoverInput` and `ToolbarInput` no longer exist.
+  Owner stories: [avatar stack](../../packages/storybook/src/stories/Avatar.stories.tsx) (story id `primitives-avatar--stack`) and
+  [tree with an insertion row](../../packages/storybook/src/stories/TreeView.stories.tsx) (story id `views-treeview--insertion`).
 - **One pager: `Pager`** (`ui/pager.tsx`) in `range` mode (lists) or `record` mode
   ("n / N" over a navigator's order; `RecordPager` is that mode behind a `nav`), with
   `formatNumber` as its default. A pane list's pager footer is `ResourcePaneFooter`.
+  Owner story: [pager](../../packages/storybook/src/stories/Pager.stories.tsx) (story id `primitives-pager--default`).
 - **A disabled reason is a tooltip.** A band verb that cannot run carries its
   `disabledReason` as a `Tooltip` and stays focusable while disabled; a menu item
   keeps the reason as its description row inside the menu (links stay usable). The
-  band never renders reason sentences.
+  band never renders reason sentences. Owner stories:
+  [record action bar](../../packages/storybook/src/stories/RecordActionBar.stories.tsx) (story id `views-recordactionbar--default`) and
+  [tooltip](../../packages/storybook/src/stories/Tooltip.stories.tsx) (story id `primitives-tooltip--default`).
 - **The pane row's verb is a control beside the row**, not text inside its button
   or link: `PaneRow.verb` as a node renders the pane's own button or link next to the
   row's control, revealed on hover or focus; a string is a hint of what the row opens.
   The aside's scope overflow is the pane menu's radio group (`PaneToolbarMenu
   groups`), with the active overflow kind shown as a clearable scope chip, never a
-  native `<select>` or an "N more" button.
+  native `<select>` or an "N more" button. Owner stories:
+  [pane rows and labels](../../packages/storybook/src/stories/PaneRow.stories.tsx) (story id `communication-panerow--default`) and
+  [timeline rail](../../packages/storybook/src/stories/TimelineRail.stories.tsx) (story id `communication-timelinerail--default`).
 - **One selected surface: the `selected` utility** (`styles/index.css`), composed
   through variants — `data-[pressed]:selected`, `aria-[current=true]:selected`,
   `data-[active]:selected` — by trees, toggles, tabs, pagers, section nav, pane rows
   and pressed chips. Never spell `bg-brand-soft text-brand-soft-text` by hand.
 - **One in-flow list message: `ListStatusMessage`** (`fragments/ListStatusMessage.tsx`)
   for a group's error or empty note inside a table, board or pane list; `ErrorBanner`,
-  `EmptyState` and `InlineEmpty` own every other error and empty surface.
+  `EmptyState` and `InlineEmpty` own every other error and empty surface. Owner story:
+  [list status message](../../packages/storybook/src/stories/ListStatusMessage.stories.tsx) (story id `fragments-liststatusmessage--default`).
 - **Status → tone is owned once** by
   [`statusTone`](../../packages/ui/src/widgets/status-tones.ts). Framework defaults
   contain only neutral vocabulary. Addons contribute product values through
@@ -863,7 +891,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   never a client copy of the server rule. RecordActionBar confirms every
   `danger` verb that runs on click: its `confirm` copy in the danger tone, or the
   standard copy titled by the verb. Declare `confirm` only for domain copy.
-  See the shipped [record verbs and command band](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--record-verbs`).
+  See the shipped [record action bar](../../packages/storybook/src/stories/RecordActionBar.stories.tsx) (story id `views-recordactionbar--default`) and
+  [command band](../../packages/storybook/src/stories/CommandBand.stories.tsx) (story id `page-commandband--default`).
 - **Trash composes the shared owner.** A resource whose metadata marks a field
   `trashable` gets Trash and Restore from [the trash module](../../packages/ui/src/views/resource/trash.tsx):
   `useTrashActions` for record forms, `useTrashRowActions` for lists, and
@@ -1228,9 +1257,12 @@ and `iam#access-visibility`.
 
 ### Context aside
 
-Owner stories: [Chatter and its panes](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--context-aside`),
+Owner stories: [Chatter and its panes](../../packages/storybook/src/stories/Chatter.stories.tsx) (story id `communication-chatter--default`),
+[timeline rail](../../packages/storybook/src/stories/TimelineRail.stories.tsx) (story id `communication-timelinerail--default`),
+[related pane](../../packages/storybook/src/stories/RelatedPane.stories.tsx) (story id `communication-relatedpane--default`),
+[step list](../../packages/storybook/src/stories/StepList.stories.tsx) (story id `communication-steplist--default`),
 [pane toolbar band](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--pane-toolbar`),
-and [pane rows and labels](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--pane-rows`).
+and [pane rows and labels](../../packages/storybook/src/stories/PaneRow.stories.tsx) (story id `communication-panerow--default`).
 
 The context aside is the shell's right region: what is around the record. Its
 children are `record#aside` and `<model>#aside` contributions. A `record#aside`
