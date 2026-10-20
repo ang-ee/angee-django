@@ -14,13 +14,16 @@ from angee.changesets import changeset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql.publishing import change_published
+from angee.graphql.schema import GraphQLSchemas
 from angee.identity import public_id_of
 from angee.signals import bulk_updated
 from angee.timeline.testing.models import Event
+from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.states import RunStatus, WaitingKind
 from angee.workflows.testing.drivers import decide, load_workflow, run_until
 from angee.workflows.testing.models import StepRun, WorkflowRun
 from tests.conftest import create_user
+from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_timeline import read_timeline
 from tests.test_workflows_review import review as review  # noqa: F401 -- shared real review driver
 from tests.test_workflows_review import start_review
@@ -182,3 +185,69 @@ def test_later_step_decision_link_reprojects_the_question_and_claims_are_silent(
     assert published.count(Decision) == 1
     event.refresh_from_db()
     assert (event.fold_model, event.fold_pk) == ("workflows.WorkflowRun", run.pk)
+
+
+@pytest.mark.parametrize("assigned", [True, False])
+def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
+    execution, register_step, monkeypatch, assigned,
+):
+    """Like the AP page: a canonical ledger record has only a child's public feed."""
+
+    actor, _sent = execution
+    with system_context(reason="test.timeline.inherited_subject"):
+        subject = MtiChild.objects.create(title="Review twice")
+        write_relationships([
+            RelationshipTuple(to_object_ref(subject), "reader", to_subject_ref(actor)),
+            RelationshipTuple(to_object_ref(MtiParent.objects.get(pk=subject.pk)), "reader", to_subject_ref(actor)),
+        ])
+
+    class Question(DecisionStep[None, None, None]):
+        key = "timeline_commit_question"
+        outcomes = {"done": "Continue"}
+
+        def ask(self, ctx):
+            return ctx.ask(DecisionRequest(
+                kind="review", records=(subject,), assignees=(actor,) if assigned else (),
+                proposal=DecisionProposal(alternatives=[{"key": "done", "label": "Continue", "outcome": "done"}]),
+            ))
+
+    register_step(Question)
+    monkeypatch.setattr(
+        GraphQLSchemas, "change_publisher_model_labels", lambda self: frozenset({MtiChild._meta.label_lower}),
+    )
+    snapshots = []
+
+    def broadcast(model, payload):
+        if model is MtiChild:
+            assert not connection.in_atomic_block
+            assert payload["id"] == public_id_of(subject)
+            assert payload["resource_id"] == str(subject.pk)
+            assert payload["related_records"] == [{"model": MtiChild._meta.label, "id": public_id_of(subject)}]
+            # Read exactly when a subscriber receives the committed invalidation.
+            snapshots.append(read_timeline(subject, actor))
+
+    monkeypatch.setattr("angee.graphql.publishing._broadcast", broadcast)
+    workflow = load_workflow({
+        "nodes": {
+            "first": {"step": Question.key, "label": "First review", "next": {"done": ["second"]}},
+            "second": {"step": Question.key, "label": "Second review"},
+        },
+        "results": [{"from": "second", "when": ["done"], "as": "done"}],
+    }, key="timeline-committed-waits", actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
+    for node in ("first", "second"):
+        snapshots.clear()
+        run_until(run)
+        step = StepRun.system_queryset().get(run=run, node_key=node)
+        event = Event.objects.for_record(subject).get(kind="workflows.run", target_pk=run.pk)
+        assert event.detail == f"Waiting · {step.node_label}"
+        assert snapshots, "The declared child feed must refresh after the projection commits."
+        page = snapshots[-1]
+        assert page["timeline_attention"] == page["timeline"]["needs_me"] == 1
+        (line,) = page["timeline"]["entries"]
+        assert line["detail"] == event.detail and line["needs_me"]
+        assert {"kind": "decisions.decision", "count": 1 if node == "first" else 2} in line["children"]
+        decide(step.decision, actor=actor, chosen=["done"])
+    run_until(run)
+    assert snapshots[-1]["timeline_attention"] == 0
+    assert snapshots[-1]["timeline"]["entries"][0]["detail"] == "Succeeded"

@@ -42,6 +42,7 @@ from rebac.resources import model_for_resource_type, model_resource_type
 from rebac.schema import FieldBinding
 
 from angee.identity import public_data_id_field, public_id_for
+from angee.lineage import concrete_child_models
 from angee.permissions import effective_rebac_definition
 
 
@@ -67,6 +68,25 @@ def record_ref_for(instance: models.Model) -> RecordRef:
 
     model = type(instance)
     return _record_ref_from_model(model, instance.pk)
+
+
+def record_view_refs(*records: RecordRef, using: str | None = None) -> tuple[RecordRef, ...]:
+    """Include existing inherited views of canonical records, querying ids in batches."""
+
+    result = list(dict.fromkeys(records))
+    grouped: dict[type[models.Model], set[Any]] = {}
+
+    def children(parent: type[models.Model], ids: set[Any]) -> None:
+        for child in concrete_child_models(parent):
+            grouped.setdefault(child, set()).update(ids)
+            children(child, ids)
+
+    for record in result:
+        children(apps.get_model(record.model_label), {record.object_id})
+    for child, ids in grouped.items():
+        present = child._base_manager.using(using).filter(pk__in=ids).values_list("pk", flat=True)
+        result.extend(_record_ref_from_model(child, pk) for pk in present)
+    return tuple(dict.fromkeys(result))
 
 
 def ancestor_object_refs(obj: models.Model) -> tuple[ObjectRef, ...]:

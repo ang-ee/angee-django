@@ -143,6 +143,7 @@ jobs:
             tests/test_workflows_cancel.py tests/test_workflows_cancel_concurrency.py \
             tests/test_workflows_review.py tests/test_workflows_review_concurrency.py \
             tests/test_workflows_review_graphql.py tests/test_decisions_inbox.py \
+            tests/test_timeline_workflows.py \
             tests/test_decision_display_nested.py \
             tests/test_workflows_map_definition.py tests/test_workflows_map.py \
             tests/test_workflows_map_concurrency.py tests/test_workflows_map_surface.py \

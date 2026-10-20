@@ -1045,7 +1045,8 @@ and current contracts before applying a historical example to a new deployment.
   cannot roll back the owner. The publisher queues transport after these local
   callbacks; background projections invalidate records when they finish. Local observation
   never enables a transport feed; completed projections also invalidate their
-  related records through those records' declared feeds. Backfill uses that
+  related records through those records' declared feeds, including existing MTI
+  views when the canonical record has no feed. Backfill uses that
   same locked projection contract. Kinds declare the source fields they read so an
   unrelated partial save never walks dependent targets; inherited sources are
   observed through their concrete descendants too. Core bulk-trash verbs emit

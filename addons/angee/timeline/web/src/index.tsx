@@ -29,7 +29,7 @@ export default defineBaseAddon({
           panelClassName: "p-0",
           render: (context, selection) => (
             <RecordTimelinePane
-              key={`${context.route?.canonicalLabel ?? context.route?.modelLabel}:${context.view.kind === "record" ? context.view.sqid : ""}`}
+              key={`${context.route?.modelLabel ?? context.route?.canonicalLabel}:${context.view.kind === "record" ? context.view.sqid : ""}`}
               context={context}
               selection={selection}
             />

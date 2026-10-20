@@ -13,6 +13,7 @@ from typing import Any
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
@@ -21,6 +22,7 @@ from django.dispatch import Signal
 
 from angee.graphql.events import ChangePayload, ChangeRelatedRecord, ReadableFields
 from angee.graphql.schema import GraphQLSchemas
+from angee.refs import record_ref_for, record_view_refs
 from angee.signals import bulk_updated
 
 _INMEMORY_CHANNEL_LAYER = "channels.layers.InMemoryChannelLayer"
@@ -296,18 +298,27 @@ def _send_change(model: type[models.Model], payload: ChangePayload) -> None:
 def broadcast_related_records(records: Iterable[models.Model]) -> None:
     """Refresh record reads after a derived projection, without observing another write.
 
-    Only declared record feeds transport these identity-only invalidations. Their
-    normal subscriber read policy applies; private source models gain no feed.
+    Only declared record feeds transport these identity-only invalidations,
+    including inherited views when the canonical model has no feed. Their normal
+    subscriber read policy applies; private source models gain no feed.
     """
 
     feeds = GraphQLSchemas.from_discovery().change_publisher_model_labels()
+    by_database: dict[str | None, list[models.Model]] = {}
     for record in records:
-        if record._meta.label_lower not in feeds:
-            continue
-        payload = ChangePayload.from_instance(record, action="update", update_fields=None, broadcasts=False)
-        _queue_transport(type(record), replace(
-            payload, broadcasts=True, related_records=(ChangeRelatedRecord(payload.model, payload.id),),
-        ))
+        by_database.setdefault(record._state.db, []).append(record)
+    for using, rows in by_database.items():
+        for reference in record_view_refs(*(record_ref_for(row) for row in rows), using=using):
+            model = apps.get_model(reference.model_label)
+            if model._meta.label_lower not in feeds:
+                continue
+            record = model(pk=reference.object_id)
+            record._state.db = using
+            payload = ChangePayload.from_instance(record, action="update", update_fields=None, broadcasts=False)
+            _queue_transport(model, replace(
+                payload, id=reference.public_id, broadcasts=True,
+                related_records=(ChangeRelatedRecord(reference.model_label, reference.public_id),),
+            ))
 
 
 def _queue_transport(model: type[models.Model], payload: ChangePayload) -> None:

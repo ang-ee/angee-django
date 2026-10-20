@@ -12,7 +12,7 @@ import { useTimelinePages } from "./useTimelinePages";
 export function NeedsYouChrome(): React.ReactElement | null {
   const record = useRecordChromeContext();
   const { setActiveTab, setCollapsed } = useChatter();
-  const model = record.canonicalResource;
+  const model = record.resource;
   const [query] = useTimelinePages({ model, id: record.recordId });
   const count = query?.data?.timeline.needs_me ?? 0;
   if (!count) return null;

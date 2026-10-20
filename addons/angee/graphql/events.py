@@ -8,16 +8,14 @@ from typing import Any, cast
 from uuid import uuid4
 
 import strawberry
-from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from rebac import ObjectRef
 from rebac.resources import model_resource_id, model_resource_type
 from strawberry.scalars import JSON
 
-from angee.identity import public_id_for, public_id_of
-from angee.lineage import concrete_child_models
-from angee.refs import RecordRef
+from angee.identity import public_id_of
+from angee.refs import RecordRef, record_view_refs
 from angee.serialization import json_safe
 
 ReadableFields = Iterable[str] | Callable[[], Iterable[str]]
@@ -34,20 +32,7 @@ class ChangeRelatedRecord:
     @classmethod
     def for_records(cls, *records: RecordRef) -> tuple[ChangeRelatedRecord, ...]:
         """Include existing inherited views of a canonical concern identity."""
-        result = list(dict.fromkeys(cls(record.model_label, record.public_id) for record in records))
-        grouped: dict[type[models.Model], set[Any]] = {}
-
-        def children(parent: type[models.Model], ids: set[Any]) -> None:
-            for child in concrete_child_models(parent):
-                grouped.setdefault(child, set()).update(ids)
-                children(child, ids)
-
-        for record in dict.fromkeys(records):
-            children(apps.get_model(record.model_label), {record.object_id})
-        for child, ids in grouped.items():
-            present = child._base_manager.filter(pk__in=ids).values_list("pk", flat=True)
-            result.extend(cls(child._meta.label, public_id_for(child, pk)) for pk in present)
-        return tuple(dict.fromkeys(result))
+        return tuple(cls(record.model_label, record.public_id) for record in record_view_refs(*records))
 
 
 @dataclass(frozen=True, slots=True)

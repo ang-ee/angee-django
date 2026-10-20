@@ -90,6 +90,22 @@ def test_record_reader_without_decision_read_sees_no_line_identity_or_count(peop
     assert data["timeline"]["needs_me"] == data["timeline_attention"] == 0
 
 
+def test_unassigned_attention_uses_answer_permission_without_claiming_others_assignments(people) -> None:
+    requester, reviewer, bystander, subject = people
+    admin = create_platform_admin("timeline-unassigned-admin")
+    decision = Decision.objects.ask(DecisionRequest(
+        kind="unassigned_review", records=(subject,), requester=requester,
+        proposal=DecisionProposal(alternatives=[{"key": "done", "label": "Done", "outcome": "done"}]),
+    ), actor=requester)
+    assert read_timeline(subject, admin)["timeline_attention"] == 1
+    assert read_timeline(subject, requester)["timeline_attention"] == 0
+    assert read_timeline(subject, bystander)["timeline"]["entries"] == []
+    Decision.objects.decide(decision, actor=admin, revision=decision.revision, chosen=["done"])
+    ask(people)
+    assert read_timeline(subject, admin)["timeline_attention"] == 0
+    assert read_timeline(subject, reviewer)["timeline_attention"] == 1
+
+
 def test_subscribers_see_the_committed_projection_before_the_change_broadcast(people, monkeypatch) -> None:
     subject = people[3]
     seen = []
