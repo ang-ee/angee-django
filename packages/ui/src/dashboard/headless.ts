@@ -1,5 +1,5 @@
 import type { ComponentType, ReactNode } from "react";
-import type { DataResourceQuery } from "@angee/metadata";
+import type { DataResourceQuery, QueryFilter } from "@angee/metadata";
 import type { ResourceListSnapshot } from "../views/resource/resource-view-surface";
 import * as v from "valibot";
 
@@ -264,8 +264,8 @@ export interface HostedResourceViewProps {
   /** Compact chrome: no view switcher, column chooser or selection. */
   presentation: "embedded";
   scope: "inherit";
-  /** The widget owns the heading and count; the hosted list keeps search and never pages. */
-  chrome: { heading: false; search: true; pager: false };
+  /** The widget owns the heading and count; `options.pager` can enable the list's native pager. */
+  chrome: { heading: false; search: true; pager: boolean };
 }
 
 export interface DashboardCapabilities {
@@ -363,6 +363,11 @@ export interface DashboardWidgetData {
   refetch: () => void;
 }
 
+export interface DashboardPageScope {
+  resource: string;
+  filter?: QueryFilter;
+}
+
 export interface DashboardWidgetRenderProps {
   spec: WidgetSpec;
   data: DashboardWidgetData;
@@ -370,6 +375,8 @@ export interface DashboardWidgetRenderProps {
   titleId?: string;
   onCountChange?: (count: number | null) => void;
   hostedView?: ComponentType<HostedResourceViewProps>;
+  /** Immutable page scope for a hosted resource view, matched by its declared resource. */
+  pageScope?: DashboardPageScope;
 }
 
 export interface DashboardWidgetKind {

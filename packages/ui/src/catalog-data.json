@@ -1790,7 +1790,7 @@
     "source": "packages/ui/src/dashboard/charts.tsx",
     "kind": "surface",
     "status": "stable",
-    "storyId": "library-owners--charts"
+    "storyId": "views-dashboard-charts--default"
   },
   {
     "package": "@angee/ui",
@@ -1832,7 +1832,7 @@
     "source": "packages/ui/src/dashboard/surface.tsx",
     "kind": "surface",
     "status": "stable",
-    "storyId": null
+    "storyId": "views-dashboardsurface--overview"
   },
   {
     "package": "@angee/ui",
@@ -4581,6 +4581,15 @@
     "kind": "primitive",
     "status": "stable",
     "storyId": "library-owners--status-icons"
+  },
+  {
+    "package": "@angee/ui",
+    "name": "StatusIconGroup",
+    "source": "packages/ui/src/ui/status-icon.tsx",
+    "kind": "primitive",
+    "owner": "@angee/ui:StatusIcon",
+    "status": "stable",
+    "storyId": "primitives-statusicon--check-group"
   },
   {
     "package": "@angee/ui",
@@ -8018,6 +8027,15 @@
     "source": "packages/ui/src/runtime/runtime.ts",
     "kind": "surface",
     "owner": "@angee/ui:DashboardView",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useDashboardWidgetData",
+    "source": "packages/ui/src/dashboard/data.tsx",
+    "kind": "surface",
+    "owner": "@angee/ui:DashboardSurface",
     "status": "stable",
     "storyId": null
   },

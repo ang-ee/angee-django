@@ -1,12 +1,12 @@
-import { holdsPermission } from "@angee/metadata";
+import { ResourceQuery, holdsPermission, useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
 import { useCallback, useMemo, useState, type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import {
-  EmptyState, InlineTextAction, LoadingPanel, PaneToolbarMenu, RemovedDisclosure, RemovedItem, ScopedExplorerPane,
+  EmptyState, ErrorBanner, InlineTextAction, LoadingPanel, PaneToolbarMenu, RemovedDisclosure, RemovedItem, ScopedExplorerPane,
   SearchInput, TRASH_PERMISSION, TreeView, WikilinkProvider, errorMessage, useBreadcrumbCollectionLink, useBreadcrumbLeafLabel,
-  useRouteHref, useRouteRecordId, type RecordNavigation, type ScopedExplorerController, type WikilinkResolver,
+  useAppRuntime, useRouteHref, useRouteRecordId, type RecordNavigation, type ScopedExplorerController, type WikilinkResolver,
 } from "@angee/ui";
 
 import {
@@ -36,8 +36,8 @@ import { usePageActions } from "../data/use-page-actions";
 import { KnowledgePageView, type KnowledgePageFrame } from "../KnowledgePageView";
 import { useKnowledgeT } from "../i18n";
 
-// One safety-capped read each of vaults/pages; the browser scopes the set
-// client-side so the navigator and reader share one fetch.
+// One safety-capped read each of vaults/pages; a mounted collection's predicate
+// is applied by the query owner before the navigator groups its pages by vault.
 type NewPageKind = "note" | "folder";
 
 type KnowledgeExplorerController = ScopedExplorerController<
@@ -59,11 +59,32 @@ export function KnowledgePage(): ReactElement {
     [],
   );
   const invalidateModels = useInvalidateAuthoredModels();
+  const { defaultResourceFilter } = useAppRuntime();
+  const metadata = useModelMetadata(PAGE_MODEL);
+  const routeFilter = defaultResourceFilter?.resource === PAGE_MODEL ? defaultResourceFilter.filter : undefined;
+  const scope = useMemo(() => {
+    if (!routeFilter) return { where: undefined, error: null };
+    try {
+      if (!metadata) throw new Error(t("vaults.unavailableTitle"));
+      return { where: ResourceQuery.from(metadata).toWhere(routeFilter), error: null };
+    } catch (error) {
+      return { where: undefined, error };
+    }
+  }, [metadata, routeFilter, t]);
   const vaultsQuery = useAuthoredQuery(KnowledgeVaults, variables, { models: ["knowledge.Vault"] });
-  const pagesQuery = useAuthoredQuery(KnowledgePages, variables, { models: [PAGE_MODEL] });
+  const pagesQuery = useAuthoredQuery(KnowledgePages, { ...variables, where: scope.where }, {
+    models: [PAGE_MODEL], enabled: scope.error === null,
+  });
 
-  const vaults = vaultsQuery.data?.vaults ?? [];
   const pages = pagesQuery.data?.pages ?? [];
+  // A mounted page collection keeps the same reader and only offers roots
+  // represented in that collection. The ordinary wiki retains empty vaults.
+  const vaults = useMemo(() => {
+    const all = vaultsQuery.data?.vaults ?? [];
+    if (!routeFilter) return all;
+    const ids = new Set(pages.map((page) => page.vault));
+    return all.filter((vault) => ids.has(vault.id));
+  }, [pages, routeFilter, vaultsQuery.data]);
 
   // The open page is route state: `/knowledge/$id` reads that page into the
   // content + aside; `/knowledge` is the empty reader.
@@ -146,13 +167,13 @@ export function KnowledgePage(): ReactElement {
       "aria-label": t("vault.label"),
       placeholder: t("vault.placeholder"),
       searchPlaceholder: t("vault.searchPlaceholder"),
-      create: { resource: "knowledge.Vault" },
+      create: routeFilter ? undefined : { resource: "knowledge.Vault" },
       onCreated: () => {
         invalidateModels(["knowledge.Vault"]);
         closePage();
       },
     }),
-    [closePage, invalidateModels, t],
+    [closePage, invalidateModels, routeFilter, t],
   );
   // A new page is typed where it will live: under the open folder, beside the
   // open page, or at the vault root. The row closes on submit and the page opens.
@@ -250,6 +271,9 @@ export function KnowledgePage(): ReactElement {
     [actionsBusy, navigate, routeHref, t],
   );
 
+  if (scope.error || pagesQuery.error) {
+    return <ErrorBanner description={errorMessage(scope.error ?? pagesQuery.error, t("vaults.unavailableTitle"))} />;
+  }
   return (
     <ScopedExplorerPane<{ id: string; name: string }, KnowledgeTreeRow>
       roots={vaults}
@@ -264,7 +288,7 @@ export function KnowledgePage(): ReactElement {
       renderTree={renderTree}
       toolbar={explorerToolbar}
       renderNavigatorFooter={renderNavigatorFooter}
-      loading={vaultsQuery.isFetching && vaults.length === 0}
+      loading={(vaultsQuery.isFetching || pagesQuery.isFetching) && vaults.length === 0}
       loadingContent={<LoadingPanel message={t("loading")} />}
       emptyContent={
         <EmptyState
