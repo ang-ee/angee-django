@@ -347,7 +347,6 @@ class TieQuerySet(AngeeQuerySet[Any]):
                             "kind": str(kind.slug if kind else ""),
                             "kind_name": str(kind.name if kind else ""),
                             "kind_inverse_name": str(kind.inverse_name if kind else ""),
-                            "source": str(relationship.source),
                         },
                     }
                 )
