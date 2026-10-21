@@ -2529,7 +2529,7 @@ class MessageQuerySet(MergeableQuerySet[Any], TrashQuerySet[Any], AngeeQuerySet[
     def involving_parties(self, parties: Any) -> MessageQuerySet:
         """Return messages any of ``parties``' resolved handles participated in.
 
-        Inbox scopes and correspondence projections pass either a lazy Party
+        Inbox scopes and correspondence reads pass either a lazy Party
         queryset (a circle subtree) or a concrete iterable. Participants are Handle-keyed
         and ``Handle.party`` is the resolution-materialised owner, so one join
         answers "every message exchanged with these parties across channels".

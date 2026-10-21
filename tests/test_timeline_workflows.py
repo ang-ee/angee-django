@@ -1,4 +1,4 @@
-"""Runs and waiting decisions update the ledger through real execution."""
+"""Runs and waiting decisions compose live source rows through real execution."""
 
 from __future__ import annotations
 
@@ -17,14 +17,13 @@ from angee.graphql.publishing import change_published
 from angee.graphql.schema import GraphQLSchemas
 from angee.identity import public_id_of
 from angee.signals import bulk_updated
-from angee.timeline.testing.models import Event
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.states import RunStatus, WaitingKind
 from angee.workflows.testing.drivers import decide, load_workflow, run_until
 from angee.workflows.testing.models import StepRun, WorkflowRun
 from tests.conftest import create_user
 from tests.mtidemo.models import MtiChild, MtiParent
-from tests.test_timeline import read_timeline
+from tests.test_timeline import read_timeline, timeline_entries
 from tests.test_workflows_review import review as review  # noqa: F401 -- shared real review driver
 from tests.test_workflows_review import start_review
 from tests.workflow_steps import document
@@ -47,17 +46,15 @@ def test_run_follows_execution_without_an_explicit_projection(execution) -> None
         document("entry"), key="timeline-run", actor=actor, subject_model=actor._meta.label, name="Timeline run",
     )
     run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
-    event = Event.objects.for_record(subject).get(kind="workflows.run")
-    assert (event.target_model, event.target_pk) == ("workflows.WorkflowRun", run.pk)
+    event, = timeline_entries(subject, actor, kind="workflows.run")
+    assert (event.target_model, event.target_id) == ("workflows.WorkflowRun", public_id_of(run))
     assert event.title == "Timeline run" and event.detail == "Running"
-    assert event.fold_pk is None
-    assert not Event.objects.for_record(run).filter(target_model="workflows.WorkflowRun", target_pk=run.pk).exists()
+    assert all(line.target_id != public_id_of(run) for line in timeline_entries(run, actor))
     run_until(run)
     run.refresh_from_db()
     assert run.status == RunStatus.SUCCEEDED
-    event.refresh_from_db()
-    assert event.detail == "Succeeded"
-    assert Event.objects.for_record(subject).filter(kind="workflows.run").count() == 1
+    current, = timeline_entries(subject, actor, kind="workflows.run")
+    assert current.key == event.key and current.detail == "Succeeded"
     # Reading the subject is insufficient to see a run acting on it.
     data = read_timeline(subject, subject, kinds=["workflows.run"])
     assert data["timeline"]["entries"] == []
@@ -81,9 +78,7 @@ def test_waiting_run_folds_readable_children_and_computes_attention(review) -> N
     subject = question.review_subject
     with system_context(reason="test.timeline.run_reader"):
         write_relationships([RelationshipTuple(to_object_ref(run), "reader", to_subject_ref(reviewer))])
-    decision_event = Event.objects.for_record(subject).get(kind="decisions.decision", target_pk=step.decision_id)
-    assert (decision_event.fold_model, decision_event.fold_pk) == ("workflows.WorkflowRun", run.pk)
-    assert Event.objects.for_record(run).get(kind="decisions.decision").fold_pk is None
+    assert timeline_entries(run, reviewer, kind="decisions.decision")[0].target_id == public_id_of(step.decision)
     with system_context(reason="test.timeline.run_change"), changeset(fresh=True, origin=run):
         subject.name = "A run edit"
         subject.save(update_fields=["name"])
@@ -97,7 +92,7 @@ def test_waiting_run_folds_readable_children_and_computes_attention(review) -> N
     assert data["timeline_attention"] == data["timeline"]["needs_me"] == 1
     folded_groups = [
         query["sql"] for query in queries.captured_queries
-        if '"fold_model" AS "fold_model"' in query["sql"] and "GROUP BY" in query["sql"]
+        if 'AS "_timeline_fold_type"' in query["sql"] and "GROUP BY" in query["sql"]
     ]
     assert len(folded_groups) == 1
 
@@ -113,12 +108,9 @@ def test_waiting_run_folds_readable_children_and_computes_attention(review) -> N
     assert all(child["kind"] != "decisions.decision" for child in readable_run["children"])
     assert hidden["timeline_attention"] == hidden["timeline"]["needs_me"] == 0
 
-    # Folding is a target reference: deleting a projection never cascades into its children.
-    Event.objects.for_record(subject).filter(kind="workflows.run").delete()
-    assert Event.objects.filter(pk=decision_event.pk).exists()
     decide(step.decision, actor=reviewer, chosen=["approve"])
     run_until(run)
-    assert Event.objects.for_record(subject).get(kind="workflows.run").detail == "Succeeded"
+    assert timeline_entries(subject, reviewer, kind="workflows.run")[0].detail == "Succeeded"
     assert read_timeline(subject, reviewer)["timeline_attention"] == 0
 
 
@@ -141,13 +133,12 @@ def test_unreadable_or_missing_run_never_hides_a_readable_question_or_change(rev
     assert next(kind["count"] for kind in data["timeline"]["kinds"] if kind["id"] == "decisions.decision") == 1
     decide(step.decision, actor=reviewer, chosen=["reject"])
     run_until(run)
-    Event.objects.filter(kind="workflows.run", target_pk=run.pk).delete()
     data = read_timeline(subject, reviewer, kinds=["decisions.decision"])
     assert len(data["timeline"]["entries"]) == 1
     assert not data["timeline"]["entries"][0]["needs_me"]
 
 
-def test_later_step_decision_link_reprojects_the_question_and_claims_are_silent(review) -> None:
+def test_later_step_decision_link_folds_the_question_and_claims_are_silent(review) -> None:
     actor, reviewers, _, question = review
     subject = question.review_subject
     workflow = load_workflow(document("entry"), key="late-question", actor=actor, subject_model=subject._meta.label)
@@ -158,8 +149,7 @@ def test_later_step_decision_link_reprojects_the_question_and_claims_are_silent(
             "alternatives": [{"key": "done", "label": "Done", "outcome": "done"}],
         }),
     ), actor=actor)
-    event = Event.objects.for_record(subject).get(kind="decisions.decision", target_pk=decision.pk)
-    assert event.fold_pk is None
+    assert timeline_entries(subject, actor, kind="decisions.decision")[0].target_id == public_id_of(decision)
     published, batches = [], []
 
     def observed(sender, **kwargs):
@@ -183,15 +173,16 @@ def test_later_step_decision_link_reprojects_the_question_and_claims_are_silent(
     assert all({"input", "output", "state", "notes"} <= row.get_deferred_fields() for row in batches[0])
     assert published.count(WorkflowRun) == 0  # Run advancement publishes its completed state separately.
     assert published.count(Decision) == 1
-    event.refresh_from_db()
-    assert (event.fold_model, event.fold_pk) == ("workflows.WorkflowRun", run.pk)
+    assert timeline_entries(subject, actor, kind="decisions.decision") == []
+    line, = timeline_entries(subject, actor, kind="workflows.run")
+    assert {child.kind: child.count for child in line.children}["decisions.decision"] == 1
 
 
 @pytest.mark.parametrize("assigned", [True, False])
 def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
     execution, register_step, monkeypatch, assigned,
 ):
-    """Like the AP page: a canonical ledger record has only a child's public feed."""
+    """Like the AP page: a canonical record has only a child's public feed."""
 
     actor, _sent = execution
     with system_context(reason="test.timeline.inherited_subject"):
@@ -239,9 +230,9 @@ def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
         snapshots.clear()
         run_until(run)
         step = StepRun.system_queryset().get(run=run, node_key=node)
-        event = Event.objects.for_record(subject).get(kind="workflows.run", target_pk=run.pk)
+        event, = timeline_entries(subject, actor, kind="workflows.run")
         assert event.detail == f"Waiting · {step.node_label}"
-        assert snapshots, "The declared child feed must refresh after the projection commits."
+        assert snapshots, "The declared child feed must refresh after the source write commits."
         page = snapshots[-1]
         assert page["timeline_attention"] == page["timeline"]["needs_me"] == 1
         (line,) = page["timeline"]["entries"]

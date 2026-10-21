@@ -313,11 +313,12 @@ stop later steps. Provision runs `makemigrations --noinput`; missing required
 migration defaults and populated column or table drops fail immediately so their
 defaults or cutovers can be authored before retrying.
 
-The stack's provision job declares `--after-if-installed timeline_backfill` so
-the deps/provision chain rebuilds the disposable ledger after migrations and
-resource loading. The composer runs these explicitly named addon commands only
-when Django's command registry contains them; stacks without timeline need no
-special provisioning branch.
+Optional addon commands can follow provision through `--after-if-installed`;
+the composer runs an explicitly named command only when Django's registry
+contains it. The timeline reads source rows directly and requires no backfill.
+An addon declaring migrations for its own app label keeps that native runtime
+app, even after its last model is retired, so Django can apply the cutover and
+retain its migration history.
 
 ### Composed addon dependencies
 

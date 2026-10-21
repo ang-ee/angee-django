@@ -405,22 +405,22 @@ def test_record_edges_invert_the_declared_targets_into_resource_metadata(compose
         "messaging.ThreadAttachment",
         "projects.Link",
         "projects.Task",
-        "storage.FileAttachment", "tags.TagAssignment", "timeline.Event",
+        "storage.FileAttachment", "tags.TagAssignment",
     ]
     assert FileAttachment.declares_target(MtiChild) and FileAttachment.declares_target(MtiChildProxy)
     assert not FileAttachment.declares_target(File) and not RecordBinding.declares_target(RecordRefPlainTarget)
     schema = addon_schema(storage_schema.schemas, "public")
     resources = {item.model_label: item for item in schema.angee_resources}
     assert resources["storage.Drive"].record_edges == (
-        "integrate.RecordLink", "projects.ProjectBinding", "storage.FileAttachment", "timeline.Event",
+        "integrate.RecordLink", "projects.ProjectBinding", "storage.FileAttachment",
     )
     # A file retains source conversations but keeps no chatter: the edge, not its chatter role.
     assert resources["storage.File"].record_edges == (
-        "integrate.RecordLink", "messaging.ThreadAttachment", "tags.TagAssignment", "timeline.Event",
+        "integrate.RecordLink", "messaging.ThreadAttachment", "tags.TagAssignment",
     )
     wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
     assert wire["storage.File"]["recordEdges"] == [
-        "integrate.RecordLink", "messaging.ThreadAttachment", "tags.TagAssignment", "timeline.Event",
+        "integrate.RecordLink", "messaging.ThreadAttachment", "tags.TagAssignment",
     ]
     # A page keeps chatter: its resource names the edge and the edge's chatter role.
     pages = {item.model_label: item for item in addon_schema(knowledge_schema.schemas, "public").angee_resources}

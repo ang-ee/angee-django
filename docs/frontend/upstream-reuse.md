@@ -101,7 +101,7 @@ are bounded to 200. Clients use those flags and render server order. A row movin
 between requests can repeat, so row overlap alone is not an exhaustion signal.
 
 Record-attached chatter retains its separate record-gated paging contract.
-Party and circle correspondence uses the shared Timeline ledger, contributed by
+Party and circle correspondence uses the shared Timeline read, contributed by
 Nexus's `nexus.correspondence` kind; it has no separate message-feed endpoint.
 
 ## History retention

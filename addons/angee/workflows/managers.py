@@ -400,7 +400,7 @@ class WorkflowRunQuerySet(AngeeQuerySet):
 
     def for_subject(self, record: Any) -> Any:
         """Select the canonical subject without changing this queryset's read scope."""
-        return self.filter(**generic_target(record).lookups(self.model, "subject"))
+        return self.filter(self.model.record_filter(record))
 
     def about(self, records: Any, *, operations: tuple[str, ...] | None = None, ancestors: bool = True,
               limit: int | None = None) -> Any:
@@ -411,9 +411,8 @@ class WorkflowRunQuerySet(AngeeQuerySet):
         targets = Q(pk__in=[])
         evidence_model = apps.get_model("workflows", "StepRecord")
         for record in records:
-            target = generic_target(record)
-            targets |= Q(**target.lookups(evidence_model, "record"))
-            subjects |= Q(**target.lookups(self.model, "subject"))
+            targets |= evidence_model.record_filter(record)
+            subjects |= self.model.record_filter(record)
         links = evidence_model.system_queryset().filter(targets)
         if operations is not None:
             links = links.filter(operation__in=operations)
@@ -426,6 +425,10 @@ class WorkflowRunQuerySet(AngeeQuerySet):
                 _created=Max("run__created_at"),
             ).annotate(_rank=Window(RowNumber(), partition_by=["content_type_id", "object_id"],
                                    order_by=[F("_created").desc(), F("run_id").desc()])).filter(_rank__lte=limit)
+        if not ancestors:
+            return self.filter(Q(pk__in=subjects.values("pk")) | Q(pk__in=links.values("run_id"))).order_by(
+                "created_at", "pk",
+            ).distinct()
         ids = set(subjects.values_list("pk", flat=True))
         ids.update(self.filter(pk__in=links.values("run_id")).values_list("pk", flat=True))
         frontier = ids.copy() if ancestors else set()
