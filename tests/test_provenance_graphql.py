@@ -132,6 +132,22 @@ def test_history_lists_a_records_changesets_newest_first_with_their_field_deltas
     assert _changes(draft)["vault"][1] == public_id_of(_vault)
 
 
+@pytest.mark.usefixtures("activity_catalog", "composed_permissions")
+def test_history_keeps_foreign_keys_to_named_fields_as_stored_values() -> None:
+    owner = create_user("history-named-reference")
+    vault = vault_for(owner)
+    with actor_context(owner), changeset(fresh=True, change_reason="Schedule"):
+        task = apps.get_model("projects", "Task").objects.schedule(vault.with_actor(owner), title="Follow up")
+    with actor_context(owner), changeset(fresh=True, change_reason="Change activity"):
+        task.activity_type_id = "call"
+        task.save(update_fields=["activity_type"])
+
+    updated, created = _history(_schema(), owner, "projects.Task", task)["entries"]
+    assert _changes(updated)["activity_type"] == ("todo", "call")
+    assert _changes(created)["activity_type"] == (None, "todo")
+    assert _changes(created)["assignee"] == (None, public_id_of(owner))
+
+
 def test_history_pages_by_changeset_and_refuses_an_unbounded_page() -> None:
     owner = create_user("history-pager")
     _vault, page = _titled_page(owner)
