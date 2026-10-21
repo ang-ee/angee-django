@@ -65,11 +65,14 @@ def test_kinds_resolve_once_each_in_sequence_order() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 @override_settings(ANGEE_TIMELINE_KINDS=KINDS)
 def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: None) -> None:
     owner = create_platform_admin("timeline-owner")
     with open_changeset(fresh=True, change_reason="vault"):
         vault = vault_for(owner)
+    with actor_context(owner):
+        apps.get_model("projects", "Task").objects.schedule(vault.with_actor(owner), title="Follow up")
     for name in ("First edit", "Second edit"):
         with actor_context(owner), open_changeset(fresh=True, change_reason=name):
             vault.name = name
@@ -86,9 +89,10 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
     counts = {kind["id"]: kind["count"] for kind in page["kinds"]}
     assert counts["provenance.change"] >= 3
     assert counts["workflows.run"] == 0
+    assert counts["projects.task"] == 1
     assert page["entries"][0]["detail"] == "Second edit"
     assert page["entries"][0]["children"] == []
-    assert page["needs_me"] == data["timeline_attention"] == 0
+    assert page["needs_me"] == data["timeline_attention"] == 1
     one = read_timeline(vault, owner, limit=1)["timeline"]
     assert one["has_more"] and one["next_before"]
     rest = read_timeline(vault, owner, before=one["next_before"])["timeline"]
