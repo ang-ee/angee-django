@@ -264,8 +264,8 @@ export interface HostedResourceViewProps {
   /** Compact chrome: no view switcher, column chooser or selection. */
   presentation: "embedded";
   scope: "inherit";
-  /** The widget owns the heading and count; the hosted list keeps search and never pages. */
-  chrome: { heading: false; search: true; pager: false };
+  /** The widget owns the heading and count; `options.pager` can enable the list's native pager. */
+  chrome: { heading: false; search: true; pager: boolean };
 }
 
 export interface DashboardCapabilities {

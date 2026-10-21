@@ -129,9 +129,11 @@ export function useDashboardWidgetData(
     enabled: wantsValue,
   });
   const projection = prepared.groups?.[0]?.groupBy();
+  const groupOrder = spec.options.order === "group";
   const grouped = useAngeeGroupBy(wantsSeries ? groupOperation.target : null, {
     document: groupOperation.document,
     dimensions: projection?.dimensions ?? [],
+    orderBy: groupOrder ? projection?.orderBy : undefined,
     measures: prepared.measure ? [prepared.measure] : [],
     where: prepared.where,
     pageSize: 500,
@@ -161,12 +163,12 @@ export function useDashboardWidgetData(
     try {
       const ranked = grouped.buckets
         .map((bucket) => ({
-          key: String(axis.bucketIdentity(bucket)),
+          key: axis.bucketId(bucket),
           label: String(axis.bucketLabel(bucket) ?? "—"),
           value: bucketValue(bucket, measure) ?? 0,
-        }))
-        .sort((left, right) => right.value - left.value || left.key.localeCompare(right.key));
-      const limit = Math.min(source?.limit ?? 8, 20);
+        }));
+      if (!groupOrder) ranked.sort((left, right) => right.value - left.value || left.key.localeCompare(right.key));
+      const limit = groupOrder ? Math.min(source?.limit ?? 30, 100) : Math.min(source?.limit ?? 8, 20);
       const visible = ranked.slice(0, limit);
       if (spec.kind === "donut" && ranked.length > limit) {
         const other = ranked.slice(limit).reduce((sum, point) => sum + point.value, 0);
@@ -176,7 +178,7 @@ export function useDashboardWidgetData(
     } catch (cause) {
       return { series: [], error: errorValue(cause) };
     }
-  }, [grouped.buckets, grouped.totalCount, prepared.groups, prepared.measure, source?.limit, spec.kind, wantsSeries]);
+  }, [grouped.buckets, grouped.totalCount, groupOrder, prepared.groups, prepared.measure, source?.limit, spec.kind, wantsSeries]);
 
   React.useEffect(() => {
     if (refresh.mode !== "interval" || !visible) return;
