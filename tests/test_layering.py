@@ -281,7 +281,7 @@ def test_inference_backends_catalogue_without_their_vendor_sdks() -> None:
             "import django, importlib, json, sys",
             "django.setup()",
             "from angee.agents.backends import InferenceBackend",
-            "from angee.base.impl import check_impl_registry, impl_choices",
+            "from angee.impl import check_impl_registry, impl_choices",
             f"for name in {INFERENCE_BACKEND_MODULES!r}:",
             "    importlib.import_module(name)",
             "impl_choices(InferenceBackend)",
