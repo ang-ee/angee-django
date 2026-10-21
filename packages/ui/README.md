@@ -85,6 +85,12 @@ outcome, including unknown ones; an empty group never means that checks passed.
 Use it in an interactive `Column` when its items can be focused or activated.
 Resource-view dashboard widgets can set `options.pager: true` to show their
 hosted list's native pager. The list preset continues to own page size and scope.
+`DashboardSurface.pageScope` also constrains hosted views of the matching
+resource, through the native view's base filter. Authored panels can read
+`useDashboardWidgetData({ kind, data, options }, pageScope)` to share the same
+query validation, actor scope, loading state and live updates as stored widgets.
+Full-view links carry the widget preset and page filter through the native
+resource-view URL codec, keeping a scoped dashboard's destination scoped too.
 
 Collection Gantt `lane` declares selected fields and returns a linked title,
 optional secondary line, named people, and a short note after the last bar.

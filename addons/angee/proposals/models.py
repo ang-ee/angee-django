@@ -61,6 +61,7 @@ from angee.models import (
     save_state,
     transition,
 )
+from angee.models.expressions import JSONArraySubquery
 from angee.money.fields import MoneyField
 from angee.proposals.inputs import RoundTemplate
 from angee.validation import validate_value
@@ -198,26 +199,6 @@ class RosterEntry:
     user_id: Any
     name: str
     track_status: str | None = None
-
-
-class ClarificationWaitingSubquery(models.Subquery):
-    """Collect the ordered recipient projection as JSON on supported databases.
-
-    Django owns subquery correlation and JSON object construction. Its PostgreSQL
-    ArraySubquery has no SQLite compiler; this domain projection uses the two
-    databases' native JSON aggregates through Django's expression compiler seam.
-    """
-
-    output_field = models.JSONField()
-    template = "(SELECT COALESCE(jsonb_agg(_recipient), '[]'::jsonb) FROM (%(subquery)s) recipients)"
-
-    def as_sqlite(self, compiler: Any, connection: Any, **extra_context: Any) -> Any:
-        return super().as_sql(
-            compiler,
-            connection,
-            template="(SELECT json_group_array(json(_recipient)) FROM (%(subquery)s) recipients)",
-            **extra_context,
-        )
 
 
 class RoundQuerySet(AngeeQuerySet):
@@ -2605,7 +2586,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
 
         if actor is None:
             return models.Value([], output_field=models.JSONField())
-        return ClarificationWaitingSubquery(cls.clarification_waiting_users(actor).values("_recipient"))
+        return JSONArraySubquery(cls.clarification_waiting_users(actor).values(_item=models.F("_recipient")))
 
     @classmethod
     def question_count_expression(cls, actor: Any, *, scope: models.Q, passed_on: bool) -> models.Expression:
