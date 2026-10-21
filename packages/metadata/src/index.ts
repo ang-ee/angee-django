@@ -94,7 +94,6 @@ export type {
   ResourceTypeName,
 } from "./resource-types";
 export {
-  DISABLED_RESOURCE,
   refineRoutePathForTanStack,
   refineResourceName,
   refineResourceIdentifier,

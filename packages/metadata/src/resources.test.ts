@@ -1,7 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 
 import {
-  DISABLED_RESOURCE,
   refineResourceName,
   refineResourcesFromDataResources,
 } from "./resources";
@@ -18,8 +17,10 @@ describe("refine resource metadata", () => {
   });
 
   test("disables route fallback only when resource metadata is absent", () => {
-    expect(refineResourceName(null)).toBe(DISABLED_RESOURCE);
-    expect(refineResourceName(undefined)).toBe(DISABLED_RESOURCE);
+    const disabled = refineResourceName(null);
+    expect(disabled).not.toBe("");
+    expect(disabled).not.toBe(refineResourceName(resource()));
+    expect(refineResourceName(undefined)).toBe(disabled);
     expect(() => refineResourceName({ ...resource(), roots: {} }))
       .toThrow('Resource "notes.Note" does not declare a list root.');
   });
