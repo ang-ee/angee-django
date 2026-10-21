@@ -66,13 +66,11 @@ class RunKind(TimelineKind):
         return True
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
-        rows = apps.get_model("workflows", "WorkflowRun").objects.with_actor(actor)
-        scope = models.Q(pk__in=rows.about(record, ancestors=False).order_by().values("pk"))
+        runs = apps.get_model("workflows", "WorkflowRun").objects.with_actor(actor)
+        rows = runs.about(record, ancestors=False)
         if isinstance(record, rows.model):
-            scope |= models.Q(parent_step__run=record)
-        rows = rows.filter(scope).scoped()
-        if isinstance(record, rows.model):
-            rows = rows.exclude(pk=record.pk)
+            rows = (rows | runs.filter(parent_step__run=record).distinct()).exclude(pk=record.pk)
+        rows = rows.scoped()
         waiting = apps.get_model("workflows", "StepRun").system_queryset().filter(
             status=StepRunStatus.WAITING,
         ).defer("input", "output", "state", "notes").order_by("rank", "map_index")

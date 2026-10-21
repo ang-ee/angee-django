@@ -33,9 +33,9 @@ class DecisionKind(TimelineKind):
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         rows = apps.get_model("decisions", "Decision").objects.with_actor(actor)
-        return rows.filter(
-            models.Q(pk__in=rows.for_records(record).order_by().values("pk")) | self._requested_by(record),
-        ).scoped().select_related("answered_by").prefetch_related(
+        return (rows.for_records(record) | rows.filter(self._requested_by(record))).scoped().select_related(
+            "answered_by",
+        ).prefetch_related(
             models.Prefetch("assignees", queryset=get_user_model().system_queryset()),
         )
 
