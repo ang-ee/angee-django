@@ -131,14 +131,16 @@ function AuthoredWidget(props: DashboardWidgetRenderProps): React.ReactElement {
   return <>{props.authored ?? <InlineEmpty label={t("widget.authoredUnavailable")} />}</>;
 }
 
-function ResourceViewWidget({ spec, hostedView: View, onCountChange }: DashboardWidgetRenderProps): React.ReactElement {
+function ResourceViewWidget({ spec, hostedView: View, onCountChange, pageScope }: DashboardWidgetRenderProps): React.ReactElement {
   const t = useDashboardT();
   const { resourceViews } = useAppRuntime();
   const preset = spec.data.shape === "resourceView" ? resourceViews[spec.data.preset] : undefined;
   if (!preset || !["list", "gantt"].includes(preset.view ?? "list") || !View) {
     return <ErrorBanner description={t("widget.viewUnavailable")} />;
   }
-  return <ResourceViewProvider key={preset.id} resource={preset.resource} scope="local" presetIds={[preset.id]} initialState={resourceViewPresetDefaults(undefined, preset)}>
+  return <ResourceViewProvider key={preset.id} resource={preset.resource} scope="local"
+    baseFilter={pageScope?.resource === preset.resource ? pageScope.filter : undefined}
+    presetIds={[preset.id]} initialState={resourceViewPresetDefaults(undefined, preset)}>
     <View
       presentation="embedded"
       scope="inherit"

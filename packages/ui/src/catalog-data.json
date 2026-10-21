@@ -8032,6 +8032,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useDashboardWidgetData",
+    "source": "packages/ui/src/dashboard/data.tsx",
+    "kind": "surface",
+    "owner": "@angee/ui:DashboardSurface",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useDebouncedText",
     "source": "packages/ui/src/lib/use-debounced-text.ts",
     "kind": null,

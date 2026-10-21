@@ -17,6 +17,7 @@ import { PageHeader } from "../page/PageHeader";
 import { Skeleton, SkeletonStatus, SkeletonText } from "../ui/skeleton";
 import type {
   DashboardDefinition,
+  DashboardPageScope,
   DashboardLoadState,
   DashboardRegistry,
   DashboardSnapshot,
@@ -27,13 +28,14 @@ import type {
 } from "./headless";
 import { DASHBOARD_SCHEMA_VERSION, parseDashboardSnapshot } from "./headless";
 import { firstDashboardSlot, moveDashboardRect, packDashboardLayout, projectDashboardLayout, resizeDashboardRect } from "./layout";
-import { useDashboardWidgetData, type DashboardPageScope } from "./data";
+import { useDashboardWidgetData } from "./data";
 import { useUnsavedChangesNavigationGuard } from "../views/form/use-unsaved-changes-navigation-guard";
 import type { DashboardWidgetCatalogueEntry } from "./catalogue";
 import { DashboardWidgetPickerDialog } from "./WidgetPickerDialog";
 import { useDashboardT } from "./i18n";
 import { titleCase } from "../lib/titleCase";
 import { SectionHeading } from "../views/form/SectionHeading";
+import { Filter, createResourceViewState, resourceViewStateToSearch } from "../views/resource/resource-view-model";
 
 const ROW_HEIGHT = 56;
 const GRID_GAP = 16;
@@ -486,10 +488,16 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
   const sourceResource = widget.data.shape === "none" ? ""
     : widget.data.shape === "resourceView" ? resourceViews[widget.data.preset]?.resource ?? ""
     : widget.data.source.resource;
-  const resourceRoute = useResourceRoute(sourceResource);
+  const preset = widget.data.shape === "resourceView" ? resourceViews[widget.data.preset] : undefined;
+  const sourceFilter = widget.data.shape === "none" || widget.data.shape === "resourceView" ? preset?.filter : widget.data.source.filter;
+  const search = resourceViewStateToSearch(createResourceViewState({
+    preset: preset?.id,
+    filter: Filter.combineOptional(sourceFilter, pageScope?.resource === sourceResource ? pageScope.filter : undefined),
+  }));
+  const resourceRoute = useResourceRoute(sourceResource, search);
   const routeHref = useRouteHref();
   const fullViewRoute = typeof widget.options.fullViewRoute === "string" ? widget.options.fullViewRoute : undefined;
-  const fullViewHref = fullViewRoute ? routeHref.maybe(fullViewRoute) : resourceRoute;
+  const fullViewHref = fullViewRoute ? routeHref.maybe(fullViewRoute, undefined, search) : resourceRoute;
   const sourceMetadata = useModelMetadata(sourceResource);
   const resourceLabel = sourceMetadata?.resource.modelName
     ? titleCase(sourceMetadata.resource.modelName)
@@ -612,7 +620,8 @@ function WidgetDataBody({ widget, kind, definition, editing, pageScope, titleId,
   return (
     <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className={cn("min-h-0 flex-1", kind.shape === "rows" || kind.shape === "resourceView" ? "overflow-auto" : "overflow-hidden")}>
-        <Component spec={widget} data={data} titleId={titleId} authored={Authored ? <Authored /> : undefined} hostedView={HostedView} onCountChange={onCountChange} />
+        <Component spec={widget} data={data} titleId={titleId} pageScope={pageScope}
+          authored={Authored ? <Authored /> : undefined} hostedView={HostedView} onCountChange={onCountChange} />
       </div>
       {!editing && widget.data.shape !== "none" && widget.data.shape !== "resourceView" ? (
         <ActionMenu label={null} aria-label={t("surface.widgetMenu", { title: widget.title })} glyph="more-horizontal" size="iconSm" align="end" className="absolute right-3 top-2">

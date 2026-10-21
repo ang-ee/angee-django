@@ -5,12 +5,7 @@ import { useAggregateOperation, useGroupOperation } from "../views/resource/reso
 import { Filter, type ResourceViewFilter } from "../views/resource/resource-view-model";
 import { useResourceListQuery } from "../views/resource/surface/resource-list-query";
 import { useResourceRecordMatchFields } from "../runtime/runtime";
-import type { DashboardWidgetData, WidgetSpec } from "./headless";
-
-export interface DashboardPageScope {
-  resource: string;
-  filter?: ResourceViewFilter;
-}
+import type { DashboardPageScope, DashboardWidgetData, WidgetSpec } from "./headless";
 
 const COUNT_MEASURE: AggregateMeasure = { op: "count", field: null };
 const EMPTY_FIELDS: DashboardWidgetData["queryFields"] = {};
@@ -41,8 +36,11 @@ function useVisible(): boolean {
   return visible;
 }
 
+/** Read authored dashboard data through the same scoped, live query owner as stored widgets.
+ * @owner DashboardSurface
+ */
 export function useDashboardWidgetData(
-  spec: WidgetSpec,
+  spec: Pick<WidgetSpec, "kind" | "data" | "options">,
   pageScope?: DashboardPageScope,
 ): DashboardWidgetData {
   const source = spec.data.shape === "none" || spec.data.shape === "resourceView" ? null : spec.data.source;

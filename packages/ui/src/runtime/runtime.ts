@@ -26,6 +26,7 @@ import {
   createRouteHref,
   recordMatchValues,
   type RouteHref,
+  type RouteHrefSearch,
   type RuntimeResourceRoutes,
 } from "./route-href";
 import type { ResourceViewPreset } from "../views/resource/model/favorites";
@@ -374,10 +375,10 @@ export function useFormOverride(resource: string): FormOverrideMap[string] | und
  * relation-follow affordance; a resource without a routed list offers no link.
  * @owner RecordReference
  */
-export function useResourceRoute(resource: string): string | undefined {
+export function useResourceRoute(resource: string, search?: RouteHrefSearch): string | undefined {
   const route = useResourceRoutes(resource);
   const routeHref = useAppRuntime().routeHref;
-  return route ? routeHref.maybe(route.collection) : undefined;
+  return route ? routeHref.maybe(route.collection, undefined, search) : undefined;
 }
 
 function useResourceRoutes(resource: string): RuntimeResourceRoutes | undefined {
