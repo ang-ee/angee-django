@@ -1034,29 +1034,27 @@ and current contracts before applying a historical example to a new deployment.
 - **Derived columns have two drift classes and two owners.** Signals own instance
   saves/deletes, cascades, and queryset deletes; idempotent repair passes own
   `bulk_create` and queryset `update` paths, where signals do not run.
-- **Committed projections subscribe to the owner's change seam.**
+- **Live timelines read owners; notifications invalidate reads.**
+  [Timeline kinds](../../addons/angee/timeline/kinds.py) contribute actor-scoped
+  source querysets. The [read owner](../../addons/angee/timeline/reading.py)
+  combines their common columns with Django's `union(all=True)`, applying
+  permissions, attention, folding and cursors in each branch before the shared
+  page limit. Display payloads are hydrated only for selected source rows.
+  There is no event projection table or backfill requirement. Folding hides a
+  child only when a readable parent target occurs on the same record; counts
+  and attention use that same scope, independent of the page's filters.
   [`publish_change` / `change_published`](../../addons/angee/graphql/publishing.py)
-  delivers local observations inside the transaction; receivers defer effects
-  with `transaction.on_commit`. A verb that completes a bulk or conditional
-  queryset write publishes once after its related rows are ready. Transport
-  suppression does not suppress local observers. The
-  [timeline reconciler](../../addons/angee/timeline/events.py) coalesces targets
-  and reloads committed state in independent transactions, so projection failure
-  cannot roll back the owner. The publisher queues transport after these local
-  callbacks; background projections invalidate records when they finish. Local observation
-  never enables a transport feed; completed projections also invalidate their
-  related records through those records' declared feeds, including existing MTI
-  views when the canonical record has no feed. Backfill uses that
-  same locked projection contract. Kinds declare the source fields they read so an
-  unrelated partial save never walks dependent targets; inherited sources are
-  observed through their concrete descendants too. Core bulk-trash verbs emit
-  bounded `bulk_updated` batches, which the change publisher adapts without
-  replaying save signals or duplicating history. A model's `change_batch_targets`
-  can coalesce publications (steps publish newly retained decisions; run
-  advancement publishes the completed run state). Local bulk observers retain
-  the original batch and coalesce projection targets independently.
-  Large projection fan-outs use bounded Celery tasks; the timeline addon declares
-  its dependency on `angee.jobs` and submits through `enqueue_task`.
+  delivers owner observations inside the transaction. The
+  [timeline observer](../../addons/angee/timeline/events.py) captures affected
+  record identities, including old membership before a save or delete, and
+  uses the declared record feeds to invalidate reads after commit. Django's
+  callback queue owns rollback; no projection queue or source-row lock is needed.
+  Observation never enables a private source's transport feed. Kinds name the
+  source fields they read, so unrelated partial saves skip dependency discovery;
+  inherited sources and the core's bounded `bulk_updated` batches use the same
+  seam. A verb completing a conditional or bulk write publishes after its
+  related rows are ready. `change_batch_targets` may coalesce publications;
+  local observers still receive original bulk batches where needed.
 - **`MembershipDecisionMixin` owns plain roster decisions, not provenance.**
   A subclass that needs REBAC side effects overrides the transition; never add
   REBAC writes to the shared mixin.

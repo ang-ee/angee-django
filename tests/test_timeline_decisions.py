@@ -1,23 +1,19 @@
-"""Decision admission and conditional verdicts drive the ledger through publication."""
+"""Decision admission and verdicts are read directly through owner policy."""
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 import pytest
-from django.db import transaction
-from django.test import TestCase
+from django.db import models, transaction
+from django.utils import timezone
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from angee.decisions.timeline import DecisionKind
-from angee.graphql.publishing import publish_change
 from angee.identity import public_id_of
+from angee.projects.testing.models import Task
 from angee.tags.testing.models import Tag
-from angee.timeline.testing.models import Event
 from tests.conftest import create_platform_admin, create_user, vault_for
-from tests.test_timeline import read_timeline
+from tests.test_timeline import read_timeline, timeline_entries
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -56,28 +52,26 @@ def test_ask_then_decide_updates_the_line_and_live_attention(people) -> None:
     requester, reviewer, _, subject = people
     with transaction.atomic():
         question = ask(people)
-        assert not Event.objects.filter(kind="decisions.decision").exists()
-    event = Event.objects.for_record(subject).get()
-    assert (event.target_model, event.target_pk, event.target_id) == (
-        "decisions.Decision", question.pk, public_id_of(question),
-    )
+        assert len(timeline_entries(subject, reviewer)) == 1
+    event, = timeline_entries(subject, reviewer)
+    assert (event.target_model, event.target_id) == ("decisions.Decision", public_id_of(question))
     assert event.title == "Note review"
     assert event.detail == f"Waiting on {reviewer.get_username()}"
-    assert event.fold_pk is None
     data = read_timeline(subject, reviewer, needsMe=True)
     assert data["timeline"]["entries"][0]["needs_me"]
     assert data["timeline"]["needs_me"] == data["timeline_attention"] == 1
     assert not read_timeline(subject, requester, needsMe=True)["timeline"]["entries"]
 
     Decision.objects.decide(question, actor=reviewer, chosen=["complete"], revision=question.revision)
-    event.refresh_from_db()
+    original_key = event.key
+    event, = timeline_entries(subject, reviewer)
+    assert event.key == original_key
     assert event.detail == "Complete"
-    assert event.actor == str(to_subject_ref(reviewer))
-    assert event.actor_label == reviewer.get_username()
+    assert event.actor == reviewer.get_username()
     data = read_timeline(subject, reviewer)
     assert not data["timeline"]["entries"][0]["needs_me"]
     assert data["timeline"]["needs_me"] == data["timeline_attention"] == 0
-    assert Event.objects.for_record(subject).count() == 1
+    assert len(timeline_entries(subject, reviewer)) == 1
 
 
 def test_record_reader_without_decision_read_sees_no_line_identity_or_count(people) -> None:
@@ -106,17 +100,18 @@ def test_unassigned_attention_uses_answer_permission_without_claiming_others_ass
     assert read_timeline(subject, reviewer)["timeline_attention"] == 1
 
 
-def test_subscribers_see_the_committed_projection_before_the_change_broadcast(people, monkeypatch) -> None:
+def test_subscribers_read_committed_sources_at_the_change_broadcast(people, monkeypatch) -> None:
     subject = people[3]
     seen = []
 
     def broadcast(model, payload):
         if model is Decision:
-            seen.append(list(Event.objects.for_record(subject).values_list("target_pk", flat=True)))
+            assert not transaction.get_connection().in_atomic_block
+            seen.append([line.target_id for line in timeline_entries(subject, people[1])])
 
     monkeypatch.setattr("angee.graphql.publishing._broadcast", broadcast)
     question = ask(people)
-    assert seen == [[question.pk]]
+    assert seen == [[public_id_of(question)]]
 
 
 def test_withdraw_publishes_the_owner_update_and_clears_attention(people) -> None:
@@ -124,64 +119,12 @@ def test_withdraw_publishes_the_owner_update_and_clears_attention(people) -> Non
     question = ask(people)
     with system_context(reason="test.timeline.withdraw"):
         Decision.objects.withdraw(question, actor=requester)
-    assert Event.objects.for_record(subject).get().detail == "Withdrawn"
+    assert timeline_entries(subject, reviewer)[0].detail == "Withdrawn"
     assert read_timeline(subject, reviewer)["timeline_attention"] == 0
 
 
-def test_multiple_writes_queue_one_committed_projection_and_rollback_discards_it(people, monkeypatch) -> None:
-    _, reviewer, _, subject = people
-    original = DecisionKind.events
-    projections = []
-
-    def observe(self, row):
-        projections.append(row.pk)
-        return original(self, row)
-
-    monkeypatch.setattr(DecisionKind, "events", observe)
-    with transaction.atomic():
-        with pytest.raises(ValueError, match="rollback"):
-            with transaction.atomic():
-                ask(people)
-                raise ValueError("rollback")
-        question = ask(people)
-        Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
-        assert projections == []
-    assert projections == [question.pk]
-    assert Event.objects.for_record(subject).get().detail == "Complete"
-
-
-def test_executed_callbacks_do_not_suppress_a_later_projection_in_the_same_atomic(people) -> None:
-    _, reviewer, _, subject = people
-    with transaction.atomic():
-        with TestCase.captureOnCommitCallbacks(execute=True):
-            question = ask(people)
-            with pytest.raises(ValueError, match="rollback"):
-                with transaction.atomic():
-                    raise ValueError("rollback")
-            # Rebuild the pending set after the savepoint replaced Django's queue.
-            publish_change(question, action="update", update_fields=None)
-        assert Event.objects.for_record(subject).get().detail.startswith("Waiting")
-        with TestCase.captureOnCommitCallbacks(execute=True):
-            Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
-        assert Event.objects.for_record(subject).get().detail == "Complete"
-
-
-def test_stored_labels_and_display_text_share_the_storage_bound(people, monkeypatch) -> None:
-    original = DecisionKind.events
-
-    def long_labels(self, row):
-        return [replace(event, actor_label="a" * 4096, title="t" * 4096, detail="d" * 4096)
-                for event in original(self, row)]
-
-    monkeypatch.setattr(DecisionKind, "events", long_labels)
-    question = ask(people)
-    event = Event.objects.get(target_pk=question.pk)
-    assert len(event.actor_label) == 255
-    assert len(event.title) == len(event.detail) == 500
-
-
 @pytest.mark.parametrize("both_records", [False, True])
-def test_merge_keeps_one_occurrence_on_the_survivor_after_reprojection(composed_permissions, both_records) -> None:
+def test_merge_keeps_one_occurrence_on_the_survivor(composed_permissions, both_records) -> None:
     requester = create_platform_admin("timeline-merge-owner")
     reviewer = create_user("timeline-merge-reviewer")
     with actor_context(requester):
@@ -194,13 +137,66 @@ def test_merge_keeps_one_occurrence_on_the_survivor_after_reprojection(composed_
             "alternatives": [{"key": "complete", "label": "Complete", "outcome": "completed"}],
         }),
     ), actor=requester)
-    assert Event.objects.filter(target_pk=question.pk).count() == (2 if both_records else 1)
+    assert len(timeline_entries(duplicate, reviewer)) == 1
+    assert len(timeline_entries(survivor, reviewer)) == int(both_records)
     with actor_context(requester):
         survivor.with_actor(requester).merge(records=[public_id_of(duplicate)])
-    event = Event.objects.for_record(survivor).get()
-    assert not Event.objects.for_record(duplicate).exists()
+    event, = timeline_entries(survivor, reviewer)
     Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
-    current = Event.objects.for_record(survivor).get()
-    assert current.pk == event.pk
+    current, = timeline_entries(survivor, reviewer)
+    assert current.key == event.key
     assert current.detail == "Complete"
-    assert Event.objects.filter(target_pk=question.pk).count() == 1
+    assert len(timeline_entries(survivor, reviewer)) == 1
+
+
+def test_rollback_discards_invalidations_and_source_rows(people, monkeypatch):
+    _, reviewer, _, subject = people
+    broadcasts = []
+    monkeypatch.setattr("angee.graphql.publishing._broadcast", lambda model, payload: broadcasts.append(payload))
+    with transaction.atomic():
+        with pytest.raises(ValueError, match="rollback"):
+            with transaction.atomic():
+                ask(people)
+                raise ValueError("rollback")
+        assert timeline_entries(subject, reviewer) == []
+        assert broadcasts == []
+        question = ask(people)
+        Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
+        assert broadcasts == []
+    assert broadcasts
+    assert timeline_entries(subject, reviewer)[0].detail == "Complete"
+
+
+def test_union_uses_one_global_order_and_cursor_across_kinds(people, settings, composed_permissions, activity_catalog):
+    requester, reviewer, bystander, subject = people
+    settings.ANGEE_TIMELINE_KINDS = [
+        "angee.decisions.timeline.timeline_kinds", "angee.projects.timeline.timeline_kinds",
+    ]
+    questions = [ask(people) for _ in range(3)]
+    hidden = ask((requester, bystander, reviewer, subject))
+    with actor_context(requester):
+        tasks = [Task.objects.schedule(subject, title=f"Task {index}", assignee=reviewer if index < 2 else None)
+                 for index in range(3)]
+    at = timezone.now()
+    # Freeze only fixture timestamps, including the invisible row. The page must
+    # scope before LIMIT and totally order equal times across source tables.
+    for model, rows in ((Decision, [*questions, hidden]), (Task, tasks)):
+        models.QuerySet(model=model).filter(pk__in=[row.pk for row in rows]).update(created_at=at)
+    expected = [public_id_of(row) for row in [*reversed(questions), *reversed(tasks)]]
+    pages, identities, cursor = [], [], None
+    while True:
+        page = read_timeline(subject, reviewer, limit=2, before=cursor)["timeline"]
+        pages.append(page)
+        identities.extend(line["target_id"] for line in page["entries"])
+        if not page["has_more"]:
+            assert page["next_before"] is None
+            break
+        cursor = page["next_before"]
+    assert identities == expected
+    assert all(page["kinds"] == pages[0]["kinds"] and page["needs_me"] == 5 for page in pages)
+    assert {kind["id"]: kind["count"] for kind in pages[0]["kinds"]} == {
+        "decisions.decision": 3, "projects.task": 3,
+    }
+    selected = read_timeline(subject, reviewer, kinds=["projects.task"], needsMe=True)["timeline"]
+    assert [line["target_id"] for line in selected["entries"]] == [public_id_of(row) for row in reversed(tasks[:2])]
+    assert selected["kinds"] == pages[0]["kinds"] and selected["needs_me"] == 5

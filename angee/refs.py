@@ -190,6 +190,7 @@ def canonical_link_path(model: type[models.Model]) -> tuple[str, ...]:
 # the import here, a process that imports angee.refs first still finds those helpers defined.
 from angee.models.merge import (  # noqa: E402
     EdgeReference,
+    MergeableMixin,
     MergePolicy,
     Reference,
     _RecordRefMergeContract,
@@ -275,6 +276,25 @@ class RecordRefMixin(_RecordRefMergeContract):
         if len(references) != 1:
             raise ImproperlyConfigured(f"{cls._meta.label} must declare exactly one GenericForeignKey.")
         return references[0]
+
+    @classmethod
+    def record_filter(cls, record: models.Model) -> models.Q:
+        """Select this edge's canonical target, including retained merge references.
+
+        KEEP edges preserve historical identities. Their record reads include
+        the survivor's native redirect group without rewriting the evidence.
+        Other policies already move or refuse references at merge time.
+        """
+        content_type, pk = generic_pointer_target(record)
+        reference = cls.record_ref_field()
+        model = generic_pointer_model(type(record))
+        scope = {reference.ct_field: content_type}
+        if cls.merge_policy == MergePolicy.KEEP and issubclass(model, MergeableMixin):
+            group = model._base_manager.using(record._state.db).redirect_group(record).order_by()
+            scope[f"{reference.fk_field}__in"] = group.values("pk")
+        else:
+            scope[reference.fk_field] = pk
+        return models.Q(**scope)
 
     @classmethod
     def declared_target_models(cls) -> dict[str, type[models.Model]]:

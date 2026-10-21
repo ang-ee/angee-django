@@ -7,8 +7,9 @@ from typing import Any
 
 from django.apps import apps
 from django.db import models
+from rebac import system_context
 
-from angee.timeline.kinds import EventData, RecordIdentity, TimelineKind, target_scope
+from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind
 
 CORRESPONDENCE_KIND = "nexus.correspondence"
 
@@ -18,6 +19,8 @@ class CorrespondenceKind(TimelineKind):
 
     id = CORRESPONDENCE_KIND
     sequence = 60
+    occurrence = "message"
+    at = models.F("_order_at")
     source_models = {
         "messaging.Message": ("sender", "thread", "platform", "direction", "sent_at", "created_at",
                               "preview", "created_by", "is_trashed", "merged_into"),
@@ -31,53 +34,51 @@ class CorrespondenceKind(TimelineKind):
         "parties.CircleMember": ("party", "circle", "is_confirmed", "is_dismissed"),
     }
 
-    def readable(self, actor: Any) -> models.Q:
-        return target_scope(apps.get_model("messaging", "Message").objects.with_actor(actor).inbox())
-
     def eligible(self, model: type[models.Model]) -> bool:
         return issubclass(model, (apps.get_model("parties", "Party"), apps.get_model("parties", "Circle")))
 
-    def rows(self) -> Iterable[models.Model]:
-        return apps.get_model("messaging", "Message").objects.inbox().canonical().order_by("pk").iterator()
+    def queryset(self, record: Any, actor: Any) -> models.QuerySet:
+        party = apps.get_model("parties", "Party")
+        with system_context(reason="nexus.timeline_membership"):
+            parties = party.system_queryset().canonical()
+            parties = parties.in_circle(record, confirmed_only=True) \
+                if isinstance(record, apps.get_model("parties", "Circle")) else parties.filter(pk=record.pk)
+            # The readable message owns its envelope; private handle or membership
+            # rows must not accidentally narrow a record's correspondence.
+            rows = apps.get_model("messaging", "Message").objects.involving_parties(parties)
+        return rows.with_actor(actor).inbox().canonical().scoped().annotate(
+            _order_at=rows.chronological_time(),
+        ).select_related("sender", "created_by").with_title_text()
 
-    def targets(self, row: Any) -> Iterable[models.Model]:
-        """Resolve identity, envelope and confirmed-membership changes to messages."""
+    def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
+        return {message.pk: Presentation(message.title(), " · ".join(filter(None, (
+            message.platform, message.direction, message.preview,
+        ))), message.authorship()[1]) for message in rows}
 
+    def records(self, row: Any) -> Iterable[RecordIdentity]:
+        """Find concerned records with SQL membership, without hydrating a message fan-out."""
         message = apps.get_model("messaging", "Message")
         party = apps.get_model("parties", "Party")
         label = row._meta.concrete_model._meta.label
         if label == "messaging.Message":
-            return (row,)
-        if label in ("messaging.Participant", "messaging.Part"):
-            return message.objects.filter(pk=row.message_id)
-        if label == "parties.Handle":
-            return message.objects.filter(models.Q(participants__handle=row) | models.Q(sender=row)).distinct()
-        if label in ("messaging.Thread", "messaging.ThreadAttachment"):
-            return message.objects.for_thread(row if label == "messaging.Thread" else row.thread)
-        if label == "parties.Circle":
-            parties = party.objects.in_circle(row, confirmed_only=True)
-        elif label == "parties.CircleMember":
-            parties = party.objects.filter(pk=row.party_id)
+            messages = message.objects.filter(pk=row.pk)
+        elif label in ("messaging.Participant", "messaging.Part"):
+            messages = message.objects.filter(pk=row.message_id)
+        elif label == "parties.Handle":
+            messages = message.objects.filter(models.Q(participants__handle=row) | models.Q(sender=row))
+        elif label in ("messaging.Thread", "messaging.ThreadAttachment"):
+            messages = message.objects.for_thread(row if label == "messaging.Thread" else row.thread)
         else:
-            # Merge moves handles before retiring the old party. Its redirect
-            # identifies the survivor even when the handle moves used SQL UPDATE.
-            parties = party.objects.filter(pk__in=(row.pk, row.canonical().pk))
-        return message.objects.involving_parties(parties)
-
-    def events(self, message: Any) -> Iterable[EventData]:
-        if not type(message).objects.inbox().canonical().filter(pk=message.pk).exists():
-            return []
-        parties = apps.get_model("parties", "Party").objects.canonical().filter(
-            handles__participations__message=message,
-        ).distinct()
-        actor, actor_label = message.authorship()
-        title = message.title()
-        detail = " · ".join(filter(None, (message.platform, message.direction, message.preview)))
-        return [EventData(
-            kind=self.id, target=message, record=record, occurrence="message", at=message.sent_at or message.created_at,
-            title=title, detail=detail,
-            actor=actor, actor_label=actor_label,
-        ) for record in self._records(parties)]
+            if label == "parties.Circle":
+                parties = party.objects.in_circle(row, confirmed_only=True)
+            elif label == "parties.CircleMember":
+                parties = party.objects.filter(pk=row.party_id)
+            else:
+                parties = party.objects.filter(pk__in=(row.pk, row.canonical().pk))
+            return self._records(parties)
+        return self._records(party.objects.canonical().filter(
+            handles__participations__message__in=messages.order_by().values("pk"),
+        ).distinct())
 
     @staticmethod
     def _records(parties: Iterable[models.Model]) -> list[RecordIdentity]:

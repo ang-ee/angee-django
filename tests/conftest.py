@@ -71,7 +71,6 @@ from angee.storage.models import MimeType as AbstractMimeType
 from angee.storage.models import StorageRole as AbstractStorageRole
 from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
-from angee.timeline.testing import models as timeline_models  # noqa: F401 -- the ledger every kind writes
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 from angee.workflows_integrate.testing import models as sync_cycle_models  # noqa: F401 -- register bridge test subject
 from tests import (

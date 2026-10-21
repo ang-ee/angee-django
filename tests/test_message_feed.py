@@ -1,4 +1,4 @@
-"""Native message-feed cursors and Nexus record-ledger scopes."""
+"""Native message-feed cursors and Nexus record-timeline scopes."""
 
 from __future__ import annotations
 
@@ -29,7 +29,6 @@ from angee.messaging.testing.models import (
     Thread,
 )
 from angee.nexus.timeline import CorrespondenceKind
-from angee.timeline.events import sync_events
 from tests.conftest import Backend, Drive, File, MimeType, execute_schema, result_data
 from tests.test_messaging import ThreadedTicket
 from tests.test_nexus import _grant, _schema
@@ -275,16 +274,12 @@ def _party_scope(owner: Any, rows: list[Any]) -> tuple[Any, Any, Any]:
 
 
 def _correspondence_page(owner: Any, record: Any, **variables: Any) -> dict[str, Any]:
-    """Backfill in this rollback-only fixture, then exercise the real ledger read."""
-    kind = CorrespondenceKind()
-    with system_context(reason="test nexus ledger backfill"):
-        for row in Message._base_manager.all():
-            sync_events(row, kinds=(kind,))
-    return read_timeline(record, owner, kinds=[kind.id], **variables)["timeline"]
+    """Read current message membership without post-commit callbacks or repair."""
+    return read_timeline(record, owner, kinds=[CorrespondenceKind.id], **variables)["timeline"]
 
 
 @override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"])
-def test_nexus_party_and_circle_use_record_ledger_pages() -> None:
+def test_nexus_party_and_circle_use_record_timeline_pages() -> None:
     owner = User.objects.create_user(username="feed-nexus")
     thread, rows = _messages(owner)
     party, circle, _ = _party_scope(owner, rows)
@@ -299,7 +294,7 @@ def test_nexus_party_and_circle_use_record_ledger_pages() -> None:
 
 
 @override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"])
-def test_nexus_circle_membership_is_rechecked_for_every_ledger_page() -> None:
+def test_nexus_circle_membership_is_rechecked_for_every_timeline_page() -> None:
     owner = User.objects.create_user(username="feed-circle-membership")
     _, rows = _messages(owner)
     party, circle, member = _party_scope(owner, rows)
@@ -313,7 +308,7 @@ def test_nexus_circle_membership_is_rechecked_for_every_ledger_page() -> None:
 
 
 @override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"])
-def test_nexus_ledger_preserves_message_visibility_and_current_party_links() -> None:
+def test_nexus_timeline_preserves_message_visibility_and_current_party_links() -> None:
     owner = User.objects.create_user(username="feed-party-edges")
     other = User.objects.create_user(username="feed-party-edges-other")
     thread, rows = _messages(owner)
@@ -439,20 +434,20 @@ def test_revalidation_partitions_current_scope_search_and_moved_rows() -> None:
 
 @override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"])
 @pytest.mark.parametrize("kind", ["party", "circle"])
-def test_nexus_ledger_rechecks_current_message_scope(kind: str) -> None:
-    owner = User.objects.create_user(username=f"ledger-current-{kind}")
-    other = User.objects.create_user(username=f"ledger-private-{kind}")
+def test_nexus_timeline_rechecks_current_message_scope(kind: str) -> None:
+    owner = User.objects.create_user(username=f"timeline-current-{kind}")
+    other = User.objects.create_user(username=f"timeline-private-{kind}")
     _, rows = _messages(owner)
     party, circle, member = _party_scope(owner, rows)
     root = party if kind == "party" else circle
     assert _correspondence_page(owner, root)["kinds"][0]["count"] == 5
-    with system_context(reason="test ledger retained row changes"):
+    with system_context(reason="test timeline retained row changes"):
         private = Thread._base_manager.create(created_by=other, platform="email")
         rows[0].delete()
         Message._base_manager.filter(pk=rows[1].pk).update(thread=private, created_by=other)
     page = _correspondence_page(owner, root)
     assert [row["target_id"] for row in page["entries"]] == [str(row.sqid) for row in rows[:1:-1]]
-    with system_context(reason="test ledger membership loss"):
+    with system_context(reason="test timeline membership loss"):
         member.delete()
     assert not _correspondence_page(owner, circle)["entries"]
     assert _correspondence_page(owner, party)["kinds"][0]["count"] == 3

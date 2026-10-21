@@ -6,17 +6,17 @@ from collections.abc import Iterable
 from typing import Any
 
 from django.apps import apps
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.db import models
-from rebac import to_subject_ref
 
-from angee.timeline.kinds import EventData, TimelineKind, actor_label, target_scope
+from angee.refs import generic_pointer_model
+from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
 
 KIND = "decisions.decision"
 
 
 class DecisionKind(TimelineKind):
-    """One question per concerned record, waiting on its current assignees."""
-
     id = KIND
     sequence = 20
     source_models = ("decisions.Decision",)
@@ -24,35 +24,52 @@ class DecisionKind(TimelineKind):
     def eligible(self, model: type[models.Model]) -> bool:
         return True
 
-    def readable(self, actor: Any) -> models.Q:
-        return target_scope(apps.get_model("decisions", "Decision").objects.with_actor(actor))
+    def _requested_by(self, record: Any) -> models.Q:
+        scope = models.Q(pk__in=[])
+        for rows in apps.get_model("decisions", "Decision").requester_querysets():
+            if generic_pointer_model(rows.model) is generic_pointer_model(type(record)):
+                scope |= models.Q(pk__in=rows.filter(pk=record.pk).order_by().values("_decision_id"))
+        return scope
 
-    def waiting_on(self, actor: Any) -> models.Q:
-        return target_scope(apps.get_model("decisions", "Decision").objects.with_actor(actor).waiting_on(actor))
-
-    def rows(self) -> Iterable[models.Model]:
-        return apps.get_model("decisions", "Decision").system_queryset().order_by("pk").iterator()
-
-    def events(self, row: Any) -> Iterable[EventData]:
-        decision = (
-            apps.get_model("decisions", "Decision").system_queryset().select_related("answered_by").get(pk=row.pk)
+    def queryset(self, record: Any, actor: Any) -> models.QuerySet:
+        rows = apps.get_model("decisions", "Decision").objects.with_actor(actor)
+        return rows.filter(
+            models.Q(pk__in=rows.for_records(record).order_by().values("pk")) | self._requested_by(record),
+        ).scoped().select_related("answered_by").prefetch_related(
+            models.Prefetch("assignees", queryset=get_user_model().system_queryset()),
         )
-        assignees = list(decision.assignees.all())
-        names = ", ".join(actor_label(user) for user in assignees)
-        detail = (f"Waiting on {names}" if names else "Waiting") if decision.is_open else decision.verdict_label
-        common = dict(
-            kind=self.id, target=decision, at=decision.created_at, title=decision.kind_label, detail=detail,
-            actor=str(to_subject_ref(decision.answered_by)) if decision.answered_by_id else "",
-            actor_label=actor_label(decision.answered_by),
+
+    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
+        return rows.waiting_on(actor).scoped()
+
+    def fold(self, record: Any) -> tuple[Any, Any]:
+        types, ids = [], []
+        requested = self._requested_by(record)
+        for rows in apps.get_model("decisions", "Decision").requester_querysets():
+            rows = rows.filter(_decision_id=models.OuterRef("pk")).order_by("pk")
+            types.append(models.When(models.Exists(rows), then=models.Value(ContentType.objects.get_for_model(
+                rows.model,
+            ).pk)))
+            ids.append(models.When(models.Exists(rows), then=models.Subquery(rows.values("pk")[:1])))
+        return (
+            models.Case(models.When(requested, then=models.Value(None)), *types, output_field=models.IntegerField()),
+            models.Case(models.When(requested, then=models.Value(None)), *ids, output_field=models.BigIntegerField()),
         )
-        requesters = list(decision.requesting_records())
-        links = decision.records.model.system_queryset().filter(decision_id=decision.pk).select_related("content_type")
-        for link in links.order_by("pk"):
-            model = link.content_type.model_class()
-            if model is not None:
-                yield EventData(record=(model, link.object_id), fold=requesters[0] if requesters else None, **common)
-        for requester in requesters:
-            yield EventData(record=(type(requester), requester.pk), **common)
+
+    def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
+        result = {}
+        for row in rows:
+            names = ", ".join(actor_label(user) for user in row.assignees.all())
+            detail = (f"Waiting on {names}" if names else "Waiting") if row.is_open else row.verdict_label
+            result[row.pk] = Presentation(row.kind_label, detail, actor_label(row.answered_by))
+        return result
+
+    def records(self, row: Any) -> Iterable[RecordIdentity]:
+        links = row.records.model.system_queryset().filter(decision_id=row.pk).select_related("content_type")
+        for link in links:
+            if (model := link.content_type.model_class()) is not None:
+                yield model, link.object_id
+        yield from ((type(record), record.pk) for record in row.requesting_records())
 
 
 def timeline_kinds() -> tuple[TimelineKind, ...]:

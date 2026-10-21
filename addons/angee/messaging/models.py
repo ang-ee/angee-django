@@ -1345,6 +1345,21 @@ class Thread(SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataMo
         survivor = self.canonical()
         return type(self)._base_manager.using(survivor._state.db).redirect_group(survivor)
 
+    def chatter_record_ref(self) -> RecordRef | None:
+        """The canonical chatter host, without loading messages or the document body."""
+        attachment = (
+            apps.get_model("messaging", "ThreadAttachment")
+            ._base_manager.filter(
+                thread_id=self.canonical().pk,
+                role="chatter",
+            )
+            .first()
+        )
+        if attachment is None:
+            return None
+        model = attachment.content_type.model_class()
+        return attachment.record_ref if model is not None and issubclass(model, ThreadedModelMixin) else None
+
     def chatter_totals(self) -> dict[str, Any]:
         """Current record summary over retained physical message containers."""
 
@@ -2292,18 +2307,7 @@ class Message(
 
         if self.thread_id is None:
             return None
-        attachment = (
-            apps.get_model("messaging", "ThreadAttachment")
-            ._base_manager.filter(
-                thread_id=self.thread.canonical().pk,
-                role="chatter",
-            )
-            .first()
-        )
-        if attachment is None:
-            return None
-        model = attachment.content_type.model_class()
-        return attachment.record_ref if model is not None and issubclass(model, ThreadedModelMixin) else None
+        return self.thread.chatter_record_ref()
 
     def sender_name(self) -> str:
         """Return the actor-visible sender label, using its selected SQL value."""

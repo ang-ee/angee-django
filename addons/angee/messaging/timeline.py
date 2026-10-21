@@ -1,17 +1,17 @@
-"""Chatter and source conversations project their own saved target identities."""
+"""Chatter and source conversations select their own saved target identities."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
+from copy import copy
 from typing import Any
 
 from django.apps import apps
 from django.db import models
-from rebac.managers import RebacQuerySet
+from rebac import actor_context
 
 from angee.messaging.models import ThreadedModelMixin
-from angee.refs import generic_pointer_model
-from angee.timeline.kinds import EventData, TimelineKind, target_scope
+from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind
 
 
 class CommentKind(TimelineKind):
@@ -19,6 +19,7 @@ class CommentKind(TimelineKind):
 
     id = "messaging.comment"
     sequence = 40
+    at = models.F("_order_at")
     source_models = {
         "messaging.Message": ("thread", "is_trashed", "preview", "sent_at", "created_at", "created_by",
                               "subtype", "message_type"),
@@ -29,49 +30,35 @@ class CommentKind(TimelineKind):
     def eligible(self, model: type[models.Model]) -> bool:
         return issubclass(model, ThreadedModelMixin)
 
-    def readable(self, actor: Any) -> models.Q:
-        scope = models.Q(pk__in=())
-        for model in apps.get_models():
-            if not self.eligible(model) or generic_pointer_model(model) is not model:
-                continue
-            rows = model._default_manager.all()
-            if isinstance(rows, RebacQuerySet):
-                rows = rows.with_actor(actor).with_action(model.thread_read_access).scoped()
-            scope |= models.Q(
-                record_content_type__app_label=model._meta.app_label,
-                record_content_type__model=model._meta.model_name,
-            ) & models.Q(models.Exists(rows.filter(pk=models.OuterRef("record_object_id"))))
-        return scope
-
-    def rows(self) -> Iterable[models.Model]:
-        return (
-            apps.get_model("messaging", "Message")._base_manager
-            .filter(thread__attachments__role="chatter").distinct().order_by("pk").iterator()
-        )
+    def queryset(self, record: Any, actor: Any) -> models.QuerySet:
+        messages = apps.get_model("messaging", "Message").objects
+        readers = type(record).objects.with_actor(actor).with_action(record.thread_read_access)
+        if not readers.filter(pk=record.pk).exists():
+            return messages.none().annotate(_order_at=messages.chronological_time())
+        with actor_context(actor):
+            return messages.record_scope(record).scoped().prefetch_related(None).select_related(
+                "subtype", "sender", "created_by",
+            )
 
     def targets(self, row: Any) -> Iterable[models.Model]:
-        if row._meta.label == "messaging.Message":
-            return (row,)
         if row._meta.label == "messaging.ThreadAttachment" and row.role != "chatter":
             return ()
-        thread = row.thread if row._meta.label == "messaging.ThreadAttachment" else row
-        return apps.get_model("messaging", "Message").objects.for_thread(thread)
+        return (row,)
 
-    def events(self, message: Any) -> Iterable[EventData]:
-        if message.is_trashed or message.thread_id is None:
-            return []
-        # Messaging owns both the canonical thread and its chatter record.
-        record = message.threaded_record_ref()
-        if record is None:
-            return []
-        actor, actor_label = message.authorship()
-        return [EventData(
-            kind=self.id, target=message, record=(apps.get_model(record.model_label), record.object_id),
-            at=message.sent_at or message.created_at,
-            title=message.preview,
-            detail=message.subtype.name if message.subtype_id else message.get_message_type_display(),
-            actor=actor, actor_label=actor_label,
-        )]
+    def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
+        return {row.pk: Presentation(
+            row.preview, row.subtype.name if row.subtype_id else row.get_message_type_display(), row.authorship()[1],
+        ) for row in rows}
+
+    def records(self, row: Any) -> Iterable[RecordIdentity]:
+        if row._meta.label == "messaging.Message":
+            record = row.threaded_record_ref()
+        elif row._meta.label == "messaging.ThreadAttachment":
+            record = row.record_ref
+        else:
+            record = row.chatter_record_ref()
+        if record is not None:
+            yield apps.get_model(record.model_label), record.object_id
 
 
 class ConversationKind(TimelineKind):
@@ -84,32 +71,26 @@ class ConversationKind(TimelineKind):
     def eligible(self, model: type[models.Model]) -> bool:
         return True
 
-    def readable(self, actor: Any) -> models.Q:
-        threads = apps.get_model("messaging", "Thread").objects.with_actor(actor).scoped().values("pk")
-        attachments = apps.get_model("messaging", "ThreadAttachment").objects.with_actor(actor)
-        return target_scope(attachments.filter(thread_id__in=threads))
-
-    def rows(self) -> Iterable[models.Model]:
-        model = apps.get_model("messaging", "ThreadAttachment")
-        return model._base_manager.filter(role="source").order_by("pk").iterator()
+    def queryset(self, record: Any, actor: Any) -> models.QuerySet:
+        with actor_context(actor):
+            return apps.get_model("messaging", "ThreadAttachment").objects.source_threads_for_record(
+                copy(record).with_actor(actor),
+            ).select_related("thread__title")
 
     def targets(self, row: Any) -> Iterable[models.Model]:
         if row._meta.label == "messaging.ThreadAttachment":
             return (row,)
         return apps.get_model("messaging", "ThreadAttachment")._base_manager.filter(thread=row, role="source")
 
-    def events(self, attachment: Any) -> Iterable[EventData]:
-        if attachment.role != "source":
-            return []
-        model = attachment.content_type.model_class()
-        if model is None:
-            return []
-        thread = attachment.thread
-        return [EventData(
-            kind=self.id, target=attachment, record=(model, attachment.object_id), at=attachment.created_at,
-            title=thread.title.text if thread.title_id else (attachment.label or "Conversation"),
-            detail=f"{thread.message_count} messages",
-        )]
+    def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
+        return {row.pk: Presentation(
+            row.thread.title.text if row.thread.title_id else (row.label or "Conversation"),
+            f"{row.thread.message_count} messages",
+        ) for row in rows}
+
+    def records(self, row: Any) -> Iterable[RecordIdentity]:
+        if row.role == "source" and (model := row.content_type.model_class()) is not None:
+            yield model, row.object_id
 
 
 def timeline_kinds() -> tuple[TimelineKind, ...]:
