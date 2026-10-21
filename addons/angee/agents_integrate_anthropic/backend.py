@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import Any, ClassVar
-
-import anthropic
-from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.providers.anthropic import AnthropicProvider
+from typing import TYPE_CHECKING, Any
 
 from angee.agents.backends import InferenceModelSpec
 from angee.agents.runtimes import ANTHROPIC_OAUTH_CLIENT_HEADERS, ANTHROPIC_OAUTH_SYSTEM_PREAMBLE
 from angee.agents.sdk_backends import SDKInferenceBackend
+
+if TYPE_CHECKING:
+    from pydantic_ai.models.anthropic import AnthropicModel
 
 
 def oauth_system_blocks(system: Any) -> list[dict[str, Any]]:
@@ -74,7 +73,7 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
     icon = "anthropic"
     oauth_client = "anthropic-personal"
     api_key_env = ("ANTHROPIC_API_KEY",)
-    transient_error_types: ClassVar[tuple[type[BaseException], ...]] = (anthropic.APIConnectionError,)
+    transient_error_paths = ("anthropic.APIConnectionError",)
     defaults = {
         "vendor": "anthropic",
         "name": "Anthropic",
@@ -98,7 +97,11 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
 
         kwargs = super()._async_client_kwargs(credential=credential)
         if "auth_token" in kwargs:
-            kwargs["http_client"] = anthropic.DefaultAsyncHttpxClient(
+            # The SDK is an optional dependency, loaded once a client is bound, not
+            # when the backend is catalogued.
+            from anthropic import DefaultAsyncHttpxClient
+
+            kwargs["http_client"] = DefaultAsyncHttpxClient(
                 event_hooks={"request": [_rewrite_oauth_messages_request]}
             )
         return kwargs
@@ -130,5 +133,9 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
 
     def _build_model(self, handle: str, client: Any) -> AnthropicModel:
         """Use native Messages conversion with the credential-owned SDK transport."""
+
+        # The SDK adapter loads with the model it binds, not with the catalogue.
+        from pydantic_ai.models.anthropic import AnthropicModel
+        from pydantic_ai.providers.anthropic import AnthropicProvider
 
         return AnthropicModel(handle, provider=AnthropicProvider(anthropic_client=client))
