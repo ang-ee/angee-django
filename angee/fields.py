@@ -31,8 +31,8 @@ from __future__ import annotations
 
 import base64
 import math
-from collections.abc import Mapping
-from typing import Any, Literal, cast
+from collections.abc import Mapping, Sequence
+from typing import Any, Literal, cast, overload
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
@@ -44,6 +44,7 @@ from django.core.exceptions import FieldDoesNotExist, FieldError, ImproperlyConf
 from django.core.validators import RegexValidator
 from django.db import models, transaction
 from django.db.models.query_utils import DeferredAttribute
+from django.utils.encoding import force_bytes
 from django_choices_field import TextChoicesField
 from django_sqids import SqidsField
 from sqids import Sqids
@@ -133,7 +134,7 @@ class ColorField(models.CharField):
         kwargs.setdefault("max_length", 7)
         super().__init__(*args, **kwargs)
 
-    def deconstruct(self) -> tuple[str, str, list[Any], dict[str, Any]]:
+    def deconstruct(self) -> tuple[str, str, Sequence[Any], dict[str, Any]]:
         name, path, args, kwargs = super().deconstruct()
         if kwargs.get("max_length") == 7:
             del kwargs["max_length"]
@@ -151,7 +152,7 @@ def _derive_fernet(label: str) -> Fernet:
         length=32,
         salt=None,
         info=label.encode(),
-    ).derive(secret_key.encode())
+    ).derive(force_bytes(secret_key))
     return Fernet(base64.urlsafe_b64encode(key))
 
 
@@ -224,7 +225,7 @@ class SqidField(SqidsField):
                 )
             self.prefix = canonical_sqid_prefix(declared)
 
-    def deconstruct(self) -> tuple[str | None, str, list[Any], dict[str, Any]]:
+    def deconstruct(self) -> tuple[str, str, Sequence[Any], dict[str, Any]]:
         """Serialize the full public-id contract for generated/runtime models.
 
         Emits the *resolved* ``prefix`` (not the declared one), so an emitted or
@@ -281,7 +282,7 @@ class SqidField(SqidsField):
         return codec
 
 
-class StateField(TextChoicesField):
+class StateField[C: models.TextChoices | None](TextChoicesField[C]):
     """A finite-state column backed by a ``TextChoices`` enum.
 
     ``docs/stack.md`` names ``django-choices-field`` the owner of enum-backed
@@ -293,16 +294,33 @@ class StateField(TextChoicesField):
     ``status_display`` declares its migration-inert ``pill``, ``dot``, or ``text`` presentation.
     """
 
+    db_index: bool
     angee_widget = "select"
     angee_scalar_hint = "String"
+
+    @overload
+    def __init__[E: models.TextChoices](
+        self: StateField[E], *, choices_enum: type[E], null: Literal[False] = False,
+        status_display: Literal["pill", "dot", "text"] | None = None, **kwargs: Any,
+    ) -> None: ...
+
+    @overload
+    def __init__[E: models.TextChoices](
+        self: StateField[E | None], *, choices_enum: type[E], null: Literal[True],
+        status_display: Literal["pill", "dot", "text"] | None = None, **kwargs: Any,
+    ) -> None: ...
 
     def __init__(
         self,
         *,
+        choices_enum: type[models.TextChoices] | None = None,
+        null: bool = False,
         status_display: Literal["pill", "dot", "text"] | None = None,
         **kwargs: Any,
     ) -> None:
         """Index state columns and leave invalid optional declarations to checks."""
+
+        kwargs.update(choices_enum=choices_enum, null=null)
 
         self.angee_status_display = status_display
         invalid_optional = bool(kwargs.get("blank")) and not bool(kwargs.get("null"))
@@ -313,7 +331,7 @@ class StateField(TextChoicesField):
         if invalid_optional:
             self.blank = True
 
-    def deconstruct(self) -> tuple[str | None, str, list[Any], dict[str, Any]]:
+    def deconstruct(self) -> tuple[str, str, Sequence[Any], dict[str, Any]]:
         """Preserve index opt-outs despite Django's opposite constructor default."""
 
         name, path, args, kwargs = super().deconstruct()
@@ -418,7 +436,7 @@ class FractionalRankField(models.FloatField):
         kwargs.setdefault("db_default", self.STEP)
         super().__init__(*args, **kwargs)
 
-    def deconstruct(self) -> tuple[str | None, str, list[Any], dict[str, Any]]:
+    def deconstruct(self) -> tuple[str, str, Sequence[Any], dict[str, Any]]:
         """Omit constructor defaults and preserve explicit index/backfill opt-outs."""
 
         name, path, args, kwargs = super().deconstruct()
@@ -446,7 +464,7 @@ class FractionalRankField(models.FloatField):
 
         return None
 
-    def validate(self, value: Any, model_instance: models.Model) -> None:
+    def validate(self, value: Any, model_instance: models.Model | None) -> None:
         """Allow the pending ``None`` that ``pre_save`` replaces with a rank."""
 
         if value is None:
@@ -498,7 +516,13 @@ class FractionalRankField(models.FloatField):
                 f"{model._meta.label}.{self.name} must belong to exactly one "
                 "field-based UniqueConstraint so a missing rank can be allocated."
             )
-        return tuple(model._meta.get_field(name) for name in contexts[0])
+        fields = []
+        for name in contexts[0]:
+            field = model._meta.get_field(name)
+            if not isinstance(field, models.Field):
+                raise ImproperlyConfigured(f"{model._meta.label}.{name} is not a concrete rank context field.")
+            fields.append(field)
+        return tuple(fields)
 
     def to_python(self, value: Any) -> float | None:
         """Coerce a rank and reject NaN or infinity at validation boundaries."""

@@ -22,6 +22,7 @@ from django.db.models.signals import post_save
 from django.db.utils import OperationalError
 from django.test import Client, RequestFactory
 from rebac import (
+    RebacMixin,
     RelationshipTuple,
     SubjectRef,
     actor_context,
@@ -59,6 +60,7 @@ from tests.conftest import (
     result_data,
 )
 from tests.mtidemo.models import MtiChild, MtiParent
+from tests.tables import model_tables
 
 # A real 1x1 PNG — libmagic classifies it as image/png; a fake signature would not.
 PNG_BYTES = bytes.fromhex(
@@ -369,6 +371,23 @@ def _proxy_upload(drive: Any, payload: bytes, **draft_kwargs: Any) -> Any:
         File.objects.for_upload_token(token).receive_bytes(BytesIO(payload))
         fresh = File.objects.all().from_public_id(str(row.sqid))
         return fresh.finalize(expected_hash=hashlib.sha256(payload).hexdigest(), expected_size=len(payload))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_attachment_locks_a_native_rebac_target(composed_tables: None) -> None:
+    """The generic target lock does not require an Angee queryset or model base."""
+
+    del composed_tables
+    class NativeTarget(RebacMixin):
+        class Meta:
+            app_label = "storage"
+            db_table = "test_storage_native_attachment_target"
+            rebac_resource_type = "storage/file"
+
+    with model_tables((NativeTarget,)), system_context(reason="test native attachment target"):
+        target = NativeTarget.objects.create()
+        with transaction.atomic():
+            FileAttachment.objects._lock_target(generic_target(target))
 
 
 @pytest.mark.django_db(transaction=True)

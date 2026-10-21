@@ -62,7 +62,9 @@ def _union(branches: list[models.QuerySet], *columns: str) -> models.QuerySet:
     the common columns. No actor or model policy is applied across the union.
     """
     first, *rest = [rows.values(*columns) for rows in branches]
-    native = models.QuerySet(model=first.model, query=first.query.clone(), using=first.db).values(*columns)
+    native = models.QuerySet[models.Model](
+        model=first.model, query=first.query.clone(), using=first.db,
+    ).values(*columns)
     return native.union(*rest, all=True) if rest else native
 
 

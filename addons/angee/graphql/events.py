@@ -248,6 +248,7 @@ def _concrete_field(
 ) -> models.Field[Any, Any] | None:
     """Return a concrete field on this row addressed by ``name`` or its attname."""
 
+    field: models.Field[Any, Any] | models.ForeignObjectRel | None
     try:
         field = instance._meta.get_field(name)
     except FieldDoesNotExist:

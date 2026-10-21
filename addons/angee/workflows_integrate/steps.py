@@ -260,7 +260,7 @@ def _stream_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl]:
     ctx.heartbeat()
     ctx.begin_effect()
     try:
-        with closing(bridge.backend) as adapter:
+        with closing(bridge.capability_impl) as adapter:
             yield adapter
     except AddressResolutionError as error:
         raise Retryable("The bridge host could not be resolved.") from error

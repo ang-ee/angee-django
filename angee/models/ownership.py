@@ -2,95 +2,27 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Iterator
+from collections.abc import Collection, Iterator
 from contextlib import contextmanager
 from typing import Any, ClassVar, Self, TypeVar
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.contrib.auth import get_user_model
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from rebac import (
     PermissionDenied,
+    RebacMixin,
     system_context,
 )
 from rebac.managers import RebacQuerySet
 
 from angee.actors import actor_user_id, instance_actor
-from angee.models.identity import update_fields_with_auto_now
-from angee.models.query import RetainedReferenceQuerySet, SystemQuerysetMixin, by_key
+from angee.models.audit import AuditMixin, retained_set_null
+from angee.models.base import AngeeModel
+from angee.models.query import SystemQuerysetMixin
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
-
-
-def retained_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model], using: str) -> None:
-    """Schedule retained-edge removal as system work inside Django's delete transaction."""
-
-    rows: RetainedReferenceQuerySet[models.Model] = RetainedReferenceQuerySet(model=field.model, using=using)
-    if isinstance(sub_objs, models.QuerySet):
-        rows.query = sub_objs.query.chain()
-        collector.add_field_update(field, None, rows)
-    else:
-        for batch in by_key(rows, [obj.pk for obj in sub_objs]):
-            collector.add_field_update(field, None, batch)
-
-
-setattr(retained_set_null, "lazy_sub_objs", True)
-
-
-
-class AuditMixin(models.Model):
-    """Add conventional user-owned audit foreign keys to a model."""
-
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=retained_set_null,
-        related_name="+",
-    )
-    """The user that created the row, when known."""
-
-    updated_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=retained_set_null,
-        related_name="+",
-    )
-    """The user that most recently updated the row, when known."""
-
-    class Meta:
-        """Django model options for audit-only abstract inheritance."""
-
-        abstract = True
-
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the row after stamping user audit fields."""
-
-        update_fields = kwargs.get("update_fields")
-        if update_fields is not None:
-            update_fields = set(update_fields)
-            if not update_fields:
-                super().save(*args, **kwargs)
-                return
-
-        user_id = actor_user_id(instance_actor(self))
-        touched: set[str] = set()
-        if user_id is not None:
-            if self._state.adding:
-                if getattr(self, "created_by_id", None) is None:
-                    self.created_by_id = user_id
-                    touched.add("created_by")
-                if getattr(self, "updated_by_id", None) is None:
-                    self.updated_by_id = user_id
-                    touched.add("updated_by")
-            else:
-                self.updated_by_id = user_id
-                touched.add("updated_by")
-
-        if update_fields is not None:
-            kwargs["update_fields"] = update_fields_with_auto_now(self, update_fields | touched)
-        super().save(*args, **kwargs)
 
 
 class OwnerQuerySet(RebacQuerySet[_ModelT]):
@@ -122,7 +54,7 @@ class ItemOwnershipMixin(SystemQuerysetMixin, models.Model):
         abstract = True
 
 
-class OwnerMixin(AuditMixin):
+class OwnerMixin(AuditMixin, SystemQuerysetMixin):
     """Give a grant root transferable ownership independent of its audit attribution.
 
     A non-null owner wins. Otherwise an owning container or ``save(ownerless=True)``
@@ -162,13 +94,20 @@ class OwnerMixin(AuditMixin):
         if self.owner_container is None:
             return False
         field = self._meta.get_field(self.owner_container)
+        if not isinstance(field, models.ForeignKey):
+            raise ImproperlyConfigured(f"{self._meta.label}.{self.owner_container} must be a ForeignKey.")
+        container_model = field.related_model
+        if container_model is None or not issubclass(container_model, ItemOwnershipMixin):
+            raise ImproperlyConfigured("An owner container must compose ItemOwnershipMixin.")
         container_id = getattr(self, field.attname)
         container = field.get_cached_value(self, default=None)
         if container is not None and not container._state.adding:
+            if not isinstance(container, ItemOwnershipMixin):
+                raise ImproperlyConfigured("An owner container must compose ItemOwnershipMixin.")
             return bool(container.owns_items)
         return (
             container_id is not None
-            and field.related_model.system_queryset()
+            and container_model.system_queryset()
             .filter(
                 pk=container_id,
                 owns_items=True,
@@ -247,18 +186,30 @@ class OwnerMixin(AuditMixin):
         if actor is None:
             raise PermissionDenied("Ownership transfer requires an acting user.")
         using = self._state.db
+
         with transaction.atomic(using=using):
-            locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk).with_actor(actor)
+            locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
+            if not isinstance(locked, AngeeModel):
+                raise ImproperlyConfigured("Ownership transfer requires AngeeModel's record-access contract.")
+            locked.with_actor(actor)
             owner_model = locked._meta.get_field("owner").model
-            target = locked
+            target: OwnerMixin = locked
             if owner_model is not type(locked):
+                if not issubclass(owner_model, OwnerMixin):
+                    raise ImproperlyConfigured("The owner field must be declared by OwnerMixin.")
+                parent_pk = owner_model._meta.pk
+                assert parent_pk is not None
                 target = owner_model.system_queryset().using(using).get(
-                    pk=locked._get_pk_val(owner_model._meta)
-                ).with_actor(actor)
+                    pk=parent_pk.value_from_object(locked),
+                )
+            if not isinstance(target, RebacMixin):
+                raise ImproperlyConfigured("Ownership transfer requires a model composing RebacMixin.")
+            target.with_actor(actor)
             if not target.has_access(target.owner_transfer_permission):
                 raise PermissionDenied("You cannot transfer ownership of this row.")
             if user is not None:
                 locked.validate_record_access_subject(relation="owner", subject=user)
+                assert isinstance(user, get_user_model())
             owner_id = user.pk if user is not None else None
             if locked.owner_id != owner_id:
                 locked.owner = user

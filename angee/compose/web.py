@@ -71,7 +71,9 @@ class WebRuntime:
                         f"Duplicate [web].package {package!r}: {packages_seen[package]} and {addon.name}"
                     )
                 packages_seen[package] = addon.name
-                entry = {"package": package, "sourceRoot": "src", "app": addon.name, "label": addon.label}
+                entry: dict[str, Any] = {
+                    "package": package, "sourceRoot": "src", "app": addon.name, "label": addon.label,
+                }
                 if self.runtime_dir is not None:
                     package_root = Path(addon.path).resolve() / "web"
                     entry["root"] = Path(os.path.relpath(package_root, self.runtime_dir.resolve() / "web")).as_posix()

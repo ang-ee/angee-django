@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from django.apps import apps
 from django.conf import settings
@@ -25,8 +25,8 @@ class CatalogProvenance(models.Model):
     seen it in a repo; a ``REMOTE`` row always carries them.
     """
 
-    extends = "platform.Addon"
-    hasura_readable_fields = ("vcs_path",)
+    extends: ClassVar[str | None] = "platform.Addon"
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = ("vcs_path",)
 
     vcs_source = models.ForeignKey(
         "integrate_vcs.Source",

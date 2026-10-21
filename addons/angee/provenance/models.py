@@ -33,7 +33,7 @@ from rebac.resources import model_resource_type
 from rebac.schema.walker import subject_allowed_by_relation
 
 from angee.actors import instance_actor
-from angee.changesets import changeset, current_changeset, discard_changeset_claim
+from angee.changesets import changeset, current_changeset, discard_changeset_claim, require_changeset
 from angee.errors import CreationKeyConflict
 from angee.fields import StateField
 from angee.graphql.publishing import publish_change
@@ -59,23 +59,35 @@ ProvenanceRole = role_anchor("provenance/role")
 MACHINE_REASON = re.compile(r"[a-z0-9_]+(?:\.[a-z0-9_]+)+")
 
 
-class ChangesetManager(AngeeManager.from_queryset(ChangesetQuerySet)):  # type: ignore[misc]
+_ChangesetManagerBase = AngeeManager.from_queryset(ChangesetQuerySet)
+
+
+class ChangesetManager[ChangesetT: Changeset](_ChangesetManagerBase[ChangesetT]):
     """Atomic idempotency claims on logical write boundaries."""
 
-    def claim(self, scope: str, key: str, *, fingerprint: str) -> Any | None:
+    def get_queryset(self) -> ChangesetQuerySet[ChangesetT]:
+        """Preserve the configured queryset and changeset row type."""
+
+        return cast(ChangesetQuerySet[ChangesetT], super().get_queryset())
+
+    def claim(self, scope: str, key: str, *, fingerprint: str) -> ChangesetT | None:
         """Claim ``(scope, key)`` on the fresh current boundary or return its completed match."""
 
         for name, value in (("scope", scope), ("key", key), ("fingerprint", fingerprint)):
             error_name = "idempotency_key" if name == "key" else name
             try:
-                self.model._meta.get_field(name).clean(value, None)
+                field = self.model._meta.get_field(name)
+                assert isinstance(field, models.Field)
+                field.clean(value, None)
             except ValidationError as error:
                 raise ValidationError({error_name: error}) from error
             if not value.strip():
                 raise ValidationError({error_name: f"A changeset {name} must not be blank."})
         if not connections[self.db].in_atomic_block:
             raise RuntimeError("Changeset claims require an outer transaction.atomic() boundary.")
-        claimed = cast(Any, current_changeset(required=True))
+        claimed = require_changeset()
+        if not isinstance(claimed, self.model):
+            raise RuntimeError("Claims must use the configured changeset model.")
         if not claimed._state.adding or claimed.pk is not None:
             raise RuntimeError("Claim an idempotency key before the boundary records any writes.")
         claimed.scope = scope
@@ -136,7 +148,8 @@ class Seed(StatementPrincipal):
 class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
     """One logical write's attribution and touched-model index; never historized.
 
-    ``actor`` is the native SubjectRef wire representation. Its relationship
+    ``actor_ref`` stores the native SubjectRef wire representation in the historical
+    ``actor`` database column. Its relationship
     tuple is a permission projection, inserted atomically through REBAC's trusted
     proposed-relationships contract. History user stamps derive from the column.
     """
@@ -171,7 +184,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         SUCCESS = "success", "Success"
         FAILURE = "failure", "Failure"
 
-    actor = models.TextField(blank=True, editable=False)
+    actor_ref = models.TextField(db_column="actor", blank=True, editable=False)
     action = StateField(choices_enum=Action, default=Action.UPDATE)
     activity = StateField(choices_enum=Activity, default=Activity.MANUAL)
     change_reason = models.TextField(blank=True)
@@ -254,9 +267,9 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
     def proposed_relationships(self, *, using: str | None = None) -> Mapping[str, tuple[SubjectRef, ...]]:
         """Promise the actor tuple that this owner persists immediately after insert."""
 
-        if not self.actor:
+        if not self.actor_ref:
             return {}
-        actor = SubjectRef.parse(self.actor)
+        actor = SubjectRef.parse(self.actor_ref)
         if is_anonymous_actor(actor):
             return {}
         definition = backend().schema().get_definition(model_resource_type(type(self)) or "")
@@ -391,9 +404,14 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
                 if history is None:
                     raise ValidationError(f"{model._meta.label}: no history owner.")
                 histories.append((model, history))
-                for version in model.history.using(using).filter(
-                    changeset_id=self.pk,
-                ).order_by("history_id").iterator():
+                for version in (
+                    model.history.using(using)
+                    .filter(
+                        changeset_id=self.pk,
+                    )
+                    .order_by("history_id")
+                    .iterator()
+                ):
                     subject = version.history_object
                     subjects.setdefault((type(subject), subject.pk), subject)
             for subject in sorted(subjects.values(), key=lambda row: (row._meta.label_lower, str(row.pk))):
@@ -438,7 +456,8 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             identities = {
                 (type(row), field.name, getattr(row, field.attname)): index
                 for index, row in enumerate(snapshots)
-                for field in row._meta.concrete_fields if field.unique
+                for field in row._meta.concrete_fields
+                if field.unique
             }
             graph: dict[int, set[int]] = {index: set() for index in range(len(batch))}
             for index, row in enumerate(snapshots):

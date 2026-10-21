@@ -59,7 +59,7 @@ class UomExpressions:
     def from_path(cls, path: str, *, fallback: str | None = None) -> UomExpressions:
         """Build unit expressions from a relation path, optionally falling back to another unit."""
 
-        def field(name: str) -> models.Expression:
+        def field(name: str) -> models.expressions.BaseExpression | models.F:
             primary = models.F(f"{path}__{name}" if path else name)
             if fallback is None:
                 return primary
@@ -154,10 +154,7 @@ class Uom(ArchiveMixin, AngeeDataModel):
                 name="%(app_label)s_uom_one_reference_per_category",
             ),
             models.CheckConstraint(
-                condition=(
-                    models.Q(is_reference=False)
-                    | (models.Q(ratio=Decimal(1)) & models.Q(offset=Decimal(0)))
-                ),
+                condition=(models.Q(is_reference=False) | (models.Q(ratio=Decimal(1)) & models.Q(offset=Decimal(0)))),
                 name="%(app_label)s_uom_reference_is_identity",
             ),
         )
@@ -269,10 +266,7 @@ class Uom(ArchiveMixin, AngeeDataModel):
         """
 
         if self.category_id != to_uom.category_id:
-            raise ValueError(
-                f"cannot convert {self.name!r} to {to_uom.name!r}: "
-                "units belong to different categories"
-            )
+            raise ValueError(f"cannot convert {self.name!r} to {to_uom.name!r}: units belong to different categories")
         return to_uom.quantize((qty * self.ratio + self.offset - to_uom.offset) / to_uom.ratio)
 
 

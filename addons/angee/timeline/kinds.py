@@ -52,13 +52,15 @@ class TimelineKind(ABC):
     def relevant(self, model: type[models.Model], update_fields: Iterable[str] | None) -> bool:
         if update_fields is None or not isinstance(self.source_models, Mapping):
             return True
-        fields = {
-            name
-            for owner in (model, *model._meta.get_parent_list())
-            for field_name in self.source_models.get(owner._meta.label, ())
-            for field in (owner._meta.get_field(field_name),)
-            for name in (field.name, field.attname)
-        }
+        fields: set[str] = set()
+        for owner in (model, *model._meta.get_parent_list()):
+            for field_name in self.source_models.get(owner._meta.label, ()):
+                field = owner._meta.get_field(field_name)
+                if not isinstance(field, models.Field):
+                    raise ImproperlyConfigured(
+                        f"Timeline kind {self.id!r} must observe a stored field: {owner._meta.label}.{field_name}."
+                    )
+                fields.update((field.name, field.attname))
         return not fields.isdisjoint(update_fields)
 
     @abstractmethod

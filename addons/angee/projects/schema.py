@@ -42,6 +42,7 @@ from angee.iam.schema import UserType
 from angee.parties.schema import PartyType
 from angee.projects.inputs import MilestoneTemplate
 from angee.projects.models import ProjectSetupState
+from angee.projects.models import Task as TaskModel
 from angee.storage.schema import FolderType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
@@ -123,10 +124,10 @@ _TASK_EXTENSION_FORBIDDEN_INSERT_FIELDS = set(
 )
 _TASK_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Task)
 
-DroppedReason = Task._meta.get_field("dropped_reason").choices_enum
-strawberry.enum(cast(Any, DroppedReason))
-TaskVisibility = Task._meta.get_field("visibility").choices_enum
-strawberry.enum(cast(Any, TaskVisibility))
+DroppedReason = TaskModel.TaskDroppedReason
+strawberry.enum(DroppedReason)
+TaskVisibility = TaskModel.TaskVisibility
+strawberry.enum(TaskVisibility)
 
 
 @pydantic_input(model=MilestoneTemplate, all_fields=True)
@@ -385,7 +386,7 @@ class TaskProjectionMixin:
         return cast(Any, self).visibility_audience_label()
 
     @strawberry_django.field(annotate=_VISIBILITY_ANNOTATIONS)
-    def allowed_visibility(self, info: strawberry.Info) -> list[TaskVisibility]:  # type: ignore[valid-type]
+    def allowed_visibility(self, info: strawberry.Info) -> list[TaskVisibility]:
         """Choices returned by the same owner that validates visibility writes."""
         allowed = _task_annotations(self, info, _VISIBILITY_ANNOTATIONS)
         return [
@@ -399,7 +400,7 @@ class TaskProjectionMixin:
         allowed = _task_annotations(self, info, _TASK_ACTION_ANNOTATIONS)
         return [action for action in Task.hand_actions() if allowed.get(f"_task_action_{action}")]
 
-    @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.objects.priority_rank_expression()})
+    @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.priority_rank_expression()})
     def priority_rank(self) -> int:
         """Return the priority's position in its declared order."""
 
@@ -747,7 +748,7 @@ class ProjectTaskActionMutation:
         self,
         info: strawberry.Info,
         id: PublicID,
-        reason: DroppedReason,  # type: ignore[valid-type]
+        reason: DroppedReason,
     ) -> ActionResult:
         """Drop one writable task for a closed reason."""
 
@@ -781,7 +782,7 @@ class ProjectTaskActionMutation:
         self,
         info: strawberry.Info,
         id: PublicID,
-        visibility: TaskVisibility,  # type: ignore[valid-type]
+        visibility: TaskVisibility,
         expected_revision: int | None = None,
     ) -> ActionResult:
         """Change a task audience through its narrowing or widening permission."""
@@ -979,17 +980,6 @@ def _project_resource(node_type: type) -> Any:
             "folder",
             *_PROJECT_EXTENSION_UPDATE_FIELDS,
         ],
-        field_id_decode={
-            "lead": public_pk_decoder(User),
-            "owner": public_pk_decoder(User),
-            "current_milestone": public_pk_decoder(Milestone),
-            "folder": public_pk_decoder(Folder),
-            "converted_from": public_pk_decoder(Task),
-            **{
-                name: public_pk_decoder(Project._meta.get_field(name).related_model)
-                for name in _PROJECT_EXTENSION_PUBLIC_ID_FIELDS
-            },
-        },
         write_backend=AngeeHasuraWriteBackend(
             Project,
             public_id_fields=("lead", "folder", *_PROJECT_EXTENSION_PUBLIC_ID_FIELDS),
@@ -1047,14 +1037,6 @@ _MILESTONE_RESOURCE = hasura_model_resource(
         "sort_order",
         *_MILESTONE_EXTENSION_UPDATE_FIELDS,
     ],
-    field_id_decode={
-        "project": public_pk_decoder(Project),
-        "reached_by": public_pk_decoder(User),
-        **{
-            name: public_pk_decoder(Milestone._meta.get_field(name).related_model)
-            for name in _MILESTONE_EXTENSION_PUBLIC_ID_FIELDS
-        },
-    },
     write_backend=AngeeHasuraWriteBackend(
         Milestone,
         public_id_fields=("project", *_MILESTONE_EXTENSION_PUBLIC_ID_FIELDS),
@@ -1110,7 +1092,7 @@ def _task_resource(node_type: type) -> Any:
             *_TASK_EXTENSION_ORDER_FIELDS,
         ],
         sortable_aliases={
-            "priority_rank": SortAlias("_priority_rank", lambda _info, queryset: queryset.priority_rank_expression()),
+            "priority_rank": SortAlias("_priority_rank", lambda _info, _queryset: Task.priority_rank_expression()),
         },
         aggregatable=[
             "id",
@@ -1170,18 +1152,6 @@ def _task_resource(node_type: type) -> Any:
             "sub_sort_order",
             *_TASK_EXTENSION_UPDATE_FIELDS,
         ],
-        field_id_decode={
-            "owner": public_pk_decoder(User),
-            "project": public_pk_decoder(Project),
-            "milestone": public_pk_decoder(Milestone),
-            "parent": public_pk_decoder(Task),
-            "assignee": public_pk_decoder(User),
-            "delegate": public_pk_decoder(User),
-            **{
-                name: public_pk_decoder(Task._meta.get_field(name).related_model)
-                for name in _TASK_EXTENSION_PUBLIC_ID_FIELDS
-            },
-        },
         write_backend=AngeeHasuraWriteBackend(
             Task,
             public_id_fields=(

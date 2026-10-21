@@ -33,8 +33,9 @@ import secrets
 from collections import OrderedDict
 from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
+from io import Reader
 from pathlib import Path
-from typing import Any, BinaryIO, ClassVar, NoReturn, cast
+from typing import IO, Any, ClassVar, NoReturn, Self, cast
 from urllib.parse import urlencode
 
 from django.conf import settings
@@ -70,7 +71,6 @@ from rebac import (
 )
 from rebac.backends import backend as rebac_backend
 from rebac.field_backing import resolve_field_backing
-from rebac.managers import RebacManager
 from rebac.resources import model_resource_type
 from rebac.schema.introspection import permission_sources
 
@@ -96,6 +96,7 @@ from angee.models import (
     TrashMixin,
     TrashQuerySet,
     role_anchor,
+    row_lock_paths,
 )
 from angee.refs import MergePolicy, RecordRefMixin
 from angee.storage import exceptions
@@ -152,7 +153,7 @@ class UploadState(models.TextChoices):
     FAILED = "failed", "Failed"
 
 
-class StorageMasterQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
+class StorageMasterQuerySet[StorageT: models.Model](ArchiveQuerySet[StorageT], AngeeQuerySet[StorageT]):
     """AngeeQuerySet plus the archive read vocabulary for storage master rows.
 
     Shared by the archivable admin/infra rows (:class:`Backend`, :class:`Drive`)
@@ -238,10 +239,22 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel):
         return instance
 
 
-class DriveManager(AngeeManager.from_queryset(StorageMasterQuerySet)):  # type: ignore[misc]
+class DriveQuerySet[DriveT: Drive](OwnerQuerySet[DriveT], StorageMasterQuerySet[DriveT]):
+    """Archive reads and protected ownership writes for storage volumes."""
+
+
+_DriveManagerBase = AngeeManager.from_queryset(DriveQuerySet)
+
+
+class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
     """Provision independent volumes on the configured default backend."""
 
-    def create_on_default_backend(self, *, slug: str, name: str, owns_items: bool = False) -> Any:
+    def get_queryset(self) -> DriveQuerySet[DriveT]:
+        """Preserve the configured volume queryset and model row type."""
+
+        return cast(DriveQuerySet[DriveT], super().get_queryset())
+
+    def create_on_default_backend(self, *, slug: str, name: str, owns_items: bool = False) -> DriveT:
         """Create an ownerless drive with its own key namespace.
 
         The caller must hold native drive creation authority. Reading the
@@ -266,12 +279,12 @@ class DriveManager(AngeeManager.from_queryset(StorageMasterQuerySet)):  # type: 
             raise ValidationError({"slug": "This drive slug or key namespace is already in use."}) from error
         return drive
 
-    def browsable(self) -> Any:
+    def browsable(self) -> DriveQuerySet[DriveT]:
         """Return the drives listings offer: all but the image drive, as with ``File.objects.browsable``."""
 
         return self.exclude(slug=settings.ANGEE_STORAGE_IMAGE_DRIVE)
 
-    def image_drive(self) -> Any | None:
+    def image_drive(self) -> DriveT | None:
         """Return the image drive (``ANGEE_STORAGE_IMAGE_DRIVE``), creating it at first use.
 
         An ownerless volume on the default backend (:meth:`create_on_default_backend`),
@@ -365,7 +378,7 @@ class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel):
         additional elevation or audit event.
         """
 
-        if self._meta.get_field("backend").is_cached(self):
+        if type(self).backend.field.is_cached(self):
             return self.backend.storage
         with system_context(reason="storage.drive.storage"):
             return self.backend.storage
@@ -385,14 +398,22 @@ class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel):
         return posixpath.join(*parts)
 
 
-class FolderQuerySet(HierarchyQuerySet[Any], AngeeQuerySet[Any]):
+class FolderQuerySet[FolderT: Folder](HierarchyQuerySet[FolderT], AngeeQuerySet[FolderT]):
     """Actor-scoped folder trees with paths maintained by HierarchyMixin."""
 
 
-class FolderManager(AngeeManager.from_queryset(FolderQuerySet)):  # type: ignore[misc]
+_FolderManagerBase = AngeeManager.from_queryset(FolderQuerySet)
+
+
+class FolderManager[FolderT: Folder](_FolderManagerBase[FolderT]):
     """Manager owning gated folder creation."""
 
-    def create_in_drive(self, *, drive_id: str, name: str, parent_id: str = "", description: str = "") -> Any:
+    def get_queryset(self) -> FolderQuerySet[FolderT]:
+        """Preserve the configured queryset and model row type."""
+
+        return cast(FolderQuerySet[FolderT], super().get_queryset())
+
+    def create_in_drive(self, *, drive_id: str, name: str, parent_id: str = "", description: str = "") -> FolderT:
         """Create a real folder after checking ``write`` on its drive.
 
         The drive-write check is the create gate — a per-row REBAC ``create``
@@ -401,7 +422,7 @@ class FolderManager(AngeeManager.from_queryset(FolderQuerySet)):  # type: ignore
         Mirrors :meth:`FileManager.draft`.
         """
 
-        drive_model = self.model._meta.get_field("drive").related_model
+        drive_model = self.model.drive.field.related_model
         drive = drive_model._default_manager.all().from_public_id(str(drive_id))
         if drive is None:
             raise exceptions.UploadTargetNotFound("drive not found")
@@ -430,7 +451,7 @@ class FolderManager(AngeeManager.from_queryset(FolderQuerySet)):  # type: ignore
 
     def ensure_path(
         self, drive: Any, parts: Sequence[str], *, cache: dict[tuple[str, ...], Any | None] | None = None
-    ) -> Any | None:
+    ) -> FolderT | None:
         """Return the real folder at ``parts``, creating missing segments.
 
         External indexers already own a drive and need idempotent tree
@@ -480,18 +501,16 @@ class FolderManager(AngeeManager.from_queryset(FolderQuerySet)):  # type: ignore
 
         present_paths = {tuple(parts) for parts in present}
         file_model = self.model._meta.get_field("files").related_model
+        assert file_model is not None and issubclass(file_model, File)
         with system_context(reason="storage.folder.prune_missing"):
-            rows = list(
-                self.filter(drive=drive, is_virtual=False).values_list("pk", "parent_id", "name")
-            )
+            rows = list(self.filter(drive=drive, is_virtual=False).values_list("pk", "parent_id", "name"))
             parents: dict[Any, tuple[Any, str]] = {pk: (parent_id, name) for pk, parent_id, name in rows}
             child_counts: dict[Any, int] = {}
             for _pk, parent_id, _name in rows:
                 if parent_id is not None:
                     child_counts[parent_id] = child_counts.get(parent_id, 0) + 1
             folders_with_files = set(
-                file_model._default_manager
-                .filter(drive=drive, folder__isnull=False)
+                file_model._default_manager.filter(drive=drive, folder__isnull=False)
                 .order_by()  # a distinct values_list must clear Meta.ordering
                 .values_list("folder_id", flat=True)
                 .distinct()
@@ -617,7 +636,11 @@ class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
 
         update_fields = kwargs.get("update_fields")
         if update_fields is None or {
-            "drive", "drive_id", "parent", "parent_id", "is_virtual",
+            "drive",
+            "drive_id",
+            "parent",
+            "parent_id",
+            "is_virtual",
         }.intersection(update_fields):
             self._validate_drive()
         super().save(*args, **kwargs)
@@ -661,38 +684,32 @@ class MimeType(AngeeDataModel):
         return self.mime_type
 
 
-class FileQuerySet(TrashQuerySet["File"], OwnerQuerySet["File"], AngeeQuerySet["File"]):
+class FileQuerySet[FileT: File](TrashQuerySet[FileT], OwnerQuerySet[FileT], AngeeQuerySet[FileT]):
     """REBAC-scoped reads for file rows; ``trashed()`` backs the Trash smart folder."""
 
-    def stale_drafts(self, cutoff: datetime) -> FileQuerySet:
+    def stale_drafts(self, cutoff: datetime) -> Self:
         """Return unfinished DRAFT/FAILED rows reserved before ``cutoff``."""
 
-        return cast(
-            FileQuerySet,
-            self.filter(upload_state__in=(UploadState.DRAFT, UploadState.FAILED), created_at__lt=cutoff),
-        )
+        return self.filter(upload_state__in=(UploadState.DRAFT, UploadState.FAILED), created_at__lt=cutoff)
 
-    def expired_trash(self, cutoff: datetime) -> FileQuerySet:
+    def expired_trash(self, cutoff: datetime) -> Self:
         """Return rows whose trash stay lapsed before ``cutoff``."""
 
-        return cast(FileQuerySet, self.trashed().filter(trashed_at__lt=cutoff))
+        return self.trashed().filter(trashed_at__lt=cutoff)
 
-    def images(self) -> FileQuerySet:
+    def images(self) -> Self:
         """Return the live images on the image drive (:meth:`FileManager.ingest_image`)."""
 
-        return cast(
-            FileQuerySet,
-            self.untrashed().filter(drive__slug=settings.ANGEE_STORAGE_IMAGE_DRIVE, upload_state=UploadState.READY),
-        )
+        return self.untrashed().filter(drive__slug=settings.ANGEE_STORAGE_IMAGE_DRIVE, upload_state=UploadState.READY)
 
-    def browsable(self) -> FileQuerySet:
+    def browsable(self) -> Self:
         """Return the files listings and pickers offer: all but the image drive's.
 
         Every signed-in user reads the image drive, so its images reach a reader
         only through the records that show them, never as a browsable gallery.
         """
 
-        return cast(FileQuerySet, self.exclude(drive__slug=settings.ANGEE_STORAGE_IMAGE_DRIVE))
+        return self.exclude(drive__slug=settings.ANGEE_STORAGE_IMAGE_DRIVE)
 
     def delete(self) -> tuple[int, dict[str, int]]:
         """Refuse bulk delete: it bypasses soft-trash and orphans backend bytes.
@@ -706,12 +723,20 @@ class FileQuerySet(TrashQuerySet["File"], OwnerQuerySet["File"], AngeeQuerySet["
         )
 
 
-class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[misc]
+_FileManagerBase = AngeeManager.from_queryset(FileQuerySet)
+
+
+class FileManager[FileT: File](_FileManagerBase[FileT]):
     """Manager owning File creation and the proxy-token lookup.
 
     :meth:`draft` reserves the row; the byte intake and publish verbs live on
     the row (see the module docstring for the source model).
     """
+
+    def get_queryset(self) -> FileQuerySet[FileT]:
+        """Preserve the configured queryset and model row type."""
+
+        return cast(FileQuerySet[FileT], super().get_queryset())
 
     def draft(
         self,
@@ -726,7 +751,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         visibility: FileVisibility | str = "inherited",
         record: models.Model | None = None,
         owner_id: Any = None,
-    ) -> Any:
+    ) -> FileT:
         """Reserve a DRAFT File targeting a backend key, or return the dedup hit.
 
         Content-addressed get-or-create: when ``content_hash`` names bytes the
@@ -754,7 +779,9 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             raise exceptions.UploadError("invalid file visibility") from error
         if visibility == FileVisibility.RECORD and record is None:
             raise exceptions.UploadError("record visibility requires an attachment record")
-        attachments = self.model._meta.get_field("attachments").related_model._default_manager
+        attachment_model = self.model._meta.get_field("attachments").related_model
+        assert attachment_model is not None and issubclass(attachment_model, FileAttachment)
+        attachments = attachment_model._default_manager
         try:
             target = generic_target(record) if record is not None else None
         except ValueError as error:
@@ -770,12 +797,16 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                 except ObjectDoesNotExist as error:
                     raise exceptions.UploadRecordDenied() from error
             if digest and visibility == FileVisibility.INHERITED:
-                existing = self.select_for_update().filter(
-                    drive_id=drive.pk,
-                    content_hash=digest,
-                    upload_state=UploadState.READY,
-                    visibility=FileVisibility.INHERITED,
-                ).first()
+                existing = (
+                    self.select_for_update()
+                    .filter(
+                        drive_id=drive.pk,
+                        content_hash=digest,
+                        upload_state=UploadState.READY,
+                        visibility=FileVisibility.INHERITED,
+                    )
+                    .first()
+                )
                 if existing is not None:
                     if target is not None:
                         self._attach_record(attachments, existing, target)
@@ -828,7 +859,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         drive_id: str = "",
         drive_slug: str = "",
         folder_id: str = "",
-    ) -> Any:
+    ) -> FileT:
         """Ingest bytes already in hand into a drive and return the READY File.
 
         The server-side sibling of the proxy upload: the bytes are trusted (a
@@ -853,7 +884,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             folder_id=folder_id,
         )
 
-    def ingest_image(self, content: bytes) -> Any:
+    def ingest_image(self, content: bytes) -> FileT:
         """Ingest an image the server renders inline (an avatar) and return its READY File.
 
         The bytes must pass :func:`require_image`. The stored filename takes the
@@ -866,14 +897,14 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         """
 
         mime = require_image(content)
-        drive = self.model._meta.get_field("drive").related_model.objects.image_drive()
+        drive = self.model.drive.field.related_model.objects.image_drive()
         if drive is None:
             raise exceptions.UploadTargetNotFound("The image drive needs a default drive to provision it.")
         return self.ingest_bytes(content, filename=f"image{attachment_extension(mime)}", drive_slug=drive.slug)
 
     def ingest_stream(
         self,
-        reader: BinaryIO,
+        reader: IO[bytes],
         *,
         filename: str,
         content_hash: str,
@@ -883,7 +914,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         drive_id: str = "",
         drive_slug: str = "",
         folder_id: str = "",
-    ) -> Any:
+    ) -> FileT:
         """Ingest a pre-hashed stream without materializing it in memory.
 
         The caller hashes outside this write path. An inherited READY hit returns
@@ -894,7 +925,9 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         """
 
         digest = _normalized_hash(content_hash)
-        filename = truncate_filename(filename, self.model._meta.get_field("filename").max_length)
+        filename_limit = self.model.filename.field.max_length
+        assert filename_limit is not None
+        filename = truncate_filename(filename, filename_limit)
         expected_size = max(int(size_bytes), 0)
         with system_context(reason="storage.file.ingest_stream"):
             row = self.draft(
@@ -922,16 +955,12 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                     row.sudo(reason="storage.ingest.duplicate").purge()
                 # A concurrent ingest of identical bytes won the dedup race; the
                 # winner is READY, so resolve to it instead of failing the sync.
-                winner = (
-                    self
-                    .filter(
-                        drive_id=row.drive_id,
-                        content_hash=digest,
-                        upload_state=UploadState.READY,
-                        visibility=FileVisibility.INHERITED,
-                    )
-                    .first()
-                )
+                winner = self.filter(
+                    drive_id=row.drive_id,
+                    content_hash=digest,
+                    upload_state=UploadState.READY,
+                    visibility=FileVisibility.INHERITED,
+                ).first()
                 if winner is not None:
                     self._grant_dedup_reach(winner, owner_id)
                     result = winner
@@ -954,7 +983,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         mime_cache: dict[str, Any | None] | None = None,
         existing_pk: Any = None,
         owner_id: Any = None,
-    ) -> Any:
+    ) -> FileT:
         """Upsert one externally-owned object by its drive-relative path.
 
         External bytes are already present, so this path creates READY rows
@@ -976,15 +1005,11 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                 row = self.filter(drive=drive, storage_path=path).first()
 
             if row is None:
-                duplicate = (
-                    self
-                    .filter(
-                        drive=drive,
-                        content_hash=digest,
-                        upload_state=UploadState.READY,
-                    )
-                    .first()
-                )
+                duplicate = self.filter(
+                    drive=drive,
+                    content_hash=digest,
+                    upload_state=UploadState.READY,
+                ).first()
                 if duplicate is not None:
                     if not duplicate.is_trashed:
                         self._raise_external_duplicate(duplicate)
@@ -1013,15 +1038,11 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                     with transaction.atomic():
                         row.save()
                 except IntegrityError as error:
-                    duplicate = (
-                        self
-                        .filter(
-                            drive=drive,
-                            content_hash=digest,
-                            upload_state=UploadState.READY,
-                        )
-                        .first()
-                    )
+                    duplicate = self.filter(
+                        drive=drive,
+                        content_hash=digest,
+                        upload_state=UploadState.READY,
+                    ).first()
                     if duplicate is not None:
                         self._raise_external_duplicate(duplicate, cause=error)
                     raise
@@ -1031,8 +1052,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             content_changed = row.content_hash != digest
             if content_changed:
                 duplicate = (
-                    self
-                    .filter(
+                    self.filter(
                         drive=drive,
                         content_hash=digest,
                         upload_state=UploadState.READY,
@@ -1069,8 +1089,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                         row.save(update_fields=[*updates, "updated_at"])
                 except IntegrityError as error:
                     duplicate = (
-                        self
-                        .filter(
+                        self.filter(
                             drive=drive,
                             content_hash=digest,
                             upload_state=UploadState.READY,
@@ -1158,7 +1177,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
 
         raise exceptions.ExternalDuplicate(f"identical external bytes already exist: {duplicate.sqid}") from cause
 
-    def for_upload_token(self, token: str) -> Any:
+    def for_upload_token(self, token: str) -> FileT:
         """Return the DRAFT row a signed proxy upload token addresses.
 
         Validates the signature, expiry, draft state, and unspent nonce — but
@@ -1178,13 +1197,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         nonce = str(payload.get("nonce") or "")
         if not file_id or not nonce:
             raise exceptions.UploadDenied("invalid upload token")
-        row = (
-            self
-            .system_context(reason="storage.upload.proxy")
-            .select_related("drive")
-            .filter(sqid=file_id)
-            .first()
-        )
+        row = self.system_context(reason="storage.upload.proxy").select_related("drive").filter(sqid=file_id).first()
         if row is None:
             raise exceptions.UploadTargetNotFound("file not found")
         if row.upload_state != UploadState.DRAFT:
@@ -1195,7 +1208,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         row._upload_nonce = nonce
         return row
 
-    def for_download_token(self, token: str) -> Any:
+    def for_download_token(self, token: str) -> FileT:
         """Return the READY file a signed proxy download token addresses.
 
         The mirror of :meth:`for_upload_token`: re-check ``read`` for the token's
@@ -1239,11 +1252,11 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         its folder targets that folder's drive.
         """
 
-        drive_model = self.model._meta.get_field("drive").related_model
+        drive_model = self.model.drive.field.related_model
         if drive_id:
             drive = drive_model._default_manager.all().from_public_id(str(drive_id))
         elif folder_id and not drive_slug:
-            folder_model = self.model._meta.get_field("folder").related_model
+            folder_model = self.model.folder.field.related_model
             folder = folder_model._default_manager.all().from_public_id(str(folder_id))
             drive = None if folder is None or folder.is_virtual else folder.drive
         else:
@@ -1260,7 +1273,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
 
         if not folder_id:
             return None
-        folder_model = self.model._meta.get_field("folder").related_model
+        folder_model = self.model.folder.field.related_model
         folder = folder_model._default_manager.all().from_public_id(str(folder_id))
         if folder is None or folder.is_virtual:
             raise exceptions.UploadTargetNotFound("folder not found")
@@ -1287,6 +1300,8 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     ``owner`` grants access; ``created_by`` retains upload attribution.
     ``delete()`` moves the file to the trash; :meth:`purge` is the real delete.
     """
+
+    _upload_nonce: str | None = None
 
     runtime = True
     rebac_grantable = {"viewer": "share"}
@@ -1360,17 +1375,12 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
 
         super().clean()
         if self.folder_id:
-            folder_model = type(self)._meta.get_field("folder").related_model
-            folder = (
-                folder_model._base_manager
-                .filter(pk=self.folder_id)
-                .values("drive_id", "is_virtual")
-                .first()
-            )
+            folder_model = type(self).folder.field.related_model
+            folder = folder_model._base_manager.filter(pk=self.folder_id).values("drive_id", "is_virtual").first()
             if folder is None or folder["is_virtual"] or folder["drive_id"] != self.drive_id:
                 raise ValidationError({"folder": "Folder must be a real folder in this file's drive."})
 
-    def set_visibility(self, value: FileVisibility | str) -> File:
+    def set_visibility(self, value: FileVisibility | str) -> Self:
         """Narrow with file write, or widen with drive share, retaining all grants."""
 
         try:
@@ -1401,7 +1411,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         comes from the per-``(row, config)`` cache.
         """
 
-        drive_field = self._meta.get_field("drive")
+        drive_field = type(self).drive.field
         if drive_field.is_cached(self):
             return self.drive.storage
         with system_context(reason="storage.file.storage"):
@@ -1471,7 +1481,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         path = f"{reverse('storage_download', args=[self.filename])}?{query}"
         return request.build_absolute_uri(path) if request is not None else path
 
-    def open_stream(self) -> BinaryIO:
+    def open_stream(self) -> DjangoFile[bytes]:
         """Open this file's stored bytes for reading (the download view streams it)."""
 
         return self.storage.open(self.storage_path, "rb")
@@ -1495,7 +1505,8 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         try:
             with self.open_stream() as stream:
                 digest, size, content = sha256_stream(
-                    cast(BinaryIO, CappedReader(stream, max_bytes=max_bytes)), capture_head=max_bytes,
+                    CappedReader(stream, max_bytes=max_bytes),
+                    capture_head=max_bytes,
                 )
         except BodyTooLarge as error:
             raise ValidationError("The file exceeds the byte limit.") from error
@@ -1533,7 +1544,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         self.upload_envelope = envelope
         return signing.dumps({"file": str(self.sqid), "nonce": nonce}, salt=UPLOAD_TOKEN_SALT)
 
-    def receive_bytes(self, body: BinaryIO) -> None:
+    def receive_bytes(self, body: Reader[bytes]) -> None:
         """Stream a proxied request body into this row's backend key.
 
         One byte source for the upload flow: the actor must hold file ``write``.
@@ -1563,7 +1574,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
             with system_context(reason="storage.upload.proxy_path"):
                 self.save(update_fields=["storage_path"])
 
-    def finalize(self, *, expected_hash: str = "", expected_size: int | None = None) -> File:
+    def finalize(self, *, expected_hash: str = "", expected_size: int | None = None) -> Self:
         """Verify the bytes at this row's key and publish it READY.
 
         Computes the SHA-256, size, and MIME from the actual stored bytes,
@@ -1604,8 +1615,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
 
         duplicate = (
             type(self)
-            ._base_manager
-            .filter(drive_id=self.drive_id, content_hash=actual_hash, upload_state=UploadState.READY)
+            ._base_manager.filter(drive_id=self.drive_id, content_hash=actual_hash, upload_state=UploadState.READY)
             .exclude(pk=self.pk)
             .first()
         )
@@ -1614,17 +1624,14 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
 
         self.content_hash = actual_hash
         self.size_bytes = actual_size
-        self.mime_type = _mime_row(type(self), detect_mime(head, self.filename)) or _mime_row(
-            type(self), FALLBACK_MIME
-        )
+        self.mime_type = _mime_row(type(self), detect_mime(head, self.filename)) or _mime_row(type(self), FALLBACK_MIME)
         self.upload_state = cast(UploadState, UploadState.READY)
         updated_at = timezone.now()
         try:
             with transaction.atomic():
                 claimed = (
                     type(self)
-                    ._base_manager
-                    .filter(pk=self.pk, upload_state=UploadState.DRAFT)
+                    ._base_manager.filter(pk=self.pk, upload_state=UploadState.DRAFT)
                     .update(
                         content_hash=self.content_hash,
                         size_bytes=self.size_bytes,
@@ -1637,8 +1644,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
             # A concurrent finalize for the same bytes won the dedup constraint.
             winner = (
                 type(self)
-                ._base_manager
-                .filter(drive_id=self.drive_id, content_hash=actual_hash)
+                ._base_manager.filter(drive_id=self.drive_id, content_hash=actual_hash)
                 .exclude(pk=self.pk)
                 .first()
             )
@@ -1710,7 +1716,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         self._fail(reason="duplicate")
         raise exceptions.UploadConflict("identical bytes already exist")
 
-    def delete(self, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
+    def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
         """Move into the Trash smart folder; backend bytes stay.
 
         :meth:`purge` (or the ``storage_prune`` command after the trash TTL)
@@ -1720,12 +1726,14 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         """
 
         del keep_parents
+        if using is not None and using != self._state.db:
+            raise ValueError("File deletion must use the file's database.")
         if self.is_trashed:
-            return (0, {})
+            return 0, {}
         if not self.has_access("delete"):
             raise PermissionDenied(f"Denied: cannot delete {self._meta.label} {self.public_id}")
         self.trash()
-        return (1, {self._meta.label: 1})
+        return 1, {self._meta.label: 1}
 
     def purge(self) -> None:
         """Really delete: remove the row, then the backend object.
@@ -1774,7 +1782,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         )
 
 
-class FileAttachmentManager(AngeeManager):
+class FileAttachmentManager[AttachmentT: FileAttachment](AngeeManager[AttachmentT]):
     """Owns the polymorphic file edge, stored at :func:`rebac.generic_target`.
 
     A record and each of its REBAC-typed MTI ancestors share one attachment set.
@@ -1784,7 +1792,7 @@ class FileAttachmentManager(AngeeManager):
     """
 
     @require_permission("read", resource_arg="file")
-    def attach(self, file: Any, record: models.Model, *, label: str = "") -> Any:
+    def attach(self, file: Any, record: models.Model, *, label: str = "") -> AttachmentT:
         """Attach a readable file to a writable record, idempotently per edge.
 
         The ambient actor needs ``read`` on the file and the edge's ``create``
@@ -1800,19 +1808,30 @@ class FileAttachmentManager(AngeeManager):
             file = type(file).system_queryset(lock=("self",)).get(pk=file.pk)
             return self._attach(file, target, label=label)
 
-    def for_record(self, record: models.Model) -> models.QuerySet[Any]:
+    def for_record(self, record: models.Model) -> AngeeQuerySet[AttachmentT]:
         """Return actor-readable file edges for a canonical record."""
 
-        return self.get_queryset().filter(
-            **generic_target(record).lookups(self.model, "target"), file__is_trashed=False,
-        ).select_related("file")
+        return (
+            self.get_queryset()
+            .filter(
+                **generic_target(record).lookups(self.model, "target"),
+                file__is_trashed=False,
+            )
+            .select_related("file")
+        )
 
-    def with_same_content(self, file: Any, record: models.Model) -> models.QuerySet[Any]:
+    def with_same_content(self, file: Any, record: models.Model) -> AngeeQuerySet[AttachmentT]:
         """Readable edges of this record type carrying the same verified bytes."""
-        return self.get_queryset().filter(
-            content_type=generic_target(record).content_type, file__content_hash=file.content_hash,
-            file__upload_state=UploadState.READY, file__is_trashed=False,
-        ) if file.content_hash and file.upload_state == UploadState.READY else self.none()
+        return (
+            self.get_queryset().filter(
+                content_type=generic_target(record).content_type,
+                file__content_hash=file.content_hash,
+                file__upload_state=UploadState.READY,
+                file__is_trashed=False,
+            )
+            if file.content_hash and file.upload_state == UploadState.READY
+            else self.none()
+        )
 
     def has_record_arm(self, target: GenericTarget) -> bool:
         """Whether record-scoped files read and write through this target type's attachments.
@@ -1822,7 +1841,7 @@ class FileAttachmentManager(AngeeManager):
         """
 
         schema = rebac_backend().schema()
-        resource_type = model_resource_type(self.model._meta.get_field("file").related_model) or ""
+        resource_type = model_resource_type(self.model.file.field.related_model) or ""
         definition = schema.get_definition(resource_type)
         if definition is None:
             return False
@@ -1853,9 +1872,9 @@ class FileAttachmentManager(AngeeManager):
         target_model = target.content_type.model_class()
         if target_model is None:
             raise ValueError("File attachment target model is unavailable.")
-        target_model.system_queryset(lock=("self",)).get(pk=target.object_id)
+        target_model._base_manager.select_for_update(of=row_lock_paths(target_model)).get(pk=target.object_id)
 
-    def _attach(self, file: Any, target: GenericTarget, *, label: str = "") -> Any:
+    def _attach(self, file: Any, target: GenericTarget, *, label: str = "") -> AttachmentT:
         """Get or insert one edge under the ambient actor, after its verb locked the target.
 
         ``attach`` also requires file read; ``draft`` encloses the new file and
@@ -1863,7 +1882,9 @@ class FileAttachmentManager(AngeeManager):
         """
 
         attachment, _created = self.get_or_create(
-            file_id=file.pk, **target.lookups(self.model, "target"), defaults={"label": label},
+            file_id=file.pk,
+            **target.lookups(self.model, "target"),
+            defaults={"label": label},
         )
         return attachment
 
@@ -1936,7 +1957,7 @@ def _mime_row(file_model: type[Any], mime_type: str) -> Any | None:
 
     if not mime_type:
         return None
-    mime_model = file_model._meta.get_field("mime_type").related_model
+    mime_model = file_model.mime_type.field.related_model
     return mime_model._default_manager.filter(mime_type=mime_type.strip().lower()).first()
 
 

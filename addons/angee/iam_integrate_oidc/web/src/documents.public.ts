@@ -2,7 +2,7 @@
 // SSO connections and the OAuth login start/complete handshake. These root fields
 // live in the `public` runtime schema, so this file is globbed against it by the
 // per-schema codegen (the `documents.public.ts` filename is load-bearing — see
-// `codegen.shared.ts`). Console/admin operations stay in `./documents`.
+// the shared codegen owner). They are scanned only when this addon is enabled.
 
 import { graphql, type DocumentType } from "@angee/gql/public";
 

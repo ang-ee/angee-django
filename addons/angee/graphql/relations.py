@@ -11,9 +11,11 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.expressions import Combinable
+from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast
 from rebac import current_actor
 from rebac.graphql.strawberry_django import optimize
+from rebac.managers import RebacQuerySet
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 from strawberry import Info
@@ -25,6 +27,7 @@ from angee.data.field_classification import is_to_one_relation
 from angee.graphql.ids import PublicID, optional_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path
 from angee.graphql.node import AngeeNode
+from angee.permissions import require_rebac_queryset
 from angee.refs import RecordRef, RecordRefMixin
 
 
@@ -61,7 +64,7 @@ class _ActorScopedSubquery(models.Expression):
 
     contains_subquery = True
 
-    def __init__(self, queryset: models.QuerySet[Any], field_name: str) -> None:
+    def __init__(self, queryset: RebacQuerySet[Any], field_name: str) -> None:
         field = queryset.query.annotations.get(field_name)
         if field is None:
             field = queryset.model._meta.pk if field_name == "pk" else queryset.model._meta.get_field(field_name)
@@ -87,10 +90,11 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
         raise ImproperlyConfigured("Record-reference access requires RecordRefMixin.")
     reference = queryset.model.record_ref_field()
     key_field = queryset.model._meta.get_field(reference.fk_field)
-    scoped_for_aggregate = getattr(queryset, "scoped_for_aggregate", None)
-    reference_rows = scoped_for_aggregate() if callable(scoped_for_aggregate) else queryset
-    content_types = ContentType.objects.filter(pk__in=reference_rows.order_by().values(
-        reference.ct_field,
+    if not isinstance(key_field, models.Field):
+        raise ImproperlyConfigured("A record reference must store its object id in a forward field.")
+    reference_rows = queryset.scoped_for_aggregate() if isinstance(queryset, RebacQuerySet) else queryset
+    content_types = ContentType.objects.filter(pk__in=reference_rows.order_by().values_list(
+        reference.ct_field, flat=True,
     )).order_by("app_label", "model")
     actor = relation_actor(queryset)
     readable = models.Q(pk__in=[])
@@ -98,7 +102,7 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
         model = content_type.model_class()
         if model is None:
             continue
-        targets = model.objects.with_actor(actor).with_action("read")
+        targets = require_rebac_queryset(model).with_actor(actor).with_action("read")
         keys = targets.order_by().annotate(_angee_reference_key=Cast("pk", output_field=key_field))
         readable |= models.Q(**{
             reference.ct_field_attname: content_type.pk,
@@ -186,10 +190,11 @@ def actor_scoped_relation_expression(
     parts = field_path.split("__")
     for part, relation in zip(parts[: len(relations)], relations, strict=True):
         related_model = relation.related_model
+        assert related_model is not None  # The to-one path was validated above.
         if not model_resource_type(related_model):
             traversed.append(part)
             continue
-        related_queryset = related_model.objects.with_actor(actor).with_action("read")
+        related_queryset = require_rebac_queryset(related_model).with_actor(actor).with_action("read")
 
         if isinstance(relation, (models.ForeignKey, models.OneToOneField)):
             lookup = "__".join((*traversed, relation.attname))
@@ -206,7 +211,7 @@ def actor_scoped_relation_expression(
     for item in guards:
         guard &= item
     output_field = (
-        terminal.target_field if isinstance(terminal, (models.ForeignKey, models.OneToOneField)) else terminal
+        terminal.target_field if isinstance(terminal, (models.ForeignObject, ForeignObjectRel)) else terminal
     )
     return models.Case(
         models.When(guard, then=models.F(field_path) if value is None else value),
@@ -298,24 +303,25 @@ def _guarded_to_one_field(field_name: str, resolver: Callable[[models.Model], An
     )
 
 
-def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], models.Prefetch | str]:
+def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], models.Prefetch]:
     """Apply selected node annotations and nested hints alongside the join key.
 
     The native optimizer resolves ``permissions_field`` annotation callbacks on
     this related queryset, as it does on roots, before any row is materialized.
     """
 
-    def prefetch(info: strawberry.Info) -> models.Prefetch | str:
+    def prefetch(info: strawberry.Info) -> models.Prefetch:
         field = cast(StrawberryDjangoField, info._field)
         related_model = field.django_model
         if related_model is None:
             # A public-ID scalar has no nested model projection to optimize.
-            return field_name
+            return models.Prefetch(field_name)
         actor = current_actor()
-        queryset = (
-            related_model.objects.none()
+        manager = require_rebac_queryset(related_model)
+        queryset: models.QuerySet[models.Model] = (
+            manager.none()
             if actor is None
-            else related_model.objects.with_actor(actor).with_action("read")
+            else manager.with_actor(actor).with_action("read")
         )
         queryset = run_type_get_queryset(queryset, field.django_type, info)
         assert field.origin_django_type is not None
@@ -341,7 +347,8 @@ def actor_scoped_to_many(field_name: str) -> Any:
 
     def resolve(root: models.Model) -> Any:
         field = root._meta.get_field(field_name)
-        if not (getattr(field, "many_to_many", False) or getattr(field, "one_to_many", False)):
+        related_model = field.related_model
+        if related_model is None or not (field.many_to_many or field.one_to_many):
             raise ImproperlyConfigured(f"{root._meta.label}.{field_name} must be a forward or reverse to-many relation")
 
         actor = current_actor()
@@ -357,13 +364,12 @@ def actor_scoped_to_many(field_name: str) -> Any:
                 return rows
 
         related_queryset = getattr(root, field_name).all()
-        with_actor = getattr(related_queryset, "with_actor", None)
-        if not callable(with_actor):
+        if not isinstance(related_queryset, RebacQuerySet):
             raise ImproperlyConfigured(
-                f"{root._meta.label}.{field_name} targets {field.related_model._meta.label}, "
+                f"{root._meta.label}.{field_name} targets {related_model._meta.label}, "
                 "whose related manager is not actor-scoped"
             )
-        return with_actor(actor)
+        return related_queryset.with_actor(actor)
 
     return strawberry_django.field(
         resolver=resolve,

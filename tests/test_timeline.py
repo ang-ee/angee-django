@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 from django.apps import apps
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
@@ -14,6 +15,7 @@ from rebac import actor_context
 from angee.changesets import changeset as open_changeset
 from angee.graphql.publishing import mute_changes
 from angee.identity import public_id_of
+from angee.messaging.timeline import CommentKind
 from angee.timeline import schema as timeline_schema
 from angee.timeline.kinds import Cursor, timeline_kinds
 from angee.timeline.reading import Timeline
@@ -62,6 +64,21 @@ def test_kinds_resolve_once_each_in_sequence_order() -> None:
         "workflows.run", "decisions.decision", "provenance.change", "messaging.comment", "projects.task",
         "messaging.conversation",
     ]
+
+
+def test_observed_fields_include_foreign_key_storage_names() -> None:
+    kind = CommentKind()
+    message = apps.get_model("messaging", "Message")
+    assert kind.relevant(message, {"thread"})
+    assert kind.relevant(message, {"thread_id"})
+    assert not kind.relevant(message, {"external_id"})
+
+
+def test_observed_fields_reject_reverse_relation_declarations() -> None:
+    kind = CommentKind()
+    kind.source_models = {"messaging.Thread": ("messages",)}
+    with pytest.raises(ImproperlyConfigured, match=r"stored field: messaging.Thread.messages"):
+        kind.relevant(apps.get_model("messaging", "Thread"), {"messages"})
 
 
 @pytest.mark.django_db(transaction=True)

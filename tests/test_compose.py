@@ -335,6 +335,24 @@ def test_nexus_aggregation_dependencies_reach_web_runtime() -> None:
     assert {"angee.messaging", "angee.parties", "angee.spaces", "angee.posts"} <= set(nexus["dependsOn"])
 
 
+def test_oidc_web_documents_follow_the_enabled_backend_addon() -> None:
+    """An IAM-only host never scans operations belonging to the optional OIDC schema."""
+
+    iam_configs = AppGraph().resolve(("angee.iam",))
+    oidc_configs = AppGraph().resolve(("angee.iam_integrate_oidc",))
+    iam_manifest = WebRuntime(iam_configs).manifest
+    oidc_manifest = WebRuntime(oidc_configs).manifest
+
+    assert "@angee/iam-integrate-oidc" not in {entry["package"] for entry in iam_manifest["addonPackages"]}
+    oidc = next(entry for entry in oidc_manifest["addonPackages"] if entry["app"] == "angee.iam_integrate_oidc")
+    assert oidc["package"] == "@angee/iam-integrate-oidc"
+    assert {"angee.iam", "angee.integrate", "angee.parties"} <= set(oidc["dependsOn"])
+    iam_config = next(config for config in iam_configs if config.name == "angee.iam")
+    assert not (Path(iam_config.path) / "web/src/documents.public.ts").exists()
+    oidc_config = next(config for config in oidc_configs if config.name == "angee.iam_integrate_oidc")
+    assert (Path(oidc_config.path) / "web/src/documents.public.ts").is_file()
+
+
 def test_web_runtime_carries_the_deployment_ui_layer() -> None:
     """``ANGEE_UI`` reaches the web runtime as the last layer; unknown keys fail composition."""
 

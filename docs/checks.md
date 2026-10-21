@@ -94,6 +94,10 @@ through imports in the root conftest before database setup. The framework-generi
 [`composed_tables`](../angee/testing/fixtures.py) fixture uses native transactional
 isolation and synchronizes REBAC after each flush; use the native `db` fixture
 when a test needs neither transaction behavior nor permission synchronization.
+Composed hosts also install their schema during native database setup. Register
+`angee.testing.fixtures` through the root conftest's `pytest_plugins`; a runner
+that loads it explicitly must pass `-p django -p angee.testing.fixtures` in that
+order so pytest-django cannot shadow the shared `django_db_setup` override.
 A test that reaches a statement source needs the install-tier `provenance.Rule`
 principals parties declares: list
 [`angee.parties.testing.fixtures`](../addons/angee/parties/testing/fixtures.py) in
@@ -240,6 +244,8 @@ database, and these commands do not create one.
 [reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
 pushes to `main`. The current tiers are:
 
+- **Python quality:** Ruff over the source tree and mypy over core and addons,
+  using the locked framework environment.
 - **SQLite:** the full framework Python suite once, as six shards that
   pytest-split cuts into contiguous chunks of equal stored time from the
   committed [durations](../.test_durations), so each test file stays in one or two
@@ -257,7 +263,8 @@ pushes to `main`. The current tiers are:
   slowest test durations; each shard writes JUnit output and checks that it did
   not skip tests. Its server runs with `max_locks_per_transaction = 256`, since
   each worker creates every table in one transaction. The `uv` job passes only
-  when every shard of both passes, so callers keep one check name.
+  when Python quality and every shard of both test suites pass, so callers keep
+  one check name.
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents
@@ -278,8 +285,48 @@ enforce private-path exclusion and other repository policies. Executable jobs in
 the reusable workflow own timeouts; GitHub's reusable-workflow caller syntax does
 not accept `timeout-minutes`.
 
+Consumer repositories call the same stack job with `uv-enabled: false`,
+`pnpm-enabled: false`, and `stack-enabled: true`. Their caller owns the explicit
+`consumer-sources` (repository, sibling slot path, ref), `consumer-roots`,
+`consumer-path`, `consumer-tests`, and optional `consumer-pytest-plugins` inputs. The caller revision replaces its
+source ref; dependency revisions remain explicit. This lane renders a separate
+host, resolves native manifest dependencies, composes/provisions it, runs Ruff
+with the consumer's inherited framework policy, and collects its full declared
+Python paths with `python_files=test*.py` on PostgreSQL, using four native
+pytest-xdist workers with `--dist worksteal`. Scheduling individual tests lets
+long consumer intake modules use every worker. Each worker loads the configured
+host through `angee.compose.settings`; pytest-django owns its separate test
+database. Shared test plugins must defer
+model imports until Django's app registry is populated. Check tools come from
+the framework lockfile. Host SDL/codegen precede typecheck/test of that consumer's
+web fragments; the framework and other consumers have their own caller lanes.
+The optional `ADDON_SOURCES_TOKEN` secret must read every private source declared
+by a caller; the default GitHub token only reads the calling repository. Configure
+that secret in each consumer repository before expecting private cross-repository
+checkout to pass. `BRIDGES_TOKEN` retains its separate full-profile purpose.
+
 Browser e2e is manual; neither `pnpm -r test` nor the current GitHub workflows run
-it. Python lint, mypy, and vulture are prescribed local checks but are not jobs in
-that reusable workflow. State local evidence and CI evidence separately. When
+it. Vulture remains a prescribed local review, outside CI.
+State local evidence and CI evidence separately. When
 changing CI, reconcile this section and link to the actual job instead of
 promising planned coverage as though it already exists.
+
+### Consumer CI Publication
+
+Consumer callers use `main` for the reusable workflow, framework checkout, and
+source dependencies. The caller's own source always uses its exact `github.sha`;
+its declared source ref is replaced by that revision. Workspace branches do not
+define the durable CI dependency contract.
+
+Publish in dependency order:
+
+1. Publish required upstream fixes and record their versions or immutable Git
+   revisions in the framework dependency declarations and lockfile.
+2. Land the framework's reusable workflow and required composition changes on
+   `main` before publishing consumer callers that use the new inputs.
+3. Land source dependency changes on their `main` branches before publishing
+   dependent consumer callers. A caller tests its own review revision against
+   those already-landed dependencies.
+
+Local source checks do not establish that this publication chain or a remote CI
+run has completed.

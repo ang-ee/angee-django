@@ -10,10 +10,11 @@ declare the matching container and stage foreign keys.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Self, cast
 
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
+from django.db.models.expressions import Combinable
 
 from angee.fields import ToneField
 
@@ -61,7 +62,7 @@ class Stage(models.Model):
         return self.name
 
     @classmethod
-    def container_field(cls) -> models.Field[Any, Any]:
+    def container_field(cls) -> models.ForeignKey:
         """Return the declared container relation, failing fast if misconfigured."""
 
         if not cls.container_field_name:
@@ -72,19 +73,19 @@ class Stage(models.Model):
             raise ImproperlyConfigured(
                 f"{cls._meta.label}.container_field_name names unknown field {cls.container_field_name!r}."
             ) from error
-        if not field.is_relation:
-            raise ImproperlyConfigured(f"{cls._meta.label}.{cls.container_field_name} must be a relation.")
-        return cast(Any, field)
+        if not isinstance(field, models.ForeignKey):
+            raise ImproperlyConfigured(f"{cls._meta.label}.{cls.container_field_name} must be a foreign key.")
+        return field
 
     @classmethod
-    def for_container(cls, container: models.Model) -> models.QuerySet[Any]:
+    def for_container(cls, container: models.Model | Combinable) -> models.QuerySet[Self]:
         """Return every stage configured for ``container`` in pipeline order."""
 
         cls.container_field()
         return cls._base_manager.filter(**{cls.container_field_name: container}).order_by("position", "pk")
 
     @classmethod
-    def resolve_default(cls, container: models.Model) -> Any | None:
+    def resolve_default(cls, container: models.Model) -> Self | None:
         """Return the container's configured default stage, or resolve its fallback.
 
         The container is the single owner of an explicit default.  A stage model
@@ -101,7 +102,7 @@ class Stage(models.Model):
         return cls.resolve_default_fallback(stages)
 
     @classmethod
-    def resolve_default_fallback(cls, stages: models.QuerySet[Any]) -> Any | None:
+    def resolve_default_fallback(cls, stages: models.QuerySet[Self]) -> Self | None:
         """Select the first ordered stage when no valid configured default exists.
 
         Overrides receive the container-scoped, ordered queryset and can refine
@@ -124,7 +125,7 @@ class Stage(models.Model):
         return getattr(self, self.category_field_name)
 
 
-class StagedModelMixin(models.Model):
+class StagedModelMixin[StageT: Stage = Stage](models.Model):
     """Validate a record's stage against its owning container.
 
     Consumers declare ordinary foreign keys named by :attr:`stage_field_name`
@@ -141,7 +142,7 @@ class StagedModelMixin(models.Model):
         abstract = True
 
     @classmethod
-    def stage_model(cls) -> type[Stage]:
+    def stage_model(cls) -> type[StageT]:
         """Return the concrete stage model declared by this record."""
 
         try:
@@ -150,18 +151,18 @@ class StagedModelMixin(models.Model):
             raise ImproperlyConfigured(
                 f"{cls._meta.label}.stage_field_name names unknown field {cls.stage_field_name!r}."
             ) from error
-        related_model = getattr(field, "related_model", None)
+        related_model = field.related_model
         if not isinstance(related_model, type) or not issubclass(related_model, Stage):
             raise ImproperlyConfigured(f"{cls._meta.label}.{cls.stage_field_name} must relate to a Stage subclass.")
-        return related_model
+        return cast(type[StageT], related_model)
 
-    def resolve_default_stage(self) -> Stage | None:
+    def resolve_default_stage(self) -> StageT | None:
         """Resolve this record's container-owned default stage."""
 
         container = self._stage_container()
         if container is None:
             return None
-        return cast(Stage | None, self.stage_model().resolve_default(container))
+        return self.stage_model().resolve_default(container)
 
     def validate_stage_scope(self) -> None:
         """Reject a stage that does not belong to this record's container."""

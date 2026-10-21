@@ -370,7 +370,11 @@ _VAULT_RESOURCE = hasura_model_resource(
     model=Vault,
     name="vaults",
     filterable=[
-        "id", "name", "is_trashed", "updated_at", *declared_hasura_resource_fields(Vault, "hasura_filterable_fields"),
+        "id",
+        "name",
+        "is_trashed",
+        "updated_at",
+        *declared_hasura_resource_fields(Vault, "hasura_filterable_fields"),
     ],
     sortable=["name", "created_at", "updated_at", *declared_hasura_resource_fields(Vault, "hasura_sortable_fields")],
     aggregatable=["id", *declared_hasura_resource_fields(Vault, "hasura_aggregatable_fields")],
@@ -389,10 +393,6 @@ _VAULT_RESOURCE = hasura_model_resource(
         "accent",
         *declared_hasura_resource_fields(Vault, "hasura_updatable_fields"),
     ],
-    field_id_decode={
-        name: public_pk_decoder(Vault._meta.get_field(name).related_model)
-        for name in _VAULT_EXTENSION_PUBLIC_ID_FIELDS
-    },
     write_backend=VaultWriteBackend(Vault, public_id_fields=_VAULT_EXTENSION_PUBLIC_ID_FIELDS),
 )
 _PAGE_RESOURCE = hasura_model_resource(
@@ -444,8 +444,8 @@ def _knowledge_for_binding(
     if input.page is not None:
         queryset = Page.objects.for_write() if write else None
         return require_instance_for_id(Page, input.page, queryset=queryset), None
-    queryset = Vault.objects.for_write() if write else None
-    return None, require_instance_for_id(Vault, cast(PublicID, input.vault), queryset=queryset)
+    vaults = Vault.objects.for_write() if write else None
+    return None, require_instance_for_id(Vault, cast(PublicID, input.vault), queryset=vaults)
 
 
 @strawberry.type
@@ -486,11 +486,7 @@ class KnowledgeQuery:
         """
 
         record = _record_for_binding(model_label, record_id)
-        return (
-            record is not None
-            and RecordBinding.declares_target(type(record))
-            and bool(record.has_access("write"))
-        )
+        return record is not None and RecordBinding.declares_target(type(record)) and bool(record.has_access("write"))
 
     @strawberry.field(name="page_record_bindings")
     def page_record_bindings(
@@ -542,14 +538,15 @@ class KnowledgeMutation:
         field = cast(SqidField, Vault._meta.get_field("sqid"))
         source = Vault(pk=field.public_id_to_value(template))
         vault = Vault._default_manager.create_from(
-            source, name=name, owned=owned, idempotency_key=idempotency_key,
+            source,
+            name=name,
+            owned=owned,
+            idempotency_key=idempotency_key,
         )
         return ActionResult(ok=True, message="Vault created.", id=require_public_id(Vault, vault.pk))
 
     @strawberry.mutation(name="create_page")
-    def create_page(
-        self, vault: PublicID, title: str, kind: str = "note", parent: PublicID | None = None
-    ) -> PageType:
+    def create_page(self, vault: PublicID, title: str, kind: str = "note", parent: PublicID | None = None) -> PageType:
         """Create the requested concrete page through its vault-owned preflight."""
 
         vault_row = require_instance_for_id(Vault, vault)

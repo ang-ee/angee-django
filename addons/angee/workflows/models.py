@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -23,6 +23,7 @@ from angee.fields import DiagnosticTextField, ModelLabelField, StateField
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.schema import GraphQLSchemas
 from angee.iam.service_users import sync_service_user
+from angee.identity import public_id_for
 from angee.models import (
     AngeeDataModel,
     AngeeManager,
@@ -111,7 +112,7 @@ class _JSONArrayLength(models.Func):
             template="CASE WHEN json_valid(%(expressions)s) THEN %(function)s(%(expressions)s) ELSE 0 END",
             **extra_context,
         )
-        return sql, params * 2
+        return sql, (*params, *params)
 
     def as_postgresql(self, compiler: Any, connection: Any, **extra_context: Any) -> Any:
         sql, params = super().as_sql(
@@ -120,7 +121,7 @@ class _JSONArrayLength(models.Func):
                      "THEN %(expressions)s ELSE '[]'::jsonb END)",
             **extra_context,
         )
-        return sql, params * 2
+        return sql, (*params, *params)
 
 
 class _NodeFailureRoute(models.Func):
@@ -321,6 +322,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
             with system_context(reason="workflows.execution_policy"):
                 return self.version
         model = self._meta.get_field("version").related_model
+        assert model is not None and issubclass(model, WorkflowVersion)
         return model.system_queryset().get(pk=self.version_id)
 
     @property
@@ -456,7 +458,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
 class WorkflowDecision(models.Model):
     """Contribute retained requesting runs to the decision owner's reference seam."""
 
-    extends: str | None = "decisions.Decision"
+    extends: ClassVar[str | None] = "decisions.Decision"
 
     class Meta:
         abstract = True
@@ -536,11 +538,14 @@ class StepRun(AngeeDataModel):
         """A step changes both its run graph and that run's record timelines."""
         run = self._meta.get_field("run").related_model
         evidence = self._meta.get_field("records").related_model
+        assert run is not None and issubclass(run, WorkflowRun)
+        assert evidence is not None and issubclass(evidence, StepRecord)
         records = [ChangeRelatedRecord(run._meta.label, run.public_id_from_pk(self.run_id)),
                    *evidence.objects.filter(run_id=self.run_id).change_related_records()]
         if self.decision_id:
             decision = self._meta.get_field("decision").related_model
-            records.append(ChangeRelatedRecord(decision._meta.label, decision.public_id_from_pk(self.decision_id)))
+            assert decision is not None
+            records.append(ChangeRelatedRecord(decision._meta.label, public_id_for(decision, self.decision_id)))
         return tuple(records)
     hold_states = {
         (StepRunStatus.FAILED, None): "error",
@@ -748,6 +753,9 @@ class StepRun(AngeeDataModel):
         ]
 
 
+_StepAttemptManager = AngeeManager.from_queryset(StepAttemptQuerySet)
+
+
 class StepAttempt(AngeeDataModel):
     """One committed claim, closed once the attempt finishes."""
 
@@ -767,7 +775,7 @@ class StepAttempt(AngeeDataModel):
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+",
     )
 
-    objects = AngeeManager.from_queryset(StepAttemptQuerySet)()
+    objects = _StepAttemptManager()
 
     def __str__(self) -> str:
         """Identify this retained claim within its step."""
@@ -869,12 +877,12 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
     sqid_prefix = "wft_"
     workflow = models.ForeignKey("workflows.Workflow", on_delete=models.CASCADE, related_name="triggers")
     source = TriggerSourceField(TriggerSource)
-    model_label: str = ModelLabelField(max_length=200, blank=True, default="")
+    model_label = ModelLabelField(max_length=200, blank=True, default="")
     condition = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=False, editable=False)
     granted_targets = models.JSONField(default=list, editable=False)
     """Targets this trigger contributes to the workflow principal's direct tuples."""
-    disabled_reason: str = DiagnosticTextField(blank=True, default="", editable=False)
+    disabled_reason = DiagnosticTextField(blank=True, default="", editable=False)
     objects = TriggerManager()
 
     @classmethod
@@ -882,14 +890,18 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
         """Workflow authors can configure sources without platform administration."""
         if field_name != "source" or actor is None:
             return False
-        workflows = cls._meta.get_field("workflow").related_model.objects.with_actor(actor).with_action("write")
+        model = cls._meta.get_field("workflow").related_model
+        assert model is not None and issubclass(model, Workflow)
+        workflows = model.objects.with_actor(actor).with_action("write")
         return workflows.exists()
 
     @property
     def source_class(self) -> type[TriggerSource]:
         """Resolve source behavior through its declared implementation field."""
         try:
-            return cast(type[TriggerSource], self._meta.get_field("source").resolve_for(self))
+            field = self._meta.get_field("source")
+            assert isinstance(field, TriggerSourceField)
+            return field.resolve_for(self)
         except ImportError as error:
             raise ImproperlyConfigured(f"Trigger source {self.source!r} cannot be loaded: {error}") from error
 
@@ -980,13 +992,16 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
         if self.enabled and (previous is None or not previous.enabled):
             raise ValidationError("Enable triggers through the manager action.")
         fields = ("condition", "source", "model_label", *self.source_class.scope_fields)
-        if previous is not None and any(
-            getattr(self, self._meta.get_field(name).attname) != getattr(previous, self._meta.get_field(name).attname)
-            for name in fields
-        ):
-            if previous.enabled and self.enabled:
-                raise ValidationError("Disable the trigger before editing its rule.")
-            self.disabled_reason = "Trigger configuration changed; enable it again."
+        if previous is not None:
+            for name in fields:
+                field = self._meta.get_field(name)
+                if not isinstance(field, models.Field):
+                    raise ImproperlyConfigured(f"Trigger configuration {name!r} must be a forward field.")
+                if getattr(self, field.attname) != getattr(previous, field.attname):
+                    if previous.enabled and self.enabled:
+                        raise ValidationError("Disable the trigger before editing its rule.")
+                    self.disabled_reason = "Trigger configuration changed; enable it again."
+                    break
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Validate native saves as well as resource writes."""

@@ -5,6 +5,7 @@ from typing import Annotated
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import models
 from pydantic import BaseModel, Field
 from rebac import (
     RelationshipTuple,
@@ -15,6 +16,7 @@ from rebac import (
     write_relationships,
 )
 
+from angee.models import row_lock_paths
 from angee.workflows import schema as workflow_schema
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus
@@ -29,10 +31,19 @@ pytestmark = pytest.mark.usefixtures("workflow_step_classes")
 
 
 @pytest.mark.django_db(transaction=True)
-def test_context_preserves_concrete_mti_subject(execution, register_step):
+def test_context_preserves_concrete_mti_subject(execution, register_step, monkeypatch):
     """A child subject retains its fields through scoped reads and locked writes."""
 
     actor, _ = execution
+    lock = models.QuerySet.select_for_update
+    locked = []
+
+    def capture_lock(rows, **kwargs):
+        if rows.model is MtiChild:
+            locked.append(kwargs)
+        return lock(rows, **kwargs)
+
+    monkeypatch.setattr(models.QuerySet, "select_for_update", capture_lock)
     with system_context(reason="test.workflow_mti_subject"):
         subject = MtiChild.objects.create(title="Parent identity", detail="Child state")
 
@@ -61,6 +72,7 @@ def test_context_preserves_concrete_mti_subject(execution, register_step):
     step_run = StepRun.system_queryset().get(run=run)
 
     assert runner.execute(step_run.pk)
+    assert locked == [{"no_key": True, "of": row_lock_paths(MtiChild)}]
 
     retained = WorkflowRun.system_queryset().get(pk=run.pk)
     assert retained.status == RunStatus.SUCCEEDED

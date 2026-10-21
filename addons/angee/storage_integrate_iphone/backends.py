@@ -60,7 +60,7 @@ class IphoneBackupStorageBackend(StorageBackend):
 
         return self._blob_path(name).stat().st_size
 
-    def url(self, name: str) -> str:
+    def url(self, name: str | None) -> str:
         """Refuse public URLs; bytes are served through Angee's proxy."""
 
         del name

@@ -18,7 +18,7 @@ from strawberry.extensions import FieldExtension
 from strawberry.types.field import StrawberryField
 from strawberry_django.fields.field import StrawberryDjangoField
 
-from angee.permissions import effective_rebac_definition
+from angee.permissions import effective_rebac_definition, require_rebac_queryset
 
 _ACTOR = "_angee_permission_actor"
 
@@ -66,7 +66,8 @@ def held_permissions(
     ):
         annotations = permission_annotations(owner, names)
         values = (
-            owner.system_queryset().filter(pk=record.pk).annotate(**annotations).values(*annotations).first()
+            require_rebac_queryset(owner).system_context(reason="graphql.permissions")
+            .filter(pk=record.pk).annotate(**annotations).values(*annotations).first()
             or {}
         )
     return frozenset(name for name in names if values.get(f"_angee_permission_{name}"))
@@ -127,7 +128,7 @@ def permission_expression(queryset: models.QuerySet[Any], name: str) -> models.E
     actor = relation_actor(queryset)
     if actor is None:
         return models.Exists(queryset.model._base_manager.none())
-    scoped = queryset.model.objects.with_actor(actor).with_action(name).scoped_for_aggregate()
+    scoped = require_rebac_queryset(queryset.model).with_actor(actor).with_action(name).scoped_for_aggregate()
     return models.Exists(scoped.filter(pk=models.OuterRef("pk")))
 
 

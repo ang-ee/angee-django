@@ -1,8 +1,8 @@
 // Console-schema operations for the IAM admin surface: the identity overview,
 // users, roles, grants, relationships, the REBAC schema, and the grant/revoke
 // writes. These root fields live in the `console` runtime schema, so this file is
-// globbed against it by the per-schema codegen. The unauthenticated login surface
-// (available connections, login start/complete) lives in `./documents.public`.
+// globbed against it by the per-schema codegen. OIDC sign-in operations live in
+// the optional `iam_integrate_oidc` addon's public-schema documents.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 import type { DocumentVariables } from "@angee/refine";

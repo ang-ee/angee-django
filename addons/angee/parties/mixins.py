@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 
-from angee.models import Statement, StatementsMixin
+from angee.models import Statement, StatementsMixin, TimestampMixin
+
+if TYPE_CHECKING:
+    from angee.parties.models import Party
 
 
 class PartyAspectMixin(StatementsMixin):
@@ -26,7 +29,7 @@ class PartyAspectMixin(StatementsMixin):
         return super().lock_subject(members)
 
 
-class MembershipDecisionMixin(models.Model):
+class MembershipDecisionMixin(TimestampMixin):
     """Plain roster decisions, independent of assertion provenance."""
 
     confidence = models.FloatField(default=1.0, validators=(MinValueValidator(0), MaxValueValidator(1)))
@@ -56,6 +59,8 @@ class MembershipDecisionMixin(models.Model):
 
 class PartyStatementMixin(Statement):
     """Party stances break equal-trust ties toward the party with a human-given name."""
+
+    statement_subject_model: type[Party]
 
     class Meta:
         abstract = True

@@ -4,8 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import models
 from rebac import system_context
 
+from angee.models import row_lock_paths
 from angee.workflows import subjects
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.testing.drivers import load_workflow, run_until
@@ -43,9 +45,18 @@ def test_system_check_rejects_missing_hook(monkeypatch, missing):
     assert missing in errors[0].msg
 
 
-def test_request_replay_admits_once_and_settlement_reads_terminal_output(execution, subject):
+def test_request_replay_admits_once_and_settlement_reads_terminal_output(execution, subject, monkeypatch):
     actor, _ = execution
     workflow = workflow_for(actor)
+    lock = models.QuerySet.select_for_update
+    locked = []
+
+    def capture_lock(rows, **kwargs):
+        if rows.model is RunSubjectRecord:
+            locked.append(kwargs)
+        return lock(rows, **kwargs)
+
+    monkeypatch.setattr(models.QuerySet, "select_for_update", capture_lock)
     run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject, input={"value": 4}, request_key="one")
     replay = WorkflowRun.objects.start(workflow, actor=actor, subject=subject, input={"value": 4}, request_key="one")
     assert replay.pk == run.pk
@@ -54,6 +65,7 @@ def test_request_replay_admits_once_and_settlement_reads_terminal_output(executi
 
     subject.refresh_from_db()
     assert subject.admissions == 1
+    assert locked and all(options == {"no_key": True, "of": row_lock_paths(RunSubjectRecord)} for options in locked)
     assert subject.settlements == [{"run": run.pk, "status": RunStatus.SUCCEEDED, "output": {"value": 4}}]
 
 

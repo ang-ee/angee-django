@@ -31,38 +31,37 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 _QuerySetT = TypeVar("_QuerySetT", bound=models.QuerySet[Any])
 
 
-class SystemQuerysetMixin:
+class SystemQuerysetMixin(models.Model):
     """Elevated unscoped reads for models that own internal persistence work."""
+
+    class Meta:
+        abstract = True
+
+    def lock_subject(self, members: Mapping[str, Any] | None = None) -> Self:
+        """Lock and reload this subject through its row-bound base manager."""
+
+        del members
+        model = type(self)
+        manager = model._base_manager.db_manager(hints={"instance": self})
+        return manager.all().select_for_update(of=row_lock_paths(model)).get(pk=self.pk)
 
     @classmethod
     def system_queryset(
         cls,
         *,
         lock: tuple[str, ...] | None = None,
-    ) -> AngeeQuerySet[Self]:
+    ) -> models.QuerySet[Self]:
         """Return an elevated unscoped queryset with the shared lock contract."""
 
-        model = cast(type[models.Model], cls)
-        queryset = cast(AngeeQuerySet[Self], model._default_manager.get_queryset())
+        model = cls
+        queryset = model._default_manager.get_queryset()
         if isinstance(queryset, RebacQuerySet):
             queryset = queryset.system_context(reason=f"{model._meta.label_lower}.system_queryset")
         if lock is None:
             return queryset
-        if "self" in lock:
-            lock = (
-                *lock,
-                *(
-                    path
-                    for path in _parent_link_paths(model._meta.concrete_model)
-                    if path not in lock
-                ),
-            )
-        lock_if_supported = getattr(queryset, "lock_if_supported", None)
-        return (
-            lock_if_supported(of=lock)
-            if callable(lock_if_supported)
-            else cast(AngeeQuerySet[Self], queryset.select_for_update(of=lock))
-        )
+        if isinstance(queryset, _AngeeQuerySetMixin):
+            return queryset.lock_if_supported(of=lock)
+        return queryset.select_for_update(of=row_lock_paths(model, lock))
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +141,16 @@ def by_key(queryset: _QuerySetT, keys: Sequence[Any]) -> Iterator[_QuerySetT]:
         yield from native_by_key(queryset, chunk)
 
 
+def row_lock_paths(model: type[models.Model], of: tuple[str, ...] = ("self",)) -> tuple[str, ...]:
+    """Lock this row's MTI tables without adding unrelated joined relations."""
+
+    if "self" not in of:
+        return of
+    return (*of, *(
+        path for path in _parent_link_paths(model._meta.concrete_model or model) if path not in of
+    ))
+
+
 def _parent_link_paths(model: type[models.Model], prefix: str = "") -> tuple[str, ...]:
     """Return ``of`` paths reaching each concrete multi-table ancestor of ``model``."""
 
@@ -167,7 +176,7 @@ def model_history(model: type[models.Model]) -> ModelHistory | None:
         return None
     if model._meta.label_lower == changeset_model_label().lower():
         return None
-    concrete = model._meta.concrete_model
+    concrete = model._meta.concrete_model or model
     history = getattr(concrete._meta, "angee_model_history", None)
     if history is None:
         history = next(
@@ -195,10 +204,19 @@ def record_history(model: type[models.Model]) -> ModelHistory | None:
     return model_history(model)
 
 
-class MergeableQuerySet(models.QuerySet[_ModelT]):
+class CanonicalQuerySet(models.QuerySet[_ModelT]):
+    """Terminal operational scope for cooperative queryset capabilities."""
+
+    def canonical(self) -> Self:
+        """All rows until an owning capability narrows the operational scope."""
+
+        return self
+
+
+class MergeableQuerySet(CanonicalQuerySet[_ModelT]):
     """Operational identities; compose trash and archival scopes independently."""
 
-    def canonical(self) -> Any:
+    def canonical(self) -> Self:
         """Rows that redirect nowhere, plus a retained redirect whose survivor these rows do not reach.
 
         A redirect is identity, not content: a reader this scope withholds the
@@ -217,7 +235,7 @@ class MergeableQuerySet(models.QuerySet[_ModelT]):
         return self.filter(models.Q(pk=survivor.pk) | models.Q(merged_into_id=survivor.pk))
 
 
-class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
+class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
     """Shared lookup, locking and history capture, preserving each manager's policy.
 
     Bulk updates dispatch through Django's native update batches. Each executed
@@ -227,11 +245,6 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
 
     model: type[_ModelT]
 
-    def canonical(self) -> Any:
-        """All rows until an owning capability narrows the operational scope."""
-
-        return self
-
     def update(self, **kwargs: Any) -> int:
         """Capture stored state after an authorized write of frozen, locked keys.
 
@@ -239,7 +252,7 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
         timestamp stamps, changes no tracked state and records no version.
         """
 
-        history_model = self.model._meta.concrete_model
+        history_model = self.model._meta.concrete_model or self.model
         history = model_history(history_model)
         if history is None or self.query.is_sliced or not self._changes_tracked_state(
             history, history_model, kwargs
@@ -286,7 +299,7 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
     ) -> list[_ModelT]:
         """Capture inserted/upserted stored rows, refusing unknowable identities."""
 
-        history_model = self.model._meta.concrete_model
+        history_model = self.model._meta.concrete_model or self.model
         history = model_history(history_model)
         candidates = list(objs)
         if history is not None and candidates:
@@ -304,8 +317,8 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
                 batch_size=batch_size,
                 ignore_conflicts=ignore_conflicts,
                 update_conflicts=update_conflicts,
-                update_fields=update_fields,
-                unique_fields=unique_fields,
+                update_fields=tuple(update_fields) if update_fields is not None else None,
+                unique_fields=tuple(unique_fields) if unique_fields is not None else None,
             )
             if history is not None and rows:
                 if any(row.pk is None for row in rows):
@@ -322,7 +335,7 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
     def delete(self) -> tuple[int, dict[str, int]]:
         """Batch root snapshots; native receivers retain collector cascade capture."""
 
-        history_model = self.model._meta.concrete_model
+        history_model = self.model._meta.concrete_model or self.model
         history = model_history(history_model)
         if history is not None and history.cascade_delete_history:
             history = None
@@ -361,9 +374,9 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
     ) -> Self:
         """Expose shared lock intent on Angee querysets and managers."""
 
-        if "self" in of:
-            of = (*of, *(path for path in _parent_link_paths(self.model._meta.concrete_model) if path not in of))
-        return cast(Self, self.select_for_update(of=of, skip_locked=skip_locked, no_key=no_key))
+        return cast(Self, self.select_for_update(
+            of=row_lock_paths(self.model, of), skip_locked=skip_locked, no_key=no_key,
+        ))
 
     def locked_get(self, *args: Any, **kwargs: Any) -> _ModelT:
         """Return one row under a database row lock when the backend supports it."""
@@ -394,7 +407,7 @@ class AngeeQuerySet(
         actor: Any = None,
         default: Any = None,
         output_field: models.Field | None = None,
-    ) -> models.Expression:
+    ) -> models.Expression | models.Subquery:
         """Project one correlated readable value, including under an elevated parent.
 
         Add correlation predicates before calling. No actor yields no value;
@@ -416,7 +429,7 @@ class AngeeQuerySet(
             output_field=output_field or scalar.output_field,
         )
 
-    def readable_count_subquery(self, *, actor: Any = None) -> models.Expression:
+    def readable_count_subquery(self, *, actor: Any = None) -> models.Expression | models.Subquery:
         """Count a correlated actor-scoped row set, returning zero when empty."""
 
         rows = self.order_by().annotate(_count_group=models.Value(1)).values("_count_group")

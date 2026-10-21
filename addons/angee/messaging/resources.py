@@ -15,7 +15,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import models
 from import_export import fields, widgets
-from rebac import actor_context
+from rebac import RebacMixin, actor_context
 
 from angee.resources.loader import AngeeResource
 from angee.resources.widgets import resolve_xref
@@ -50,7 +50,9 @@ class _ChatterResource(AngeeResource):
         if not isinstance(author, get_user_model()):
             raise ValidationError({"author": "An author xref must name a user."})
         with actor_context(author):
-            written = self.write(record.with_actor(author), author, instance, row)
+            if isinstance(record, RebacMixin):
+                record = record.with_actor(author)
+            written = self.write(record, author, instance, row)
         for field in instance._meta.concrete_fields:
             setattr(instance, field.attname, getattr(written, field.attname))
         instance._state.adding = False

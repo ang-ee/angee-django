@@ -45,7 +45,7 @@ from angee.impl import ImplClassField
 from angee.lineage import concrete_child_models
 from angee.models import AngeeModel, MergeableMixin, record_history
 from angee.permissions import effective_rebac_definition
-from angee.refs import generic_pointer_model, record_edges_by_target
+from angee.refs import RecordRefMixin, generic_pointer_model, record_edges_by_target
 from graphql import GraphQLSchema, get_named_type
 
 __all__ = [
@@ -717,7 +717,7 @@ def _concrete_kinds(
 
 def _record_edges(
     model: type[models.Model] | None,
-    edges_by_target: Mapping[type[models.Model], tuple[type[models.Model], ...]],
+    edges_by_target: Mapping[type[models.Model], tuple[type[RecordRefMixin], ...]],
 ) -> tuple[str, ...]:
     """Project the edge models accepting this resource's canonical type as a target.
 
@@ -1059,7 +1059,7 @@ def _default_sort(
 
     orderable = set(order_fields)
     sorts: list[data_contract.DataDefaultSortMetadata] = []
-    for term in model._meta.ordering:
+    for term in model._meta.ordering or ():
         if isinstance(term, models.expressions.OrderBy):
             # An expression ordering (F(...).desc(nulls_last=True), say) carries a
             # DB detail — NULL placement — the metadata does not need; expose the
@@ -1142,7 +1142,7 @@ def _require_model_field_for_path(
     path: str,
     *,
     purpose: str,
-) -> models.Field[Any, Any]:
+) -> models.Field[Any, Any] | models.ForeignObjectRel:
     """Return a concrete model field for ``path`` or fail at metadata emission."""
 
     try:
@@ -1169,6 +1169,8 @@ def _model_label_parts(
     """
 
     if model is not None and model_label == model._meta.label:
-        return model._meta.app_label, model._meta.model_name
+        model_name = model._meta.model_name
+        assert model_name is not None
+        return model._meta.app_label, model_name
     app_label, object_name = model_label.split(".", 1)
     return app_label, object_name.lower()

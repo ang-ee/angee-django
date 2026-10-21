@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self, cast
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -13,16 +13,27 @@ from rebac.resources import model_resource_type
 from angee.fields import enum_member_for
 from angee.models import AngeeManager, AngeeQuerySet, HierarchyQuerySet
 
+if TYPE_CHECKING:
+    from angee.spaces.models import Group, Membership
 
-class GroupQuerySet(HierarchyQuerySet, AngeeQuerySet):
+
+class GroupQuerySet[GroupT: Group](HierarchyQuerySet[GroupT], AngeeQuerySet[GroupT]):
     """Group read scopes with hierarchy subtree and ancestor traversal."""
 
 
-class GroupManager(AngeeManager.from_queryset(GroupQuerySet)):  # type: ignore[misc]
-    """Manager for unscoped shared group trees."""
+_GroupManagerBase = AngeeManager.from_queryset(GroupQuerySet)
 
 
-class MembershipQuerySet(AngeeQuerySet):
+class GroupManager[GroupT: Group](_GroupManagerBase[GroupT]):
+    """Keep a stable import identity for shared group tree managers."""
+
+    def get_queryset(self) -> GroupQuerySet[GroupT]:
+        """Preserve the configured queryset and model row type."""
+
+        return cast(GroupQuerySet[GroupT], super().get_queryset())
+
+
+class MembershipQuerySet[MembershipT: Membership](AngeeQuerySet[MembershipT]):
     """Canonical roster selections shared by admission and the team audience."""
 
     def confirmed(self) -> Self:
@@ -31,8 +42,16 @@ class MembershipQuerySet(AngeeQuerySet):
         return self.filter(is_confirmed=True, is_dismissed=False)
 
 
-class MembershipManager(AngeeManager.from_queryset(MembershipQuerySet)):  # type: ignore[misc]
+_MembershipManagerBase = AngeeManager.from_queryset(MembershipQuerySet)
+
+
+class MembershipManager[MembershipT: Membership](_MembershipManagerBase[MembershipT]):
     """Own confirmed manual roster writes under the roster's role permissions."""
+
+    def get_queryset(self) -> MembershipQuerySet[MembershipT]:
+        """Preserve the configured queryset and model row type."""
+
+        return cast(MembershipQuerySet[MembershipT], super().get_queryset())
 
     def check_role_create(self, *, group: Any, role: Any) -> SubjectRef:
         """Check the selected role through the same REBAC preflight as admission."""
@@ -67,7 +86,7 @@ class MembershipManager(AngeeManager.from_queryset(MembershipQuerySet)):  # type
             roles.append(role)
         return roles
 
-    def add_confirmed(self, *, group: Any, party: Any, role: Any) -> Any:
+    def add_confirmed(self, *, group: Group, party: Any, role: Any) -> MembershipT:
         """Create or confirm one manual membership with the selected group role.
 
         Access follows the persisted row through live REBAC backing. Re-adding an

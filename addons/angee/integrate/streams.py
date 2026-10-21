@@ -846,7 +846,7 @@ def resolve_conflict(link: Any, slot: int | None, keep: ConflictKeep) -> Any:
         if stream.state == StreamState.CLOSED:
             raise ValidationError("Resync the closed stream before resolving its conflict.")
         owner = link.parent if link.parent is not None else link
-        adapter = stream.integration.concrete_capability().backend
+        adapter = stream.integration.concrete_capability().capability_impl
         keys = frozenset((owner.external_key,))
         resolved = False
         try:
@@ -1069,15 +1069,11 @@ def begin_stream_cycle(
             retention = stream.tombstone_retention
             retry = False
             if retention and (stream.last_advanced_at is None or stream.last_advanced_at + retention < timezone.now()):
-                retry = (
-                    links_manager
-                    .filter(
-                        stream=stream,
-                        status=LinkStatus.TOMBSTONE,
-                        tombstoned_at__lt=timezone.now() - retention,
-                    )
-                    .exists()
-                )
+                retry = links_manager.filter(
+                    stream=stream,
+                    status=LinkStatus.TOMBSTONE,
+                    tombstoned_at__lt=timezone.now() - retention,
+                ).exists()
             if force_apply and not identity_reads:
                 raise AdapterContractError("Explicit remote resolution requires identity reads.")
             if due and not identity_reads:
@@ -1090,8 +1086,7 @@ def begin_stream_cycle(
             if stream.resync_required or (not due and not force_apply) or adapter is None:
                 return stream
             links = (
-                links_manager
-                .filter(stream=stream, pk__in=[row.link_pk for row in due])
+                links_manager.filter(stream=stream, pk__in=[row.link_pk for row in due])
                 .select_related("parent")
                 .order_by("external_key")
             )
@@ -1239,7 +1234,7 @@ def _drain_partition(bridge: Any, definition: StreamDefinition, deadline: float)
     try:
         with system_context(reason="integrate.stream.partition"):
             row = type(bridge)._base_manager.get(pk=bridge.pk)
-            adapter = row.backend
+            adapter = row.capability_impl
             try:
                 with bridge_progress_context(row):
                     return _drain(row, adapter, definition, deadline)
@@ -1255,7 +1250,7 @@ def sync_bridge(bridge: Any) -> int:
     config = bridge.config
     soft_limit = float(settings.CELERY_TASK_SOFT_TIME_LIMIT)
     deadline = monotonic() + max(0.0, float(config.get("sync_time_budget", max(60.0, soft_limit - 60.0))))
-    adapter = bridge.backend
+    adapter = bridge.capability_impl
     try:
         with system_context(reason="integrate.bridge.streams"):
             definitions = tuple(sorted(adapter.streams(deadline=deadline), key=lambda item: (item.key, item.partition)))

@@ -654,6 +654,8 @@ class AgentSessionQuery:
             return None
         model = getattr(agent, "model", None)
         user_id = actor_user_id(current_actor())
+        if user_id is None:
+            return None
         with system_context(reason="agents.graphql.session_for_view"):
             session = (
                 AgentSessionModel.objects.filter(agent=agent, user_id=user_id)

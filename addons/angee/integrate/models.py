@@ -66,7 +66,7 @@ from angee.integrate.errors import (
     safe_integration_failure,
 )
 from angee.integrate.events import EventKind
-from angee.integrate.impl import IntegrationImpl, LiveBridgeImpl
+from angee.integrate.impl import BridgeImpl, IntegrationImpl, LiveBridgeImpl
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
 from angee.integrate.locks import bridge_advisory_lock, bridge_is_locked
 from angee.integrate.mixins import SyncStateMixin
@@ -152,10 +152,10 @@ class CredentialStatus(models.TextChoices):
     REVOKED = "revoked", "Revoked"
 
 
-class OAuthClientQuerySet(AngeeQuerySet[Any]):
+class OAuthClientQuerySet[OAuthClientT: OAuthClient](AngeeQuerySet[OAuthClientT]):
     """REBAC-scoped reads for OAuth client registration."""
 
-    def preferred(self, *, environment: str = "prod") -> OAuthClientQuerySet:
+    def preferred(self, *, environment: str = "prod") -> Self:
         """Select the first registration per slug under a deterministic priority.
 
         Choose the environment before testing readiness: a disabled production
@@ -173,29 +173,37 @@ class OAuthClientQuerySet(AngeeQuerySet[Any]):
                 "pk",
             )
         )
-        return cast(OAuthClientQuerySet, self.filter(pk=Subquery(alternatives.values("pk")[:1])))
+        return self.filter(pk=Subquery(alternatives.values("pk")[:1]))
 
-    def connectable(self) -> OAuthClientQuerySet:
+    def connectable(self) -> Self:
         """Use the model's readiness rule for the public connection picker."""
 
         public = self.system_context(reason="integrate.graphql.connectable").preferred()
         ready_ids = [row.pk for row in public.only(*self.model.readiness_fields) if row.configuration_state == "ready"]
-        return cast(OAuthClientQuerySet, public.filter(pk__in=ready_ids))
+        return public.filter(pk__in=ready_ids)
 
-    def enabled_for_slug(self, slug: str, *, environment: str = "prod") -> Any | None:
+    def enabled_for_slug(self, slug: str, *, environment: str = "prod") -> OAuthClientT | None:
         """Resolve the same ready registration the picker and projection offer."""
 
         client = self.filter(slug=slug).preferred(environment=environment).first()
         return client if client is not None and client.configuration_state == "ready" else None
 
 
-class OAuthClientManager(AngeeManager.from_queryset(OAuthClientQuerySet)):  # type: ignore[misc]
+_OAuthClientManagerBase = AngeeManager.from_queryset(OAuthClientQuerySet)
+
+
+class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAuthClientT]):
     """Manager for settings-sourced OAuth client registration.
 
     OAuth only: settings entries carry the OAuth base fields. The OIDC refinement
     (issuer/JWKS/discovery + login policy) is owned by the ``iam_integrate_oidc``
     addon and seeded there, never from here.
     """
+
+    def get_queryset(self) -> OAuthClientQuerySet[OAuthClientT]:
+        """Preserve the configured queryset and model row type."""
+
+        return cast(OAuthClientQuerySet[OAuthClientT], super().get_queryset())
 
     seed_fields = frozenset(
         {
@@ -410,7 +418,7 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     def provider(self) -> type[OAuthProviderType]:
         """Resolve the selected provider preset through its implementation field."""
 
-        return self._meta.get_field("provider_type").resolve_for(self)
+        return type(self).provider_type.field.resolve_for(self)
 
     def userinfo_params(self, protocol: OAuthClientProtocol, access_token: str) -> Mapping[str, str]:
         """Ask the selected preset for profile-request parameters."""
@@ -588,20 +596,30 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         return discovery
 
 
-class ExternalAccountQuerySet(OwnerQuerySet[Any], AngeeQuerySet[Any]):
+class ExternalAccountQuerySet[ExternalAccountT: ExternalAccount](
+    OwnerQuerySet[ExternalAccountT], AngeeQuerySet[ExternalAccountT]
+):
     """REBAC-scoped reads and verb-authorized ownership release for external accounts."""
 
-    def console_external_accounts(self) -> ExternalAccountQuerySet:
+    def console_external_accounts(self) -> Self:
         """Return admin-visible external accounts with guarded FK joins."""
 
-        return cast(ExternalAccountQuerySet, self.rebac_select_related("oauth_client", "credential"))
+        return self.rebac_select_related("oauth_client", "credential")
 
 
-class ExternalAccountManager(AngeeManager.from_queryset(ExternalAccountQuerySet)):  # type: ignore[misc]
+_ExternalAccountManagerBase = AngeeManager.from_queryset(ExternalAccountQuerySet)
+
+
+class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccountManagerBase[ExternalAccountT]):
     """Manager for idempotent external account linking.
 
     Actor-less framework writes run under ``system_context``; update paths do not maintain ``updated_by``.
     """
+
+    def get_queryset(self) -> ExternalAccountQuerySet[ExternalAccountT]:
+        """Preserve the configured queryset and model row type."""
+
+        return cast(ExternalAccountQuerySet[ExternalAccountT], super().get_queryset())
 
     caller_fields = frozenset(
         {
@@ -690,7 +708,7 @@ class ExternalAccount(OwnerMixin, AngeeDataModel):
     )
     status = StateField(choices_enum=AccountStatus, default=AccountStatus.ACTIVE)
     identity_claims = models.JSONField(default=dict, blank=True)
-    last_error: str = DiagnosticTextField(blank=True)
+    last_error = DiagnosticTextField(blank=True)
     last_error_at = models.DateTimeField(null=True, blank=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
 
@@ -770,10 +788,10 @@ class ExternalAccount(OwnerMixin, AngeeDataModel):
         return email
 
 
-class CredentialQuerySet(AngeeQuerySet[Any]):
+class CredentialQuerySet[CredentialT: Credential](AngeeQuerySet[CredentialT]):
     """REBAC-scoped reads for credential health and connected accounts."""
 
-    def connection_health(self) -> Any:
+    def connection_health(self) -> Self:
         """Load current health and refresh evidence for an integration-owned projection.
 
         Native prefetch hints batch non-secret facts. Only an expired OAuth row
@@ -792,7 +810,7 @@ class CredentialQuerySet(AngeeQuerySet[Any]):
             )
         )
 
-    def connected_for(self, user: Any) -> CredentialQuerySet:
+    def connected_for(self, user: Any) -> Self:
         """Return ``user``'s external-account-backed credentials.
 
         Each row is a credential whose ``external_account`` (and that account's
@@ -801,31 +819,33 @@ class CredentialQuerySet(AngeeQuerySet[Any]):
         connected-accounts surface.
         """
 
-        return cast(
-            CredentialQuerySet,
-            self.filter(
-                user=user,
-                external_account__isnull=False,
-            ).rebac_select_related("external_account", "external_account__credential"),
-        )
+        return self.filter(
+            user=user,
+            external_account__isnull=False,
+        ).rebac_select_related("external_account", "external_account__credential")
 
-    def console_credentials(self) -> CredentialQuerySet:
+    def console_credentials(self) -> Self:
         """Return admin-visible credential health with guarded FK joins."""
 
-        return cast(
-            CredentialQuerySet,
-            self.rebac_select_related(
-                "oauth_client",
-                "external_account",
-            ),
+        return self.rebac_select_related(
+            "oauth_client",
+            "external_account",
         )
 
 
-class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type: ignore[misc]
+_CredentialManagerBase = AngeeManager.from_queryset(CredentialQuerySet)
+
+
+class CredentialManager[CredentialT: Credential](_CredentialManagerBase[CredentialT]):
     """Manager for idempotent per-user credential writes.
 
     Actor-less framework writes run under ``system_context``; update paths do not maintain ``updated_by``.
     """
+
+    def get_queryset(self) -> CredentialQuerySet[CredentialT]:
+        """Preserve the configured queryset and model row type."""
+
+        return cast(CredentialQuerySet[CredentialT], super().get_queryset())
 
     caller_fields = frozenset(
         {
@@ -1238,7 +1258,7 @@ class Credential(AuditMixin, AngeeDataModel):
                     else:
                         material[key] = value
                 # EncryptedField's descriptor is not modeled by django-stubs.
-                row.material = self.encode_material(material)  # type: ignore[assignment]
+                row.material = self.encode_material(material)
                 row.save(update_fields=["material", "updated_at"])
             self.refresh_from_db(fields=["material", "updated_at"])
 
@@ -1402,11 +1422,13 @@ def _validated_manager_values(
         raise ValueError(f"Unknown {model.__name__} field(s): {names}")
     result = dict(values)
     if "status" in result:
-        result["status"] = model._meta.get_field("status").to_python(result["status"])
+        status_field = model._meta.get_field("status")
+        assert isinstance(status_field, models.Field)
+        result["status"] = status_field.to_python(result["status"])
     return result
 
 
-class VendorManager(AngeeManager):
+class VendorManager[VendorT: Vendor](AngeeManager[VendorT]):
     """Manager for the resource-seeded third-party catalogue."""
 
     def seeded(self, slug: str) -> Any:
@@ -1499,22 +1521,22 @@ class IntegrationRuntimeStatus(models.TextChoices):
             raise ValueError(f"Unsupported integration runtime status: {raw}") from error
 
 
-class IntegrationQuerySet(AngeeQuerySet[Any]):
+class IntegrationQuerySet[IntegrationT: Integration](AngeeQuerySet[IntegrationT]):
     """Chainable collection scopes for integration and bridge rows."""
 
-    def of_concrete_type(self) -> Any:
+    def of_concrete_type(self) -> Self:
         """Keep rows whose declared final MTI kind is this queryset's model."""
 
         return self.filter(concrete_type=ContentType.objects.get_for_model(self.model))
 
-    def ready_for_work(self) -> Any:
+    def ready_for_work(self) -> Self:
         """Exclude pending or unsuccessful discovery through one admission predicate."""
 
         return self.filter(discovery_retry_at__isnull=True).filter(
             Q(discovery_generation=0) | Q(discovery_completed_at__isnull=False),
         )
 
-    def due_for_enqueue(self, *, timestamp: datetime, stale_before: datetime) -> Any:
+    def due_for_enqueue(self, *, timestamp: datetime, stale_before: datetime) -> Self:
         """Return bridge rows due for a new queue attempt or stale recovery."""
 
         return self.ready_for_work().filter(
@@ -1526,7 +1548,7 @@ class IntegrationQuerySet(AngeeQuerySet[Any]):
             )
         )
 
-    def pending_discoveries(self, *, now: datetime) -> Any:
+    def pending_discoveries(self, *, now: datetime) -> Self:
         """Select due connection discovery, including paused rows."""
 
         return (
@@ -1544,7 +1566,7 @@ class IntegrationQuerySet(AngeeQuerySet[Any]):
         external_id: str,
         *,
         identity_key: str,
-    ) -> Any:
+    ) -> Self:
         """Return other rows retaining the same backend account claim."""
 
         return (
@@ -1559,12 +1581,12 @@ class IntegrationQuerySet(AngeeQuerySet[Any]):
             .order_by("pk")
         )
 
-    def with_concrete_children(self, *, actor: Any, exposed_model_labels: set[str]) -> Any:
+    def with_concrete_children(self, *, actor: Any, exposed_model_labels: set[str]) -> Self:
         """Prefetch installed and actor-readable MTI descendants in fixed queries."""
 
         prefetches: list[Prefetch] = []
 
-        def add_children(parent_model: type[models.Model], prefix: str = "") -> None:
+        def add_children(parent_model: type[Integration], prefix: str = "") -> None:
             for child_model in concrete_child_models(parent_model):
                 accessor = concrete_child_accessor(parent_model, child_model)
                 path = f"{prefix}__{accessor}" if prefix else accessor
@@ -1590,8 +1612,16 @@ class IntegrationQuerySet(AngeeQuerySet[Any]):
         return self.prefetch_related(*prefetches)
 
 
-class IntegrationManager(AngeeManager.from_queryset(IntegrationQuerySet)):  # type: ignore[misc]
-    """Manager for integration and bridge collection scopes."""
+_IntegrationManagerBase = AngeeManager.from_queryset(IntegrationQuerySet)
+
+
+class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[IntegrationT]):
+    """Keep a stable import identity for integration and bridge collection scopes."""
+
+    def get_queryset(self) -> IntegrationQuerySet[IntegrationT]:
+        """Preserve the configured queryset and model row type."""
+
+        return cast(IntegrationQuerySet[IntegrationT], super().get_queryset())
 
 
 def _save_lifecycle(instance: Integration, source: Any, target: Any, **kwargs: Any) -> None:
@@ -1640,7 +1670,10 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         if self.concrete_type_id is None:
             return None
-        return cast(type[Integration] | None, ContentType.objects.get_for_id(self.concrete_type_id).model_class())
+        model = ContentType.objects.get_for_id(self.concrete_type_id).model_class()
+        if model is not None:
+            assert issubclass(model, Integration)
+        return model
 
     @property
     def source_kind(self) -> SourceKind | None:
@@ -1672,10 +1705,10 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         return errors
 
     @classmethod
-    def concrete_child_models(cls) -> tuple[type[Integration], ...]:
+    def concrete_child_models(cls) -> tuple[type[Self], ...]:
         """Return installed direct children in stable model-label order."""
 
-        return cast(tuple[type[Integration], ...], concrete_child_models(cls))
+        return concrete_child_models(cls)
 
     @classmethod
     def concrete_child_cache_attr(cls, child_model: type[Integration], *, authorized: bool) -> str:
@@ -1684,7 +1717,9 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         scope = "authorized" if authorized else "integrity"
         return f"_angee_integration_child_{scope}_{child_model._meta.app_label}_{child_model._meta.model_name}"
 
-    def _concrete_child(self, model: type[Integration], *, actor: Any, authorized: bool) -> Integration | None:
+    def _concrete_child[ChildT: Integration](
+        self, model: type[ChildT], *, actor: Any, authorized: bool
+    ) -> ChildT | None:
         """Return one child from this row's collection cache or scoped storage."""
 
         queryset = (
@@ -1694,26 +1729,21 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         )
         if type(self) not in model._meta.parents:
             parent_model = next(iter(model._meta.parents))
-            parent = self._concrete_child(cast(type[Integration], parent_model), actor=actor, authorized=False)
+            assert issubclass(parent_model, Integration)
+            parent = self._concrete_child(parent_model, actor=actor, authorized=False)
             if parent is None:
                 return None
-            return cast(
-                Integration | None,
-                concrete_child(
-                    parent,
-                    model,
-                    queryset=queryset,
-                    cache_attr=type(self).concrete_child_cache_attr(model, authorized=authorized),
-                ),
-            )
-        return cast(
-            Integration | None,
-            concrete_child(
-                self,
+            return concrete_child(
+                parent,
                 model,
                 queryset=queryset,
                 cache_attr=type(self).concrete_child_cache_attr(model, authorized=authorized),
-            ),
+            )
+        return concrete_child(
+            self,
+            model,
+            queryset=queryset,
+            cache_attr=type(self).concrete_child_cache_attr(model, authorized=authorized),
         )
 
     def concrete_children(
@@ -1919,7 +1949,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             and not self.discovery_pending
         )
 
-    def lock_capability(self) -> Integration:
+    def lock_capability(self) -> Self:
         """Lock the final MTI row and its ancestors in the same order as bridge work.
 
         Call inside an atomic block. Parent-addressed verbs resolve the child
@@ -1931,7 +1961,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         target = self
         if self.declared_concrete_model() is not type(self):
             target = copy(self).sudo(reason="integrate.connection.lock_target").concrete_capability()
-        return cast(Integration, type(target).objects.lock_if_supported().get(pk=self.pk))
+        return type(target).objects.lock_if_supported().get(pk=self.pk)
 
     def resume(self) -> None:
         """Recheck Resume admission under the integration lock before connecting."""
@@ -1987,7 +2017,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         self.refresh_from_db(fields=["credential"])
         return cast(Credential | None, self.credential)
 
-    def concrete_capability(self) -> Integration:
+    def concrete_capability(self) -> Self:
         """Return the installed concrete child row for this integration, or itself.
 
         A parent-addressed action (the console targets ``integrate.Integration``
@@ -1999,12 +2029,12 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         actor, unscoped = self.effective_actor(strict=True)
         declared = self.declared_concrete_model()
         if declared is not None and declared is not type(self) and issubclass(declared, type(self)):
-            child = self._concrete_child(cast(type[Integration], declared), actor=actor, authorized=not unscoped)
+            child = self._concrete_child(declared, actor=actor, authorized=not unscoped)
             return child if child is not None else self
         for child_model in type(self).concrete_child_models():
             child = self._concrete_child(child_model, actor=actor, authorized=not unscoped)
             if child is not None:
-                return cast(Integration, child)
+                return child
         return self
 
     def probe_credential(self) -> str:
@@ -2074,7 +2104,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     last_used_status = models.CharField(max_length=64, blank=True)
     use_count_24h = models.PositiveIntegerField(default=0)
     error_count_24h = models.PositiveIntegerField(default=0)
-    last_error: str = DiagnosticTextField(blank=True)
+    last_error = DiagnosticTextField(blank=True)
     last_error_at = models.DateTimeField(null=True, blank=True)
     discovery_credential = models.ForeignKey(
         "integrate.Credential",
@@ -2177,13 +2207,15 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         """Attach connection rows and reset health, returning the fields changed."""
 
         fields: set[str] = set()
-        for name, value in (("credential", credential), ("account", account)):
+        for name, value, field in (
+            ("credential", credential, type(self).credential.field),
+            ("account", account, type(self).account.field),
+        ):
             if value is _UNSET:
                 continue
             if value is not None and value._state.adding:
                 setattr(self, name, value)
             else:
-                field = self._meta.get_field(name)
                 setattr(self, field.attname, None if value is None else value.pk)
                 if field.is_cached(self):
                     field.delete_cached_value(self)
@@ -2405,6 +2437,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                     error=IntegrationFailure(_DISCOVERY_RETRY_EXHAUSTED_MESSAGE),
                 )
             else:
+                assert row.discovery_retry_at is not None  # discovery_is_pending checked the persisted deadline.
                 row.discovery_retry_at = max(row.discovery_retry_at, timezone.now() + retry_after)
                 row.save(update_fields=["discovery_retry_at", "updated_at"])
         self.refresh_from_db()
@@ -2439,6 +2472,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                 result = discovery or ConnectionDiscovery()
                 row.apply_discovery(result)
                 if result.credential is not None:
+                    if credential_pk is None:
+                        raise IntegrationError("No credential is attached.")
                     source = apps.get_model("integrate", "Credential").objects.get(pk=credential_pk)
                     derived = result.credential
                     credential = type(source).objects.create_local_credential(
@@ -2487,6 +2522,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                 row = target.lock_capability()
                 if not row.discovery_is_pending(credential_pk, generation=generation):
                     return {"ok": False, "reason": "stale-discovery"}
+                assert row.discovery_retry_at is not None  # discovery_is_pending checked the persisted deadline.
                 if row.discovery_retry_at > timezone.now():
                     return {"ok": False, "reason": "deferred"}
                 if row.discovery_attempts >= DISCOVERY_ATTEMPT_LIMIT:
@@ -2500,9 +2536,10 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                 row.save(update_fields=["discovery_attempts", "updated_at"])
             target = row
             try:
-                if credential_pk is None:
+                credential = row.credential
+                if credential_pk is None or credential is None:
                     raise IntegrationError("No credential is attached.")
-                discovery = target.discover_connection(row.credential)
+                discovery = target.discover_connection(credential)
                 if not isinstance(discovery, ConnectionDiscovery):
                     raise IntegrationError("The adapter returned an invalid connection discovery result.")
                 applied = target.finish_discovery(
@@ -2635,6 +2672,11 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     on the child.
     """
 
+    requires_parent: ClassVar[str] = "integrate.Integration"
+
+    capability_impl: BridgeImpl
+    """The concrete integration supplies its selected bridge implementation."""
+
     class SyncStage(models.TextChoices):
         """Generic lifecycle stage for bridge sync jobs."""
 
@@ -2674,7 +2716,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     last_sync_items = models.PositiveIntegerField(default=0)
     sync_stage = StateField(choices_enum=SyncStage, max_length=32, default=SyncStage.IDLE, db_index=True)
     """Messaging channels keep their existing varchar(32) column on upgrade."""
-    sync_error: str = DiagnosticTextField(blank=True, default="")
+    sync_error = DiagnosticTextField(blank=True, default="")
     sync_run_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     """Opaque execution-owner run identity, retained after terminal settlement."""
     sync_progress = models.JSONField(default=dict, blank=True)
@@ -2693,7 +2735,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     def source_url(self, link: Any) -> str | None:
         """Delegate a retained remote identity URL to the selected connector."""
 
-        return cast(Any, self).capability_impl.source_url(link)
+        return self.capability_impl.source_url(link)
 
     @classmethod
     def live_implementation_field(cls) -> ImplClassField | None:
@@ -2920,8 +2962,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
             raise ValueError("A positive run identity is required.")
         expected_run_id = self.sync_run_id
         with system_context(reason="integrate.bridge.claim_dispatch"), transaction.atomic():
-            row = cast(Any, self).lock_capability()
-            if not cast(Any, row).discovery_ready:
+            row = self.lock_capability()
+            if not row.discovery_ready:
                 return False
             if row.sync_run_id != expected_run_id or (row.sync_run_id == run_id and row.sync_is_dispatched):
                 return False
@@ -2943,7 +2985,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         """Settle the expected busy dispatch once, retaining its inspection ID."""
 
         with system_context(reason="integrate.bridge.settle_dispatch"), transaction.atomic():
-            row = cast(Any, self).lock_capability()
+            row = self.lock_capability()
             if row.sync_run_id != run_id or not row.sync_is_dispatched:
                 return False
             at = now or timezone.now()
@@ -2973,7 +3015,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         """
 
         with system_context(reason="integrate.live.interrupted"), transaction.atomic():
-            row = cast(Any, self).lock_capability()
+            row = self.lock_capability()
             if (
                 row.lifecycle != row.Lifecycle.CONNECTED
                 or row.runtime_status != IntegrationRuntimeStatus.OK
@@ -3013,8 +3055,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         fields = ["last_sync_started_at", "sync_error", "sync_progress", "sync_stage"]
         with system_context(reason="integrate.bridge.start"), transaction.atomic():
-            row = cast(Any, self).lock_capability()
-            if not cast(Any, row).discovery_ready:
+            row = self.lock_capability()
+            if not row.discovery_ready:
                 return False
             if row.sync_stage == row.SyncStage.SYNCING and row.last_sync_started_at == now:
                 return True
@@ -3030,8 +3072,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         """Claim the next interval only after the connection is ready for work."""
 
         with system_context(reason="integrate.bridge.claim"), transaction.atomic():
-            row = cast(Any, self).lock_capability()
-            if not cast(Any, row).discovery_ready:
+            row = self.lock_capability()
+            if not row.discovery_ready:
                 return False
             row.next_sync_at = row._next_sync_at(now=now)
             row.save(update_fields=["next_sync_at", "updated_at"])
@@ -3042,8 +3084,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         """Persist that a worker task has been queued for this bridge."""
 
         with system_context(reason="integrate.bridge.queue"), transaction.atomic():
-            row = cast(Any, self).lock_capability()
-            if not cast(Any, row).discovery_ready:
+            row = self.lock_capability()
+            if not row.discovery_ready:
                 raise IntegrationError("Connection discovery must finish before syncing.")
             if not row.sync_is_dispatched:
                 row.sync_stage = self.SyncStage.QUEUED
@@ -3089,7 +3131,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         """
 
         with system_context(reason="integrate.bridge.release_sync_queue"), transaction.atomic():
-            row = cast(Any, self).lock_capability()
+            row = self.lock_capability()
             if not row.sync_queue_token_matches(now):
                 return False
             row.sync_stage = row.SyncStage.IDLE
@@ -3103,12 +3145,12 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         if not any(isinstance(field, ImplClassField) for field in self._meta.fields):
             return False
-        return cast(Any, self).capability_impl_class.requires_connection_discovery
+        return self.capability_impl_class.requires_connection_discovery
 
     def discover_connection(self, credential: Credential) -> ConnectionDiscovery:
         """Invoke the adapter's read-only remote hook outside a transaction."""
 
-        adapter = cast(Any, self).capability_impl
+        adapter = self.capability_impl
         try:
             return adapter.discover_connection(credential)
         finally:
@@ -3117,11 +3159,11 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
         """Compose the domain's database apply hook under the integration-owned fence."""
 
-        if not cast(Any, self).requires_connection_discovery:
+        if not self.requires_connection_discovery:
             if discovery.data or discovery.credential is not None:
                 raise IntegrationError("This bridge does not accept connection discovery results.")
             return
-        adapter = cast(Any, self).capability_impl
+        adapter = self.capability_impl
         try:
             adapter.apply_discovery(discovery)
         finally:
@@ -3132,9 +3174,9 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         self.next_sync_at = None
         self.save(update_fields=["next_sync_at", "updated_at"])
-        if not cast(Any, self).requires_connection_discovery:
+        if not self.requires_connection_discovery:
             return
-        impl = cast(Any, self).capability_impl_class
+        impl = self.capability_impl_class
         if issubclass(impl, LiveBridgeImpl):
             self.update_live_state(identity_key=impl.state_identity_key, desired=self.LiveState.STOPPED)
 
@@ -3164,7 +3206,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         }
         with transaction.atomic():
             # Credential attachment may have started discovery during extraction.
-            cast(Any, self).lock_capability()
+            self.lock_capability()
             self.refresh_from_db(
                 fields=[
                     "discovery_retry_at",
@@ -3174,8 +3216,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                 ]
             )
             self.next_sync_at = self._next_sync_at(now=now)
-            if cast(Any, self).discovery_ready:
-                cast(Any, self).report_status(status=IntegrationRuntimeStatus.OK)
+            if self.discovery_ready:
+                self.report_status(status=IntegrationRuntimeStatus.OK)
             self.save(
                 update_fields=[
                     "cursor",
@@ -3199,7 +3241,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         self.sync_error = error_message
         self.sync_progress = self._sync_marker(stage=self.SyncStage.FAILED, error=error_message)
         with transaction.atomic():
-            cast(Any, self).lock_capability()
+            self.lock_capability()
             self.refresh_from_db(
                 fields=[
                     "discovery_retry_at",
@@ -3211,8 +3253,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
             self.next_sync_at = self._next_sync_at(now=now)
             if self.next_sync_at is not None and isinstance(error, IntegrationError) and error.retry_after is not None:
                 self.next_sync_at = max(self.next_sync_at, max(now, timezone.now()) + error.retry_after)
-            if cast(Any, self).discovery_ready:
-                cast(Any, self).report_status(status=IntegrationRuntimeStatus.ERROR, error=failure)
+            if self.discovery_ready:
+                self.report_status(status=IntegrationRuntimeStatus.ERROR, error=failure)
             self.save(
                 update_fields=[
                     "next_sync_at",
@@ -3248,7 +3290,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         """
 
         with system_context(reason="integrate.bridge.clear_sync_error"), transaction.atomic():
-            row = cast(Any, self).lock_capability()
+            row = self.lock_capability()
             progress = row.sync_progress if isinstance(row.sync_progress, Mapping) else {}
             if not row.sync_error and row.sync_stage != row.SyncStage.FAILED and "error" not in progress:
                 return
@@ -3318,7 +3360,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         if connection.in_atomic_block:
             raise IntegrationError("Inbound dispatch requires autocommit.")
         with system_context(reason="integrate.inbound.capability"):
-            capability = cast(Any, self).concrete_capability()
+            capability = self.concrete_capability()
         if not capability.verify_webhook(request_or_payload):
             return False
         with bridge_advisory_lock(capability) as acquired:
@@ -3350,7 +3392,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         saves through the shared nested-JSON owner.
         """
 
-        return merge_json_state(cast(Any, self), "subscription_state", values)
+        return merge_json_state(self, "subscription_state", values)
 
     def _next_sync_at(self, *, now: datetime) -> datetime | None:
         """Return the next polling timestamp from this bridge's interval.
@@ -3362,13 +3404,13 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         if (
             IntegrationLifecycle.from_value(self.lifecycle) is not IntegrationLifecycle.CONNECTED
-            or not cast(Any, self).discovery_ready
+            or not self.discovery_ready
         ):
             return None
         return now + timedelta(seconds=int(self.poll_interval))
 
 
-class WebhookSubscriptionManager(AngeeManager):
+class WebhookSubscriptionManager[WebhookSubscriptionT: WebhookSubscription](AngeeManager[WebhookSubscriptionT]):
     """Manager for webhook subscriptions."""
 
     def enqueue_event(
@@ -3476,7 +3518,7 @@ class WebhookSubscription(OwnerMixin, AngeeDataModel):
     enabled = models.BooleanField(default=True, db_index=True)
     last_delivery_at = models.DateTimeField(null=True, blank=True)
     last_delivery_status = models.CharField(max_length=64, blank=True, default="")
-    last_error: str = DiagnosticTextField(blank=True, default="")
+    last_error = DiagnosticTextField(blank=True, default="")
     consecutive_failures = models.PositiveIntegerField(default=0)
 
     objects = WebhookSubscriptionManager()
@@ -3571,7 +3613,7 @@ class WebhookSubscription(OwnerMixin, AngeeDataModel):
         """
 
         new_secret = secrets.token_urlsafe(32)
-        self.secret = new_secret  # type: ignore[assignment]  # EncryptedField descriptor unmodeled by django-stubs
+        self.secret = new_secret
         self.save(update_fields=["secret", "updated_at"])
         return new_secret
 
@@ -3601,7 +3643,7 @@ class WebhookSubscription(OwnerMixin, AngeeDataModel):
         self.refresh_from_db(fields=("consecutive_failures",))
 
 
-class SyncStreamManager(AngeeManager):
+class SyncStreamManager[SyncStreamT: SyncStream](AngeeManager[SyncStreamT]):
     """Serialize stream discovery and epoch changes on the integration row."""
 
     def lock_current(self, stream: Any, *, fenced_to: Any = None) -> Any:
@@ -3660,7 +3702,7 @@ class SyncStreamManager(AngeeManager):
 
         if definition.absence_threshold < 1:
             raise ValidationError("A stream absence threshold must be positive.")
-        integration_model = self.model._meta.get_field("integration").remote_field.model
+        integration_model = self.model.integration.field.related_model
         if bridge._meta.proxy or integration_model not in bridge._meta.get_parent_list():
             raise ValidationError("A stream bridge must be a concrete Integration child.")
         with system_context(reason="integrate.stream.current"), transaction.atomic():
@@ -3756,9 +3798,7 @@ class SyncStreamManager(AngeeManager):
                     linked = reference.model._base_manager.filter(
                         **{f"{reference.name}__stream": latest}, superseded__isnull=True
                     )
-                    subject_ids = linked.order_by("subject_id").values_list(
-                        "subject_id", flat=True
-                    ).distinct()
+                    subject_ids = linked.order_by("subject_id").values_list("subject_id", flat=True).distinct()
                     derivations.append((reference.model, reference.model.statement_subject_model, subject_ids))
                 latest.authoritative = authoritative
                 latest.save(update_fields=["authoritative", "updated_at"])
@@ -3928,7 +3968,7 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel):
         )
 
 
-class RecordLinkQuerySet(AngeeQuerySet[Any]):
+class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeQuerySet[RecordLinkT]):
     """Load comparison evidence for a bounded collection of replica identities."""
 
     def with_sync_evidence(self) -> Self:
@@ -3985,8 +4025,16 @@ class RecordLinkQuerySet(AngeeQuerySet[Any]):
         return tuple(row for aggregate, row in candidates if aggregate not in conflicts)[:limit]
 
 
-class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type: ignore[misc]
+_RecordLinkManagerBase = AngeeManager.from_queryset(RecordLinkQuerySet)
+
+
+class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLinkT]):
     """Own replica identity, applied bases and count-based absence policy."""
+
+    def get_queryset(self) -> RecordLinkQuerySet[RecordLinkT]:
+        """Preserve the configured queryset and model row type."""
+
+        return cast(RecordLinkQuerySet[RecordLinkT], super().get_queryset())
 
     def observe(
         self,
@@ -4346,9 +4394,9 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
 
         source = self.asserting_source()
         statements = [
-            reference
+            (reference, statement_model)
             for reference in references(type(self))
-            if issubclass(reference.model, Statement) and reference.columns == ("link",)
+            if issubclass(statement_model := reference.model, Statement) and reference.columns == ("link",)
         ]
         observing = (
             type(self)
@@ -4367,11 +4415,11 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
         sibling = next((link for link in observing if link.asserting_source() == source), None) if targeted else None
         if sibling is None:
             return sum(
-                reference.model.objects.db_manager(self._state.db).withdraw(source, link=self)
-                for reference in statements
+                statement_model.objects.db_manager(self._state.db).withdraw(source, link=self)
+                for _reference, statement_model in statements
             )
         with system_context(reason="integrate.link_evidence_move"):
-            for reference in statements:
+            for reference, _statement_model in statements:
                 rows = reference.rows(self).using(self._state.db).filter(asserted_by=str(source))
                 if rows.exists():
                     reference.move(rows, survivor=sibling)

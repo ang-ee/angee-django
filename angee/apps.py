@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from django.apps import AppConfig
 from django.core import checks
+from django.db import models
 
 
 class BaseConfig(AppConfig):
@@ -39,14 +40,14 @@ class BaseConfig(AppConfig):
             dispatch_uid="angee.record_refs.target_delete",
         )
 
-        def bind_late_cleanup_edge(sender: type, **_kwargs: object) -> None:
+        def bind_late_cleanup_edge(sender: type[models.Model], **_kwargs: object) -> None:
             """Bind targets prepared before a composed cleanup edge existed."""
 
             if (
                 sender._meta.abstract
                 or sender._meta.apps is not apps
                 or not issubclass(sender, RecordRefMixin)
-                or not callable(getattr(sender, "teardown_for_target", None))
+                or sender.teardown_for_target is None
             ):
                 return
             for model in apps.get_models():

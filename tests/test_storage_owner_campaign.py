@@ -10,7 +10,7 @@ from rebac.relationships import delete_relationships, write_relationships
 from rebac.types import RelationshipFilter
 
 from angee.storage.models import FileVisibility
-from tests.conftest import File, Folder, create_platform_admin, create_user
+from tests.conftest import Drive, File, Folder, create_platform_admin, create_user
 from tests.storage_campaign import relationship_storage as relationship_storage
 from tests.test_storage import PNG_BYTES, PNG_SHA256, _proxy_upload
 from tests.test_storage import drive as drive
@@ -94,12 +94,16 @@ def test_platform_admin_can_transfer_storage_ownership(drive: Any, kind: str) ->
     assert (row.owner_id, row.created_by_id) == (recipient.pk, drive.alice.pk)
 
 
-def test_protected_release_only_clears_selected_owner_and_never_regrants(drive: Any) -> None:
+@pytest.mark.parametrize("kind", ["drive", "file"])
+def test_protected_release_only_clears_selected_owner_and_never_regrants(drive: Any, kind: str) -> None:
     author = create_user("released-author")
     other = create_user("retained-owner")
     with system_context(reason="test.storage.release.seed"):
         rows = [
-            File.objects.create(
+            Drive.objects.create(
+                backend=drive.backend, slug=f"release-{index}", name=f"Volume {index}", prefix=f"release/{index}",
+                owner=owner, created_by=owner,
+            ) if kind == "drive" else File.objects.create(
                 drive=drive, filename=f"{index}.txt", content_hash=f"{index:064x}",
                 owner=owner, created_by=owner, visibility=FileVisibility.RECORD,
             )
@@ -107,12 +111,13 @@ def test_protected_release_only_clears_selected_owner_and_never_regrants(drive: 
         ]
     with actor_context(drive.alice):
         assert drive.with_actor(drive.alice).has_access("share")
-        assert File.objects.filter(pk__in=[rows[0].pk, rows[2].pk]).release(author) == 1
+        assert type(rows[0]).objects.filter(pk__in=[rows[0].pk, rows[2].pk]).release(author) == 1
     with system_context(reason="test.storage.release.inspect"):
         for row in rows:
             row.refresh_from_db()
-        rows[0].title = "Retained audit row"
-        rows[0].save(update_fields=["title"])
+        field = "name" if kind == "drive" else "title"
+        setattr(rows[0], field, "Retained audit row")
+        rows[0].save(update_fields=[field])
         rows[0].refresh_from_db()
     assert [(row.owner_id, row.created_by_id) for row in rows] == [
         (None, author.pk), (author.pk, author.pk), (other.pk, other.pk),

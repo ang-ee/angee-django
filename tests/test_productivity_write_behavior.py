@@ -80,7 +80,7 @@ class RoutingPipelineStage(OrderedStage):
         app_label = "tests"
 
 
-class RoutingStageRecord(StagedModelMixin, models.Model):
+class RoutingStageRecord(StagedModelMixin[RoutingPipelineStage], models.Model):
     """A record whose stage and container IDs can both be deferred."""
 
     stage_container_field_name = "container"

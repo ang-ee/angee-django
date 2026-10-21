@@ -6,6 +6,7 @@ from typing import Any, get_args
 
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
+from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.utils.choices import flatten_choices
 from strawberry.types import get_object_definition
 from strawberry.types.base import StrawberryList, StrawberryOptional
@@ -504,7 +505,7 @@ def _graphql_scalar(value: object, *, kind: str, field_name: str, node_name: str
 
 
 def _field_enum_values(
-    field: models.Field[Any, Any] | None,
+    field: models.Field[Any, Any] | ForeignObjectRel | None,
     value: object,
 ) -> tuple[data_contract.DataResourceEnumValueMetadata, ...]:
     """Project selector options from the final enum or a string field's Django choices."""
@@ -522,14 +523,17 @@ def _field_enum_values(
                 )
             )
         return tuple(result)
-    if field is None or not getattr(field, "choices", None):
+    if not isinstance(field, models.Field) or not field.choices:
         return ()
+    choices: list[tuple[object, object]] = list(
+        flatten_choices(field.get_choices(include_blank=field.blank, blank_choice=[("", "")]))
+    )
     return tuple(
         data_contract.DataResourceEnumValueMetadata(
             value=str(raw),
             description=str(label) if str(label).strip() else None,
         )
-        for raw, label in flatten_choices(field.get_choices(include_blank=field.blank, blank_choice=[("", "")]))
+        for raw, label in choices
     )
 
 
@@ -602,7 +606,7 @@ def _validate_resource_field(model_label: str, field: data_contract.DataResource
 
 
 def _relation_model_label(
-    field: models.Field[Any, Any] | None,
+    field: models.Field[Any, Any] | ForeignObjectRel | None,
 ) -> str | None:
     if field is None or not field.is_relation:
         return None
@@ -660,7 +664,7 @@ def _selection_surface(value: object) -> tuple[object, bool]:
     return value, is_list
 
 
-def _field_choice_labels(field: models.Field[Any, Any] | None) -> dict[str, str]:
+def _field_choice_labels(field: models.Field[Any, Any] | ForeignObjectRel | None) -> dict[str, str]:
     """Return a stored-value -> human-label map for an enum-backed field, or empty.
 
     An ``ImplClassField`` owns registry labels keyed by impl key; any other
@@ -677,7 +681,9 @@ def _field_choice_labels(field: models.Field[Any, Any] | None) -> dict[str, str]
     return {str(member.value): str(member.label) for member in choices_enum}
 
 
-def _model_field_or_none(model: type[models.Model] | None, name: str) -> models.Field[Any, Any] | None:
+def _model_field_or_none(
+    model: type[models.Model] | None, name: str,
+) -> models.Field[Any, Any] | ForeignObjectRel | None:
     """Return a Django model field for ``name`` when one owns that GraphQL field."""
 
     if model is None:

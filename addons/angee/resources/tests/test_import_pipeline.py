@@ -118,7 +118,7 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
             abstract = False
 
     user_model = get_user_model()
-    rows = [
+    rows: list[dict[str, Any]] = [
         {"model": "base.PipelineTag", "_xref": "tag", "fields": {"name": "tag"}},
         {"model": user_model._meta.label, "_xref": "user", "fields": {"username": "pipeline-user", "password": "!"}},
         {

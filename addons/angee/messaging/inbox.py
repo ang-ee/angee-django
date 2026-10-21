@@ -278,6 +278,8 @@ class MessageInbox:
                 raise ValueError("Handle unavailable.")
             rows = self.involving_handles(rows, self.handles.filter(pk=handle.pk))
         if search.starred:
+            if self.user_id is None:
+                return rows.none()
             stars = apps.get_model("messaging", "MessageStar").objects.filter(user_id=self.user_id)
             rows = rows.filter(pk__in=Subquery(stars.values("message_id")))
         parts = self.parts.filter(message_id=OuterRef("pk"))

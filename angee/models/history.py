@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime
 from itertools import groupby
-from typing import Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -14,16 +14,19 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import models, transaction
 from django.db.models import F, Q
+from django.db.models.base import ModelBase
+from django.db.models.fields.reverse_related import ManyToOneRel
 from django.utils import timezone
 from rebac import (
     PermissionDenied,
+    RebacMixin,
     SubjectRef,
     system_context,
 )
 from rebac.actors import is_sudo
 from rebac.errors import SchemaError
 from rebac.field_backing import resolve_field_backing
-from rebac.field_visibility import gated_read_fields
+from rebac.field_visibility import gated_read_fields, redacted_fields
 from rebac.resources import model_resource_type
 from rebac.schema import ConstBinding, FieldBinding
 from simple_history.manager import HistoryManager
@@ -40,15 +43,15 @@ from angee.models.trash import TrashMixin
 _UNLOADED = object()
 
 
-class ChangesetQuerySet(AngeeQuerySet[Any]):
+class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T]):
     """Changeset scopes derived from the history contracts of records they touch."""
 
-    def touching(self, record: HistoryMixin) -> models.QuerySet[Any]:
+    def touching(self, record: HistoryMixin) -> Self:
         """Return changesets belonging to ``record``'s declared history document."""
 
         using = record._state.db
         rows = [
-            table.history.using(using)
+            get_history_manager_for_model(table).using(using)
             .filter(predicate, changeset_id__isnull=False)
             .order_by()
             .values_list("changeset_id", flat=True)
@@ -93,7 +96,7 @@ class ChangesetQuerySet(AngeeQuerySet[Any]):
         def touched_ids(table: type[models.Model], column: str) -> set[Any]:
             key = table, column
             if key not in identities:
-                identities[key] = set(table.history.using(self.db).filter(
+                identities[key] = set(get_history_manager_for_model(table).using(self.db).filter(
                     changeset_id__in=boundaries,
                 ).order_by().values_list(column, flat=True))
             return identities[key]
@@ -116,7 +119,7 @@ class ChangesetQuerySet(AngeeQuerySet[Any]):
                     elif subjects:
                         # Deleted/moved owned rows still identify every document
                         # their statements belong to through retained snapshots.
-                        history = table.history.using(self.db).filter(**{
+                        history = get_history_manager_for_model(table).using(self.db).filter(**{
                             f"{table._meta.pk.attname}__in": subjects,
                         })
                         for column in columns:
@@ -211,14 +214,14 @@ class ModelHistory(HistoricalRecords):
         if declaration is not self:
             return
         super().finalize(sender, **kwargs)
-        sender._meta.angee_model_history = self
+        setattr(sender._meta, "angee_model_history", self)
         pre_create_historical_record.connect(
             self.set_changeset,
             sender=get_history_manager_for_model(sender).model,
             weak=False,
         )
 
-    def set_changeset(self, instance: models.Model, history_instance: models.Model, **kwargs: Any) -> None:
+    def set_changeset(self, instance: models.Model, history_instance: _ChangesetHistory, **kwargs: Any) -> None:
         """Bind attribution after native construction and before the history save."""
 
         history_instance.changeset = current_changeset(required=True, record=True)
@@ -227,7 +230,7 @@ class ModelHistory(HistoricalRecords):
         """Derive the user FK from the changeset's native subject, without a lookup."""
 
         context = current_changeset()
-        actor = SubjectRef.parse(context.actor) if context is not None and context.actor else None
+        actor = SubjectRef.parse(context.actor_ref) if context is not None and context.actor_ref else None
         user_id = actor_user_id(actor)
         return get_user_model()(pk=user_id) if user_id is not None else None
 
@@ -353,7 +356,7 @@ class ModelHistory(HistoricalRecords):
         if row is _UNLOADED:
             row = model.objects.with_actor(actor).with_action("read").using(using).filter(pk=target.pk).first()
         if row is not None:
-            return row.redacted_fields()
+            return redacted_fields(row)
         hidden = frozenset(field.name for field in model._meta.concrete_fields)
         if retained is _UNLOADED:
             retained = model._base_manager.using(using).filter(pk=target.pk).exists()
@@ -553,20 +556,20 @@ class ModelHistory(HistoricalRecords):
                 group.seen.remove(key)
                 return
             current_changeset(required=True, record=True)
-            alias = instance._state.db
+            alias = model._base_manager.db_manager(hints={"instance": instance}).db
             names = [field.attname for field in self.fields_included(model)]
             try:
                 snapshot = model._base_manager.using(alias).only(*names).get(pk=instance.pk)
-            except model.DoesNotExist as error:
+            except ObjectDoesNotExist as error:
                 if history_type == "-":
                     # Django's collector sends pre_delete for every collected row before
                     # deleting any; a receiver on an earlier row (messaging's chatter
                     # teardown) may already have deleted this one through its own capturing
                     # delete, which wrote the "-" snapshot. Nothing is left to capture.
                     return
-                raise model.DoesNotExist(f"Cannot capture missing {model._meta.label} row {instance.pk!r}.") from error
+                raise type(error)(f"Cannot capture missing {model._meta.label} row {instance.pk!r}.") from error
             if hasattr(instance, "_history_date"):
-                snapshot._history_date = instance._history_date
+                setattr(snapshot, "_history_date", instance._history_date)
             super().create_historical_record(snapshot, history_type, using=alias)
             history_manager = get_history_manager_for_model(model)
             history_using = alias if self.use_base_model_db else history_manager.db
@@ -623,18 +626,16 @@ class ModelHistory(HistoricalRecords):
         fields = super().copy_fields(model)
         for name, field in fields.items():
             source = model._meta.get_field(name)
-            if (
-                model._meta.apps is not apps
-                and isinstance(field, models.ForeignKey)
-                and isinstance(source.remote_field.model, type)
-                and cast(Any, source.remote_field.model)._meta.apps is apps
-            ):
-                field.remote_field.model = source.remote_field.model
-                field.remote_field.field_name = source.target_field.name
-            if source.remote_field is None or not source.auto_created or not source.remote_field.parent_link:
+            if not isinstance(source, models.ForeignKey):
                 continue
-            field.auto_created = False
-            field.remote_field.parent_link = False
+            assert isinstance(field, models.ForeignKey)
+            related = source.remote_field.model
+            if model._meta.apps is not apps and isinstance(related, type) and related._meta.apps is apps:
+                field.remote_field.model = related
+                field.remote_field.field_name = source.target_field.name
+            if source.auto_created and source.remote_field.parent_link:
+                field.auto_created = False
+                field.remote_field.parent_link = False
         return fields
 
     def fields_included(self, model: type[models.Model]) -> list[models.Field]:
@@ -652,6 +653,9 @@ class HistoryMixin(models.Model):
     """Track concrete models through django-simple-history's inherited descriptor."""
 
     history = ModelHistory(inherit=True)
+    if TYPE_CHECKING:
+        save_without_historical_record = models.Model.save
+
     history_revert_permission: ClassVar[str] = "write"
     """Permission admitting replay; immutable edges use their unlink/relink authority."""
     history_relations: ClassVar[tuple[str, ...]] = ()
@@ -678,9 +682,10 @@ class HistoryMixin(models.Model):
         }
         for name in self.history_relations:
             relation = self._meta.get_field(name)
-            if not relation.one_to_many or relation.field.remote_field.parent_link:
+            if not isinstance(relation, ManyToOneRel) or relation.field.remote_field.parent_link:
                 raise ImproperlyConfigured(f"{self._meta.label}.{name}: history requires an owned reverse FK.")
             child = relation.related_model
+            assert child is not None
             if model_history(child) is None:
                 raise ImproperlyConfigured(f"{child._meta.label}: an owned history relation must keep history.")
             columns[child] = (*columns.get(child, ()), relation.field.attname)
@@ -713,7 +718,9 @@ class HistoryMixin(models.Model):
             statement_models = getattr(model, "statement_models", None)
             if statement_models is None:
                 continue
-            subjects = model.history.using(self._state.db).filter(predicate).values(model._meta.pk.attname)
+            subjects = get_history_manager_for_model(model).using(self._state.db).filter(predicate).values(
+                model._meta.pk.attname,
+            )
             subject_scope = (
                 Q(subject_id=self.pk)
                 if model in tables
@@ -791,6 +798,8 @@ class HistoryMixin(models.Model):
         admitted = self.admitted_reverts(changesets)
         if not admitted:
             return admitted
+        if not isinstance(self, RebacMixin):
+            raise ImproperlyConfigured("History replay admission requires RebacMixin.")
         if actor is not None:
             self.with_actor(actor)
         return admitted if self.has_access(self.history_revert_permission) else frozenset()
@@ -801,7 +810,7 @@ class HistoryMixin(models.Model):
     def save_base(
         self,
         raw: bool = False,
-        force_insert: bool | tuple[type[models.Model], ...] = False,
+        force_insert: bool | tuple[ModelBase, ...] = False,
         force_update: bool = False,
         using: str | None = None,
         update_fields: Iterable[str] | None = None,

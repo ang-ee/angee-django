@@ -47,7 +47,7 @@ def prepend_import_paths(paths: Iterable[Path]) -> None:
     package = sys.modules.get("angee")
     package_path = getattr(package, "__path__", None)
     portions = tuple(str(path / "angee") for path in import_paths if (path / "angee").is_dir())
-    if package_path is not None and portions:
+    if package is not None and package_path is not None and portions:
         package.__path__ = list(dict.fromkeys((*portions, *(str(path) for path in package_path))))
 
 

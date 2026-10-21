@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any, Self, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -43,8 +43,11 @@ from angee.resources.loader import (
 from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.widgets import is_xref, resolve_xref, split_xref
 
+if TYPE_CHECKING:
+    from angee.resources.models import Resource
 
-class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
+
+class ResourceQuerySet[LedgerT: Resource](AngeeUnscopedQuerySet[LedgerT]):
     """Reusable filtered reads over resource-ledger rows."""
 
     def counts_by_addon(self) -> dict[str, int]:
@@ -56,13 +59,13 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
                 for row in self.values("source_addon").annotate(count=models.Count("id"))
             }
 
-    def ledger_page(self, *, limit: int) -> list[Any]:
+    def ledger_page(self, *, limit: int) -> list[LedgerT]:
         """Return up to ``limit`` ledger rows in the queryset's declared order."""
 
         with system_context(reason="resources.ledger_page"):
             return list(self.all()[:limit])
 
-    def seeding(self, record: models.Model) -> ResourceQuerySet:
+    def seeding(self, record: models.Model) -> Self:
         """Return the ledger rows whose target is ``record``, by its model label and public id."""
 
         return self.filter(target_model=record._meta.label, target_id=public_id_of(record))
@@ -122,8 +125,16 @@ def seeded_record_merge_guard(record: models.Model) -> str | None:
     return f"{record} is loaded from {ledger.source_addon} resources, which would recreate it; keep it instead."
 
 
-class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # type: ignore[misc]
+_ResourceManagerBase = AngeeUnscopedManager.from_queryset(ResourceQuerySet)
+
+
+class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
     """Orchestrate selected addon resources independently of ledger row filters."""
+
+    def get_queryset(self) -> ResourceQuerySet[LedgerT]:
+        """Retain the configured ledger queryset and concrete row type."""
+
+        return cast(ResourceQuerySet[LedgerT], super().get_queryset())
 
     def resolve(self, handle: str, *, model: type[models.Model] | None = None) -> models.Model:
         """Resolve a ledger handle under the current actor, optionally checking its type."""
@@ -275,6 +286,8 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                         resolved, _ = resource.resolve_existing(((selected.dataset, resource),))
                     resolution = resolved.get((resource, xref))
                     if resolution is not None and resolution.instance is not None:
+                        if not isinstance(resolution.instance, model):
+                            raise ResourceLoadError(f"Resource {handle!r} did not produce {model._meta.label}.")
                         actor = resolution.instance.require_access("write", actor)
                     self._import_groups(
                         (group.entry,),

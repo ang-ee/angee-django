@@ -3,34 +3,44 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, Self, cast
 from zoneinfo import ZoneInfo
 
 from django.db import models, transaction
 from django.utils import timezone
-from rebac.managers import RebacManager
 
 from angee.models import AngeeManager, AngeeQuerySet
 
+if TYPE_CHECKING:
+    from angee.posts.models import FeedFollow, PostMetrics, Quota
 
-class FeedFollowQuerySet(AngeeQuerySet[Any]):
+
+class FeedFollowQuerySet[FollowT: FeedFollow](AngeeQuerySet[FollowT]):
     """REBAC-scoped read scopes for the following/timeline edge."""
 
-    def active(self) -> FeedFollowQuerySet:
+    def active(self) -> Self:
         """Return open follows (never ended)."""
 
-        return cast(FeedFollowQuerySet, self.filter(ended_at__isnull=True))
+        return self.filter(ended_at__isnull=True)
 
-    def for_feed(self, feed: Any) -> FeedFollowQuerySet:
+    def for_feed(self, feed: Any) -> Self:
         """Return the follows subscribed to a given feed."""
 
-        return cast(FeedFollowQuerySet, self.filter(feed=feed))
+        return self.filter(feed=feed)
 
 
-class FeedFollowManager(RebacManager.from_queryset(FeedFollowQuerySet)):  # type: ignore[misc]
+_FeedFollowManagerBase = AngeeManager.from_queryset(FeedFollowQuerySet)
+
+
+class FeedFollowManager[FollowT: FeedFollow](_FeedFollowManagerBase[FollowT]):
     """Owns the follow/unfollow writes over the ``(feed, handle)`` subscription."""
 
-    def follow(self, *, feed: Any, handle: Any) -> Any:
+    def get_queryset(self) -> FeedFollowQuerySet[FollowT]:
+        """Preserve the configured queryset and follow row type."""
+
+        return cast(FeedFollowQuerySet[FollowT], super().get_queryset())
+
+    def follow(self, *, feed: Any, handle: Any) -> FollowT:
         """Open (or re-open) the follow of ``feed`` by ``handle``; idempotent."""
 
         follow, created = self.get_or_create(
@@ -52,10 +62,10 @@ class FeedFollowManager(RebacManager.from_queryset(FeedFollowQuerySet)):  # type
         )
 
 
-class PostMetricsManager(AngeeManager):
+class PostMetricsManager[MetricsT: PostMetrics](AngeeManager[MetricsT]):
     """Owns the one-to-one engagement-counter upsert for a message."""
 
-    def upsert(self, *, message: Any, metrics: Any, created_by_id: Any = None) -> Any:
+    def upsert(self, *, message: Any, metrics: Any, created_by_id: Any = None) -> MetricsT:
         """Write the rolled-up engagement counters for ``message`` (idempotent).
 
         ``metrics`` is a :class:`~angee.posts.backends.ParsedMetrics`. Counters are a
@@ -80,7 +90,7 @@ class PostMetricsManager(AngeeManager):
         return row
 
 
-class QuotaManager(AngeeManager):
+class QuotaManager[QuotaT: Quota](AngeeManager[QuotaT]):
     """Owns the API-unit ledger: opening a period and atomic consumption.
 
     A backend calls :meth:`consume` before spending platform API units; enforcement is
@@ -89,8 +99,13 @@ class QuotaManager(AngeeManager):
     """
 
     def open_period(
-        self, *, integration: Any, now: datetime | None = None, scope: str, reset_timezone: str = "UTC",
-    ) -> Any:
+        self,
+        *,
+        integration: Any,
+        now: datetime | None = None,
+        scope: str,
+        reset_timezone: str = "UTC",
+    ) -> QuotaT:
         """Open the backend's daily scope at midnight in its declared reset timezone.
 
         A scope must include the provider namespace and its true budget identity
@@ -111,7 +126,13 @@ class QuotaManager(AngeeManager):
         return row
 
     def consume(
-        self, *, period: Any, units: int, limit: int, now: datetime | None = None, reserve: int = 0,
+        self,
+        *,
+        period: Any,
+        units: int,
+        limit: int,
+        now: datetime | None = None,
+        reserve: int = 0,
     ) -> bool:
         """Atomically debit an already opened period; ``False`` if it would exceed.
 

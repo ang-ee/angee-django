@@ -19,6 +19,7 @@ from django.db.models import (
     When,
     Window,
 )
+from django.db.models.expressions import BaseExpression
 from django.db.models.functions import Coalesce
 from pydantic import BaseModel, ConfigDict
 
@@ -133,6 +134,7 @@ class InboxGroups:
                 {**row, "_label": labels.get(row["_bucket"], self.empty_label)} for row in headers[window]
             ]
         else:
+            label: BaseExpression | F
             if self.objects is not None:
                 label = Subquery(self.objects.filter(pk=OuterRef("_bucket")).values(self.label_field)[:1])
             elif self.label_expression is not None:

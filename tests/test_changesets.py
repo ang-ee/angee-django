@@ -74,7 +74,7 @@ def test_main_attributes_a_command_to_one_closed_changeset(
     manage.main(["manage.py", command])
     (context,) = changesets()
     assert changeset_of(OwnedRow.system_queryset().get()) == context
-    assert (context.change_reason, context.activity, context.actor) == (f"manage.{command}", "system", "")
+    assert (context.change_reason, context.activity, context.actor_ref) == (f"manage.{command}", "system", "")
     assert (context.state, context.outcome) == ("closed", "success")
 
 
@@ -206,7 +206,7 @@ def test_each_actor_under_one_boundary_records_its_own_changeset() -> None:
     by_title = {row.title: changeset_of(row) for row in OwnedRow.system_queryset()}
     assert by_title["alice"] == by_title["alice-again"]
     assert len({context.pk for context in by_title.values()}) == 3
-    assert {title: context.actor for title, context in by_title.items()} == {
+    assert {title: context.actor_ref for title, context in by_title.items()} == {
         "system": "",
         "alice": str(to_subject_ref(alice)),
         "alice-again": str(to_subject_ref(alice)),

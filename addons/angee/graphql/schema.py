@@ -19,7 +19,6 @@ from django.utils.functional import cached_property
 from rebac import MissingActorError, PermissionDenied
 from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
-from rebac.managers import RebacManager
 from rebac.resources import model_resource_type
 from strawberry.schema.schema_converter import GraphQLCoreConverter
 from strawberry.tools import merge_types
@@ -48,6 +47,7 @@ from angee.graphql.introspection import (
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.models import StaleRevisionError
+from angee.permissions import require_rebac_queryset
 from graphql import GraphQLError, GraphQLObjectType, GraphQLSchema, assert_input_type, coerce_input_value
 
 DEFAULT_SCHEMA_NAME = "public"
@@ -480,7 +480,7 @@ class GraphQLSchemas:
         query = self._merge_root(name, "query", parts.query)
         if query is None:
             raise ImproperlyConfigured(f"GraphQL schema {name!r} has no query root")
-        self._assert_rebac_managers(name, types)
+        self._assert_rebac_querysets(types)
         assert_unique_sqid_prefixes(types)
         self._describe_choice_enums(types)
         schema = AngeeSchema(
@@ -579,9 +579,8 @@ class GraphQLSchemas:
         definition.fields = [copy.copy(field) for field in definition.fields]
         return root
 
-    def _assert_rebac_managers(
+    def _assert_rebac_querysets(
         self,
-        schema_name: str,
         types: tuple[object, ...],
     ) -> None:
         """Raise when a GraphQL-exposed REBAC model is not manager-scoped."""
@@ -590,10 +589,7 @@ class GraphQLSchemas:
             model = self._django_model_or_none(surface)
             if model is None or not model_resource_type(model):
                 continue
-            if not isinstance(model._default_manager, RebacManager):
-                raise ImproperlyConfigured(
-                    f"GraphQL schema {schema_name!r} exposes {model._meta.label} without a RebacManager default manager"
-                )
+            require_rebac_queryset(model)
 
     def _django_model_or_none(
         self,

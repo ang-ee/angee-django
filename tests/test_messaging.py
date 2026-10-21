@@ -1267,6 +1267,13 @@ def test_unread_count_respects_default_subtype_subscription(composed_tables: Non
     # The explicit follower counts only their chosen subtype.
     explicit_unread = ThreadFollower.objects.unread_messages(thread, user=promo_watcher)
     assert [message.pk for message in explicit_unread] == [promo.pk]
+    messages = ThreadedTicket.thread_messages_expression(ticket.pk)
+    assert set(messages.unread_for(default_watcher).values_list("pk", flat=True)) == {comment.pk}
+    assert set(messages.unread_for(promo_watcher).values_list("pk", flat=True)) == {promo.pk}
+    assert not messages.unread_for(None).exists()
+    with system_context(reason="test unread muted projection"):
+        ticket.message_subscribe(user=default_watcher, notification_policy="muted")
+    assert not messages.unread_for(default_watcher).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2491,7 +2498,8 @@ def test_resync_with_changed_body_appends_edit_history(channel: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_read_receipts_anchor_unread_and_never_regress(composed_tables: None) -> None:
+@pytest.mark.parametrize("equal_timestamps", [False, True])
+def test_read_receipts_anchor_unread_and_never_regress(composed_tables: None, equal_timestamps: bool) -> None:
     """Unread is everything past the receipt; the receipt only ever advances.
 
     A follower with no receipt sees the whole thread unread; marking read up to the
@@ -2512,11 +2520,22 @@ def test_read_receipts_anchor_unread_and_never_regress(composed_tables: None) ->
         first = ticket.message_post("First.")
         second = ticket.message_post("Second.")
         third = ticket.message_post("Third.")
+    if equal_timestamps:
+        # Equal chronological timestamps use primary-key order, including the
+        # creation-time fallback for a provider row with no send timestamp.
+        with system_context(reason="test.receipts.equal_timestamps"):
+            Message.objects.filter(pk__in=[first.pk, second.pk, third.pk]).update(sent_at=_AT, created_at=_AT)
+            Message.objects.filter(pk=second.pk).update(sent_at=None)
+        for message in (first, second, third):
+            message.refresh_from_db()
     thread = ticket.message_thread(create=False)
     assert thread is not None
 
     def unread_pks(user: Any) -> set[Any]:
-        return set(ThreadFollower.objects.unread_messages(thread, user=user).values_list("pk", flat=True))
+        expected = set(ThreadFollower.objects.unread_messages(thread, user=user).values_list("pk", flat=True))
+        projected = ThreadedTicket.thread_messages_expression(ticket.pk).unread_for(user)
+        assert set(projected.values_list("pk", flat=True)) == expected
+        return expected
 
     # No receipt yet: the whole thread is unread for the watcher.
     assert unread_pks(watcher) == {first.pk, second.pk, third.pk}

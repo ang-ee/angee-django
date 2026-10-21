@@ -18,6 +18,13 @@ Observers receive persisted rows without pretending they were individually saved
 the queryset already owns history and authorization for the write.
 """
 
+record_access_revoked = Signal()
+"""A direct record relation was revoked (instance, relation, subject, using).
+
+The subject is the normalized native SubjectRef. Receivers run synchronously
+inside the relationship write transaction, including for an absent tuple.
+"""
+
 
 def migrated_model(*, app_config: object, using: str, app_label: str, model_name: str) -> type[Model] | None:
     """Return the model a ``post_migrate`` receiver may work on now, or ``None``.

@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from itertools import batched
-from typing import Any, ClassVar, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Self, TypeVar, cast
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import NotSupportedError, connections, models, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
 
 from angee.changesets import write_group
 from angee.indexes import PatternOpsIndex
-from angee.models.query import _AngeeQuerySetMixin, model_history
+from angee.models.query import SystemQuerysetMixin, _AngeeQuerySetMixin, model_history
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _HierarchyModelT = TypeVar("_HierarchyModelT", bound="HierarchyMixin")
@@ -54,7 +54,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
 
         owned = {"path", "parent", "parent_id"}
         for name in self.model.hierarchy_scope_fields:
-            field = self.model._meta.get_field(name)
+            field = self.model._hierarchy_column(name)
             owned.update((field.name, field.attname))
         if owned & kwargs.keys():
             raise ValidationError("The hierarchy parent, scope and path belong to the saved-row owner.")
@@ -80,14 +80,19 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
         model = self.model
         using = self.db
         history = model_history(model)
-        field = model._meta.get_field("parent")
+        field = model._hierarchy_parent_field()
         rows = list(rows)
         if any(row.pk is not None for row in rows):
             raise ValidationError("A forest insert takes unsaved rows.")
         if not connections[using].features.can_return_rows_from_bulk_insert:
             raise NotSupportedError("A forest insert requires bulk-insert primary keys on this database.")
         members = {id(row) for row in rows}
-        parents = {id(row): field.get_cached_value(row, None) for row in rows}
+        parents: dict[int, HierarchyMixin | None] = {}
+        for row in rows:
+            parent = field.get_cached_value(row, None)
+            if parent is not None and not isinstance(parent, HierarchyMixin):
+                raise ImproperlyConfigured("Hierarchy parents must compose HierarchyMixin.")
+            parents[id(row)] = parent
         order: list[_HierarchyModelT] = []
         placed: set[int] = set()
         pending = rows
@@ -99,7 +104,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
             order.extend(ready)
             placed.update(id(row) for row in ready)
             pending = [row for row in pending if id(row) not in placed]
-        scope = [model._meta.get_field(name).attname for name in model.hierarchy_scope_fields]
+        scope = [model._hierarchy_column(name).attname for name in model.hierarchy_scope_fields]
         for row in rows:
             parent = parents[id(row)]
             if parent is not None and any(getattr(row, name) != getattr(parent, name) for name in scope):
@@ -124,7 +129,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
                     ),
                     path=models.Case(
                         *(models.When(pk=row.pk, then=models.Value(row.path)) for row in chunk),
-                        output_field=model._meta.get_field("path"),
+                        output_field=model._hierarchy_column("path"),
                     ),
                 )
             if history is not None and rows:
@@ -141,7 +146,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
         return super().update(**kwargs)
 
 
-class HierarchyMixin(models.Model):
+class HierarchyMixin(SystemQuerysetMixin):
     """Materialized-path tree membership for a self-parented model.
 
     Adds a ``parent`` self-FK and a maintained ``path`` column of zero-padded,
@@ -176,6 +181,10 @@ class HierarchyMixin(models.Model):
     bulk ``UPDATE``. It owns no REBAC of its own; path maintenance runs unscoped so
     a reparent reaches descendants the acting user cannot read.
     """
+
+    if TYPE_CHECKING:
+        # The abstract self-FK has no PK type until its concrete model exists.
+        parent_id: object
 
     hierarchy_scope_fields: ClassVar[tuple[str, ...]] = ()
     """Field names a child must share with its parent (e.g. ``("scope",)``).
@@ -228,7 +237,21 @@ class HierarchyMixin(models.Model):
         indexes = (PatternOpsIndex(fields=["path"], opclasses=["varchar_pattern_ops"]),)
 
     @classmethod
-    def from_db(cls, db: Any, field_names: Sequence[str], values: Sequence[Any]) -> Self:
+    def _hierarchy_column(cls, name: str) -> models.Field:
+        field = cls._meta.get_field(name)
+        if not isinstance(field, models.Field):
+            raise ImproperlyConfigured(f"Hierarchy column {cls._meta.label}.{name} must be a forward field.")
+        return field
+
+    @classmethod
+    def _hierarchy_parent_field(cls) -> models.ForeignKey:
+        field = cls._hierarchy_column("parent")
+        if not isinstance(field, models.ForeignKey):
+            raise ImproperlyConfigured(f"{cls._meta.label}.parent must be a ForeignKey.")
+        return field
+
+    @classmethod
+    def from_db(cls, db: Any, field_names: Collection[str], values: Collection[Any]) -> Self:
         """Record the loaded ``parent`` so :meth:`save` can detect a reparent.
 
         Only when ``parent`` was actually loaded: seeding the baseline off a
@@ -317,7 +340,7 @@ class HierarchyMixin(models.Model):
         changing one row must never silently move or strand its descendants.
         """
 
-        fields = [self._meta.get_field(name) for name in self.hierarchy_scope_fields]
+        fields = [self._hierarchy_column(name) for name in self.hierarchy_scope_fields]
         touched = [field for field in fields if field.attname in self.__dict__ and (
             update_fields is None or field.name in update_fields or field.attname in update_fields
         )]
@@ -478,12 +501,15 @@ class HierarchyMixin(models.Model):
 
         if self.parent_id is None:
             return None
-        field = self._meta.get_field("parent")
+        field = self._hierarchy_parent_field()
         if field.is_cached(self):
             parent = field.get_cached_value(self)
             if parent is not None and parent._state.db == self._state.db:
                 return cast("HierarchyMixin", parent)
-        parent = field.related_model.system_queryset().using(self._state.db).get(pk=self.parent_id)
+        parent_model = field.related_model
+        if parent_model is None or not issubclass(parent_model, HierarchyMixin):
+            raise ImproperlyConfigured("Hierarchy parents must compose HierarchyMixin.")
+        parent = parent_model.system_queryset().using(self._state.db).get(pk=self.parent_id)
         field.set_cached_value(self, parent)
         return cast("HierarchyMixin", parent)
 
@@ -508,7 +534,7 @@ class HierarchyMixin(models.Model):
             return
         if not self.hierarchy_scope_fields:
             return
-        fields = [self._meta.get_field(name) for name in self.hierarchy_scope_fields]
+        fields = [self._hierarchy_column(name) for name in self.hierarchy_scope_fields]
         # The parent is a row of the hierarchy's own model; a multi-table child
         # of it may not have a row in this model's table.
         committed = type(parent).system_queryset().using(self._state.db).filter(pk=parent.pk).values(

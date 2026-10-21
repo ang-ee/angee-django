@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import os
-from collections.abc import Awaitable, Callable, MutableMapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from functools import partial
 from io import BytesIO
@@ -62,9 +62,9 @@ def _http_mounts() -> list[tuple[str, Any]]:
     return mounts
 
 
-Scope = MutableMapping[str, Any]
-Receive = Callable[[], Awaitable[MutableMapping[str, Any]]]
-Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
+Scope = dict[str, Any]
+Receive = Callable[[], Awaitable[Mapping[str, Any]]]
+Send = Callable[[Mapping[str, Any]], Awaitable[None]]
 ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
 

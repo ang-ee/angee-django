@@ -10,3 +10,15 @@ class MessagingConfig(AppConfig):
 
     default = True
     name = "angee.messaging"
+
+    def ready(self) -> None:
+        from angee.messaging.events import end_unreadable_follows
+        from angee.messaging.models import ThreadedModelMixin
+        from angee.signals import connect_for_models, record_access_revoked
+
+        connect_for_models(
+            record_access_revoked,
+            end_unreadable_follows,
+            applies=lambda model: issubclass(model, ThreadedModelMixin),
+            dispatch_uid="messaging.record_access_revoked",
+        )

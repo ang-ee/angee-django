@@ -2,6 +2,8 @@
 
 # ruff: noqa: F401 -- this module is the public re-export surface.
 
+from typing import TYPE_CHECKING
+
 from angee.errors import CreationKeyConflict
 from angee.lineage import (
     concrete_child,
@@ -16,6 +18,7 @@ from angee.models.append_only import (
     AppendOnlyModel,
     AppendOnlyQuerySet,
 )
+from angee.models.audit import AuditMixin, retained_set_null
 from angee.models.base import (
     AngeeDataModel,
     AngeeModel,
@@ -31,6 +34,7 @@ from angee.models.identity import (
     auto_now_stamps,
     update_fields_with_auto_now,
 )
+from angee.models.inputs import InputExtensionsMixin
 from angee.models.locks import (
     ImmutableFieldsMixin,
     OptimisticLockMixin,
@@ -56,11 +60,9 @@ from angee.models.merge import (
     unique_field_sets,
 )
 from angee.models.ownership import (
-    AuditMixin,
     ItemOwnershipMixin,
     OwnerMixin,
     OwnerQuerySet,
-    retained_set_null,
 )
 from angee.models.query import (
     AngeeQuerySet,
@@ -74,6 +76,7 @@ from angee.models.query import (
     model_history,
     query_batch_size,
     record_history,
+    row_lock_paths,
 )
 from angee.models.stages import Stage, StagedModelMixin, StageTone
 from angee.models.statements import (
@@ -119,6 +122,9 @@ from angee.models.trash import (
     TrashQuerySet,
     clean_trash_reason,
 )
+
+if TYPE_CHECKING:
+    from angee.models.derived import DerivedFrom
 
 
 def __getattr__(name: str) -> object:

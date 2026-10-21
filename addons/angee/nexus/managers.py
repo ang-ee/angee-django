@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self, cast
 
 from django.apps import apps
 from django.db import models, transaction
@@ -14,6 +14,9 @@ from django.utils import timezone
 from rebac import current_actor
 
 from angee.models import AngeeManager, AngeeQuerySet
+
+if TYPE_CHECKING:
+    from angee.nexus.models import Cadence, Tie
 
 
 @dataclass
@@ -75,7 +78,7 @@ class NexusOverviewRows:
     due_count: int
 
 
-class TieQuerySet(AngeeQuerySet[Any]):
+class TieQuerySet[TieT: Tie](AngeeQuerySet[TieT]):
     """Party-pair scopes over the derived edge collection."""
 
     def around_party(self, party: Any) -> Self:
@@ -259,12 +262,12 @@ class TieQuerySet(AngeeQuerySet[Any]):
             }
             next_frontier: set[Any] = set()
             for party_id in candidate_party_ids:
-                party = visible_candidates.get(party_id)
-                if party is None:
+                candidate = visible_candidates.get(party_id)
+                if candidate is None:
                     continue
-                if not add_party(party):
+                if not add_party(candidate):
                     break
-                next_frontier.add(party.pk)
+                next_frontier.add(candidate.pk)
 
             for tie in tie_candidates:
                 if len(edges) >= edge_limit:
@@ -357,10 +360,10 @@ class TieQuerySet(AngeeQuerySet[Any]):
         party_ids = set(parties)
         cadences = cadence_model.objects.filter(party_id__in=party_ids).scoped()
         for cadence in cadences:
-            party = parties.get(cadence.party_id)
-            if party is None:
+            cadence_party = parties.get(cadence.party_id)
+            if cadence_party is None:
                 continue
-            nodes[public_id(party)]["meta"]["cadence"] = {
+            nodes[public_id(cadence_party)]["meta"]["cadence"] = {
                 "id": public_id(cadence),
                 "cadence_days": int(cadence.cadence_days),
                 "touch_due_at": (cadence.touch_due_at.isoformat() if cadence.touch_due_at is not None else None),
@@ -429,7 +432,8 @@ class TieQuerySet(AngeeQuerySet[Any]):
         if "identity" in selected_lenses:
             statement_model = party_model.statements.model
             statements = list(
-                party_model.objects.handle_statements(actor=current_actor())
+                party_model.objects.handle_statements()
+                .for_reader(current_actor())
                 .members()
                 .filter(
                     subject_id__in=party_ids,
@@ -539,10 +543,18 @@ class TieQuerySet(AngeeQuerySet[Any]):
         )
 
 
-class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
+_TieManagerBase = AngeeManager.from_queryset(TieQuerySet)
+
+
+class TieManager[TieT: Tie](_TieManagerBase[TieT]):
     """Own the deliberate-interaction derivation and canonical pair lookups."""
 
-    def for_parties(self, first: Any, second: Any) -> Any | None:
+    def get_queryset(self) -> TieQuerySet[TieT]:
+        """Preserve the configured queryset and tie row type."""
+
+        return cast(TieQuerySet[TieT], super().get_queryset())
+
+    def for_parties(self, first: Any, second: Any) -> TieT | None:
         """Return the canonically ordered edge between two parties, when present."""
 
         party_a_id, party_b_id = sorted((first.pk, second.pk))
@@ -709,7 +721,7 @@ class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
         return addressed_rows, reply_rows, mention_rows
 
 
-class CadenceManager(AngeeManager):
+class CadenceManager[CadenceT: Cadence](AngeeManager[CadenceT]):
     """Own derived due-date refreshes for the human cadence collection."""
 
     def refresh_touch_due(self) -> None:

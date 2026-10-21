@@ -6,7 +6,7 @@ import logging
 from contextvars import Context
 from dataclasses import dataclass, field, replace
 from inspect import getattr_static
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
@@ -37,8 +37,11 @@ from angee.iam.identity import user_label
 from angee.iam.service_users import sync_service_user
 from angee.identity import public_id_of
 from angee.impl import ImplBase, ImplClassField, resolve_all_impl_classes
-from angee.models import AngeeManager, AngeeQuerySet, record_display_label
+from angee.models import AngeeManager, AngeeQuerySet, record_display_label, row_lock_paths
 from angee.permissions import rebac_relation_label
+
+if TYPE_CHECKING:
+    from angee.workflows.models import Trigger, TriggerEvent
 
 logger = logging.getLogger(__name__)
 TRIGGER_DRAIN_LIMIT = 100
@@ -272,8 +275,10 @@ class TriggerSource(ImplBase):
             with transaction.atomic(), system_context(reason="workflows.source_dispatch"):
                 cls.validate_model(model)
                 target = generic_target(record)
-                records = target.content_type.model_class().system_queryset().filter(pk=target.object_id)
-                if records.lock_if_supported(no_key=True).first() is None:
+                target_model = target.content_type.model_class()
+                assert target_model is not None
+                records = target_model._default_manager.filter(pk=target.object_id)
+                if records.select_for_update(no_key=True, of=row_lock_paths(target_model)).first() is None:
                     return
                 events = apps.get_model("workflows", "TriggerEvent").objects
                 for source in cls.registered():
@@ -330,7 +335,7 @@ class TriggerSource(ImplBase):
             cls.dispatch(sender, instance)
 
 
-class TriggerSourceField(ImplClassField):
+class TriggerSourceField(ImplClassField[TriggerSource]):
     """Offer only admission-capable entries from the one observation registry."""
 
     def impl_choices(self) -> list[Any]:
@@ -387,7 +392,7 @@ def check_record_changed_models(**kwargs: Any) -> list[checks.CheckMessage]:
     ]
 
 
-class TriggerEventQuerySet(AngeeQuerySet):
+class TriggerEventQuerySet[T: TriggerEvent](AngeeQuerySet[T]):
     """Pending admission is a re-armed, never-admitted ledger fact."""
 
     def pending(self) -> Any:
@@ -395,7 +400,10 @@ class TriggerEventQuerySet(AngeeQuerySet):
         return self.filter(Q(evaluated_at__isnull=True) | Q(changed_at__gt=F("evaluated_at")), admitted_at=None)
 
 
-class TriggerEventManager(AngeeManager.from_queryset(TriggerEventQuerySet)):  # type: ignore[misc]
+_TriggerEventManagerBase = AngeeManager.from_queryset(TriggerEventQuerySet)
+
+
+class TriggerEventManager[T: TriggerEvent](_TriggerEventManagerBase[T]):
     """Capture without compromising the transaction that changed the record."""
 
     def record_change(self, model: Any, record: Any, *, source: str = "record_changed") -> None:
@@ -408,7 +416,10 @@ class TriggerEventManager(AngeeManager.from_queryset(TriggerEventQuerySet)):  # 
             return
         try:
             triggers = apps.get_model("workflows", "Trigger")
-            implementation = triggers._meta.get_field("source").resolve_class(source)
+            field = triggers._meta.get_field("source")
+            if not isinstance(field, TriggerSourceField):
+                raise ImproperlyConfigured("Workflow trigger sources require a TriggerSourceField.")
+            implementation = field.resolve_class(source)
             try:
                 implementation.validate_model(model)
             except ValidationError:
@@ -427,7 +438,7 @@ class TriggerEventManager(AngeeManager.from_queryset(TriggerEventQuerySet)):  # 
             logger.exception("Workflow trigger capture failed.")
 
 
-class TriggerQuerySet(AngeeQuerySet):
+class TriggerQuerySet[T: Trigger](AngeeQuerySet[T]):
     """Keep authored writes at the validating model; engine updates use explicit scope."""
 
     def _check_bulk_write(self) -> None:
@@ -445,7 +456,10 @@ class TriggerQuerySet(AngeeQuerySet):
         return super().bulk_create(*args, **kwargs)
 
 
-class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: ignore[misc]
+_TriggerManagerBase = AngeeManager.from_queryset(TriggerQuerySet)
+
+
+class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
     """Enablement and admission serialize on the trigger before its ledger row."""
 
     def lock_grants(self, workflow_id: Any, *, skip_locked: bool = False) -> Any:
@@ -621,7 +635,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                        .lock_if_supported(no_key=True, skip_locked=True).first())
             if trigger is None or not trigger.enabled:
                 return False
-            current = (events.system_queryset().pending().filter(pk=event.pk)
+            current = (events.objects.system_context(reason="workflows.admit").pending().filter(pk=event.pk)
                        .lock_if_supported(no_key=True, skip_locked=True).first())
             if current is None:
                 return False
@@ -684,8 +698,10 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
     def drain(self) -> int:
         """Examine an ordered, bounded batch; one broken event cannot stop later rows."""
         events = apps.get_model("workflows", "TriggerEvent")
-        candidates = list(events.system_queryset().pending().filter(trigger__enabled=True)
-                          .order_by("pk")[:TRIGGER_DRAIN_LIMIT])
+        candidates = list(
+            events.objects.system_context(reason="workflows.drain").pending().filter(trigger__enabled=True)
+            .order_by("pk")[:TRIGGER_DRAIN_LIMIT]
+        )
         admitted = 0
         for event in candidates:
             try:

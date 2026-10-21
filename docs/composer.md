@@ -192,6 +192,14 @@ constraint seam. See `ModelComposition` for validation and ordering rules,
 including rejection of model-parent cycles and mutually importing generated app
 modules.
 
+An abstract capability may declare `requires_parent = "app.Model"` when its
+methods require that materialized ancestor. The compiler checks every composed
+source and donor using the capability against its declared `extends` chain,
+including indirect parents. This requirement changes no Python bases or fields;
+the parent remains the MTI persistence owner. The typing view consumes the same
+validated contract. See [Bridge](../addons/angee/integrate/models.py) and
+[`ModelComposition`](../angee/compose/model_composition.py).
+
 Tracking and batch behavior stay with their owners. `HistoryMixin` uses a native
 simple-history descriptor adapted for generated module labels and virtual fields;
 every concrete descendant of a tracked source has its own history table,

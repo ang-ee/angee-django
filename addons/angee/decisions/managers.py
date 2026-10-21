@@ -19,12 +19,15 @@ from angee.decisions.signals import decision_answered
 from angee.evidence import readable_records
 from angee.graphql.publishing import mute_changes, publish_change
 from angee.identity import public_id_of
-from angee.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet
+from angee.models import AngeeManager, AngeeModel, AngeeQuerySet, AppendOnlyQuerySet
+from angee.permissions import require_rebac_queryset
 from angee.refs import generic_pointer_model
 
 
 def _user(actor: Any, *, active: bool = True) -> Any:
     identity = actor_user_id(to_subject_ref(actor if actor is not None else current_actor()))
+    if identity is None:
+        raise PermissionDenied("An active user is required.")
     users = get_user_model().system_queryset().filter(pk=identity)
     user = (users.filter(is_active=True) if active else users).first()
     if user is None:
@@ -68,14 +71,21 @@ class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
         model = generic_pointer_model(queryset.model)
         # Attention belongs to the readable record, regardless of who can answer
         # or read the question. Only the boolean crosses that permission boundary.
-        return Exists(self.model.system_queryset().open().filter(
-            records__content_type__app_label=model._meta.app_label,
-            records__content_type__model=model._meta.model_name,
-            records__object_id=OuterRef("pk"),
-        ))
+        return Exists(
+            self.model.system_queryset()
+            .open()
+            .filter(
+                records__content_type__app_label=model._meta.app_label,
+                records__content_type__model=model._meta.model_name,
+                records__object_id=OuterRef("pk"),
+            )
+        )
 
 
-class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ignore[misc]
+_DecisionManagerBase = AngeeManager.from_queryset(DecisionQuerySet)
+
+
+class DecisionManager(_DecisionManagerBase):
     def withdraw(self, decision: Any, *, actor: Any) -> Any:
         """An authorized asking owner withdraws a question in a named system context."""
         if not is_sudo():
@@ -87,8 +97,11 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             row = self.filter(pk=pk).lock_if_supported().get()
             if row.is_open:
                 self.filter(pk=pk).open().owner_update(
-                    verdict=[], answered_by=withdrawing, answered_at=Now(),
-                    revision=F("revision") + 1, updated_at=Now(),
+                    verdict=[],
+                    answered_by=withdrawing,
+                    answered_at=Now(),
+                    revision=F("revision") + 1,
+                    updated_at=Now(),
                 )
                 row.refresh_from_db()
                 publish_change(row, action="update", update_fields=None)
@@ -100,18 +113,20 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         request = DecisionRequest.model_validate(request)
         if actor is None and not is_sudo():
             raise PermissionDenied("Actorless admission requires a named system context.")
-        supplied = (*request.assignees, *((actor,) if actor is not None else ()), *(
-            (request.requester,) if request.requester is not None else ()
-        ))
-        ids = [actor_user_id(to_subject_ref(person)) for person in supplied]
+        supplied = (
+            *request.assignees,
+            *((actor,) if actor is not None else ()),
+            *((request.requester,) if request.requester is not None else ()),
+        )
+        ids = [identity for person in supplied if (identity := actor_user_id(to_subject_ref(person))) is not None]
+        if len(ids) != len(supplied):
+            raise PermissionDenied("An active user is required.")
         users = get_user_model().system_queryset().filter(pk__in=ids, is_active=True).in_bulk()
         if any(identity not in users for identity in ids):
             raise PermissionDenied("An active user is required.")
         asking = users[actor_user_id(to_subject_ref(actor))] if actor is not None else None
         assignees = tuple(users[actor_user_id(to_subject_ref(person))] for person in request.assignees)
-        requester = (
-            users[actor_user_id(to_subject_ref(request.requester))] if request.requester is not None else None
-        )
+        requester = users[actor_user_id(to_subject_ref(request.requester))] if request.requester is not None else None
         related_records: list[Any] = []
         try:
             DecisionProposal.model_validate(
@@ -121,33 +136,44 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         except ValueError as error:
             raise ValidationError({"proposal": str(error)}) from error
         participants = tuple(person for person in (asking, requester, *assignees) if person is not None)
-        references = (*request.context.records(), *(
-            DecisionRecordReference(model=record._meta.label, id=public_id_of(record))
-            for record in (*request.records, *related_records)
-        ))
+        references = (
+            *request.context.records(),
+            *(
+                DecisionRecordReference(model=record._meta.label, id=public_id_of(record))
+                for record in (*request.records, *related_records)
+            ),
+        )
         readable_records(references, participants)
         targets = {generic_target(record) for record in request.records}
         with transaction.atomic(), system_context(reason="decisions.ask"):
             # Capture admission only after its immutable concern links exist.
             with mute_changes():
                 decision = self.create(
-                    kind=request.kind, requester=requester,
+                    kind=request.kind,
+                    requester=requester,
                     proposal=request.proposal.model_dump(mode="json"),
                     context=request.context.model_dump(mode="json"),
                 )
             decision.assignees.set(assignees)
             link = apps.get_model("decisions", "DecisionRecord")
-            link.objects.bulk_create([
-                link(decision=decision, **target.lookups(link, "record"))
-                for target in sorted(targets, key=lambda target: (target.content_type.pk, target.object_id))
-            ])
+            link.objects.bulk_create(
+                [
+                    link(decision=decision, **target.lookups(link, "record"))
+                    for target in sorted(targets, key=lambda target: (target.content_type.pk, target.object_id))
+                ]
+            )
             if assignees and not any(decision.with_actor(person).has_access("act") for person in assignees):
                 raise ValidationError({"assignees": "At least one assignee must be allowed to answer."})
             publish_change(decision, action="create", update_fields=None)
         return decision.with_actor(asking) if asking is not None else decision
 
     def decide(
-        self, decision: Any, *, actor: Any, chosen: Sequence[str], revision: int | None = None,
+        self,
+        decision: Any,
+        *,
+        actor: Any,
+        chosen: Sequence[str],
+        revision: int | None = None,
         values: dict[str, dict[str, JsonValue]] | None = None,
     ) -> Any:
         """Record one final verdict. Proposal actions belong to the asker."""
@@ -186,22 +212,32 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                             reference = link.record if link is not None else None
                             if reference is None:
                                 raise ValueError("The record for a chosen action is missing or inaccessible.")
-                            record = actions.target_model(reference).objects.with_actor(answering).for_write().get(
-                                pk=reference.pk,
+                            record = (
+                                require_rebac_queryset(actions.target_model(reference))
+                                .with_actor(answering)
+                                .for_write()
+                                .get(
+                                    pk=reference.pk,
+                                )
                             )
+                            assert isinstance(record, AngeeModel)
                             record.require_access("write", answering)
                             with actor_context(answering):
                                 actions.resolve(record, context={"actor": answering}, values=values[identity])
                 except (ValueError, ObjectDoesNotExist) as error:
                     raise ValidationError({"values": str(error)}) from error
                 row.validate_verdict(selected, actor=answering)
-                if not self.filter(pk=pk, revision=row.revision).open().owner_update(
-                    verdict=[alternative.key for alternative in selected],
-                    answered_by=answering,
-                    answered_at=Now(),
-                    verdict_values=values or None,
-                    revision=F("revision") + 1,
-                    updated_at=Now(),
+                if (
+                    not self.filter(pk=pk, revision=row.revision)
+                    .open()
+                    .owner_update(
+                        verdict=[alternative.key for alternative in selected],
+                        answered_by=answering,
+                        answered_at=Now(),
+                        verdict_values=values or None,
+                        revision=F("revision") + 1,
+                        updated_at=Now(),
+                    )
                 ):
                     raise ValidationError({"revision": "The decision has changed; reload it."})
                 row.refresh_from_db()

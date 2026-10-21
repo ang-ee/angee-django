@@ -17,7 +17,7 @@ from rebac.schema.walker import field_gated_actions
 
 from angee.graphql.events import ChangeEvent, ChangePayload
 from angee.identity import instance_from_public_id
-from angee.permissions import effective_rebac_definition
+from angee.permissions import effective_rebac_definition, require_rebac_queryset
 
 
 def actor_can_read(resource: ObjectRef) -> bool:
@@ -168,7 +168,7 @@ class ChangeReadGate:
                 model = apps.get_model(reference.model)
             except (LookupError, ValueError):
                 continue
-            scope = model.objects.with_actor(self.actor).with_action("read")
+            scope = require_rebac_queryset(model).with_actor(self.actor).with_action("read")
             if instance_from_public_id(model, reference.id, queryset=scope) is not None:
                 readable.append(reference)
         return replace(change, related_records=tuple(readable))

@@ -5,11 +5,11 @@ from inspect import signature
 from typing import Any
 
 from django.apps import apps
-from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from pydantic import BaseModel, ConfigDict, Field, InstanceOf, JsonValue, TypeAdapter, ValidationInfo, model_validator
 from pydantic.experimental.missing_sentinel import MISSING
-from rebac import current_actor
+from rebac import RebacMixin, current_actor
 from rebac.schema.walker import field_gated_actions
 
 from angee.evidence import EvidenceFact, EvidenceReference
@@ -17,7 +17,7 @@ from angee.fields import StateField
 from angee.graphql.data.metadata import data_resource_contributions
 from angee.graphql.schema import schema_parts_for
 from angee.identity import instance_from_public_id, public_id_for
-from angee.permissions import effective_rebac_definition
+from angee.permissions import effective_rebac_definition, require_rebac_queryset
 from angee.refs import generic_pointer_model
 
 
@@ -48,12 +48,14 @@ class DecisionContext(BaseModel):
 
 class SetValue(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    set: JsonValue | MISSING = MISSING
+    # Mypy lacks PEP 661 sentinel types; Pydantic requires this exact omittable union.
+    set: JsonValue | MISSING = MISSING  # type: ignore[valid-type]
 
 
 class ChooseOptions(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    filter: dict[str, JsonValue] | MISSING = MISSING
+    # Keep Pydantic's sentinel out of the serialized JSON schema and omitted values.
+    filter: dict[str, JsonValue] | MISSING = MISSING  # type: ignore[valid-type]
 
 
 class ChooseValue(BaseModel):
@@ -116,6 +118,8 @@ class RecordActions(BaseModel):
                 raise ValueError(f"The record owner does not expose writes to {name}.")
             if field.one_to_many:
                 raise ValueError(f"Set a scalar field or call its owner's method: {name}.")
+            if not isinstance(field, models.Field):
+                raise ValueError(f"Use an editable model field name: {field.name}.")
             if (
                 field.auto_created
                 or not (field.concrete or field.many_to_many)
@@ -127,16 +131,17 @@ class RecordActions(BaseModel):
                 raise ValueError(f"Use an editable model field name: {field.name}.")
             definition = effective_rebac_definition(model)
             permission = f"write__{name}"
-            if (
-                "actor" in context
-                and definition
-                and permission in field_gated_actions(definition, "write")
-                and not record.with_actor(context["actor"]).has_access(permission)
-            ):
-                raise ValueError(f"The actor cannot write {name}.")
-            if isinstance(operation, ChooseValue) and values is None:
-                continue
-            value = values[name] if isinstance(operation, ChooseValue) else operation.set
+            if "actor" in context and definition and permission in field_gated_actions(definition, "write"):
+                if not isinstance(record, RebacMixin):
+                    raise ValueError(f"The record for {name} does not support actor scoping.")
+                if not record.with_actor(context["actor"]).has_access(permission):
+                    raise ValueError(f"The actor cannot write {name}.")
+            if isinstance(operation, ChooseValue):
+                if values is None:
+                    continue
+                value = values[name]
+            else:
+                value = operation.set
             try:
                 if field.is_relation:
                     if field.many_to_many:
@@ -150,24 +155,29 @@ class RecordActions(BaseModel):
                     # Request construction validates shape; admission/application supply the read actor.
                     if "actor" not in context:
                         continue
-                    if not callable(getattr(field.related_model.objects, "with_actor", None)):
-                        raise ValueError(f"The related record for {name} does not support actor scoping.")
-                    queryset = field.related_model.objects.with_actor(context.get("actor", current_actor()))
-                    related = tuple(
-                        instance_from_public_id(field.related_model, identity, queryset=queryset)
-                        for identity in identities
-                    )
-                    if any(instance is None for instance in related):
-                        raise ValueError(f"The related record for {name} is absent or unreadable.")
+                    related_model = field.related_model
+                    if related_model is None:
+                        raise ValueError(f"The related record model for {name} is unavailable.")
+                    try:
+                        queryset = require_rebac_queryset(related_model)
+                    except ImproperlyConfigured as error:
+                        raise ValueError(f"The related record for {name} does not support actor scoping.") from error
+                    queryset = queryset.with_actor(context.get("actor", current_actor()))
+                    related = []
+                    for identity in identities:
+                        instance = instance_from_public_id(related_model, identity, queryset=queryset)
+                        if instance is None:
+                            raise ValueError(f"The related record for {name} is absent or unreadable.")
+                        related.append(instance)
                     context.get("related_records", []).extend(related)
-                    value = related if field.many_to_many else next(iter(related), None)
-                    if not field.many_to_many and value is not None:
-                        field.run_validators(field.to_python(value.pk))
+                    decoded = tuple(related) if field.many_to_many else next(iter(related), None)
+                    if not field.many_to_many and related:
+                        field.run_validators(field.to_python(related[0].pk))
                 else:
-                    value = field.clean(value, record)
+                    decoded = field.clean(value, record)
             except (ValidationError, TypeError) as error:
                 raise ValueError(f"Invalid proposed value for {name}: {error}") from error
-            resolved[name] = value
+            resolved[name] = decoded
         if self.record:
             call = self.record.call
             if call == "delete" or call not in getattr(model, "decision_methods", ()):

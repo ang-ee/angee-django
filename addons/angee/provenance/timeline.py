@@ -26,13 +26,19 @@ class ChangeKind(TimelineKind):
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         model = apps.get_model("provenance", "Changeset")
-        return model.objects.sudo(reason="provenance.record_history").touching(record).filter(
-            state=model.State.CLOSED,
-        ).scoped()
+        return (
+            model.objects.sudo(reason="provenance.record_history")
+            .touching(record)
+            .filter(
+                state=model.State.CLOSED,
+            )
+            .scoped()
+        )
 
     def fold(self, record: Any) -> tuple[Any, Any]:
         integer_key = models.Q(origin_object_id__regex=r"^[0-9]{1,18}$") | models.Q(
-            origin_object_id__regex=r"^[0-9]{19}$", origin_object_id__lte="9223372036854775807",
+            origin_object_id__regex=r"^[0-9]{19}$",
+            origin_object_id__lte="9223372036854775807",
         )
         return models.F("origin_content_type_id"), models.Case(
             models.When(integer_key, then=Cast("origin_object_id", models.BigIntegerField())),
@@ -41,18 +47,27 @@ class ChangeKind(TimelineKind):
 
     def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
         rows = list(rows)
-        actors = {row.actor: SubjectRef.parse(row.actor) for row in rows if row.actor}
-        resolved = resolve_subjects(actor for actor in actors.values()
-                                    if actor.subject_id not in ("", "*") and not actor.optional_relation)
+        actors = {row.actor_ref: SubjectRef.parse(row.actor_ref) for row in rows if row.actor_ref}
+        resolved = resolve_subjects(
+            actor for actor in actors.values() if actor.subject_id not in ("", "*") and not actor.optional_relation
+        )
         labels = {value: str(resolved.get(actor, actor)) for value, actor in actors.items()}
-        return {row.pk: Presentation(
-            f"{row.get_action_display()} · {row.get_activity_display()}", row.reason_display, labels.get(row.actor, ""),
-        ) for row in rows}
+        return {
+            row.pk: Presentation(
+                f"{row.get_action_display()} · {row.get_activity_display()}",
+                row.reason_display,
+                labels.get(row.actor_ref, ""),
+            )
+            for row in rows
+        }
 
     def records(self, row: Any) -> Iterable[RecordIdentity]:
         if row.state == row.State.CLOSED:
-            yield from ((model, pk) for model, pk in type(row).objects.filter(pk=row.pk).records_touched()
-                        if self.eligible(model))
+            yield from (
+                (model, pk)
+                for model, pk in type(row).objects.filter(pk=row.pk).records_touched()
+                if self.eligible(model)
+            )
 
 
 def timeline_kinds() -> tuple[TimelineKind, ...]:

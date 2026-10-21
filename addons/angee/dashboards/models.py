@@ -12,7 +12,7 @@ from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import PermissionDenied, current_actor, system_context, to_subject_ref
 
-from angee.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
+from angee.changesets import changeset, changeset_model, creation_fingerprint, require_changeset
 from angee.dashboards.resources import DashboardResource
 from angee.fields import StateField
 from angee.graphql.access import is_gated_read_axis
@@ -32,7 +32,7 @@ from angee.models import (
     TrashMixin,
     TrashQuerySet,
 )
-from angee.permissions import effective_rebac_definition
+from angee.permissions import effective_rebac_definition, require_rebac_queryset
 from angee.resources.mixins import ResourceLoadMixin
 
 DASHBOARD_SCHEMA_VERSION = 1
@@ -74,13 +74,15 @@ def widget_visibility_answers(policies: Sequence[Mapping[str, Any]], actor: Any)
             container = require_field_for_path(model, container_path).related_model if separator else model
         except (LookupError, ValueError, FieldDoesNotExist, FieldPathError) as error:
             raise ValidationError({"visibility": "The scope resource or key does not exist."}) from error
+        if container is None or not isinstance(field, models.Field):
+            raise ValidationError({"visibility": "Use a scalar key on a related scope."})
         definition = effective_rebac_definition(container)
         if field.is_relation or not field.unique or definition is None or is_gated_read_axis(model, key):
             raise ValidationError({"visibility": "Use a unique, ungated scalar key on a permission-managed scope."})
         scopes.setdefault((container, field.name), []).append((index, field.to_python(policy["value"])))
     allowed = [False] * len(policies)
     for (model, key), entries in scopes.items():
-        rows = model.objects.with_actor(actor) if actor is not None else model._base_manager.none()
+        rows = require_rebac_queryset(model).with_actor(actor) if actor is not None else model._base_manager.none()
         readable = set(rows.filter(**{f"{key}__in": [value for _, value in entries]}).values_list(key, flat=True))
         for index, value in entries:
             allowed[index] = value in readable
@@ -451,8 +453,9 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
                 _invalid_query(f"{path}.source.refresh.seconds", "interval must be from 5 to 3600 seconds")
 
 
-class DashboardQuerySet(
-    TrashQuerySet[Any], AngeeQuerySet[Any],
+class DashboardQuerySet[DashboardT: Dashboard](
+    TrashQuerySet[DashboardT],
+    AngeeQuerySet[DashboardT],
 ):
     """Actor-scoped dashboards with removal reserved for personal snapshots."""
 
@@ -462,10 +465,18 @@ class DashboardQuerySet(
         return self.filter(scope="personal")
 
 
-class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: ignore[misc]
+_DashboardManagerBase = AngeeManager.from_queryset(DashboardQuerySet)
+
+
+class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT]):
     """Own target resolution and snapshot writes, including CAS and child diffs."""
 
-    def for_target(self, owner: Any, scope: str, scope_key: str | None) -> Any | None:
+    def get_queryset(self) -> DashboardQuerySet[DashboardT]:
+        """Preserve the configured queryset and dashboard row type."""
+
+        return cast(DashboardQuerySet[DashboardT], super().get_queryset())
+
+    def for_target(self, owner: Any, scope: str, scope_key: str | None) -> DashboardT | None:
         """Return the readable target, preferring the actor's authored snapshot."""
 
         if scope == "personal":
@@ -485,7 +496,7 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
 
         return self.model(owner=owner, is_baseline=False).require_access("create", actor or current_actor())
 
-    def create_personal(self, owner: Any, *, name: str, description: str = "", idempotency_key: str) -> Any:
+    def create_personal(self, owner: Any, *, name: str, description: str = "", idempotency_key: str) -> DashboardT:
         actor = self.may_create(owner)
         if to_subject_ref(owner) != actor:
             raise PermissionDenied("A personal dashboard can only be created for the acting user.")
@@ -503,11 +514,15 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
                     raise ValidationError({"idempotency_key": "The claimed dashboard is unavailable."})
                 return dashboard.with_actor(actor)
             dashboard = self.model(
-                owner=owner, scope="personal", scope_key=None, name=name, description=description,
+                owner=owner,
+                scope="personal",
+                scope_key=None,
+                name=name,
+                description=description,
             )
             dashboard.full_clean()
             dashboard.sudo(reason="dashboards.create_personal").save()
-            current_changeset(required=True).record_created(dashboard)
+            require_changeset().record_created(dashboard)
             return dashboard.with_actor(actor)
 
     def save_snapshot(
@@ -522,7 +537,7 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
         declaration_revision: str = "",
         name: str = "",
         description: str = "",
-    ) -> Any:
+    ) -> DashboardT:
         canonical = canonical_dashboard_snapshot(snapshot)
         validate_dashboard_queries(canonical)
         actor = current_actor()
@@ -533,10 +548,7 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
         with transaction.atomic(), system_context(reason="dashboards.save_snapshot"):
             current = None
             if persisted_id is not None:
-                current = (
-                    cast(Any, self.model).system_queryset(lock=("self",))
-                    .filter(pk=persisted_id).first()
-                )
+                current = self.model.system_queryset(lock=("self",)).filter(pk=persisted_id).first()
                 if current is None:
                     raise DashboardConflictError()
                 if scope != "personal" and current.owner_id != owner.pk:
@@ -554,8 +566,7 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
                 if scope == "personal":
                     raise ValidationError({"scope": "Create personal dashboards before saving them."})
                 current = (
-                    cast(Any, self.model)
-                    .system_queryset(lock=("self",))
+                    self.model.system_queryset(lock=("self",))
                     .filter(
                         owner=owner,
                         scope=scope,
@@ -586,6 +597,7 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
             if not current.with_actor(actor).has_access("write"):
                 raise PermissionDenied("You cannot edit this dashboard.")
             widget_model = current._meta.get_field("widgets").related_model
+            assert widget_model is not None and issubclass(widget_model, DashboardWidget)
             existing_widgets = {
                 widget.widget_key: widget
                 for widget in widget_model.system_queryset(lock=("self",)).filter(dashboard=current)
@@ -645,25 +657,27 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
                 )
             return current.with_actor(actor)
 
-    def reset_snapshot(self, dashboard: Any, *, expected_revision: int) -> None:
+    def reset_snapshot(self, dashboard: DashboardT, *, expected_revision: int) -> None:
         actor = current_actor()
         with transaction.atomic(), system_context(reason="dashboards.reset_snapshot"):
-            locked = cast(Any, self.model).system_queryset(lock=("self",)).get(pk=dashboard.pk)
+            locked = self.model.system_queryset(lock=("self",)).get(pk=dashboard.pk)
             locked.require_revision(expected_revision)
-            if (
-                locked.scope == "personal" or actor is None
-                or to_subject_ref(locked.owner) != actor
-            ):
+            if locked.scope == "personal" or actor is None or to_subject_ref(locked.owner) != actor:
                 raise PermissionDenied("Only the owner can reset a scoped dashboard.")
             locked.sudo(reason="dashboards.reset_snapshot").delete()
 
 
-DashboardObjects = DashboardManager()
+DashboardObjects: DashboardManager[Dashboard] = DashboardManager()
 
 
 class Dashboard(
-    ImmutableFieldsMixin, OptimisticLockMixin,
-    ResourceLoadMixin, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel,
+    ImmutableFieldsMixin,
+    OptimisticLockMixin,
+    ResourceLoadMixin,
+    TrashMixin,
+    OwnerMixin,
+    HistoryMixin,
+    AngeeDataModel,
 ):
     """One installed baseline or actor-owned complete dashboard snapshot."""
 
@@ -801,7 +815,7 @@ class Dashboard(
         super().after_resource_load(loaded, tier=tier, source=source)
 
 
-class DashboardWidgetQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
+class DashboardWidgetQuerySet[WidgetT: DashboardWidget](ArchiveQuerySet[WidgetT], AngeeQuerySet[WidgetT]):
     """Archive scopes layered over dashboard widget reads."""
 
 
@@ -864,7 +878,7 @@ class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, HistoryMixin,
         """Revalidate installed parents when a widget resource is loaded alone."""
 
         loaded = tuple(instances)
-        dashboard_model = cls._meta.get_field("dashboard").remote_field.model
+        dashboard_model = cls.dashboard.field.related_model
         dashboard_ids = sorted({cast("DashboardWidget", widget).dashboard_id for widget in loaded})
         for dashboard in dashboard_model.objects.filter(pk__in=dashboard_ids, is_baseline=True):
             dashboard.validate_installed_snapshot()

@@ -33,8 +33,7 @@ def load_statement_sources(addon_label: str) -> None:
         return
     manifest = resource_manifest_for(addon)
     excluded = [
-        ":".join(ResourceEntry.from_declaration(addon, "master", declaration).key)
-        for declaration in manifest["master"]
+        ":".join(ResourceEntry.from_declaration(addon, "master", declaration).key) for declaration in manifest["master"]
     ]
     # Only the principals and their grants load: the addon's other install rows
     # (and whatever other addons they depend on) are not statement sources.

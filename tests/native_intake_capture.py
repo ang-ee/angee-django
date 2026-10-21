@@ -506,6 +506,22 @@ class NeedAccessDecisionTests(IntakeAccessCase):
 
 
 class NeedAccessTests(IntakeAccessCase):
+    def test_setup_without_promoted_task_leaves_unrelated_project_requests_unassigned(self):
+        Project = apps.get_model("projects", "Project")
+        Vault = apps.get_model("knowledge", "Vault")
+        with system_context(reason="test project setup request isolation"):
+            template = Vault.objects.create(name="Setup template", owner=self.owner)
+            unrelated = Project.objects.create(title="Other project", owner=self.owner)
+            request = self.Need.objects.create(project=unrelated, body="Unassigned project request")
+            project = Project.objects.create(title="Standalone project", owner=self.owner)
+        with actor_context(self.admin), transaction.atomic():
+            project.with_actor(self.admin).apply_setup(
+                team=self.queue, milestones=[{"name": "Start"}], vault_template=template,
+            )
+        request.refresh_from_db()
+        self.assertIsNone(request.party_id)
+        self.assertEqual(project.milestones.with_actor(self.admin).count(), 1)
+
     def assert_task_filter(self, where, expected, *, user, bucket):
         """Pin both read roots to the same task set, including its aggregate count."""
         data = self.graphql(

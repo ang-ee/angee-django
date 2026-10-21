@@ -8,10 +8,10 @@ import {
   type AvailableConnection,
 } from "./documents.public";
 import { loginCallbackRedirectUri, loginNextFromLocation } from "./redirects";
-import { useIamT } from "./i18n";
+import { useOidcT } from "./i18n";
 
 export function OAuthLoginMethods(): ReactNode {
-  const t = useIamT();
+  const t = useOidcT();
   const { data, isFetching: fetching, error: queryError } =
     useAuthoredQuery(IamAvailableConnections);
   const [loginStart] = useAuthoredMutation(IamLoginStart);

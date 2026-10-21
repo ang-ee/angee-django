@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -30,6 +30,9 @@ from angee.integrate.oauth import flow
 from angee.integrate.oauth.errors import INVALID_ID_TOKEN, INVALID_STATE, OAuthFlowError
 from angee.integrate.oauth.state import StateFlow, StateRecord
 
+if TYPE_CHECKING:
+    from django.contrib.auth.models import _User
+
 SESSION_AUTH_BACKEND = "angee.iam.auth.ModelBackend"
 logger = logging.getLogger(__name__)
 
@@ -38,7 +41,7 @@ logger = logging.getLogger(__name__)
 class LoginCompletion:
     """Resolved user and verified claims from one completed OIDC login flow."""
 
-    user: AbstractBaseUser
+    user: _User
     claims: dict[str, Any]
     next_path: str
 
@@ -179,10 +182,10 @@ class OidcIdentityResolver:
         sub: str,
         email: str | None,
         claims: dict[str, Any],
-    ) -> AbstractBaseUser:
+    ) -> _User:
         """Return the user for one verified OIDC identity, or fail closed."""
 
-        Account = cast(Any, apps.get_model("integrate", "ExternalAccount"))
+        Account = apps.get_model("integrate", "ExternalAccount")
 
         manager = Account.objects
         with system_context(reason="iam_integrate_oidc.resolve"), transaction.atomic():
@@ -194,7 +197,7 @@ class OidcIdentityResolver:
                 owner = account.owner
                 if owner is None or not can_authenticate_user(owner):
                     raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
-                return cast(AbstractBaseUser, owner)
+                return owner
 
             normalized_email = get_user_model().objects.normalize_email(email)
             email_verified = claims.get("email_verified") is True
@@ -230,34 +233,34 @@ class OidcIdentityResolver:
 
         raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
 
-    def user_for_link_state(self, record: StateRecord) -> AbstractBaseUser:
+    def user_for_link_state(self, record: StateRecord) -> _User:
         """Return the user captured when the authenticated link flow started."""
 
         if not record.user_id:
             raise OAuthFlowError(INVALID_STATE, 400)
         user_model = get_user_model()
 
-        manager = cast(Any, user_model.objects)
+        manager = user_model.objects
         with system_context(reason="iam_integrate_oidc.link_user"):
             try:
                 user = manager.get(pk=record.user_id)
             except user_model.DoesNotExist as exc:
                 raise OAuthFlowError(INVALID_STATE, 400) from exc
-        return cast(AbstractBaseUser, user)
+        return user
 
-    def _find_by_email(self, email: str) -> AbstractBaseUser | None:
+    def _find_by_email(self, email: str) -> _User | None:
         """Return the person selected by IAM's canonical email-key lookup."""
 
-        manager = cast(Any, get_user_model().objects)
+        manager = get_user_model().objects
         try:
-            return cast(AbstractBaseUser | None, manager.person_for_email(email))
+            return manager.person_for_email(email)
         except AmbiguousAccountEmail:
             raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403) from None
 
-    def _create_for_identity(self, email: str, sub: str, *, claims: dict[str, Any]) -> AbstractBaseUser:
+    def _create_for_identity(self, email: str, sub: str, *, claims: dict[str, Any]) -> _User:
         """Create a non-superuser user for one OIDC identity."""
 
-        manager = cast(Any, get_user_model().objects)
+        manager = get_user_model().objects
         user_fields: dict[str, Any] = {}
         if given_name := claims.get("given_name"):
             user_fields["first_name"] = str(given_name)
@@ -265,16 +268,13 @@ class OidcIdentityResolver:
             user_fields["last_name"] = str(family_name)
         try:
             with transaction.atomic():
-                return cast(
-                    AbstractBaseUser,
-                    manager.create_user(
-                        username=self._available_username(email or f"oidc-{sub}"),
-                        email=email,
-                        password=None,
-                        is_staff=False,
-                        is_superuser=False,
-                        **user_fields,
-                    ),
+                return manager.create_user(
+                    username=self._available_username(email or f"oidc-{sub}"),
+                    email=email,
+                    password=None,
+                    is_staff=False,
+                    is_superuser=False,
+                    **user_fields,
                 )
         except IntegrityError:
             user = self._find_by_email(email)
@@ -285,7 +285,7 @@ class OidcIdentityResolver:
     def _available_username(self, seed: str) -> str:
         """Return a unique Django username derived from ``seed``."""
 
-        manager = cast(Any, get_user_model().objects)
+        manager = get_user_model().objects
         base = re.sub(r"[^\w.@+-]", "-", seed).strip("-")[:140] or "oidc-user"
         candidate = base
         suffix = 1
@@ -302,7 +302,7 @@ def resolve(
     sub: str,
     email: str | None,
     claims: dict[str, Any],
-) -> AbstractBaseUser:
+) -> _User:
     """Resolve OIDC claims to a host user, linking or provisioning when policy allows.
 
     The identity-resolution seam the login completion calls (and callers/tests can

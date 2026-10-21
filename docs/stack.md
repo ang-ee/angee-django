@@ -16,12 +16,13 @@ Dependency changes must update this file in the same change.
   composed manifests into the host's generated `[dependency-groups].addons` key.
   `uv.lock` pins the resolved Python graph. The `angee.graphql` folder addon's
   manifest owns its Strawberry stack, Channels Redis adapter, and the exact
-  Strawberry fork reference. strawberry-django, REBAC, Hasura and aggregates use
-  published release floors in their owning manifests and registry artifacts in
-  `uv.lock`. A distribution the core wheel requires has one exact pin, the
+  Strawberry fork reference. Native corrections to Django typing, enum fields,
+  REBAC, Strawberry Django, and aggregates use immutable upstream Git references
+  in their owning manifests; the lock records their resolved revisions. Other
+  dependencies use published release bounds. A distribution the core wheel requires has one exact pin, the
   core's: a manifest adds only extras and a floor, so a core bump never
-  contradicts a host's generated group. The Strawberry fork remains necessary for native input/object
-  extensions; every other Python dependency tracks its PyPI release.
+  contradicts a host's generated group. The Strawberry fork supplies native
+  input/object extensions.
   Use `uv add` / `uv lock`; do not use `pip install` by hand.
 - Package `package.json` files own scripts and declared JavaScript dependencies.
   The installing workspace's `pnpm-workspace.yaml` owns membership and its
@@ -43,9 +44,10 @@ into a remote permission store.
 | Pick | Owns | Angee adds |
 |---|---|---|
 | Python >= 3.14 | Runtime and typing | Project conventions |
+| tldextract >= 5.3, < 6 | Public Suffix List registrable-domain parsing, including private suffixes | Bundled PSL snapshot with request-time networking disabled |
 | Django >= 6.0, < 6.1 | ORM, migrations, admin, auth contract, app registry, response security headers (`SecurityMiddleware`, `ContentSecurityPolicyMiddleware` with per-view `csp_override`) | Abstract bases and build-time composition into runtime apps; the composer installs both security middlewares. |
 | strawberry-django >= 0.89.2 | GraphQL types, dataloaders, schema printing, and the create resolver, which without a pre-save hook persists through `manager.create(**kwargs)`; on a REBAC manager that composes `RebacQuerySet.insert`, so queryset factories and the candidate gate run for GraphQL creates. Upstream PR strawberry-graphql/strawberry-django#959 proposes persisting the same prepared instance the resolver validated | Merge addon schema parts into named schemas, public-ID decoding, `changes` subscription shortcuts, emit SDL, serve per name; the write backend passes no pre-save hook |
-| django-choices-field | Enum-backed model fields | `StateField` semantic wrapper |
+| django-choices-field | Enum-backed model fields, precise nullable descriptors, and runtime generic field subscriptions | `StateField` semantic wrapper; immutable upstream correction pinned by the core manifest |
 | django-countries >= 9, < 10 | Configurable ISO 3166-1 country choices, overrides, localized names, and translated display names | `angee.parties.fields.CountryCodeField` preserves configured codes and names, stores alpha-2 as a plain string, and exposes the upstream choices through resource metadata |
 | pycountry >= 26, < 27 | Complete ISO country code and official/common-name lookup | `angee.parties.fields.CountryCodeField` uses the upstream catalogue only when the configured django-countries catalogue has no match |
 | strawberry-django-aggregates >= 0.14.0 | Aggregation, JSON-path grouping, canonical group naming/type helpers, blank-allowed choice buckets distinct from null, caller-owned to-one group expressions and to-one relation-key overrides (unreadable parents merge into one exact null bucket), group key encoders and exact grouped cardinality, plus in-memory grouping of computed rows over an abstract row model (`make_row_model`/`compute_row_aggregation`) | Declarative dimensions/measures, schema-owned bucket value mappings, public-ID key encoding and actor-scoped related-axis expressions |
@@ -328,7 +330,7 @@ calendar.
 | Cobra | `angee` CLI implementation | Dev supervisor, init, workspaces, templates |
 | hatchling | Python wheel build | Package metadata conventions |
 | ruff | Python lint and format | Repo checks |
-| mypy | Python type checking | Strict backend checks |
+| mypy + django-stubs[compatible-mypy] | Python and Django ORM type checking, model descriptors, managers, and TextChoices enums | Immutable upstream corrections pinned by the dev manifest; the native plugin uses the full composer-owned model registry in [`tests.typing_settings`](../tests/typing_settings.py), isolated from the live stack and pytest |
 | pytest + pytest-django + pytest-xdist + pytest-randomly | Backend tests, native test-database setup and transactional flush, worker isolation, and opt-in randomized ordering | Synthetic projects, addon-owned [`workflows`](../addons/angee/workflows/testing/__init__.py) and [`integrate`](../addons/angee/integrate/testing/__init__.py) test compositions, central [`decisions`](../addons/angee/decisions/testing/models.py) model registration; generic [`composed_tables`](../angee/testing/fixtures.py) permission synchronization; CI schedules SQLite tests by file |
 | pytest-split | Splitting the suite into duration-balanced shards from stored test durations | The CI `uv` lane's six shards and the committed [`.test_durations`](../.test_durations); [Checks](checks.md#what-ci-actually-runs) owns when to refresh it |
 | Faker | Test and seed data generation | Bulk lorem fixtures (e.g. `seed_lorem_notes`) |
@@ -340,12 +342,6 @@ calendar.
 | Storybook | Component workshop | `@angee/ui` and addon previews |
 | GitHub Actions | CI | Implemented build/type/test lanes and repository policies; [Checks](checks.md#what-ci-actually-runs) distinguishes local requirements and manual browser verification |
 | Copier | Project and addon templates | Angee templates |
-
-**Typing stack decision pending.** Mypy cannot type Django `TextChoices` members
-in `integrate` and `parties` without `django-stubs`; eight errors are known
-there. Decide whether to add and configure `django-stubs` in the
-tooling manifest and lock, then resolve the eight errors. The dependency
-decision blocks a code-only workaround or a claim that the type check is clean.
 
 ## Proposed, Not Locked
 

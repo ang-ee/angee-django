@@ -26,7 +26,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 from math import isfinite
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -75,8 +75,8 @@ class Feed(models.Model, metaclass=RebacModelBase):
     """
 
     runtime = True
-    extends = "messaging.Channel"
-    integration_create_mode = IntegrationCreateMode.FORM
+    extends: ClassVar[str | None] = "messaging.Channel"
+    integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.FORM
     live_impl_field = None
 
     feed_backend_class = ImplClassField(
@@ -108,27 +108,21 @@ class Feed(models.Model, metaclass=RebacModelBase):
         rebac_resource_type = "posts/feed"
 
     @property
-    def backend(self) -> FeedBackend:
+    def feed_backend(self) -> FeedBackend:
         """Return this feed's selected backend, bound to this row."""
 
-        backend_class = cast("type[FeedBackend]", self.resolve_impl("feed_backend_class"))
+        backend_class = type(self).feed_backend_class.field.resolve_for(self)
         return backend_class(self)
 
     def can_reconcile_delivery(self) -> bool:
         """Read the provider hook declaration without constructing its transport."""
 
-        return cast("type[FeedBackend]", self.resolve_impl("feed_backend_class")).reconciles_delivery()
+        return type(self).feed_backend_class.field.resolve_for(self).reconciles_delivery()
 
     def delivery_visibility_delay(self) -> timedelta:
         """Read the feed provider's propagation margin from its backend class."""
 
-        return cast("type[FeedBackend]", self.resolve_impl("feed_backend_class")).delivery_visibility_delay
-
-    @property
-    def capability_impl(self) -> FeedBackend:
-        """Use the feed selector when Integration dispatches a capability."""
-
-        return self.backend
+        return type(self).feed_backend_class.field.resolve_for(self).delivery_visibility_delay
 
     def test_connection(self) -> str:
         """Use the inherited credential probe for a periodic feed."""
@@ -336,7 +330,7 @@ class ThreadPublic(models.Model):
     ``visibility`` discriminators stay owned by messaging.
     """
 
-    extends = "messaging.Thread"
+    extends: ClassVar[str | None] = "messaging.Thread"
 
     subject_url = models.URLField(max_length=1024, blank=True, default="")
 
@@ -358,9 +352,9 @@ class MessagePublic(models.Model):
     onto the single ``messaging.Message`` table.
     """
 
-    extends = "messaging.Message"
+    extends: ClassVar[str | None] = "messaging.Message"
 
-    hasura_filterable_fields = ("is_original_post",)
+    hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("is_original_post",)
 
     is_original_post = models.BooleanField(default=False)
 
@@ -369,7 +363,10 @@ class MessagePublic(models.Model):
         """Whether this row's current trash is the provider's moderation, stamped at ingest."""
 
         message = cast("Message", self)
-        return message.is_trashed and message.local_metadata.get("provider_hidden") == message.trashed_at.isoformat()
+        return (
+            message.trashed_at is not None
+            and message.local_metadata.get("provider_hidden") == message.trashed_at.isoformat()
+        )
 
     def top_level_comment(self) -> Any:
         """Resolve the provider anchor once within this feed's parent chain."""
@@ -404,7 +401,8 @@ class MessagePublic(models.Model):
         connection = connections[using]
         table = connection.ops.quote_name(message._meta.db_table)
         body_sql, body_params = apps.get_model("messaging", "Part").objects.plain_body_sql(
-            "c.id", connection=connection,
+            "c.id",
+            connection=connection,
         )
         active, possible = message.ACTIVE_OUTBOUND_STATUSES, message.POSSIBLY_PUBLIC_STATUSES
         active_in, possible_in = (", ".join(["%s"] * len(statuses)) for statuses in (active, possible))
@@ -439,8 +437,19 @@ class MessagePublic(models.Model):
             JOIN bodies own_body ON own_body.id = own.candidate_id
             JOIN bodies other_body ON other_body.id = other.candidate_id AND other_body.body = own_body.body
             WHERE own.candidate_id = %s LIMIT 1"""
-        params = [message.pk, message.channel_id, lower_bound, lower_bound, *active, *possible,
-                  message.channel_id, message.channel_id, message.channel_id, *body_params, message.pk]
+        params = [
+            message.pk,
+            message.channel_id,
+            lower_bound,
+            lower_bound,
+            *active,
+            *possible,
+            message.channel_id,
+            message.channel_id,
+            message.channel_id,
+            *body_params,
+            message.pk,
+        ]
         with system_context(reason="posts.reply.reconciliation"):
             with connection.cursor() as cursor:
                 cursor.execute(sql, params)
@@ -455,12 +464,23 @@ class MessagePublic(models.Model):
 
         message = cast("Message", self)
         with system_context(reason="posts.reply.evidence"):
-            sender_id, channel_id = type(message)._base_manager.filter(pk=message.pk).values_list(
-                "sender_id", "channel_id",
-            ).get()
-            handle_id = apps.get_model("posts", "Feed")._base_manager.filter(
-                pk=channel_id,
-            ).values_list("handle_id", flat=True).first()
+            sender_id, channel_id = (
+                type(message)
+                ._base_manager.filter(pk=message.pk)
+                .values_list(
+                    "sender_id",
+                    "channel_id",
+                )
+                .get()
+            )
+            handle_id = (
+                apps.get_model("posts", "Feed")
+                ._base_manager.filter(
+                    pk=channel_id,
+                )
+                .values_list("handle_id", flat=True)
+                .first()
+            )
             if handle_id is not None and sender_id == handle_id:
                 return True
             replies = type(message)._base_manager.filter(parent_id=message.pk, channel_id=channel_id)
@@ -473,7 +493,11 @@ class MessagePublic(models.Model):
             return replies.filter((models.Q(is_trashed=False) & active) | possible).exists()
 
     def reply_to_comment(
-        self, *, body: str, actor: Any, local: Mapping[str, Any] | None = None,
+        self,
+        *,
+        body: str,
+        actor: Any,
+        local: Mapping[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> Message:
         """Apply feed reply policy over messaging's idempotent Python-only factory.
@@ -489,19 +513,32 @@ class MessagePublic(models.Model):
             parent = type(self).objects.with_actor(actor).lock_if_supported(no_key=True).filter(pk=self.pk).first()
             if parent is None:
                 raise PermissionDenied("Comment read access is required.")
-            if (parent.is_trashed or parent.direction != parent.Direction.INBOUND
-                    or parent.is_original_post or parent.parent_id is None):
+            if (
+                parent.is_trashed
+                or parent.direction != parent.Direction.INBOUND
+                or parent.is_original_post
+                or parent.parent_id is None
+            ):
                 raise ValidationError("Reply requires an inbound comment with an available parent.")
+            if parent.channel_id is None:
+                raise ValidationError("The comment's feed has no publishing identity.")
             feed = apps.get_model("posts", "Feed").objects.with_actor(actor).filter(pk=parent.channel_id).first()
             if feed is None or feed.handle_id is None:
                 raise ValidationError("The comment's feed has no publishing identity.")
+
             def admit(comment: Any) -> None:
                 if comment.reply_state():
                     raise CommentAnswered("The comment is already answered.")
 
             return apps.get_model("messaging", "Message").objects.compose_reply(
-                parent, body=body, sender=feed.handle, actor=actor, local=local, idempotency_key=idempotency_key,
-                scheduled_at=feed.reply_schedule(), queued=feed.reply_hold == 0,
+                parent,
+                body=body,
+                sender=feed.handle,
+                actor=actor,
+                local=local,
+                idempotency_key=idempotency_key,
+                scheduled_at=feed.reply_schedule(),
+                queued=feed.reply_hold == 0,
                 admit=admit,
             )
 

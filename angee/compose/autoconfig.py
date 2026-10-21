@@ -8,7 +8,7 @@ import os
 from collections import ChainMap
 from collections.abc import Mapping, MutableMapping
 from types import ModuleType
-from typing import Any
+from typing import Any, TypedDict
 
 import django_yamlconf
 from django.apps import AppConfig
@@ -138,7 +138,16 @@ class AutoConfig:
         return contributed, derived
 
 
-SETTINGS = {
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "MIDDLEWARE:prepend": list[str],
+        "MIDDLEWARE:append": list[str],
+        "ANGEE_WEB_STATEMENT_TIMEOUT": int,
+    },
+)
+
+SETTINGS: _Settings = {
     # Django's response security headers (SECURE_* settings, nosniff among them) lead
     # the stack; its CSP middleware applies SECURE_CSP and each view's csp_override.
     "MIDDLEWARE:prepend": ["django.middleware.security.SecurityMiddleware"],

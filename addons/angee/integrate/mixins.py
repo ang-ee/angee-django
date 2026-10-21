@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Self
 
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
 
 from angee.integrate.states import SyncFailure, SyncFailureKind, SyncFailureStatus
+from angee.models.query import AngeeQuerySet
 
 if TYPE_CHECKING:
     from angee.integrate.models import SyncStream
@@ -37,7 +38,9 @@ class SyncStateMixin(models.Model):
     def _lock_sync_state(self) -> Self:
         stream = self.failure_stream
         type(stream).objects.lock_current(stream)
-        return cast(Self, type(self)._default_manager.lock_if_supported().get(pk=self.pk))
+        rows = type(self)._default_manager.get_queryset()
+        assert isinstance(rows, AngeeQuerySet)
+        return rows.lock_if_supported().get(pk=self.pk)
 
     def on_sync_state_saved(self, locked: Self) -> None:
         """Persist inbound state and refresh the caller; links extend the saved fields."""

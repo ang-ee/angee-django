@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 class CredentialOidc(models.Model):
     """Prevent explicit disconnect from removing the user's last sign-in method."""
 
-    extends = "integrate.Credential"
+    extends: ClassVar[str | None] = "integrate.Credential"
 
     class Meta:
         """Abstract behavior contributed to the native credential model."""
@@ -33,19 +33,23 @@ class CredentialOidc(models.Model):
         credential = cast("Credential", self)
         if credential.kind != CredentialKind.OAUTH:
             return
-        oauth_field = credential._meta.get_field("oauth_client")
+        if credential.oauth_client_id is None:
+            return
+        oauth_field = type(credential).oauth_client.field
         # Disconnect must honor current login policy rather than a cached related row.
         oauth_client = oauth_field.related_model._base_manager.filter(pk=credential.oauth_client_id).first()
         if oauth_client is None or not oauth_client.login_enabled:
             return
-        user_field = credential._meta.get_field("user")
+        user_field = type(credential).user.field
+        assert credential.user_id is not None
         # A password may have changed since this credential cached its user.
         user = user_field.related_model._base_manager.get(pk=credential.user_id)
         if user.has_usable_password():
             return
         with system_context(reason="iam_integrate_oidc.unlink.guard"):
             account_count = (
-                type(credential).objects.filter(
+                type(credential)
+                .objects.filter(
                     user_id=credential.user_id,
                     kind=CredentialKind.OAUTH,
                     oauth_client__login_enabled=True,
@@ -68,8 +72,8 @@ class OAuthClientOidc(models.Model):
     ``login_enabled`` is the discriminator for public login/link flows.
     """
 
-    extends = "integrate.OAuthClient"
-    hasura_insertable_fields = (
+    extends: ClassVar[str | None] = "integrate.OAuthClient"
+    hasura_insertable_fields: ClassVar[tuple[str, ...]] = (
         "issuer",
         "jwks_uri",
         "login_enabled",
@@ -77,8 +81,8 @@ class OAuthClientOidc(models.Model):
         "create_on_login",
         "allowed_email_domains",
     )
-    hasura_readable_fields = hasura_insertable_fields
-    hasura_updatable_fields = hasura_insertable_fields
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = hasura_insertable_fields
+    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_insertable_fields
 
     issuer = models.URLField(blank=True)
     jwks_uri = models.URLField(blank=True)

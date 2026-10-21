@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from django.apps import apps
 from import_export import fields, widgets
 from pydantic import ValidationError as PydanticValidationError
 
@@ -54,6 +55,7 @@ class WorkflowExtensionResourceKind(ResourceEntryKind):
             for xref in group.dataset["_xref"]:
                 instance = resource.instance_for_xref(xref)
                 if instance is not None:
+                    assert isinstance(instance, apps.get_model("workflows", "Workflow"))
                     loaded.add(instance.key)
         missing = sorted({item.extension.extends for item in declarations} - loaded)
         if missing:

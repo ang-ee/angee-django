@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -22,19 +22,21 @@ from angee.messaging_integrate_imap.backend import (
 class ImapChannelSampling(models.Model):
     """Compose bounded imports without a second channel, cursor or intake ledger."""
 
-    extends = "messaging.Channel"
+    extends: ClassVar[str | None] = "messaging.Channel"
 
     class Meta:
         abstract = True
 
-    def _require_paused_imap(self, actor: Any) -> None:
+    def _require_paused_imap(self, actor: Any) -> ImapChannelBackend:
         """Require explicit write access to one paused IMAP channel."""
 
         self.require_access("write", actor)
         if self.lifecycle != self.Lifecycle.PAUSED:
             raise ValidationError("Pause this IMAP channel before changing its mailbox position.")
-        if not isinstance(self.backend, ImapChannelBackend):
+        backend = self.backend
+        if not isinstance(backend, ImapChannelBackend):
             raise ValidationError("Mailbox positioning is available for IMAP channels.")
+        return backend
 
     def prepare_imap_new_mail(self, *, actor: Any) -> tuple[int, bool]:
         """Atomically exclude the selected mailboxes' current contents from live sync.
@@ -50,11 +52,11 @@ class ImapChannelSampling(models.Model):
                 "credential__external_account",
                 "credential__oauth_client",
             ).get(pk=self.pk)
-            current._require_paused_imap(actor)
+            backend = current._require_paused_imap(actor)
             with bridge_advisory_lock(current) as acquired:
                 if not acquired:
                     raise ValidationError("The channel is busy. Retry when its current operation finishes.")
-                boundary = current.backend.prepare_new_mail_boundary()
+                boundary = backend.prepare_new_mail_boundary()
                 with transaction.atomic():
                     locked = (
                         channel_model.objects.sudo(
@@ -63,7 +65,7 @@ class ImapChannelSampling(models.Model):
                         .lock_if_supported(of=())
                         .get(pk=self.pk)
                     )
-                    locked._require_paused_imap(actor)
+                    locked_backend = locked._require_paused_imap(actor)
                     if locked.config != current.config or locked.credential_id != current.credential_id:
                         raise ValidationError("The channel configuration changed. Set the starting point again.")
                     locked.config = {
@@ -73,7 +75,7 @@ class ImapChannelSampling(models.Model):
                         "mailbox_selection": sorted(boundary.cursors),
                     }
                     locked.save(update_fields=["config", "updated_at"])
-                    locked.backend.apply_new_mail_boundary(boundary)
+                    locked_backend.apply_new_mail_boundary(boundary)
             return len(boundary.cursors), boundary.changed
 
     def preview_imap_sample(
@@ -92,8 +94,8 @@ class ImapChannelSampling(models.Model):
             )
             .get(pk=self.pk)
         )
-        current._require_paused_imap(actor)
-        return current.backend.preview_sample(request)
+        backend = current._require_paused_imap(actor)
+        return backend.preview_sample(request)
 
     def import_imap_sample(
         self,
@@ -119,11 +121,11 @@ class ImapChannelSampling(models.Model):
             )
             .get(pk=self.pk)
         )
-        current._require_paused_imap(actor)
+        backend = current._require_paused_imap(actor)
         with bridge_advisory_lock(current) as acquired:
             if not acquired:
                 raise ValidationError("The channel is busy. Retry when its current operation finishes.")
-            parsed, imported_uids, flags_unchanged = current.backend.fetch_sample(
+            parsed, imported_uids, flags_unchanged = backend.fetch_sample(
                 mailbox=mailbox,
                 uidvalidity=uidvalidity,
                 uids=uids,

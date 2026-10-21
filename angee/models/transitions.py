@@ -76,10 +76,12 @@ from typing import Any, NoReturn, cast
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models, transaction
+from django.db.models.fields.mixins import FieldCacheMixin
 from django.db.models.query_utils import DeferredAttribute
 from django.db.models.signals import class_prepared
 
 from angee.fields import StateField, enum_member_for
+from angee.models.query import SystemQuerysetMixin
 
 Condition = Callable[[models.Model], bool]
 SuccessHook = Callable[..., None]
@@ -492,7 +494,7 @@ class StateTransitions:
     def _reload_state(cls, instance: models.Model) -> Iterator[None]:
         """Authorize guarded hydration only inside AngeeModel.refresh_from_db."""
 
-        fields = {instance._meta.get_field(name).attname for name in cls.get_field_names(type(instance))}
+        fields = {declaration.field.attname for declaration in cls._iter_declarations(type(instance))}
         with cls._allow_write(instance, fields):
             yield
 
@@ -515,13 +517,18 @@ class StateTransitions:
             raise ValueError("Copy requires the same primary key.")
         if source._state.adding:
             raise ValueError("Copy requires a persisted source row.")
-        model_fields = (source._meta.get_field(name) for name in fields)
+        model_fields = []
+        for name in fields:
+            field = source._meta.get_field(name)
+            if not isinstance(field, models.Field):
+                raise TypeError(f"{source._meta.label}.{name} is not a forward field.")
+            model_fields.append(field)
         values = [(field, source.__dict__[field.attname]) for field in model_fields]
         guarded = cls.get_field_names(type(instance))
         with cls._allow_write(instance, {field.attname for field, _ in values if field.name in guarded}):
             for field, value in values:
                 setattr(instance, field.attname, value)
-                if field.is_relation and field.is_cached(instance):
+                if isinstance(field, FieldCacheMixin) and field.is_cached(instance):
                     field.delete_cached_value(instance)
 
     @staticmethod
@@ -636,6 +643,8 @@ def _verify_uncontended_source(
 ) -> None:
     """Lock the row and reject a committed state that already left ``source``."""
 
+    if not isinstance(instance, SystemQuerysetMixin):
+        raise TypeError("Guarded state transitions require SystemQuerysetMixin.")
     reader = type(instance).system_queryset(lock=("self",))
     committed = reader.filter(pk=instance.pk).values_list(field_name, flat=True).first()
     field = cast(StateField, instance._meta.get_field(field_name))

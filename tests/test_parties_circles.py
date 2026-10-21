@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import to_subject_ref
 
@@ -259,6 +261,32 @@ def test_circle_membership_is_unique_per_pair(composed_tables: None) -> None:
         CircleMember._base_manager.create(circle=circle, party=party, created_by=owner)
         with pytest.raises(IntegrityError), transaction.atomic():
             CircleMember._base_manager.create(circle=circle, party=party, created_by=owner)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("decision", ("confirm", "dismiss"))
+def test_circle_membership_decisions_preserve_confidence_and_update_timestamp(
+    composed_tables: None, decision: str,
+) -> None:
+    """Review flags and their native timestamp belong to the membership owner."""
+
+    del composed_tables
+    with system_context(reason="test membership decision timestamp"):
+        owner = _user("membership-reviewer")
+        circle = Circle._base_manager.create(name="Team", created_by=owner)
+        party = Party._base_manager.create(display_name="Maya", created_by=owner)
+        row = CircleMember._base_manager.create(circle=circle, party=party, confidence=0.3, created_by=owner)
+        previous = timezone.now() - timedelta(days=1)
+        CircleMember._base_manager.filter(pk=row.pk).update(updated_at=previous)
+        row.refresh_from_db()
+
+        getattr(row, decision)()
+        row.refresh_from_db()
+
+    assert row.confidence == 0.3
+    assert row.is_confirmed is (decision == "confirm")
+    assert row.is_dismissed is (decision == "dismiss")
+    assert row.updated_at > previous
 
 
 @pytest.mark.django_db(transaction=True)

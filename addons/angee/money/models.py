@@ -23,7 +23,7 @@ the converted amount at the point that owns the business policy.
 from __future__ import annotations
 
 from decimal import MAX_EMAX, MAX_PREC, MIN_EMIN, Context, Decimal
-from typing import Any
+from typing import Any, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -43,6 +43,7 @@ from angee.models import (
     HistoryMixin,
     role_anchor,
 )
+from angee.models.query import SystemQuerysetMixin
 from angee.money.rounding import RoundingMode, rounding_constant
 from angee.numeric import quantize
 from angee.refs import MergePolicy, RecordRefMixin
@@ -71,7 +72,7 @@ def reference_currency_code() -> str:
     return str(code)
 
 
-class CurrencyQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
+class CurrencyQuerySet[CurrencyT: Currency](ArchiveQuerySet[CurrencyT], AngeeQuerySet[CurrencyT]):
     """Archive read scopes layered over the REBAC-scoped currency queryset."""
 
 
@@ -145,9 +146,7 @@ class Currency(ArchiveMixin, AngeeDataModel):
         """
 
         if (context is None) != (reference_currency is None):
-            raise ValidationError(
-                "Contextual currency conversion requires its explicit reference currency."
-            )
+            raise ValidationError("Contextual currency conversion requires its explicit reference currency.")
         rates = apps.get_model(self._meta.app_label, "CurrencyRate").objects
         if context is not None:
             rates.validate_context_reference(context, reference_currency)
@@ -157,20 +156,24 @@ class Currency(ArchiveMixin, AngeeDataModel):
         )
         if canonical_source.pk == canonical_target.pk:
             return amount
-        return amount * rates.rate_for(
-            canonical_target,
-            on_date,
-            context=context,
-            reference_currency=reference_currency,
-        ) / rates.rate_for(
-            canonical_source,
-            on_date,
-            context=context,
-            reference_currency=reference_currency,
+        return (
+            amount
+            * rates.rate_for(
+                canonical_target,
+                on_date,
+                context=context,
+                reference_currency=reference_currency,
+            )
+            / rates.rate_for(
+                canonical_source,
+                on_date,
+                context=context,
+                reference_currency=reference_currency,
+            )
         )
 
 
-class CurrencyRateQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
+class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeQuerySet[RateT]):
     """Protect contextual identity fields that also govern rate visibility."""
 
     _identity_fields = {
@@ -194,8 +197,16 @@ class CurrencyRateQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
         return super().update(**kwargs)
 
 
-class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # type: ignore[misc]
+_CurrencyRateManagerBase = AngeeManager.from_queryset(CurrencyRateQuerySet)
+
+
+class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
     """Resolves the effective exchange rate for a currency on a date."""
+
+    def get_queryset(self) -> CurrencyRateQuerySet[RateT]:
+        """Preserve the configured queryset and currency-rate row type."""
+
+        return cast(CurrencyRateQuerySet[RateT], super().get_queryset())
 
     def rate_for(
         self,
@@ -216,9 +227,7 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
         """
 
         if (context is None) != (reference_currency is None):
-            raise ValidationError(
-                "Contextual currency conversion requires its explicit reference currency."
-            )
+            raise ValidationError("Contextual currency conversion requires its explicit reference currency.")
         canonical_currency, canonical_reference = self._canonical_currencies(
             currency,
             reference_currency,
@@ -226,11 +235,7 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
         context_ref = None
         if context is not None:
             context_ref = self._canonical_context(context)
-        code = (
-            reference_currency_code()
-            if reference_currency is None
-            else str(canonical_reference.code)
-        )
+        code = reference_currency_code() if reference_currency is None else str(canonical_reference.code)
         if not code:
             raise ValidationError("The contextual reference currency is invalid.")
         if canonical_currency.code == code:
@@ -254,11 +259,7 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
                 context_object_id=str(context_ref.object_id),
                 reference_currency=canonical_reference,
             )
-        ordering = (
-            ("-date",)
-            if context is None
-            else ("-source_priority", "-date")
-        )
+        ordering = ("-date",) if context is None else ("-source_priority", "-date")
         rate = rates.order_by(*ordering).values_list("rate", flat=True).first()
         if rate is None:
             raise self.model.DoesNotExist(
@@ -291,7 +292,7 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
         except ValueError as error:
             raise ValidationError("A contextual currency rate requires one saved, typed context.") from error
         model = canonical.content_type.model_class()
-        if not hasattr(model, "system_queryset"):
+        if model is None or not issubclass(model, SystemQuerysetMixin):
             raise ValidationError("The currency-rate context is not a canonical resource.")
         if not model.system_queryset().filter(pk=canonical.object_id).exists():
             raise ValidationError("The currency-rate context is unavailable.")
@@ -299,33 +300,23 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
 
     def _canonical_currencies(
         self, currency: models.Model, reference_currency: models.Model | None
-    ) -> tuple[models.Model, models.Model]:
+    ) -> tuple[Currency, Currency]:
         if currency is None or currency.pk is None:
             raise ValidationError("Currency-rate reads require saved canonical currencies.")
-        declared_model = self.model._meta.get_field("currency").related_model
+        declared_model = self.model.currency.field.related_model
         if not isinstance(currency, declared_model):
             raise ValidationError("Currency-rate reads require the canonical Currency model.")
         if reference_currency is not None and (
-            not isinstance(reference_currency, declared_model)
-            or reference_currency.pk is None
+            not isinstance(reference_currency, declared_model) or reference_currency.pk is None
         ):
             raise ValidationError("Contextual currency rates require canonical currencies.")
-        ids = {currency.pk} | (
-            set() if reference_currency is None else {reference_currency.pk}
-        )
-        rows = {
-            row.pk: row
-            for row in declared_model.system_queryset()
-            .filter(pk__in=ids)
-            .order_by("pk")
-        }
+        ids = {currency.pk} | (set() if reference_currency is None else {reference_currency.pk})
+        rows = {row.pk: row for row in declared_model.system_queryset().filter(pk__in=ids).order_by("pk")}
         if set(rows) != ids:
             raise ValidationError("A contextual currency is unavailable.")
         return (
             rows[currency.pk],
-            rows[currency.pk]
-            if reference_currency is None
-            else rows[reference_currency.pk],
+            rows[currency.pk] if reference_currency is None else rows[reference_currency.pk],
         )
 
 
@@ -425,32 +416,25 @@ class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel):
         """Keep every rate slot identity immutable after its first persistence."""
 
         with transaction.atomic():
-            self.date = self._meta.get_field("date").to_python(self.date)
-            rate_field = self._meta.get_field("rate")
+            self.date = type(self).date.field.to_python(self.date)
+            rate_field = type(self).rate.field
             self.rate = rate_field.to_python(self.rate)
-            self.source_priority = self._meta.get_field("source_priority").to_python(
-                self.source_priority
-            )
+            self.source_priority = type(self).source_priority.field.to_python(self.source_priority)
             if self.date is None or self.rate is None or self.rate <= 0:
-                raise ValidationError(
-                    "A currency rate requires a date and positive finite rate."
-                )
-            if (
-                isinstance(self.source_priority, bool)
-                or self.source_priority is None
-                or self.source_priority < 0
-            ):
-                raise ValidationError(
-                    "A currency rate requires a non-negative source priority."
-                )
-            normalized = self.rate.normalize(
-                Context(prec=MAX_PREC, Emax=MAX_EMAX, Emin=MIN_EMIN)
-            )
+                raise ValidationError("A currency rate requires a date and positive finite rate.")
+            if isinstance(self.source_priority, bool) or self.source_priority is None or self.source_priority < 0:
+                raise ValidationError("A currency rate requires a non-negative source priority.")
+            normalized = self.rate.normalize(Context(prec=MAX_PREC, Emax=MAX_EMAX, Emin=MIN_EMIN))
             rate_field.run_validators(normalized)
             if self.pk is not None:
-                previous = type(self).system_queryset(
-                    lock=("self",),
-                ).filter(pk=self.pk).first()
+                previous = (
+                    type(self)
+                    .system_queryset(
+                        lock=("self",),
+                    )
+                    .filter(pk=self.pk)
+                    .first()
+                )
                 if previous is not None:
                     identity = (
                         "currency_id",
@@ -460,21 +444,11 @@ class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel):
                         "reference_currency_id",
                     )
                     update_fields = kwargs.get("update_fields")
-                    written = (
-                        set(identity)
-                        if update_fields is None
-                        else {str(value) for value in update_fields}
-                    )
+                    written = set(identity) if update_fields is None else {str(value) for value in update_fields}
                     for name in identity:
-                        field = next(
-                            field
-                            for field in self._meta.fields
-                            if name in {field.name, field.attname}
-                        )
+                        field = next(field for field in self._meta.fields if name in {field.name, field.attname})
                         is_written = field.name in written or field.attname in written
-                        if is_written and getattr(self, field.attname) != getattr(
-                            previous, field.attname
-                        ):
+                        if is_written and getattr(self, field.attname) != getattr(previous, field.attname):
                             raise ValidationError("Currency-rate identity is immutable.")
                         if not is_written:
                             setattr(self, field.attname, getattr(previous, field.attname))

@@ -267,7 +267,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
     def _local_states(
         self, stream: Any, keys: Iterable[str], *, links: Iterable[Any]
-    ) -> dict[str, tuple[Any, Any, str]]:
+    ) -> dict[str, tuple[Any | None, dict[str, Any] | None]]:
         keys = set(keys)
         if not keys:
             return {}
@@ -290,7 +290,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             states[key] = person, projection
         return states
 
-    def _local_state(self, stream: Any, external_key: str) -> tuple[Any, Any]:
+    def _local_state(self, stream: Any, external_key: str) -> tuple[Any | None, dict[str, Any] | None]:
         links = apps.get_model("integrate", "RecordLink").objects.filter(stream=stream, external_key=external_key)
         return self._local_states(stream, (external_key,), links=links)[external_key]
 
@@ -430,6 +430,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             link.withdraw_statements()
             projection = contact_projection(parties.project_contact(target)) if target is not None else None
         else:
+            assert parsed is not None  # Only tombstones omit the parsed contact.
             target = parties.ingest_contact(
                 parsed,
                 folder=self._folder(stream),

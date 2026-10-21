@@ -1,11 +1,11 @@
-import { Field, Group } from "@angee/ui";
+import { Field, Group, optionToken } from "@angee/ui";
 import { type Row } from "@angee/metadata";
 import type { ReactElement } from "react";
 
-import { useIamT } from "../i18n";
+import { useOidcT } from "../i18n";
 
-// iam owns the OIDC provider-type impls (GenericOidc, Google). The tab those impls
-// enable shows only when the OAuth client's provider_type is one of them — keeping
+// This addon owns the OIDC provider-type impls (GenericOidc, Google). Their tab
+// shows only when the OAuth client's provider_type is one of them — keeping
 // the predicate here, with the addon that owns the impls, leaves integrate's OAuth
 // form OIDC-agnostic (and a project without this addon composes with no OIDC tab).
 // Reads tolerate both the lowercase create value and the UPPERCASE read casing of
@@ -13,9 +13,7 @@ import { useIamT } from "../i18n";
 const OIDC_PROVIDER_TYPES = ["google", "generic_oidc"];
 
 function isOidcProvider(values: Row): boolean {
-  return OIDC_PROVIDER_TYPES.includes(
-    String(values.provider_type ?? "").trim().toLowerCase(),
-  );
+  return OIDC_PROVIDER_TYPES.includes(optionToken(values.provider_type));
 }
 
 /**
@@ -25,7 +23,7 @@ function isOidcProvider(values: Row): boolean {
  * The fields are native on `OAuthClient` (folded in by the OIDC `extends` model).
  */
 function OidcSectionLabel(): ReactElement {
-  const t = useIamT();
+  const t = useOidcT();
   return <>{t("oidc.section")}</>;
 }
 

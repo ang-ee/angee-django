@@ -39,6 +39,8 @@ from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
 from angee.identity import public_subject_ref
 from angee.integrate.schema import BridgeTypeMixin
 from angee.parties.managers import DisplayAvatarPrefetches
+from angee.parties.models import Party as PartyModel
+from angee.parties.models import RelationshipKind as RelationshipKindModel
 from angee.storage.schema import FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
@@ -121,10 +123,10 @@ class PartyType(AuthoredRefMixin, AngeeNode):
         return cast(Any, Party.objects.display_avatar(cast(Any, self), actor=session_user(info)))
 
     @strawberry.field
-    def concrete_kind(self) -> RelationshipKind.PartyKind | None:
+    def concrete_kind(parent: strawberry.Parent[PartyModel]) -> RelationshipKindModel.PartyKind | None:
         """Return the native MTI subtype used for canonical Party navigation."""
 
-        return Party.concrete_kind.fget(self)
+        return parent.concrete_kind
 
     handles: list["HandleType"]
 
@@ -589,11 +591,8 @@ class PartiesDirectoryMutation:
         user = session_user(info)
         credential_model = apps.get_model("integrate", "Credential")
         vendor_model = apps.get_model("integrate", "Vendor")
-        credential_values = {
-            "kind": "basic_auth",
-            "name": f"CardDAV — {name}",
-            "material": {"username": username, "password": password},
-        }
+        credential_name = f"CardDAV — {name}"
+        credential_material = {"username": username, "password": password}
         directory_values = {
             "owner": user,
             "backend_class": "carddav",
@@ -605,12 +604,22 @@ class PartiesDirectoryMutation:
 
         # Complete validation and network discovery before opening the database
         # transaction. Both rows are intentionally unsaved probe inputs.
-        probe_credential = credential_model.objects.prepare_local_credential(user, **credential_values)
+        probe_credential = credential_model.objects.prepare_local_credential(
+            user,
+            kind="basic_auth",
+            name=credential_name,
+            material=credential_material,
+        )
         Directory(credential=probe_credential, **directory_values).backend.probe()
 
         # Persist every owned row in one write-only transaction after the probe.
         with system_context(reason="parties.graphql.connect_carddav"), transaction.atomic():
-            credential = credential_model.objects.create_local_credential(user, **credential_values)
+            credential = credential_model.objects.create_local_credential(
+                user,
+                kind="basic_auth",
+                name=credential_name,
+                material=credential_material,
+            )
             vendor, _created = vendor_model.objects.get_or_create(slug="carddav", defaults={"display_name": "CardDAV"})
             directory = Directory.objects.create(
                 vendor=vendor,
@@ -626,7 +635,7 @@ class PartiesDirectoryMutation:
                     platform=Handle.Platform.for_value(username),
                     value=username.strip(),
                     asserted_by=user,
-                    evidence=[directory.integration_ptr],
+                    evidence=[directory],
                     display_name=name,
                 )
         return cast(DirectoryType, directory)

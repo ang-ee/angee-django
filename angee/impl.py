@@ -8,10 +8,10 @@ settings-backed registry resolver shared by row-owned and row-less selectors.
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import cache
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Self, cast
 
 from django.conf import settings
 from django.core import checks
@@ -438,10 +438,10 @@ def _impl_choices_enum(registry_setting: str, keys: tuple[str, ...]) -> type[mod
     core = registry_setting.removeprefix("ANGEE_").removesuffix("_CLASSES")
     camel = "".join(part.capitalize() for part in core.split("_") if part)
     members = [(key.upper(), (key, key)) for key in keys]
-    return cast("type[models.TextChoices]", models.TextChoices(f"{camel or 'Impl'}Impl", members))
+    return models.TextChoices(f"{camel or 'Impl'}Impl", members)
 
 
-class ImplClassField(TextChoicesField):
+class ImplClassField[T = object](TextChoicesField):
     """A column naming a non-model implementation class by a short key.
 
     The base names the Django setting that maps keys to dotted import paths.
@@ -452,7 +452,7 @@ class ImplClassField(TextChoicesField):
 
     def __init__(
         self,
-        base_class: type[object] | None = None,
+        base_class: type[T] | None = None,
         *,
         registry_setting: str = "",
         create_only: bool = False,
@@ -471,7 +471,7 @@ class ImplClassField(TextChoicesField):
         kwargs.setdefault("max_length", 100)
         super().__init__(choices_enum=self._build_enum(), **kwargs)
 
-    def deconstruct(self) -> tuple[str | None, str, list[Any], dict[str, Any]]:
+    def deconstruct(self) -> tuple[str, str, Sequence[Any], dict[str, Any]]:
         """Emit a plain varchar column and rebuild the enum from settings on reconstruct."""
 
         name, path, args, kwargs = super().deconstruct()
@@ -514,17 +514,19 @@ class ImplClassField(TextChoicesField):
             )
         return errors
 
-    def resolve_class(self, key: Any) -> type:
+    def resolve_class(self, key: Any) -> type[T]:
         """Return the impl class the configured mapping binds to ``key``."""
 
-        return resolve_impl_class(cast(type, self.base_class), self.key_for(key))
+        if self.base_class is None:
+            raise ImproperlyConfigured("Historical implementation fields do not resolve runtime classes.")
+        return resolve_impl_class(self.base_class, self.key_for(key))
 
     def registered_keys(self) -> tuple[str, ...]:
         """Return this field's configured implementation keys in deterministic order."""
 
         return tuple(sorted(impl_registry(self.registry_setting)))
 
-    def resolve_for(self, instance: models.Model) -> type:
+    def resolve_for(self, instance: models.Model) -> type[T]:
         """Return the impl class selected by this field on ``instance``."""
 
         return self.resolve_class(getattr(instance, self.attname))
@@ -571,7 +573,7 @@ class ImplDefaultsMixin(models.Model):
         abstract = True
 
     @classmethod
-    def from_db(cls, db: str, field_names: list[str], values: list[Any]) -> ImplDefaultsMixin:
+    def from_db(cls, db: str | None, field_names: Collection[str], values: Collection[Any]) -> Self:
         """Remember loaded impl keys so every persisted write ingress enforces immutability."""
 
         instance = super().from_db(db, field_names, values)
@@ -671,7 +673,7 @@ class ImplDefaultsMixin(models.Model):
             if getattr(self, field.attname) != loaded[field.attname]:
                 raise ValidationError({field.name: "Implementation selection is create-only."})
 
-    def apply_config_patch(self, patch: Mapping[str, Any]) -> set[str]:
+    def apply_config_patch(self, patch: object) -> set[str]:
         """Merge top-level config keys, removing explicit ``None`` values.
 
         Return changed model field names for ``save(update_fields=...)``. Saving
@@ -708,16 +710,5 @@ class ImplDefaultsMixin(models.Model):
                 continue
             impl = field.resolve_class(key)
             if isinstance(impl, type) and issubclass(impl, ImplBase) and impl.config_model is not None:
-                normalized = impl.normalize_config(self.config)
+                normalized = impl.normalize_config(getattr(self, "config"))
                 setattr(self, "config", normalized)
-
-    def set_impl_key(self, field_name: str, value: Any, *, default: str | None = None) -> bool:
-        """Assign an impl key and return whether the stored key changed."""
-
-        field = type(self).impl_field(field_name)
-        key = type(self).impl_key_for(field_name, value, default=default)
-        changed = key != getattr(self, field.attname)
-        if changed and field.create_only and not self._state.adding:
-            raise ValidationError({field.name: "Implementation selection is create-only."})
-        setattr(self, field.attname, key)
-        return changed
