@@ -42,6 +42,7 @@ function StatWidget(props: DashboardWidgetRenderProps): React.ReactElement {
         format={{ maximumFractionDigits: 2 }}
         label={<span className="sr-only">{props.spec.title}</span>}
         numericValue={props.data.value ?? undefined}
+        detail={typeof props.spec.options.detail === "string" ? props.spec.options.detail : undefined}
         suffix={suffix}
         value="—"
         valueSize="lg"
@@ -51,7 +52,10 @@ function StatWidget(props: DashboardWidgetRenderProps): React.ReactElement {
 }
 
 function BarWidget(props: DashboardWidgetRenderProps): React.ReactElement {
-  return <DataState {...props} skeleton={<><Skeleton className="h-4 w-1/3" /><Skeleton className="h-6 w-4/5" /><Skeleton className="h-6 w-3/5" /><Skeleton className="h-6 w-2/5" /></>}><DashboardBars points={props.data.series} title={props.spec.title} /></DataState>;
+  return <DataState {...props} skeleton={<><Skeleton className="h-4 w-1/3" /><Skeleton className="h-6 w-4/5" /><Skeleton className="h-6 w-3/5" /><Skeleton className="h-6 w-2/5" /></>}>
+    <DashboardBars points={props.data.series} title={props.spec.title}
+      orientation={props.spec.options.orientation === "vertical" ? "vertical" : "horizontal"} />
+  </DataState>;
 }
 
 function DonutWidget(props: DashboardWidgetRenderProps): React.ReactElement {
@@ -138,7 +142,7 @@ function ResourceViewWidget({ spec, hostedView: View, onCountChange }: Dashboard
     <View
       presentation="embedded"
       scope="inherit"
-      chrome={{ heading: false, search: true, pager: false }}
+      chrome={{ heading: false, search: true, pager: spec.options.pager === true }}
       onListStateChange={(state) => onCountChange?.(state.total ?? null)}
     />
   </ResourceViewProvider>;

@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { useState } from "react";
 import { MetricStrip } from "@angee/ui";
 
 const meta = {
@@ -43,3 +44,20 @@ export const Prominent: Story = {
 export const Loading: Story = {
   render: () => <MetricStrip loading loadingMessage="Loading metrics…" className="max-w-5xl" />,
 };
+
+export const SelectableSummary: Story = { render: () => <Summary /> };
+
+function Summary() {
+  const [selected, setSelected] = useState("all");
+  return <MetricStrip density="prominent" className="w-full max-w-7xl" metrics={([
+    { id: "all", label: "Open records", numericValue: 26, detail: "Received this month", tone: "neutral" },
+    { id: "clear", label: "All checks passed", numericValue: 16, detail: "No outstanding findings", tone: "success" },
+    { id: "risk", label: "Risks", numericValue: 5, detail: "Review the evidence", tone: "warning" },
+    { id: "conflict", label: "Conflicts", numericValue: 3, detail: "Sources disagree", tone: "danger" },
+    { id: "unknown", label: "Unresolved", numericValue: 2, detail: "Waiting for information", tone: "muted" },
+  ] as const).map((metric) => ({
+    ...metric,
+    selected: selected === metric.id,
+    onClick: () => setSelected(metric.id),
+  }))} />;
+}

@@ -6,6 +6,7 @@ import { useDashboardRegistry } from "../runtime/runtime";
 import { useDndKitSensors } from "../lib/dnd";
 import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
+import { Card, CardContent, CardHeader } from "../ui/card";
 import { ActionMenu, ActionTrigger } from "../toolbars/ActionMenu";
 import { Glyph } from "../chrome/Glyph";
 import { Input } from "../ui/input";
@@ -35,7 +36,7 @@ import { titleCase } from "../lib/titleCase";
 import { SectionHeading } from "../views/form/SectionHeading";
 
 const ROW_HEIGHT = 56;
-const GRID_GAP = 12;
+const GRID_GAP = 16;
 
 export interface DashboardSurfaceProps {
   target: DashboardTarget;
@@ -172,17 +173,17 @@ function DashboardSkeleton({
         <Skeleton className="h-btn-sm w-24 shrink-0" />
       </div>
       {toolbar}
-      <div aria-hidden="true" className="grid min-h-0 flex-1 grid-cols-12 auto-rows-[56px] gap-3 overflow-hidden p-3">
+      <div aria-hidden="true" className="grid min-h-0 flex-1 grid-cols-12 auto-rows-[56px] gap-4 overflow-hidden p-4">
         {[
           "col-span-12 row-span-3 md:col-span-5",
           "col-span-12 row-span-3 md:col-span-7",
           "col-span-12 row-span-4 md:col-span-8",
           "col-span-12 row-span-4 md:col-span-4",
         ].map((placement, index) => (
-          <div key={placement} className={cn("rounded-8 border border-border-subtle bg-sheet p-4", placement)}>
+          <Card key={placement} className={cn("p-4", placement)}>
             <Skeleton shape="text" size="md" className={index % 2 === 0 ? "w-32" : "w-24"} />
             <SkeletonText lines={index < 2 ? 3 : 5} className="mt-5" />
-          </div>
+          </Card>
         ))}
       </div>
     </SkeletonStatus>
@@ -408,9 +409,12 @@ function DashboardLayout({ snapshot, registry, definition, editing, pageScope, o
       : projectDashboardLayout(active, columns, snapshot.columns);
   const handleDragEnd = ({ active: dragged, delta }: DragEndEvent) => {
     const element = containerRef.current;
-    const cellWidth = element ? (element.clientWidth - GRID_GAP * (columns - 1)) / columns : 0;
+    const style = element ? getComputedStyle(element) : null;
+    const contentWidth = element && style
+      ? element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) : 0;
+    const cellWidth = (contentWidth - GRID_GAP * (columns - 1)) / columns;
     const widget = projected.find((item) => item.id === String(dragged.id));
-    if (!widget || !cellWidth) return;
+    if (!widget || cellWidth <= 0) return;
     const moved = moveDashboardRect(
       active,
       widget.id,
@@ -420,7 +424,7 @@ function DashboardLayout({ snapshot, registry, definition, editing, pageScope, o
     onWidgetsChange([...moved, ...retained]);
   };
   return (
-    <div ref={containerRef} className={cn("min-h-0 flex-1 overflow-auto p-3", editing && "min-w-[720px]")}>
+    <div ref={containerRef} className={cn("min-h-0 flex-1 overflow-auto p-4", editing && "min-w-[720px]")}>
       {projected.length === 0 ? <InlineEmpty icon="dashboard" label={t("surface.empty")} /> : (
         <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
           <div className="grid min-h-0" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gridAutoRows: `${ROW_HEIGHT}px`, gap: GRID_GAP }}>
@@ -495,66 +499,70 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
   const drag = useDraggable({ id: widget.id, disabled: !editing });
   const transform = drag.transform;
   return (
-    <article
-      ref={drag.setNodeRef}
-      tabIndex={editing ? 0 : undefined}
-      aria-label={editing ? t("surface.layoutControls", { title: visibleTitle }) : undefined}
-      onKeyDown={(event) => {
-        if (!editing || event.target !== event.currentTarget) return;
-        if (event.shiftKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
-          event.preventDefault();
-          if (event.key === "ArrowLeft") onResize(-1, 0);
-          if (event.key === "ArrowRight") onResize(1, 0);
-          if (event.key === "ArrowUp") onResize(0, -1);
-          if (event.key === "ArrowDown") onResize(0, 1);
-          return;
-        }
-        if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
-          event.preventDefault();
-          if (event.key === "ArrowLeft") onMove(-1, 0);
-          if (event.key === "ArrowRight") onMove(1, 0);
-          if (event.key === "ArrowUp") onMove(0, -1);
-          if (event.key === "ArrowDown") onMove(0, 1);
-        }
-      }}
-      className={cn("relative flex min-h-0 flex-col overflow-hidden rounded-8 border border-border-subtle bg-sheet shadow-sm", drag.isDragging && "z-10 opacity-90")}
-      style={{
-        gridColumn: `${widget.x + 1} / span ${widget.w}`,
-        gridRow: `${widget.y + 1} / span ${widget.h}`,
-        ...(transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : {}),
-      }}
-    >
-      <header className={cn("flex min-h-9 shrink-0 items-center gap-1 border-b border-border-subtle px-2 py-1", !editing && widget.data.shape !== "none" && widget.data.shape !== "resourceView" && "pr-9")}>
-        <div id={titleId} className={editing ? "sr-only" : "min-w-0 flex-1"}>
-          <SectionHeading
-            label={!editing && fullViewHref ? <NavLink href={fullViewHref} className="hover:underline">{visibleTitle}</NavLink> : visibleTitle}
-            count={count == null ? undefined : `· ${count}`}
-            hint={typeof widget.options.hint === "string" ? `· ${widget.options.hint}` : undefined}
-            audience={typeof widget.options.audience === "string" ? widget.options.audience : undefined}
-          />
-        </div>
-        {!editing && fullViewHref ? <NavLink href={fullViewHref} aria-label={t("surface.fullView", { title: visibleTitle })} affordance="outward" className="shrink-0 rounded-4 p-1 text-sm text-fg-muted hover:text-fg focus-visible:focus-ring" /> : null}
-        {editing ? <Button type="button" variant="ghost" size="iconSm" className="cursor-grab" aria-label={t("surface.move", { title: visibleTitle })} {...drag.attributes} {...drag.listeners}><Glyph name="grip-vertical" fallbackName="more-vertical" /></Button> : null}
-        {editing ? (
-          <Input
-            size="sm"
-            value={visibleTitle}
-            onChange={(event) => onUpdate({ title: event.target.value })}
-            aria-label={t("surface.widgetTitle")}
-            className="min-w-0 flex-1"
-          />
-        ) : null}
-        {editing ? (
-          <>
-            <Button type="button" variant="ghost" size="iconSm" aria-label={t("surface.moveLeft")} onClick={() => onMove(-1, 0)}><Glyph name="arrow-left" /></Button>
-            <Button type="button" variant="ghost" size="iconSm" aria-label={t("surface.moveRight")} onClick={() => onMove(1, 0)}><Glyph name="arrow-right" /></Button>
-            <Button type="button" variant="ghost" size="iconSm" aria-label={t("surface.wider")} onClick={() => onResize(1, 0)}><Glyph name="maximize-2" /></Button>
-            <Button type="button" variant="ghost" size="iconSm" aria-label={t("surface.removeWidget")} onClick={onArchive}><Glyph name="archive" fallbackName="x" /></Button>
-          </>
-        ) : null}
-      </header>
-      <ResolvedWidget widget={widget} registry={registry} definition={definition} editing={editing} pageScope={pageScope} titleId={titleId} onCountChange={setCount} />
-    </article>
+    <Card asChild>
+      <article
+        ref={drag.setNodeRef}
+        tabIndex={editing ? 0 : undefined}
+        aria-label={editing ? t("surface.layoutControls", { title: visibleTitle }) : undefined}
+        onKeyDown={(event) => {
+          if (!editing || event.target !== event.currentTarget) return;
+          if (event.shiftKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+            event.preventDefault();
+            if (event.key === "ArrowLeft") onResize(-1, 0);
+            if (event.key === "ArrowRight") onResize(1, 0);
+            if (event.key === "ArrowUp") onResize(0, -1);
+            if (event.key === "ArrowDown") onResize(0, 1);
+            return;
+          }
+          if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+            event.preventDefault();
+            if (event.key === "ArrowLeft") onMove(-1, 0);
+            if (event.key === "ArrowRight") onMove(1, 0);
+            if (event.key === "ArrowUp") onMove(0, -1);
+            if (event.key === "ArrowDown") onMove(0, 1);
+          }
+        }}
+        className={cn("relative flex min-h-0 flex-col overflow-hidden", drag.isDragging && "z-10 opacity-90")}
+        style={{
+          gridColumn: `${widget.x + 1} / span ${widget.w}`,
+          gridRow: `${widget.y + 1} / span ${widget.h}`,
+          ...(transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : {}),
+        }}
+      >
+        <CardHeader className={cn("min-h-11 shrink-0 flex-row items-center gap-2 py-2",
+          widget.data.shape !== "value" && "border-b border-border-subtle",
+          !editing && widget.data.shape !== "none" && widget.data.shape !== "resourceView" && "pr-12")}>
+          <div id={titleId} className={editing ? "sr-only" : "min-w-0 flex-1"}>
+            <SectionHeading
+              label={!editing && fullViewHref ? <NavLink href={fullViewHref} className="hover:underline">{visibleTitle}</NavLink> : visibleTitle}
+              count={count == null ? undefined : `· ${count}`}
+              hint={typeof widget.options.hint === "string" ? `· ${widget.options.hint}` : undefined}
+              audience={typeof widget.options.audience === "string" ? widget.options.audience : undefined}
+            />
+          </div>
+          {!editing && fullViewHref ? <NavLink href={fullViewHref} aria-label={t("surface.fullView", { title: visibleTitle })} affordance="outward" className="shrink-0 rounded-4 p-1 text-sm text-fg-muted hover:text-fg focus-visible:focus-ring" /> : null}
+          {editing ? <Button type="button" variant="ghost" size="iconSm" className="cursor-grab" aria-label={t("surface.move", { title: visibleTitle })} {...drag.attributes} {...drag.listeners}><Glyph name="grip-vertical" fallbackName="more-vertical" /></Button> : null}
+          {editing ? (
+            <Input
+              size="sm"
+              value={visibleTitle}
+              onChange={(event) => onUpdate({ title: event.target.value })}
+              aria-label={t("surface.widgetTitle")}
+              className="min-w-0 flex-1"
+            />
+          ) : null}
+          {editing ? (
+            <>
+              <Button type="button" variant="ghost" size="iconSm" aria-label={t("surface.moveLeft")} onClick={() => onMove(-1, 0)}><Glyph name="arrow-left" /></Button>
+              <Button type="button" variant="ghost" size="iconSm" aria-label={t("surface.moveRight")} onClick={() => onMove(1, 0)}><Glyph name="arrow-right" /></Button>
+              <Button type="button" variant="ghost" size="iconSm" aria-label={t("surface.wider")} onClick={() => onResize(1, 0)}><Glyph name="maximize-2" /></Button>
+              <Button type="button" variant="ghost" size="iconSm" aria-label={t("surface.removeWidget")} onClick={onArchive}><Glyph name="archive" fallbackName="x" /></Button>
+            </>
+          ) : null}
+        </CardHeader>
+        <ResolvedWidget widget={widget} registry={registry} definition={definition} editing={editing} pageScope={pageScope} titleId={titleId} onCountChange={setCount} />
+      </article>
+    </Card>
   );
 }
 
@@ -602,19 +610,16 @@ function WidgetDataBody({ widget, kind, definition, editing, pageScope, titleId,
   const Authored = definition?.authored?.[widget.id];
   const HostedView = widget.data.shape === "resourceView" ? definition?.views?.[widget.data.preset] : undefined;
   return (
-    <div className={cn(
-      "flex min-h-0 flex-1 flex-col overflow-hidden",
-      "px-3 pt-2 pb-1.5",
-    )}>
+    <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className={cn("min-h-0 flex-1", kind.shape === "rows" || kind.shape === "resourceView" ? "overflow-auto" : "overflow-hidden")}>
         <Component spec={widget} data={data} titleId={titleId} authored={Authored ? <Authored /> : undefined} hostedView={HostedView} onCountChange={onCountChange} />
       </div>
       {!editing && widget.data.shape !== "none" && widget.data.shape !== "resourceView" ? (
-        <ActionMenu label={null} aria-label={t("surface.widgetMenu", { title: widget.title })} glyph="more-horizontal" size="iconSm" align="end" className="absolute right-1 top-1">
+        <ActionMenu label={null} aria-label={t("surface.widgetMenu", { title: widget.title })} glyph="more-horizontal" size="iconSm" align="end" className="absolute right-3 top-2">
           <ActionTrigger glyph="refresh" onClick={data.refetch}>{t("surface.refresh")}</ActionTrigger>
         </ActionMenu>
       ) : null}
-    </div>
+    </CardContent>
   );
 }
 
