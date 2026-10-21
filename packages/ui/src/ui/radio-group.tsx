@@ -65,11 +65,6 @@ export const radioGroupVariants = tv({
 });
 
 export type RadioGroupRecipeProps = VariantProps<typeof radioGroupVariants>;
-export type RadioGroupVariant = NonNullable<RadioGroupRecipeProps["variant"]>;
-export type RadioGroupSize = NonNullable<RadioGroupRecipeProps["size"]>;
-export type RadioGroupOrientation = NonNullable<
-  RadioGroupRecipeProps["orientation"]
->;
 
 export type RadioGroupRootProps = Omit<
   BaseRadioGroupRootProps,

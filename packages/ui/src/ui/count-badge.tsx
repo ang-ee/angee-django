@@ -30,9 +30,6 @@ export const countBadgeVariants = tv({
 
 type CountBadgeRecipeProps = VariantProps<typeof countBadgeVariants>;
 
-export type CountBadgeSize = NonNullable<CountBadgeRecipeProps["size"]>;
-export type CountBadgePlacement = NonNullable<CountBadgeRecipeProps["placement"]>;
-
 export type CountBadgeProps = Omit<
   React.HTMLAttributes<HTMLSpanElement>,
   "className" | "color"

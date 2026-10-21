@@ -185,6 +185,3 @@ export type KnowledgePageRow =
 export type KnowledgePageDetail = NonNullable<
   DocumentType<typeof KnowledgePage>["pages_by_pk"]
 >;
-
-/** One resolved page that links to the page being viewed. */
-export type Backlink = KnowledgePageDetail["backlinks"][number];

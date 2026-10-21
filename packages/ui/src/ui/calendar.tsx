@@ -69,7 +69,6 @@ export const calendarVariants = tv({
 });
 
 export type CalendarRecipeProps = VariantProps<typeof calendarVariants>;
-export type CalendarSize = NonNullable<CalendarRecipeProps["size"]>;
 export type CalendarClassNames = DayPickerClassNames;
 export type CalendarProps = DayPickerProps &
   CalendarRecipeProps & {

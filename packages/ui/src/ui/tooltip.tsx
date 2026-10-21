@@ -38,9 +38,6 @@ export const tooltipVariants = tv({
 });
 
 type TooltipRecipeProps = VariantProps<typeof tooltipVariants>;
-
-export type TooltipSize = NonNullable<TooltipRecipeProps["size"]>;
-export type TooltipSide = NonNullable<BaseTooltipPositionerProps["side"]>;
 export type TooltipRootProps<Payload = unknown> =
   BaseTooltipRootProps<Payload>;
 export type TooltipTriggerProps<Payload = unknown> =
@@ -114,11 +111,6 @@ export const TooltipContent = React.forwardRef<
   );
 });
 TooltipContent.displayName = "TooltipContent";
-
-/**
- * @owner Tooltip
- */
-export const TooltipPopup = TooltipContent;
 
 /**
  * @owner Tooltip

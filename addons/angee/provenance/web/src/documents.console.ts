@@ -61,7 +61,4 @@ export const FieldProvenanceDocument = graphql(`
 export type RecordHistory = NonNullable<DocumentType<typeof RecordHistoryDocument>["history"]>;
 export type HistoryEntry = RecordHistory["entries"][number];
 export type HistoryStatement = HistoryEntry["statements"][number];
-export type HistoryFieldChange = HistoryEntry["changes"][number];
 export type FieldProvenance = NonNullable<DocumentType<typeof FieldProvenanceDocument>["field_provenance"]>[number];
-
-export type HistorySummaryEntry = DocumentType<typeof HistoryEntrySummaryFields>;

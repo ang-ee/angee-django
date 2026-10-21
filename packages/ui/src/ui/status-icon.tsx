@@ -68,10 +68,6 @@ export const statusDotVariants = tv({
 type StatusIconRecipeProps = VariantProps<typeof statusIconVariants>;
 type StatusDotRecipeProps = VariantProps<typeof statusDotVariants>;
 
-export type StatusIconSize = NonNullable<StatusIconRecipeProps["size"]>;
-export type StatusDotTone = NonNullable<StatusDotRecipeProps["tone"]>;
-export type StatusDotSize = NonNullable<StatusDotRecipeProps["size"]>;
-
 export type StatusIconProps = Omit<
   React.HTMLAttributes<HTMLSpanElement>,
   "className" | "color"

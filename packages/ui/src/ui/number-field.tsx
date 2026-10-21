@@ -84,8 +84,6 @@ export const numberFieldVariants = tv({
 });
 
 export type NumberFieldRecipeProps = VariantProps<typeof numberFieldVariants>;
-export type NumberFieldSize = NonNullable<NumberFieldRecipeProps["size"]>;
-export type NumberFieldAlign = NonNullable<NumberFieldRecipeProps["align"]>;
 
 export type NumberFieldRootProps = Omit<BaseNumberFieldRootProps, "className"> &
   Pick<NumberFieldRecipeProps, "size" | "invalid"> & {

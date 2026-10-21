@@ -70,11 +70,6 @@ export const codeBlockVariants = tv({
 type CodeRecipeProps = VariantProps<typeof codeVariants>;
 type CodeBlockRecipeProps = VariantProps<typeof codeBlockVariants>;
 
-export type CodeTone = NonNullable<CodeRecipeProps["tone"]>;
-export type CodeBox = NonNullable<CodeRecipeProps["box"]>;
-export type CodeSize = NonNullable<CodeRecipeProps["size"]>;
-export type CodeBlockTone = NonNullable<CodeBlockRecipeProps["tone"]>;
-
 export type CodeProps = Omit<
   React.HTMLAttributes<HTMLElement>,
   "className" | "color"

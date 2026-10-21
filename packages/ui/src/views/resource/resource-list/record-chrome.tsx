@@ -1,10 +1,8 @@
 import * as React from "react";
 import { Glyph } from "../../../chrome/Glyph";
-import { type ActionDescriptor } from "../../page";
 import { RecordPager, type RecordNavigation } from "../RecordPager";
 import type { RecordSmartButtonDescriptor } from "./public";
 export const EMPTY_RECORD_ID_SET: ReadonlySet<string> = new Set();
-export const EMPTY_ACTIONS: readonly ActionDescriptor[] = [];
 
 export function RecordHeaderActions({
   navigation,

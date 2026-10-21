@@ -3,7 +3,7 @@ import { Command as CmdkCommand } from "cmdk";
 
 import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
-import { tv, type VariantProps } from "../lib/variants";
+import { tv } from "../lib/variants";
 import { POPUP_ITEM, POPUP_LIST } from "./popover";
 import { shortcutVariants } from "./kbd";
 import { SectionEyebrow } from "./section-eyebrow";
@@ -38,8 +38,6 @@ export const commandVariants = tv({
     shortcut: shortcutVariants(),
   },
 });
-
-export type CommandRecipeProps = VariantProps<typeof commandVariants>;
 
 export type CommandProps = Omit<
   React.ComponentPropsWithoutRef<typeof CmdkCommand>,

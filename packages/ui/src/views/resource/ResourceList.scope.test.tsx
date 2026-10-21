@@ -57,7 +57,7 @@ test("a drawer record exposes its resource name as the accessible dialog title",
 });
 
 test("a native controlled child list isolates queries and record UI from its parent collection", async () => {
-  const getList = vi.fn(async (params: GetListParams) => ({
+  const getList = vi.fn(async (_params: GetListParams) => ({
     data: [{ id: "trigger-1", kind: "Schedule", enabled: true, workflow: "workflow-1" }],
     total: 1,
   }));

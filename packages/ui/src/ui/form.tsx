@@ -46,7 +46,6 @@ export const formVariants = tv({
 
 export type FormRecipeProps = VariantProps<typeof formVariants>;
 export type FormLayout = NonNullable<FormRecipeProps["layout"]>;
-export type FormDensity = NonNullable<FormRecipeProps["density"]>;
 
 export type FormRootProps<
   FormValues extends Record<string, any> = Record<string, any>,

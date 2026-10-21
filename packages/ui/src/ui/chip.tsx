@@ -51,10 +51,7 @@ export const chipVariants = tv({
 });
 
 export type ChipRecipeProps = VariantProps<typeof chipVariants>;
-
-export type ChipShape = NonNullable<ChipRecipeProps["shape"]>;
 export type ChipSize = NonNullable<ChipRecipeProps["size"]>;
-export type ChipMark = NonNullable<ChipRecipeProps["mark"]>;
 
 /** The palette tones plus `inherit`, which adopts the surrounding text colour. */
 export type ChipTone = Tone | "inherit";

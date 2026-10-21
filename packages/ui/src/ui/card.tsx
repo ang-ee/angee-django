@@ -127,7 +127,6 @@ type CardState = {
 };
 
 export type CardDensity = NonNullable<CardRecipeProps["density"]>;
-export type CardVariant = NonNullable<CardRecipeProps["variant"]>;
 
 export type CardProps = Omit<
   React.ButtonHTMLAttributes<HTMLButtonElement>,
@@ -146,14 +145,6 @@ export type CardProps = Omit<
 export const CARD_BASE = cardVariants({
   density: "md",
   interactive: false,
-  variant: "default",
-});
-/**
- * @kind token
- */
-export const CARD_INTERACTIVE_BASE = cardVariants({
-  density: "md",
-  interactive: true,
   variant: "default",
 });
 

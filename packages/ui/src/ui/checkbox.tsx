@@ -43,8 +43,6 @@ type CheckboxRecipeProps = VariantProps<typeof checkboxVariants>;
 type CheckedChangeHandler = NonNullable<BaseCheckboxRootProps["onCheckedChange"]>;
 type CheckedChangeDetails = Parameters<CheckedChangeHandler>[1];
 
-export type CheckboxSize = NonNullable<CheckboxRecipeProps["size"]>;
-
 export interface CheckboxVisualProps
   extends Pick<CheckboxRecipeProps, "invalid" | "size"> {
   checked?: boolean;

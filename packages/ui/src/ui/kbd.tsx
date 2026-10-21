@@ -36,9 +36,6 @@ export const kbdVariants = tv({
 
 type KbdRecipeProps = VariantProps<typeof kbdVariants>;
 
-export type KbdSize = NonNullable<KbdRecipeProps["size"]>;
-export type KbdTone = NonNullable<KbdRecipeProps["tone"]>;
-
 export type KbdProps = Omit<
   React.HTMLAttributes<HTMLElement>,
   "className" | "color"

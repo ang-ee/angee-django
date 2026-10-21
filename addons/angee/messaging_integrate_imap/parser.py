@@ -612,25 +612,6 @@ def _unsupported_message_part(message: MIMEPart) -> ParsedPart:
     )
 
 
-def expand_embedded_message(raw: bytes) -> ParsedPart | None:
-    """Parse retained RFC 5322 envelope bytes into one bounded evidence subtree.
-
-    The result is the single subtree to append beneath the existing raw
-    ``message/rfc822`` Part. ``None`` leaves that parent intact when the bytes are
-    empty, malformed, or exceed the embedded expansion budget.
-    """
-
-    if not raw or len(raw) > EMBEDDED_MESSAGE_MAX_BYTES:
-        return None
-    try:
-        embedded = cast(EmailMessage, message_from_bytes(raw, policy=email_policy.default))
-    except Exception:  # noqa: BLE001 — the retained parent remains the evidence.
-        return None
-    return _expand_embedded_message(
-        embedded, raw=raw, depth=0, budget=_EmbeddedMessageBudget(),
-    )
-
-
 def _expand_embedded_message(
     embedded: MIMEPart | None,
     *,

@@ -455,13 +455,6 @@ class StateTransitions:
         setattr(cls, "_angee_transition_specs", method_map)
         return method_map
 
-    def _spec_for(self, instance: models.Model, method_name: str) -> _TransitionSpec:
-        specs = cast(dict[str, _TransitionSpec], getattr(instance.__class__, "_angee_transition_specs", {}))
-        try:
-            return specs[method_name]
-        except KeyError as error:
-            raise AttributeError(f"{instance.__class__.__name__} has no transition method {method_name!r}.") from error
-
     def _matches_field(self, field: StateField) -> bool:
         return field is self.field or (
             getattr(field, "name", None) == self.field.name and getattr(field, "attname", None) == self.field.attname

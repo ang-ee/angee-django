@@ -10,10 +10,6 @@ import { JsonValueSchema, type JsonObject } from "../widgets/json-value";
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export const DASHBOARD_SCHEMA_VERSION = 1 as const;
-/**
- * @kind token
- */
-export const DASHBOARD_COLUMNS = 12;
 
 /**
  * @kind token
@@ -239,8 +235,6 @@ export const DashboardSnapshotSchema = v.strictObject({
 });
 
 export type DashboardTarget = v.InferOutput<typeof DashboardTargetSchema>;
-export type DashboardRefresh = v.InferOutput<typeof DashboardRefreshSchema>;
-export type WidgetMeasure = v.InferOutput<typeof WidgetMeasureSchema>;
 export type WidgetSource = v.InferOutput<typeof WidgetSourceSchema>;
 export type WidgetDataSpec = v.InferOutput<typeof WidgetDataSpecSchema>;
 export type WidgetColumn = v.InferOutput<typeof WidgetColumnsSchema>[number];
@@ -395,16 +389,6 @@ export interface DashboardRegistry {
   resourceDefaults: Readonly<Record<string, string>>;
   widgetKinds: Readonly<Record<string, DashboardWidgetKind>>;
   store: DashboardStore | null;
-}
-
-/**
- * @kind null
- * @reason Codec and transport infrastructure: translates runtime data and addresses.
- */
-export function dashboardTargetKey(target: DashboardTarget): string {
-  return target.scope === "personal"
-    ? `personal:${target.id}`
-    : `${target.scope}:${target.key}`;
 }
 
 /**

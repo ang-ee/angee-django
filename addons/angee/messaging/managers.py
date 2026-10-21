@@ -3784,44 +3784,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         for message in messages:
             edges.create_for_message(message)
 
-    def expand_retained_part(self, part: Any, children: tuple[ParsedPart, ...]) -> tuple[Any, ...]:
-        """Append parsed descendants beneath one retained byte-backed Part.
-
-        Source adapters own decoding their wire formats and pass neutral
-        :class:`ParsedPart` children here.  The existing Message, parent Part and
-        File remain untouched, so immutable evidence that points at any of them
-        stays valid.  Locking the parent and treating existing children as the
-        completed state makes concurrent and repeated repairs idempotent.
-        """
-
-        part_model = apps.get_model("messaging", "Part")
-        if not isinstance(part, part_model) or part.pk is None:
-            raise ValueError("Part expansion requires a saved messaging Part.")
-        with transaction.atomic():
-            retained = part_model._base_manager.select_for_update().select_related("message").get(pk=part.pk)
-            if retained.file_id is None:
-                raise ValueError("Part expansion requires a retained byte-backed messaging Part.")
-            if not retained.message.has_access("write"):
-                raise PermissionDenied("Denied: cannot expand the retained Message part")
-            existing = tuple(part_model._base_manager.filter(parent=retained).order_by("position", "sqid"))
-            if existing:
-                return existing
-            if not children:
-                return ()
-            # One counter across the expanded children so a retained part exploding
-            # into several nameless byte parts derives distinct ``-{index}`` names.
-            nameless: list[int] = [0]
-            for position, child in enumerate(children):
-                self._build_parts(
-                    retained.message,
-                    child,
-                    parent=retained,
-                    position=position,
-                    created_by_id=retained.created_by_id,
-                    nameless=nameless,
-                )
-            return tuple(part_model._base_manager.filter(parent=retained).order_by("position", "sqid"))
-
     def _ingest_one(
         self,
         parsed: ParsedMessage,

@@ -721,20 +721,3 @@ class ImplDefaultsMixin(models.Model):
             raise ValidationError({field.name: "Implementation selection is create-only."})
         setattr(self, field.attname, key)
         return changed
-
-    def materialize_impl_defaults(
-        self,
-        field_name: str,
-        *,
-        provided: frozenset[str] = frozenset(),
-    ) -> set[str]:
-        """Apply the selected impl's defaults for one impl field."""
-
-        field = type(self).impl_field(field_name)
-        key = getattr(self, field.attname, None)
-        if not key:
-            return set()
-        impl = field.resolve_class(key)
-        if isinstance(impl, type) and issubclass(impl, ImplBase):
-            return impl.materialize(self, provided=provided | {field.name, field.attname})
-        return set()

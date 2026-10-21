@@ -1,7 +1,7 @@
 // Authored reads and bespoke result shapes for the integrate console.
 // ActionResult mutations use generated action documents through the shared hooks.
 
-import { graphql, type DocumentType } from "@angee/gql/console";
+import { graphql } from "@angee/gql/console";
 
 export const IntegrationRecordRedirectDocument = graphql(`
   query IntegrationRecordRedirect($id: String!) {
@@ -22,10 +22,6 @@ export const IntegrationCapabilities = graphql(`
     }
   }
 `);
-
-export type IntegrationCapability = DocumentType<
-  typeof IntegrationCapabilities
->["integration_capabilities"][number];
 
 // The OAuth connect result shared by every `connect_*` mutation that returns a
 // `ConnectIntegrationResult` (integrate's `connect_integration`, agents'

@@ -56,22 +56,6 @@ export type SectionEyebrowRecipeProps = VariantProps<
   typeof sectionEyebrowVariants
 >;
 
-export type SectionEyebrowSize = NonNullable<
-  SectionEyebrowRecipeProps["size"]
->;
-export type SectionEyebrowTone = NonNullable<
-  SectionEyebrowRecipeProps["tone"]
->;
-export type SectionEyebrowWeight = NonNullable<
-  SectionEyebrowRecipeProps["weight"]
->;
-export type SectionEyebrowTracking = NonNullable<
-  SectionEyebrowRecipeProps["tracking"]
->;
-export type SectionEyebrowSpacing = NonNullable<
-  SectionEyebrowRecipeProps["spacing"]
->;
-
 export type SectionEyebrowElement = "dt" | "h2" | "h3" | "h4" | "h5" | "h6" | "label" | "p" | "span";
 
 export type SectionEyebrowProps = Omit<

@@ -99,8 +99,6 @@ export const fieldVariants = tv({
 });
 
 export type FieldRecipeProps = VariantProps<typeof fieldVariants>;
-export type FieldSize = NonNullable<FieldRecipeProps["size"]>;
-export type FieldLayout = NonNullable<FieldRecipeProps["layout"]>;
 
 export type FieldRootProps = Omit<BaseFieldRootProps, "className"> &
   Pick<FieldRecipeProps, "layout" | "size" | "invalid"> & {

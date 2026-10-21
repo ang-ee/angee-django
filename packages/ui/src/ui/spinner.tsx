@@ -29,7 +29,6 @@ export const spinnerVariants = tv({
 type SpinnerRecipeProps = VariantProps<typeof spinnerVariants>;
 
 export type SpinnerSize = NonNullable<SpinnerRecipeProps["size"]>;
-export type SpinnerTone = NonNullable<SpinnerRecipeProps["tone"]>;
 
 export type SpinnerProps = Omit<
   React.HTMLAttributes<HTMLSpanElement>,

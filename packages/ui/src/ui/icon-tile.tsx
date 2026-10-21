@@ -31,8 +31,6 @@ export const iconTileVariants = tv({
 });
 
 export type IconTileRecipeProps = VariantProps<typeof iconTileVariants>;
-export type IconTileSize = NonNullable<IconTileRecipeProps["size"]>;
-export type IconTileTone = NonNullable<IconTileRecipeProps["tone"]>;
 
 export type IconTileProps = Omit<
   React.HTMLAttributes<HTMLSpanElement>,
