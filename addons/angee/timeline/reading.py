@@ -77,6 +77,8 @@ class Timeline:
         self.folding = set()
         for kind in self.kinds:
             rows = kind.queryset(record, actor).order_by()
+            if not rows.exists():
+                continue
             content_type = ContentType.objects.get_for_model(rows.model)
             self.content_types[kind.id] = content_type.pk
             fold = kind.fold(record)
@@ -182,7 +184,9 @@ class Timeline:
         scope = models.Q(pk__in=[])
         for kind, pks in ids.items():
             scope |= models.Q(_timeline_fold_type=self.content_types[kind], _timeline_fold_pk__in=pks)
-        branches = [rows.filter(scope).exclude(pk__in=self.lines[kind].values("pk"))
+        # Selected parents are readable top-level lines already. Only a line's
+        # self-reference needs excluding; rechecking every parent repeats the page query.
+        branches = [rows.filter(scope).exclude(pk__in=ids.get(kind, ()))
                     .values("_timeline_fold_type", "_timeline_fold_pk", "_timeline_kind")
                     .annotate(_timeline_count=models.Count("pk", distinct=True))
                     for kind, rows in self.branches.items() if kind in self.folding]

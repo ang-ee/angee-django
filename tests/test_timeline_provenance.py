@@ -14,6 +14,7 @@ from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.messaging.testing.models import Channel
 from angee.provenance.timeline import ChangeKind
+from angee.refs import generic_pointer_target
 from tests.conftest import create_platform_admin, current_stream, make_integration, vault_for
 from tests.test_timeline import timeline_entries
 
@@ -209,6 +210,23 @@ def test_noninteger_origin_does_not_break_a_readable_history_line(composed_permi
     boundary = record.history.latest("history_id").changeset
     models.QuerySet(model=type(boundary)).filter(pk=boundary.pk).update(origin_object_id=origin_id)
     assert timeline_entries(record, owner)[0].detail == "External origin"
+
+
+def test_self_origin_stays_visible_and_only_other_changes_fold_beneath_it(composed_permissions):
+    owner = create_platform_admin("timeline-self-origin")
+    with actor_context(owner), open_changeset(fresh=True, change_reason="Parent"):
+        record = vault_for(owner)
+    parent = record.history.latest("history_id").changeset
+    content_type, pk = generic_pointer_target(parent)
+    models.QuerySet(model=type(parent)).filter(pk=pk).update(
+        origin_content_type=content_type, origin_object_id=str(pk),
+    )
+    with actor_context(owner), open_changeset(fresh=True, origin=parent, change_reason="Child"):
+        record.name = "Changed by parent"
+        record.save(update_fields=["name"])
+    entry, = timeline_entries(record, owner)
+    assert entry.target_id == public_id_of(parent)
+    assert [(child.kind, child.count) for child in entry.children] == [("provenance.change", 1)]
 
 
 def test_history_actor_labels_are_resolved_as_a_batch(composed_permissions):
