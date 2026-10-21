@@ -146,7 +146,7 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("JsonValueSchema", "@angee/ui", "src/widgets/json-value.ts"),
   frameworkCriticalExport("FORM_SPEC_ANNOTATIONS", "@angee/ui", "src/views/form/form-spec-schema.ts"),
   frameworkCriticalExport("textValue", "@angee/ui", "src/views/form/field-values.ts"),
-  frameworkCriticalExport("DISABLED_RESOURCE", "@angee/metadata", "src/resources.ts"),
+  frameworkCriticalExport("refineResourceName", "@angee/metadata", "src/resources.ts"),
   frameworkCriticalExport("graphNodeStyle", "@angee/ui", "src/views/GraphView.tsx"),
   frameworkCriticalExport("ScopedExplorerPane", "@angee/ui", "src/views/tree/ScopedExplorerPane.tsx"),
   frameworkCriticalExport("PrimaryPanePublisher", "@angee/ui", "src/layouts/primary-pane-context.tsx"),
