@@ -289,11 +289,11 @@ def _actor_projections(changesets: Iterable[Any]) -> dict[str, tuple[SubjectRef,
 
 
 def _reference_value(model_field: models.Field[Any, Any], value: Any) -> Any:
-    """Return a JSON-safe value; a stored key becomes its target's public id."""
+    """Expose primary-key references as public IDs; retain other stored values."""
 
     if value is None:
         return None
-    if model_field.is_relation and model_field.related_model is not None:
+    if isinstance(model_field, models.ForeignKey) and model_field.target_field.primary_key:
         return public_id_for(cast(type[models.Model], model_field.related_model), value)
     return json_safe(value)
 
