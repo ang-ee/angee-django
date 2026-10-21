@@ -222,6 +222,8 @@ class ArchiveGate(DecisionStep[ArchiveProbeOutput, list[ArchiveMappingUnit], Arc
         if outcome == "skipped":
             return ctx.done([], outcome="skipped")
         resource = _validate_proposals(ctx.input.proposals)
+        if resource is None:
+            raise ValidationError("Archive extractors no longer agree on their target model.")
         mappings = [ArchiveMappingUnit.model_validate(item) for item in ctx.state["mappings"][decision.verdict[0]]]
         for item in mappings:
             ctx.record(ctx.load(apps.get_model(resource), item.target), "Archive import target")

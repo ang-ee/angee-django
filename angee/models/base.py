@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import re
 import sys
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from typing import Any, Self, TypeVar, cast
+from typing import Any, ClassVar, Self, TypeVar, cast
 
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
-from django.db import models
+from django.db import models, router, transaction
 from rebac import (
     RebacMixin,
     RelationshipTuple,
@@ -24,6 +24,7 @@ from rebac import (
 )
 from rebac.actors import is_sudo, to_subject_ref
 from rebac.errors import NoActorResolvedError, PermissionDenied
+from rebac.field_visibility import redacted_fields
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 from simple_history.models import HistoricalChanges
@@ -32,11 +33,13 @@ from angee.actors import instance_actor
 from angee.identity import PublicIdentity
 from angee.impl import ImplClassField
 from angee.models.identity import SqidMixin, TimestampMixin
+from angee.models.inputs import InputExtensionsMixin
 from angee.models.manager import AngeeManager, AngeeUnscopedManager
-from angee.models.merge import MergeContractMixin, named_in_relationships, references
-from angee.models.query import AngeeQuerySet, SystemQuerysetMixin
+from angee.models.merge_references import MergeContractMixin, named_in_relationships, references
+from angee.models.query import AngeeQuerySet, SystemQuerysetMixin, row_lock_paths
 from angee.models.transitions import StateTransitions
 from angee.permissions import effective_rebac_definition
+from angee.signals import record_access_revoked
 from angee.tiers import ResourceTier
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -54,11 +57,12 @@ class DirectRecordAccess:
     subject: SubjectRef
 
 
-
-class AngeeModel(SystemQuerysetMixin, MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin):
+class AngeeModel(
+    InputExtensionsMixin, SystemQuerysetMixin, MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin
+):
     """Abstract base model for Angee source and runtime models."""
 
-    objects = AngeeManager()
+    objects: ClassVar[models.Manager[Self]] = AngeeManager()
     """Default REBAC manager with Angee queryset conveniences."""
 
     _angee_base = AngeeUnscopedManager()
@@ -85,7 +89,8 @@ class AngeeModel(SystemQuerysetMixin, MergeContractMixin, PublicIdentity, Timest
         from angee.refs import reference_blocks_target_delete
 
         live_references = (
-            reference for reference in references(type(self))
+            reference
+            for reference in references(type(self))
             if not issubclass(reference.model, HistoricalChanges)
             and reference_blocks_target_delete(reference, type(self))
         )
@@ -95,7 +100,7 @@ class AngeeModel(SystemQuerysetMixin, MergeContractMixin, PublicIdentity, Timest
             raise ValidationError(f"{self._meta.label} {self.pk}: live references or grants prevent removal.")
         self.delete()
 
-    extends: str | None = None
+    extends: ClassVar[str | None] = None
     """Optional ``app_label.ModelName`` target this source model extends."""
 
     runtime: bool = False
@@ -143,7 +148,7 @@ class AngeeModel(SystemQuerysetMixin, MergeContractMixin, PublicIdentity, Timest
 
         return None
 
-    def lock_for_delete(self, *, queryset: models.QuerySet[Self] | None = None) -> Self | None:
+    def lock_for_delete(self, *, queryset: models.QuerySet[models.Model] | None = None) -> Self | None:
         """Lock and reload this target for deletion in the model's domain order.
 
         Call inside a transaction, after any caller-owned permission preflight.
@@ -154,37 +159,17 @@ class AngeeModel(SystemQuerysetMixin, MergeContractMixin, PublicIdentity, Timest
         receivers omit it to use system rows. Return ``None`` if unavailable.
         """
 
-        targets = queryset if queryset is not None else type(self).system_queryset()
-        return targets.lock_if_supported().filter(pk=self.pk).first()
-
-    def lock_subject(self, members: Mapping[str, Any] | None = None) -> Self:
-        """Lock and reload this row through its row-bound base manager."""
-
-        del members
-        manager = type(self)._base_manager.db_manager(hints={"instance": self})
-        return cast(Self, manager.all().select_for_update().get(pk=self.pk))
+        if queryset is None:
+            return type(self).system_queryset(lock=("self",)).filter(pk=self.pk).first()
+        target = queryset.select_for_update(of=row_lock_paths(queryset.model)).filter(pk=self.pk).first()
+        if target is not None and not isinstance(target, type(self)):
+            raise TypeError("A delete queryset must return rows of its target model.")
+        return target
 
     def redacted_fields(self) -> frozenset[str]:
         """Return the fields hidden when this instance was projected by REBAC."""
 
-        return frozenset(getattr(self, "_rebac_redacted_fields", ()))
-
-    def apply_input_extensions(self, **values: Any) -> None:
-        """Terminal cooperative hook for write-input values no model field owns.
-
-        A GraphQL input extension can add a field to this model's generated
-        insert/set input that is not a column, such as a relation an edge owns.
-        The write backend persists the row, then calls this hook in the same
-        transaction with those values. A mixin or ``extends`` donor declares a
-        keyword-only parameter for each value it owns, applies it and delegates
-        the rest exactly once through ``super()``; a value reaching this
-        terminal has no owner, so it fails fast instead of being dropped.
-        """
-
-        if values:
-            raise ImproperlyConfigured(
-                f"{type(self)._meta.label} has no owner for input extension values: {', '.join(sorted(values))}."
-            )
+        return redacted_fields(self)
 
     def refresh_from_db(
         self,
@@ -205,7 +190,7 @@ class AngeeModel(SystemQuerysetMixin, MergeContractMixin, PublicIdentity, Timest
 
     def full_clean(
         self,
-        exclude: Collection[str] | None = None,
+        exclude: Iterable[str] | None = None,
         validate_unique: bool = True,
         validate_constraints: bool = True,
     ) -> None:
@@ -277,7 +262,11 @@ class AngeeModel(SystemQuerysetMixin, MergeContractMixin, PublicIdentity, Timest
         fields = self._meta.concrete_fields
         return (
             any(field.unique and not field.primary_key for field in fields)
-            or any(field.unique_for_date or field.unique_for_month or field.unique_for_year for field in fields)
+            or any(
+                getattr(field, option)
+                for field in fields
+                for option in ("unique_for_date", "unique_for_month", "unique_for_year")
+            )
             or any(model._meta.unique_together for model in lineage)
         )
 
@@ -300,7 +289,7 @@ class AngeeModel(SystemQuerysetMixin, MergeContractMixin, PublicIdentity, Timest
             self.__dict__[_SAVE_VERDICT] = _SAVE_PENDING
         try:
             verdict = self.check_save().allowed
-        except (DjangoPermissionDenied, ObjectDoesNotExist, TypeError, ValidationError, ValueError):
+        except DjangoPermissionDenied, ObjectDoesNotExist, TypeError, ValidationError, ValueError:
             verdict = False
         if deciding:
             self.__dict__[_SAVE_VERDICT] = verdict
@@ -367,17 +356,17 @@ class AngeeModel(SystemQuerysetMixin, MergeContractMixin, PublicIdentity, Timest
         """Idempotently grant ``subject`` one declared direct relation."""
 
         self.validate_record_access_target()
-        self._grant_declared_record_access(type(self), relation, subject)
+        self._grant_declared_record_access(type(self).record_access_permission, relation, subject)
 
     def _grant_declared_record_access(
         self,
-        declaration_owner: type[AngeeModel],
+        permission_for: Callable[[str], str],
         relation: str,
         subject: models.Model | SubjectRef,
     ) -> None:
         """Grant through one model class's own record-share declaration."""
 
-        permission = declaration_owner.record_access_permission(relation)
+        permission = permission_for(relation)
         self.require_access(permission)
         self._write_declared_record_access(relation, subject)
 
@@ -413,25 +402,49 @@ class AngeeModel(SystemQuerysetMixin, MergeContractMixin, PublicIdentity, Timest
         """Idempotently revoke ``subject`` from one declared direct relation."""
 
         self.validate_record_access_target()
-        self._revoke_declared_record_access(type(self), relation, subject)
+        self._revoke_declared_record_access(type(self).record_access_permission, relation, subject)
 
     def _revoke_declared_record_access(
         self,
-        declaration_owner: type[AngeeModel],
+        permission_for: Callable[[str], str],
         relation: str,
         subject: models.Model | SubjectRef,
     ) -> None:
         """Revoke through one model class's own record-share declaration."""
 
-        permission = declaration_owner.record_access_permission(relation)
+        permission = permission_for(relation)
         self.require_access(permission)
-        delete_relationship(
-            RelationshipTuple(
-                resource=to_object_ref(self),
-                relation=relation,
-                subject=_relationship_subject(subject),
+        self._delete_declared_record_access(relation, subject)
+
+    def system_revoke_record_access(self, relation: str, subject: models.Model | SubjectRef) -> None:
+        """Revoke a declared relation inside a framework flow's admitted system scope."""
+
+        if not is_sudo():
+            raise PermissionDenied("A system record revoke requires an explicit system scope.")
+        self.validate_record_access_target()
+        type(self).record_access_permission(relation)
+        self._delete_declared_record_access(relation, subject)
+
+    def _delete_declared_record_access(self, relation: str, subject: models.Model | SubjectRef) -> None:
+        """Delete the tuple and notify its lifecycle owners in the same transaction."""
+
+        subject_ref = _relationship_subject(subject)
+        using = router.db_for_write(active_relationship_model())
+        with transaction.atomic(using=using):
+            delete_relationship(
+                RelationshipTuple(
+                    resource=to_object_ref(self),
+                    relation=relation,
+                    subject=subject_ref,
+                )
             )
-        )
+            record_access_revoked.send(
+                sender=type(self),
+                instance=self,
+                relation=relation,
+                subject=subject_ref,
+                using=using,
+            )
 
     def direct_record_access(self, relations: Sequence[str] | None = None) -> tuple[DirectRecordAccess, ...]:
         """Return authorized direct tuples for this record's declared relations.
@@ -645,6 +658,17 @@ class AngeeModel(SystemQuerysetMixin, MergeContractMixin, PublicIdentity, Timest
         field.resolve_class(key)
         return key
 
+    def set_impl_key(self, field_name: str, value: Any, *, default: str | None = None) -> bool:
+        """Assign an impl key and return whether the stored key changed."""
+
+        field = type(self).impl_field(field_name)
+        key = type(self).impl_key_for(field_name, value, default=default)
+        changed = key != getattr(self, field.attname)
+        if changed and field.create_only and not self._state.adding:
+            raise ValidationError({field.name: "Implementation selection is create-only."})
+        setattr(self, field.attname, key)
+        return changed
+
     @classmethod
     def resolve_impl_class(cls, field_name: str, value: Any, *, default: str | None = None) -> type:
         """Return the impl class bound to one supplied impl-field value."""
@@ -654,7 +678,7 @@ class AngeeModel(SystemQuerysetMixin, MergeContractMixin, PublicIdentity, Timest
         return field.resolve_class(key)
 
     @classmethod
-    def impl_field(cls, field_name: str) -> Any:
+    def impl_field(cls, field_name: str) -> ImplClassField[object]:
         """Return the declared ``ImplClassField`` named by ``field_name``.
 
         This is the model-owned accessor for callers that need the impl field's
@@ -706,7 +730,6 @@ class AngeeDataModel(SqidMixin, AngeeModel):
         """Django model options for Angee's public data model base."""
 
         abstract = True
-
 
 
 def record_display_label(record: models.Model) -> str:

@@ -948,6 +948,7 @@ class RecordTimelineQuery:
                         break
                     selected.add(run.pk)
             canonical = target.content_type.model_class()
+            assert canonical is not None
             result.append(RecordTimelineType(
                 record_model=canonical._meta.label,
                 record_id=PublicID(public_id_for(canonical, target.object_id)),

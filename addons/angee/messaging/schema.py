@@ -18,7 +18,7 @@ import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
@@ -60,7 +60,16 @@ from angee.identity import instance_from_public_id
 from angee.integrate.live import PairingProjection, PairingState
 from angee.integrate.schema import BridgeTypeMixin
 from angee.messaging import connect
-from angee.messaging.managers import MessageQuerySet, message_subtype_options, strip_null_bytes
+from angee.messaging.managers import (
+    ChannelQuerySet,
+    MessageQuerySet,
+    ThreadQuerySet,
+    message_subtype_options,
+    strip_null_bytes,
+)
+from angee.messaging.models import Message as MessageModel
+from angee.messaging.models import Part as PartModel
+from angee.messaging.models import Thread as ThreadModel
 from angee.messaging.models import ThreadedModelMixin, chatter_record
 from angee.parties.schema import HandleType, PartyType
 from angee.storage.schema import FileType
@@ -444,11 +453,14 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(prefetch_related=["parts__fragment", "parts__file__mime_type"])
-    def parts(self) -> list[PartType]:
+    @strawberry_django.field(
+        graphql_type=list[PartType], prefetch_related=["parts__fragment", "parts__file__mime_type"]
+    )
+    @staticmethod
+    def parts(parent: strawberry.Parent[MessageModel]) -> list[PartModel]:
         """Return this message's MIME parts in depth-first reading order."""
 
-        return cast(list[PartType], Part.objects.reading_order_for_message(self))
+        return Part.objects.reading_order_for_message(parent)
 
     @strawberry.field
     def title(self) -> str:
@@ -570,11 +582,12 @@ class RecordMessageType(TrashedRefMixin, AngeeNode):
 
         return cast(Any, self).sender_name() or None
 
-    @strawberry.field
-    def parts(self) -> list[PartType]:
+    @strawberry.field(graphql_type=list[PartType])
+    @staticmethod
+    def parts(parent: strawberry.Parent[MessageModel]) -> list[PartModel]:
         """Return this record message's MIME parts in depth-first reading order."""
 
-        return cast(list[PartType], Part.objects.reading_order_for_message(self))
+        return Part.objects.reading_order_for_message(parent)
 
     @strawberry.field
     def title(self) -> str:
@@ -1011,7 +1024,7 @@ class RecordErrorPayload:
 class RecordThreadStatePayload:
     """Refreshed thread state shared by reads and message write results."""
 
-    thread: RecordThreadType | None = None
+    thread: ThreadModel | None = strawberry.field(graphql_type=RecordThreadType | None, default=None)
     followers: list[RecordThreadFollowerType] = strawberry.field(default_factory=list)
     follower_count: int = strawberry.field(name="follower_count", default=0)
     is_following: bool = strawberry.field(name="is_following", default=False)
@@ -1145,7 +1158,7 @@ class RecordMessageDonePayload(RecordErrorPayload):
     """A message marked done for the user, or the error that prevented it."""
 
     message: RecordMessageType | None = None
-    thread: RecordThreadType | None = None
+    thread: ThreadModel | None = strawberry.field(graphql_type=RecordThreadType | None, default=None)
     notifications: list[RecordThreadNotificationType] = strawberry.field(default_factory=list)
     unread_count: int = strawberry.field(name="unread_count", default=0)
     needaction_count: int = strawberry.field(name="needaction_count", default=0)
@@ -1156,7 +1169,7 @@ class RecordFollowPayload(RecordErrorPayload):
     """A record follower update result, or the error that prevented it."""
 
     follower: RecordThreadFollowerType | None = None
-    thread: RecordThreadType | None = None
+    thread: ThreadModel | None = strawberry.field(graphql_type=RecordThreadType | None, default=None)
     followers: list[RecordThreadFollowerType] = strawberry.field(default_factory=list)
     follower_count: int = strawberry.field(name="follower_count", default=0)
     is_following: bool = strawberry.field(name="is_following", default=False)
@@ -1280,8 +1293,8 @@ class MessagingQuery:
             Message.objects.inbox().untrashed().for_thread(thread), ids, search=search, all_copies=all_copies,
         )
 
-    @strawberry.field(name="message_source_copies")
-    def message_source_copies(self, id: strawberry.ID) -> list[MessageType]:
+    @strawberry.field(name="message_source_copies", graphql_type=list[MessageType])
+    def message_source_copies(self, id: strawberry.ID) -> models.QuerySet[MessageModel]:
         """The readable channel occurrences of one message: its survivor and every copy folded into it."""
 
         rows = Message.objects.inbox().untrashed()
@@ -1714,7 +1727,10 @@ class _InboxWriteBackend(AngeeHasuraWriteBackend):
     def write_target_queryset(self) -> Any:
         """Scope the update/delete/save target queryset to non-record rows."""
 
-        return super().write_target_queryset().inbox()
+        queryset = super().write_target_queryset()
+        if not isinstance(queryset, (MessageQuerySet, ThreadQuerySet)):
+            raise ImproperlyConfigured("The inbox write backend requires a message or thread queryset.")
+        return queryset.inbox()
 
 
 class _ChannelWriteBackend(AngeeHasuraWriteBackend):
@@ -1733,6 +1749,8 @@ class _ChannelWriteBackend(AngeeHasuraWriteBackend):
 
         del info
         queryset = self.write_target_queryset()
+        if not isinstance(queryset, ChannelQuerySet):
+            raise ImproperlyConfigured("The channel write backend requires a channel queryset.")
         channel = require_instance_for_id(Channel, str(pk), queryset=queryset.of_concrete_type())
         Channel.objects.purge(channel)
         return channel
@@ -1818,10 +1836,15 @@ _MESSAGE_RESOURCE = hasura_model_resource(
     ],
     sortable_aliases={
         "title": "_title_text",
-        "sender_name": SortAlias("_sender_name", lambda _info, queryset: queryset.sender_name_expression()),
-        "thread_title": SortAlias("_thread_title", lambda _info, queryset: queryset.thread_title_expression()),
+        "sender_name": SortAlias(
+            "_sender_name", lambda _info, queryset: cast(MessageQuerySet, queryset).sender_name_expression()
+        ),
+        "thread_title": SortAlias(
+            "_thread_title", lambda _info, queryset: cast(MessageQuerySet, queryset).thread_title_expression()
+        ),
         "channel_vendor_name": SortAlias(
-            "_channel_vendor_name", lambda _info, queryset: queryset.channel_vendor_name_expression()
+            "_channel_vendor_name",
+            lambda _info, queryset: cast(MessageQuerySet, queryset).channel_vendor_name_expression(),
         ),
     },
     aggregatable=["id"],
@@ -2153,7 +2176,9 @@ def _prime_follower_identities(followers: list[Any], actor: Any) -> None:
         .filter(pk__in={p.user_id for p in people.values() if p.user_id})
     }
     for person in people.values():
-        person._meta.get_field("user").set_cached_value(person, users.get(person.user_id))
+        person._meta.get_field("user").set_cached_value(
+            person, users.get(person.user_id) if person.user_id is not None else None
+        )
     for party in parties.values():
         party._meta.get_field("person").set_cached_value(party, people.get(party.pk))
     for follower in followers:

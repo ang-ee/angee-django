@@ -30,6 +30,7 @@ from angee.graphql.data.metadata import (
 from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE, require_instance_for_id
 from angee.identity import public_id_of
 from angee.models import AngeeModel
+from angee.permissions import require_rebac_queryset
 from graphql import GraphQLError
 
 _PREVIEW_LEAF_LIMIT = 50
@@ -492,7 +493,7 @@ class _PreviewRows:
             )
         if actor is None:
             return cls(total_count=len(collected))
-        scoped = model.objects.with_actor(actor).with_action("read")
+        scoped = require_rebac_queryset(model).with_actor(actor).with_action("read")
         return cls._from_scoped_collected(collected, scoped)
 
     @classmethod
@@ -536,7 +537,7 @@ class _PreviewRows:
             )
         if actor is None:
             return cls(total_count=total_count)
-        scoped = queryset.model.objects.with_actor(actor).with_action("read")
+        scoped = require_rebac_queryset(queryset.model).with_actor(actor).with_action("read")
         visible_queryset = scoped.filter(pk__in=models.Subquery(queryset.order_by().values("pk")))
         visible_count = visible_queryset.count()
         return cls(

@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
-from typing import Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import DatabaseError, IntegrityError, OperationalError, connection, transaction
-from django.db.models import Count, Exists, F, Max, OuterRef, Q, Sum, Value, Window
+from django.db.models import Count, Exists, F, Max, OuterRef, Q, QuerySet, Sum, Value, Window
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now, RowNumber
 from pydantic import Field, TypeAdapter
@@ -32,7 +32,14 @@ from angee.graphql.publishing import changes_muted, mute_changes, publish_change
 from angee.identity import public_id_of
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
-from angee.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet, StaleRevisionError, require_revision
+from angee.models import (
+    AngeeManager,
+    AngeeQuerySet,
+    AppendOnlyQuerySet,
+    StaleRevisionError,
+    require_revision,
+    row_lock_paths,
+)
 from angee.models.query import by_key
 from angee.serialization import canonical_json_sha256, strip_null_bytes
 from angee.signals import bulk_updated
@@ -59,6 +66,9 @@ from angee.workflows.states import (
 from angee.workflows.steps import StepMode, Superseded
 from angee.workflows.subjects import RunSubject
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
+
+if TYPE_CHECKING:
+    from angee.workflows.models import StepAttempt, StepRecord, StepRun, StepWatch, Workflow, WorkflowRun
 
 logger = logging.getLogger(__name__)
 RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
@@ -135,7 +145,7 @@ _CONFIGURATIONS: TypeAdapter[list[StepConfiguration]] = TypeAdapter(
 )
 
 
-class WorkflowManager(AngeeManager):
+class WorkflowManager[T: Workflow](AngeeManager[T]):
     """Own the editable document and the immutable publication sequence."""
 
     def _resolved_document(self, draft: Any, actor: Any) -> tuple[Any, list[Issue]]:
@@ -184,7 +194,7 @@ class WorkflowManager(AngeeManager):
             if not isinstance(expects, str) or not expects:
                 continue
             expected = expected_by_key.get(expects)
-            if expected is None:
+            if expected is None or expected.published is None:
                 issues.append(Issue(
                     node=key, path=[*path, "config", "expects"], code="expected_workflow",
                     message=f"Expected workflow {expects!r} must be readable and published.",
@@ -273,7 +283,7 @@ class WorkflowManager(AngeeManager):
         *,
         draft: Any,
         expected_revision: int,
-        node_keys: dict[str, str] | None = None,
+        node_keys: object = None,
         layout: Any = None,
         actor: Any = None,
     ) -> DraftSave:
@@ -317,10 +327,11 @@ class WorkflowManager(AngeeManager):
             with system_context(reason="workflows.publish"):
                 current = self.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
             require_revision(expected=expected_revision, current=current.draft_revision, minimum=0)
+            published = current.published
             if extensions is None:
                 extensions = (
-                    current.published.definition.retained_extensions()
-                    if current.published_id is not None
+                    published.definition.retained_extensions()
+                    if published is not None
                     else ()
                 )
             source = current.draft
@@ -338,8 +349,8 @@ class WorkflowManager(AngeeManager):
             assert definition is not None
             document = definition.published_document()
             digest = canonical_json_sha256(document)
-            if current.published_id and current.published.content_hash == digest:
-                version = current.published
+            if published is not None and published.content_hash == digest:
+                version = published
             else:
                 with system_context(reason="workflows.publish"):
                     number = current.versions.aggregate(number=Max("number"))["number"] or 0
@@ -395,7 +406,7 @@ class WorkflowManager(AngeeManager):
             return workflow
 
 
-class WorkflowRunQuerySet(AngeeQuerySet):
+class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
     """Own run locks and the delivery obligation every lock holder acquires."""
 
     def for_subject(self, record: Any) -> Any:
@@ -407,30 +418,32 @@ class WorkflowRunQuerySet(AngeeQuerySet):
         """Runs that worked on readable records and all readable ancestors, oldest first."""
         if not isinstance(records, (list, tuple)):
             records = (records,)
-        subjects = Q(pk__in=[])
+        subject_filter = Q(pk__in=[])
         targets = Q(pk__in=[])
         evidence_model = apps.get_model("workflows", "StepRecord")
         for record in records:
             targets |= evidence_model.record_filter(record)
-            subjects |= self.model.record_filter(record)
+            subject_filter |= self.model.record_filter(record)
         links = evidence_model.system_queryset().filter(targets)
         if operations is not None:
             links = links.filter(operation__in=operations)
-        subjects = self.filter(subjects)
+        subjects: QuerySet[WorkflowRun, Mapping[str, object]] = self.filter(subject_filter).values("pk")
+        link_runs = links.values("run_id")
         if limit is not None:
-            subjects = subjects.annotate(_rank=Window(RowNumber(),
+            subjects = self.filter(subject_filter).alias(_rank=Window(RowNumber(),
                 partition_by=["subject_content_type_id", "subject_object_id"], order_by=["-created_at", "-pk"])
-            ).filter(_rank__lte=limit)
-            links = links.values("content_type_id", "object_id", "run_id").annotate(
+            ).filter(_rank__lte=limit).values("pk")
+            link_runs = links.values("content_type_id", "object_id", "run_id").annotate(
                 _created=Max("run__created_at"),
             ).annotate(_rank=Window(RowNumber(), partition_by=["content_type_id", "object_id"],
-                                   order_by=[F("_created").desc(), F("run_id").desc()])).filter(_rank__lte=limit)
+                                   order_by=[F("_created").desc(), F("run_id").desc()])
+            ).filter(_rank__lte=limit).values("run_id")
         if not ancestors:
-            return self.filter(Q(pk__in=subjects.values("pk")) | Q(pk__in=links.values("run_id"))).order_by(
+            return self.filter(Q(pk__in=subjects) | Q(pk__in=link_runs)).order_by(
                 "created_at", "pk",
             ).distinct()
         ids = set(subjects.values_list("pk", flat=True))
-        ids.update(self.filter(pk__in=links.values("run_id")).values_list("pk", flat=True))
+        ids.update(self.filter(pk__in=link_runs).values_list("pk", flat=True))
         frontier = ids.copy() if ancestors else set()
         while frontier:
             parents = set(self.filter(pk__in=frontier).exclude(parent_step=None)
@@ -463,10 +476,10 @@ class WorkflowRunQuerySet(AngeeQuerySet):
         # A block is policy: it holds whether or not the caller may read the run (an import's
         # run belongs to the workflow's service user, not to the clerk posting the bill), so the
         # open runs and their pinned definitions are read under the policy's own system scope.
-        version_model = self.model._meta.get_field("version").related_model
+        version_model = apps.get_model("workflows", "WorkflowVersion")
         with system_context(reason="workflows.blocking_policy"):
             runs = (
-                self.model.system_queryset()
+                self.model.objects.system_context(reason="workflows.blocking_policy")
                 .exclude(status__in=RunStatus.terminal_values())
                 .about(record, ancestors=False)
             )
@@ -549,7 +562,7 @@ class WorkflowRunQuerySet(AngeeQuerySet):
         )
 
 
-class StepRecordQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
+class StepRecordQuerySet[T: StepRecord](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
     """Keep retained admission references immutable until their run is pruned."""
 
     def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
@@ -565,7 +578,10 @@ class StepRecordQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
 StepRecordManager = AngeeManager.from_queryset(StepRecordQuerySet)
 
 
-class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # type: ignore[misc]
+_WorkflowRunManagerBase = AngeeManager.from_queryset(WorkflowRunQuerySet)
+
+
+class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
     """Own run admission, cancellation and retained row updates under the run lock."""
 
     def start(
@@ -609,8 +625,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             workflow.refresh_from_db()
             workflow.validate_subject(subject)
             target = generic_target(subject) if subject is not None else None
+            principal_id = actor_user_id(to_subject_ref(actor))
             identity = dict(
-                run_as_id=actor_user_id(to_subject_ref(actor)),
+                run_as_id=principal_id,
                 subject_content_type_id=target.content_type.pk if target is not None else None,
                 subject_object_id=target.object_id if target is not None else None,
                 parent_step_id=parent_step.pk if parent_step is not None else None,
@@ -638,9 +655,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             version = version or workflow.published
             if version is None or version.workflow_id != workflow.pk:
                 raise ValidationError("A published version of this workflow is required.")
-            principal_workflow = apps.get_model("workflows", "Workflow").system_queryset().filter(
-                user_id=identity["run_as_id"],
-            ).first()
+            principal_workflow = (
+                apps.get_model("workflows", "Workflow").system_queryset().filter(user_id=principal_id).first()
+                if principal_id is not None else None
+            )
             if principal_workflow is not None:
                 granted = apps.get_model("workflows", "Trigger").system_queryset().filter(
                     workflow=principal_workflow, enabled=True,
@@ -684,7 +702,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         model = run.subject_model_class
         if model is None or not issubclass(model, RunSubject):
             return None
-        subject = model.system_queryset().filter(pk=run.subject_object_id).lock_if_supported(no_key=True).first()
+        subject = model._default_manager.filter(pk=run.subject_object_id).select_for_update(
+            no_key=True, of=row_lock_paths(model),
+        ).first()
         if subject is None and required:
             raise ValidationError("The workflow run subject no longer exists.")
         return cast(RunSubject | None, subject)
@@ -876,7 +896,7 @@ def unfinished_run_merge_guard(record: Any) -> str | None:
     return f"Workflow runs still working on {record} must finish or be canceled first."
 
 
-class StepWatchManager(AngeeManager):
+class StepWatchManager[T: StepWatch](AngeeManager[T]):
     """Own transactional observation, durable change capture and wait admission."""
 
     def register(self, step_run: Any, records: tuple[Any, ...], *, actor: Any) -> None:
@@ -895,8 +915,11 @@ class StepWatchManager(AngeeManager):
             targets[(target.content_type.pk, target.object_id)] = target
         with system_context(reason="workflows.watch_register"):
             for _, target in sorted(targets.items()):
-                rows = target.content_type.model_class().system_queryset().filter(pk=target.object_id)
-                rows.lock_if_supported(no_key=True).get()
+                model = target.content_type.model_class()
+                assert model is not None
+                model._default_manager.filter(pk=target.object_id).select_for_update(
+                    no_key=True, of=row_lock_paths(model),
+                ).get()
             for record in records:
                 readable = type(record).objects.with_actor(actor)
                 if not readable.filter(pk=record.pk).exists():
@@ -921,8 +944,10 @@ class StepWatchManager(AngeeManager):
             except ValueError:
                 return  # Unsaved or untyped records cannot have watches.
             with transaction.atomic(), system_context(reason="workflows.watch_capture"):
-                rows = target.content_type.model_class().system_queryset().filter(pk=target.object_id)
-                if rows.lock_if_supported(no_key=True).first() is None:
+                model = target.content_type.model_class()
+                assert model is not None
+                rows = model._default_manager.filter(pk=target.object_id)
+                if rows.select_for_update(no_key=True, of=row_lock_paths(model)).first() is None:
                     return
                 if self.filter(**target.lookups(self.model, "record")).update(pending=True):
                     payload = {"content_type_id": target.content_type.pk, "object_id": target.object_id}
@@ -931,7 +956,7 @@ class StepWatchManager(AngeeManager):
             logger.exception("Workflow watch capture failed.")
 
 
-class StepRunQuerySet(AngeeQuerySet):
+class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
     """Own conditional step transitions and database-clock candidate scopes."""
 
     def _write_transition(self, **values: Any) -> int:
@@ -1112,7 +1137,7 @@ class StepRunQuerySet(AngeeQuerySet):
         """Cancel open steps while leaving their questions and answers intact."""
         opened = self.exclude(status__in=StepRunStatus.terminal_values())
         list(opened.order_by("pk").lock_if_supported(no_key=True).values_list("pk", flat=True))
-        attempts = self.model._meta.get_field("attempts").related_model
+        attempts = apps.get_model("workflows", "StepAttempt")
         attempts.objects.filter(step_run__in=opened).close(AttemptResult.SUPERSEDED)
         apps.get_model("workflows", "StepWatch").objects.filter(step_run__in=opened).delete()
         return opened._write_transition(
@@ -1158,7 +1183,7 @@ class StepRunQuerySet(AngeeQuerySet):
         return self.filter(status=StepRunStatus.RUNNING, deadline_at__lt=Now())
 
 
-class StepAttemptQuerySet(AngeeQuerySet):
+class StepAttemptQuerySet[T: StepAttempt](AngeeQuerySet[T]):
     """Own the one-way closure of an execution attempt."""
 
     def close(self, result: str, error: str = "", stacktrace: str = "") -> int:
@@ -1190,7 +1215,10 @@ def _database_timeout(timeout: timedelta, *, setting: str = "statement_timeout")
                 cursor.execute("SELECT set_config(%s, %s, true)", [setting, previous])
 
 
-class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: ignore[misc]
+_StepRunManagerBase = AngeeManager.from_queryset(StepRunQuerySet)
+
+
+class StepRunManager[T: StepRun](_StepRunManagerBase[T]):
     """Own step row updates and operator retry under the run lock."""
 
     @cached_property

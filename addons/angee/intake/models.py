@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping
 from types import NotImplementedType
-from typing import Any, ClassVar, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Self, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -13,6 +13,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.validators import DomainNameValidator, validate_email
 from django.db import models, transaction
+from django.db.models.expressions import BaseExpression
 from django.db.models.functions import Coalesce, NullIf
 from rebac import PermissionDenied, actor_context, check_new, current_actor, system_context, to_object_ref
 from rebac.backends import backend
@@ -20,7 +21,7 @@ from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.actors import actor_user_id, instance_actor
-from angee.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
+from angee.changesets import changeset, changeset_model, creation_fingerprint, require_changeset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.errors import DomainError, RecordAccessSubjectRefused
 from angee.fields import StateField
@@ -28,6 +29,12 @@ from angee.intake.choices import NeedAccessAction
 from angee.intake.resources import NeedResource
 from angee.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AuditMixin, HistoryMixin, OptimisticLockMixin
 from angee.resources.mixins import ResourceLoadMixin
+
+if TYPE_CHECKING:
+    from angee.messaging.models import Message
+    from angee.projects.models import Project, Task
+    from angee.work.models import Queue
+
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +44,15 @@ def _require_user_create() -> None:
 
     actor = current_actor()
     resource_type = model_resource_type(get_user_model())
-    if actor is None or resource_type is None or not check_new(
-        subject=actor, action="create", resource_type=resource_type,
-    ).allowed:
+    if (
+        actor is None
+        or resource_type is None
+        or not check_new(
+            subject=actor,
+            action="create",
+            resource_type=resource_type,
+        ).allowed
+    ):
         raise PermissionDenied("Account create access is required.")
 
 
@@ -50,7 +63,7 @@ class NeedImportance(models.TextChoices):
     IMPORTANT = "important", "Important"
 
 
-class NeedQuerySet(AngeeQuerySet):
+class NeedQuerySet[NeedT: Need](AngeeQuerySet[NeedT]):
     """Request collections follow their stored target, including project tasks."""
 
     def for_project(self, project: models.Model) -> Self:
@@ -59,8 +72,16 @@ class NeedQuerySet(AngeeQuerySet):
         return self.filter(models.Q(project=project) | models.Q(task__project=project))
 
 
-class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[misc]
+_NeedManagerBase = AngeeManager.from_queryset(NeedQuerySet)
+
+
+class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
     """Own manual capture, message capture, and triage-task construction."""
+
+    def get_queryset(self) -> NeedQuerySet[NeedT]:
+        """Preserve the configured queryset and model row type."""
+
+        return cast(NeedQuerySet[NeedT], super().get_queryset())
 
     TARGET_FIELDS = {
         "projects.project": "project",
@@ -108,17 +129,17 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
                 return task_model.objects.with_actor(actor).get(pk=created.pk)
             task = task_model.objects.with_actor(actor).create(**values, created_by_id=scope)
             self.capture(target=task, party=party, body=body, importance=importance)
-            current_changeset(required=True).record_created(task)
+            require_changeset().record_created(task)
             return task
 
-    @classmethod
-    def target_model(cls, model_label: str) -> type[models.Model]:
-        """Return the installed model for one allowed need target label."""
+    def target_model(self, model_label: str) -> type[Project] | type[Task]:
+        """Return the declared relation target for one allowed need target label."""
 
         normalized = str(model_label).strip().lower()
-        if normalized not in cls.TARGET_FIELDS:
+        if normalized not in self.TARGET_FIELDS:
             raise ValidationError({"target": "Needs may target only projects or tasks."})
-        return apps.get_model(normalized)
+        field = self.TARGET_FIELDS[normalized]
+        return self.model.task.field.related_model if field == "task" else self.model.project.field.related_model
 
     @classmethod
     def target_field(cls, target: models.Model) -> str:
@@ -132,11 +153,11 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
     def capture(
         self,
         *,
-        target: models.Model,
+        target: Project | Task,
         body: str,
         party: models.Model | None = None,
         importance: str = "normal",
-    ) -> models.Model:
+    ) -> NeedT:
         """Capture one exact manual request onto ``target`` under its write lock.
 
         The authored action has no separate idempotency token, so its replay
@@ -196,11 +217,11 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
 
     def capture_from_message(
         self,
-        message: models.Model,
+        message: Message,
         *,
-        queue: models.Model,
+        queue: Queue,
         values: dict[str, Any] | None = None,
-    ) -> models.Model:
+    ) -> NeedT:
         """Capture one message into triage; its clean replay no-op is SELECT-FOR-UPDATE-backed."""
 
         if message.pk is None or queue.pk is None:
@@ -220,6 +241,8 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
                 return existing
 
             channel = locked_message.transport_channel(reason="intake.capture.configuration")
+            if channel is None:
+                raise ValidationError("Message capture requires its intake channel.")
             mapped = dict(channel.mapped_task_values(locked_message) if values is None else values)
             claimed_name = mapped.pop("claimed_name", "")
             submission = locked_message.webform_submission()
@@ -263,13 +286,13 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
     def _create_triage_task(
         self,
         *,
-        queue: models.Model,
+        queue: Queue,
         title: str,
         note: str,
-        project: models.Model | None = None,
+        project: Project | None = None,
         created_by_id: Any = None,
         values: dict[str, Any] | None = None,
-    ) -> models.Model:
+    ) -> Task:
         """Create one task in ``queue``'s system triage stage."""
 
         stage_model = apps.get_model("work", "Stage")
@@ -277,7 +300,8 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
         if triage is None:
             raise ValidationError({"queue": "The intake queue has no triage stage."})
         task_model = apps.get_model("projects", "Task")
-        title_limit = cast(int, task_model._meta.get_field("title").max_length)
+        title_limit = task_model.title.field.max_length
+        assert title_limit is not None
         normalized_title = " ".join(str(title or "").split())[:title_limit]
         task = task_model(
             queue=queue,
@@ -297,7 +321,7 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
         return task
 
     @staticmethod
-    def _message_title(message: models.Model) -> str:
+    def _message_title(message: Message) -> str:
         """Return a stable task title from the message preview or thread title."""
 
         preview = str(message.preview or "").strip()
@@ -308,7 +332,7 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
         return str(title or "Captured message")
 
     @staticmethod
-    def _resolved_sender_party_id(message: models.Model) -> Any | None:
+    def _resolved_sender_party_id(message: Message) -> Any | None:
         """Resolve the sender through parties' matching owner and return its party id."""
 
         sender = message.sender
@@ -319,6 +343,7 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
             party_model.objects.suggest_for(sender)
             sender.refresh_from_db(fields=("party", "party_link_confirmed"))
         return sender.party_id if sender.party_link_confirmed else None
+
 
 class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
     """One external or manually-authored request attached to one semantic target."""
@@ -478,11 +503,13 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             )
 
     @property
-    def target(self) -> Any:
+    def target(self) -> Task | Project:
         """Load the target for server-side validation, without exposing its projection."""
 
-        field = self._meta.get_field("task" if self.task_id is not None else "project")
-        return field.remote_field.model._base_manager.get(pk=getattr(self, field.attname))
+        if self.task_id is not None:
+            return type(self).task.field.related_model._base_manager.get(pk=self.task_id)
+        assert self.project_id is not None
+        return type(self).project.field.related_model._base_manager.get(pk=self.project_id)
 
     def clean(self) -> None:
         """Reject missing or double targets; a task's project is never copied."""
@@ -507,7 +534,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
 
         if party_id is None:
             return None
-        party_model = self._meta.get_field("party").remote_field.model
+        party_model = type(self).party.field.related_model
         with system_context(reason="intake.need.party_subject"):
             return party_model.objects.user_for(party_model._base_manager.get(pk=party_id))
 
@@ -546,7 +573,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 super().save(**kwargs)
                 return
         with transaction.atomic():
-            previous = (
+            previous: Mapping[str, object] | None = (
                 None
                 if self._state.adding
                 else (
@@ -558,11 +585,12 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                     .first()
                 )
             )
+            assignment_names: Final = ("task_id", "project_id", "party_id")
             values = {
                 name: getattr(self, name)
                 if previous is None or update_fields is None or {name, name.removesuffix("_id")} & update_fields
                 else previous[name]
-                for name in ("task_id", "project_id", "party_id")
+                for name in assignment_names
             }
             candidate = type(self)(pk=self.pk, **values)
             candidate.clean()
@@ -591,7 +619,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 if separate_assignment:
                     # Keep ordinary fields under their actor gates. Inserts first
                     # establish the target without assigning a party.
-                    before = previous or {**values, "party_id": None}
+                    before: Mapping[str, object] = previous or {**values, "party_id": None}
                     for name, value in before.items():
                         setattr(self, name, value)
                     try:
@@ -799,7 +827,9 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             if decision is not None:
                 if locked.access_decision_id != decision.pk:
                     raise ValidationError({"revision": "The access question has changed; reload it."})
-                locked.access_decision.require_revision(decision_revision)
+                locked_decision = locked.access_decision
+                assert locked_decision is not None  # Its stored key matched the provided decision.
+                locked_decision.require_revision(decision_revision)
             if decision is None or locked.access_verdict != [action]:
                 raise ValidationError({"action": "Apply the request's current answer."})
             user = None
@@ -827,7 +857,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         self.refresh_from_db()
         return user
 
-    def convert_to_task(self, queue: models.Model) -> models.Model:
+    def convert_to_task(self, queue: Queue) -> Task:
         """Return this need's task; its clean concurrent no-op is SELECT-FOR-UPDATE-backed."""
 
         if self.pk is None or queue.pk is None:
@@ -841,7 +871,8 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 .select_related("task", "project", "source_message")
                 .get(pk=self.pk)
             )
-            if locked.task_id is not None:
+            task: Task
+            if locked.task is not None:
                 task = locked.task
             else:
                 title = locked.body or getattr(locked.source_message, "preview", "")
@@ -931,8 +962,8 @@ def _requested_by_viewer_filter(queryset: models.QuerySet[Any]) -> models.Expres
 class TaskIntakeFilters(models.Model):
     """Filter tasks by who filed them, the way the task shows it: intake's first request."""
 
-    extends = "projects.Task"
-    hasura_filter_expressions: ClassVar[Mapping[str, Callable[[models.QuerySet[Any]], models.Expression]]] = {
+    extends: ClassVar[str | None] = "projects.Task"
+    hasura_filter_expressions: ClassVar[Mapping[str, Callable[[models.QuerySet[Any]], BaseExpression]]] = {
         "requester_name": _requester_name_filter,
         "requested_by_viewer": _requested_by_viewer_filter,
     }
@@ -944,7 +975,7 @@ class TaskIntakeFilters(models.Model):
 class ProjectIntakeSetup(models.Model):
     """Link unassigned request parties before downstream setup admits people."""
 
-    extends = "projects.Project"
+    extends: ClassVar[str | None] = "projects.Project"
 
     class Meta:
         abstract = True
@@ -953,7 +984,11 @@ class ProjectIntakeSetup(models.Model):
         """Retain existing request identities; a new assignment uses its share gate."""
 
         need_model = apps.get_model("intake", "Need")
-        needs = need_model.objects.filter(task_id=self.converted_from_id, party__isnull=True)
+        needs = (
+            need_model.objects.none()
+            if self.converted_from_id is None
+            else need_model.objects.filter(task_id=self.converted_from_id, party__isnull=True)
+        )
         for need in needs:
             if party is None:
                 raise ValidationError({"party": "Choose a party for the unassigned request."})
@@ -965,7 +1000,7 @@ class ProjectIntakeSetup(models.Model):
 class ChannelIntake(models.Model):
     """Same-row intake fields and capture behavior for ``messaging.Channel``."""
 
-    extends = "messaging.Channel"
+    extends: ClassVar[str | None] = "messaging.Channel"
 
     class IntakeTrigger(models.TextChoices):
         """Declared capture triggers; only all-messages is implemented in v1."""
@@ -975,12 +1010,17 @@ class ChannelIntake(models.Model):
         MENTION = "mention", "Mention"
         COMMAND = "command", "Command"
 
-    hasura_readable_fields = ("intake_queue", "intake_trigger", "intake_field_map", "intake_requester_domains")
-    hasura_filterable_fields = ("intake_queue", "intake_trigger")
-    hasura_sortable_fields = hasura_filterable_fields
-    hasura_aggregatable_fields: tuple[str, ...] = ()
-    hasura_groupable_fields = hasura_filterable_fields
-    hasura_updatable_fields = hasura_readable_fields
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = (
+        "intake_queue",
+        "intake_trigger",
+        "intake_field_map",
+        "intake_requester_domains",
+    )
+    hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("intake_queue", "intake_trigger")
+    hasura_sortable_fields: ClassVar[tuple[str, ...]] = hasura_filterable_fields
+    hasura_aggregatable_fields: ClassVar[tuple[str, ...]] = ()
+    hasura_groupable_fields: ClassVar[tuple[str, ...]] = hasura_filterable_fields
+    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
 
     intake_queue = models.ForeignKey(
         "work.Queue",
@@ -1071,7 +1111,7 @@ class ChannelIntake(models.Model):
             self._validate_requester_domains()
         super().save(*args, **kwargs)
 
-    def mapped_task_values(self, message: models.Model) -> dict[str, Any]:
+    def mapped_task_values(self, message: Message) -> dict[str, Any]:
         """Clean each mapped answer through its field; malformed answers fall back."""
 
         submission = message.webform_submission()
@@ -1088,12 +1128,14 @@ class ChannelIntake(models.Model):
                 continue
             model = need_model if target == "claimed_name" else task_model
             try:
-                values[target] = model._meta.get_field(target).clean(value, model())
+                field = model._meta.get_field(target)
+                assert isinstance(field, models.Field)
+                values[target] = field.clean(value, model())
             except ValidationError, TypeError, ValueError, OverflowError:
                 logger.warning("Invalid intake value for %s on message %s; using its default.", target, message.pk)
         return values
 
-    def should_capture_message(self, message: models.Model) -> bool:
+    def should_capture_message(self, message: Message) -> bool:
         """Return whether this channel's configured v1 trigger accepts ``message``."""
 
         if self.intake_queue_id is None:
@@ -1106,10 +1148,12 @@ class ChannelIntake(models.Model):
             case _:
                 raise ValidationError({"intake_trigger": "Unknown intake trigger."})
 
-    def capture_ingested_message(self, message: models.Model) -> models.Model | None:
+    def capture_ingested_message(self, message: Message) -> Need | None:
         """Dispatch an accepted ingested message to the Need write owner."""
 
         if not self.should_capture_message(message):
             return None
+        queue = self.intake_queue
+        assert queue is not None  # should_capture_message required the configured queue.
         need_model = apps.get_model("intake", "Need")
-        return need_model.objects.capture_from_message(message, queue=self.intake_queue)
+        return need_model.objects.capture_from_message(message, queue=queue)

@@ -6,9 +6,9 @@ import logging
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, cast
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.base_user import AbstractBaseUser
 from django.core.exceptions import PermissionDenied
 from django.db import connections, transaction
 from django.http import HttpRequest, HttpResponse
@@ -19,6 +19,12 @@ from strawberry.types.graphql import OperationType
 
 from angee.errors import DomainError
 from angee.identity import public_id_of
+
+if TYPE_CHECKING:
+    from django.contrib.auth.models import _User
+
+    class _ViewAsRequest(HttpRequest):
+        view_as: ViewAs
 
 logger = logging.getLogger(__name__)
 _DENIED = "View-as is not permitted."
@@ -40,8 +46,8 @@ class ViewAs:
     This adapter owns request binding and rollback only.
     """
 
-    real_user: AbstractBaseUser
-    target: AbstractBaseUser
+    real_user: _User
+    target: _User
     operations: list[str] = field(default_factory=list)
 
     @classmethod
@@ -67,6 +73,7 @@ class ViewAs:
     ) -> HttpResponse:
         """Bind both identity readers, roll back query writes, then audit once."""
 
+        request = cast("_ViewAsRequest", request)
         request.view_as = self
         request.user = self.target
         try:

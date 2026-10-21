@@ -17,7 +17,7 @@ import pytest
 import strawberry
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import connection
+from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 from rebac import (
     RelationshipTuple,
@@ -480,20 +480,18 @@ def test_save_locks_the_parent_row_before_diffing_lines(composed_tables, monkeyp
     """The child diff runs under a parent-row lock (serializes concurrent saves).
 
     A true cross-delete race needs two Postgres connections; Django emits no
-    row-lock SQL on SQLite. This pins the intent: the diff requests a lock through
-    the base helper, targeting the parent model, before touching the child set.
+    row-lock SQL on SQLite. The request must name the owning parent row explicitly
+    so a manager's unrelated eager joins never become lock targets.
     """
 
-    from angee.models import AngeeQuerySet
-
-    locked_models: list[type] = []
-    original = AngeeQuerySet.lock_if_supported
+    locked_models: list[tuple[type, tuple[str, ...]]] = []
+    original = models.QuerySet.select_for_update
 
     def spy(self: Any, **kwargs: Any) -> Any:
-        locked_models.append(self.model)
+        locked_models.append((self.model, kwargs.get("of", ())))
         return original(self, **kwargs)
 
-    monkeypatch.setattr(AngeeQuerySet, "lock_if_supported", spy)
+    monkeypatch.setattr(models.QuerySet, "select_for_update", spy)
 
     owner = create_user("owner")
     with system_context(reason="seed"):
@@ -508,7 +506,9 @@ def test_save_locks_the_parent_row_before_diffing_lines(composed_tables, monkeyp
         user=owner,
     )
     result_data(result)
-    assert Document in locked_models
+    document_locks = [paths for model, paths in locked_models if model is Document]
+    assert document_locks
+    assert all(paths == ("self",) for paths in document_locks)
 
 
 def test_save_decodes_line_relation_under_the_callers_actor(composed_tables):

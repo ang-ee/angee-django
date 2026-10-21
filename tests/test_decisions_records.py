@@ -118,16 +118,17 @@ def test_many_to_many_set_and_choose_require_string_lists(many_to_many, value):
 @pytest.mark.parametrize("choose", [False, True])
 def test_many_to_many_refuses_an_unreadable_related_id(many_to_many, monkeypatch, choose):
     actor, line, tags = many_to_many
-    original = type(Tag.objects).with_actor
+    querysets = type(Tag.objects.get_queryset())
+    original = querysets.with_actor
     actors = []
 
-    def scoped(manager, answering):
-        if manager.model is Tag:
+    def scoped(queryset, answering):
+        if queryset.model is Tag:
             actors.append(answering)
-            return original(manager, answering).exclude(pk=tags[-1].pk)
-        return original(manager, answering)
+            return original(queryset, answering).exclude(pk=tags[-1].pk)
+        return original(queryset, answering)
 
-    monkeypatch.setattr(type(Tag.objects), "with_actor", scoped)
+    monkeypatch.setattr(querysets, "with_actor", scoped)
     identities = [tags[1].public_id, tags[-1].public_id]
     actions = RecordActions(fields={"tags": {"choose": {}} if choose else {"set": identities}})
     with pytest.raises(ValueError, match="absent or unreadable"):

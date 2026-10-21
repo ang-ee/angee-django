@@ -10,17 +10,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import Any, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Self, TypedDict, cast
 
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
+from django.db.models.expressions import Combinable
 from django.db.models.functions import JSONObject, Lower
 from django.db.models.lookups import Exact
 from django.utils import timezone
@@ -43,7 +44,7 @@ from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter, SubjectRef
 
 from angee.actors import actor_user_id, instance_actor, subject_reaches_user
-from angee.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
+from angee.changesets import changeset, changeset_model, creation_fingerprint, require_changeset
 from angee.errors import DomainError, RecordAccessSubjectRefused
 from angee.fields import FractionalRankField, StateField
 from angee.iam.identity import user_label_expression, user_label_queryset
@@ -51,6 +52,7 @@ from angee.messaging.models import ThreadedModelMixin
 from angee.models import (
     AngeeDataModel,
     AngeeManager,
+    AngeeModel,
     AngeeQuerySet,
     AuditMixin,
     ImmutableFieldsMixin,
@@ -64,6 +66,15 @@ from angee.models import (
 from angee.money.fields import MoneyField
 from angee.proposals.inputs import RoundTemplate
 from angee.validation import validate_value
+
+if TYPE_CHECKING:
+    from django_stubs_ext import WithAnnotations
+
+    from angee.iam.models import User
+    from angee.messaging.models import Message
+    from angee.parties.models import Party
+    from angee.projects.models import Milestone, MilestoneQuerySet, Project, Task
+    from angee.spaces.models import Group
 
 _TRACK_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "track")
 """Non-user attribution for Project rows created only by ``create_track``."""
@@ -220,10 +231,10 @@ class ClarificationWaitingSubquery(models.Subquery):
         )
 
 
-class RoundQuerySet(AngeeQuerySet):
+class RoundQuerySet[T: Round](AngeeQuerySet[T]):
     """Round collection scopes shared by record projections."""
 
-    def active_for_project(self, project: Any) -> Any:
+    def active_for_project(self, project: Project) -> Self:
         """Select the newest live round targeting this project, its source task or track."""
         targets = models.Q(project=project) | models.Q(proposals__track=project)
         if project.converted_from_id is not None:
@@ -238,23 +249,26 @@ class RoundQuerySet(AngeeQuerySet):
         )
 
 
-class RoundManager(AngeeManager.from_queryset(RoundQuerySet)):  # type: ignore[misc]
+_RoundManagerBase = AngeeManager.from_queryset(RoundQuerySet)
+
+
+class RoundManager[T: Round](_RoundManagerBase[T]):
     """Provision rounds by composing the native topic and admission owners."""
 
     def provision(
         self,
-        target: Any,
-        template: RoundTemplate | Mapping[str, Any],
-        facilitator: models.Model,
-        responders: Iterable[models.Model],
-        team: models.Model | None = None,
+        target: Project | Task,
+        template: object,
+        facilitator: User,
+        responders: Iterable[User],
+        team: Group | None = None,
         *,
-        requester_party: models.Model | None = None,
+        requester_party: Party | None = None,
         configuration: Mapping[str, Any] | None = None,
-    ) -> Any:
+    ) -> T:
         """Resume a round with the same target, name and declared settings."""
 
-        template = validate_value(RoundTemplate, template, field="template")
+        round_template: RoundTemplate = validate_value(RoundTemplate, template, field="template")
         target_field = {"projects.project": "project", "projects.task": "task"}.get(target._meta.label_lower)
         if target_field is None:
             raise ValidationError({"target": "Choose a project or task."})
@@ -273,13 +287,13 @@ class RoundManager(AngeeManager.from_queryset(RoundQuerySet)):  # type: ignore[m
             type(target).system_queryset(lock=("self",)).get(pk=target.pk)
             candidate = self.model(**{target_field: target}, facilitator=facilitator, team=team)
             project = candidate.target_project()
-            values = template.round_values(project)
+            values = round_template.round_values(project)
             setup_values = self.model.setup_values(**(configuration or {}))
             if requester_party is not None:
                 setup_values["requester_party_id"] = requester_party.pk
             rows = self.sudo(reason="proposals.round.provision").filter(
                 **{target_field: target},
-                name=template.name,
+                name=round_template.name,
                 closed_at__isnull=True,
             )
             round = rows.first()
@@ -313,10 +327,10 @@ class RoundManager(AngeeManager.from_queryset(RoundQuerySet)):  # type: ignore[m
             topic_model = apps.get_model("proposals", "Topic")
             with system_context(reason="proposals.round.provision.topics"):
                 topics = {topic.key: topic for topic in topic_model._base_manager.filter(round=round)}
-                if set(topics) - {topic.key for topic in template.topics}:
+                if set(topics) - {topic.key for topic in round_template.topics}:
                     raise ValidationError({"template": "The existing round has different topic keys."})
                 rank = None
-                for topic in template.topics:
+                for topic in round_template.topics:
                     rank = FractionalRankField.get_append_rank(rank)
                     values = dict(name=topic.name, hint=topic.hint, sort_order=rank)
                     existing = topics.get(topic.key)
@@ -326,10 +340,10 @@ class RoundManager(AngeeManager.from_queryset(RoundQuerySet)):  # type: ignore[m
                         raise ValidationError({"template": "The existing topic differs from the template."})
             round.sudo(reason="proposals.round.provision.admission")
             for responder in responders:
-                round.admit(responder, track=template.tracks)
+                round.admit(responder, track=round_template.tracks)
         return round.with_actor(actor)
 
-    def for_track(self, project_id: Any) -> Any | None:
+    def for_track(self, project_id: Any) -> T | None:
         """Return the round whose admitted shell owns ``project_id`` as its track, else ``None``.
 
         Track items keep the round's holder ceiling and manager-only sharing; an
@@ -355,8 +369,15 @@ def _receipt_user_id(fallback: Any | None = None) -> Any | None:
     return actor_user_id(current_actor()) or fallback
 
 
+class _RosterProjection(TypedDict):
+    _roster_name: str
+    _roster_track_status: str | None
+
+
 class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel):
     """A bounded solicitation on one project or task; its chatter is shared."""
+
+    _roster_entries: list[WithAnnotations[Proposal, _RosterProjection]]
 
     @classmethod
     def setup_values(cls) -> dict[str, Any]:
@@ -372,7 +393,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
 
     runtime = True
     sqid_prefix = "rnd_"
-    thread_team_field = "team"
+    thread_team_field: ClassVar[str | None] = "team"
     rebac_grantable = {
         "reader": "share",
         "evaluator": "share",
@@ -517,10 +538,15 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
 
         return self.name
 
-    def target_project(self) -> Any:
+    def target_project(self) -> Project | None:
         """Resolve the planning project for either kind of target."""
+        self._validate_target()
         with system_context(reason="proposals.round.target_project"):
-            return self.project if self.project_id is not None else self.task.project
+            if self.project_id is not None:
+                return self.project
+            task = self.task
+            assert task is not None
+            return task.project
 
     @staticmethod
     def admission_condition() -> models.Q:
@@ -541,7 +567,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         )
 
     @classmethod
-    def can_open_expression(cls, actor: Any) -> models.Expression:
+    def can_open_expression(cls, actor: Any) -> Combinable:
         """Offer disclosure to managers until the round has an opening receipt, once its phase has come."""
         if actor is None:
             return models.Value(False)
@@ -550,7 +576,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         return models.Exists(unopened.filter(pk=models.OuterRef("pk")))
 
     @classmethod
-    def can_admit_expression(cls, actor: Any) -> models.Expression:
+    def can_admit_expression(cls, actor: Any) -> Combinable:
         """Combine the write scope and shell admission state in one expression."""
         if actor is None:
             return models.Value(False)
@@ -644,8 +670,8 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             raise RecordAccessSubjectRefused()
 
     def admit(
-        self, user: models.Model, party: models.Model | None = None, track: bool = False, follow: bool = False
-    ) -> Any:
+        self, user: User, party: Party | None = None, track: bool = False, follow: bool = False
+    ) -> Proposal:
         """Create the unique shell and optionally its owning track, idempotently."""
         if not self.has_access("write"):
             raise PermissionDenied("Round write access is required.")
@@ -668,7 +694,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                     locked.message_subscribe(user=user)
         return proposal.with_actor(actor)
 
-    def remove_responder(self, user: models.Model, expected_revision: int | None = None) -> dict[str, Any]:
+    def remove_responder(self, user: User, expected_revision: int | None = None) -> dict[str, Any]:
         """Retire one shell and clean its direct access, reporting wider shares."""
         if not self.has_access("manage"):
             raise PermissionDenied("Round management is required.")
@@ -703,19 +729,23 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             proposal.save(update_fields=("retired_at", "retired_by", "updated_at"))
             task_model = apps.get_model("projects", "Task")
             answer_model = apps.get_model("proposals", "Answer")
-            collections = [
+            clarification_tasks = task_model.objects.filter(clarification_round=self)
+            tracks = apps.get_model("projects", "Project").objects.filter(source_proposal__round=self)
+            track_tasks = task_model.objects.filter(project_id__in=tracks.values("pk"))
+            for tasks in (clarification_tasks, track_tasks):
+                tasks.filter(assignee=user).update(assignee=None)
+            collections: list[tuple[models.QuerySet[AngeeModel], bool]] = [
                 (type(self).objects.filter(pk=self.pk), False),
                 (apps.get_model("proposals", "Proposal").objects.filter(round=self), False),
                 (answer_model.objects.filter(proposal__round=self), False),
-                (task_model.objects.filter(clarification_round=self), False),
+                (clarification_tasks, False),
             ]
-            tracks = apps.get_model("projects", "Project").objects.filter(source_proposal__round=self)
             drive_model = apps.get_model("storage", "Drive")
             drives = drive_model.objects.filter(project_bindings__project_id__in=tracks.values("pk"))
             collections.extend(
                 [
                     (tracks, True),
-                    (task_model.objects.filter(project_id__in=tracks.values("pk")), True),
+                    (track_tasks, True),
                     (drives, True),
                     (apps.get_model("storage", "File").objects.filter(drive_id__in=drives.values("pk")), True),
                 ]
@@ -724,10 +754,10 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             relationships = active_relationship_model().objects
             for rows, track_rows in collections:
                 if track_rows:
-                    OwnerQuerySet.release(rows, user)
-                if rows.model is task_model:
-                    rows.filter(assignee=user).update(assignee=None)
-                resource_type = rows.model._meta.rebac_resource_type
+                    assert isinstance(rows, OwnerQuerySet)
+                    rows.release(user)
+                resource_type = model_resource_type(rows.model)
+                assert resource_type is not None
                 identifiers = [str(pk) for pk in rows.order_by().values_list("pk", flat=True)]
                 shares = relationships.filter(
                     resource_type=resource_type,
@@ -796,13 +826,17 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         """Snapshot the section audience from the current phase and its boundary."""
         with system_context(reason="proposals.round.clarification_default"):
             project = self.target_project()
-            if self.clarifications_shared_until_id is None:
+            boundary = self.clarifications_shared_until
+            if boundary is None:
                 return "restricted"
-            if project.current_milestone_id is None:
+            if project is None:
+                raise ValidationError("A clarification milestone requires a target project.")
+            current = project.current_milestone
+            if current is None:
                 return "inherited"
             return (
                 "inherited"
-                if project.current_milestone.sort_order <= self.clarifications_shared_until.sort_order
+                if current.sort_order <= boundary.sort_order
                 else "restricted"
             )
 
@@ -875,7 +909,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 if manager:
                     locked._pass_clarification_locked(task, recipient, "default", manager_ask=True)
             if idempotency_key is not None:
-                current_changeset(required=True).record_created(task)
+                require_changeset().record_created(task)
         return task
 
     def resolve_clarification(self, task: Any, *, expected_revision: int) -> Any:
@@ -1033,11 +1067,11 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         }
         if changed_ids:
             project = self.target_project()
-            valid = set(
+            valid = set() if project is None else set(
                 apps.get_model("projects", "Milestone").system_queryset()
                 .filter(
                     pk__in=changed_ids.values(),
-                    project_id=project.pk if project else None,
+                    project_id=project.pk,
                 )
                 .values_list("pk", flat=True)
             )
@@ -1231,7 +1265,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         )
         return self
 
-    def transfer_facilitation(self, user: models.Model, expected_revision: int | None = None) -> Self:
+    def transfer_facilitation(self, user: User, expected_revision: int | None = None) -> Self:
         """Transfer the manager seat without duplicating it in track grants."""
         if not self.has_access("write"):
             raise PermissionDenied("Round write access is required.")
@@ -1328,7 +1362,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
 
     def _assert_close_postcondition(
         self,
-        proposals: list[models.Model],
+        proposals: Sequence[Proposal],
         *,
         outcome: RoundOutcome,
         accepted_ids: set[Any],
@@ -1402,7 +1436,7 @@ class Topic(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         super().save(*args, **kwargs)
 
 
-class ProposalManager(AngeeManager):
+class ProposalManager[T: Proposal](AngeeManager[T]):
     """Own replay-safe message capture into Proposal and Answer rows."""
 
     CAPTURE_PARSER_VERSION = "proposals.capture.v1"
@@ -1418,10 +1452,10 @@ class ProposalManager(AngeeManager):
 
     def capture_from_message(
         self,
-        message: models.Model,
-        round: models.Model,
-        party: models.Model | None = None,
-    ) -> models.Model:
+        message: Message,
+        round: Round,
+        party: Party | None = None,
+    ) -> T:
         """Interpret one reply atomically and submit only after all rows succeed."""
 
         if message.pk is None or round.pk is None:
@@ -1464,10 +1498,10 @@ class ProposalManager(AngeeManager):
     def _locked_capture_proposal(
         self,
         *,
-        message: models.Model,
-        round: models.Model,
-        party: models.Model,
-    ) -> models.Model:
+        message: Message,
+        round: Round,
+        party: Party,
+    ) -> T:
         """Resolve an existing capture shell or create/reload its unique row."""
 
         candidates = list(
@@ -1492,20 +1526,21 @@ class ProposalManager(AngeeManager):
             with transaction.atomic():
                 proposal.sudo(reason="proposals.capture.create").save()
         except IntegrityError:
-            proposal = (
+            concurrent = (
                 self.sudo(reason="proposals.capture.concurrent_reload")
                 .lock_if_supported()
                 .filter(models.Q(source_message_id=message.pk) | models.Q(round_id=round.pk, party_id=party.pk))
                 .order_by("pk")
                 .first()
             )
-            if proposal is None:
+            if concurrent is None:
                 raise
+            proposal = concurrent
             if proposal.round_id != round.pk or proposal.party_id != party.pk:
                 raise ValidationError("A concurrent capture claimed the message for another proposal.")
         return proposal
 
-    def _interpret(self, message: models.Model, round: models.Model) -> dict[str, Any]:
+    def _interpret(self, message: Message, round: Round) -> dict[str, Any]:
         """Return the deterministic v1 interpretation envelope for one Message."""
 
         metadata = message.metadata if isinstance(message.metadata, Mapping) else {}
@@ -1546,9 +1581,9 @@ class ProposalManager(AngeeManager):
 
     def _apply_interpretation(
         self,
-        proposal: models.Model,
+        proposal: T,
         *,
-        message: models.Model,
+        message: Message,
         interpretation: Mapping[str, Any],
         payload_hash: str,
     ) -> None:
@@ -1598,19 +1633,20 @@ class ProposalManager(AngeeManager):
             answer.full_clean(validate_unique=False, validate_constraints=False)
             answer.sudo(reason="proposals.capture.answer").save()
 
-    def _resolved_sender_party(self, message: models.Model) -> models.Model | None:
+    def _resolved_sender_party(self, message: Message) -> Party | None:
         """Resolve the sender through the parties-owned handle matching seam."""
 
         if message.sender_id is None:
             return None
-        handle: Any = message.sender
+        handle = message.sender
+        assert handle is not None
         if handle.party_id is None:
             apps.get_model("parties", "Party").objects.suggest_for(handle)
             # Matching may assign the party through another Handle instance.
             handle.refresh_from_db(fields=["party"])
         return handle.party
 
-    def _payload_hash(self, message: models.Model) -> str:
+    def _payload_hash(self, message: Message) -> str:
         """Hash the portable source payload interpreted by this parser version."""
 
         canonical = json.dumps(
@@ -1858,7 +1894,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
             self.round.validate_build_subject(subject)
 
     @classmethod
-    def track_status_expression(cls, actor: Any) -> models.Expression:
+    def track_status_expression(cls, actor: Any) -> Combinable:
         """Project the gated track scalar in the proposal list query."""
         if actor is None:
             return models.Value(None, output_field=models.CharField())
@@ -1877,7 +1913,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
             .get()
         )
 
-    def lock_for_delete(self, *, queryset: models.QuerySet[Self] | None = None) -> Self | None:
+    def lock_for_delete(self, *, queryset: models.QuerySet[models.Model] | None = None) -> Self | None:
         """Serialize confirmed and native deletes with round-first submission."""
 
         apps.get_model("proposals", "Round").system_queryset(lock=("self",)).filter(pk=self.round_id).first()
@@ -2002,7 +2038,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         _copy_persisted_state(self, locked, ("state", "decided_at", "decided_by", "updated_at", "updated_by"))
         return self
 
-    def identify_party(self, party: models.Model) -> Self:
+    def identify_party(self, party: Party) -> Self:
         """Set the external identity once under Round-first row locks."""
 
         if self.pk is None or party.pk is None:
@@ -2032,7 +2068,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         _copy_persisted_state(self, locked, ("party", "updated_at", "updated_by"))
         return self
 
-    def create_track(self) -> models.Model:
+    def create_track(self) -> Project:
         """Create one ownerless, item-owning project with its own bound drive."""
 
         actor = instance_actor(self)
@@ -2060,7 +2096,8 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
             if not unscoped and not locked.with_actor(actor).has_access("write"):
                 raise PermissionDenied("Proposal write access is required.")
             if locked.track_id is not None:
-                track: Any = locked.track
+                track = locked.track
+                assert track is not None
             else:
                 track = project_model(
                     title=f"{locked_round.name} — proposal track",
@@ -2114,7 +2151,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         self._state.fields_cache["track"] = track
         return track
 
-    def publish_track(self, expected_revision: int | None = None) -> models.Model:
+    def publish_track(self, expected_revision: int | None = None) -> Project:
         """Publish the private track to this Round's responders, idempotently."""
 
         if not self.has_access("publish"):
@@ -2196,14 +2233,15 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         if self.submitted_at is None or self.submitted_by_id is None or self.decided_at is not None:
             raise ValidationError("Submitted proposal receipts do not match the requested postcondition.")
 
-    def _publish_track_locked(self) -> models.Model:
-        if self.track_id is None:
+    def _publish_track_locked(self) -> Project:
+        track = self.track
+        if track is None:
             raise ValidationError({"track": "Create the proposal track before publishing it."})
         if self.track_published_at is None:
             self.track_published_at = timezone.now()
             self.allow_immutable_save("track_published_at")
             self.save(update_fields=("track_published_at", "updated_at"))
-        return self.track
+        return track
 
     def _validate_lifecycle_receipts(self) -> None:
         if self.state == ProposalState.DRAFT and any(
@@ -2228,7 +2266,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
 class ProjectProposalAccess(models.Model):
     """Grant proposal visibility from one Project without owning its policy."""
 
-    extends = "projects.Project"
+    extends: ClassVar[str | None] = "projects.Project"
     rebac_grantable = {"proposal_viewer": "share"}
 
     def apply_setup(self, *, round: Mapping[str, Any] | None = None, **options: Any) -> None:
@@ -2269,7 +2307,7 @@ class ProjectProposalAccess(models.Model):
         return super().setup_complete_condition(actor) & models.Q(models.Exists(rounds))
 
     @classmethod
-    def question_attention_expression(cls, actor: Any, *, passed_on: bool = False) -> models.Expression:
+    def question_attention_expression(cls, actor: Any, *, passed_on: bool = False) -> Combinable:
         """Count readable unanswered questions on this project."""
 
         return apps.get_model("projects", "Task").question_count_expression(
@@ -2286,7 +2324,7 @@ class ProjectProposalAccess(models.Model):
             if round is not None:
                 round.validate_build_subject(subject)
 
-    def selectable_milestones(self) -> models.QuerySet:
+    def selectable_milestones(self) -> MilestoneQuerySet[Milestone]:
         """Limit unopened rounds to the boundary and its immediate successor."""
         choices = super().selectable_milestones()
         with system_context(reason="proposals.track.phase_choices"):
@@ -2301,8 +2339,10 @@ class ProjectProposalAccess(models.Model):
                 .select_related("opens_after")
             )
             for round in rounds:
+                boundary = round.opens_after
+                assert boundary is not None  # The queryset excludes NULL boundaries.
                 next_rank = (
-                    choices.filter(sort_order__gt=round.opens_after.sort_order)
+                    choices.filter(sort_order__gt=boundary.sort_order)
                     .order_by(
                         "sort_order",
                     )
@@ -2310,7 +2350,7 @@ class ProjectProposalAccess(models.Model):
                     .first()
                 )
                 choices = choices.filter(
-                    sort_order__lte=round.opens_after.sort_order if next_rank is None else next_rank,
+                    sort_order__lte=boundary.sort_order if next_rank is None else next_rank,
                 )
         return choices
 
@@ -2323,7 +2363,7 @@ class ProjectProposalAccess(models.Model):
 class TaskProposalAccess(ImmutableFieldsMixin):
     """Contribute question facts and track-item sharing to the task owner."""
 
-    extends = "projects.Task"
+    extends: ClassVar[str | None] = "projects.Task"
     rebac_grantable = {"proposal_viewer": "share"}
 
     @classmethod
@@ -2365,7 +2405,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
     clarification_passed_at = models.DateTimeField(null=True, blank=True, editable=False)
     clarification_passed_audience = models.CharField(max_length=16, default="", blank=True, editable=False)
     shared_with_responders = models.BooleanField(default=False, editable=False)
-    hasura_readable_fields = (
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = (
         "clarification_round",
         "clarification_asker",
         "clarification_by_manager",
@@ -2374,17 +2414,17 @@ class TaskProposalAccess(ImmutableFieldsMixin):
         "clarification_passed_at",
         "shared_with_responders",
     )
-    hasura_filterable_fields = (
+    hasura_filterable_fields: ClassVar[tuple[str, ...]] = (
         "clarification_round",
         "clarification_passed_at",
         "clarification_by_manager",
         "clarification_surrendered",
         "shared_with_responders",
     )
-    hasura_groupable_fields = ("clarification_round", "clarification_passed_at")
-    hasura_aggregatable_fields = ("clarification_round", "clarification_passed_at")
+    hasura_groupable_fields: ClassVar[tuple[str, ...]] = ("clarification_round", "clarification_passed_at")
+    hasura_aggregatable_fields: ClassVar[tuple[str, ...]] = ("clarification_round", "clarification_passed_at")
 
-    immutable_fields = (
+    immutable_fields: ClassVar[tuple[str, ...]] = (
         "clarification_round_id",
         "clarification_asker_id",
         "clarification_by_manager",
@@ -2396,7 +2436,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
 
     class Meta:
         abstract = True
-        constraints: tuple[Any, ...] = ()
+        constraints: ClassVar[tuple[models.BaseConstraint, ...]] = ()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Reject content changes after the first pass, including generated writes."""
@@ -2437,7 +2477,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
         )
 
     @classmethod
-    def clarification_widen_blocker_expression(cls) -> models.Expression:
+    def clarification_widen_blocker_expression(cls) -> Combinable:
         """Compute the publication blocker; callers must authorize its disclosure.
 
         Keep the hidden asker's identity inside the model-owned system query.
@@ -2460,7 +2500,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
         )
 
     @classmethod
-    def visibility_blockers(cls, value: str) -> tuple[tuple[models.Q, type[ValidationError]], ...]:
+    def visibility_blockers(cls, value: str) -> tuple[tuple[models.Q, Callable[[], ValidationError]], ...]:
         """Keep question publication rules on the task verb's shared predicate seam."""
         blockers = super().visibility_blockers(value)
         if value == "restricted":
@@ -2490,7 +2530,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
             )
         return blockers
 
-    def _message_post(self, body: str, **kwargs: Any) -> models.Model:
+    def _message_post(self, body: str, **kwargs: Any) -> Message:
         """Serialize user comments and notes with publication on the task row.
 
         Automatic system logs use messaging's separate native write path. Keep
@@ -2559,23 +2599,20 @@ class TaskProposalAccess(ImmutableFieldsMixin):
             messages = cls.thread_messages_expression(models.OuterRef("_question_id")).filter(
                 created_by_id=models.OuterRef("pk"),
             )
+            question_context = {}
+            for alias, name in (
+                ("_question_id", "pk"),
+                ("_question_round", "clarification_round"),
+                ("_question_assignee", "assignee"),
+                ("_manager_question", "clarification_by_manager"),
+                ("_passed", "clarification_passed_at"),
+            ):
+                field = cls._meta.pk if name == "pk" else cls._meta.get_field(name)
+                assert isinstance(field, models.Field)
+                question_context[alias] = models.ExpressionWrapper(models.OuterRef(name), output_field=field)
             users = (
                 user_label_queryset()
-                .annotate(
-                    **{
-                        alias: models.ExpressionWrapper(
-                            models.OuterRef(field),
-                            output_field=cls._meta.pk if field == "pk" else cls._meta.get_field(field),
-                        )
-                        for alias, field in (
-                            ("_question_id", "pk"),
-                            ("_question_round", "clarification_round"),
-                            ("_question_assignee", "assignee"),
-                            ("_manager_question", "clarification_by_manager"),
-                            ("_passed", "clarification_passed_at"),
-                        )
-                    },
-                )
+                .annotate(**question_context)
                 .filter(_question_round__isnull=False)
                 .filter(
                     models.Q(pk=models.F("_question_assignee"))
@@ -2600,7 +2637,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
             return users if actor is not None else users.none()
 
     @classmethod
-    def clarification_waiting_expression(cls, actor: Any) -> models.Expression:
+    def clarification_waiting_expression(cls, actor: Any) -> Combinable:
         """Project the same unanswered recipients in the task's SQL query."""
 
         if actor is None:
@@ -2608,7 +2645,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
         return ClarificationWaitingSubquery(cls.clarification_waiting_users(actor).values("_recipient"))
 
     @classmethod
-    def question_count_expression(cls, actor: Any, *, scope: models.Q, passed_on: bool) -> models.Expression:
+    def question_count_expression(cls, actor: Any, *, scope: models.Q, passed_on: bool) -> Combinable:
         """Count questions, not recipients, intersecting the native task read scope."""
 
         if actor is None:
@@ -2635,7 +2672,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
         return questions.readable_count_subquery(actor=actor)
 
     @classmethod
-    def question_attention_expression(cls, actor: Any, *, passed_on: bool = False) -> models.Expression:
+    def question_attention_expression(cls, actor: Any, *, passed_on: bool = False) -> Combinable:
         """Include this question or the questions filed under this source task."""
 
         return cls.question_count_expression(
@@ -2664,7 +2701,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
 class DriveProposalAccess(models.Model):
     """Apply the build-content holder invariant through project bindings."""
 
-    extends = "storage.Drive"
+    extends: ClassVar[str | None] = "storage.Drive"
     runtime = False
 
     class Meta:
@@ -2689,7 +2726,7 @@ class DriveProposalAccess(models.Model):
 class FileProposalAccess(models.Model):
     """Keep file grants within the same holder ceiling as their track drive."""
 
-    extends = "storage.File"
+    extends: ClassVar[str | None] = "storage.File"
     runtime = False
 
     class Meta:
@@ -2773,8 +2810,10 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
 
     def set_visibility(self, value: str, expected_revision: int | None = None) -> Self:
         """Narrow the inherited audience, or let a manager select any audience."""
-        if value not in AnswerVisibility.values:
-            raise ValidationError({"visibility": "Unknown answer audience."})
+        try:
+            visibility = AnswerVisibility(value)
+        except ValueError:
+            raise ValidationError({"visibility": "Unknown answer audience."}) from None
         if not self.has_access("narrow"):
             raise PermissionDenied("Answer narrow access is required.")
         manager = self.has_access("manage")
@@ -2782,10 +2821,10 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
             locked = type(self).objects.sudo(reason="proposals.answer.visibility").lock_if_supported().get(pk=self.pk)
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
-            if value not in locked.allowed_visibility(narrow=True, manage=manager):
+            if visibility not in locked.allowed_visibility(narrow=True, manage=manager):
                 raise PermissionDenied("Only a manager may widen an answer.")
-            if locked.visibility != value:
-                locked.visibility = value
+            if locked.visibility != visibility:
+                locked.visibility = visibility
                 locked.allow_immutable_save("visibility")
                 locked.save(update_fields=("visibility", "updated_at"))
         _copy_persisted_state(self, locked, ("visibility", "updated_at", "updated_by"))

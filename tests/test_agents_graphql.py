@@ -3487,6 +3487,25 @@ def test_mcp_config_emits_secret_ref_auth_header_for_credentialed_server(
     assert secrets == {secret_name: "tok-notes"}  # synced server-side, never in the file
 
 
+@pytest.mark.parametrize("placement", [MCPPlacement.EXTERNAL, MCPPlacement.INTERNAL])
+def test_mcp_authenticated_operations_require_a_configured_credential(composed_tables: None, placement: str) -> None:
+    """An uncredentialed server remains public and cannot mint authenticated secrets."""
+
+    with system_context(reason="test.agents.mcp_missing_credential"):
+        agent = Agent.objects.create(name="Public MCP agent")
+        server = MCPServer.objects.create(name="Public MCP", url="https://mcp.example.test/", placement=placement)
+        agent.mcp_servers.add(server)
+        assert agent.mcp_secrets() == {}
+        assert "headers" not in agent.mcp_config()["mcpServers"][server.name]
+        for operation in (
+            lambda: server.bearer_for(agent),
+            lambda: agent.mcp_secret_name(server),
+            lambda: agent.mcp_bearer_env(server),
+        ):
+            with pytest.raises(ValidationError, match="no authentication credential"):
+                operation()
+
+
 def test_mcp_secrets_derive_per_agent_bearer_for_internal_server(composed_tables: None) -> None:
     """An internal server syncs the per-agent derived bearer, not the raw credential secret."""
 

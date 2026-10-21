@@ -64,6 +64,7 @@ from angee.identity import public_id_of
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
+from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, PROVIDER_UNAVAILABLE, OAuthFlowError
@@ -133,11 +134,14 @@ class ConsoleIntegrationCapabilitiesQuery:
             if mode is None:
                 continue
             resource_type = model_resource_type(model)
-            if resource_type is None or not check_new(
-                subject=to_subject_ref(_session_user(info)),
-                action="create",
-                resource_type=resource_type,
-            ).allowed:
+            if (
+                resource_type is None
+                or not check_new(
+                    subject=to_subject_ref(_session_user(info)),
+                    action="create",
+                    resource_type=resource_type,
+                ).allowed
+            ):
                 continue
             capabilities.append(
                 IntegrationCapability(
@@ -1025,6 +1029,7 @@ class ConnectionMutation:
                 )
             if credential is None:
                 return UnlinkAccountResult(ok=False)
+            assert credential.external_account_id is not None
             with system_context(reason="integrate.graphql.disconnect_account"), transaction.atomic():
                 Credential.objects.prepare_disconnect(credential)
                 ExternalAccount.objects.filter(pk=credential.external_account_id).release(user)
@@ -1669,12 +1674,13 @@ def _authorized_failure(
     slot: int | None,
 ) -> SyncFailure:
     """Authorize typed owners; the model interprets the selected retained slot."""
-    owner = authorized_action_target(info, SyncStream, stream, "write")
+    epoch = authorized_action_target(info, SyncStream, stream, "write")
+    owner: SyncStateMixin = epoch
     if link is not None:
-        epoch = owner
-        owner = authorized_action_target(info, RecordLink, link, "write")
-        if owner.stream_id != epoch.pk:
+        linked = authorized_action_target(info, RecordLink, link, "write")
+        if linked.stream_id != epoch.pk:
             raise ValidationError("The failure link does not belong to the selected stream.")
+        owner = linked
     for failure in owner.failures():
         if failure.slot == slot:
             return failure

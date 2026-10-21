@@ -10,6 +10,8 @@ from rebac import actor_context
 
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRequest
 from angee.identity import public_id_of
+from angee.models import row_lock_paths
+from angee.permissions import require_rebac_queryset
 from angee.workflows.states import DONE_OUTCOME
 from angee.workflows.steps import Settlement, Step, StepMode
 
@@ -33,9 +35,10 @@ def apply_proposals(decision: Any, *, actor: Any, ctx: Any = None) -> str:
                 reference = link.record if link is not None else None
                 if reference is None:
                     raise ValidationError("The record for a chosen action is missing or inaccessible.")
+                target_model = actions.target_model(reference)
                 record = (
-                    actions.target_model(reference).objects.with_actor(actor).for_write()
-                    .filter(pk=reference.pk).lock_if_supported().get()
+                    require_rebac_queryset(target_model).with_actor(actor).for_write()
+                    .filter(pk=reference.pk).select_for_update(of=row_lock_paths(target_model)).get()
                 )
                 try:
                     values = actions.resolve(record, context={"actor": actor},

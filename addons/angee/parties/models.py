@@ -411,7 +411,7 @@ class Person(models.Model, metaclass=RebacModelBase):
     """A human party — carries name parts and an optional platform-user link."""
 
     runtime = True
-    extends = "parties.Party"
+    extends: ClassVar[str | None] = "parties.Party"
 
     statements = StatementRecords(
         link="integrate.RecordLink",
@@ -462,7 +462,7 @@ class Organization(models.Model, metaclass=RebacModelBase):
     """An organisation party — carries its legal name and primary domain."""
 
     runtime = True
-    extends = "parties.Party"
+    extends: ClassVar[str | None] = "parties.Party"
 
     statements = StatementRecords(
         link="integrate.RecordLink",
@@ -668,7 +668,9 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         for row in merged:
             filled = []
             for name in ("controller", "label", "display_name", "is_verified"):
-                attname = self._meta.get_field(name).attname
+                field = self._meta.get_field(name)
+                assert isinstance(field, models.Field)
+                attname = field.attname
                 if not getattr(self, attname) and getattr(row, attname):
                     setattr(self, attname, getattr(row, attname))
                     filled.append(name)
@@ -716,7 +718,7 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         return row.confidence if row is not None else None
 
 
-class AddressManager(StatementSubjectManager):
+class AddressManager[AddressT: Address](StatementSubjectManager[AddressT]):
     """Own normalized, conflict-safe attachment of canonical party addresses."""
 
     components = ("po_box", "extended", "street", "city", "region", "postal_code", "country")
@@ -747,7 +749,9 @@ class AddressManager(StatementSubjectManager):
         stored: dict[str, Any] = {}
         for name in self.components:
             try:
-                stored[name] = self.model._meta.get_field(name).to_python(values[name])
+                field = self.model._meta.get_field(name)
+                assert isinstance(field, models.Field)
+                stored[name] = field.to_python(values[name])
             except ValidationError:
                 if not lenient:
                     raise
@@ -763,7 +767,7 @@ class AddressManager(StatementSubjectManager):
     def lock_party(self, party_id: Any) -> None:
         """Serialize address writes for one party, including its first address."""
 
-        party_model = self.model._meta.get_field("party").remote_field.model
+        party_model = self.model.party.field.related_model
         party_model.objects.sudo(
             reason="parties.address.lock_party",
         ).locked_get(pk=party_id)
@@ -797,7 +801,7 @@ class AddressManager(StatementSubjectManager):
         label: str = "Primary",
         is_primary: bool = True,
         conflict: str = "raise",
-    ) -> tuple[str, models.Model | None]:
+    ) -> tuple[str, AddressT | None]:
         if conflict not in {"raise", "retain", "append"}:
             raise ValueError("Address conflict policy must be 'raise', 'retain', or 'append'.")
         normalized = self._normalize_components(values)
@@ -839,7 +843,7 @@ class AddressManager(StatementSubjectManager):
         actor: Any,
         expected_id: Any | None,
         label: str = "Primary",
-    ) -> tuple[str, models.Model]:
+    ) -> tuple[str, AddressT]:
         """Replace the frozen primary address, or create it when none existed."""
 
         normalized = self._normalize_components(values)
@@ -1234,7 +1238,9 @@ class RelationshipKind(AuditMixin, AngeeDataModel):
         for _field, required, _end in checked:
             model = required.model()
             if model is not None:
-                relation_names.add(model._meta.model_name)
+                model_name = model._meta.model_name
+                assert model_name is not None
+                relation_names.add(model_name)
         party_model = apps.get_model("parties", "Party")
         concrete_by_pk = {
             row["pk"]: row
@@ -1262,7 +1268,9 @@ class RelationshipKind(AuditMixin, AngeeDataModel):
         if model is None:
             return
         row = concrete_by_pk.get(party.pk, {})
-        if row.get(model._meta.model_name) is None:
+        model_name = model._meta.model_name
+        assert model_name is not None
+        if row.get(model_name) is None:
             errors[field] = f"{self.name} requires {required} on this end."
 
 
@@ -1379,8 +1387,8 @@ class Relationship(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, Angee
         update_fields = kwargs.get("update_fields")
         end_fields = {"party", "party_id", "other_party", "other_party_id", "kind", "kind_id"}
         if self.kind_id is not None and (update_fields is None or end_fields.intersection(update_fields)):
-            party_model = self._meta.get_field("party").remote_field.model
-            kind_model = self._meta.get_field("kind").remote_field.model
+            party_model = type(self).party.field.related_model
+            kind_model = type(self).kind.field.related_model
             kind = kind_model._base_manager.get(pk=self.kind_id)
             ends = party_model._base_manager.in_bulk([self.party_id, self.other_party_id])
             kind.validate_ends(ends.get(self.party_id), ends.get(self.other_party_id))
@@ -1399,8 +1407,8 @@ class Directory(Bridge):
     """
 
     runtime = True
-    extends = "integrate.Integration"
-    integration_create_mode = IntegrationCreateMode.CONNECT
+    extends: ClassVar[str | None] = "integrate.Integration"
+    integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
 
     @property
     def source_kind(self) -> SourceKind:

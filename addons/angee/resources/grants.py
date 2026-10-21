@@ -30,6 +30,7 @@ Reference resolution composes the two owners, never re-deriving either:
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING
 
 from django.db import models
 from rebac import (
@@ -50,11 +51,14 @@ from angee.resources.entries import GrantGroup, GrantRow
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.widgets import resolve_xref
 
+if TYPE_CHECKING:
+    from angee.resources.models import Resource
+
 
 def materialize_grant_groups(
     groups: Iterable[GrantGroup],
     *,
-    ledger_model: type[models.Model],
+    ledger_model: type[Resource],
     addon_aliases: Mapping[str, str],
 ) -> tuple[int, int]:
     """Write every group's grant tuples idempotently; return ``(created, skipped)``.
@@ -91,7 +95,7 @@ def materialize_grant_groups(
 
 def _grant_tuples(
     row: GrantRow,
-    ledger_model: type[models.Model],
+    ledger_model: type[Resource],
     addon_aliases: Mapping[str, str],
 ) -> list[RelationshipTuple]:
     """Return the explicit grant and compatible grants on its MTI ancestors.
@@ -120,7 +124,7 @@ def _grant_tuples(
 
 def _resolve_resource_refs(
     row: GrantRow,
-    ledger_model: type[models.Model],
+    ledger_model: type[Resource],
     addon_aliases: Mapping[str, str],
 ) -> list[ObjectRef]:
     """Resolve the grant resource to every REBAC identity it carries.
@@ -140,7 +144,7 @@ def _resolve_resource_refs(
 
 def _resolve_subject(
     row: GrantRow,
-    ledger_model: type[models.Model],
+    ledger_model: type[Resource],
     addon_aliases: Mapping[str, str],
 ) -> SubjectRef:
     """Resolve the grant subject to a subject reference."""
@@ -156,7 +160,7 @@ def _resolve_subject(
 def _resolve_row(
     row: GrantRow,
     value: str,
-    ledger_model: type[models.Model],
+    ledger_model: type[Resource],
     addon_aliases: Mapping[str, str],
 ) -> models.Model:
     """Resolve one row xref through the ledger, or raise with the grant location."""

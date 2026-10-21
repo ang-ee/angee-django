@@ -220,14 +220,10 @@ class ThreadNotification(AbstractThreadNotification):
         rebac_resource_type = "messaging/thread_notification"
 
 
-_OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
-_AddressMeta = getattr(AbstractAddress, "Meta", object)
-
-
 class Organization(AbstractOrganization, Party):
     """Concrete organization matching the composer inheritance shape."""
 
-    class Meta(_OrganizationMeta):
+    class Meta(AbstractOrganization.Meta):
         """Django model options for the canonical test organization."""
 
         abstract = False
@@ -239,7 +235,7 @@ class Organization(AbstractOrganization, Party):
 class Address(AbstractAddress):
     """Concrete party address used by contact-ingest tests."""
 
-    class Meta(_AddressMeta):
+    class Meta(AbstractAddress.Meta):
         """Django model options for the canonical test address."""
 
         abstract = False

@@ -20,10 +20,12 @@ from typing import Any, cast
 import strawberry
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import SubjectRef, current_actor
+from rebac.field_visibility import redacted_fields
 from rebac.resources import model_for_subject_type, model_resource_type
+from simple_history.utils import get_history_manager_for_model
 from strawberry.scalars import JSON
 
 from angee.actors import source_kind_for
@@ -42,6 +44,7 @@ from angee.models import (
     record_display_label,
     record_history,
 )
+from angee.permissions import require_rebac_queryset
 from angee.provenance.models import Changeset as ChangesetContract
 from angee.refs import generic_pointer_model
 from angee.serialization import json_safe
@@ -168,7 +171,7 @@ class HistorySummaryType(HistoryAttribution):
 
         page = list(changesets)
         actors = _actor_projections(page)
-        return [cls(**_attribution(row, *actors.get(row.actor, (None, None)))) for row in page]
+        return [cls(**_attribution(row, *actors.get(row.actor_ref, (None, None)))) for row in page]
 
 
 @strawberry.type
@@ -191,14 +194,14 @@ class RecordHistoryType:
     entries: list[HistoryEntryType]
 
 
-def history_model(label: str) -> type[models.Model]:
+def history_model(label: str) -> type[HistoryMixin]:
     """Return the tracked, permission-governed model ``label`` names."""
 
     try:
         model = apps.get_model(label)
     except (LookupError, ValueError) as error:
         raise ValidationError(f"Unknown model {label!r}.") from error
-    if record_history(model) is None:
+    if not issubclass(model, HistoryMixin) or record_history(model) is None:
         raise ValidationError(f"{model._meta.label} keeps no history.")
     return model
 
@@ -227,15 +230,10 @@ def _statement_origin(statement: Statement) -> str:
 def field_provenance(record: StatementsMixin, actor: Any) -> list[FieldProvenanceType]:
     """Project each visible field's applied statement in deterministic owner order."""
 
-    hidden = record.redacted_fields()
-    projected = []
+    hidden = redacted_fields(record)
+    projected: list[FieldProvenanceType] = []
     for statement_model in type(record).statement_models():
-        rows = (
-            statement_model.objects.for_reader(actor)
-            .applied()
-            .filter(subject_id=record.pk)
-            .order_by("aspect", "pk")
-        )
+        rows = statement_model.objects.for_reader(actor).applied().filter(subject_id=record.pk).order_by("aspect", "pk")
         for row in rows:
             declaration = statement_model.statement_aspects[row.aspect]
             projected.extend(
@@ -262,9 +260,7 @@ def _attribution(changeset: Any, actor: SubjectRef | None, source_kind: str | No
     resolved = model_for_subject_type(public_actor.subject_type) if public_actor is not None else None
     actor_model = resolved[0]._meta.label if resolved is not None else None
     actor_id = (
-        public_actor.subject_id
-        if public_actor is not None and public_actor.subject_id not in ("", "*")
-        else None
+        public_actor.subject_id if public_actor is not None and public_actor.subject_id not in ("", "*") else None
     )
     return dict(
         id=PublicID(public_id_of(changeset)),
@@ -284,7 +280,7 @@ def _attribution(changeset: Any, actor: SubjectRef | None, source_kind: str | No
 def _actor_projections(changesets: Iterable[Any]) -> dict[str, tuple[SubjectRef, str | None]]:
     """Resolve each page actor's stored source kind once."""
 
-    actors = {row.actor: SubjectRef.parse(row.actor) for row in changesets if row.actor}
+    actors = {row.actor_ref: SubjectRef.parse(row.actor_ref) for row in changesets if row.actor_ref}
     return {value: (actor, source_kind_for(actor)) for value, actor in actors.items()}
 
 
@@ -332,9 +328,11 @@ class RecordHistory:
         self.model = type(record)
         self.using = record._state.db
         self.scopes = record.history_scope()
-        self.statement_scopes = {
-            model: scope for model, scope in record.history_scopes().items() if model not in self.scopes
-        }
+        self.statement_scopes: dict[type[Statement], models.Q] = {}
+        for model, scope in record.history_scopes().items():
+            if model not in self.scopes:
+                assert issubclass(model, Statement)
+                self.statement_scopes[model] = scope
 
     def changesets(self) -> models.QuerySet[Any]:
         """The record's changesets, newest first; ordering is the changeset owner's."""
@@ -355,11 +353,9 @@ class RecordHistory:
         revertable = self.record.revertable_changesets(page, actor=self.actor)
         return [
             HistoryEntryType(
-                **_attribution(changeset, *actors.get(changeset.actor, (None, None))),
+                **_attribution(changeset, *actors.get(changeset.actor_ref, (None, None))),
                 changes=[
-                    change
-                    for state in versions.get(changeset.pk, ())
-                    for change in self._changes(state, redacted)
+                    change for state in versions.get(changeset.pk, ()) for change in self._changes(state, redacted)
                 ],
                 statements=self._statements(statements.get(changeset.pk, ()), redacted),
                 merge=merges.get(changeset.pk),
@@ -383,29 +379,35 @@ class RecordHistory:
         grouped: defaultdict[Any, list[_Version]] = defaultdict(list)
         for table, predicate in self.scopes.items():
             key = table._meta.pk.attname
-            historical = cast(Any, table).history.model
+            historical = get_history_manager_for_model(table).model
             predecessor = (
                 historical._base_manager.using(self.using)
                 .filter(**{key: models.OuterRef(key)}, history_id__lt=models.OuterRef("history_id"))
                 .order_by("-history_id")
                 .values("history_id")[:1]
             )
-            rows = cast(Any, table).history.using(self.using).filter(
-                predicate, changeset_id__in=changeset_ids,
-            ).annotate(_angee_predecessor_id=models.Subquery(predecessor)).order_by(
-                "changeset_id", key, "history_id"
+            rows = (
+                get_history_manager_for_model(table)
+                .using(self.using)
+                .filter(
+                    predicate,
+                    changeset_id__in=changeset_ids,
+                )
+                .annotate(_angee_predecessor_id=models.Subquery(predecessor))
+                .order_by("changeset_id", key, "history_id")
             )
             boundaries = []
             predecessor_ids = set()
             for (changeset_id, _pk), versions in groupby(
-                rows.iterator(), key=lambda row: (row.changeset_id, getattr(row, key)),
+                rows.iterator(),
+                key=lambda row: (row.changeset_id, getattr(row, key)),
             ):
                 boundary = list(versions)
                 predecessor_id = boundary[0]._angee_predecessor_id
                 boundaries.append((changeset_id, boundary[0], boundary[-1], predecessor_id))
                 if predecessor_id is not None:
                     predecessor_ids.add(predecessor_id)
-            predecessors = cast(Any, table).history.using(self.using).in_bulk(predecessor_ids)
+            predecessors = get_history_manager_for_model(table).using(self.using).in_bulk(predecessor_ids)
             for changeset_id, first, last, predecessor_id in boundaries:
                 grouped[changeset_id].append((table, first, last, predecessors.get(predecessor_id)))
         return dict(grouped)
@@ -413,21 +415,26 @@ class RecordHistory:
     def _statement_versions(
         self,
         changeset_ids: list[Any],
-    ) -> dict[Any, list[tuple[type[models.Model], Any]]]:
+    ) -> dict[Any, list[tuple[type[Statement], Any]]]:
         """Fetch every selected statement model once for the bounded page."""
 
-        grouped: defaultdict[Any, list[tuple[type[models.Model], Any]]] = defaultdict(list)
+        grouped: defaultdict[Any, list[tuple[type[Statement], Any]]] = defaultdict(list)
         for statement_model, predicate in self.statement_scopes.items():
-            versions = statement_model.history.using(self.using).filter(
-                predicate, changeset_id__in=changeset_ids,
-            ).order_by("history_id")
+            versions = (
+                statement_model.history.using(self.using)
+                .filter(
+                    predicate,
+                    changeset_id__in=changeset_ids,
+                )
+                .order_by("history_id")
+            )
             for version in versions:
                 grouped[version.changeset_id].append((statement_model, version))
         return dict(grouped)
 
     def _prime_statement_references(
         self,
-        statements: dict[Any, list[tuple[type[models.Model], Any]]],
+        statements: dict[Any, list[tuple[type[Statement], Any]]],
     ) -> None:
         """Batch readable principals, evidence and retained record links for this page."""
 
@@ -437,12 +444,9 @@ class RecordHistory:
         prime_readable_statement_records(versions, self.actor)
         links_by_model: defaultdict[type[models.Model], set[Any]] = defaultdict(set)
         keyed_versions = []
-        for statement_model, version in (
-            row for rows in statements.values() for row in rows
-        ):
-            try:
-                field = statement_model._meta.get_field("link")
-            except FieldDoesNotExist:
+        for statement_model, version in (row for rows in statements.values() for row in rows):
+            field = statement_model.link_field()
+            if field is None:
                 continue
             if version.link_id is None or field.remote_field is None:
                 continue
@@ -453,7 +457,7 @@ class RecordHistory:
             keyed_versions.append((version, link_model, version.link_id))
         readable_links: dict[tuple[type[models.Model], Any], models.Model] = {}
         for link_model, ids in links_by_model.items():
-            rows = link_model.objects.with_actor(self.actor).with_action("read").filter(pk__in=ids)
+            rows = require_rebac_queryset(link_model).with_actor(self.actor).with_action("read").filter(pk__in=ids)
             if any(field.name == "stream" for field in link_model._meta.fields):
                 rows = rows.select_related("stream__integration")
             readable_links.update({(link_model, row.pk): row for row in rows})
@@ -463,7 +467,7 @@ class RecordHistory:
     def _redactions(
         self,
         versions: dict[Any, list[_Version]],
-        statements: dict[Any, list[tuple[type[models.Model], Any]]],
+        statements: dict[Any, list[tuple[type[Statement], Any]]],
     ) -> dict[tuple[type[models.Model], Any, Any | None], frozenset[str]]:
         """Resolve current subjects in bulk, delegating retained snapshots to their owner."""
 
@@ -477,21 +481,23 @@ class RecordHistory:
         for model, items in snapshots.items():
             keys = {pk for pk, _changeset_id in items}
             readable = (
-                model.objects.with_actor(self.actor).with_action("read").using(self.using).filter(pk__in=keys)
+                require_rebac_queryset(model)
+                .with_actor(self.actor)
+                .with_action("read")
+                .using(self.using)
+                .filter(pk__in=keys)
                 if self.actor is not None
                 else model._base_manager.none()
             )
             current = {row.pk: row for row in readable}
             missing = keys - current.keys()
-            retained = set(
-                model._base_manager.using(self.using).filter(pk__in=missing).values_list("pk", flat=True)
-            )
+            retained = set(model._base_manager.using(self.using).filter(pk__in=missing).values_list("pk", flat=True))
             hidden = frozenset(field.name for field in model._meta.concrete_fields)
             history = model_history(model)
             decisions: defaultdict[Any, list[frozenset[str]]] = defaultdict(list)
             for (pk, changeset_id), snapshot in items.items():
                 row = current.get(pk)
-                fields = row.redacted_fields() if row is not None else None
+                fields = redacted_fields(row) if row is not None else None
                 if fields is None:
                     fields = (
                         history.redacted(snapshot, self.actor, current=None, retained=pk in retained)
@@ -500,8 +506,8 @@ class RecordHistory:
                     )
                 result[model, pk, changeset_id] = fields
                 decisions[pk].append(fields)
-            for pk, fields in decisions.items():
-                result.setdefault((model, pk, None), frozenset().union(*fields))
+            for pk, redactions in decisions.items():
+                result.setdefault((model, pk, None), frozenset().union(*redactions))
         return result
 
     def _changes(
@@ -520,11 +526,12 @@ class RecordHistory:
             (table, pk, last.changeset_id),
             redactions[table, pk, None],
         )
-        projected = []
+        projected: list[HistoryFieldChangeType] = []
         for change in history.diff(first, last, previous=previous).changes:
             if change.field in hidden:
                 continue
             model_field = table._meta.get_field(change.field)
+            assert isinstance(model_field, models.Field)
             projected.append(
                 HistoryFieldChangeType(
                     field=model_field.name,
@@ -538,12 +545,12 @@ class RecordHistory:
 
     def _statements(
         self,
-        versions: Iterable[tuple[type[models.Model], Any]],
+        versions: Iterable[tuple[type[Statement], Any]],
         redactions: dict[tuple[type[models.Model], Any, Any | None], frozenset[str]],
     ) -> list[HistoryStatementType]:
         """Project prefetched statement versions, redacted through their subjects."""
 
-        projected = []
+        projected: list[HistoryStatementType] = []
         for statement_model, version in versions:
             subject_model = statement_model.statement_subject_model
             redacted = redactions.get(
@@ -551,12 +558,13 @@ class RecordHistory:
                 redactions[subject_model, version.subject_id, None],
             )
             declaration = statement_model.statement_aspects[version.aspect]
-            values = {
-                name: _reference_value(field, field.value_from_object(version))
-                for name in (*declaration.fields, *declaration.members)
-                if name not in redacted
-                for field in (statement_model._meta.get_field(name),)
-            }
+            values = {}
+            for name in (*declaration.fields, *declaration.members):
+                if name in redacted:
+                    continue
+                field = statement_model._meta.get_field(name)
+                assert isinstance(field, models.Field)
+                values[name] = _reference_value(field, field.value_from_object(version))
             projected.append(
                 HistoryStatementType(
                     id=PublicID(public_id_for(statement_model, version.id)),
@@ -584,14 +592,14 @@ class RecordHistory:
 
         boundaries = {
             changeset.pk: (
-                apps.get_model(changeset.record_ref.model_label),
+                history_model(changeset.record_ref.model_label),
                 changeset.record_ref.object_id,
             )
             for changeset in changesets
             if changeset.activity == ChangesetContract.Activity.MERGE and changeset.record_ref.model_label
         }
         absorbed: defaultdict[Any, set[Any]] = defaultdict(set)
-        by_model: defaultdict[type[models.Model], set[Any]] = defaultdict(set)
+        by_model: defaultdict[type[HistoryMixin], set[Any]] = defaultdict(set)
         for changeset_id, (model, _pk) in boundaries.items():
             by_model[model].add(changeset_id)
         for model, changeset_ids in by_model.items():
@@ -601,19 +609,29 @@ class RecordHistory:
                 key = table._meta.pk.attname
                 redirected = "merged_into" in {field.name for field in table._meta.fields}
                 fields = ("changeset_id", key, "history_type", *(("merged_into_id",) if redirected else ()))
-                rows = cast(Any, table).history.using(self.using).filter(
-                    changeset_id__in=changeset_ids,
-                ).values_list(*fields)
+                rows = (
+                    get_history_manager_for_model(table)
+                    .using(self.using)
+                    .filter(
+                        changeset_id__in=changeset_ids,
+                    )
+                    .values_list(*fields)
+                )
                 for changeset_id, pk, history_type, *redirect in rows:
                     survivor = model._meta.pk.to_python(boundaries[changeset_id][1])
                     if pk != survivor and (history_type == HistoryType.DELETED or redirect and redirect[0] == survivor):
                         absorbed[changeset_id].add(pk)
-        retained = set()
+        retained: set[tuple[type[models.Model], Any]] = set()
         for model, changeset_ids in by_model.items():
             keys = {pk for changeset_id in changeset_ids for pk in absorbed[changeset_id]}
-            retained.update((model, pk) for pk in model._base_manager.using(self.using).filter(
-                pk__in=keys,
-            ).values_list("pk", flat=True))
+            retained.update(
+                (model, pk)
+                for pk in model._base_manager.using(self.using)
+                .filter(
+                    pk__in=keys,
+                )
+                .values_list("pk", flat=True)
+            )
         return {
             changeset_id: HistoryMergeType(
                 survivor=HistoryRecordType(
@@ -649,7 +667,7 @@ class HistoryQuery:
         subject_model = provenance_model(model)
         actor = current_actor()
         queryset = (
-            subject_model.objects.with_actor(actor).with_action("read")
+            require_rebac_queryset(subject_model).with_actor(actor).with_action("read")
             if actor is not None
             else subject_model._base_manager.none()
         )
@@ -668,7 +686,7 @@ class HistoryQuery:
         tracked = history_model(model)
         actor = current_actor()
         queryset = (
-            tracked.objects.with_actor(actor).with_action("read")
+            require_rebac_queryset(tracked).with_actor(actor).with_action("read")
             if actor is not None
             else tracked._base_manager.none()
         )

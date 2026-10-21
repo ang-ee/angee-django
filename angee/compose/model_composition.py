@@ -1,7 +1,8 @@
 """Discover and order abstract Django declarations for concrete composition.
 
-Django owns fields, managers and class construction. This module owns the two
-Angee declarations, ``runtime`` and ``extends``, and the additive donor policy.
+Django owns fields, managers and class construction. This module owns
+``runtime``, ``extends``, and checked ``requires_parent`` declarations and the
+additive donor policy.
 It retains native model classes, never copies their metadata into another model.
 """
 
@@ -26,25 +27,29 @@ from angee.addons import addon_manifest
 from angee.models import AngeeModel, revalidate_transition_metadata
 
 
-def extension_target(model: type[models.Model]) -> str | None:
-    """Return this class's own normalized target; markers are not inherited."""
-
-    target = model.__dict__.get("extends")
+def _model_reference(model: type[models.Model], attribute: str) -> str | None:
+    target = model.__dict__.get(attribute)
     if target is None:
         return None
     if not isinstance(target, str):
-        raise ImproperlyConfigured(f"{model.__module__}.{model.__name__}.extends must be a string.")
+        raise ImproperlyConfigured(f"{model.__module__}.{model.__name__}.{attribute} must be a string.")
     try:
         app_label, model_name = make_model_tuple(target)
     except ValueError as error:
         raise ImproperlyConfigured(
-            f"{model.__module__}.{model.__name__}.extends must be an 'app_label.ModelName' reference."
+            f"{model.__module__}.{model.__name__}.{attribute} must be an 'app_label.ModelName' reference."
         ) from error
     if not app_label or not model_name:
         raise ImproperlyConfigured(
-            f"{model.__module__}.{model.__name__}.extends must be an 'app_label.ModelName' reference."
+            f"{model.__module__}.{model.__name__}.{attribute} must be an 'app_label.ModelName' reference."
         )
     return f"{app_label}.{model_name}"
+
+
+def extension_target(model: type[models.Model]) -> str | None:
+    """Return this class's own normalized target; markers are not inherited."""
+
+    return _model_reference(model, "extends")
 
 
 class ModelComposition:
@@ -59,7 +64,9 @@ class ModelComposition:
         self.sources_by_label = dict(sorted(sources_by_label.items()))
         self.extensions = extensions
         self._model_owners = model_owners or {}
-        self._contributed_field_origins: dict[type[models.Model], tuple[tuple[str, str], ...]] = {}
+        self._contributed_fields: dict[
+            type[models.Model], tuple[tuple[models.Field, type[models.Model] | None], ...]
+        ] = {}
         missing_owners = [
             donor
             for donors in extensions.values()
@@ -131,6 +138,7 @@ class ModelComposition:
         )
         for model in dict.fromkeys(declarations):
             self._validate_import(model)
+        self.required_parents = self._validate_required_parents()
         self._validate_fields()
         self._validate_donor_managers()
         for source in self.ordered_models:
@@ -193,7 +201,7 @@ class ModelComposition:
                 model_owners[model] = config.name
         return cls(
             {
-                label: tuple(sorted(sources, key=lambda model: model._meta.object_name))
+                label: tuple(sorted(sources, key=lambda model: model.__name__))
                 for label, sources in sources_by_label.items()
             },
             {target: tuple(donors) for target, donors in extensions.items()},
@@ -246,7 +254,21 @@ class ModelComposition:
     def contributed_field_origins(self, source: type[models.Model]) -> tuple[tuple[str, str], ...]:
         """Return ``(field name, addon name)`` for fields supplied by source donors."""
 
-        return self._contributed_field_origins.get(source, ())
+        return tuple(
+            (field.name, self._model_owners[owner])
+            for field, owner in self._contributed_fields.get(source, ())
+            if owner is not None
+        )
+
+    def contributed_fields(self, source: type[models.Model]) -> tuple[models.Field, ...]:
+        """Return native donor declarations, including shared abstract ancestry.
+
+        Validation resolves repeated abstract copies to the first declaration.
+        Its native ``field.model`` identifies the donor exposing that field;
+        shared ancestry deliberately has no exclusive addon gate owner.
+        """
+
+        return tuple(field for field, _ in self._contributed_fields.get(source, ()))
 
     def field_gate_owners(self) -> dict[str, dict[str, str]]:
         """Map resource types to the packages owning their concrete donor columns.
@@ -272,6 +294,39 @@ class ModelComposition:
                 if name in columns
             }
         return dict(sorted(owners.items()))
+
+    def _validate_required_parents(self) -> dict[type[models.Model], type[models.Model]]:
+        """Validate abstract capabilities against each materialized parent chain.
+
+        The requirement adds no fields or Python bases. The declared parent is
+        still the only owner of MTI layout and inherited persistence behavior.
+        """
+        requirements: dict[type[models.Model], type[models.Model]] = {}
+        for source in self.ordered_models:
+            parents: set[type[models.Model]] = set()
+            parent = self.parent(source)
+            while parent is not None:
+                parents.add(parent)
+                parent = self.parent(parent)
+            for contributor in (*self.donors(source), source):
+                for declaration in contributor.__mro__:
+                    if not issubclass(declaration, models.Model):
+                        continue
+                    reference = _model_reference(declaration, "requires_parent")
+                    if reference is None:
+                        continue
+                    required = self.models_by_label.get(reference)
+                    if required is None:
+                        raise ImproperlyConfigured(
+                            f"{declaration._meta.label}.requires_parent references unknown model {reference!r}."
+                        )
+                    if required not in parents:
+                        raise ImproperlyConfigured(
+                            f"{source._meta.label} requires parent {required._meta.label} through "
+                            f"{declaration._meta.label}; declare it in the materialized model's extends chain."
+                        )
+                    requirements[declaration] = required
+        return requirements
 
     def _validate_fields(self) -> None:
         """Reject competing additive fields and parent columns redeclared by children.
@@ -308,14 +363,10 @@ class ModelComposition:
                 **inherited,
                 **{name: field for name, (field, _) in owners.items()},
             }
-            self._contributed_field_origins[source] = tuple(
-                sorted(
-                    (name, self._model_owners[base])
-                    for name, (field, base) in owners.items()
-                    if base is not None
-                    and base is not source
-                    and (field.concrete or field.many_to_many)
-                )
+            self._contributed_fields[source] = tuple(
+                (field, base)
+                for _, (field, base) in sorted(owners.items())
+                if base is not source and (field.concrete or field.many_to_many)
             )
 
     def _validate_donor_managers(self) -> None:

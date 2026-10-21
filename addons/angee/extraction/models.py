@@ -545,9 +545,12 @@ class ExtractionSource(DerivedFrom):
     @property
     def reference(self) -> SourceRef:
         """Return the exact file or message-part identity retained here."""
+        source = self.file if self.file_id is not None else self.message_part
+        if source is None:
+            raise ValidationError("An extraction source requires a file or message part.")
         return SourceRef(
             ExtractionSourceKind.FILE if self.file_id is not None else ExtractionSourceKind.MESSAGE_PART,
-            str((self.file if self.file_id is not None else self.message_part).sqid),
+            str(source.sqid),
             self.content_hash,
         )
 

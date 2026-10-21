@@ -346,9 +346,7 @@ def test_baseline_completion_during_extraction_retries_without_adopting(
 def test_extraction_contract_is_checked_before_page_application(
     stream_bridge: Channel, reconcile: bool, page: Any, message: str
 ) -> None:
-    stream = current_stream(
-        stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, reconcile_interval=timedelta(0)
-    )
+    stream = current_stream(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, reconcile_interval=timedelta(0))
     adapter = MemoryAdapter(pages=[page])
 
     with pytest.raises(AdapterContractError, match=message):
@@ -377,11 +375,7 @@ def test_invalid_write_result_never_promotes_record_bases(stream_bridge: Channel
     adapter = InvalidWriteAdapter(
         pages=[
             StreamPage(
-                (
-                    RecordChange(
-                        "person:1", {}, "base", "v1", mapped_payload={}, projection={"value": "changed"}
-                    ),
-                ),
+                (RecordChange("person:1", {}, "base", "v1", mapped_payload={}, projection={"value": "changed"}),),
                 {"offset": 1},
             )
         ],
@@ -461,7 +455,7 @@ def test_native_sync_rejects_stalled_pages_and_repeated_resets(
             StreamPage((), {}, exhausted=False),
         ]
     )
-    monkeypatch.setattr(type(stream_bridge), "backend", property(lambda self: adapter))
+    monkeypatch.setattr(type(stream_bridge), "capability_impl", property(lambda self: adapter))
 
     with pytest.raises(BridgeSyncError, match="records: Integration operation failed") as refused:
         sync_bridge(stream_bridge)
@@ -506,9 +500,7 @@ def test_mapping_evidence_change_reapplies_unchanged_source(
     record = RecordChange("person:1", {"name": "Ada"}, "source", mapped_payload={"name": "Ada"})
     adapter = MemoryAdapter(pages=[StreamPage((record,), {"page": 1})])
     advance_stream(stream, adapter)
-    adapter.pages = [
-        StreamPage((replace(record, **changed_evidence, projection={"name": "Ada"}),), {"page": 2})
-    ]
+    adapter.pages = [StreamPage((replace(record, **changed_evidence, projection={"name": "Ada"}),), {"page": 2})]
     assert advance_stream(stream, adapter).count == 1
     assert adapter.applied == ["person:1", "person:1"]
     assert applied_history().count() == 2
@@ -1309,9 +1301,7 @@ def test_quarantine_backoff_grows_and_caps_without_generation_inflation(
 ) -> None:
     now = timezone.now()
     monkeypatch.setattr(timezone, "now", lambda: now)
-    stream = current_stream(
-        stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, reconcile_interval=interval
-    )
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, reconcile_interval=interval)
     record = RecordChange("poison", {"name": "invalid"}, "invalid", mapped_payload={"name": "invalid"})
     adapter = ReadKeysAdapter(
         pages=[StreamPage((record,), {"page": 1})], semantic_key="poison", remote={"poison": record}
@@ -1454,11 +1444,7 @@ def test_page_reloads_conflicts_recorded_during_conditional_write(stream_bridge:
             return super().write_back(link, projection, expected_version=expected_version)
 
     adapter = RacingAdapter(
-        pages=[
-            StreamPage(
-                (RecordChange("one", {}, "base", mapped_payload={}, projection={"value": "local"}),), {}
-            )
-        ]
+        pages=[StreamPage((RecordChange("one", {}, "base", mapped_payload={}, projection={"value": "local"}),), {})]
     )
 
     result = advance_stream(stream, adapter)
@@ -1580,7 +1566,8 @@ def test_event_feeds_apply_without_replica_links(stream_bridge: Channel) -> None
 
 
 def test_sync_bridge_deadline_partial_page_is_not_a_repeated_cursor(
-    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch,
+    stream_bridge: Channel,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clock = [0.0]
 
@@ -1595,7 +1582,7 @@ def test_sync_bridge_deadline_partial_page_is_not_a_repeated_cursor(
     adapter = BudgetAdapter(pages=[page, page])
     stream_bridge.config = {"sync_time_budget": 1}
     monkeypatch.setattr(stream_driver, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
     with system_context(reason="test budget partial page"):
         assert sync_bridge(stream_bridge) == 2
     assert adapter.extracted == 2
@@ -1772,7 +1759,7 @@ def test_parallel_partitions_close_each_adapter_once_even_after_failure(
             adapters.append(adapter)
         return adapter
 
-    monkeypatch.setattr(Channel, "backend", property(backend))
+    monkeypatch.setattr(Channel, "capability_impl", property(backend))
     stream_bridge.config = {**stream_bridge.config, "sync_parallelism": 2, "sync_time_budget": 60}
     stream_bridge.save(update_fields=["config"])
     if failed_partition:
@@ -1850,10 +1837,12 @@ def test_partition_failure_preserves_safe_cause_logs_once_and_replaces_healthy_p
         monkeypatch.setattr(
             stream_driver,
             "_drain_partition",
-            lambda bridge, definition, deadline: stream_driver._drain(bridge, bridge.backend, definition, deadline),
+            lambda bridge, definition, deadline: stream_driver._drain(
+                bridge, bridge.capability_impl, definition, deadline
+            ),
         )
 
-    monkeypatch.setattr(Channel, "backend", property(lambda row: PartitionAdapter(sync_parallelism=2)))
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda row: PartitionAdapter(sync_parallelism=2)))
     stream_bridge.config = {"sync_parallelism": 2 if execution == "pool" else 1, "sync_time_budget": 60}
     stream_bridge.save(update_fields=["config"])
     with pytest.raises(BridgeSyncError) as refused:
@@ -1909,7 +1898,7 @@ def test_partition_data_error_persists_safe_stream_partition_and_reason(
         def finish_page(self, stream: Any, page: StreamPage, outcomes: Any) -> None:
             raise DataError("secret database payload")
 
-    monkeypatch.setattr(Channel, "backend", property(lambda row: DataAdapter(pages=[StreamPage(("one",), {})])))
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda row: DataAdapter(pages=[StreamPage(("one",), {})])))
     with pytest.raises(BridgeSyncError) as refused:
         stream_bridge.run_sync(now=timezone.now())
 
@@ -1941,7 +1930,7 @@ def test_bridge_reports_and_logs_each_failed_partition(
                 raise IntegrationError("Login refused.")
             raise RuntimeError("private vendor payload")
 
-    monkeypatch.setattr(Channel, "backend", property(lambda row: RefusedAdapter()))
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda row: RefusedAdapter()))
     with pytest.raises(BridgeSyncError) as refused:
         stream_bridge.run_sync(now=timezone.now())
     assert refused.value.public_message == ("contacts (a): Login refused.; contacts (b): Integration operation failed.")
@@ -2042,7 +2031,7 @@ def test_failed_conflict_reread_keeps_quarantine(
             raise OperationalError("remote offline")
 
     adapter = UnavailableAdapter()
-    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
     with pytest.raises(OperationalError, match="remote offline"):
         failure.resolve_conflict(keep=keep)
     link.refresh_from_db()
@@ -2094,7 +2083,7 @@ def test_conflict_choice_requires_a_completed_apply_or_conditional_write(
             )
         }
     )
-    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
     keep = "local"
     if failure == "new_remote_version":
         adapter.candidates = (LocalChange("one", {"name": "local"}),)
@@ -2126,9 +2115,7 @@ def test_stale_cursor_reset_cannot_overwrite_successor_progress(stream_bridge: C
 
 
 def test_reconcile_pulse_rejects_a_checkpoint_changed_during_transport(stream_bridge: Channel) -> None:
-    stream = current_stream(
-        stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, reconcile_interval=timedelta(0)
-    )
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, reconcile_interval=timedelta(0))
 
     class RacingAdapter(ReadKeysAdapter):
         def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:

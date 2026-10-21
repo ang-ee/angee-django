@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 from rebac.resources import model_resource_type
 
 from angee.identity import instances_from_public_ids, public_id_for
+from angee.permissions import require_rebac_queryset
 from angee.refs import generic_pointer_model
 
 
@@ -77,7 +78,7 @@ def _readable(
         found = instances_from_public_ids(
             model,
             ids,
-            queryset=model.objects.with_actor(actor).with_action(permission),
+            queryset=require_rebac_queryset(model).with_actor(actor).with_action(permission),
         )
         resolved.update(
             (

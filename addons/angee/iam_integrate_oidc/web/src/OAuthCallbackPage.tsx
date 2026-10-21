@@ -1,15 +1,15 @@
-import { OAuthCallback, type CallbackExchange, type OAuthCallbackCopy, } from "@angee/app/auth";
+import { OAuthCallback, type CallbackExchange, type OAuthCallbackCopy } from "@angee/app/auth";
 import { useAuthoredMutation } from "@angee/refine";
 import { useLoginPath } from "@angee/ui";
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import { IamLoginComplete } from "./documents.public";
-import { useIamT } from "./i18n";
+import { useOidcT } from "./i18n";
 import { loginCallbackRedirectUri } from "./redirects";
 
 /** OIDC sign-in redirect handler: completes the login code exchange. */
 export function OAuthCallbackPage(): ReactNode {
-  const t = useIamT();
+  const t = useOidcT();
   const loginPath = useLoginPath();
   const copy = useMemo<OAuthCallbackCopy>(
     () => ({

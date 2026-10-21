@@ -9,7 +9,7 @@ from copy import copy
 from dataclasses import dataclass
 from enum import StrEnum
 from itertools import batched, groupby
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Self, cast
 
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
@@ -47,16 +47,35 @@ from angee.models.history import HistoryMixin, ModelHistory, _ChangesetHistory
 from angee.models.identity import SqidMixin, TimestampMixin, update_fields_with_auto_now
 from angee.models.locks import OptimisticLockMixin
 from angee.models.manager import AngeeManager
-from angee.models.merge import MergeContractMixin
-from angee.models.query import AngeeQuerySet, AngeeUnscopedQuerySet, by_key, query_batch_size
+from angee.models.merge_references import MergeContractMixin
+from angee.models.query import AngeeQuerySet, AngeeUnscopedQuerySet, SystemQuerysetMixin, by_key, query_batch_size
 from angee.models.trash import TrashMixin, TrashQuerySet
+from angee.permissions import require_rebac_queryset
 from angee.validation import validate_value
 
 
-class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
+def _statement_column(model: type[models.Model], name: str) -> models.Field:
+    """Resolve declared values through Django's forward field metadata."""
+
+    field = model._meta.get_field(name)
+    if not isinstance(field, models.Field):
+        raise ImproperlyConfigured(f"{model._meta.label}.{name} must be a forward statement column.")
+    return field
+
+
+def _statement_foreign_key(model: type[models.Model], name: str) -> models.ForeignKey:
+    field = _statement_column(model, name)
+    if not isinstance(field, models.ForeignKey):
+        raise ImproperlyConfigured(f"{model._meta.label}.{name} must be a statement foreign key.")
+    return field
+
+
+class StatementQuerySet[T: Statement](AngeeUnscopedQuerySet[T]):
     """Chainable assertion scopes; the manager owns subject admission."""
 
-    def _clone(self) -> Any:
+    _statement_reader: object | None = None
+
+    def _clone(self) -> Self:
         clone = super()._clone()
         clone._statement_reader = getattr(self, "_statement_reader", None)
         return clone
@@ -80,10 +99,10 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
             kwargs["changeset"] = current_changeset(required=True, record=True)
         return super().update(**kwargs)
 
-    def current(self) -> Any:
+    def current(self) -> Self:
         return self.filter(superseded__isnull=True)
 
-    def for_reader(self, actor: Any) -> Any:
+    def for_reader(self, actor: Any) -> Self:
         """Scope shadow rows through every record endpoint the reader may read.
 
         The scopes are applied eagerly (``scoped()``): a lazily scoped queryset
@@ -93,15 +112,17 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
 
         if actor is None:
             return self.none()
-        subjects = self.model.statement_subject_model.objects.with_actor(actor).with_action("read")
+        subjects = require_rebac_queryset(self.model.statement_subject_model).with_actor(actor).with_action("read")
         rows = self.filter(subject_id__in=models.Subquery(cast(Any, subjects).scoped().values("pk")))
         member_names = sorted({name for aspect in self.model.statement_aspects.values() for name in aspect.members})
         for name in member_names:
-            field = self.model._meta.get_field(name)
-            related = field.remote_field.model if isinstance(field, models.ForeignKey) else None
-            if related is None or model_resource_type(related) is None:
+            field = _statement_column(self.model, name)
+            if not isinstance(field, models.ForeignKey):
                 continue
-            members = related.objects.with_actor(actor).with_action("read").scoped()
+            related = field.remote_field.model
+            if model_resource_type(related) is None:
+                continue
+            members = require_rebac_queryset(related).with_actor(actor).with_action("read").scoped()
             rows = rows.filter(
                 Q(**{f"{field.attname}__isnull": True})
                 | Q(**{f"{field.attname}__in": models.Subquery(members.values(field.target_field.name))})
@@ -109,21 +130,21 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
         rows._statement_reader = actor
         return rows
 
-    def with_readable_records(self, actor: Any) -> Any:
+    def with_readable_records(self, actor: Any) -> Self:
         """Batch evidence and asserting-source admission for the evaluated page."""
 
         rows = self._chain()
         rows._statement_reader = actor
         return rows
 
-    def applied(self) -> Any:
+    def applied(self) -> Self:
         """Standing value assertions selected by survivorship."""
 
         return self.current().filter(
             status=self.model.StatementStatus.ASSERTED, applied=True, snak=self.model.StatementSnak.VALUE
         )
 
-    def provenance(self, field: str) -> Any:
+    def provenance(self, field: str) -> Self:
         """Return the applied assertions, including a preferred dismissal."""
 
         aspects = [
@@ -176,7 +197,7 @@ def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
     readable_sources: dict[tuple[type[models.Model], str, str], models.Model] = {}
     for (model, id_attr), sources in sources_by_model.items():
         visible = (
-            model.objects.with_actor(actor)
+            require_rebac_queryset(model).with_actor(actor)
             .with_action("read")
             .filter(**{f"{id_attr}__in": sources})
         )
@@ -188,18 +209,22 @@ def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
         row._readable_asserting_source = readable_sources.get(source_key) if source_key is not None else None
 
 
-class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type: ignore[misc]
+_StatementManagerBase = models.Manager.from_queryset(StatementQuerySet)
+
+
+class StatementManager[T: Statement](_StatementManagerBase[T]):
     """Locked upserts and survivorship on the generated assertion model."""
 
-    def __init__(self, model: Any = None, instance: Any = None) -> None:
+    def __init__(self, model: type[T] | None = None, instance: models.Model | None = None) -> None:
         super().__init__()
-        self.model = model
+        if model is not None:
+            self.model = model
         self.instance = instance
         if instance is not None:
             self._db = instance._state.db
 
-    def get_queryset(self) -> Any:
-        rows = super().get_queryset()
+    def get_queryset(self) -> StatementQuerySet[T]:
+        rows = cast(StatementQuerySet[T], super().get_queryset())
         return rows if self.instance is None else rows.filter(subject=self.instance)
 
     def set(
@@ -322,7 +347,7 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
 
     def _transition(
         self,
-        status: str,
+        status: Statement.StatementStatus,
         *,
         asserted_by: Any,
         subjects: Sequence[Any] | None = None,
@@ -344,26 +369,26 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
             rows = rows.filter(changeset=changeset)
         ids = set(rows.values_list("pk", flat=True))
         if subjects is not None:
-            selected = set()
-            for batch in by_key(
+            selected: set[object] = set()
+            for subject_batch in by_key(
                 self.model.statement_subject_model._base_manager.using(self.db),
                 [subject.pk if isinstance(subject, models.Model) else subject for subject in subjects],
             ):
-                selected.update(rows.filter(subject__in=batch.values("pk")).values_list("pk", flat=True))
+                selected.update(rows.filter(subject__in=subject_batch.values("pk")).values_list("pk", flat=True))
             ids.intersection_update(selected)
         if supported is not None:
             for key in supported:
                 if set(key) != {"subject", "aspect", *self.model.statement_aspects[key["aspect"]].members}:
                     raise ValidationError("Supported keys require subject, aspect and every member.")
             width = max((len(key) for key in supported), default=1)
-            for batch in batched(supported, query_batch_size(rows, width=width)):
+            for supported_batch in batched(supported, query_batch_size(rows, width=width)):
                 supported_filter = models.Q(pk__in=[])
-                for key in batch:
+                for key in supported_batch:
                     supported_filter |= models.Q(**key)
                 ids.difference_update(rows.filter(supported_filter).values_list("pk", flat=True))
         affected: dict[Any, list[Any]] = {}
-        for batch in by_key(rows, sorted(ids)):
-            for pk, subject_id in batch.values_list("pk", "subject_id"):
+        for statement_batch in by_key(rows, sorted(ids)):
+            for pk, subject_id in statement_batch.values_list("pk", "subject_id"):
                 affected.setdefault(subject_id, []).append(pk)
         count = 0
         for subject_id, subject_keys in sorted(affected.items()):
@@ -373,13 +398,13 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                 subject.require_statement_write(source)
                 with system_context(reason="statements.transition"):
                     groups: dict[tuple[Any, ...], dict[str, Any]] = {}
-                    for batch in by_key(rows.filter(subject=subject), subject_keys):
-                        for row in batch.order_by("pk").select_for_update():
+                    for statement_batch in by_key(rows.filter(subject=subject), subject_keys):
+                        for row in statement_batch.order_by("pk").select_for_update():
                             row.status = status
                             # A transition changes the source's stance, so it moves its recency.
                             row.save(using=self.db, update_fields=("status", "updated_at"))
                             members = {
-                                name: row._meta.get_field(name).value_from_object(row)
+                                name: _statement_column(type(row), name).value_from_object(row)
                                 for name in self.model.statement_aspects[row.aspect].members
                             }
                             groups[row.aspect, *members.values()] = members
@@ -417,8 +442,11 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
             rows = self.model._base_manager.using(using).filter(subject=subject, superseded__isnull=True)
             if aspect is not None:
                 rows = rows.filter(aspect=aspect, **(members or {}))
-            if self.model.statement_link:
-                link_model = self.model._meta.get_field("link").remote_field.model
+            link_field = self.model.link_field()
+            if link_field is not None:
+                link_model = link_field.remote_field.model
+                if not issubclass(link_model, StatementLinkMixin):
+                    raise ImproperlyConfigured("Statement link models require StatementLinkMixin.")
                 rows = rows.select_related("link", *(f"link__{name}" for name in link_model.authority_related))
             member_names = sorted(
                 {name for declaration in self.model.statement_aspects.values() for name in declaration.members}
@@ -428,7 +456,7 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                 return (
                     row.aspect,
                     *(
-                        row._meta.get_field(name).value_from_object(row)
+                        _statement_column(type(row), name).value_from_object(row)
                         for name in self.model.statement_aspects[row.aspect].members
                     ),
                 )
@@ -453,7 +481,7 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                     else next((row for row in ordered if row.snak == self.model.StatementSnak.VALUE), None)
                 )
                 values = {
-                    name: winner._meta.get_field(name).value_from_object(winner)
+                    name: _statement_column(type(winner), name).value_from_object(winner)
                     if winner is not None and winner.snak == self.model.StatementSnak.VALUE
                     else None
                     for name in declaration.fields
@@ -463,10 +491,10 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                         if value in (None, ""):
                             values[name] = next(
                                 (
-                                    row._meta.get_field(name).value_from_object(row)
+                                    _statement_column(type(row), name).value_from_object(row)
                                     for row in ordered
                                     if row.snak == self.model.StatementSnak.VALUE
-                                    and row._meta.get_field(name).value_from_object(row) not in (None, "")
+                                    and _statement_column(type(row), name).value_from_object(row) not in (None, "")
                                 ),
                                 value,
                             )
@@ -519,18 +547,22 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
             self.db_manager(rows.db).resolve(subject=subject)
 
 
-class StatementPairManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):  # type: ignore[misc]
+_StatementPairManagerBase = models.Manager.from_queryset(AngeeUnscopedQuerySet)
+
+
+class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
     """Bind ordered carriers to an endpoint; endpoints own pair admission."""
 
-    def __init__(self, model: Any = None, instance: Any = None) -> None:
+    def __init__(self, model: type[T] | None = None, instance: models.Model | None = None) -> None:
         super().__init__()
-        self.model = model
+        if model is not None:
+            self.model = model
         self.instance = instance
         if instance is not None:
             self._db = instance._state.db
 
-    def get_queryset(self) -> Any:
-        rows = super().get_queryset()
+    def get_queryset(self) -> AngeeUnscopedQuerySet[T]:
+        rows = cast(AngeeUnscopedQuerySet[T], super().get_queryset())
         return (
             rows if self.instance is None else rows.filter(models.Q(left=self.instance) | models.Q(right=self.instance))
         )
@@ -546,7 +578,7 @@ class StatementPairManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):
         ).exists()
 
     def for_pair(self, left: Any, right: Any) -> Any:
-        model = self.model._meta.get_field("left").remote_field.model
+        model = _statement_foreign_key(self.model, "left").remote_field.model
         if not all(isinstance(row, model) and row.pk is not None for row in (left, right)) or left.pk == right.pk:
             raise ValidationError("A pair requires two distinct persisted endpoints of its declared model.")
         using = left._state.db
@@ -554,7 +586,8 @@ class StatementPairManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):
             raise ValidationError("Pair endpoints must belong to the same database.")
         actor = instance_actor(left)
         for endpoint in (left, right):
-            if not model.objects.with_actor(actor).with_action("read").using(using).filter(pk=endpoint.pk).exists():
+            visible = require_rebac_queryset(model).with_actor(actor).with_action("read").using(using)
+            if not visible.filter(pk=endpoint.pk).exists():
                 raise PermissionDenied("A pair requires read on both endpoints.")
         ordered = sorted((left, right), key=lambda endpoint: endpoint.pk)
         with transaction.atomic(using=using):
@@ -582,17 +615,24 @@ class StatementPairManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):
             pair.trash(reason="Merged pair endpoints")
 
 
-class StatementSubjectQuerySet(TrashQuerySet, AngeeQuerySet):
+class StatementSubjectQuerySet[T: models.Model](TrashQuerySet[T], AngeeQuerySet[T]):
     """Canonical asserted rows, retaining withdrawn subjects and their identities."""
 
-    def canonical(self) -> Any:
-        statements = self.model.statements.model._base_manager.filter(subject_id=OuterRef("pk"))
-        remaining = statements.exclude(status=self.model.statements.model.StatementStatus.WITHDRAWN)
+    def canonical(self) -> Self:
+        statement_model = getattr(self.model, "statements").model
+        statements = statement_model._base_manager.filter(subject_id=OuterRef("pk"))
+        remaining = statements.exclude(status=statement_model.StatementStatus.WITHDRAWN)
         return self.untrashed().filter(~Exists(statements) | Exists(remaining))
 
 
-class StatementSubjectManager(AngeeManager.from_queryset(StatementSubjectQuerySet)):  # type: ignore[misc]
+_StatementSubjectManagerBase = AngeeManager.from_queryset(StatementSubjectQuerySet)
+
+
+class StatementSubjectManager[T: models.Model](_StatementSubjectManagerBase[T]):
     """Shared scope for canonical models whose presence is asserted."""
+
+    def get_queryset(self) -> StatementSubjectQuerySet[T]:
+        return cast(StatementSubjectQuerySet[T], super().get_queryset())
 
 class SourceKind(models.TextChoices):
     """Source classification, never a global precedence order."""
@@ -710,11 +750,11 @@ class Aspect:
         if set(members) != set(self.members) or any(value is None for value in members.values()):
             raise ValidationError("Every aspect member is required.")
         for name, value in members.items():
-            field = model._meta.get_field(name)
+            field = _statement_column(model, name)
             if isinstance(field, models.ForeignKey):
                 pk = field.target_field.value_from_object(value) if isinstance(value, models.Model) else value
                 rows = (
-                    field.remote_field.model.objects.with_actor(source).with_action("read")
+                    require_rebac_queryset(field.remote_field.model).with_actor(source).with_action("read")
                     if kind == SourceKind.PERSON and not is_sudo()
                     else field.remote_field.model._base_manager.all()
                 )
@@ -724,14 +764,14 @@ class Aspect:
         return members
 
 
-class StatementsMixin(models.Model):
+class StatementsMixin(SystemQuerysetMixin):
     """Subject-owned eligibility and application hooks for typed statements."""
 
     class Meta:
         abstract = True
 
     @classmethod
-    def statement_models(cls) -> Iterable[type[models.Model]]:
+    def statement_models(cls) -> Iterable[type[Statement]]:
         """Yield the declared statement tables once, including MTI parents."""
 
         seen = set()
@@ -742,14 +782,14 @@ class StatementsMixin(models.Model):
                 yield declaration.model
 
     @classmethod
-    def pair_models(cls) -> tuple[type[models.Model], ...]:
+    def pair_models(cls) -> tuple[type[StatementPair], ...]:
         """Read generated pair carriers from Django's declared endpoint relations."""
 
         carriers = {
             relation.related_model
             for relation in cls._meta.get_fields(include_hidden=True)
             if relation.auto_created and relation.one_to_many
-            and issubclass(relation.related_model, StatementPair)
+            and relation.related_model is not None and issubclass(relation.related_model, StatementPair)
         }
         return tuple(sorted(carriers, key=lambda model: model._meta.label_lower))
 
@@ -764,8 +804,10 @@ class StatementsMixin(models.Model):
                 else subject_model._base_manager.db_manager(self._state.db).get(pk=self.pk)
             )
             if subject is not self and (actor := instance_actor(self)) is not None:
+                if not isinstance(subject, RebacMixin):
+                    raise ImproperlyConfigured("Statement subjects require REBAC actor binding.")
                 subject.with_actor(actor)
-            yield subject.statements
+            yield getattr(subject, "statements")
 
     def statements_for(self, aspect: str) -> Any:
         """Return the single table declaring this aspect; conflicting owners refuse."""
@@ -774,13 +816,6 @@ class StatementsMixin(models.Model):
         if len(owners) != 1:
             raise ImproperlyConfigured(f"Expected one statement owner for {aspect!r}.")
         return owners[0]
-
-    def lock_subject(self, members: Mapping[str, Any] | None = None) -> Any:
-        """Lock this most-derived subject through its row-bound base manager."""
-
-        del members
-        manager = type(self)._base_manager.db_manager(hints={"instance": self})
-        return manager.all().select_for_update().get(pk=self.pk)
 
     def revert_subjects(self) -> list[Any]:
         """A restored subject re-derives its aspects after the whole replay."""
@@ -846,10 +881,10 @@ class StatementsMixin(models.Model):
             if resolved_fields:
                 self.refresh_from_db(using=using, fields=sorted(resolved_fields))
 
-    def require_statement_write(self, actor: SubjectRef) -> None:
+    def require_statement_write(self, actor: SubjectRef | None) -> None:
         """Admit assertions through the subject's native REBAC write scope."""
 
-        rows = type(self)._default_manager.filter(pk=self.pk).with_actor(actor).with_action("write")
+        rows = require_rebac_queryset(type(self)).filter(pk=self.pk).with_actor(actor).with_action("write")
         if not rows.exists():
             raise PermissionDenied("The asserting source requires write on the subject.")
 
@@ -874,7 +909,7 @@ class StatementsMixin(models.Model):
             raise ImproperlyConfigured("Member aspects require the subject's apply_resolved hook.")
         changed = []
         for name, value in values.items():
-            field = self._meta.get_field(name)
+            field = _statement_column(type(self), name)
             value = field.get_default() if value is None and not field.null else value
             if getattr(self, field.attname) != value:
                 setattr(self, field.attname, value)
@@ -1018,10 +1053,10 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
     history = StatementHistory(inherit=True)
     objects = StatementManager()
     _angee_base = StatementManager()
-    statement_subject_model: Any
+    statement_subject_model: type[StatementsMixin]
     statement_aspects: dict[str, Aspect]
     statement_link: str | None
-    subject: Any
+    subject: models.ForeignKey[Any, Any]
     asserted_by = models.TextField()
     source_kind = StateField(choices_enum=SourceKind)
     """Retained assertion-time classification, independent of later principal edits."""
@@ -1072,6 +1107,12 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
         )
 
     @classmethod
+    def link_field(cls) -> models.ForeignKey[Any, Any] | None:
+        """Return the declared optional link's native field when enabled."""
+
+        return _statement_foreign_key(cls, "link") if cls.statement_link else None
+
+    @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
         """Validate declarations after all subject and relation models are prepared."""
 
@@ -1084,8 +1125,9 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
 
         if not issubclass(cls.statement_subject_model, StatementsMixin) or not cls.statement_aspects:
             error("StatementRecords requires StatementsMixin and at least one aspect.", "E039")
-        if cls.statement_link:
-            link_model = cls._meta.get_field("link").remote_field.model
+        link_field = cls.link_field()
+        if link_field is not None:
+            link_model = link_field.remote_field.model
             if not isinstance(link_model, type) or not issubclass(link_model, StatementLinkMixin):
                 error(f"Statement link model {cls.statement_link!r} must compose StatementLinkMixin.", "E044")
         claimed: set[str] = set()
@@ -1157,8 +1199,16 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
     def authoritative(self) -> bool:
         """Whether the asserting stream is the system of record for this statement's aspects."""
 
-        link = self.link if self.statement_link else None
-        return link is not None and bool(link.authoritative)
+        field = self.link_field()
+        if field is None:
+            return False
+        link = field.value_from_object(self)
+        if link is None:
+            return False
+        linked = getattr(self, field.name)
+        if not isinstance(linked, StatementLinkMixin):
+            raise ImproperlyConfigured("Statement link models require StatementLinkMixin.")
+        return linked.authoritative
 
     @property
     def fact_authority(self) -> FactAuthority:
@@ -1215,7 +1265,8 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
 
     def same_values(self, other: Statement, names: Iterable[str]) -> bool:
         return all(
-            self._meta.get_field(name).value_from_object(self) == self._meta.get_field(name).value_from_object(other)
+            _statement_column(type(self), name).value_from_object(self)
+            == _statement_column(type(self), name).value_from_object(other)
             for name in names
         )
 
@@ -1224,7 +1275,8 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
 
         fields = ("subject", "asserted_by", "aspect", *self.statement_aspects[self.aspect].members)
         return {
-            self._meta.get_field(name).attname: self._meta.get_field(name).value_from_object(self) for name in fields
+            _statement_column(type(self), name).attname: _statement_column(type(self), name).value_from_object(self)
+            for name in fields
         }
 
     def save(self, *args: Any, **kwargs: Any) -> None:
@@ -1277,13 +1329,14 @@ class StatementPair(
     left: Any
     right: Any
     pair_name: str
+    statements: StatementManager[Statement]
 
     class Meta:
         abstract = True
         base_manager_name = "_angee_base"
         rebac_resource_type = None
 
-    def require_statement_write(self, actor: SubjectRef) -> None:
+    def require_statement_write(self, actor: SubjectRef | None) -> None:
         for endpoint in (self.left, self.right):
             endpoint.require_statement_write(actor)
 

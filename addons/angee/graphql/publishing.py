@@ -163,7 +163,7 @@ def disconnect_publishers(model: type[models.Model]) -> bool:
         ) or disconnected
     disconnected = post_delete.disconnect(sender=model, dispatch_uid=f"{dispatch_uid}-delete") or disconnected
     disconnected = bulk_updated.disconnect(sender=model, dispatch_uid=f"{dispatch_uid}-bulk") or disconnected
-    return disconnected
+    return bool(disconnected)
 
 
 def change_channel_layer() -> Any:
@@ -206,9 +206,10 @@ def _on_save(
     if raw:
         return
     if published_model is not None and type(instance) is not published_model:
-        instance = published_model._base_manager.filter(pk=instance.pk).first()
-        if instance is None:
+        published_instance = published_model._base_manager.filter(pk=instance.pk).first()
+        if published_instance is None:
             return
+        instance = published_instance
         created = False
     publish_change(
         instance,

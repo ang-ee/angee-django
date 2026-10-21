@@ -67,7 +67,7 @@ class AngeeResource(resources.ModelResource):
         self,
         *,
         entry: ResourceEntry,
-        ledger_model: type[models.Model],
+        ledger_model: type[Resource],
         addon_aliases: Mapping[str, str],
         kind_declarations: ResourceKindDeclarations | None = None,
     ) -> None:
@@ -181,6 +181,8 @@ class AngeeResource(resources.ModelResource):
             for field in self._transition_state_fields:
                 if field.column_name in row and not field.readonly:
                     model_field = instance._meta.get_field(field.attribute)
+                    if not isinstance(model_field, models.Field):
+                        raise ImproperlyConfigured(f"Transition field {field.attribute!r} must be a concrete field.")
                     try:
                         model_field.clean(field.clean(row), instance)
                     except ValidationError as error:
@@ -605,6 +607,8 @@ class AngeeResource(resources.ModelResource):
             if isinstance(child, models.Q):
                 results.append(self._row_matches_condition(row, child))
                 continue
+            if not isinstance(child, tuple):
+                raise ImproperlyConfigured(f"{self.entry.display}: adopt conditions require field lookups or Q nodes")
             lookup, expected = child
             results.append(self._row_matches_lookup(row, str(lookup), expected))
         if condition.connector == models.Q.OR:
@@ -830,7 +834,7 @@ def build_resource(
     model: type[models.Model],
     entry: ResourceEntry,
     *,
-    ledger_model: type[models.Model],
+    ledger_model: type[Resource],
     addon_aliases: Mapping[str, str],
     kind_declarations: ResourceKindDeclarations | None = None,
 ) -> AngeeResource:

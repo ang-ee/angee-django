@@ -40,7 +40,13 @@ from rebac.mixins import RebacModelBase
 from rebac.resources import model_resource_type
 
 from angee.actors import actor_user_id
-from angee.changesets import changeset, changeset_model, creation_fingerprint, current_changeset, write_group
+from angee.changesets import (
+    changeset,
+    changeset_model,
+    creation_fingerprint,
+    require_changeset,
+    write_group,
+)
 from angee.fields import StateField
 from angee.impl import ImplClassField
 from angee.knowledge.retrieval import RetrievalBackend
@@ -57,6 +63,7 @@ from angee.models import (
     OwnerMixin,
     TrashMixin,
     TrashQuerySet,
+    row_lock_paths,
 )
 from angee.refs import (
     MergePolicy,
@@ -114,7 +121,7 @@ def parse_wikilinks(body: str) -> dict[str, str]:
     return found
 
 
-class VaultQuerySet(TrashQuerySet[Any], AngeeQuerySet[Any]):
+class VaultQuerySet[VaultT: Vault](TrashQuerySet[VaultT], AngeeQuerySet[VaultT]):
     """Actor-scoped vault reads and search helpers."""
 
     def search_pages(self, query: str, *, first: int = 20) -> list[Any]:
@@ -129,7 +136,7 @@ class VaultQuerySet(TrashQuerySet[Any], AngeeQuerySet[Any]):
         groups: dict[str, list[Any]] = {}
         for vault in self.untrashed().scoped().order_by("name", "sqid")[:MAX_SEARCH_VAULTS]:
             groups.setdefault(vault.retrieval_class, []).append(vault)
-        field = self.model._meta.get_field("retrieval_class")
+        field = self.model.retrieval_class.field
         pages: list[Any] = []
         for key, vaults in sorted(groups.items()):
             remaining = limit - len(pages)
@@ -140,10 +147,18 @@ class VaultQuerySet(TrashQuerySet[Any], AngeeQuerySet[Any]):
         return pages
 
 
-class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[misc]
+_VaultManagerBase = AngeeManager.from_queryset(VaultQuerySet)
+
+
+class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
     """Factories for actor-owned vault writes."""
 
-    def create_for(self, owner: Any, **fields: Any) -> Any:
+    def get_queryset(self) -> VaultQuerySet[VaultT]:
+        """Preserve the configured queryset and model row type."""
+
+        return cast(VaultQuerySet[VaultT], super().get_queryset())
+
+    def create_for(self, owner: Any, **fields: Any) -> VaultT:
         """Create a vault owned by ``owner`` after the REBAC create preflight.
 
         ``owner`` must be the acting user — ownership on behalf of someone
@@ -154,7 +169,7 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
         resource_type = model_resource_type(self.model)
         if actor is None:
             raise MissingActorError(f"Creating {resource_type or self.model._meta.label_lower} requires an actor.")
-        if resource_type is None or not check_new(
+        if actor is None or resource_type is None or not check_new(
             subject=actor,
             action="create",
             resource_type=resource_type,
@@ -171,7 +186,7 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
         name: str,
         owned: bool = True,
         idempotency_key: str | None = None,
-    ) -> Vault:
+    ) -> VaultT:
         """Clone a readable vault's page tree and markdown bodies for the actor.
 
         Requires vault create and, for a new clone, template read. New identities and attribution
@@ -185,7 +200,7 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
 
         actor, _ = self.effective_actor(strict=True)
         resource_type = model_resource_type(self.model)
-        if resource_type is None or not check_new(
+        if actor is None or resource_type is None or not check_new(
             subject=actor,
             action="create",
             resource_type=resource_type,
@@ -196,7 +211,7 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
             raise PermissionDenied("Cloning a vault requires a user actor.")
         fingerprint = creation_fingerprint([template.pk, name, owned])
 
-        def insert() -> Vault:
+        def insert() -> VaultT:
             source = self.with_actor(actor).get(pk=template.pk)
             page_model = apps.get_model("knowledge", "Page")
             markdown_model = apps.get_model("knowledge", "MarkdownPage")
@@ -237,7 +252,7 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
             )
             copies = page_model._default_manager._copy_tree_in(vault, pages, actor=actor)
             markdown_model._default_manager._copy_bodies(bodies, copies, actor=actor)
-            return cast(Vault, vault)
+            return vault
 
         claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
         with claim_boundary, transaction.atomic():
@@ -251,13 +266,13 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
                     vault = replay.created_row
                     if not isinstance(vault, self.model):
                         raise ValidationError({"idempotency_key": "The claimed clone result is unavailable."})
-                    return cast(Vault, vault.with_actor(actor))
+                    return vault.with_actor(actor)
             vault = insert()
             if idempotency_key is not None:
-                current_changeset(required=True).record_created(vault)
-            return cast(Vault, vault.with_actor(actor))
+                require_changeset().record_created(vault)
+            return vault.with_actor(actor)
 
-    def _create_for_actor(self, actor: SubjectRef, *, owned: bool = True, **fields: Any) -> Any:
+    def _create_for_actor(self, actor: SubjectRef, *, owned: bool = True, **fields: Any) -> VaultT:
         """Persist a vault after its caller's create preflight."""
 
         owner_id = actor_user_id(actor)
@@ -348,14 +363,22 @@ class Vault(OwnerMixin, TrashMixin, AngeeDataModel, HistoryMixin):
         return backend_class(self)
 
 
-class PageQuerySet(HierarchyQuerySet[Any], TrashQuerySet[Any], AngeeQuerySet[Any]):
+class PageQuerySet[PageT: Page](HierarchyQuerySet[PageT], TrashQuerySet[PageT], AngeeQuerySet[PageT]):
     """Actor-scoped page reads; ``untrashed()`` is every page's default surface."""
 
 
-class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[misc]
+_PageManagerBase = AngeeManager.from_queryset(PageQuerySet)
+
+
+class PageManager[PageT: Page](_PageManagerBase[PageT]):
     """Factories for actor-scoped page writes."""
 
-    def create_in(self, vault: Any, **fields: Any) -> Any:
+    def get_queryset(self) -> PageQuerySet[PageT]:
+        """Preserve the configured queryset and model row type."""
+
+        return cast(PageQuerySet[PageT], super().get_queryset())
+
+    def create_in(self, vault: Any, **fields: Any) -> PageT:
         """Create a page in ``vault`` after the REBAC create preflight.
 
         The preflight evaluates the schema's ``create = vault->write`` with
@@ -383,7 +406,7 @@ class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[mis
         ).allowed:
             raise PermissionDenied(f"Denied: {actor} cannot create {resource_type or 'knowledge/page'}")
         kind = fields.pop("kind", self.model.PageKind.NOTE)
-        page_model = self.model
+        page_model: type[Page] = self.model
         if kind != self.model.PageKind.FOLDER:
             if kind not in (self.model.PageKind.NOTE, self.model.PageKind.TEMPLATE):
                 raise ValueError(f"Unsupported page kind: {kind!r}")
@@ -396,7 +419,7 @@ class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[mis
 
     def _copy_tree_in(
         self, vault: Vault, pages: Mapping[Any, Page], *, actor: SubjectRef,
-    ) -> dict[Any, Page]:
+    ) -> dict[Any, PageT]:
         """Copy template pages within the authorized vault-cloning transaction.
 
         The clone owner supplies actor-readable source pages. Their unchanged
@@ -418,7 +441,7 @@ class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[mis
             order = tuple(tree.static_order())
         except CycleError as error:
             raise ValidationError("Template page parents must form a tree.") from error
-        copies: dict[Any, Page] = {}
+        copies: dict[Any, PageT] = {}
         for pk in order:
             source = pages[pk]
             copies[pk] = self.model(
@@ -507,7 +530,9 @@ class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMix
             if child is not None:
                 if child_model is self._meta.apps.get_model("knowledge", "MarkdownPage"):
                     return str(child.kind)
-                return child._meta.model_name
+                model_name = child._meta.model_name
+                assert model_name is not None
+                return model_name
         return str(self.PageKind.FOLDER)
 
     def clean(self) -> None:
@@ -550,7 +575,7 @@ class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMix
 
 
 
-class RecordBindingManager(AngeeManager):
+class RecordBindingManager[BindingT: RecordBinding](AngeeManager[BindingT]):
     """Own polymorphic knowledge-to-record binding writes and reverse reads.
 
     Bindings are stored at :func:`rebac.generic_target` and written under the
@@ -561,7 +586,7 @@ class RecordBindingManager(AngeeManager):
     DEFAULT_ROLE = "related"
     KNOWLEDGE_MODELS = frozenset({"knowledge.page", "knowledge.vault"})
 
-    def create(self, **kwargs: Any) -> models.Model:
+    def create(self, **kwargs: Any) -> BindingT:
         """Create through the idempotent role-keyed upsert contract."""
 
         try:
@@ -583,7 +608,7 @@ class RecordBindingManager(AngeeManager):
         page: models.Model | None = None,
         vault: models.Model | None = None,
         role: str = DEFAULT_ROLE,
-    ) -> models.Model:
+    ) -> BindingT:
         """Return one binding per knowledge owner, canonical target, and role.
 
         Lock and recheck the canonical target before every write. If target
@@ -594,12 +619,21 @@ class RecordBindingManager(AngeeManager):
         with transaction.atomic():
             with system_context(reason="knowledge.record_binding.lock"):
                 canonical = reference.content_type.model_class()
-                canonical._base_manager.all().lock_if_supported(no_key=True).get(pk=reference.object_id)
+                if canonical is None:
+                    raise ValueError("Knowledge binding target model is unavailable.")
+                canonical._base_manager.select_for_update(of=row_lock_paths(canonical), no_key=True).get(
+                    pk=reference.object_id
+                )
             owner = page
             if owner is not None:
                 # Serialize binding admission with page trash.
                 with system_context(reason="knowledge.record_binding.page_lock"):
-                    owner = type(owner)._base_manager.all().lock_if_supported(no_key=True).get(pk=owner.pk)
+                    owner = (
+                        type(owner)
+                        ._base_manager.select_for_update(of=row_lock_paths(type(owner)), no_key=True)
+                        .get(pk=owner.pk)
+                    )
+                    assert isinstance(owner, TrashMixin)
                     if owner.is_trashed:
                         raise ValidationError("Cannot bind a page in the trash.")
             binding, _created = self.get_or_create(**self._key(target, page=owner, vault=vault, role=role))
@@ -805,7 +839,7 @@ class AmbiguousMatchError(StructuredEditError):
     """Raised when a heading path (or replace target) matches more than once."""
 
 
-class MarkdownPageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[misc]
+class MarkdownPageManager[MarkdownT: MarkdownPage](PageManager[MarkdownT]):
     """Factories for actor-scoped markdown body writes."""
 
     def _copy_bodies(
@@ -842,7 +876,7 @@ class MarkdownPageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ig
                     raw=False, using=self.db, update_fields=None, knowledge_backlinks_rebuilt=True,
                 )
 
-    def write_body(self, page: Any, body: str, *, expected_hash: str | None = None) -> Any:
+    def write_body(self, page: Any, body: str, *, expected_hash: str | None = None) -> MarkdownT:
         """Update ``page``'s markdown body, last-write-wins.
 
         ``expected_hash`` is an optimistic-concurrency token: when supplied
@@ -876,7 +910,7 @@ class MarkdownPageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ig
         content: str,
         *,
         expected_hash: str | None = None,
-    ) -> Any:
+    ) -> MarkdownT:
         """Replace/append/prepend the section at ``heading_path`` and write the body.
 
         Splices through :meth:`MarkdownPage.spliced_section`, which fails fast with
@@ -893,7 +927,7 @@ class MarkdownPageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ig
         new: str,
         *,
         expected_hash: str | None = None,
-    ) -> Any:
+    ) -> MarkdownT:
         """Replace the single occurrence of ``old`` with ``new`` and write the body.
 
         Splices through :meth:`MarkdownPage.spliced_unique` (exact-string, uniqueness
@@ -903,13 +937,13 @@ class MarkdownPageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ig
         new_body = self.model.spliced_unique(self._current_body(page), old, new)
         return self.write_body(page, new_body, expected_hash=expected_hash)
 
-    def append(self, page: Any, content: str, *, expected_hash: str | None = None) -> Any:
+    def append(self, page: Any, content: str, *, expected_hash: str | None = None) -> MarkdownT:
         """Append ``content`` to the end of ``page``'s body and write it."""
 
         new_body = self.model.appended(self._current_body(page), content)
         return self.write_body(page, new_body, expected_hash=expected_hash)
 
-    def prepend(self, page: Any, content: str, *, expected_hash: str | None = None) -> Any:
+    def prepend(self, page: Any, content: str, *, expected_hash: str | None = None) -> MarkdownT:
         """Prepend ``content`` to the start of ``page``'s body and write it."""
 
         new_body = self.model.prepended(self._current_body(page), content)
@@ -946,7 +980,7 @@ class MarkdownPage(HistoryMixin, models.Model, metaclass=RebacModelBase):
     """
 
     runtime = True
-    extends = "knowledge.Page"
+    extends: ClassVar[str | None] = "knowledge.Page"
 
     excerpt_chars: ClassVar[int] = 180
     """Number of body characters surfaced by :attr:`excerpt`."""
@@ -1204,7 +1238,7 @@ class MarkdownPage(HistoryMixin, models.Model, metaclass=RebacModelBase):
 # ---------------------------------------------------------------------------
 
 
-class LinkManager(AngeeManager):
+class LinkManager[LinkT: Link](AngeeManager[LinkT]):
     """Owns the wikilink edge set derived from page bodies."""
 
     def rebuild_for(self, markdown: Any) -> None:

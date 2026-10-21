@@ -4,3 +4,8 @@ description = "Changesets attributing canonical record history to its actor and 
 keywords = ["provenance", "history"]
 category = "Data"
 depends_on = ["angee.graphql", "angee.timeline"]
+
+[[migrations]]
+name = "changeset_actor_ref"
+app_label = "provenance"
+module = "runtime_migrations.changeset_actor_ref"

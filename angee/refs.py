@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Protocol, cast
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
@@ -49,8 +49,10 @@ from angee.permissions import effective_rebac_definition
 class RetainedGenericRelation(GenericRelation):
     """Query retained edges without collecting them on the target's deletion."""
 
-    def bulk_related_objects(self, objs: Sequence[models.Model], using: str = DEFAULT_DB_ALIAS) -> list[models.Model]:
-        return []
+    def bulk_related_objects(
+        self, objs: Sequence[models.Model], using: str = DEFAULT_DB_ALIAS,
+    ) -> models.QuerySet[models.Model]:
+        return models.QuerySet(model=self.related_model, using=using).none()
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,20 +183,28 @@ def canonical_link_path(model: type[models.Model]) -> tuple[str, ...]:
     for step, parent in zip(chain, chain[1:], strict=False):
         if step is target:
             break
-        links.append(step._meta.parents[parent].name)
+        link = step._meta.parents[parent]
+        if link is None:
+            raise ImproperlyConfigured(f"{step._meta.label} has no concrete parent link to {parent._meta.label}.")
+        links.append(link.name)
     return tuple(links)
 
 
 # Deferred on purpose: the merge contract lives in the angee.models package, whose import runs
 # angee.evidence and the statement models, which read this module's pointer helpers above. With
 # the import here, a process that imports angee.refs first still finds those helpers defined.
-from angee.models.merge import (  # noqa: E402
+from angee.models.merge import MergeableMixin  # noqa: E402
+from angee.models.merge_references import (  # noqa: E402
     EdgeReference,
-    MergeableMixin,
     MergePolicy,
     Reference,
     _RecordRefMergeContract,
 )
+from angee.models.query import MergeableQuerySet  # noqa: E402
+
+
+class _TargetTeardown(Protocol):
+    def __call__(self, target: models.Model) -> None: ...
 
 
 class RecordRefMixin(_RecordRefMergeContract):
@@ -210,6 +220,8 @@ class RecordRefMixin(_RecordRefMergeContract):
     """What deleting the referenced record does to this edge's rows."""
     accepts_any_record_target: ClassVar[bool] = False
     """Whether this infrastructure edge may point at every canonical record type."""
+    teardown_for_target: ClassVar[_TargetTeardown | None] = None
+    """Optional class hook replacing ordinary deletion policy with the edge owner's cleanup."""
 
     class Meta:
         """Django model options for record-ref-only abstract inheritance."""
@@ -288,9 +300,13 @@ class RecordRefMixin(_RecordRefMergeContract):
         content_type, pk = generic_pointer_target(record)
         reference = cls.record_ref_field()
         model = generic_pointer_model(type(record))
-        scope = {reference.ct_field: content_type}
+        scope: dict[str, object] = {reference.ct_field: content_type}
         if cls.merge_policy == MergePolicy.KEEP and issubclass(model, MergeableMixin):
-            group = model._base_manager.using(record._state.db).redirect_group(record).order_by()
+            assert isinstance(record, MergeableMixin)
+            group = model._base_manager.using(record._state.db)
+            if not isinstance(group, MergeableQuerySet):
+                raise ImproperlyConfigured(f"{model._meta.label}'s base queryset must support merge redirects.")
+            group = group.redirect_group(record).order_by()
             scope[f"{reference.fk_field}__in"] = group.values("pk")
         else:
             scope[reference.fk_field] = pk
@@ -455,7 +471,7 @@ def record_ref_cleanup_edges() -> tuple[type[RecordRefMixin], ...]:
     return tuple(
         edge
         for edge in sorted(apps.get_models(), key=lambda model: model._meta.label)
-        if issubclass(edge, RecordRefMixin) and callable(getattr(edge, "teardown_for_target", None))
+        if issubclass(edge, RecordRefMixin) and edge.teardown_for_target is not None
     )
 
 
@@ -508,7 +524,9 @@ def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> Non
     del kwargs
     cleanup_edges = record_ref_cleanup_edges_for_target(type(instance))
     for edge in cleanup_edges:
-        edge.teardown_for_target(instance)
+        teardown = edge.teardown_for_target
+        assert teardown is not None
+        teardown(instance)
     target = canonical_model(type(instance))
     declared = record_edges_by_target().get(target, ()) if target is not None else ()
     content_type, object_id = generic_pointer_target(instance)
@@ -521,7 +539,7 @@ def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> Non
         )
         policy = edge.on_target_delete
         if policy is models.PROTECT:
-            protected = list(rows)
+            protected: set[models.Model] = set(rows)
             if protected:
                 raise ProtectedError(f"{edge._meta.label} rows still refer to {instance}.", protected)
             continue

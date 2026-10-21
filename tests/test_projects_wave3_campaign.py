@@ -82,7 +82,7 @@ def test_priority_rank_uses_enum_order_in_one_query_per_direction(project_case, 
         ]
     ids = {row.priority: row.pk for row in rows}
     with actor_context(owner):
-        query = Task._base_manager.annotate(rank=Task.objects.priority_rank_expression())
+        query = Task._base_manager.annotate(rank=Task.priority_rank_expression())
         # Warm schema metadata independently of the actual ordered SELECT budget.
         list(query.values_list("pk", flat=True))
         for descending in (False, True):

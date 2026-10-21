@@ -9,12 +9,13 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta
-from enum import StrEnum
 from typing import TYPE_CHECKING, Any, cast
 
 from django.core.exceptions import ValidationError
 from django.db import models
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+
+from angee.identity import public_id_of
 
 if TYPE_CHECKING:
     from angee.integrate.mixins import SyncStateMixin
@@ -24,14 +25,14 @@ UNSET = object()
 """Omitted record binding; ``None`` explicitly clears the target."""
 
 
-class StreamKind(models.TextChoices, StrEnum):
+class StreamKind(models.TextChoices):
     """Whether a stream carries append-only events or mutable replicas."""
 
     EVENT_FEED = "event_feed", "Event feed"
     RECORD_REPLICA = "record_replica", "Record replica"
 
 
-class StreamDirection(models.TextChoices, StrEnum):
+class StreamDirection(models.TextChoices):
     """The sides a stream may write."""
 
     PULL = "pull", "Pull"
@@ -39,21 +40,21 @@ class StreamDirection(models.TextChoices, StrEnum):
     BIDIRECTIONAL = "bidirectional", "Bidirectional"
 
 
-class StreamPhase(models.TextChoices, StrEnum):
+class StreamPhase(models.TextChoices):
     """A new epoch verifies a baseline before accepting deltas."""
 
     BASELINE = "baseline", "Baseline"
     DELTA = "delta", "Delta"
 
 
-class StreamState(models.TextChoices, StrEnum):
+class StreamState(models.TextChoices):
     """Reopening a closed generation starts a fresh baseline."""
 
     OPEN = "open", "Open"
     CLOSED = "closed", "Closed"
 
 
-class LinkStatus(models.TextChoices, StrEnum):
+class LinkStatus(models.TextChoices):
     """Observed identity and reconciliation state."""
 
     CURRENT = "current", "Current"
@@ -64,7 +65,7 @@ class LinkStatus(models.TextChoices, StrEnum):
     TOMBSTONE = "tombstone", "Tombstone"
 
 
-class SyncFailureKind(models.TextChoices, StrEnum):
+class SyncFailureKind(models.TextChoices):
     """Recoverable record failures, independent of transport failures."""
 
     SEMANTIC = "semantic", "Semantic"
@@ -73,7 +74,7 @@ class SyncFailureKind(models.TextChoices, StrEnum):
     REMOTE_REJECTED = "remote_rejected", "Remote rejected"
 
 
-class OutboxState(models.TextChoices, StrEnum):
+class OutboxState(models.TextChoices):
     """A link's outstanding write; null means there is no pending write."""
 
     PENDING = "pending", "Pending"
@@ -81,7 +82,7 @@ class OutboxState(models.TextChoices, StrEnum):
     ERROR = "error", "Error"
 
 
-class SyncFailureStatus(models.TextChoices, StrEnum):
+class SyncFailureStatus(models.TextChoices):
     """Quarantine remains open until a successful rescan resolves it."""
 
     OPEN = "open", "Open"
@@ -89,7 +90,7 @@ class SyncFailureStatus(models.TextChoices, StrEnum):
     RESOLVED = "resolved", "Resolved"
 
 
-class ConflictKeep(models.TextChoices, StrEnum):
+class ConflictKeep(models.TextChoices):
     """The side retained by an explicit conflict resolution."""
 
     REMOTE = "remote", "Remote"
@@ -156,9 +157,9 @@ class SyncFailure(BaseModel):
         row = cls.model_validate(
             {
                 **data,
-                "id": f"{owner.public_id}:{'outbox' if slot is None else slot}",
+                "id": f"{public_id_of(owner)}:{'outbox' if slot is None else slot}",
                 "stream_id": stream.public_id,
-                "link_id": None if owner == stream else str(owner.public_id),
+                "link_id": None if owner == stream else public_id_of(owner),
             }
         )
         row._owner, row._slot = owner, slot

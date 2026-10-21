@@ -314,7 +314,7 @@ class Definition(BaseModel):
         cls,
         document: Any,
         *,
-        keys: Mapping[str, str] | None = None,
+        keys: object = None,
         layout: Any = None,
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         """Translate client identities through the typed routing and binding owners.

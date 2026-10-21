@@ -54,8 +54,11 @@ def changeset_model() -> type[models.Model]:
 class ChangesetLike(Protocol):
     """Storage contract supplied by ANGEE_CHANGESET_MODEL."""
 
-    pk: object
-    actor: str
+    @property
+    def pk(self) -> object: ...
+
+    def _set_pk_val(self, value: None) -> None: ...
+    actor_ref: str
     change_reason: str
     touched: list[str]
     counts: dict[str, int]
@@ -131,7 +134,7 @@ class _ChangesetBoundary:
                 facts = dict(self.facts)
                 origin = facts.pop("origin", None)
                 facts.setdefault("occurred_at", timezone.now())
-                instance = cast(ChangesetLike, model(actor=key[1], **facts))
+                instance = cast(ChangesetLike, model(actor_ref=key[1], **facts))
                 if origin is not None:
                     setattr(instance, "origin", origin)
                 row = self.rows[key] = _ChangesetRow(instance)
@@ -144,14 +147,14 @@ class _ChangesetBoundary:
             instance.change_reason = cast(str, self.facts.get("change_reason", current_sudo_reason() or ""))
             row.attributed = True
         if record and not row.persisted:
-            using = router.db_for_write(type(instance), instance=instance)
+            using = router.db_for_write(changeset_model(), instance=instance)
             connection = connections[using]
             # Django removes callbacks on savepoint/transaction rollback and
             # retains them on savepoint release. The queue owns that distinction.
             if row.pending_commit is None or not any(
-                callback is row.pending_commit for _, callback, _ in connection.run_on_commit
+                entry[1] is row.pending_commit for entry in connection.run_on_commit
             ):
-                instance.pk = None
+                instance._set_pk_val(None)
                 instance._state.adding = True
                 instance.save(force_insert=True, using=using)
 
@@ -183,7 +186,7 @@ class _ChangesetBoundary:
     @staticmethod
     def _close_row(row: _ChangesetRow, outcome: str) -> None:
         instance = row.instance
-        using = router.db_for_write(type(instance), instance=instance)
+        using = router.db_for_write(changeset_model(), instance=instance)
 
         def close_persisted() -> None:
             if not row.persisted:

@@ -20,7 +20,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.impl import impl_choices_enum
 from angee.knowledge import schema as knowledge_schema
-from angee.models import AngeeQuerySet
+from angee.models import row_lock_paths
 from angee.workflows import schema as workflow_schema
 from angee.workflows import triggers
 from angee.workflows.steps import Step
@@ -631,24 +631,28 @@ def test_refined_source_shares_the_one_capture_of_its_bases_event(
     with actor_context(actor):
         record.name = "Waiting"  # The watcher parks until the record is ready again.
         record.save(update_fields=("name",))
+    locked = []
+    lock = models.QuerySet.select_for_update
+
+    def count_lock(rows, **kwargs):
+        locked.append((rows.model, kwargs))
+        return lock(rows, **kwargs)
+
+    monkeypatch.setattr(models.QuerySet, "select_for_update", count_lock)
     run, _step = start_watcher(Watch, record, actor)
     run_until(run)
     assert StepWatch.system_queryset().count() == 1
-    locked = []
-    lock = AngeeQuerySet.lock_if_supported
-
-    def count_lock(rows, **kwargs):
-        locked.append(rows.model)
-        return lock(rows, **kwargs)
-
-    monkeypatch.setattr(AngeeQuerySet, "lock_if_supported", count_lock)
+    expected_lock = {"no_key": True, "of": row_lock_paths(Vault)}
+    # Reading the predicate and installing its watch each lock the target's tables.
+    assert [kwargs for model, kwargs in locked if model is Vault] == [expected_lock, expected_lock]
+    locked.clear()
     sent.clear()
     with trigger_source(Vault, connect=True), actor_context(actor):
         record.name = "Ready"
         record.save(update_fields=("name",))
-    monkeypatch.setattr(AngeeQuerySet, "lock_if_supported", lock)
+    monkeypatch.setattr(models.QuerySet, "select_for_update", lock)
     # Admission and watch capture each enforce their own lock contract.
-    assert [model for model in locked if model is Vault] == [Vault, Vault]
+    assert [kwargs for model, kwargs in locked if model is Vault] == [expected_lock, expected_lock]
     assert len(record_deliveries(sent)) == 1
     assert set(TriggerEvent.system_queryset().values_list("trigger_id", flat=True)) == {trigger.pk, refined.pk}
     assert Trigger.objects.drain() == 2

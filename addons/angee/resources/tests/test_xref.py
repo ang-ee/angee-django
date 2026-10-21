@@ -7,6 +7,8 @@ from django.core.exceptions import PermissionDenied
 from rebac import actor_context, system_context
 
 from angee.identity import public_id_of
+from angee.resources.exceptions import ResourceLoadError
+from angee.resources.loader import AngeeResource, ResourceResolution
 from angee.resources.testing.models import Resource
 from angee.spaces.testing.models import Group
 from tests.conftest import (
@@ -116,5 +118,43 @@ def test_load_xref_requires_vault_create_access_for_new_pages(tmp_path, monkeypa
             with system_context(reason="denied create rolls back target and ledger"):
                 assert not Page.objects.exists()
                 assert not Resource.objects.filter(xref="target").exists()
+    finally:
+        apps.clear_cache()
+
+
+@pytest.mark.usefixtures("composed_tables")
+def test_load_xref_rejects_wrong_model_from_adapter_before_authorization(tmp_path, monkeypatch):
+    """An adapter cannot redirect authorization or import to an unrelated row."""
+
+    (tmp_path / "target.yaml").write_text(yaml.safe_dump({
+        "_meta": {"model": Page._meta.label},
+        "rows": [{"xref": "target", "fields": {"title": "Requested page"}}],
+    }), encoding="utf-8")
+    addon = make_addon(
+        name="tests.resource_wrong_target", path=tmp_path, resources={"install": [{"path": "target.yaml"}]},
+    )
+    addon.apps = apps
+    addon.models = {}
+    wrong_target = Group(name="Unrelated group", slug="unrelated-resource-target")
+
+    def resolve_wrong_target(self, loaded_groups):
+        return {(self, "target"): ResourceResolution(wrong_target, None)}, {}
+
+    def unexpected_access(*args, **kwargs):
+        pytest.fail("An unrelated adapter target must never receive authorization or import calls")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setitem(apps.app_configs, addon.label, addon)
+            patch.setattr(AngeeResource, "resolve_existing", resolve_wrong_target)
+            patch.setattr(type(wrong_target), "require_access", unexpected_access)
+            patch.setattr(AngeeResource, "import_data", unexpected_access)
+            apps.clear_cache()
+            with pytest.raises(ResourceLoadError, match="did not produce"):
+                Resource.objects.load_xref(f"{addon.name}.target", model=Page)
+            with system_context(reason="invalid resource adapter leaves no writes"):
+                assert not Resource.objects.filter(source_addon=addon.name).exists()
+                assert not Page.objects.exists()
+                assert not Group.objects.exists()
     finally:
         apps.clear_cache()

@@ -20,7 +20,7 @@ from typing import Any, Self, cast
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
-from django.contrib.auth.models import UnicodeUsernameValidator
+from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import Exists, F, OuterRef, Q, TextField
@@ -184,10 +184,10 @@ class AmbiguousAccountEmail(DomainError):
     code = "ACCOUNT_EMAIL_AMBIGUOUS"
 
 
-class UserQuerySet(AngeeQuerySet[Any]):
+class UserQuerySet[UserT: User](AngeeQuerySet[UserT]):
     """Queryset vocabulary for user-row surfaces."""
 
-    def people(self) -> Any:
+    def people(self) -> Self:
         """Return login-capable human users, excluding service-account rows."""
 
         return self.filter(kind=UserKind.PERSON)
@@ -202,7 +202,7 @@ class UserQuerySet(AngeeQuerySet[Any]):
         """
 
         actor, unscoped = self.effective_actor()
-        return cast(Self, self.people().exclude(self.inactive_condition(None if unscoped else actor)))
+        return self.people().exclude(self.inactive_condition(None if unscoped else actor))
 
     def inactive_condition(self, actor: Any = None) -> Q:
         """Match inactive accounts as IAM's Zed discloses them to ``actor`` (``active_account``).
@@ -317,10 +317,18 @@ class UserQuerySet(AngeeQuerySet[Any]):
         return cast(Self, users.annotate(_iam_has_role=Exists(assigned)).filter(_iam_has_role=False))
 
 
-class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  # type: ignore[misc]
+_UserManagerBase = AngeeManager.from_queryset(UserQuerySet)
+
+
+class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
     """Manager for Angee's composed user model."""
 
     use_in_migrations = True
+
+    def get_queryset(self) -> UserQuerySet[UserT]:
+        """Retain IAM's queryset vocabulary through Django's configured factory."""
+
+        return cast(UserQuerySet[UserT], super().get_queryset())
 
     @classmethod
     def normalize_email(cls, email: str | None) -> str:
@@ -334,14 +342,14 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
 
         return (email or "").strip().lower()
 
-    def _person_email_matches(self, email: str | None) -> Any:
+    def _person_email_matches(self, email: str | None) -> UserQuerySet[UserT]:
         key = self.normalize_email(email)
         people = self.system_context(reason="iam.person.email_lookup").people()
         if not key:
             return people.none()
         return people.filter(email=key)
 
-    def person_for_email(self, email: str) -> Any | None:
+    def person_for_email(self, email: str) -> UserT | None:
         """Look up one person by email, including inactive and staff accounts.
 
         This is a system identity lookup, never a public directory surface.
@@ -354,17 +362,17 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
             raise AmbiguousAccountEmail
         return matches[0] if matches else None
 
-    def get_by_natural_key(self, username: str) -> Any:
+    def get_by_natural_key(self, username: str | None) -> UserT:
         """Return a user for credential checks without row-scope filtering."""
 
         return self.system_context(reason="iam.credentials").get(**{self.model.USERNAME_FIELD: username})
 
-    def get_for_session(self, user_id: Any) -> Any:
+    def get_for_session(self, user_id: Any) -> UserT:
         """Return the session user through the named Django-auth reload seam."""
 
         return self.system_context(reason="iam.session").get(pk=user_id)
 
-    async def aget_by_natural_key(self, username: str) -> Any:
+    async def aget_by_natural_key(self, username: str | None) -> UserT:
         """Async sibling of ``get_by_natural_key``."""
 
         return await self.system_context(reason="iam.credentials").aget(**{self.model.USERNAME_FIELD: username})
@@ -377,7 +385,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         *,
         first_name: str = "",
         last_name: str = "",
-    ) -> Any:
+    ) -> UserT:
         """Create a non-staff person for the actor authorized by ``create``.
 
         The person event and its dependent identity link commit with the account.
@@ -388,11 +396,14 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         resource_type = model_resource_type(self.model)
         if actor is None:
             raise MissingActorError(f"Creating {resource_type or self.model._meta.label_lower} requires an actor.")
-        if resource_type is None or not check_new(
-            subject=actor,
-            action="create",
-            resource_type=resource_type,
-        ).allowed:
+        if (
+            resource_type is None
+            or not check_new(
+                subject=actor,
+                action="create",
+                resource_type=resource_type,
+            ).allowed
+        ):
             raise PermissionDenied(f"Denied: {actor} cannot create {resource_type or self.model._meta.label_lower}")
         return self._create_person(
             username,
@@ -404,7 +415,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
             reason="iam.person.create",
         )
 
-    def create_person_as_system(self, username: str, email: str, *, reason: str) -> Any:
+    def create_person_as_system(self, username: str, email: str, *, reason: str) -> UserT:
         """Create a passwordless person for a channel-authorized system ingress.
 
         The channel owner must require channel write and account create when
@@ -439,7 +450,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         last_name: str,
         actor: SubjectRef | None,
         reason: str,
-    ) -> Any:
+    ) -> UserT:
         """Own validation, uniqueness, persistence and the transactional event."""
 
         with transaction.atomic():
@@ -478,7 +489,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         email: str | None = None,
         password: str | None = None,
         **extra_fields: Any,
-    ) -> Any:
+    ) -> UserT:
         """Create a user for trusted system paths such as bootstrap and OIDC.
 
         Actor-requested accounts use ``create_person`` and its creation gate.
@@ -495,7 +506,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         email: str | None = None,
         password: str | None = None,
         **extra_fields: Any,
-    ) -> Any:
+    ) -> UserT:
         """Create and save a superuser."""
 
         extra_fields.setdefault("is_staff", True)
@@ -513,7 +524,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         email: str | None,
         password: str | None,
         **extra_fields: Any,
-    ) -> Any:
+    ) -> UserT:
         """Build, password-hash, and save one user."""
 
         if not username:
@@ -533,15 +544,15 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
             user.unsudo()
         return user
 
-    def directory(self, actor: Any) -> UserQuerySet:
+    def directory(self, actor: Any) -> UserQuerySet[UserT]:
         """Return the accounts ``actor`` lists in the people directory, scoped by ``auth/user#list``.
 
         People managers list every account; anyone else lists nobody.
         """
 
-        return cast(UserQuerySet, self.with_actor(actor).with_action("list"))
+        return cast(UserQuerySet[UserT], self.with_actor(actor).with_action("list"))
 
-    def colleagues(self, actor: Any) -> UserQuerySet:
+    def colleagues(self, actor: Any) -> UserQuerySet[UserT]:
         """Return the accounts ``actor`` is offered in pickers, scoped by ``auth/user#colleague``.
 
         People managers are offered every account; anyone else their own and
@@ -549,7 +560,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         identity they read through records.
         """
 
-        return cast(UserQuerySet, self.with_actor(actor).with_action("colleague"))
+        return cast(UserQuerySet[UserT], self.with_actor(actor).with_action("colleague"))
 
     def visible_people(
         self,
@@ -557,12 +568,12 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         *,
         search: str = "",
         limit: int = VISIBLE_PEOPLE_DEFAULT_LIMIT,
-    ) -> list[Any]:
+    ) -> list[UserT]:
         """Return ``actor``'s active colleagues after search, ordering, and cap."""
 
         return list(self.colleagues(actor).picker(search)[: bounded_limit(limit)])
 
-    def visible_person_from_public_id(self, actor: Any, public_id: str) -> Any | None:
+    def visible_person_from_public_id(self, actor: Any, public_id: str) -> UserT | None:
         """Resolve one public user id against the same colleague rows as the picker."""
 
         return instance_from_public_id(self.model, str(public_id), queryset=self.colleagues(actor).active_people())
@@ -573,19 +584,19 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         *,
         search: str = "",
         limit: int = VISIBLE_PEOPLE_DEFAULT_LIMIT,
-    ) -> list[Any]:
+    ) -> list[UserT]:
         """Return permitted preview targets, applying admission before the cap."""
 
         bounded = bounded_limit(limit, maximum=VIEWABLE_PEOPLE_MAX_LIMIT)
         return [copy(person) for person in self.view_as_queryset(actor).search_users(search).ordered_users()[:bounded]]
 
-    def view_as_queryset(self, actor: Any) -> UserQuerySet:
+    def view_as_queryset(self, actor: Any) -> UserQuerySet[UserT]:
         """The single admission scope used by the picker and header lookup."""
 
         subject = to_subject_ref(actor)
         return self.with_actor(subject).with_action("view_as").preview_candidates(subject)
 
-    def admit_view_as(self, actor: Any, public_id: str) -> Any | None:
+    def admit_view_as(self, actor: Any, public_id: str) -> UserT | None:
         """Admit a preview identity for both the picker and GraphQL header.
 
         Admission uses an actor-scoped candidate. REBAC's native copy contract
@@ -600,7 +611,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         )
         return copy(candidate) if candidate is not None else None
 
-    def active_person_for_subject(self, subject: SubjectRef) -> Any | None:
+    def active_person_for_subject(self, subject: SubjectRef) -> UserT | None:
         """Resolve an accountable human actor from a concrete canonical subject."""
 
         if (
@@ -658,7 +669,7 @@ class User(StatementSourceMixin, AbstractBaseUser, RebacPermissionsMixin, Optimi
 
     EMAIL_FIELD = "email"
     USERNAME_FIELD = "username"
-    REQUIRED_FIELDS = ("email",)
+    REQUIRED_FIELDS = ["email"]
 
     @property
     def is_person(self) -> bool:
@@ -740,7 +751,7 @@ class User(StatementSourceMixin, AbstractBaseUser, RebacPermissionsMixin, Optimi
         return tuple(blockers)
 
     @classmethod
-    def account_action_annotations(cls, actor: Any) -> dict[str, models.Expression]:
+    def account_action_annotations(cls, actor: Any) -> dict[str, models.expressions.BaseExpression]:
         """Batch every account verb's permission and eligibility for one actor's rows.
 
         Keys are ``UserAccountAction`` values. Without an actor nothing is allowed.
@@ -750,7 +761,7 @@ class User(StatementSourceMixin, AbstractBaseUser, RebacPermissionsMixin, Optimi
             return {action: models.Value(False) for action in UserAccountAction.values}
         protection = cls.objects.protection_condition(actor)
         inactive = cls.objects.inactive_condition(actor)
-        annotations: dict[str, models.Expression] = {}
+        annotations: dict[str, models.expressions.BaseExpression] = {}
         for action in UserAccountAction.values:
             rows = cls.objects.with_actor(actor).with_action(action).scoped_for_aggregate()
             for condition, _error in cls.account_action_blockers(action, protection, inactive):
@@ -791,7 +802,9 @@ class User(StatementSourceMixin, AbstractBaseUser, RebacPermissionsMixin, Optimi
         users = type(self).objects
         rows = users.system_context(reason="iam.account.eligibility").filter(pk=self.pk)
         blockers = type(self).account_action_blockers(
-            action, users.protection_condition(actor), users.inactive_condition(actor),
+            action,
+            users.protection_condition(actor),
+            users.inactive_condition(actor),
         )
         for condition, error in blockers:
             if rows.filter(condition).exists():

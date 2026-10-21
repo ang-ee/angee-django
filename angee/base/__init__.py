@@ -2,7 +2,8 @@
 rename.
 
 A stack that keeps its database keeps its generated runtime migrations; those files import the
-symbols below from this package. The modules only re-export the owning implementation. New code
-imports the owner. The aliases leave once every stack has collapsed its history through
+symbols below from this package. Live fields and classes are re-exported from their owners;
+``historical_relationships`` retains the frozen operations required by older data migrations.
+New code imports the live owner. Compatibility leaves once every stack has collapsed its history through
 ``reset_migration_history``.
 """

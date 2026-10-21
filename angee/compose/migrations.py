@@ -155,7 +155,8 @@ class RuntimeMigrations:
                 migration_class=migration_class,
             )
             migration = migration_class(name, declaration["app_label"])
-            migration.dependencies = list(dependencies)
+            # Django's constructor owns a mutable instance copy of the class declaration.
+            cast(list[tuple[str, str]], migration.dependencies)[:] = dependencies
             try:
                 loader.graph.add_node(node, migration)
                 for dependency in dependencies:

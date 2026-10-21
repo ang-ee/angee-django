@@ -18,6 +18,7 @@ from rebac import PermissionDenied, current_actor
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.dashboards.models import Dashboard as DashboardModel
 from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot, widget_visibility_answers
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data import hasura_model_resource
@@ -36,7 +37,7 @@ DashboardWidget = apps.get_model("dashboards", "DashboardWidget")
 
 @strawberry.input
 class DashboardTargetInput:
-    scope: Dashboard.DashboardScope
+    scope: DashboardModel.DashboardScope
     key: str | None = None
     id: PublicID | None = None
 
@@ -118,7 +119,7 @@ class DashboardPayload:
 @strawberry.type
 class DashboardSummaryType:
     id: PublicID
-    scope: Dashboard.DashboardScope
+    scope: DashboardModel.DashboardScope
     scope_key: str | None
     name: str
     description: str

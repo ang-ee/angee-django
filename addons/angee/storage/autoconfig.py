@@ -2,7 +2,25 @@
 
 from __future__ import annotations
 
-SETTINGS = {
+from typing import TypedDict
+
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "ANGEE_IMPL_REGISTRIES:append": list[str],
+        "ANGEE_STORAGE_DEFAULT_DRIVE": str,
+        "ANGEE_STORAGE_PROXY_UPLOAD_MAX_BYTES": int,
+        "ANGEE_STORAGE_IMAGE_DRIVE": str,
+        "ANGEE_STORAGE_IMAGE_MAX_BYTES": int,
+        "ANGEE_STORAGE_IMAGE_TYPES": list[str],
+        "ANGEE_STORAGE_VIEWER_TYPES": list[str],
+        "ANGEE_STORAGE_DRAFT_TTL_HOURS": int,
+        "ANGEE_STORAGE_TRASH_TTL_DAYS": int,
+        "ANGEE_STORAGE_BACKEND_CLASSES": dict[str, str],
+    },
+)
+
+SETTINGS: _Settings = {
     "ANGEE_IMPL_REGISTRIES:append": ["angee.storage.backends.StorageBackend"],
     "ANGEE_STORAGE_DEFAULT_DRIVE": "assets",
     "ANGEE_STORAGE_PROXY_UPLOAD_MAX_BYTES": 64 * 1024 * 1024,

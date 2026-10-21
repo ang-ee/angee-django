@@ -68,6 +68,16 @@ def setting_name(attribute_name: str) -> str:
     return attribute_name.split(":", maxsplit=1)[0].split(".", maxsplit=1)[0]
 
 
+def setting_sources(settings: object, name: str) -> tuple[str, ...]:
+    """Return effective and merged declaration owners from native provenance."""
+
+    info = django_yamlconf.get_attr_info(name, settings)
+    if not info:
+        return ()
+    sources = (info.get("source"), *(source for _value, source in info.get("history", ())))
+    return tuple(dict.fromkeys(source for source in sources if isinstance(source, str)))
+
+
 def is_setting_name(name: str) -> bool:
     """Return whether ``name`` is a top-level Django setting (public, all-caps).
 

@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
-SETTINGS = {
+from typing import TypedDict
+
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "ANGEE_IMPL_REGISTRIES:append": list[str],
+        "ANGEE_MERGE_GUARDS:append": list[str],
+        "ANGEE_RESOURCE_SOURCE_CLASSES": dict[str, str],
+        "ANGEE_RESOURCE_ENTRY_KIND_CLASSES": dict[str, str],
+        "ANGEE_RESOURCE_EXCLUDED_ENTRIES": tuple[str, ...],
+    },
+)
+
+SETTINGS: _Settings = {
     "ANGEE_IMPL_REGISTRIES:append": [
         "angee.resources.kinds.ResourceEntryKind",
         "angee.resources.sources.ResourceSource",

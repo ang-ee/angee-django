@@ -43,12 +43,12 @@ dependencies = [
   "cryptography>=44",
   "django-simple-history>=3.13",
   "django-sqids>=0.1",
-  "django-zed-rebac==0.27.3",
+  "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@13f0859a606a9f1ed7952c934e59b0f03a784ef8",
   # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
   # override does not accept it yet; lift the cap when rebac supports 6.1.
   "django>=6.0,<6.1",
   "hatch-angee>=0.2.4",
-  "django-choices-field>=4.0.0",
+  "django-choices-field @ git+https://github.com/ang-ee/django-choices-field.git@b02c1488660d0bf1f4483d2e73bc842b41b70632",
   "django-yamlconf>=1.5.0",
   "django-environ>=0.12",
   "jsonschema[format-nongpl]>=4.26",
@@ -91,7 +91,8 @@ dev = [
   # Source-addon tests import django.contrib.postgres field types even when the
   # test database is SQLite; the former base wrapper selected the core extra.
   "psycopg[binary,pool]>=3.2",
-  "mypy>=1.10",
+  "django-stubs[compatible-mypy] @ git+https://github.com/ang-ee/django-stubs.git@c059382110d802744729d50de71f678aa3cf7533",
+  "mypy @ git+https://github.com/ang-ee/mypy.git@70993efa722fca8cd7471172a9bf07172efec38f",
   "pytest>=8.0",
   "pytest-django>=4.8",
   "pytest-randomly>=3.16",
@@ -140,10 +141,10 @@ addons = [
     "requests>=2.32",
     "ruamel.yaml>=0.18",
     "slack-sdk>=3.43.0",
-    "strawberry-django-aggregates>=0.14.0",
+    "strawberry-django-aggregates @ git+https://github.com/ang-ee/strawberry-django-aggregates.git@0f374854d19b2709b6d77ae872090ab2a751f1dc",
     "strawberry-django-hasura>=0.14.0",
     "strawberry-graphql @ git+https://github.com/ang-ee/strawberry.git@273bf0456d914d4df535222c4cbae73dff46a376",
-    "strawberry-graphql-django>=0.89.2",
+    "strawberry-graphql-django @ git+https://github.com/ang-ee/strawberry-django.git@5da69857d12c8a0fd09b78ee930741f3550c8bb0",
     "tablib>=3",
     "urllib3>=2.2",
     "vobject>=0.9.9",
@@ -161,6 +162,9 @@ default-groups = ["dev", "addons"]
 # This repository publishes the framework core only. Folder addons remain
 # in-repo source content and must never generate wheel seams or entry points.
 addon-discovery = []
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 # The distribution contains the framework core only. Folder addons are provided
@@ -235,12 +239,13 @@ exclude = [
 select = ["E", "F", "I"]
 
 [tool.mypy]
+plugins = ["angee.compose.typing"]
 python_version = "3.14"
 cache_dir = ".mypy_cache"
 explicit_package_bases = true
 files = ["angee", "addons/angee"]
 ignore_missing_imports = true
-mypy_path = [".", "addons"]
+mypy_path = [".", "addons", ".mypy_cache"]
 warn_unused_ignores = true
 
 [tool.vulture]
@@ -253,3 +258,6 @@ ignore_names = [
   "*_tables",
 ]
 min_confidence = 80
+
+[tool.django-stubs]
+django_settings_module = "tests.typing_settings"

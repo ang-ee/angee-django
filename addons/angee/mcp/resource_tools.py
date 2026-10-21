@@ -15,6 +15,7 @@ from typing import Any
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
+from django.db.models.fields.reverse_related import ForeignObjectRel
 from fastmcp import FastMCP
 from fastmcp.tools import Tool
 from graphql import GraphQLInputObjectType, GraphQLList, GraphQLNonNull
@@ -237,7 +238,7 @@ def _with_public_id(resource: DataResourceMetadata, fields: tuple[str, ...]) -> 
     return projected if "sqid" in projected else ("sqid", *projected)
 
 
-def _model_field(model: type[models.Model], name: str) -> models.Field[Any, Any] | None:
+def _model_field(model: type[models.Model], name: str) -> models.Field[Any, Any] | ForeignObjectRel | None:
     """Resolve metadata's wire field to its owning Django field when one exists."""
 
     try:

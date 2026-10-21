@@ -1,5 +1,7 @@
 """Channel scope belongs to the messaging contribution, not the workflow engine."""
 
+from typing import ClassVar
+
 from django.apps import apps
 from django.db import models
 
@@ -7,11 +9,11 @@ from django.db import models
 class TriggerMessaging(models.Model):
     """Declare the protected channel required by a message source."""
 
-    extends = "workflows.Trigger"
-    hasura_readable_fields = ("channel",)
-    hasura_filterable_fields = hasura_readable_fields
-    hasura_insertable_fields = hasura_readable_fields
-    hasura_updatable_fields = hasura_readable_fields
+    extends: ClassVar[str | None] = "workflows.Trigger"
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = ("channel",)
+    hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_insertable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
 
     channel = models.ForeignKey(
         "messaging.Channel", null=True, blank=True, on_delete=models.PROTECT, related_name="workflow_triggers",
@@ -24,7 +26,7 @@ class TriggerMessaging(models.Model):
 class ChannelWorkflowTriggers(models.Model):
     """Name the protected trigger rows in the channel owner's purge preview."""
 
-    extends = "messaging.Channel"
+    extends: ClassVar[str | None] = "messaging.Channel"
 
     class Meta:
         abstract = True

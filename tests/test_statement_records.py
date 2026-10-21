@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from django.apps import apps
 from django.db import models
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
@@ -11,6 +12,13 @@ from angee.models import SourceKind
 from tests.conftest import create_platform_admin, create_user
 from tests.extcontrib.models import Claimed, ClaimedBilling, ClaimedSource, ClaimedStatementQuerySet
 from tests.statement_models import Ledger
+
+
+def test_statement_link_metadata_matches_the_declared_capability() -> None:
+    assert Ledger.statements.model.link_field() is None
+    statement_model = apps.get_model("parties", "Party").statements.model
+    assert statement_model.link_field() is statement_model._meta.get_field("link")
+    assert isinstance(statement_model.link_field(), models.ForeignKey)
 
 
 def test_the_source_declaration_finalizes_one_table_carrying_every_donor_aspect() -> None:

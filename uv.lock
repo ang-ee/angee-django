@@ -819,6 +819,7 @@ addons = [
 ]
 dev = [
     { name = "daphne" },
+    { name = "django-stubs", extra = ["compatible-mypy"] },
     { name = "django-zed-rebac", extra = ["caveats"] },
     { name = "faker" },
     { name = "mypy" },
@@ -840,12 +841,12 @@ requires-dist = [
     { name = "cryptography", specifier = ">=44" },
     { name = "django", specifier = ">=6.0,<6.1" },
     { name = "django-celery-beat", specifier = ">=2.9" },
-    { name = "django-choices-field", specifier = ">=4.0.0" },
+    { name = "django-choices-field", git = "https://github.com/ang-ee/django-choices-field.git?rev=b02c1488660d0bf1f4483d2e73bc842b41b70632" },
     { name = "django-environ", specifier = ">=0.12" },
     { name = "django-simple-history", specifier = ">=3.13" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", specifier = "==0.27.3" },
+    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=13f0859a606a9f1ed7952c934e59b0f03a784ef8" },
     { name = "hatch-angee", specifier = ">=0.2.4" },
     { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
@@ -895,19 +896,20 @@ addons = [
     { name = "requests", specifier = ">=2.32" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "slack-sdk", specifier = ">=3.43.0" },
-    { name = "strawberry-django-aggregates", specifier = ">=0.14.0" },
+    { name = "strawberry-django-aggregates", git = "https://github.com/ang-ee/strawberry-django-aggregates.git?rev=0f374854d19b2709b6d77ae872090ab2a751f1dc" },
     { name = "strawberry-django-hasura", specifier = ">=0.14.0" },
     { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=273bf0456d914d4df535222c4cbae73dff46a376" },
-    { name = "strawberry-graphql-django", specifier = ">=0.89.2" },
+    { name = "strawberry-graphql-django", git = "https://github.com/ang-ee/strawberry-django.git?rev=5da69857d12c8a0fd09b78ee930741f3550c8bb0" },
     { name = "tablib", specifier = ">=3" },
     { name = "urllib3", specifier = ">=2.2" },
     { name = "vobject", specifier = ">=0.9.9" },
 ]
 dev = [
     { name = "daphne", specifier = ">=4.0" },
+    { name = "django-stubs", extras = ["compatible-mypy"], git = "https://github.com/ang-ee/django-stubs.git?rev=c059382110d802744729d50de71f678aa3cf7533" },
     { name = "django-zed-rebac", extras = ["caveats"], specifier = "==0.27.3" },
     { name = "faker", specifier = ">=30.0" },
-    { name = "mypy", specifier = ">=1.10" },
+    { name = "mypy", git = "https://github.com/ang-ee/mypy.git?rev=70993efa722fca8cd7471172a9bf07172efec38f" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-django", specifier = ">=4.8" },
@@ -966,14 +968,10 @@ wheels = [
 [[package]]
 name = "django-choices-field"
 version = "4.0.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/ang-ee/django-choices-field.git?rev=b02c1488660d0bf1f4483d2e73bc842b41b70632#b02c1488660d0bf1f4483d2e73bc842b41b70632" }
 dependencies = [
     { name = "django" },
     { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/3e/23/54749b86f605aafeaab81dc8e023968d95a7cc44434eac4df330e8e7f0d8/django_choices_field-4.0.0.tar.gz", hash = "sha256:7b07aacb2ad2b3ee3c8be78be98302ebbcb606285d20547a4163287819364954", size = 6346, upload-time = "2025-12-27T11:53:50.986Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3d/fd/2e0bb952961ba108bdb82efbb10eaeae5bbb5a687b6bdaf8427af181ac5d/django_choices_field-4.0.0-py3-none-any.whl", hash = "sha256:dfa59033685af989f5bc49d95a586e8de692999d3179bf1cb14ef99879e6ff45", size = 7035, upload-time = "2025-12-27T11:53:50.229Z" },
 ]
 
 [[package]]
@@ -1037,6 +1035,31 @@ wheels = [
 ]
 
 [[package]]
+name = "django-stubs"
+version = "6.0.9"
+source = { git = "https://github.com/ang-ee/django-stubs.git?rev=c059382110d802744729d50de71f678aa3cf7533#c059382110d802744729d50de71f678aa3cf7533" }
+dependencies = [
+    { name = "django" },
+    { name = "django-stubs-ext" },
+    { name = "types-pyyaml" },
+    { name = "typing-extensions" },
+]
+
+[package.optional-dependencies]
+compatible-mypy = [
+    { name = "mypy" },
+]
+
+[[package]]
+name = "django-stubs-ext"
+version = "6.0.9"
+source = { git = "https://github.com/ang-ee/django-stubs.git?subdirectory=ext&rev=c059382110d802744729d50de71f678aa3cf7533#c059382110d802744729d50de71f678aa3cf7533" }
+dependencies = [
+    { name = "django" },
+    { name = "typing-extensions" },
+]
+
+[[package]]
 name = "django-timezone-field"
 version = "7.2.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1062,13 +1085,9 @@ wheels = [
 [[package]]
 name = "django-zed-rebac"
 version = "0.27.3"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=13f0859a606a9f1ed7952c934e59b0f03a784ef8#13f0859a606a9f1ed7952c934e59b0f03a784ef8" }
 dependencies = [
     { name = "django" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/de/6c/64e45ca4046217e3a19d2f24a2ea950d3eb6eda4540eea7d2e53572d70c9/django_zed_rebac-0.27.3.tar.gz", hash = "sha256:a4f813471bd4b11cff6a848ad8037b30cd4c64de8b4a1c84f34b138ab212f691", size = 599388, upload-time = "2026-10-14T09:50:06.217Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9c/61/303b8cc5bca7cb0485eeb5b521e4abe168d56362918988f0b939cb4e5ed7/django_zed_rebac-0.27.3-py3-none-any.whl", hash = "sha256:50d0e0e8507824cbe321105524ec0ab39cd91879ad7b9b855c20486fe370a9d4", size = 314848, upload-time = "2026-10-14T09:50:05.01Z" },
 ]
 
 [package.optional-dependencies]
@@ -1819,31 +1838,13 @@ wheels = [
 [[package]]
 name = "mypy"
 version = "2.1.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/ang-ee/mypy.git?rev=70993efa722fca8cd7471172a9bf07172efec38f#70993efa722fca8cd7471172a9bf07172efec38f" }
 dependencies = [
     { name = "ast-serialize" },
     { name = "librt", marker = "platform_python_implementation != 'PyPy'" },
     { name = "mypy-extensions" },
     { name = "pathspec" },
     { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/82/15/cca9d88503549ed6fedeaa1d448cdddd542ee8a490232d732e278036fbf2/mypy-2.1.0.tar.gz", hash = "sha256:81e76ad12c2d804512e9b13240d1588316531bfba07558286078bfbce9613633", size = 3898359, upload-time = "2026-05-11T18:37:36.237Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b0/ca/b279a672e874aedd5498ae25f722dacc8aa86bbffb939b3f97cbb1cf6686/mypy-2.1.0-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:7354c5a7f69d9345c3d6e69921d57088eea3ddeeb6b20d34c1b3855b02c36ec2", size = 14848422, upload-time = "2026-05-11T18:35:45.984Z" },
-    { url = "https://files.pythonhosted.org/packages/27/e6/3efe56c631d959b9b4454e208b0ac4b7f4f58b404c89f8bec7b49efdfc21/mypy-2.1.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:49890d4f76ac9e06ec117f9e09f3174da70a620a0c300953d8595c926e80947f", size = 13677374, upload-time = "2026-05-11T18:36:57.188Z" },
-    { url = "https://files.pythonhosted.org/packages/84/7f/8107ea87a44fd1f1b59882442f033c9c3488c127201b1d1d15f1cbd6022e/mypy-2.1.0-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:761be68e023ef5d94678772396a8af1220030f80837a3afd8d0aef3b419666f4", size = 14055743, upload-time = "2026-05-11T18:35:18.361Z" },
-    { url = "https://files.pythonhosted.org/packages/51/4d/b6d34db183133b83761b9199a82d31557cdbb70a380d8c3b3438e11882a3/mypy-2.1.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c90345fc182dc363b891350457ec69c35140858538f38b4540845afcc32b1aef", size = 15020937, upload-time = "2026-05-11T18:34:59.618Z" },
-    { url = "https://files.pythonhosted.org/packages/ff/d7/f08360c691d758acb02f45022c34d98b92892f4ea756644e1000d4b9f3d8/mypy-2.1.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:b84802e7b5a6daf1f5e15bc9fcd7ddae77be13981ffab037f1c67bb84d67d135", size = 15253371, upload-time = "2026-05-11T18:36:41.081Z" },
-    { url = "https://files.pythonhosted.org/packages/67/1b/09460a13719530a19bce27bd3bc8449e83569dd2ba7faf51c9c3c30c0b61/mypy-2.1.0-cp314-cp314-win_amd64.whl", hash = "sha256:022c771234936ceac541ebaf836fe9e2abeb3f5e09aff21588fe543ff006fe21", size = 11326429, upload-time = "2026-05-11T18:34:13.526Z" },
-    { url = "https://files.pythonhosted.org/packages/40/62/75dbf0f82f7b6680340efc614af29dd0b3c17b8a4f1cd09b8bd2fd6bc814/mypy-2.1.0-cp314-cp314-win_arm64.whl", hash = "sha256:498207db725cec88829a6a5c2fc771205fd043719ef98bc49aba8fb9fc4e6d57", size = 10218799, upload-time = "2026-05-11T18:32:23.491Z" },
-    { url = "https://files.pythonhosted.org/packages/b2/66/caca04ed7d972fb6eb6dd1ccd6df1de5c38fae8c5b3dc1c4e8e0d85ee6b9/mypy-2.1.0-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:7d5e5cad0efeba72b93cd17490cc0d69c5ac9ca132994fe3fb0314808aeeb83e", size = 15923458, upload-time = "2026-05-11T18:35:28.64Z" },
-    { url = "https://files.pythonhosted.org/packages/ed/52/2d90cbe49d014b13ed7ff337930c30bad35893fe38a1e4641e756bb62191/mypy-2.1.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:ff715050c127d724fd260a2e666e7747fdd83511c0c47d449d98238970aef780", size = 14757697, upload-time = "2026-05-11T18:36:14.208Z" },
-    { url = "https://files.pythonhosted.org/packages/ac/37/d98f4a14e081b238992d0ed96b6d39c7cc0148c9699eb71eaa68629665ea/mypy-2.1.0-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:82208da9e09414d520e912d3e462d454854bed0810b71540bb016dcbca7308fd", size = 15405638, upload-time = "2026-05-11T18:33:48.249Z" },
-    { url = "https://files.pythonhosted.org/packages/a3/c2/15c46613b24a84fad2aea1248bf9619b99c2767ae9071fe224c179a0b7d4/mypy-2.1.0-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e79ebc1b904b84f0310dff7469655a9c36c7a68bddb37bdd42b67a332df61d08", size = 16215852, upload-time = "2026-05-11T18:32:50.296Z" },
-    { url = "https://files.pythonhosted.org/packages/5c/90/9c16a57f482c76d25f6379762b56bbf65c711d8158cf271fb2802cfb0640/mypy-2.1.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:e583edc957cfb0deb142079162ae826f58449b116c1d442f2d91c69d9fced081", size = 16452695, upload-time = "2026-05-11T18:33:38.182Z" },
-    { url = "https://files.pythonhosted.org/packages/0f/4c/215a4eeb63cacc5f17f516691ea7285d11e249802b942476bff15922a314/mypy-2.1.0-cp314-cp314t-win_amd64.whl", hash = "sha256:b33b6cd332695bba180d55e717a79d3038e479a2c49cc5eb3d53603409b9a5d7", size = 12866622, upload-time = "2026-05-11T18:34:39.945Z" },
-    { url = "https://files.pythonhosted.org/packages/4b/50/1043e1db5f455ffe4c9ab22747cd8ca2bc492b1e4f4e21b130a44ee2b217/mypy-2.1.0-cp314-cp314t-win_arm64.whl", hash = "sha256:4f910fe825376a7b66ef7ca8c98e5a149e8cd64c19ae71d84047a74ee060d4e6", size = 10610798, upload-time = "2026-05-11T18:36:31.444Z" },
-    { url = "https://files.pythonhosted.org/packages/0d/2a/13ca1f292f6db1b98ff495ef3467736b331621c5917cad984b7043e7348d/mypy-2.1.0-py3-none-any.whl", hash = "sha256:a663814603a5c563fb87a4f96fb473eeb30d1f5a4885afcf44f9db000a366289", size = 2693302, upload-time = "2026-05-11T18:31:29.246Z" },
 ]
 
 [[package]]
@@ -2867,15 +2868,11 @@ wheels = [
 [[package]]
 name = "strawberry-django-aggregates"
 version = "0.14.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/ang-ee/strawberry-django-aggregates.git?rev=0f374854d19b2709b6d77ae872090ab2a751f1dc#0f374854d19b2709b6d77ae872090ab2a751f1dc" }
 dependencies = [
     { name = "django" },
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ca/3e/739c73f072e4d43d68b4918319f76fbb6d23420420152a9b1cf27b247c39/strawberry_django_aggregates-0.14.0.tar.gz", hash = "sha256:a837203d4299a6d80ccf1b4880f3c5e402f2c9e9e73ecc9852859403805a17fc", size = 179329, upload-time = "2026-10-05T14:52:08.616Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/48/15/513e15531c95e737f53f565bb27277b7b05f16a503df7cb2cb51372ff363/strawberry_django_aggregates-0.14.0-py3-none-any.whl", hash = "sha256:29a5652b679aa0897f28096d49805e07453537d57cfe96b3d8680a8a3dd7e81b", size = 115226, upload-time = "2026-10-05T14:52:07.628Z" },
 ]
 
 [[package]]
@@ -2908,15 +2905,11 @@ dependencies = [
 [[package]]
 name = "strawberry-graphql-django"
 version = "0.89.2"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/ang-ee/strawberry-django.git?rev=5da69857d12c8a0fd09b78ee930741f3550c8bb0#5da69857d12c8a0fd09b78ee930741f3550c8bb0" }
 dependencies = [
     { name = "asgiref" },
     { name = "django" },
     { name = "strawberry-graphql" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d1/6c/b7c0e37062412639d56652295da898e0468ad079f356b6fa09a564562ef8/strawberry_graphql_django-0.89.2.tar.gz", hash = "sha256:2c7d33eaf0ae8029274c446d6fc30a27361040077101473b39b250cd250cf2db", size = 96917, upload-time = "2026-09-13T10:14:05.74Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fb/88/1bca5f3155c69b963120a1b9c10d85293d954a6766ec44efd1a9e14b2acf/strawberry_graphql_django-0.89.2-py3-none-any.whl", hash = "sha256:e049bb4c08f42fe104390556ae8e723705a39a6bf7913c1afc76b4099a5891c2", size = 121218, upload-time = "2026-09-13T10:14:04.556Z" },
 ]
 
 [[package]]
@@ -3025,6 +3018,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/49/de/52729cab9d2c8de679ad015e87f11f69e092d6fb3084eb9a39735df09ce7/txaio-26.6.1.tar.gz", hash = "sha256:3ee900b2331c93457530fddbccc1a320c4e2d7ac8f9073d01c3fbe87762ccb35", size = 134555, upload-time = "2026-06-18T14:38:59.096Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/91/68/075bf851e11c9ef65bd6a0426791f0d9a0c7dae0e7f6e0b16ca67334b456/txaio-26.6.1-py3-none-any.whl", hash = "sha256:91a84a7825485a367c0b070c7399824c0e1a1e8c071cbdf3882dd3146dab587b", size = 31399, upload-time = "2026-06-18T14:38:57.774Z" },
+]
+
+[[package]]
+name = "types-pyyaml"
+version = "6.0.12.20260906"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/6e/abec85b9013db5b934b0280a6dd104904d84f7bcbaab2e2f3def87ac7463/types_pyyaml-6.0.12.20260906.tar.gz", hash = "sha256:f59c1cc05010b833d2d72287bbaa72610106b28d42d89a907313117faba85212", size = 18649, upload-time = "2026-09-06T06:35:35.362Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/15/c0/fc0644b7ddcfb969e95845837143cb5173ddd6e06ee4ba5fc493cd9329b7/types_pyyaml-6.0.12.20260906-py3-none-any.whl", hash = "sha256:bca893ff0d51df5c9053137d5d0e6ccd36e939a196356f1d5c16372422f5137b", size = 21282, upload-time = "2026-09-06T06:35:34.372Z" },
 ]
 
 [[package]]

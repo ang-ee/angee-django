@@ -140,6 +140,7 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
     and ``self.bridge.credential`` authenticates — and ``self.http`` is the shared
     SSRF-pinned client. Incremental state lives on integrate's durable per-partition ``SyncStream``.
     """
+
     registry_setting = "ANGEE_POSTS_FEED_BACKEND_CLASSES"
     requires_connection_discovery: ClassVar[bool] = True
 
@@ -211,7 +212,10 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
             period = self.current_quota_period(now=moment)
             if not quota.consume(
                 period=period,
-                units=units, limit=policy.quota_limit, reserve=0 if delivery else policy.reply_reserve, now=moment,
+                units=units,
+                limit=policy.quota_limit,
+                reserve=0 if delivery else policy.reply_reserve,
+                now=moment,
             ):
                 raise IntegrationError("The feed request budget is exhausted.", retry_after=period.period_end - moment)
         return period
@@ -226,7 +230,10 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
 
         with system_context(reason="posts.quota"):
             return apps.get_model("posts", "Quota").objects.open_period(
-                integration=self.bridge, scope=self.quota_scope(), reset_timezone=self.quota_reset_timezone, now=now,
+                integration=self.bridge,
+                scope=self.quota_scope(),
+                reset_timezone=self.quota_reset_timezone,
+                now=now,
             )
 
     def consume_reobserve_quota(self, units: int, *, now: datetime | None = None) -> bool:
@@ -257,7 +264,10 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
         return True
 
     def request_json(
-        self, method: str, url: str, *,
+        self,
+        method: str,
+        url: str,
+        *,
         is_transient: Callable[[httpx2.Response, dict[str, Any]], bool],
         refusal: Callable[[httpx2.Response, dict[str, Any]], Exception | None],
         retry_delay: Callable[[httpx2.Response], timedelta] | None = None,
@@ -308,7 +318,8 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
                 if method == "POST":
                     raise DeliveryUncertain("The feed reply acknowledgement was unreadable.") from error
                 raise IntegrationError(
-                    "The feed response was unreadable.", retry_after=(retry_delay or self.retry_after)(response),
+                    "The feed response was unreadable.",
+                    retry_after=(retry_delay or self.retry_after)(response),
                 ) from error
             # A 4xx answered the request: classify it with the predicates, without a body.
             data = {}
@@ -316,7 +327,8 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
             if method == "POST":
                 raise DeliveryUncertain("The feed reply acknowledgement was lost.")
             raise IntegrationError(
-                "The feed is temporarily unavailable.", retry_after=(retry_delay or self.retry_after)(response),
+                "The feed is temporarily unavailable.",
+                retry_after=(retry_delay or self.retry_after)(response),
             )
         refusal_error = refusal(response, data)
         if refusal_error is not None:
@@ -334,13 +346,13 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
             seconds = float(value)
             if isfinite(seconds) and seconds > 0:
                 return timedelta(seconds=seconds)
-        except (ValueError, TypeError, OverflowError):
+        except ValueError, TypeError, OverflowError:
             pass
         try:
             at = parsedate_to_datetime(value)
             if at.tzinfo is not None:
                 return max(at - (now or timezone.now()), timedelta(seconds=1))
-        except (ValueError, TypeError, OverflowError):
+        except ValueError, TypeError, OverflowError:
             pass
         return timedelta(minutes=1)
 
@@ -364,7 +376,7 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
                 field = self.bridge._meta.get_field(name)
                 value = discovery.data[name]
                 if name == "display_name":
-                    value = str(value or "")[:field.max_length]
+                    value = str(value or "")[: field.max_length]
                 setattr(self.bridge, name, field.clean(value, self.bridge))
                 fields.append(name)
         if "handle" in discovery.data:
@@ -372,8 +384,12 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
             if not isinstance(parsed, ParsedHandle):
                 raise AdapterContractError("Feed discovery handle must be a ParsedHandle.")
             self.bridge.handle = apps.get_model("parties", "Handle").objects.upsert(
-                platform=parsed.platform, value=parsed.value, external_id=parsed.external_id,
-                display_name=parsed.display_name, metadata=parsed.metadata, created_by_id=self.bridge.owner_id,
+                platform=parsed.platform,
+                value=parsed.value,
+                external_id=parsed.external_id,
+                display_name=parsed.display_name,
+                metadata=parsed.metadata,
+                created_by_id=self.bridge.owner_id,
             )
             fields.append("handle")
         if fields:
@@ -397,8 +413,11 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
             with system_context(reason="posts.discovery.horizon"):
                 self.bridge.discovery_finished()
         (message,) = land_posts(
-            self.bridge, [record], owner_id=self.bridge.owner_id,
-            historical=self.bridge.is_historical(record), relations=False,
+            self.bridge,
+            [record],
+            owner_id=self.bridge.owner_id,
+            historical=self.bridge.is_historical(record),
+            relations=False,
         )
         return ApplyResult(target=message)
 
@@ -425,9 +444,12 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
         """
 
         valid_context = (
-            message.channel_id == self.bridge.pk and message.direction == "outbound"
-            and message.parent_id is not None and message.parent.channel_id == self.bridge.pk
-            and not message.parent.is_original_post and bool(message.body_text().strip())
+            message.channel_id == self.bridge.pk
+            and message.direction == "outbound"
+            and message.parent_id is not None
+            and message.parent.channel_id == self.bridge.pk
+            and not message.parent.is_original_post
+            and bool(message.body_text().strip())
         )
         if valid_context:
             try:
@@ -547,7 +569,7 @@ class FeedChannelBackend(ManualChannelBackend):
         if not isinstance(feed, apps.get_model("posts", "Feed")):
             raise IntegrationError("This channel's feed source is unavailable.")
         super().__init__(feed)
-        self._backend = feed.backend
+        self._backend = feed.feed_backend
 
     def delivery_lock(self) -> AbstractContextManager[bool]:
         """Serialize publish and settlement with the feed's stream sync."""

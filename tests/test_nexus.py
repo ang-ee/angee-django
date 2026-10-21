@@ -734,6 +734,29 @@ def test_party_graph_projects_visible_typed_relationships(project_access_schema:
     assert graph["truncated"] is False
 
 
+@pytest.mark.django_db(transaction=True)
+def test_party_graph_identity_lens_uses_the_reader_statement_scope(project_access_schema: Any) -> None:
+    """The identity lens uses the shared statement owner with its reader gate."""
+
+    del project_access_schema
+    reader = User.objects.create_user(username="identity-lens-reader")
+    with system_context(reason="test nexus identity lens seed"):
+        root = Party._base_manager.create(display_name="Identity root", created_by=reader)
+    _grant(root, "reader", reader)
+
+    graph = _data(
+        execute_schema(
+            _schema(),
+            'query IdentityGraph($id: ID!) { party_graph(root_id: $id, lenses: ["identity"]) { nodes edges } }',
+            {"id": root.sqid},
+            user=reader,
+        )
+    )["party_graph"]
+
+    assert [node["id"] for node in graph["nodes"]] == [root.sqid]
+    assert graph["edges"] == []
+
+
 def test_viewer_relative_party_resolvers_remain_objects() -> None:
     """Computed object projections must not become default relation reads/pickers."""
 

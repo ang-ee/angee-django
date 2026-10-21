@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-SETTINGS = {
+from typing import TypedDict
+
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "ANGEE_IMPL_REGISTRIES:append": list[str],
+        "ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES": dict[str, str],
+    },
+)
+
+SETTINGS: _Settings = {
     "ANGEE_IMPL_REGISTRIES:append": ["angee.knowledge.retrieval.RetrievalBackend"],
     # Vaults select their retrieval backend with a vault-owned ``retrieval_class``
     # field. ``lexical`` is the default title/body ``icontains`` search. A semantic

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, ClassVar, cast
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import DatabaseError, models, transaction
 from django.db.models import F
 from rebac import (
@@ -94,7 +94,13 @@ class RowLockMixin(models.Model):
     def row_lock(self) -> dict[str, Any]:
         """Return this row's locked fields with their current values."""
 
-        return {name: self._meta.get_field(name).value_from_object(self) for name in self.locked_fields()}
+        return {name: self._lock_field(name).value_from_object(self) for name in self.locked_fields()}
+
+    def _lock_field(self, name: str) -> models.Field[Any, Any]:
+        field = self._meta.get_field(name)
+        if not isinstance(field, models.Field):
+            raise ImproperlyConfigured(f"{self._meta.label}.{name} must be a stored field to be locked.")
+        return field
 
     def validate_row_lock(self, previous: Mapping[str, Any] | None) -> None:
         """Refuse this state as a user write over ``previous``, the row's persisted :meth:`row_lock`.
@@ -105,16 +111,13 @@ class RowLockMixin(models.Model):
 
         label = self._locked_rows_label()
         if previous:
-            changed = [
-                name for name, value in previous.items() if self._meta.get_field(name).value_from_object(self) != value
-            ]
+            changed = {}
+            for name, value in previous.items():
+                field = self._lock_field(name)
+                if field.value_from_object(self) != value:
+                    changed[name] = f"The {field.verbose_name} of {label.lower()} cannot change."
             if changed:
-                raise ValidationError(
-                    {
-                        name: f"The {self._meta.get_field(name).verbose_name} of {label.lower()} cannot change."
-                        for name in changed
-                    }
-                )
+                raise ValidationError(changed)
             return
         if locked := self.locked_fields():
             raise ValidationError(dict.fromkeys(locked, f"{label} are system-provisioned."))
@@ -223,6 +226,8 @@ class OptimisticLockMixin(SystemQuerysetMixin, models.Model):
                 raise ValidationError({"expected_revision": "An expected revision requires an existing row."})
         counter = self.REVISION_FIELD
         owner = self._meta.get_field(counter).model
+        if not issubclass(owner, SystemQuerysetMixin):
+            raise ImproperlyConfigured(f"{owner._meta.label} must own system queries for its revision counter.")
         manager = owner._base_manager.db_manager(hints={"instance": self})
         using = manager.db
         rows = owner.system_queryset().using(using).filter(pk=self._get_pk_val(owner._meta))

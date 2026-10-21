@@ -23,6 +23,7 @@ from angee.projects.testing.models import Link, Task
 from angee.refs import (
     RecordRef,
     RecordRefMixin,
+    RetainedGenericRelation,
     ancestor_object_refs,
     delete_record_refs,
     generic_pointer_model,
@@ -77,6 +78,17 @@ def record_ref_delete_receiver(monkeypatch: pytest.MonkeyPatch) -> Any:
         yield
     finally:
         pre_delete.disconnect(sender=RecordRefTypedTarget, dispatch_uid=dispatch_uid)
+
+
+@pytest.mark.django_db
+def test_retained_relation_returns_an_empty_native_queryset_without_queries(django_assert_num_queries):
+    relation = RetainedGenericRelation(RecordRefTargetEdge)
+    with django_assert_num_queries(0):
+        rows = relation.bulk_related_objects([RecordRefTypedTarget(pk=42)])
+        assert isinstance(rows, models.QuerySet)
+        assert rows.model is RecordRefTargetEdge
+        assert rows.db == "default"
+        assert list(rows) == []
 
 
 def test_record_ref_for_instance_projects_identity_and_rebac_type(record_ref_tables: None) -> None:

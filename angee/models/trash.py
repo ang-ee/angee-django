@@ -9,17 +9,18 @@ from typing import Any, ClassVar, Self, TypeVar, cast
 
 from django.conf import settings
 from django.core import checks
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.utils import timezone
 from rebac import (
+    RebacMixin,
     current_actor,
 )
 
 from angee.actors import actor_user_id, instance_actor
 from angee.data.field_classification import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD
 from angee.models.identity import auto_now_stamps, update_fields_with_auto_now
-from angee.models.query import SystemQuerysetMixin, by_key
+from angee.models.query import CanonicalQuerySet, SystemQuerysetMixin, by_key
 from angee.serialization import strip_null_bytes
 from angee.signals import bulk_updated
 
@@ -202,8 +203,12 @@ class TrashMixin(SystemQuerysetMixin, models.Model):
         """Replay removal through the trash owner shared by MTI descendants."""
 
         owner = self._meta.get_field(TRASH_FLAG_FIELD).model
+        if not issubclass(owner, TrashMixin):
+            raise ImproperlyConfigured("The trash flag must be declared by TrashMixin.")
         target = owner._base_manager.db_manager(hints={"instance": self}).get(pk=self.pk)
         if (actor := instance_actor(self)) is not None:
+            if not isinstance(target, RebacMixin):
+                raise ImproperlyConfigured("Actor-attributed trash replay requires RebacMixin.")
             target.with_actor(actor)
         trashed = previous is None or previous.history_type == "-" or previous.is_trashed
         if target.is_trashed != trashed:
@@ -218,6 +223,8 @@ class TrashMixin(SystemQuerysetMixin, models.Model):
         """Lock the stored row and refuse a trash verb that would change nothing."""
 
         owner = self._meta.get_field(TRASH_FLAG_FIELD).model
+        if not issubclass(owner, TrashMixin):
+            raise ImproperlyConfigured("The trash flag must be declared by TrashMixin.")
         stored = (
             owner.system_queryset(lock=("self",))
             .using(owner._base_manager.db_manager(hints={"instance": self}).db)
@@ -232,7 +239,7 @@ class TrashMixin(SystemQuerysetMixin, models.Model):
             raise ValidationError({TRASH_FLAG_FIELD: f"This {self._meta.verbose_name} {state} the trash."})
 
 
-class TrashQuerySet(models.QuerySet[_TrashModelT]):
+class TrashQuerySet(CanonicalQuerySet[_TrashModelT]):
     """Composable row scopes for the :class:`TrashMixin` trash flag.
 
     Mix into the model's queryset beside its base queryset (e.g.
@@ -256,7 +263,7 @@ class TrashQuerySet(models.QuerySet[_TrashModelT]):
         mergeable model's ``canonical()`` reads the same on every model.
         """
 
-        return cast(Self, super().canonical().untrashed())
+        return super().canonical().untrashed()
 
     def trash_targets(self) -> Self:
         """Return the rows the shared trash verbs may address.

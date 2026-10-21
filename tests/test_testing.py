@@ -1,5 +1,10 @@
 """Contracts for the reusable Django test composition."""
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -22,6 +27,29 @@ from angee.workflows import models as workflow_sources
 from angee.workflows.states import RunOrigin
 from angee.workflows.testing import models as workflow_models
 from angee.workflows.testing.models import Workflow, WorkflowRun, WorkflowVersion
+
+
+def test_shared_fixture_plugin_imports_before_django_setup(tmp_path: Path) -> None:
+    """Native pytest workers import explicit plugins before populating Django apps."""
+
+    environment = dict(os.environ)
+    environment.pop("DJANGO_SETTINGS_MODULE", None)
+    environment["PYTHONPATH"] = os.pathsep.join(sys.path)
+    result = subprocess.run(
+        [sys.executable, "-c", """
+from django.apps import apps
+from django.conf import settings
+import angee.testing.fixtures
+assert not apps.ready
+assert not settings.configured
+"""],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("shared_models", (

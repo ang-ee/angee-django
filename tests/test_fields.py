@@ -13,7 +13,7 @@ from django.core.exceptions import FieldError, ImproperlyConfigured, ValidationE
 from django.db import connection, models
 from django.db.models import F, Value
 from django.db.models.functions import Concat
-from django.test.utils import isolate_apps
+from django.test.utils import isolate_apps, override_settings
 
 from angee.fields import (
     DiagnosticTextField,
@@ -58,7 +58,9 @@ def test_diagnostic_and_model_label_fields_normalize_instance_and_queryset_write
 
 
 @pytest.mark.django_db(transaction=True)
-def test_encrypted_field_round_trips_plaintext() -> None:
+@pytest.mark.parametrize("secret_key", ["field-encryption-key", b"field-encryption-key"])
+@isolate_apps()
+def test_encrypted_field_round_trips_plaintext(secret_key: str | bytes) -> None:
     """Plaintext assigned in Python decrypts when the row is reloaded."""
 
     class FieldRoundTrip(models.Model):
@@ -71,7 +73,7 @@ def test_encrypted_field_round_trips_plaintext() -> None:
 
             app_label = "auth"
 
-    with model_tables((FieldRoundTrip,)):
+    with override_settings(SECRET_KEY=secret_key), model_tables((FieldRoundTrip,)):
         instance = FieldRoundTrip.objects.create(secret="open sesame")
 
         reloaded = FieldRoundTrip.objects.get(pk=instance.pk)

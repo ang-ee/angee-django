@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
@@ -16,11 +16,14 @@ from angee.fields import ModelLabelField
 from angee.refs import RecordRefMixin
 from angee.serialization import canonical_json
 
+if TYPE_CHECKING:
+    from angee.resources.models import Resource
+
 
 class XrefWidgetMixin:
     """Carry the resource ledger model bound by ``AngeeResource``."""
 
-    ledger_model: type[models.Model] | None = None
+    ledger_model: type[Resource] | None = None
     """Concrete resource ledger model used to resolve xrefs."""
 
     addon_aliases: Mapping[str, str] | None = None
@@ -95,6 +98,8 @@ class RecordRefField(fields.Field):
         values = (target.content_type.pk, target.object_id) if target is not None else None
         for index, name in enumerate(field_names):
             field = instance._meta.get_field(name)
+            if not isinstance(field, models.Field):
+                raise ValueError(f"Record reference backing column {name!r} must be a concrete field.")
             value = values[index] if values is not None else (None if field.null else field.get_default())
             try:
                 # Field.clean owns to_python and null/default validation before assignment.
@@ -199,7 +204,7 @@ class _NativeJSONWidget(widgets.JSONWidget):
 
 def resolve_xref(
     value: str,
-    ledger_model: type[models.Model] | None,
+    ledger_model: type[Resource] | None,
     addon_aliases: Mapping[str, str] | None,
     *, model: type[models.Model] | None = None,
 ) -> models.Model:

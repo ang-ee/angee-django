@@ -27,6 +27,7 @@ from rebac import (
     PermissionDenied,
     RebacMixin,
     RelationshipTuple,
+    SubjectRef,
     system_context,
     to_object_ref,
     to_subject_ref,
@@ -53,7 +54,9 @@ from angee.graphql.schema import (
 from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.iam.permissions import session_user
 from angee.models import AngeeModel, TransitionNotAllowed
+from angee.permissions import require_rebac_queryset
 from tests.conftest import make_addon
+from tests.core_persistence import OwnedRow
 from tests.hierdemo.models import HierNode
 
 
@@ -913,7 +916,7 @@ def test_graphql_identity_exports_public_node() -> None:
 
 
 def test_rebac_graphql_types_require_rebac_default_manager() -> None:
-    """GraphQL-exposed REBAC models fail fast without the library manager."""
+    """GraphQL-exposed REBAC models fail fast without the native query contract."""
 
     assert isinstance(ManagedThing._default_manager, RebacManager)
     GraphQLSchemas(
@@ -927,7 +930,7 @@ def test_rebac_graphql_types_require_rebac_default_manager() -> None:
         ]
     ).build("public")
 
-    with pytest.raises(ImproperlyConfigured, match="RebacManager"):
+    with pytest.raises(ImproperlyConfigured, match="RebacQuerySet"):
         GraphQLSchemas(
             [
                 addon(
@@ -938,6 +941,17 @@ def test_rebac_graphql_types_require_rebac_default_manager() -> None:
                 )
             ]
         ).build("public")
+
+
+def test_rebac_query_contract_accepts_django_as_manager() -> None:
+    """A native queryset-generated manager retains its model and actor policy."""
+
+    assert not isinstance(OwnedRow._default_manager, RebacManager)
+    actor = SubjectRef("auth/user", "123")
+    rows = require_rebac_queryset(OwnedRow).with_actor(actor)
+    assert rows.model is OwnedRow
+    assert rows.actor() == actor
+    assert type(rows) is type(OwnedRow._default_manager.get_queryset())
 
 
 def test_choice_enum_value_descriptions_come_from_django_labels() -> None:

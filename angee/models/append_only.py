@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from typing import Any, TypeVar
 
 from django.core import checks
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 
@@ -73,7 +73,7 @@ class _AppendOnlyWritesMixin(models.QuerySet[_ModelT]):
 
         raise self.immutable_error("delete")
 
-    def _raw_delete(self, using: str) -> int:
+    def _raw_delete(self, using: str | None) -> int:
         """Reject direct SQL deletion through the queryset."""
 
         raise self.immutable_error("_raw_delete")
@@ -97,6 +97,15 @@ class AppendOnlyQuerySet(_AppendOnlyWritesMixin[_ModelT], RebacQuerySet[_ModelT]
         return super().insert(obj)
 
 
+def _validate_model_insert(model: type[models.Model]) -> None:
+    """Delegate every insert path to the default queryset's admission policy."""
+
+    rows = model._default_manager.get_queryset()
+    if not isinstance(rows, AppendOnlyQuerySet):
+        raise ImproperlyConfigured(f"{model._meta.label}'s default manager must compose AppendOnlyQuerySet.")
+    rows.validate_insert()
+
+
 class AppendOnlyBaseQuerySet(
     _AngeeQuerySetMixin[_ModelT],
     _AppendOnlyWritesMixin[_ModelT],
@@ -107,10 +116,13 @@ class AppendOnlyBaseQuerySet(
     def validate_insert(self) -> None:
         """Apply the domain's default-queryset admission to base-manager inserts."""
 
-        self.model._default_manager.get_queryset().validate_insert()
+        _validate_model_insert(self.model)
 
 
-class AppendOnlyBaseManager(models.Manager.from_queryset(AppendOnlyBaseQuerySet)):  # type: ignore[misc]
+_AppendOnlyBaseManagerBase = models.Manager.from_queryset(AppendOnlyBaseQuerySet)
+
+
+class AppendOnlyBaseManager(_AppendOnlyBaseManagerBase):
     """The base manager an append-only model declares: unfiltered reads, closed writes."""
 
 
@@ -147,7 +159,7 @@ class AppendOnlyModel(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         if not self._state.adding:
             raise ValidationError(f"{self._meta.label} rows cannot be edited.")
-        type(self)._default_manager.get_queryset().validate_insert()
+        _validate_model_insert(type(self))
         kwargs["force_insert"] = True
         super().save(*args, **kwargs)
 

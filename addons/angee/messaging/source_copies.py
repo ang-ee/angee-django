@@ -24,6 +24,7 @@ from rebac import system_context, to_subject_ref
 from angee.changesets import changeset
 from angee.evidence import EvidenceReference
 from angee.models import MergeableMixin, PairAspect, StatementsMixin
+from angee.parties.models import Handle
 
 SOURCE_IDENTITY_RULE = "messaging.source_identity"
 """The provenance rule that asserts email copies, and the reason its folds record."""
@@ -31,6 +32,9 @@ SOURCE_IDENTITY_RULE = "messaging.source_identity"
 
 class SourceCopyMixin(MergeableMixin, StatementsMixin, models.Model):
     """A channel occurrence; an applied ``same_as`` statement folds it into its oldest copy."""
+
+    channel_id: int | None
+    platform: Handle.Platform
 
     same_as = PairAspect()
     retains_merged = True

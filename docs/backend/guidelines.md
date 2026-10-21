@@ -19,6 +19,11 @@ libraries and what each one owns. Check it before adding a dependency or
 hand-rolling a concern. Python dependency setup belongs in `pyproject.toml` and
 `uv.lock`.
 
+When extending a generated manager, bind native `Manager.from_queryset(...)`
+to a module-level name before using it as a class base, as in
+[`AngeeManager`](../../angee/models/manager.py). Leave that assignment inferred:
+direct class-base calls and `Any` annotations bypass django-stubs' native factory hook.
+
 ## Django-Native Rule
 
 Angee is not a second framework on top of Django. It is a build-time composer
@@ -438,8 +443,10 @@ Use these owners instead of maintaining another contract in an addon:
   [`AngeeHasuraWriteBackend`](../../addons/angee/graphql/data/hasura.py) writes
   values naming model fields with the row and, in the same transaction, passes
   the rest to the written row's cooperative
-  [`AngeeModel.apply_input_extensions`](../../angee/models/base.py), nested line
-  rows included. Its consumer (a mixin or `extends` donor on the model) takes
+  [`InputExtensionsMixin.apply_input_extensions`](../../angee/models/inputs.py),
+  composed by `AngeeModel`, with nested line rows included. Input-owning mixins
+  also compose this fieldless terminal when they support plain Django hosts.
+  Its consumer (a mixin or `extends` donor on the model) takes
   each value it owns as a keyword-only parameter and delegates the rest once
   through `super()`; the terminal fails fast on a value no consumer took. A
   custom write backend consumes its own extensions: IAM's
@@ -2091,6 +2098,12 @@ Follow [settings bootstrap](../composer.md#settings-bootstrap) and
 binds generated labels during Django phase 2. Keep YAML loading bounded to the
 project's settings and explicit configuration file: an enclosing stack must not
 silently contribute settings to a nested project.
+
+Declare autoconfig `SETTINGS` with a source-owned `TypedDict`, including the
+normalized value types of `:append` contributions; annotate derived `settings()`
+results the same way. Preserve configurable unions and nullable values rather
+than inferring a contract from one default. The [typing adapter](../../angee/compose/typing.py)
+reads those native declarations through [yamlconf provenance](../../angee/compose/yamlconf.py).
 
 Keep `angee` as a namespace package. Do not add an `__init__.py` at either
 namespace root (`angee/` for the framework, `addons/angee/` for the base

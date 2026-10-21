@@ -66,7 +66,7 @@ class ImapSampleImportType:
 class MessagingImapQuery:
     """Explicit read-only mailbox probes, admitted by the channel's write owner."""
 
-    @strawberry.field(permission_classes=ADMIN_PERMISSION_CLASSES)
+    @strawberry.field(permission_classes=ADMIN_PERMISSION_CLASSES, graphql_type=ImapSamplePreviewType)
     def preview_imap_sample(
         self,
         info: strawberry.Info,
@@ -80,7 +80,7 @@ class MessagingImapQuery:
         before_uid: int | None = None,
         total_count: int | None = None,
         limit: int = 20,
-    ) -> ImapSamplePreviewType:
+    ) -> ImapSamplePreview:
         """Preview one page from a frozen historical mailbox selection."""
 
         channel = authorized_action_target(info, Channel, id, "write")
@@ -123,16 +123,24 @@ class MessagingImapMutation:
             message=f"Set the new-mail starting point for {mailbox_count} mailbox(es). Resume to begin delivery.",
         )
 
-    @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
+    @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES, graphql_type=ImapSampleImportType)
     def import_imap_sample(
-        self, info: strawberry.Info, id: PublicID, mailbox: str, uidvalidity: int, uids: list[int],
-    ) -> ImapSampleImportType:
+        self,
+        info: strawberry.Info,
+        id: PublicID,
+        mailbox: str,
+        uidvalidity: int,
+        uids: list[int],
+    ) -> ImapSampleImport:
         """Import the explicit selection without activating live message triggers."""
 
         channel = authorized_action_target(info, Channel, id, "write")
         with _imap_errors():
             return channel.import_imap_sample(
-                actor=session_user(info), mailbox=mailbox, uidvalidity=uidvalidity, uids=uids,
+                actor=session_user(info),
+                mailbox=mailbox,
+                uidvalidity=uidvalidity,
+                uids=uids,
             )
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)

@@ -22,9 +22,14 @@ def close_run_conversations(sender: Any, *, run: Any, **kwargs: Any) -> None:
             sessions.system_queryset().filter(pk__in=owned), reason="workflows_agents.run_stopping",
         )
         own_turns = created.filter(content_type=content_types.objects.get_for_model(turns)).values("object_id")
-        for turn in turns.system_queryset().open().filter(pk__in=own_turns).select_related("session").order_by(
-            "session_id", "index",
-        ):
+        open_turns = (
+            turns.objects.open()
+            .system_context(reason="workflows_agents.run_stopping")
+            .filter(pk__in=own_turns)
+            .select_related("session")
+            .order_by("session_id", "index")
+        )
+        for turn in open_turns:
             turn.session.cancel_turn(turn)
 
 

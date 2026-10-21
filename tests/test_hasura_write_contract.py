@@ -8,6 +8,9 @@ import pytest
 import strawberry
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
+from django.db import models
+from django.test.utils import isolate_apps
+from graphql import GraphQLInputObjectType, get_named_type
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from strawberry import auto
 from strawberry.types import get_object_definition
@@ -15,6 +18,7 @@ from strawberry.types import get_object_definition
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.models import AngeeDataModel
 from tests.conftest import create_user, execute_schema, make_addon, result_data
 from tests.linesdemo.models import Document, DocumentLine, Tag
 from tests.scopedemo.models import SharedDoc
@@ -102,6 +106,42 @@ class StampedLineType(AngeeNode):
 
     label: auto
     position: auto
+
+
+@pytest.mark.parametrize("filterable", [False, True])
+@isolate_apps()
+def test_write_relation_declaration_supplies_public_id_inputs(filterable: bool) -> None:
+    """A relation's write owner also declares its public scalar, even without a filter."""
+
+    class Referenced(AngeeDataModel):
+        key = models.IntegerField(primary_key=True)
+
+        class Meta:
+            app_label = "write_contract"
+
+    class Reference(AngeeDataModel):
+        product = models.ForeignKey(Referenced, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "write_contract"
+
+    @strawberry_django.type(Reference)
+    class ReferenceType(AngeeNode):
+        pass
+
+    resource = hasura_model_resource(
+        ReferenceType, model=Reference, name="declared_relations",
+        filterable=["id", *(["product"] if filterable else [])],
+        sortable=["id"], aggregatable=["id"],
+        insertable=["product"], updatable=["product"],
+        write_backend=AngeeHasuraWriteBackend(Reference, public_id_fields=("product",)),
+    )
+    schema = strawberry.Schema(query=resource.query, mutation=resource.mutation, types=resource.types)
+    for input_type in (resource.insert_input_type, resource.set_input_type):
+        definition = get_object_definition(input_type, strict=True)
+        graphql_type = schema._schema.get_type(definition.name)
+        assert isinstance(graphql_type, GraphQLInputObjectType)
+        assert get_named_type(graphql_type.fields["product"].type).name == "ID"
 
 
 @strawberry_django.type(Document)

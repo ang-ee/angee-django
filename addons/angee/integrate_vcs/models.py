@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from datetime import datetime
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.db import models, transaction
@@ -41,8 +41,8 @@ class VcsBridge(Bridge):
     """
 
     runtime = True
-    extends = "integrate.Integration"
-    integration_create_mode = IntegrationCreateMode.FORM
+    extends: ClassVar[str | None] = "integrate.Integration"
+    integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.FORM
 
     backend_class = ImplClassField(
         VCSBackend,
@@ -305,7 +305,7 @@ class Source(AuditMixin, AngeeDataModel):
         return f"{self.kind}:{self.path or '/'}"
 
     @classmethod
-    def kind_models(cls) -> tuple[type[models.Model], ...]:
+    def kind_models(cls) -> tuple[type[registry.VcsOutput], ...]:
         """Return the output models that declare a ``source_kind`` (e.g. ``Template``).
 
         ``Source`` owns "what a kind resolves to": an output model binds itself to a
@@ -322,7 +322,7 @@ class Source(AuditMixin, AngeeDataModel):
         return tuple(sorted({str(model.source_kind) for model in cls.kind_models()}))
 
     @classmethod
-    def target_for_kind(cls, kind: str) -> type[models.Model]:
+    def target_for_kind(cls, kind: str) -> type[registry.VcsOutput]:
         """Return the output model bound to one source ``kind`` or raise."""
 
         for model in cls.kind_models():
@@ -334,7 +334,9 @@ class Source(AuditMixin, AngeeDataModel):
     def refresh(self) -> int:
         """Re-enumerate over REST into the kind's output rows; return the row count."""
 
-        return int(type(self).target_for_kind(self.kind).objects.sync_from_source(self))
+        manager = type(self).target_for_kind(self.kind)._default_manager
+        assert isinstance(manager, registry.VcsOutputManager)
+        return manager.sync_from_source(self)
 
     def materialize_spec(self) -> dict[str, str]:
         """Return the operator handoff coordinates to clone and check out this source."""

@@ -33,6 +33,7 @@ from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.permissions import RolePermission, request_from_info
 from angee.identity import instance_from_public_id
 from angee.storage import exceptions
+from angee.storage.models import File as FileModel
 from angee.storage.models import FileVisibility, UploadState
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
@@ -155,15 +156,18 @@ class FileAttachmentType(RecordReferenceNode):
     label: auto
     file: FileType
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name, only=["label", "file_id"],
+        resolver=AngeeNode.display_name,
+        only=["label", "file_id"],
         description=NODE_DISPLAY_NAME_DESCRIPTION,
     )
 
     model_label: str | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
+        resolver=RecordReferenceNode.reference_model,
+        only=["content_type_id", "object_id"],
     )
     record_id: PublicID | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
+        resolver=RecordReferenceNode.reference_id,
+        only=["content_type_id", "object_id"],
     )
 
 
@@ -199,7 +203,7 @@ class StorageQuery:
 
         try:
             model = apps.get_model(model_label.strip())
-        except (LookupError, ValueError):
+        except LookupError, ValueError:
             return RecordFilesType(can_upload=False, attachments=[])
         if model_resource_type(model) is None:
             return RecordFilesType(can_upload=False, attachments=[])
@@ -247,7 +251,7 @@ class FileUploadBeginPayload:
     """
 
     method: str = ""
-    file: FileType | None = None
+    file: FileModel | None = strawberry.field(graphql_type=FileType | None, default=None)
     upload_url: str = strawberry.field(name="upload_url", default="")
     upload_token: str = strawberry.field(name="upload_token", default="")
     error: str | None = None
@@ -267,7 +271,7 @@ class FileUploadFinalizeInput:
 class FileUploadFinalizePayload:
     """Verified file row, or the error that rejected the upload."""
 
-    file: FileType | None = None
+    file: FileModel | None = strawberry.field(graphql_type=FileType | None, default=None)
     error: str | None = None
     error_code: str | None = strawberry.field(name="error_code", default=None)
 
@@ -436,7 +440,9 @@ class StorageMutation:
                     raise exceptions.UploadRecordDenied()
                 try:
                     record = resolve_action_target(
-                        model, input.record.record_id, reason="storage.upload.record_target",
+                        model,
+                        input.record.record_id,
+                        reason="storage.upload.record_target",
                     )
                 except GraphQLError as error:
                     raise exceptions.UploadRecordDenied() from error

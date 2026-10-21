@@ -4,11 +4,31 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TypedDict
 
 from angee.messaging.constants import RELEASE_MESSAGES_TASK
 
-SETTINGS = {
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "CELERY_BEAT_SCHEDULE:append": dict[str, dict[str, object]],
+        "ANGEE_HOOKS:append": list[str],
+        "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS:append": list[str],
+        "ANGEE_PARTIES_SIGNING_PROVIDERS:append": list[str],
+        "ANGEE_IMPL_REGISTRIES:append": list[str],
+        "ANGEE_TIMELINE_KINDS:append": list[str],
+        "ANGEE_CHANNEL_BACKEND_CLASSES": dict[str, str],
+        "ANGEE_WEBFORM_MAX_BODY_BYTES": int,
+        "ANGEE_WEBFORM_RATE_LIMIT_BURST": int,
+        "ANGEE_WEBFORM_RATE_LIMIT_WINDOW": int,
+        "ANGEE_WEBFORM_HONEYPOT_FIELD": str,
+        "ANGEE_WEBFORM_TOKEN_HOOK": str,
+        "ANGEE_EMAIL_DELIVERY_CONFIGURED": bool,
+        "ANGEE_MESSAGING_PROTECTED_LOCAL_KEYS": list[str],
+    },
+)
+
+SETTINGS: _Settings = {
     "CELERY_BEAT_SCHEDULE:append": {
         RELEASE_MESSAGES_TASK: {"task": RELEASE_MESSAGES_TASK, "schedule": 60.0},
     },

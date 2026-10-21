@@ -104,7 +104,7 @@ class AddonChangePreview:
     settings_text: str = field(default="", repr=False)
 
 
-class AddonManager(AngeeManager):
+class AddonManager[T: Addon](AngeeManager[T]):
     """Manager owning reflection, change previews, and install/disable flow."""
 
     def install(self, name: str, revision: str | None = None) -> InstallResult:
@@ -351,8 +351,8 @@ class AddonManager(AngeeManager):
             else frozenset(aliases.get(declaration, declaration) for declaration in desired)
         )
         manifests = {name: manifest for name, (manifest, _origin) in available.items()}
-        for name, config in loaded.items():
-            if (manifest := addon_manifest(config)) is not None:
+        for name, loaded_config in loaded.items():
+            if (manifest := addon_manifest(loaded_config)) is not None:
                 manifests[name] = manifest
         depended_by = self._dependants(manifests.values(), aliases=aliases)
         counts = composed.resource_counts()

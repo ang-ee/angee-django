@@ -121,6 +121,7 @@ def check_ownership(
         if not issubclass(model, OwnerMixin):
             continue
         owner_model = model._meta.get_field("owner").model
+        assert issubclass(owner_model, OwnerMixin)
         if owner_model is model and model.owner_container is not None:
             try:
                 field = model._meta.get_field(model.owner_container)

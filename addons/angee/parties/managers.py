@@ -21,7 +21,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from itertools import chain, combinations, groupby, islice
-from typing import Any, NamedTuple, Self
+from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -57,6 +57,12 @@ from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, P
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.serialization import canonical_json
 from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
+
+if TYPE_CHECKING:
+    from django_stubs_ext import WithAnnotations
+
+    from angee.parties.mixins import PartyStatementMixin
+    from angee.parties.models import Circle, Handle, Party
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +139,7 @@ class IdentityBasis:
         ).hexdigest()
 
 
-class CircleQuerySet(HierarchyQuerySet, AngeeQuerySet):
+class CircleQuerySet[CircleT: Circle](HierarchyQuerySet[CircleT], AngeeQuerySet[CircleT]):
     """Circle read scopes: the hierarchy subtree vocabulary over the Angee base."""
 
     def memberships(self, *, confirmed_only: bool = False) -> Any:
@@ -191,11 +197,23 @@ class CircleQuerySet(HierarchyQuerySet, AngeeQuerySet):
         )
 
 
-class CircleManager(AngeeManager.from_queryset(CircleQuerySet)):  # type: ignore[misc]
-    """Manager for circles — subtree scopes ride in through :class:`CircleQuerySet`."""
+_CircleManagerBase = AngeeManager.from_queryset(CircleQuerySet)
 
 
-class HandleQuerySet(MergeableQuerySet, AngeeQuerySet):
+class CircleManager[CircleT: Circle](_CircleManagerBase[CircleT]):
+    """Keep a stable import identity for circle subtree managers."""
+
+    def get_queryset(self) -> CircleQuerySet[CircleT]:
+        """Preserve the configured queryset and model row type."""
+
+        return cast(CircleQuerySet[CircleT], super().get_queryset())
+
+
+class _HandleSenderName(TypedDict):
+    _sender_name: str
+
+
+class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeQuerySet[HandleT]):
     """Handle read scopes over the Angee base."""
 
     def confirmed(self, platform: str, value: str) -> Self:
@@ -212,7 +230,7 @@ class HandleQuerySet(MergeableQuerySet, AngeeQuerySet):
             party__isnull=False,
         )
 
-    def with_sender_name(self) -> Self:
+    def with_sender_name(self) -> HandleQuerySet[WithAnnotations[HandleT, _HandleSenderName]]:
         """Select each readable handle's confirmed, readable party/envelope name.
 
         Explicit actor scopes keep elevated parents from exposing directory
@@ -273,8 +291,16 @@ class HandleQuerySet(MergeableQuerySet, AngeeQuerySet):
         return handles
 
 
-class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore[misc]
+_HandleManagerBase = AngeeManager.from_queryset(HandleQuerySet)
+
+
+class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
     """Factory + upsert for handles (the contact-point write path)."""
+
+    def get_queryset(self) -> HandleQuerySet[HandleT]:
+        """Preserve the configured queryset and handle row type."""
+
+        return cast(HandleQuerySet[HandleT], super().get_queryset())
 
     def for_user(self, user: Any) -> Any:
         """Return the account's self-claimed handle for internal attribution."""
@@ -341,12 +367,16 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
             "external_id": external_id,
         }.items():
             try:
-                self.model._meta.get_field(name).run_validators(identifier)
+                field = self.model._meta.get_field(name)
+                assert isinstance(field, models.Field)
+                field.run_validators(identifier)
             except ValidationError as error:
                 raise ValidationError({name: error}) from error
         for name in ("display_name", "label"):
             if fields.get(name):
-                fields[name] = fields[name][: self.model._meta.get_field(name).max_length]
+                field = self.model._meta.get_field(name)
+                assert isinstance(field, models.Field) and field.max_length is not None
+                fields[name] = fields[name][: field.max_length]
         handle = self.find_identity(platform=platform, value=value, external_id=external_id)
         if handle is None:
             try:
@@ -566,13 +596,13 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
                 return False
         return self.set_avatar(handle, avatar)
 
-class PartyStatementQuerySet(StatementQuerySet):
+class PartyStatementQuerySet[StatementT: PartyStatementMixin](StatementQuerySet[StatementT]):
     """Party handle scopes; serving callers explicitly authorize both endpoints."""
 
-    def handles(self) -> Any:
+    def handles(self) -> Self:
         return self.current().filter(aspect="handle")
 
-    def members(self) -> Any:
+    def members(self) -> Self:
         """One strongest current stance per subject/member, including weak claims."""
         representative = (
             self.model._base_manager.using(self.db)
@@ -588,7 +618,7 @@ class PartyStatementQuerySet(StatementQuerySet):
         )
         return self.filter(pk=Subquery(representative))
 
-    def to_review(self) -> Any:
+    def to_review(self) -> Self:
         decision = (
             self.model._base_manager.using(self.db)
             .current()
@@ -612,7 +642,7 @@ class PartyStatementQuerySet(StatementQuerySet):
             .exclude(Exists(decision))
         )
 
-    def asserted(self) -> Any:
+    def asserted(self) -> Self:
         """Publish eligible applied directory/person assertions or confirmations."""
         return (
             self.applied()
@@ -633,7 +663,7 @@ class SameAsPair:
     handles: tuple[Any, ...]
 
 
-class PartyQuerySet(MergeableQuerySet, StatementSubjectQuerySet):
+class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQuerySet[PartyT]):
     """Party read scopes: canonical (unmerged) rows and organisation membership."""
 
     def with_display_avatars(self, actor: Any) -> Self:
@@ -845,13 +875,21 @@ class PartyQuerySet(MergeableQuerySet, StatementSubjectQuerySet):
         return result
 
 
-class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[misc]
+_PartyManagerBase = AngeeManager.from_queryset(PartyQuerySet)
+
+
+class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     """Factory for parties, including the idempotent directory-sync ingest.
 
     Also the effective manager of the MTI children (``Person`` / ``Organization``
     inherit the parent's concrete default manager), so the Person-per-user factory
     :meth:`for_user` lives here.
     """
+
+    def get_queryset(self) -> PartyQuerySet[PartyT]:
+        """Retain party scopes and concrete MTI row types through the native factory."""
+
+        return cast(PartyQuerySet[PartyT], super().get_queryset())
 
     def display_avatar(self, party: Any, *, actor: Any) -> Any | None:
         """Return the avatar ``party`` shows ``actor``: its own, else its strongest handle's.
@@ -962,13 +1000,17 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 handles.update((row.pk, row) for row in batch.order_by("pk").lock_if_supported())
             ids = set(party_ids) | {row.party_id for row in handles.values() if row.party_id is not None}
             statements = self.handle_statements().using(self.db)
-            for batch in by_key(handle_model._base_manager.using(self.db), sorted(handles)):
-                ids.update(statements.filter(handle_id__in=batch.values("pk")).values_list("subject_id", flat=True))
+            for statement_handles in by_key(handle_model._base_manager.using(self.db), sorted(handles)):
+                ids.update(
+                    statements.filter(handle_id__in=statement_handles.values("pk")).values_list("subject_id", flat=True)
+                )
             parties: dict[int, Any] = {}
-            for batch in by_key(party_model.objects.using(self.db), sorted(ids)):
-                parties.update((row.pk, row) for row in batch.order_by("pk").lock_if_supported())
-            for batch in by_key(handle_model._base_manager.using(self.db), sorted(handles)):
-                keys = list(statements.filter(handle_id__in=batch.values("pk")).values_list("pk", flat=True))
+            for party_batch in by_key(party_model.objects.using(self.db), sorted(ids)):
+                parties.update((row.pk, row) for row in party_batch.order_by("pk").lock_if_supported())
+            for statement_handles in by_key(handle_model._base_manager.using(self.db), sorted(handles)):
+                keys = list(
+                    statements.filter(handle_id__in=statement_handles.values("pk")).values_list("pk", flat=True)
+                )
                 for rows in by_key(statements, sorted(keys)):
                     list(rows.order_by("pk").lock_if_supported())
         return handles, parties

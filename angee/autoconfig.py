@@ -3,9 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TypedDict
 
-SETTINGS = {
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "ANGEE_CHANGESET_MODEL": str,
+        "ANGEE_IMPL_REGISTRIES": list[str],
+        "ANGEE_HOOKS": list[str],
+        "ANGEE_MERGE_GUARDS": list[str],
+        "SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD": bool,
+        "REBAC_BACKEND": str,
+        "REBAC_LOCAL_BACKEND_STORAGE": str,
+        "REBAC_STRICT_MODE": bool,
+        "REBAC_LINT_BARE_PREFETCH": bool,
+        "REBAC_FIELD_READ_MODE": str,
+        "REBAC_ALLOW_SUDO": bool,
+        "REBAC_SUPERUSER_BYPASS": bool,
+    },
+)
+
+SETTINGS: _Settings = {
     "ANGEE_CHANGESET_MODEL": "provenance.Changeset",
     "ANGEE_IMPL_REGISTRIES": [],
     "ANGEE_HOOKS": ["ANGEE_MERGE_GUARDS"],
@@ -25,7 +43,11 @@ SETTINGS = {
 """Django settings contributed when the model foundation is installed."""
 
 
-def settings(namespace: Mapping[str, Any]) -> dict[str, int]:
+class _DerivedSettings(TypedDict):
+    REBAC_DEPTH_LIMIT: int
+
+
+def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
     """Default permission depth to 8 on SQLite and 16 elsewhere.
 
     Autoconfig supplies environment values before project settings; either

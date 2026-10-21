@@ -49,8 +49,8 @@ def refuse_session_delete(sender: Any, instance: AgentSession, **kwargs: Any) ->
     locked = type(instance).system_queryset(lock=("self",)).filter(pk=instance.pk).first()
     if locked is None:
         return
-    turn_model = locked._meta.get_field("turns").related_model
-    if turn_model.system_queryset().active().filter(session_id=locked.pk).exists():
+    turn_model = type(locked).turn_model()
+    if turn_model.objects.system_context(reason="agents.session.delete").active().filter(session_id=locked.pk).exists():
         raise ValidationError(ACTIVE_TURN_DELETE_MESSAGE)
 
 

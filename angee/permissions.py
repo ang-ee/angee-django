@@ -5,12 +5,22 @@ from __future__ import annotations
 from functools import lru_cache
 
 from django.apps import AppConfig, apps
-from django.core.exceptions import FieldDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from django.utils.text import capfirst
+from rebac.managers import RebacQuerySet
 from rebac.resources import model_for_resource_type, model_resource_type
 from rebac.schema import Definition, FieldBinding, Schema, resolve_schema_path
 from rebac.schema.parser import parse_zed
+
+
+def require_rebac_queryset[M: models.Model](model: type[M]) -> RebacQuerySet[M]:
+    """Preserve the default manager's filters and require its native REBAC query contract."""
+
+    queryset = model._default_manager.get_queryset()
+    if not isinstance(queryset, RebacQuerySet):
+        raise ImproperlyConfigured(f"{model._meta.label} requires a RebacQuerySet default manager.")
+    return queryset
 
 
 def effective_rebac_definition(model: type[models.Model]) -> Definition | None:

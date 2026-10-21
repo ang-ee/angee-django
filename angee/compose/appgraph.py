@@ -112,7 +112,7 @@ class AppGraph:
             for dependency in dependencies_by_name[config.name]:
                 depended_upon.add(aliases.get(dependency, dependency))
         for config in ordered:
-            config.angee_addon_root = config.name in root_name_set
-            config.angee_root_declaration = root_declarations.get(config.name)
-            config.angee_forced = config.name in depended_upon
+            setattr(config, "angee_addon_root", config.name in root_name_set)
+            setattr(config, "angee_root_declaration", root_declarations.get(config.name))
+            setattr(config, "angee_forced", config.name in depended_upon)
         return ordered

@@ -6,14 +6,15 @@ writers must open their own changeset around iteration.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, MutableMapping
-from typing import Any, cast
+from collections.abc import Awaitable, Callable
+from typing import cast
 
 from asgiref.sync import iscoroutinefunction
 from django.core.exceptions import MiddlewareNotUsed
 from django.http import HttpRequest, HttpResponse
 from django.utils.decorators import sync_and_async_middleware
 
+from angee.asgi import ASGIApp, Receive, Scope, Send
 from angee.changesets import changeset, changeset_model_label
 
 FAILED_STATUS = 400
@@ -53,12 +54,6 @@ def ChangesetMiddleware(
             return response
 
     return middleware
-
-
-Scope = MutableMapping[str, Any]
-Receive = Callable[[], Awaitable[MutableMapping[str, Any]]]
-Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
-ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
 
 class ChangesetScopeMiddleware:
