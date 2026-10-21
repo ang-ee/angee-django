@@ -87,12 +87,6 @@ export const formLayoutVariants = tv({
 });
 
 export type FormLayoutRecipeProps = VariantProps<typeof formLayoutVariants>;
-export type FormLayoutDensity = NonNullable<FormLayoutRecipeProps["density"]>;
-export type FormGridColumns = NonNullable<FormLayoutRecipeProps["columns"]>;
-export type FormLayoutPadding = NonNullable<FormLayoutRecipeProps["padding"]>;
-export type FormActionsAlign = NonNullable<FormLayoutRecipeProps["align"]>;
-export type FormFooterBorder = NonNullable<FormLayoutRecipeProps["border"]>;
-export type FormFooterSurface = NonNullable<FormLayoutRecipeProps["surface"]>;
 export type FormFieldSpan = NonNullable<FormLayoutRecipeProps["span"]>;
 
 export type FormGridAreas = readonly string[] | string;

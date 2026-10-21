@@ -59,13 +59,6 @@ export const selectionBarVariants = tv({
 });
 
 type SelectionBarRecipeProps = VariantProps<typeof selectionBarVariants>;
-
-export type SelectionBarSurface = NonNullable<
-  SelectionBarRecipeProps["surface"]
->;
-export type SelectionBarPosition = NonNullable<
-  SelectionBarRecipeProps["position"]
->;
 export type SelectionBarActionTone = NonNullable<
   SelectionBarRecipeProps["actionTone"]
 >;

@@ -500,6 +500,21 @@ describe("React architecture guardrails", () => {
     ]);
   });
 
+  test("i18n manifests declare literal and constant-computed namespaces without translation hooks", () => {
+    const source = ts.createSourceFile("index.ts", `
+      const NAMESPACE = "computed";
+      export default defineBaseAddon({
+        i18n: { literal: messages, "quoted": messages, [NAMESPACE]: messages },
+      });
+    `, ts.ScriptTarget.Latest, true);
+    expect(i18nManifestNamespaces(source)).toEqual(["literal", "quoted", "computed"]);
+    const dynamic = ts.createSourceFile("index.ts", `
+      const NAMESPACE = resolveNamespace();
+      export default defineBaseAddon({ i18n: { [NAMESPACE]: messages } });
+    `, ts.ScriptTarget.Latest, true);
+    expect(i18nManifestNamespaces(dynamic)).toEqual([]);
+  });
+
   test("every repository i18n key is referenced statically or by a typed dynamic family", () => {
     const packages = repositoryPackageRoots();
     const bundles = i18nBundleKeys(packages);
@@ -1255,10 +1270,9 @@ function i18nNamespace(file: string, text: string): string {
   const packageRootPath = resolve(dirname(file), "..");
   const manifestNamespaces = sourceFiles(packageRootPath).flatMap((sourceFile) => {
     if (isTestFile(sourceFile) || isStoryFile(sourceFile)) return [];
-    const sourceText = readFileSync(sourceFile, "utf8");
-    return [...sourceText.matchAll(/\bi18n\s*:\s*\{\s*(?:["']([^"']+)["']|([a-zA-Z][\w-]*))\s*:/g)]
-      .map((match) => match[1] ?? match[2])
-      .filter((namespace): namespace is string => Boolean(namespace));
+    return i18nManifestNamespaces(ts.createSourceFile(
+      sourceFile, readFileSync(sourceFile, "utf8"), ts.ScriptTarget.Latest, true,
+    ));
   });
   const namespaces = [...new Set(manifestNamespaces)];
   if (namespaces.length === 1) return namespaces[0] ?? "";
@@ -1266,6 +1280,38 @@ function i18nNamespace(file: string, text: string): string {
     `Could not resolve one owning i18n namespace for ${workspaceRelative(file)}; `
     + "declare it with createNamespaceT or the addon's i18n manifest contribution",
   );
+}
+
+function i18nManifestNamespaces(source: ts.SourceFile): string[] {
+  const constants = new Map<string, string>();
+  for (const statement of source.statements) {
+    if (!ts.isVariableStatement(statement) || !(statement.declarationList.flags & ts.NodeFlags.Const)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (ts.isIdentifier(declaration.name) && declaration.initializer && ts.isStringLiteralLike(declaration.initializer)) {
+        constants.set(declaration.name.text, declaration.initializer.text);
+      }
+    }
+  }
+  const namespaces: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isPropertyAssignment(node) && (ts.isIdentifier(node.name) || ts.isStringLiteralLike(node.name))
+      && node.name.text === "i18n" && ts.isObjectLiteralExpression(node.initializer)) {
+      for (const property of node.initializer.properties) {
+        const name = property.name;
+        if (!name) continue;
+        if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) namespaces.push(name.text);
+        else if (ts.isComputedPropertyName(name)) {
+          const expression = name.expression;
+          const namespace = ts.isStringLiteralLike(expression) ? expression.text
+            : ts.isIdentifier(expression) ? constants.get(expression.text) : undefined;
+          if (namespace) namespaces.push(namespace);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return namespaces;
 }
 
 function i18nSourceTexts(

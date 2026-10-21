@@ -41,8 +41,6 @@ export const switchVariants = tv({
 
 type SwitchRecipeProps = VariantProps<typeof switchVariants>;
 
-export type SwitchSize = NonNullable<SwitchRecipeProps["size"]>;
-
 export type SwitchRootProps = Omit<BaseSwitchRootProps, "className"> &
   SwitchRecipeProps & Pick<WidgetControlSurfaceProps, "presentation"> & {
     className?: string;

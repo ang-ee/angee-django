@@ -17,7 +17,6 @@ from angee.messaging_integrate_imap.backend import (
     ImapSamplePreview,
     ImapSamplePreviewRequest,
 )
-from angee.messaging_integrate_imap.parser import EMBEDDED_MESSAGE_MAX_BYTES, expand_embedded_message
 
 
 class ImapChannelSampling(models.Model):
@@ -153,36 +152,4 @@ class ImapChannelSampling(models.Model):
                 imported_uids=imported_uids,
                 missing_uids=sorted(set(uids) - set(imported_uids)),
                 flags_unchanged=flags_unchanged,
-            )
-
-    def expand_retained_imap_part(self, part: Any, *, actor: Any) -> tuple[Any, ...]:
-        """Append bounded evidence below this Channel's retained RFC 822 Part.
-
-        Existing Message, Part and File identities remain unchanged. The IMAP
-        adapter owns RFC 822 decoding; Messaging owns the locked, idempotent
-        descendant write.
-        """
-
-        with actor_context(actor):
-            current = type(self)._base_manager.get(pk=self.pk)
-            current.require_access("write")
-            part_model = apps.get_model("messaging", "Part")
-            if not isinstance(part, part_model) or part.pk is None:
-                raise ValidationError("Embedded expansion requires a retained Message Part.")
-            retained = part_model._base_manager.select_related("message", "file").get(pk=part.pk)
-            if (
-                retained.message.channel_id != current.pk
-                or str(retained.type).lower() != "message/rfc822"
-                or retained.file_id is None
-            ):
-                raise ValidationError("Select an RFC 822 Part retained by this IMAP Channel.")
-            retained.file.require_access("read")
-            with retained.file.open_stream() as stream:
-                raw = stream.read(EMBEDDED_MESSAGE_MAX_BYTES + 1)
-            child = expand_embedded_message(raw)
-            if child is None:
-                return ()
-            return apps.get_model("messaging", "Message").objects.expand_retained_part(
-                retained,
-                (child,),
             )

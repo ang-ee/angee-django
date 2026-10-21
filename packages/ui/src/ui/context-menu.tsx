@@ -16,18 +16,6 @@ import { cn } from "../lib/cn";
 import {
   createMenuRecipe,
   createStyledMenuParts,
-  type MenuCheckboxItemIndicatorProps,
-  type MenuCheckboxItemProps,
-  type MenuContentProps,
-  type MenuItemProps,
-  type MenuItemVariant,
-  type MenuLabelProps,
-  type MenuLinkItemProps,
-  type MenuRadioItemIndicatorProps,
-  type MenuRadioItemProps,
-  type MenuSeparatorProps,
-  type MenuShortcutProps,
-  type MenuSubmenuTriggerProps,
 } from "./menu-parts";
 import { PORTALED_CONTROL_LAYER } from "./popover";
 
@@ -39,8 +27,6 @@ import { PORTALED_CONTROL_LAYER } from "./popover";
 export const contextMenuVariants = createMenuRecipe({
   trigger: "outline-none focus-visible:focus-ring data-[popup-open]:focus-ring",
 });
-
-export type ContextMenuItemVariant = MenuItemVariant;
 export type ContextMenuRootProps = BaseContextMenuRootProps;
 export type ContextMenuPortalProps = BaseContextMenuPortalProps;
 export type ContextMenuPositionerProps = Omit<
@@ -129,69 +115,46 @@ ContextMenuTrigger.displayName = "ContextMenuTrigger";
 
 // The styled parts shared with DropdownMenu, built over the context recipe.
 const parts = createStyledMenuParts(contextMenuVariants, "ContextMenu");
-
-export type ContextMenuContentProps = MenuContentProps;
 /**
  * @owner ContextMenu
  */
 export const ContextMenuContent = parts.Content;
-
-export type ContextMenuItemProps = MenuItemProps;
 /**
  * @owner ContextMenu
  */
 export const ContextMenuItem = parts.Item;
-
-export type ContextMenuLinkItemProps = MenuLinkItemProps;
 /**
  * @owner ContextMenu
  */
 export const ContextMenuLinkItem = parts.LinkItem;
-
-export type ContextMenuCheckboxItemProps = MenuCheckboxItemProps;
 /**
  * @owner ContextMenu
  */
 export const ContextMenuCheckboxItem = parts.CheckboxItem;
-
-export type ContextMenuCheckboxItemIndicatorProps =
-  MenuCheckboxItemIndicatorProps;
 /**
  * @owner ContextMenu
  */
 export const ContextMenuCheckboxItemIndicator = parts.CheckboxItemIndicator;
-
-export type ContextMenuRadioItemProps = MenuRadioItemProps;
 /**
  * @owner ContextMenu
  */
 export const ContextMenuRadioItem = parts.RadioItem;
-
-export type ContextMenuRadioItemIndicatorProps = MenuRadioItemIndicatorProps;
 /**
  * @owner ContextMenu
  */
 export const ContextMenuRadioItemIndicator = parts.RadioItemIndicator;
-
-export type ContextMenuSubmenuTriggerProps = MenuSubmenuTriggerProps;
 /**
  * @owner ContextMenu
  */
 export const ContextMenuSubmenuTrigger = parts.SubmenuTrigger;
-
-export type ContextMenuLabelProps = MenuLabelProps;
 /**
  * @owner ContextMenu
  */
 export const ContextMenuLabel = parts.Label;
-
-export type ContextMenuSeparatorProps = MenuSeparatorProps;
 /**
  * @owner ContextMenu
  */
 export const ContextMenuSeparator = parts.Separator;
-
-export type ContextMenuShortcutProps = MenuShortcutProps;
 /**
  * @owner ContextMenu
  */

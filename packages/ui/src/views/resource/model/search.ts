@@ -220,10 +220,6 @@ function parseResourceViewSort(value: string): ResourceViewSort | null {
   return { field, dir };
 }
 
-export function serializeResourceViewSort(sort: ResourceViewSort): string {
-  return `${sort.field}:${sort.dir}`;
-}
-
 function parseResourceViewGroup(value: string): ResourceViewGroup | null {
   if (!value) return null;
   const [field, granularity, extra] = value.split(":");

@@ -9,7 +9,7 @@ import type {
   ScrollAreaViewportProps as BaseScrollAreaViewportProps,
 } from "@base-ui/react/scroll-area";
 
-import { tv, type VariantProps } from "../lib/variants";
+import { tv } from "../lib/variants";
 
 /**
  * @kind token
@@ -26,8 +26,6 @@ export const scrollAreaVariants = tv({
     corner: "bg-transparent",
   },
 });
-
-export type ScrollAreaRecipeProps = VariantProps<typeof scrollAreaVariants>;
 
 export type ScrollAreaScrollbarPolicy =
   | "both"

@@ -15,16 +15,9 @@ import {
   DialogRoot,
   DialogTitle,
   DialogTrigger,
-  type DialogBackdropProps,
   type DialogBodyProps,
-  type DialogCloseProps,
-  type DialogDescriptionProps,
   type DialogFooterProps,
   type DialogHeaderProps,
-  type DialogPortalProps,
-  type DialogRootProps,
-  type DialogTitleProps,
-  type DialogTriggerProps,
 } from "./dialog";
 
 /**
@@ -66,18 +59,9 @@ export const drawerVariants = tv({
 });
 
 type DrawerRecipeProps = VariantProps<typeof drawerVariants>;
-
-export type DrawerSide = NonNullable<DrawerRecipeProps["side"]>;
-export type DrawerRootProps<Payload = unknown> = DialogRootProps<Payload>;
-export type DrawerTriggerProps<Payload = unknown> = DialogTriggerProps<Payload>;
-export type DrawerPortalProps = DialogPortalProps;
-export type DrawerBackdropProps = DialogBackdropProps;
 export type DrawerHeaderProps = DialogHeaderProps;
 export type DrawerBodyProps = DialogBodyProps;
 export type DrawerFooterProps = DialogFooterProps;
-export type DrawerTitleProps = DialogTitleProps;
-export type DrawerDescriptionProps = DialogDescriptionProps;
-export type DrawerCloseProps = DialogCloseProps;
 
 /**
  * @owner Drawer
@@ -188,19 +172,3 @@ export const Drawer = Object.assign(DrawerRoot, {
  * @kind primitive
  */
 export const Sheet = Drawer;
-/**
- * @owner Sheet
- */
-export const SheetContent = DrawerContent;
-/**
- * @owner Sheet
- */
-export const SheetHeader = DrawerHeader;
-/**
- * @owner Sheet
- */
-export const SheetBody = DrawerBody;
-/**
- * @owner Sheet
- */
-export const SheetFooter = DrawerFooter;

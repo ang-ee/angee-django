@@ -21,11 +21,6 @@ class FeedFollowQuerySet(AngeeQuerySet[Any]):
 
         return cast(FeedFollowQuerySet, self.filter(ended_at__isnull=True))
 
-    def for_handle(self, handle: Any) -> FeedFollowQuerySet:
-        """Return the follows a given handle subscribes through."""
-
-        return cast(FeedFollowQuerySet, self.filter(handle=handle))
-
     def for_feed(self, feed: Any) -> FeedFollowQuerySet:
         """Return the follows subscribed to a given feed."""
 

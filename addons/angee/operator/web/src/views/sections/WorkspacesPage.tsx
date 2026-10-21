@@ -123,7 +123,7 @@ export function WorkspaceSources({ sources, title, emptyContent }: WorkspaceSour
           : <StatusBadge value={source.state} />,
       },
       { field: "branch", header: t("workspaceSources.column.branch"), render: (source) => source.branch ?? source.ref ?? source.currentRef },
-      { field: "drift", header: t("workspaceSources.column.drift"), render: (source) => workspaceSourceDrift(source, t) },
+      { field: "drift", header: t("workspaceSources.column.drift"), render: workspaceSourceDrift },
       { field: "path", header: t("workspaceSources.column.path"), render: (source) => <Code truncate>{source.path}</Code> },
     ],
     [t],
@@ -144,7 +144,7 @@ export function WorkspaceSources({ sources, title, emptyContent }: WorkspaceSour
   );
 }
 
-function workspaceSourceDrift(source: WorkspaceSourceStatus, t: (key: string) => string): ReactNode {
+function workspaceSourceDrift(source: WorkspaceSourceStatus): ReactNode {
   if (source.error) return <Code tone="danger" truncate>{source.error}</Code>;
   if (source.dirty) return <StatusBadge value="dirty" />;
   if (source.ahead || source.behind) return <span className="tabular-nums">{formatDrift(source.ahead, source.behind)}</span>;

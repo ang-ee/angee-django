@@ -5,10 +5,6 @@ export function resourceLabel(resourceType: string): string {
   return titleCase(slash >= 0 ? resourceType.slice(slash + 1) : resourceType);
 }
 
-export function userLabel(user: { username: string; email: string }): string {
-  return user.email ? `${user.username} <${user.email}>` : user.username;
-}
-
 export interface UserDisplayNameInput {
   display_name?: string | null;
   username?: string | null;

@@ -8,12 +8,10 @@ request/auth context helpers shared between the permission and iam's resolvers.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any, ClassVar, cast
 
 import strawberry
 from django.contrib.auth.models import AnonymousUser
-from django.db import models
 from django.http import HttpRequest
 from rebac import ObjectRef, PermissionDenied, current_actor
 from strawberry.permission import BasePermission
@@ -45,17 +43,6 @@ def session_user(info: strawberry.Info) -> Any:
     if not is_authenticated(user):
         raise PermissionDenied("Authentication required.")
     return user
-
-
-def read_resource_queryset(
-    model: type[models.Model],
-) -> Callable[[strawberry.Info], models.QuerySet[Any]]:
-    """Bind a read-only GraphQL resource to its signed-in REBAC scope."""
-
-    def get_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-        return model.objects.with_actor(session_user(info)).with_action("read")
-
-    return get_queryset
 
 
 def is_platform_admin(user: Any) -> bool:

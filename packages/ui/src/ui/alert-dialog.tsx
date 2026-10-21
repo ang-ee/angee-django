@@ -22,14 +22,7 @@ import {
   DialogHeader,
   DialogPortal,
   DialogTitle,
-  type DialogBackdropProps,
-  type DialogBodyProps,
   type DialogContentProps,
-  type DialogDescriptionProps,
-  type DialogFooterProps,
-  type DialogHeaderProps,
-  type DialogPortalProps,
-  type DialogTitleProps,
 } from "./dialog";
 
 /**
@@ -85,17 +78,6 @@ export const AlertDialogTitle = DialogTitle;
  * @owner AlertDialog
  */
 export const AlertDialogDescription = DialogDescription;
-
-export type AlertDialogTriggerProps = React.ComponentPropsWithoutRef<
-  typeof BaseAlertDialog.Trigger
->;
-export type AlertDialogPortalProps = DialogPortalProps;
-export type AlertDialogBackdropProps = DialogBackdropProps;
-export type AlertDialogHeaderProps = DialogHeaderProps;
-export type AlertDialogBodyProps = DialogBodyProps;
-export type AlertDialogFooterProps = DialogFooterProps;
-export type AlertDialogTitleProps = DialogTitleProps;
-export type AlertDialogDescriptionProps = DialogDescriptionProps;
 
 export type AlertDialogContentProps = DialogContentProps & {
     className?: string;

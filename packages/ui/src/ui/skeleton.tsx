@@ -34,9 +34,6 @@ export const skeletonVariants = tv({
 
 type SkeletonRecipeProps = VariantProps<typeof skeletonVariants>;
 
-export type SkeletonShape = NonNullable<SkeletonRecipeProps["shape"]>;
-export type SkeletonSize = NonNullable<SkeletonRecipeProps["size"]>;
-
 export type SkeletonProps = React.HTMLAttributes<HTMLDivElement> &
   SkeletonRecipeProps & {
     decorative?: boolean;

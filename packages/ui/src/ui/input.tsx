@@ -116,8 +116,6 @@ type InputRecipeProps = VariantProps<typeof inputVariants>;
 type SearchInputRecipeProps = VariantProps<typeof searchInputVariants>;
 
 export type InputSize = NonNullable<InputRecipeProps["size"]>;
-export type SearchInputSize = NonNullable<SearchInputRecipeProps["size"]>;
-export type SearchInputSurface = NonNullable<SearchInputRecipeProps["surface"]>;
 
 export type InputProps = Omit<
   React.InputHTMLAttributes<HTMLInputElement>,

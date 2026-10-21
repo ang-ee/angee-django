@@ -30,9 +30,6 @@ export const textareaVariants = tv({
 
 type TextareaRecipeProps = VariantProps<typeof textareaVariants>;
 
-export type TextareaSize = NonNullable<TextareaRecipeProps["size"]>;
-export type TextareaResize = NonNullable<TextareaRecipeProps["resize"]>;
-
 export type TextareaProps = Omit<
   React.TextareaHTMLAttributes<HTMLTextAreaElement>,
   "className" | "color"

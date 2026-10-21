@@ -40,8 +40,6 @@ export const avatarStackVariants = tv({
 });
 
 type AvatarRecipeProps = VariantProps<typeof avatarVariants>;
-
-export type AvatarSize = NonNullable<AvatarRecipeProps["size"]>;
 export type AvatarColorSlot = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 export type AvatarImageProps = Omit<BaseAvatarImageProps, "className"> & {

@@ -765,7 +765,6 @@ export type MessageReaderData = DocumentType<typeof MessageReaderFields>;
 
 export type RecordThreadPayload = DocumentType<typeof RecordThreadDocument>["record_thread"];
 export type RecordMessageRow = NonNullable<RecordThreadPayload["messages"]>[number];
-export type RecordNotificationRow = NonNullable<RecordThreadPayload["notifications"]>[number];
 export type SuggestedRecipientRow =
   NonNullable<RecordThreadPayload["suggested_recipients"]>[number];
 export type RecipientUserRow =

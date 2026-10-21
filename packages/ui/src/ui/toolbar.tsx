@@ -51,7 +51,6 @@ export const toolbarVariants = tv({
 });
 
 export type ToolbarRecipeProps = VariantProps<typeof toolbarVariants>;
-export type ToolbarSurface = NonNullable<ToolbarRecipeProps["surface"]>;
 
 export type ToolbarRootProps = Omit<BaseToolbarRootProps, "className"> &
   Pick<ToolbarRecipeProps, "surface"> & {

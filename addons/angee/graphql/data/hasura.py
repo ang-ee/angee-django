@@ -1278,7 +1278,6 @@ class _FilterInputExtension(FieldExtension):
     def __init__(self, base: type, donor: type | None, aliases: Mapping[str, str]) -> None:
         self.base = base
         self.aliases = aliases
-        self.filter_aliases = frozenset(aliases.values())
         self.combined = base if donor is None else dataclasses.make_dataclass(
             f"{base.__name__}WithExpressions", [], bases=(base, donor), kw_only=True,
         )
@@ -1960,12 +1959,6 @@ def attach_hasura_resource_metadata(
     attach_data_resource_contribution(resource.query, contribution)
     attach_data_resource_contribution(resource.mutation, contribution)
     return resource
-
-
-def _parent_write_exclude(lines: HasuraLines | None) -> tuple[str, ...]:
-    """Return parent create-field wire names to skip (id + the lines envelope)."""
-
-    return ("id",) if lines is None else ("id", lines.field)
 
 
 def _line_metadata(

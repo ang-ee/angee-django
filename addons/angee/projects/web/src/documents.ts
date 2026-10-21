@@ -69,4 +69,3 @@ export const LogRecordTaskDocument = graphql(`
 
 export type RecordTasksPayload = DocumentType<typeof RecordTasksDocument>;
 export type RecordTaskRow = RecordTasksPayload["record_tasks"][number];
-export type ActivityTypeRow = RecordTasksPayload["activity_types"][number];

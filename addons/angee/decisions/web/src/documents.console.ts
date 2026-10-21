@@ -19,14 +19,6 @@ export const DecisionDocument = graphql(`
   }
 `);
 
-export const RecordDecisionAnswersDocument = graphql(`
-  query RecordDecisionAnswers($model: String!, $id: ID!, $limit: Int!) {
-    record_decision_answers(model: $model, id: $id, limit: $limit) {
-      ...DecisionCardFields
-    }
-  }
-`);
-
 export type Decision = DocumentType<typeof DecisionFields>;
 
 export const DecideDocument = graphql(`

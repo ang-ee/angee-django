@@ -40,9 +40,6 @@ export const toggleVariants = tv({
 
 type ToggleRecipeProps = VariantProps<typeof toggleVariants>;
 
-export type ToggleVariant = NonNullable<ToggleRecipeProps["variant"]>;
-export type ToggleSize = NonNullable<ToggleRecipeProps["size"]>;
-
 export type ToggleProps = Omit<BaseToggleProps<string>, "className"> &
   Pick<ToggleRecipeProps, "variant" | "size"> & {
     className?: string;
@@ -67,8 +64,3 @@ export const Toggle = React.forwardRef<HTMLButtonElement, ToggleProps>(
   },
 );
 Toggle.displayName = "Toggle";
-
-/**
- * @owner Toggle
- */
-export const ToggleRoot = Toggle;

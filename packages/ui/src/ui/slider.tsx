@@ -66,9 +66,6 @@ export const sliderVariants = tv({
 });
 
 export type SliderRecipeProps = VariantProps<typeof sliderVariants>;
-export type SliderSize = NonNullable<SliderRecipeProps["size"]>;
-export type SliderTone = NonNullable<SliderRecipeProps["tone"]>;
-export type SliderOrientation = NonNullable<SliderRecipeProps["orientation"]>;
 export type SliderValueType = number | readonly number[];
 
 export type SliderRootProps<

@@ -9,8 +9,6 @@ export const REGION_PLACES = [
   "page-toolbar", "pane-toolbar-band", "reader", "record-header", "section-navigation",
   "status-line", "top-bar", "user-menu",
 ] as const;
-export type ComponentKind = (typeof COMPONENT_KINDS)[number];
-export type RegionPlace = (typeof REGION_PLACES)[number];
 
 const Kind = v.nullable(v.picklist(COMPONENT_KINDS));
 export const CatalogEntrySchema = v.pipe(v.strictObject({
@@ -26,7 +24,6 @@ export const CatalogEntrySchema = v.pipe(v.strictObject({
 }), v.check(entry => (entry.kind === "region") === Boolean(entry.region), "A region must name a shell place."),
 v.check(entry => entry.kind !== null || Boolean(entry.reason), "Infrastructure requires an explicit reason."));
 export type CatalogEntry = v.InferOutput<typeof CatalogEntrySchema>;
-export type CatalogStatus = CatalogEntry["status"];
 export const CatalogSchema = v.array(CatalogEntrySchema);
 
 /** The composition graph uses the same ontology as the export catalog. */

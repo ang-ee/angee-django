@@ -42,4 +42,3 @@ export const enPortfolioMessages: Record<string, string> = {
 };
 
 export const usePortfolioT = createNamespaceT("portfolio", enPortfolioMessages);
-export type PortfolioT = ReturnType<typeof usePortfolioT>;

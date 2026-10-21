@@ -237,13 +237,3 @@ export type IAMGrant = NonNullable<
 /** One `rebac_schema` resource entry, derived from the `IamRebacSchema` selection. */
 export type IAMResourceSchema =
   DocumentType<typeof IamRebacSchema>["rebac_schema"][number];
-
-/** A relation within a `rebac_schema` resource. */
-export type IAMRelationSchema = IAMResourceSchema["relations"][number];
-
-/** A permission within a `rebac_schema` resource. */
-export type IAMPermissionSchema = IAMResourceSchema["permissions"][number];
-
-export type IAMRevokeRoleVariables = DocumentVariables<typeof IamRevokeRole>;
-
-export type IAMGrantRoleVariables = DocumentVariables<typeof IamGrantRole>;

@@ -69,14 +69,6 @@ class VcsBridge(Bridge):
         backend_class = cast(type[VCSBackend], self.resolve_impl("backend_class"))
         return backend_class(self)
 
-    def repositories_by_org(self) -> dict[str, list[Any]]:
-        """Return every visible repository grouped and sorted by owning org."""
-
-        groups: dict[str, list[Any]] = {}
-        for descriptor in self.backend.ls_repos():
-            groups.setdefault(descriptor.org, []).append(descriptor)
-        return {org: sorted(repos, key=lambda item: item.name) for org, repos in sorted(groups.items())}
-
     def discover(self, source: Any, *, marker: str, parse: Callable[[bytes], dict[str, Any]]) -> list[dict[str, Any]]:
         """Return one descriptor per directory under ``source`` bearing ``marker``.
 

@@ -31,11 +31,6 @@ export const separatorVariants = tv({
 
 type SeparatorRecipeProps = VariantProps<typeof separatorVariants>;
 
-export type SeparatorOrientation = NonNullable<
-  SeparatorRecipeProps["orientation"]
->;
-export type SeparatorTone = NonNullable<SeparatorRecipeProps["tone"]>;
-
 export type SeparatorProps = Omit<
   BaseSeparatorProps,
   "className" | "orientation"

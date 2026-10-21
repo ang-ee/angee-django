@@ -69,18 +69,8 @@ export const POPUP_ITEM = popoverVariants().item();
  * @kind token
  */
 export const POPUP_LIST = popoverVariants().list();
-/**
- * @kind token
- */
-export const MODAL_BASE = popoverVariants().modal();
-/**
- * @kind token
- */
-export const MODAL_BACKDROP = popoverVariants().modalBackdrop();
 
 type PopoverRecipeProps = VariantProps<typeof popoverVariants>;
-
-export type PopoverSurface = NonNullable<PopoverRecipeProps["surface"]>;
 export type PopoverRootProps<Payload = unknown> =
   BasePopoverRootProps<Payload>;
 export type PopoverTriggerProps<Payload = unknown> =
@@ -95,9 +85,6 @@ export type PopoverPositionerProps = Omit<
 export type PopoverArrowProps = BasePopoverArrowProps;
 export type PopoverBackdropProps = BasePopoverBackdropProps;
 export type PopoverCloseProps = BasePopoverCloseProps;
-export type PopoverViewportProps = React.ComponentPropsWithoutRef<
-  typeof BasePopover.Viewport
->;
 
 /**
  * @owner Popover

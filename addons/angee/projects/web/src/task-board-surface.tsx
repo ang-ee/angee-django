@@ -5,7 +5,7 @@ import * as React from "react";
 import { TASK_MODEL } from "./resources";
 import { useTaskFormDeclaration, useTaskRowHref, type TaskActionRow } from "./task-actions";
 
-export interface TaskBoardSurfaceProps<TRow extends TaskActionRow> {
+export interface TaskBoardSurfaceProps {
   children: React.ReactNode;
   createDefaults?: Record<string, unknown>;
 }
@@ -17,7 +17,7 @@ export interface TaskBoardSurfaceProps<TRow extends TaskActionRow> {
 export function TaskBoardSurface<TRow extends TaskActionRow>({
   children,
   createDefaults,
-}: TaskBoardSurfaceProps<TRow>): React.ReactElement {
+}: TaskBoardSurfaceProps): React.ReactElement {
   const navigate = useNavigate();
   const taskHref = useResourceRecordHref(TASK_MODEL);
   const [creating, setCreating] = React.useState(false);

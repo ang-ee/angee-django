@@ -51,8 +51,6 @@ export type NavLinkRecipeProps = VariantProps<typeof navLinkVariants>;
 
 export type NavLinkAffordance = NonNullable<NavLinkRecipeProps["affordance"]>;
 
-export type NavLinkVariant = NonNullable<NavLinkRecipeProps["variant"]>;
-
 export type NavLinkState = {
   active: boolean;
   disabled: boolean;
