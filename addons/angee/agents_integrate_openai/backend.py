@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, ClassVar
-
-from openai import APIConnectionError
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.profiles.openai import OpenAIModelProfile
-from pydantic_ai.providers.openai import OpenAIProvider
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from angee.agents.backends import InferenceModelSpec
 from angee.agents.sdk_backends import SDKInferenceBackend
+
+if TYPE_CHECKING:
+    from pydantic_ai.models.openai import OpenAIChatModel
 
 DEFAULT_BROKER_NAME = "openai"
 _MAX_TOKEN_FIELDS = frozenset({"max_tokens", "max_completion_tokens"})
@@ -24,7 +22,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     label = "OpenAI"
     icon = "openai"
     api_key_env: ClassVar[tuple[str, ...]] = ("OPENAI_API_KEY",)
-    transient_error_types: ClassVar[tuple[type[BaseException], ...]] = (APIConnectionError,)
+    transient_error_paths = ("openai.APIConnectionError",)
     defaults = {
         "vendor": "openai",
         "name": "OpenAI",
@@ -91,6 +89,11 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
 
     def _build_model(self, handle: str, client: Any) -> OpenAIChatModel:
         """Use native protocol conversion, including the configured token-limit field."""
+
+        # The SDK adapter loads with the model it binds, not with the catalogue.
+        from pydantic_ai.models.openai import OpenAIChatModel
+        from pydantic_ai.profiles.openai import OpenAIModelProfile
+        from pydantic_ai.providers.openai import OpenAIProvider
 
         return OpenAIChatModel(
             handle,
