@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import pytest
+from django.db import models
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.evidence import FactAuthority
 from angee.models import SourceKind
 from tests.conftest import create_platform_admin, create_user
 from tests.extcontrib.models import Claimed, ClaimedBilling, ClaimedSource, ClaimedStatementQuerySet
+from tests.statement_models import Ledger
 
 
 def test_the_source_declaration_finalizes_one_table_carrying_every_donor_aspect() -> None:
@@ -104,10 +106,6 @@ def test_a_person_create_states_no_group_left_empty(composed_tables: None) -> No
 
 def test_a_declaration_names_its_model_and_copies_money_without_its_currency() -> None:
     """``model_name`` sidesteps a taken ``<Subject>Statement``; a money column copies as a plain decimal."""
-
-    from django.db import models
-
-    from tests.statement_models import Ledger
 
     generated = Ledger.statements.model
     assert generated.__name__ == "LedgerStance"
