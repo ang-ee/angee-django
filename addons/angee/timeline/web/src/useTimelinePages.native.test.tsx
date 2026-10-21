@@ -49,7 +49,7 @@ test("header and rail share a read and subscribe to the exact record", async () 
   expect(custom).toHaveBeenCalledTimes(2);
 });
 
-test("an unsaved record neither reads the ledger nor subscribes", async () => {
+test("an unsaved record neither reads the timeline nor subscribes", async () => {
   const custom = vi.fn();
   const subscribe = vi.fn<Subscribe>(() => "timeline-subscription");
   function Read() { useTimelinePages({ model: "notes.Note", id: "" }); return null; }

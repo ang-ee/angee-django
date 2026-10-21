@@ -10,7 +10,7 @@ export { TIMELINE_FOCUS_NEEDS_ME, TIMELINE_KINDS_CONTAINER, TIMELINE_TAB_ID, Rec
 /**
  * The record's one chronology: the Timeline tab, first in the context aside, on
  * every model-backed record. Kinds present themselves through `timeline#kinds`,
- * the container this addon owns; their Python kinds project the ledger the read pages.
+ * the container this addon owns; their Python kinds contribute the source queries the read pages.
  * The Needs you header control counts the lines that wait on the viewer.
  */
 export default defineBaseAddon({

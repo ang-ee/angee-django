@@ -914,10 +914,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   chrome's server choices, revision and action gate; [Task fields](../../addons/angee/projects/web/src/task-actions.tsx)
   and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
 - **Records have one chronology.** The timeline addon owns the `Timeline`
-  tab, the `timeline.Event` ledger and the `timeline` read that pages it
-  behind one cursor; each addon contributes a Python
-  [timeline kind](../../addons/angee/timeline/kinds.py), reconciled through the
-  owner's committed change publications, and a `timeline#kinds` presentation (label,
+  tab and the `timeline` read, which pages a SQL `UNION ALL` of native source
+  queries behind one cursor. Each addon contributes a Python
+  [timeline kind](../../addons/angee/timeline/kinds.py) and a `timeline#kinds` presentation (label,
   glyph, verb, target). A line is a pointer: one sentence, actor, time, one
   verb, never a body, never an action. A run folds its decisions and changes
   into its line; the run drill-in shows one run with its own Stop. The same
@@ -929,8 +928,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   open decisions and tags marked for attention in one badge cluster. An
   attention tag's normalized name is its `statusTones` key, declared once by
   the addon that owns that vocabulary; there is no attention-column tone map.
-  The ledger invalidates related records through their declared change feeds
-  after reconciliation; the timeline fragment subscribes to its exact record,
+  Owner changes invalidate related records through their declared change feeds
+  after commit; the timeline fragment subscribes to its exact record,
   with no list of foreign source models. Batched authored reads carry the same
   exact-record interests as singleton reads, without polling.
 - **Unreadable projected fields remain legible as restrictions.** A record row's
@@ -1373,9 +1372,10 @@ never picks its own font size, card or header row.
 
 Each `timeline#kinds` child presents one kind a Python timeline kind
 implements; [the kind contract](../../addons/angee/timeline/kinds.py) owns its
-source models, projections, read policy and live attention predicate. Published
-owner changes reconcile the `timeline.Event` ledger after commit; the read pages
-that table through the record's and each target owner's read policies:
+source models, source query, presentation and live attention predicate. The read
+combines owner querysets with SQL `UNION ALL`, applying the record's and each
+target owner's read policies before pagination. Published owner changes
+invalidate open record reads after commit:
 
 ```ts
 interface TimelineKindContent {
@@ -1387,7 +1387,7 @@ interface TimelineKindContent {
 }
 ```
 
-The rail composes lines from the ledger read and these presentations. Semantic
+The rail composes lines from the union read and these presentations. Semantic
 grouping (a run's decisions and changes counted on the run's line) is the
 read's: kinds name a fold target, and readable events on the same record are
 counted beneath lines targeting that row. Top-level lines page independently of

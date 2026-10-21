@@ -1085,7 +1085,7 @@ def test_dev_stack_has_explicit_lifecycle_job_graph() -> None:
         "sh",
         "-c",
         "uv run python -m angee.compose.bootstrap && uv sync "
-        "&& exec uv run python manage.py angee provision --demo --force-rebac --after-if-installed timeline_backfill",
+        "&& exec uv run python manage.py angee provision --demo --force-rebac",
     ]
     assert stack["jobs"]["provision"]["workdir"] == "source://app"
     assert stack["jobs"]["provision"]["env"]["ANGEE_PROJECT_DIR"] == "."
@@ -1969,11 +1969,11 @@ def test_production_provision_loads_no_demo_data() -> None:
 
     production = _render_dev_stack(_runtime_mode="docker", serve_mode="production")["jobs"]["provision"]
     assert production["command"][-1].endswith(
-        "python manage.py angee provision --force-rebac --after-if-installed timeline_backfill",
+        "python manage.py angee provision --force-rebac",
     )
     development = _render_dev_stack(_runtime_mode="docker")["jobs"]["provision"]
     assert development["command"][-1].endswith(
-        "python manage.py angee provision --demo --force-rebac --after-if-installed timeline_backfill",
+        "python manage.py angee provision --demo --force-rebac",
     )
 
 

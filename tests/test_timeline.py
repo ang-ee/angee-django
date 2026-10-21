@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from io import StringIO
 
 import pytest
 from django.apps import apps
-from django.core.management import call_command
+from django.db import connection
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from rebac import actor_context
 
 from angee.changesets import changeset as open_changeset
 from angee.graphql.publishing import mute_changes
 from angee.identity import public_id_of
 from angee.timeline import schema as timeline_schema
-from angee.timeline.events import sync_events
 from angee.timeline.kinds import Cursor, timeline_kinds
+from angee.timeline.reading import Timeline
 from tests.conftest import addon_schema, create_platform_admin, execute_schema, result_data, vault_for
 
 KINDS = [
@@ -66,7 +66,7 @@ def test_kinds_resolve_once_each_in_sequence_order() -> None:
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(ANGEE_TIMELINE_KINDS=KINDS)
-def test_the_ledger_pages_committed_records_and_counts_the_whole_scope(composed_permissions: None) -> None:
+def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: None) -> None:
     owner = create_platform_admin("timeline-owner")
     with open_changeset(fresh=True, change_reason="vault"):
         vault = vault_for(owner)
@@ -75,7 +75,10 @@ def test_the_ledger_pages_committed_records_and_counts_the_whole_scope(composed_
             vault.name = name
             vault.save(update_fields=["name"])
 
-    data = read_timeline(vault, owner)
+    with CaptureQueriesContext(connection) as queries:
+        data = read_timeline(vault, owner)
+    page_queries = [query["sql"] for query in queries if "UNION ALL" in query["sql"] and "LIMIT 26" in query["sql"]]
+    assert len(page_queries) == 1
     page = data["timeline"]
     assert [kind["id"] for kind in page["kinds"]] == [
         "workflows.run", "decisions.decision", "provenance.change", "projects.task", "messaging.conversation",
@@ -94,19 +97,22 @@ def test_the_ledger_pages_committed_records_and_counts_the_whole_scope(composed_
     assert read_timeline(vault, owner, kinds=["workflows.run"])["timeline"]["entries"] == []
 
 
+def timeline_entries(record, actor=None, *, kind=None):
+    """Read the service directly where a fixture already authorizes the record."""
+    return Timeline(record, actor).page(kinds=[kind] if kind else None, limit=100).entries
+
+
 @pytest.mark.django_db(transaction=True)
 @override_settings(ANGEE_TIMELINE_KINDS=["angee.provenance.timeline.timeline_kinds"])
-def test_backfill_reuses_the_projection_and_is_idempotent(composed_permissions: None) -> None:
-    owner = create_platform_admin("timeline-backfill")
-    with mute_changes(), open_changeset(fresh=True, change_reason="Before the ledger"):
+def test_existing_and_muted_source_changes_need_no_backfill(composed_permissions):
+    owner = create_platform_admin("timeline-direct")
+    with mute_changes(), actor_context(owner), open_changeset(fresh=True, change_reason="Before subscriptions"):
         record = vault_for(owner)
-    events = apps.get_model("timeline", "Event").objects.for_record(record)
-    assert not events.exists()
-    output = StringIO()
-    call_command("timeline_backfill", kind=["provenance.change"], stdout=output)
-    before = list(events.values())
-    assert len(before) == 1
-    changeset = apps.get_model("provenance", "Changeset")._base_manager.get(pk=before[0]["target_pk"])
-    sync_events(changeset)
-    call_command("timeline_backfill", kind=["provenance.change"], stdout=output)
-    assert list(events.values()) == before
+    first = read_timeline(record, owner)["timeline"]["entries"]
+    assert len(first) == 1 and first[0]["detail"] == "Before subscriptions"
+    with mute_changes(), actor_context(owner), open_changeset(fresh=True, change_reason="No callback"):
+        record.name = "Current source"
+        record.save(update_fields=["name"])
+    assert read_timeline(record, owner)["timeline"]["entries"][0]["detail"] == "No callback"
+    with pytest.raises(LookupError):
+        apps.get_model("timeline", "Event")

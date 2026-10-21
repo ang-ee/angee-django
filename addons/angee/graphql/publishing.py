@@ -33,9 +33,9 @@ Receivers are called with ``sender`` set to the model class, a ``payload``
 keyword containing the already-built :class:`ChangePayload`. Delivery uses
 ``send_robust``: receiver exceptions are logged by the publisher and are not
 propagated to the save/delete caller or allowed to starve later receivers.
-Observers enqueue effects with ``transaction.on_commit``; local projections can
-coalesce targets in that native queue. The publisher queues transport afterward;
-background projections send record invalidations when their writes commit.
+Observers enqueue effects with ``transaction.on_commit``. The publisher queues
+transport afterward; derived reads can invalidate their related record feeds
+through the same native commit queue.
 """
 
 logger = logging.getLogger(__name__)
@@ -261,7 +261,7 @@ def publish_change(
     # exists() nor the group_send runs while thousands of rows are being deleted.
     if changes_muted():
         return
-    # Broadcast policy governs transport, not local observers such as the ledger.
+    # Broadcast policy governs transport, not local read invalidation observers.
     # Capture it while the row is live so deletion retains the same boundary.
     broadcast_policy = getattr(instance, "broadcasts_changes", None)
     broadcasts = broadcast and (bool(broadcast_policy()) if callable(broadcast_policy) else True)
@@ -296,7 +296,7 @@ def _send_change(model: type[models.Model], payload: ChangePayload) -> None:
 
 
 def broadcast_related_records(records: Iterable[models.Model]) -> None:
-    """Refresh record reads after a derived projection, without observing another write.
+    """Refresh derived record reads after a source change, without observing another write.
 
     Only declared record feeds transport these identity-only invalidations,
     including inherited views when the canonical model has no feed. Their normal

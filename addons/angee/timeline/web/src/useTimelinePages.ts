@@ -5,7 +5,7 @@ import { TimelineDocument } from "./documents.console";
 type Variables = Omit<AuthoredVariables<typeof TimelineDocument>, "before">;
 const FIRST_PAGE = [undefined];
 
-/** Use the displayed model's feed; the server canonicalizes its ledger identity. */
+/** Use the displayed model's feed; the server resolves its canonical record identity. */
 export function useTimelinePages(variables: Variables, cursors: readonly (string | undefined)[] = FIRST_PAGE) {
   const results = useAuthoredQueryBatch(cursors.map((before, index) => ({
     key: `page-${index}`,
