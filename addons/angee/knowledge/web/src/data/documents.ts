@@ -81,8 +81,8 @@ export const KnowledgeVaultByName = graphql(`
 `);
 
 export const KnowledgePages = graphql(`
-  query KnowledgePages($limit: Int, $offset: Int) {
-    pages(limit: $limit, offset: $offset) {
+  query KnowledgePages($limit: Int, $offset: Int, $where: pages_bool_exp) {
+    pages(where: $where, limit: $limit, offset: $offset) {
       id
       permissions
       title

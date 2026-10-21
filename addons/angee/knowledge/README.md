@@ -1,5 +1,12 @@
 # Record pages
 
+The Knowledge navigator also serves mounted page collections. A mount's
+`defaultFilter` for `knowledge.Page` is translated by the shared resource query
+owner and applied to the pages read. The navigator offers vaults represented in
+that collection and uses the same page editor, hierarchy and permissions. New
+pages are created in the selected vault; creating an unrelated vault is offered
+only in the unscoped wiki.
+
 Every binding write locks and rechecks the canonical target through `upsert`, so
 deleted targets refuse writes. `RecordBinding.on_target_delete` declares cascade
 teardown through the shared record-pointer lifecycle; deleting a target removes

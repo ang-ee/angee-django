@@ -4,12 +4,13 @@ import { cn } from "../lib/cn";
 import { useRender, type UseRenderRenderProp } from "../lib/slot";
 import { tv, type VariantProps } from "../lib/variants";
 import { textRoleVariants } from "./text";
+import { interactiveSurface } from "./widget-control";
 
 /**
  * @kind token
  */
 export const cardVariants = tv({
-  base: "rounded-6 border bg-sheet text-fg shadow-xs transition-colors",
+  base: "rounded-8 border bg-sheet text-fg shadow-xs transition-colors",
   variants: {
     variant: {
       default: "border-border-subtle",
@@ -23,8 +24,12 @@ export const cardVariants = tv({
       lg: "text-sm",
     },
     interactive: {
-      true:
-        "w-full cursor-pointer text-left outline-none hover:border-border-strong hover:shadow-sm focus-visible:focus-ring",
+      true: cn(interactiveSurface({ focus: "visible", disabled: "pseudo" }),
+        "w-full cursor-pointer text-left hover:border-border-strong hover:shadow-sm"),
+      false: "",
+    },
+    selected: {
+      true: "selected border-brand hover:selected hover:border-brand",
       false: "",
     },
   },
@@ -32,6 +37,7 @@ export const cardVariants = tv({
     variant: "default",
     density: "md",
     interactive: false,
+    selected: false,
   },
 });
 
@@ -124,6 +130,7 @@ type CardRecipeProps = VariantProps<typeof cardVariants>;
 type CardState = {
   interactive: boolean;
   placeholder: boolean;
+  selected: boolean;
 };
 
 export type CardDensity = NonNullable<CardRecipeProps["density"]>;
@@ -160,6 +167,7 @@ export const Card = React.forwardRef<HTMLElement, CardProps>(function Card(
     interactive = false,
     placeholder = false,
     render,
+    selected = false,
     type,
     variant = "default",
     ...props
@@ -176,6 +184,7 @@ export const Card = React.forwardRef<HTMLElement, CardProps>(function Card(
       cardVariants({
         density,
         interactive,
+        selected,
         variant: resolvedVariant,
       }),
       className,
@@ -193,6 +202,7 @@ export const Card = React.forwardRef<HTMLElement, CardProps>(function Card(
     render: asChild ? child : render,
     state: {
       interactive,
+      selected,
       placeholder: resolvedVariant === "placeholder",
     },
     props: renderProps,

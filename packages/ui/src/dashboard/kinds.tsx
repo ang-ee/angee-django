@@ -42,6 +42,7 @@ function StatWidget(props: DashboardWidgetRenderProps): React.ReactElement {
         format={{ maximumFractionDigits: 2 }}
         label={<span className="sr-only">{props.spec.title}</span>}
         numericValue={props.data.value ?? undefined}
+        detail={typeof props.spec.options.detail === "string" ? props.spec.options.detail : undefined}
         suffix={suffix}
         value="—"
         valueSize="lg"
@@ -51,7 +52,10 @@ function StatWidget(props: DashboardWidgetRenderProps): React.ReactElement {
 }
 
 function BarWidget(props: DashboardWidgetRenderProps): React.ReactElement {
-  return <DataState {...props} skeleton={<><Skeleton className="h-4 w-1/3" /><Skeleton className="h-6 w-4/5" /><Skeleton className="h-6 w-3/5" /><Skeleton className="h-6 w-2/5" /></>}><DashboardBars points={props.data.series} title={props.spec.title} /></DataState>;
+  return <DataState {...props} skeleton={<><Skeleton className="h-4 w-1/3" /><Skeleton className="h-6 w-4/5" /><Skeleton className="h-6 w-3/5" /><Skeleton className="h-6 w-2/5" /></>}>
+    <DashboardBars points={props.data.series} title={props.spec.title}
+      orientation={props.spec.options.orientation === "vertical" ? "vertical" : "horizontal"} />
+  </DataState>;
 }
 
 function DonutWidget(props: DashboardWidgetRenderProps): React.ReactElement {
@@ -127,18 +131,20 @@ function AuthoredWidget(props: DashboardWidgetRenderProps): React.ReactElement {
   return <>{props.authored ?? <InlineEmpty label={t("widget.authoredUnavailable")} />}</>;
 }
 
-function ResourceViewWidget({ spec, hostedView: View, onCountChange }: DashboardWidgetRenderProps): React.ReactElement {
+function ResourceViewWidget({ spec, hostedView: View, onCountChange, pageScope }: DashboardWidgetRenderProps): React.ReactElement {
   const t = useDashboardT();
   const { resourceViews } = useAppRuntime();
   const preset = spec.data.shape === "resourceView" ? resourceViews[spec.data.preset] : undefined;
   if (!preset || !["list", "gantt"].includes(preset.view ?? "list") || !View) {
     return <ErrorBanner description={t("widget.viewUnavailable")} />;
   }
-  return <ResourceViewProvider key={preset.id} resource={preset.resource} scope="local" presetIds={[preset.id]} initialState={resourceViewPresetDefaults(undefined, preset)}>
+  return <ResourceViewProvider key={preset.id} resource={preset.resource} scope="local"
+    baseFilter={pageScope?.resource === preset.resource ? pageScope.filter : undefined}
+    presetIds={[preset.id]} initialState={resourceViewPresetDefaults(undefined, preset)}>
     <View
       presentation="embedded"
       scope="inherit"
-      chrome={{ heading: false, search: true, pager: false }}
+      chrome={{ heading: false, search: true, pager: spec.options.pager === true }}
       onListStateChange={(state) => onCountChange?.(state.total ?? null)}
     />
   </ResourceViewProvider>;

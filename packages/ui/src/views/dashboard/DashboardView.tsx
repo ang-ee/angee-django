@@ -49,24 +49,17 @@ export function DashboardView({
 
 /** Counts take the tile's typed numeric path so they format and animate there. */
 function dashboardMetric(metric: MetricProps): MetricTileValue {
-  const tile: MetricTileValue = {
-    label: metric.label,
-    value: metric.value,
-    icon: metric.icon,
-    tone: metric.tone,
-    detail: metric.detail,
-    href: metric.href,
-  };
-  if (metric.format !== "count") return tile;
-  if (metric.value == null && metric.loading) return { ...tile, value: "—" };
-  const count = typeof metric.value === "number" && Number.isFinite(metric.value)
-    ? metric.value
+  const { format, loading, max, ...tile } = metric;
+  if (format !== "count") return tile;
+  if (tile.value == null && loading) return { ...tile, value: "—" };
+  const count = typeof tile.value === "number" && Number.isFinite(tile.value)
+    ? tile.value
     : 0;
-  const bounded = metric.max !== undefined && count > metric.max;
+  const bounded = max !== undefined && count > max;
   return {
     ...tile,
     animate: true,
-    numericValue: bounded ? metric.max : count,
+    numericValue: bounded ? max : count,
     suffix: bounded ? "+" : undefined,
   };
 }

@@ -12,6 +12,9 @@ import {
   type Tone,
 } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
+import { cn } from "../lib/cn";
+import { Button } from "./button";
+import { Tooltip } from "./tooltip";
 
 /** A tinted status glyph speaks in feedback tones (+ the `muted` quiet tone). */
 export type StatusIconTone = FeedbackIntent | "muted";
@@ -113,6 +116,56 @@ export const StatusIcon = React.forwardRef<HTMLSpanElement, StatusIconProps>(
   },
 );
 StatusIcon.displayName = "StatusIcon";
+
+export interface StatusIconItem {
+  key: string;
+  /** The complete accessible meaning, including the status, not just the subject. */
+  label: string;
+  description?: string;
+  /** Supplied by the status owner; the group never infers a result from missing items. */
+  tone: StatusIconTone;
+  icon?: StatusIconProps["icon"];
+}
+
+export interface StatusIconGroupProps {
+  label: string;
+  items: readonly StatusIconItem[];
+  className?: string;
+  /** Makes each status a keyboard-accessible action, such as opening its evidence. */
+  onSelect?: (key: string) => void;
+}
+
+/** A compact row of independently labelled outcomes; colors always accompany glyphs and text.
+ * @owner StatusIcon
+ */
+export function StatusIconGroup({ label, items, className, onSelect }: StatusIconGroupProps): React.ReactElement {
+  return (
+    <span role="group" aria-label={label} className={cn("inline-flex flex-wrap items-center gap-1", className)}>
+      {items.map((item) => (
+        <Tooltip key={item.key} label={
+          <span className="grid gap-1">
+            <span>{item.label}</span>
+            {item.description ? <span className="font-normal">{item.description}</span> : null}
+          </span>
+        }>
+          {onSelect ? (
+            <Button variant="ghost" size="iconSm" aria-label={item.label} onClick={() => onSelect(item.key)}>
+              <StatusIcon tone={item.tone} icon={item.icon} />
+            </Button>
+          ) : (
+            <StatusIcon
+              tone={item.tone}
+              icon={item.icon}
+              label={item.label}
+              tabIndex={0}
+              className="m-1 outline-none focus-visible:focus-ring"
+            />
+          )}
+        </Tooltip>
+      ))}
+    </span>
+  );
+}
 
 export type StatusDotProps = Omit<
   React.HTMLAttributes<HTMLSpanElement>,

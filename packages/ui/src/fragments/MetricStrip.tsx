@@ -41,6 +41,11 @@ export interface MetricTileValue {
   tone?: Tone;
   /** When set, the tile is a link to this href (rendered as an `<a>`). */
   href?: string;
+  /** Controlled selection, for a metric that scopes the surrounding view. */
+  selected?: boolean;
+  /** An action metric renders a native button; navigation metrics use `href`. */
+  onClick?: React.MouseEventHandler<HTMLElement>;
+  disabled?: boolean;
 }
 
 /**
@@ -48,19 +53,19 @@ export interface MetricTileValue {
  */
 export const metricStripVariants = tv({
   slots: {
-    root: "grid gap-3 sm:grid-cols-2",
+    root: "grid grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))] gap-3",
     tile: "min-w-0 shadow-none",
     value: "",
   },
   variants: {
     density: {
       compact: {
-        root: "xl:grid-cols-4",
+        root: "",
         tile: "px-3 py-2.5",
       },
       prominent: {
-        root: "lg:grid-cols-4",
-        tile: "px-4 py-3",
+        root: "gap-4",
+        tile: "px-4 py-4",
       },
     },
     valueSize: {
@@ -92,7 +97,7 @@ export type MetricTileProps = Omit<
   };
 
 export type MetricStripProps = Omit<
-  React.HTMLAttributes<HTMLDListElement>,
+  React.HTMLAttributes<HTMLDivElement>,
   "className"
 > & {
   className?: string;
@@ -125,12 +130,20 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
       tone,
       href,
       onClick,
+      selected,
+      disabled,
       valueSize = "default",
       ...props
     },
     ref,
   ) {
-    const link = useInAppLink(href, { ...props, onClick });
+    const link = useInAppLink(href, {
+      ...props,
+      onClick: (event) => {
+        if (disabled) event.preventDefault();
+        else onClick?.(event);
+      },
+    });
     const styles = metricStripVariants({ density, valueSize });
     const resolvedValue = numericValue == null
       ? value
@@ -138,35 +151,40 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
         ? <AnimatedMetricTileNumber format={format} suffix={suffix} value={numericValue} />
         : <>{formatNumber(numericValue, format)}{suffix}</>;
     const body = (
-      <DefinitionPair
-        action={icon ? <IconTile icon={icon} size="md" /> : undefined}
-        density={density}
-        detail={detail}
-        label={
-          density === "prominent" ? (
-            // The label sits as a grid item of the stacked pair: a pill must not stretch to the tile.
-            <Chip tone={tone ?? "neutral"} className="justify-self-start">{label}</Chip>
-          ) : (
-            label
-          )
-        }
-        orientation="stacked"
-        value={
-          valueSize === "lg" ? (
-            <span className={styles.value()}>{resolvedValue}</span>
-          ) : (
-            resolvedValue
-          )
-        }
-      />
+      <dl>
+        <DefinitionPair
+          action={icon ? <IconTile icon={icon} size="md" /> : undefined}
+          density={density}
+          detail={detail}
+          label={
+            density === "prominent" ? (
+              // The label sits as a grid item of the stacked pair: a pill must not stretch to the tile.
+              <Chip tone={tone ?? "neutral"} className="justify-self-start">{label}</Chip>
+            ) : (
+              label
+            )
+          }
+          orientation="stacked"
+          value={
+            valueSize === "lg" ? (
+              <span className={styles.value()}>{resolvedValue}</span>
+            ) : (
+              resolvedValue
+            )
+          }
+        />
+      </dl>
     );
 
     if (href != null) {
       return (
-        <Card asChild className={styles.tile({ className })} density="sm" interactive>
+        <Card asChild className={styles.tile({ className })} density="sm" interactive selected={selected}>
           <a
             ref={ref as React.Ref<HTMLAnchorElement>}
-            href={href}
+            href={disabled ? undefined : href}
+            aria-current={selected ? "true" : undefined}
+            aria-disabled={disabled || undefined}
+            tabIndex={disabled ? -1 : undefined}
             {...props}
             {...link}
           >
@@ -176,9 +194,27 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
       );
     }
 
+    if (onClick) {
+      return (
+        <Card
+          ref={ref}
+          className={styles.tile({ className })}
+          density="sm"
+          interactive
+          selected={selected}
+          aria-pressed={selected}
+          disabled={disabled}
+          onClick={onClick}
+          {...props}
+        >
+          {body}
+        </Card>
+      );
+    }
+
     return (
-      <Card asChild className={styles.tile({ className })} density="sm">
-        <div ref={ref as React.Ref<HTMLDivElement>} onClick={onClick} {...props}>
+      <Card asChild className={styles.tile({ className })} density="sm" selected={selected}>
+        <div ref={ref as React.Ref<HTMLDivElement>} {...props}>
           {body}
         </div>
       </Card>
@@ -222,7 +258,7 @@ function AnimatedMetricTileNumber({
 /**
  * @kind fragment
  */
-export const MetricStrip = React.forwardRef<HTMLDListElement, MetricStripProps>(
+export const MetricStrip = React.forwardRef<HTMLDivElement, MetricStripProps>(
   function MetricStrip({ className, density = "compact", items, metrics, loading = false, loadingCount = 4, loadingMessage, ...props }, ref) {
     const styles = metricStripVariants({ density });
     const resolved: readonly MetricTileValue[] =
@@ -243,11 +279,11 @@ export const MetricStrip = React.forwardRef<HTMLDListElement, MetricStripProps>(
     }
 
     return (
-      <dl ref={ref} className={cn(styles.root(), className)} {...props}>
+      <div ref={ref} className={cn(styles.root(), className)} {...props}>
         {resolved.map((metric, index) => (
           <MetricTile key={metricKey(metric, index)} density={density} {...metric} />
         ))}
-      </dl>
+      </div>
     );
   },
 );
