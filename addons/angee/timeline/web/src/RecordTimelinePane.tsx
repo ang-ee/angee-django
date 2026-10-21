@@ -18,7 +18,7 @@ export const TIMELINE_TAB_ID = "timeline.rail";
 export const TIMELINE_KINDS_CONTAINER = "timeline#kinds";
 
 /**
- * The Timeline tab: the ledger read, paged by keyset cursor, drawn by the rail.
+ * The Timeline tab: the union read, paged by keyset cursor, drawn by the rail.
  * Each kind's presentation (label, glyph, verb, where it leads) is the
  * `timeline#kinds` child its owner declared; a line's verb opens the kind's
  * drill-in with the line's target, or navigates to the target's page.

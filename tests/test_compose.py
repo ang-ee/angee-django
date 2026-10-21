@@ -1437,12 +1437,12 @@ def test_provision_runs_declared_installed_addon_commands_after_migrations(monke
     command = Command()
     monkeypatch.setattr(command, "_run_step", calls.append)
     monkeypatch.setattr(
-        "angee.compose.management.commands.angee.get_commands", lambda: {"timeline_backfill": "timeline"},
+        "angee.compose.management.commands.angee.get_commands", lambda: {"addon_post_build": "timeline"},
     )
     command._handle_provision(_provision_options(
-        post_build=True, after_if_installed=["timeline_backfill", "absent_addon_command"],
+        post_build=True, after_if_installed=["addon_post_build", "absent_addon_command"],
     ))
-    assert calls[-1] == ["timeline_backfill"]
+    assert calls[-1] == ["addon_post_build"]
     assert calls.index(["migrate", "--noinput", "--skip-checks"]) < len(calls) - 1
 
 

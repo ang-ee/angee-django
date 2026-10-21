@@ -58,11 +58,11 @@ class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
     def for_records(self, *records: Any) -> Any:
         """Select decisions retaining any of the supplied canonical records."""
 
+        link = apps.get_model("decisions", "DecisionRecord")
         concerns = Q(pk__in=[])
         for record in records:
-            target = generic_target(record)
-            concerns |= Q(records__content_type=target.content_type, records__object_id=target.object_id)
-        return self.filter(concerns).distinct()
+            concerns |= link.record_filter(record)
+        return self.filter(pk__in=link.system_queryset().filter(concerns).order_by().values("decision_id"))
 
     def attention_expression(self, queryset: Any) -> Exists:
         model = generic_pointer_model(queryset.model)

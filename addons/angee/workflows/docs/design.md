@@ -86,7 +86,7 @@ The manual-start mutation reads the subject in the actor's scope and delegates
 validation and request-key replay to run admission. Success refreshes the run
 models; the timeline's existing attention owner opens it when a question appears.
 
-- **Record timeline:** the shared timeline ledger owns record-aside chronology and attention.
+- **Record timeline:** the shared timeline read owns record-aside chronology and attention.
   Workflows contributes `timeline#kinds/workflows.run`; opening a run enters the
   `record#aside/workflows.run` drill-in. That pane renders the vertical stepper
   described above, with decision cards inline. Stop uses the runs page's confirmed
@@ -98,7 +98,7 @@ Not built in the first version: timers on decisions, automatic answers, any cons
 
 `RecordTimeline` receives `record`, a `{model, id}` or array of those, and an
 optional `runId` that limits the drill-in to one run. Its host owns placement;
-the Python timeline kind projects run lifecycle and waiting state into the ledger.
+the Python timeline kind reads native run lifecycle and waiting state into the shared union.
 
 Each step body opens a fresh run changeset whose origin is the WorkflowRun. Actor
 attribution follows the step actor; a handled failure marks that boundary failed.

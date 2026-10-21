@@ -1,12 +1,4 @@
-"""The contribution contract behind the record timeline.
-
-A kind is one event vocabulary an addon owns (``workflows.run``,
-``provenance.change``). It names the source models whose changes re-project it,
-resolves affected targets, enumerates targets for a backfill, and projects each
-target's complete, current set of events. The timeline addon
-stores those projections in the ``Event`` ledger and reads them back in one query;
-bodies, verbs and composers stay with the owning addon's aside tab.
-"""
+"""Addon-owned source queries and presentation for the record timeline."""
 
 from __future__ import annotations
 
@@ -20,10 +12,8 @@ from typing import Any
 from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 from django.db import models
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Q
 from django.dispatch import receiver
-from rebac import SubjectRef
-from rebac.resources import model_for_subject_type
 
 from angee.impl import resolve_hooks
 
@@ -32,47 +22,34 @@ type RecordIdentity = tuple[type[models.Model], int]
 
 
 @dataclass(frozen=True)
-class EventData:
-    """One occurrence as its owner projects it: a pointer, never a body."""
+class Presentation:
+    """The small display payload, hydrated only for the selected source rows."""
 
-    kind: str
-    target: models.Model
-    """The saved row whose complete projection is reconciled."""
-    record: RecordIdentity
-    """Model and primary key only; the ledger resolves canonical records in bulk."""
-    at: datetime
     title: str
-    occurrence: str = "1"
     detail: str = ""
     actor: str = ""
-    """The acting subject as a stored subject reference; empty for the system."""
-    actor_label: str = ""
-    fold: models.Model | None = None
-    """Fold under lines targeting this row on the same record; never an event key."""
 
 
 class TimelineKind(ABC):
-    """One event kind's owner: what it projects, from which rows."""
+    """One addon-owned branch of the record chronology.
+
+    A branch selects one row per occurrence on a record, with its owner's read
+    policy applied. SQL owns ordering, folding and attention before pagination;
+    presentation loads only the selected source rows. Source observation exists
+    solely to invalidate open record reads after commit; it stores no projection.
+    """
 
     id: str
-    """The kind's id, namespaced by its owner (``workflows.run``); also its ``timeline#kinds`` child id."""
     sequence: int
-    """Where the kind sorts among the scope chips."""
     source_models: tuple[str, ...] | Mapping[str, Iterable[str]]
-    """Observed models, including MTI descendants. A mapping narrows partial saves
-    to the named fields; creates, deletes and full saves always re-project.
-    """
     explicit_publication = False
-    """Observe owner publications only, without adapting model saves/deletes."""
+    occurrence = "1"
+    at = models.F("created_at")
 
     def observes(self, model: type[models.Model]) -> bool:
-        """Observe the same inherited source facts when a concrete child saves."""
-
         return any(owner._meta.label in self.source_models for owner in (model, *model._meta.get_parent_list()))
 
     def relevant(self, model: type[models.Model], update_fields: Iterable[str] | None) -> bool:
-        """Decide relevance before discovering potentially many dependent targets."""
-
         if update_fields is None or not isinstance(self.source_models, Mapping):
             return True
         fields = {
@@ -84,45 +61,33 @@ class TimelineKind(ABC):
         }
         return not fields.isdisjoint(update_fields)
 
-    def readable(self, actor: Any) -> Q:
-        """All rows when the record alone owns read policy; override for independent targets."""
-
-        return Q()
-
-    def waiting_on(self, actor: Any) -> Q:
-        """Readable targets whose owner waits on this actor; this implies readable()."""
-
-        return Q(pk__in=())
-
     @abstractmethod
     def eligible(self, model: type[models.Model]) -> bool:
-        """Whether rows of ``model`` can carry this kind at all.
-
-        A kind that projects onto any touched record composes
-        :func:`timeline_subject` so a model's own opt-out holds on write and on read.
-        """
+        """Whether this record model can carry the kind."""
 
     @abstractmethod
-    def rows(self) -> Iterable[models.Model]:
-        """Every target row for a backfill; the projection of each is ``events``."""
+    def queryset(self, record: models.Model, actor: Any) -> models.QuerySet:
+        """Readable occurrences on this record, one per source primary key."""
 
     @abstractmethod
-    def events(self, row: models.Model) -> Iterable[EventData]:
-        """The complete, current events that a change to ``row`` affects.
+    def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
+        """Describe the selected source rows, batching any additional display dependencies."""
 
-        ``row`` is a target, resolved from a source through ``targets`` when needed.
-        The result is complete for this target: missing occurrences are removed.
-        """
+    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
+        """The native subset waiting on the viewer, within the readable branch."""
+        return rows.none()
 
-    def targets(self, row: models.Model) -> Iterable[models.Model]:
-        """Targets affected by this source, including targets whose projection is now empty.
+    def fold(self, record: models.Model) -> tuple[Any, Any] | None:
+        """Content type and primary key expressions for a possible parent target."""
+        return None
 
-        Include targets even when their current projection is empty. The ledger
-        calls ``events(target)`` and reconciles each target, so removing a source
-        relationship can remove its last event without inventing a tombstone.
-        """
-
+    def targets(self, row: Any) -> Iterable[models.Model]:
+        """Resolve a changed dependency to the source rows whose record reads depend on it."""
         return (row,)
+
+    @abstractmethod
+    def records(self, row: Any) -> Iterable[RecordIdentity]:
+        """Records to invalidate when this source row changes; no display payload."""
 
 
 @lru_cache(maxsize=1)
@@ -147,25 +112,8 @@ def _forget_kinds(*, setting: str, **_: Any) -> None:
 
 
 def actor_label(user: Any) -> str:
-    """A user's or stored subject's display label, with a retained-reference fallback."""
-
-    if user is None or user == "":
-        return ""
-    if isinstance(user, str | SubjectRef):
-        subject = SubjectRef.parse(user) if isinstance(user, str) else user
-        resolved = model_for_subject_type(subject.subject_type)
-        if resolved is None or subject.subject_id in ("", "*") or subject.optional_relation:
-            return str(subject)
-        model, id_attr = resolved
-        row = model._base_manager.filter(**{id_attr: subject.subject_id}).first()
-        return str(row) if row is not None else str(subject)
-    return str(user)
-
-
-def target_scope(rows: Any) -> Q:
-    """Correlate a native, already actor-scoped target queryset with ledger rows."""
-
-    return Q(target_model=rows.model._meta.label) & Q(Exists(rows.scoped().filter(pk=OuterRef("target_pk"))))
+    """A selected user's display label, empty when no actor is recorded."""
+    return str(user) if user is not None else ""
 
 
 @dataclass(frozen=True)
@@ -190,9 +138,9 @@ class Cursor:
         """Events strictly after this cursor on the page order."""
 
         return (
-            Q(at__lt=self.at)
-            | Q(at=self.at, kind__gt=self.kind)
-            | Q(at=self.at, kind=self.kind, pk__lt=self.pk)
+            Q(_timeline_at__lt=self.at)
+            | Q(_timeline_at=self.at, _timeline_kind__gt=self.kind)
+            | Q(_timeline_at=self.at, _timeline_kind=self.kind, pk__lt=self.pk)
         )
 
 
@@ -201,7 +149,7 @@ def timeline_subject(model: type[models.Model]) -> bool:
 
     A record declares ``timeline_subject = False`` when its rows are bookkeeping read
     through another record (a sync link's history is evidence on its target), so no kind
-    writes events about them and no read admits any.
+    admits them to the chronology.
     """
 
     return bool(getattr(model, "timeline_subject", True))

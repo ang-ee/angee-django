@@ -7,43 +7,37 @@ from typing import Any
 
 from django.apps import apps
 from django.db import models
-from rebac import to_subject_ref
 
-from angee.timeline.kinds import EventData, TimelineKind, actor_label, target_scope
+from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
 
 
 class TaskKind(TimelineKind):
-    """A task waits on its assignee while it is open and readable."""
-
     id = "projects.task"
     sequence = 50
     source_models = ("projects.Task",)
 
     def eligible(self, model: type[models.Model]) -> bool:
-        return True
+        return apps.get_model("projects", "Task").declares_target(model)
 
-    def readable(self, actor: Any) -> models.Q:
-        return target_scope(apps.get_model("projects", "Task").objects.with_actor(actor))
+    def queryset(self, record: Any, actor: Any) -> models.QuerySet:
+        rows = apps.get_model("projects", "Task").objects.with_actor(actor).for_record(record)
+        return rows.untrashed().scoped().select_related(
+            "assignee",
+        )
 
-    def waiting_on(self, actor: Any) -> models.Q:
-        return target_scope(apps.get_model("projects", "Task").objects.with_actor(actor).waiting_on(actor))
+    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
+        return rows.waiting_on(actor)
 
-    def rows(self) -> Iterable[models.Model]:
-        return apps.get_model("projects", "Task").system_queryset().filter(subject_object_id__isnull=False).iterator()
+    def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
+        result = {}
+        for row in rows:
+            due = f" · due {row.due_date.isoformat()}" if row.due_date and row.status == row.TaskStatus.OPEN else ""
+            result[row.pk] = Presentation(row.title, f"{row.get_status_display()}{due}", actor_label(row.assignee))
+        return result
 
-    def events(self, task: Any) -> Iterable[EventData]:
-        if task.subject_object_id is None or task.is_trashed:
-            return []
-        model = task.subject_content_type.model_class()
-        if model is None:
-            return []
-        due = f" · due {task.due_date.isoformat()}" if task.due_date and task.status == task.TaskStatus.OPEN else ""
-        assignee = task.assignee
-        return [EventData(
-            kind=self.id, target=task, record=(model, task.subject_object_id), at=task.created_at,
-            title=task.title, detail=f"{task.get_status_display()}{due}",
-            actor=str(to_subject_ref(assignee)) if assignee is not None else "", actor_label=actor_label(assignee),
-        )]
+    def records(self, row: Any) -> Iterable[RecordIdentity]:
+        if row.subject_object_id is not None and (model := row.subject_content_type.model_class()) is not None:
+            yield model, row.subject_object_id
 
 
 def timeline_kinds() -> tuple[TimelineKind, ...]:

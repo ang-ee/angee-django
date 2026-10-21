@@ -22,6 +22,7 @@ from django.utils.module_loading import module_has_submodule
 from rebac.mixins import INJECTED_BASE_MANAGER
 from rebac.resources import model_resource_type
 
+from angee.addons import addon_manifest
 from angee.models import AngeeModel, revalidate_transition_metadata
 
 
@@ -148,6 +149,11 @@ class ModelComposition:
         extensions: dict[str, list[type[models.Model]]] = {}
         model_owners: dict[type[models.Model], str] = {}
         for config in app_configs:
+            manifest = addon_manifest(config)
+            if manifest is not None and any(item.get("app_label") == config.label for item in manifest.migrations):
+                # An addon still owns its migration graph after retiring its last
+                # model. Keep an empty native app so Django can apply that cutover.
+                sources_by_label.setdefault(config.label, [])
             source = config.models_module
             if source is None and module_has_submodule(config.module, "models"):
                 source = importlib.import_module(f"{config.name}.models")

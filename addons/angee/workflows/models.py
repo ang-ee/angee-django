@@ -461,13 +461,12 @@ class WorkflowDecision(models.Model):
     class Meta:
         abstract = True
 
-    def requesting_records(self) -> Iterable[models.Model]:
-        yield from cast(Any, super()).requesting_records()
-        runs = apps.get_model("workflows", "StepRun")._base_manager.using(self._state.db).filter(
-            decision_id=self.pk,
-        ).order_by("run_id").values_list("run_id", flat=True).distinct()
-        model = apps.get_model("workflows", "WorkflowRun")
-        yield from (model(pk=pk) for pk in runs)
+    @classmethod
+    def requester_querysets(cls) -> tuple[models.QuerySet, ...]:
+        runs = apps.get_model("workflows", "WorkflowRun").system_queryset().annotate(
+            _decision_id=models.F("step_runs__decision_id"),
+        )
+        return (*cast(Any, super()).requester_querysets(), runs)
 
 
 class StepRun(AngeeDataModel):
