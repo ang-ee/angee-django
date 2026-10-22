@@ -11,13 +11,7 @@ from django.apps import apps
 from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
 from django.test import TransactionTestCase, override_settings
-from rebac import (
-    ObjectRef,
-    RelationshipTuple,
-    SubjectRef,
-    system_context,
-    write_relationships,
-)
+from rebac import system_context, to_object_ref
 from rebac.backends import backend
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
@@ -41,6 +35,31 @@ class NotesAuthorizationTests(TransactionTestCase):
     def test_note_is_a_rebac_resource(self) -> None:
         self.assertEqual(model_resource_type(Note), "notes/note")
         self.assertEqual(Note.get_rebac_grantable(), {"reader": "share", "editor": "share"})
+
+    def test_related_groups_offer_upload_and_bind_to_note_writers(self) -> None:
+        """The shared groups expose their verbs for owners and editors, not readers."""
+
+        query = """query NoteRelated($id: ID!) {
+            record_files(model_label: "notes.Note", record_id: $id) { can_upload }
+            record_knowledge_can_bind(model_label: "notes.Note", record_id: $id)
+        }"""
+        for relation, can_write in (("reader", False), ("editor", True)):
+            self.welcome.with_actor(self.alice).grant_record_access(relation, self.bob)
+            for user, expected in ((self.alice, True), (self.bob, can_write)):
+                with self.subTest(relation=relation, user=user.username):
+                    self.client.force_login(user)
+                    response = self.client.post(
+                        "/graphql/console/",
+                        {"query": query, "variables": {"id": str(self.welcome.sqid)}},
+                        content_type="application/json",
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    payload = response.json()
+                    self.assertNotIn("errors", payload)
+                    self.assertEqual(payload["data"], {
+                        "record_files": {"can_upload": expected},
+                        "record_knowledge_can_bind": expected,
+                    })
 
     def test_scoped_for_aggregate_is_actor_scoped_and_fails_closed(self) -> None:
         # Aggregates compile through .values()/.aggregate() (no field redaction),
@@ -139,15 +158,7 @@ class NotesAuthorizationTests(TransactionTestCase):
         self.assertFalse(bob.is_staff)
 
     def test_reader_grant_redacts_owner_only_fields(self) -> None:
-        write_relationships(
-            [
-                RelationshipTuple(
-                    resource=ObjectRef("notes/note", self.welcome.sqid),
-                    relation="reader",
-                    subject=SubjectRef.of("auth/user", str(self.bob.pk)),
-                )
-            ]
-        )
+        self.welcome.with_actor(self.alice).grant_record_access("reader", self.bob)
         sqid = self.welcome.sqid
         bob_view = Note.objects.as_user(self.bob).get(sqid=sqid)
         owner_view = Note.objects.as_user(self.alice).get(sqid=sqid)
@@ -158,6 +169,7 @@ class NotesAuthorizationTests(TransactionTestCase):
 
     def test_deleting_a_note_clears_its_relationships(self) -> None:
         sqid = self.welcome.sqid
+        resource = to_object_ref(self.welcome)
         relationship_model = active_relationship_model()
         with system_context(reason="test"):
             Note.objects.get(sqid=sqid).delete()
@@ -166,6 +178,6 @@ class NotesAuthorizationTests(TransactionTestCase):
         self.assertEqual(list(Note.objects.as_user(self.alice).filter(sqid=sqid)), [])
         self.assertFalse(
             relationship_model.objects.filter(
-                resource_type="notes/note", resource_id=str(sqid)
+                resource_type=resource.resource_type, resource_id=resource.resource_id
             ).exists()
         )

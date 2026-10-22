@@ -41,7 +41,7 @@ describe("Angee Hasura provider defaults", () => {
     const provider = createAngeeHasuraDataProvider({
       url: "https://example.invalid/graphql", auth: (request) => request,
       mutations: { notes: {
-        create: { root: "insert_notes_one", inputType: "notes_insert_input", arguments: [{ name: "client_creation_key", type: "String!" }] },
+        create: { root: "insert_notes_one", inputType: "notes_insert_input", arguments: [{ name: "idempotency_key", type: "String!" }] },
         update: { root: "update_notes_by_pk", inputType: "notes_set_input", arguments: [{ name: "expected_revision", type: "Int!" }] },
       } },
       fetch: async (_input, init) => {
@@ -50,13 +50,13 @@ describe("Angee Hasura provider defaults", () => {
       },
     });
     const created = await provider.create({ resource: "notes", variables: { title: "New" },
-      meta: { fields: ["id"], gqlVariables: { client_creation_key: "session-key", expected_revision: 99 } } });
+      meta: { fields: ["id"], gqlVariables: { idempotency_key: "session-key", expected_revision: 99 } } });
     expect(created.data.id).toBe("note-1");
     const updated = await provider.update({ resource: "notes", id: "note-1", variables: { title: "Changed" },
       meta: { fields: ["id", "revision"], gqlVariables: { expected_revision: 3 } } });
     expect(updated.data.revision).toBe(4);
-    expect(requests[0]?.variables).toMatchObject({ object: { title: "New" }, client_creation_key: "session-key" });
-    expect(requests[0]?.query).toContain("$client_creation_key: String!");
+    expect(requests[0]?.variables).toMatchObject({ object: { title: "New" }, idempotency_key: "session-key" });
+    expect(requests[0]?.query).toContain("$idempotency_key: String!");
     expect(requests[0]?.variables).not.toHaveProperty("expected_revision");
     expect(requests[1]?.variables).toMatchObject({ object: { title: "Changed" }, pk_columns: { id: "note-1" }, expected_revision: 3 });
     expect(requests[1]?.query).toContain("$expected_revision: Int!");

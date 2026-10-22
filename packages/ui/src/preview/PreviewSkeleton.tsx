@@ -9,7 +9,9 @@ export interface PreviewSkeletonProps {
   variant?: "surface" | "text";
 }
 
-/** Reserve the preview viewport while its renderer or file body is loading. */
+/** Reserve the preview viewport while its renderer or file body is loading.
+ * @kind fragment
+ */
 export function PreviewSkeleton({
   label,
   className,

@@ -23,11 +23,10 @@ from strawberry import auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
 
+from angee.actors import actor_user_id
 from angee.agents import provisioning
 from angee.agents.context import render_view_context
 from angee.agents.models import RuntimeStatus, SessionStatus
-from angee.base.actors import actor_user_id
-from angee.base.identity import public_subject_ref
 from angee.graphql.actions import ActionResult, action_target, authorized_permission_target, resolve_action_target
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
@@ -35,10 +34,10 @@ from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.graphql.writes import write_queryset
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import PlatformAdminPermission, request_from_info
 from angee.iam.schema import UserType
+from angee.identity import public_subject_ref
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.schema import (
     ConnectIntegrationResult,
@@ -223,10 +222,10 @@ class AgentType(AngeeNode):
 
 @strawberry_django.type(AgentSessionModel)
 class AgentSessionType(AngeeNode):
-    """Owner-visible projection of one persisted agent conversation."""
+    """Projection of one persisted agent conversation, readable by its user."""
 
     agent: AgentType
-    owner: UserType | None
+    user: UserType | None
     title: auto
     context: JSON
     status: auto
@@ -238,7 +237,7 @@ class AgentSessionType(AngeeNode):
 
 @strawberry_django.type(AgentTurn)
 class AgentTurnType(AngeeNode):
-    """Owner-visible projection of one persisted agent turn."""
+    """Projection of one persisted agent turn, readable through its session."""
 
     session: AgentSessionType
     index: auto
@@ -388,16 +387,16 @@ _AGENT_SESSION_RESOURCE = hasura_model_resource(
     AgentSessionType,
     model=AgentSessionModel,
     name="agent_sessions",
-    filterable=["id", "agent", "owner", "status", "updated_at"],
+    filterable=["id", "agent", "user", "status", "updated_at"],
     sortable=["title", "status", "created_at", "updated_at"],
     aggregatable=["id"],
-    groupable=["agent", "owner", "status"],
+    groupable=["agent", "user", "status"],
     insert=False,
     update=False,
     write_backend=AngeeHasuraWriteBackend(AgentSessionModel),
     field_id_decode={
         "agent": public_pk_decoder(Agent),
-        "owner": public_pk_decoder(User),
+        "user": public_pk_decoder(User),
     },
 )
 _AGENT_TURN_RESOURCE = hasura_model_resource(
@@ -654,10 +653,12 @@ class AgentSessionQuery:
         if agent is None:
             return None
         model = getattr(agent, "model", None)
-        owner_id = actor_user_id(current_actor())
+        user_id = actor_user_id(current_actor())
+        if user_id is None:
+            return None
         with system_context(reason="agents.graphql.session_for_view"):
             session = (
-                AgentSessionModel.objects.filter(agent=agent, owner_id=owner_id)
+                AgentSessionModel.objects.filter(agent=agent, user_id=user_id)
                 .exclude(status=SessionStatus.CLOSED)
                 .order_by("-updated_at")
                 .first()
@@ -715,7 +716,7 @@ class AgentDeletePreviewMutation:
     def delete_agent(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Preview or confirm deletion of one agent by public id."""
 
-        return delete_by_public_id(Agent, str(id), confirm=confirm, queryset=write_queryset(Agent))
+        return delete_by_public_id(Agent, str(id), confirm=confirm, queryset=Agent.objects.for_write())
 
 
 attach_delete_preview_metadata(

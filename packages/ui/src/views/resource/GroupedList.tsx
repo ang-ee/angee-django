@@ -22,7 +22,8 @@ import { Glyph } from "../../chrome/Glyph";
 import { useUiT, type UiTranslate } from "../../i18n";
 import { cn } from "../../lib/cn";
 import type { DndPayload } from "../../lib/dnd";
-import { CountBadge } from "../../ui/badge";
+import { ListStatusMessage } from "../../fragments/ListStatusMessage";
+import { CountBadge } from "../../ui/count-badge";
 import {
   Table,
   TableBody,
@@ -32,6 +33,7 @@ import {
   TableRow,
 } from "../../ui/table";
 import { textRoleVariants } from "../../ui/text";
+import { depthIndent } from "../../ui/tree";
 import type { ResourceViewContextValue } from "./resource-view-context";
 import type { ListViewNavigationScope, ResourceListSnapshot } from "./resource-view-surface";
 import {
@@ -574,7 +576,7 @@ function GroupedHeaderRow<TRow extends Row>({
               column.id === labelColumn ? "font-semibold" : "",
             )}
             style={
-              column.id === labelColumn ? depthIndentStyle(depth) : undefined
+              column.id === labelColumn && depth > 0 ? { paddingLeft: depthIndent(depth) } : undefined
             }
             aria-label={
               measure
@@ -611,21 +613,9 @@ function GroupedStatusRow<TRow extends Row>({
 }): React.ReactElement {
   return (
     <TableRow>
-      <TableCell
-        colSpan={colSpan}
-        className={cn(
-          "py-4",
-          item.tone === "danger" ? "text-danger-text" : "text-center text-fg-muted",
-        )}
-        style={depthIndentStyle(item.depth)}
-      >
-        {item.message}
+      <TableCell colSpan={colSpan} className="py-4" style={item.depth > 0 ? { paddingLeft: depthIndent(item.depth) } : undefined}>
+        <ListStatusMessage tone={item.tone} align={item.tone === "danger" ? "start" : "center"}>{item.message}</ListStatusMessage>
       </TableCell>
     </TableRow>
   );
-}
-
-function depthIndentStyle(depth: number): React.CSSProperties | undefined {
-  if (depth <= 0) return undefined;
-  return { paddingLeft: `calc(0.75rem + ${depth * 1.25}rem)` };
 }

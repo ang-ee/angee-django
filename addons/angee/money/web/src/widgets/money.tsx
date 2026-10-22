@@ -49,12 +49,23 @@ function toAmount(value: MoneyWidgetValue | undefined): number | null {
  * decimal. Display coerces the Decimal string to a number for `Intl`; the exact
  * string is preserved by the edit control, which is where precision matters.
  */
-export function formatMoney(value: MoneyWidgetValue | undefined, code: string | undefined): string {
+export interface FormatMoneyOptions {
+  /** A presentation precision that overrides the currency's own minor-unit digits (a company's display places). */
+  fractionDigits?: number;
+  /** Intl sign display: `"never"` reads an owed amount unsigned whichever side of the ledger holds it. */
+  signDisplay?: Intl.NumberFormatOptions["signDisplay"];
+}
+
+export function formatMoney(value: MoneyWidgetValue | undefined, code: string | undefined, options: FormatMoneyOptions = {}): string {
   const amount = toAmount(value);
   if (amount === null) return "";
+  const precision = options.fractionDigits === undefined
+    ? {}
+    : { minimumFractionDigits: options.fractionDigits, maximumFractionDigits: options.fractionDigits };
+  const sign = options.signDisplay === undefined ? {} : { signDisplay: options.signDisplay };
   if (code) {
     try {
-      return formatNumber(amount, { style: "currency", currency: code });
+      return formatNumber(amount, { style: "currency", currency: code, ...precision, ...sign });
     } catch {
       // Unknown/blank code — fall through to the neutral format.
     }
@@ -66,12 +77,22 @@ export function formatMoney(value: MoneyWidgetValue | undefined, code: string | 
   return formatNumber(amount, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
+    ...precision,
+    ...sign,
   });
+}
+
+/** The row's presentation precision for a money field, when the field names where it lives. */
+function resolveFractionDigits(row: Record<string, unknown> | undefined, path: string | undefined): number | undefined {
+  if (!row || !path) return undefined;
+  const value = path.split(".").reduce<unknown>((current, key) => (current && typeof current === "object" ? (current as Record<string, unknown>)[key] : undefined), row);
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function MoneyRead({ value, row, field }: WidgetRenderProps<MoneyWidgetValue>): ReactElement {
   const code = resolveCurrencyCode(row, field?.currencyField);
-  return <span className={textRoleVariants({ role: "value" })}>{formatMoney(value, code)}</span>;
+  const fractionDigits = resolveFractionDigits(row as Record<string, unknown> | undefined, field?.fractionDigitsField);
+  return <span className={textRoleVariants({ role: "value" })}>{formatMoney(value, code, { fractionDigits })}</span>;
 }
 
 function MoneyEdit({

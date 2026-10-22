@@ -1,4 +1,4 @@
-"""Behaviour of :class:`~angee.base.mixins.HierarchyMixin` (F-hier, foundation R3).
+"""Behaviour of :class:`~angee.models.HierarchyMixin` (F-hier, foundation R3).
 
 The mixin gives a self-parented model a maintained materialized ``path`` so
 subtree membership is a database prefix test, not a client-side ``parent`` walk.
@@ -23,7 +23,7 @@ from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
-from angee.base.models import AngeeQuerySet
+from angee.models import AngeeQuerySet
 from tests.hierdemo.models import HierNode, PlainManagerHierNode, ScopedHierNode
 from tests.scopedemo.models import Scope
 
@@ -59,6 +59,16 @@ def test_ancestors_of_is_exclusive_of_self() -> None:
         root_ancestors = list(HierNode.objects.ancestors_of(nodes["A"]).values_list("name", flat=True))
     assert ancestors == ["A", "B", "C"]
     assert root_ancestors == []
+
+
+@pytest.mark.django_db
+def test_ancestors_of_batches_shared_paths_in_one_query() -> None:
+    with system_context(reason="test batched hierarchy ancestors"):
+        nodes = _tree()
+        with CaptureQueriesContext(connection) as queries:
+            ancestors = list(HierNode.objects.ancestors_of([nodes["D"], nodes["E"]]).order_by("path"))
+        assert ancestors == [nodes["A"], nodes["B"], nodes["C"]]
+        assert len(queries) == 1
 
 
 @pytest.mark.django_db

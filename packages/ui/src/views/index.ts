@@ -2,7 +2,7 @@
 // list/form views, their collection⇄record page composition, and aggregate
 // panels. Hosts configure them with descriptors or with the page element DSL.
 export {
-  RecordFieldMarksProvider, RecordFieldMarkButton, useRecordFieldMarks, useActiveRecordForm, useRevealedRecordField,
+  RecordFieldMarksProvider, RecordFieldMarkControl, useRecordFieldMarks, useActiveRecordForm, useRevealedRecordField,
   type RecordFieldMark, type ActiveRecordForm,
 } from "./form/record-field-marks";
 
@@ -189,12 +189,12 @@ export {
   DashboardView,
   type DashboardViewProps,
 } from "./dashboard/DashboardView";
-export { TreeView, type TreeViewProps } from "./tree/TreeView";
+export { TreeView, TREE_INSERTION_ID, type TreeViewProps } from "./tree/TreeView";
 export {
   RelationFieldWidget,
   type RelationFieldWidgetProps,
 } from "./relation/RelationFieldWidget";
-export { RecordReference, type RecordReferenceProps } from "./relation/RecordReference";
+export { RecordReference, RecordReferenceRow, type RecordReferenceProps, type RecordReferenceRowProps } from "./relation/RecordReference";
 export {
   RelationMultiFieldWidget,
   type RelationMultiFieldWidgetProps,
@@ -217,7 +217,6 @@ export {
   type UseScopedTreeExplorerOptions,
 } from "./tree/useScopedTreeExplorer";
 export { GalleryView, type GalleryViewProps } from "./GalleryView";
-export { TimelineView, type TimelineViewProps } from "./TimelineView";
 export {
   CalendarView,
   type CalendarViewProps,
@@ -358,6 +357,7 @@ export {
 export {
   RemovedDisclosure,
   RemovedItem,
+  RemovedList,
   RemovedRecords,
   TRASH_PERMISSION,
   TRASH_REASON_MAX_LENGTH,
@@ -368,6 +368,7 @@ export {
   useTrashRowActions,
   type RemovedDisclosureProps,
   type RemovedItemProps,
+  type RemovedListProps,
   type RemovedRecordsProps,
   type TrashActionOptions,
   type TrashPrompt,
@@ -395,6 +396,7 @@ export {
   type ActionResultRunOptions,
 } from "./resource/action-result-run";
 export { RecordPager, type RecordNavigation } from "./resource/RecordPager";
+export { CommandBand, type CommandBandProps } from "./resource/CommandBand";
 export {
   useRelationFacets,
   type RelationFacets,
@@ -483,3 +485,4 @@ export {
   useResourceViewKindContent,
   useResourceViewKinds,
 } from "./resource/resource-view-kinds";
+export { RecordVerb } from "./form/RecordVerb";

@@ -1,13 +1,17 @@
 """Framework-generic fixtures requiring pytest and pytest-django."""
 
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from django.apps import apps
 from django.core.management import call_command
+from django.db.models.signals import post_migrate
 from pytest_django.django_compat import is_django_unittest
+from pytest_django.plugin import DjangoDbBlocker
 
-from angee.base.changesets import changeset
+from angee.changesets import changeset
+from angee.compose.apps import ComposeConfig
 from angee.testing.permissions import composed_permissions as composed_permissions
 
 
@@ -18,6 +22,36 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "entrypoint_boundaries: the module opens its own changeset boundaries; the autouse test boundary stays closed",
     )
+
+
+@pytest.fixture(scope="session")
+def django_db_setup(
+    django_db_setup: None,
+    django_db_blocker: DjangoDbBlocker,
+) -> Iterator[None]:
+    """Install the host's permission schema and restore it after transaction flushes.
+
+    Native Django database setup owns table creation. A composed host gets the
+    same REBAC lifecycle as a provisioned application. Bare source-model tests
+    own their per-test schemas through ``composed_permissions`` instead.
+    """
+
+    if not any(isinstance(config, ComposeConfig) for config in apps.get_app_configs()):
+        yield
+        return
+
+    rebac_app = apps.get_app_config("rebac")
+
+    def sync_rebac_schema(**kwargs: Any) -> None:
+        call_command("rebac", "sync", verbosity=0)
+
+    post_migrate.connect(sync_rebac_schema, sender=rebac_app, weak=False)
+    try:
+        with django_db_blocker.unblock():
+            sync_rebac_schema()
+        yield
+    finally:
+        post_migrate.disconnect(sync_rebac_schema, sender=rebac_app)
 
 
 @pytest.fixture(autouse=True)

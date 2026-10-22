@@ -19,11 +19,9 @@ export const THREAD_ATTACHMENT_MODEL = "messaging.ThreadAttachment";
 /** The `recordEdges` entry of a type that keeps chatter: the edge's chatter role, which only threaded models carry. */
 export const THREAD_CHATTER_EDGE = `${THREAD_ATTACHMENT_MODEL}:chatter`;
 
-// The models a record thread reads: the live-refresh keys for the thread/history
-// queries and the invalidation set every chatter mutation republishes. One owner,
-// shared by both chatter panes.
+// Messaging-owned read dependencies and mutation invalidation keys. The shared
+// useRecordThreadQuery also observes the parent record's ledger refreshes.
 export const READ_MODELS = [
-  "provenance.Changeset",
   "parties.Handle",
   "messaging.Thread",
   THREAD_ATTACHMENT_MODEL,
@@ -32,13 +30,6 @@ export const READ_MODELS = [
   "messaging.ThreadNotification",
   "messaging.Reaction",
   "messaging.MessageStar",
-] as const;
-
-// The count probe only depends on receipt-moving rows and messages; it avoids
-// the wider thread payload's followers, notifications, and handles.
-export const RECORD_UNREAD_COUNT_MODELS = [
-  "messaging.Message",
-  "messaging.ThreadFollower",
 ] as const;
 
 /** Typed projection rendered by the Message record's structural parts list. */
@@ -372,8 +363,6 @@ export const RecordThreadDocument = graphql(`
     $after: ID = null
     $around: ID = null
     $messageTypes: [String!] = []
-    $includeHistory: Boolean = false
-    $timelineOffset: Int = 0
   ) {
     record_thread(
       input: {
@@ -385,8 +374,6 @@ export const RecordThreadDocument = graphql(`
         after: $after
         around: $around
         message_types: $messageTypes
-        include_history: $includeHistory
-        timeline_offset: $timelineOffset
       }
     ) {
       error
@@ -395,12 +382,6 @@ export const RecordThreadDocument = graphql(`
       permissions
       thread {
         ...RecordThreadSummaryFields
-      }
-      timeline_count
-      timeline {
-        __typename
-        ... on RecordMessageType { ...RecordMessageFields }
-        ... on HistorySummaryType { ...HistoryEntrySummaryFields }
       }
       message_result_count
       removed_message_count
@@ -471,12 +452,6 @@ export const RecordSourceThreadsDocument = graphql(`
 
 export type RecordSourceThreadRow = DocumentType<typeof RecordSourceThreadsDocument>["record_source_threads"][number];
 
-export const RecordThreadUnreadCountDocument = graphql(`
-  query MessagingRecordThreadUnreadCount($modelLabel: String!, $recordId: ID!) {
-    record_thread_unread_count(model_label: $modelLabel, record_id: $recordId)
-  }
-`);
-
 export const PostRecordMessageDocument = graphql(`
   mutation MessagingPostRecordMessage(
     $modelLabel: String!
@@ -487,7 +462,7 @@ export const PostRecordMessageDocument = graphql(`
     $attachmentIds: [ID!] = []
     $recipientUserIds: [ID!] = []
     $autofollowRecipients: Boolean = false
-    $clientCreationKey: String = null
+    $idempotencyKey: String = null
   ) {
     post_record_message(
       input: {
@@ -500,7 +475,7 @@ export const PostRecordMessageDocument = graphql(`
         recipient_user_ids: $recipientUserIds
         autofollow_recipients: $autofollowRecipients
       }
-      client_creation_key: $clientCreationKey
+      idempotency_key: $idempotencyKey
     ) {
       error
       error_code
@@ -790,7 +765,6 @@ export type MessageReaderData = DocumentType<typeof MessageReaderFields>;
 
 export type RecordThreadPayload = DocumentType<typeof RecordThreadDocument>["record_thread"];
 export type RecordMessageRow = NonNullable<RecordThreadPayload["messages"]>[number];
-export type RecordNotificationRow = NonNullable<RecordThreadPayload["notifications"]>[number];
 export type SuggestedRecipientRow =
   NonNullable<RecordThreadPayload["suggested_recipients"]>[number];
 export type RecipientUserRow =

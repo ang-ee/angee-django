@@ -13,6 +13,7 @@ import { widgetControlSurface, widgetControlPresentationProps } from "../ui/widg
 import { useCodeMirrorEditor } from "./codemirror-editor";
 import type { JsonValue } from "./json-value";
 import { widgetLabel } from "./label";
+import { formatJson } from "./json-format";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
 
 type JsonParseResult =
@@ -104,7 +105,7 @@ function JsonRead({ value }: WidgetRenderProps<unknown>): ReactElement {
 function JsonCell({ value }: WidgetRenderProps<unknown>): ReactElement {
   return (
     <Code box="inset" truncate className="max-w-full">
-      {compactJson(value)}
+      {formatJson(value, { compact: true })}
     </Code>
   );
 }
@@ -125,12 +126,3 @@ function parseJsonDraft(input: string): JsonParseResult {
   }
 }
 
-function formatJson(value: unknown): string {
-  if (value === undefined) return "";
-  return JSON.stringify(value, null, 2) ?? "";
-}
-
-function compactJson(value: unknown): string {
-  if (value === undefined) return "";
-  return JSON.stringify(value) ?? "";
-}

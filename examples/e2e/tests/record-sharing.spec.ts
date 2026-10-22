@@ -6,12 +6,12 @@ const CREATE_PERSONAL_DASHBOARD = `
   mutation CreateRecordSharingDashboard(
     $name: String!
     $description: String!
-    $clientCreationKey: String!
+    $idempotencyKey: String!
   ) {
     create_personal_dashboard(
       name: $name
       description: $description
-      client_creation_key: $clientCreationKey
+      idempotency_key: $idempotencyKey
     ) { status id revision message }
   }
 `;
@@ -204,7 +204,7 @@ test.describe("shared record access", () => {
     }>(CREATE_PERSONAL_DASHBOARD, {
       name: "Dashboard E2E Verified",
       description: "Self-contained record sharing coverage",
-      clientCreationKey: `record-sharing-${Date.now()}`,
+      idempotencyKey: `record-sharing-${Date.now()}`,
     });
     expect(created.errors).toBeUndefined();
     const dashboard = created.data?.create_personal_dashboard;

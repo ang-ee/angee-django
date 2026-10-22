@@ -32,6 +32,14 @@ pages and repeated baseline resets; checkpoints retain its digest and reset coun
 never a second cursor. No bridge-reference input or separate dispatch setting is
 needed: steps resolve `ctx.subject` through the engine's declared subject owner.
 
+All bounded adapter IO composes [`bridge_io`](steps.py), including consumer
+preflight and inventory stages. For `BridgeImpl.sync_parallelism = 1`, it holds
+the existing bridge sync/webhook advisory lock through the operation. Another
+partition or run waits in the native time-wait state with its checkpoint and
+retry count unchanged, before beginning an external effect. Native map fan-out
+still owns admission; this seam guarantees serialization for the exact-one cap,
+not arbitrary workflow concurrency limits above one.
+
 Cycles pull only. No stage pushes local changes or retries a refused write, and
 the rescan leaves refused writes to the push, so `StreamStage` and the coverage
 steps refuse a partition that writes back instead of waiting on a refusal that

@@ -1,7 +1,7 @@
 import { type Row } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Button, Column, EmptyState, ErrorBanner, List, LoadingPanel, ResourceList, errorMessage, useResourceRecordHrefLookup, useRouteHref, useRouteRecordId } from "@angee/ui";
+import { Button, Column, EmptyState, ErrorBanner, Glyph, List, LoadingPanel, ResourceList, errorMessage, useResourceRecordHrefLookup, useRouteHref, useRouteRecordId } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
 import { IntegrationRecordRedirectDocument } from "../documents";
@@ -63,7 +63,9 @@ export function IntegrationsPage(): React.ReactElement {
       resource={MODEL}
       rowHref={rowHref}
       hideCreate
-      toolbarActions={<Button variant="primary" onClick={() => void navigate({ to: routeHref("integrate.add") })}>{t("integrations.add.title")}</Button>}
+      // Create is a capability chooser page, not a form dialog: the list's own create is hidden
+      // and the toolbar carries the page verb in the list create's shape.
+      toolbarActions={<Button variant="primary" size="sm" onClick={() => void navigate({ to: routeHref("integrate.add") })}><Glyph decorative name="plus" />{t("integrations.add.title")}</Button>}
     >
       <List
         resource={MODEL}
@@ -75,9 +77,9 @@ export function IntegrationsPage(): React.ReactElement {
         <Column field="kind" header={t("col.type")} />
         <Column field="vendor.display_name" header={t("col.vendor")} />
         <Column field="lifecycle" widget="statusBadge" />
-        <Column field="runtime_status" />
+        <Column field="runtime_status" widget="statusBadge" />
         <Column field="credential.display_name" header={t("col.credential")} />
-        <Column field="concrete_target.state" header={t("integrations.targetState")} />
+        <Column field="concrete_target.state" header={t("integrations.targetState")} widget="statusBadge" />
         <Column field="last_error" header={t("col.lastError")} />
       </List>
     </ResourceList>

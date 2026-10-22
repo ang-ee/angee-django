@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import mimetypes
-from typing import BinaryIO
+from io import Reader
 
 import magic
 from django.conf import settings
@@ -97,7 +97,7 @@ def truncate_filename(name: str, max_length: int) -> str:
     return name[:max_length]
 
 
-def sha256_stream(reader: BinaryIO, *, capture_head: int = 0) -> tuple[str, int, bytes]:
+def sha256_stream(reader: Reader[bytes], *, capture_head: int = 0) -> tuple[str, int, bytes]:
     """Stream-hash a binary reader without materializing it.
 
     Returns ``(hex_digest, total_bytes, head_bytes)``; ``head_bytes`` is the
@@ -205,7 +205,7 @@ class CappedReader:
     partial backend object before answering with an API error.
     """
 
-    def __init__(self, reader: BinaryIO, *, max_bytes: int) -> None:
+    def __init__(self, reader: Reader[bytes], *, max_bytes: int) -> None:
         """Wrap ``reader`` with a hard byte cap."""
 
         self._reader = reader

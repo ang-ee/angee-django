@@ -1,10 +1,14 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
-import { RecordFieldMarksProvider, RecordFieldMarkButton, usePublishActiveRecordForm, useRecordFieldMarks, useRevealedRecordField, type RecordFieldMark } from "./record-field-marks";
+import { RecordFieldMarksProvider, RecordFieldMarkControl, usePublishActiveRecordForm, useRecordFieldMarks, useRevealedRecordField, type RecordFieldMark } from "./record-field-marks";
 
 vi.mock("../resource/record-chrome-context", () => ({ useRecordChromeContextMaybe: () => ({ recordId: "nte_7", canonicalResource: "notes.Note" }) }));
+vi.mock("../relation/RecordReference", () => ({
+  RecordReference: ({ model, id, label }: { model: string; id: string; label: ReactNode }) =>
+    <a href={`/${model}/${id}`}>{label}</a>,
+}));
 afterEach(cleanup);
 
 test("mark and reveal updates do not render a form that only consumes stable dispatch", async () => {
@@ -17,7 +21,7 @@ test("mark and reveal updates do not render a form that only consumes stable dis
     const publications = useMemo(() => [{ model: form.model, id: form.id, marks }], [marks]);
     useRecordFieldMarks(publications);
     const field = useRevealedRecordField();
-    return <><RecordFieldMarkButton field="display_name" label="Name" /><output>{field?.field ?? "none"}</output></>;
+    return <><RecordFieldMarkControl field="display_name" label="Name" /><output>{field?.field ?? "none"}</output></>;
   }
   render(<RecordFieldMarksProvider><Form /><Marks /></RecordFieldMarksProvider>);
   const before = renders.mock.calls.length;
@@ -28,4 +32,62 @@ test("mark and reveal updates do not render a form that only consumes stable dis
   act(() => publish([]));
   await waitFor(() => expect(screen.getByText("none")).toBeTruthy());
   expect(renders).toHaveBeenCalledTimes(before);
+});
+
+test("a linked mark opens its record and names its origin on hover", async () => {
+  function Marks() {
+    const publications = useMemo(() => [
+      {
+        model: "notes.Note",
+        id: "nte_7",
+        marks: [{
+          field: "display_name",
+          label: "Source",
+          tone: "info" as const,
+          origin: "Directory: Customer contacts",
+          target: { model: "parties.Party", id: "pty_9" },
+        }],
+      },
+      {
+        model: "notes.Note",
+        id: "nte_7",
+        marks: [{
+          field: "display_name",
+          label: "Unconfirmed",
+          tone: "warning" as const,
+          onReveal: vi.fn(),
+        }],
+      },
+    ], []);
+    useRecordFieldMarks(publications);
+    return <RecordFieldMarkControl field="display_name" label="Name" />;
+  }
+
+  render(<RecordFieldMarksProvider><Marks /></RecordFieldMarksProvider>);
+  const link = await screen.findByRole("link", { name: "Source" });
+  expect(link.getAttribute("href")).toBe("/parties.Party/pty_9");
+  expect(screen.getByRole("button", { name: "Unconfirmed: Name" })).toBeTruthy();
+  const trigger = link.parentElement!;
+  fireEvent.mouseEnter(trigger);
+  fireEvent.mouseMove(trigger);
+  expect(await screen.findByText("Directory: Customer contacts")).toBeTruthy();
+});
+
+test("a reveal mark preserves its origin tooltip", async () => {
+  const onReveal = vi.fn();
+  function Marks() {
+    const publications = useMemo(() => [{ model: "notes.Note", id: "nte_7", marks: [{
+      field: "display_name", label: "Source", tone: "info" as const,
+      origin: "Imported directory", onReveal,
+    }] }], []);
+    useRecordFieldMarks(publications);
+    return <RecordFieldMarkControl field="display_name" label="Name" />;
+  }
+  render(<RecordFieldMarksProvider><Marks /></RecordFieldMarksProvider>);
+  const mark = await screen.findByRole("button", { name: "Source: Name" });
+  fireEvent.mouseEnter(mark.parentElement!);
+  fireEvent.mouseMove(mark.parentElement!);
+  expect(await screen.findByText("Imported directory")).toBeTruthy();
+  fireEvent.click(mark);
+  expect(onReveal).toHaveBeenCalledOnce();
 });

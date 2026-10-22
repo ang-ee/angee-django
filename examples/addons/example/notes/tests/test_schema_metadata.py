@@ -23,6 +23,8 @@ class NotesSchemaMetadataTests(SimpleTestCase):
         fields = {field["name"]: field for field in note["fields"]}
 
         self.assertEqual(note["resourceType"], "notes/note")
+        self.assertIn("storage.FileAttachment", note["recordEdges"])
+        self.assertIn("knowledge.RecordBinding", note["recordEdges"])
         self.assertEqual(
             [(item["relation"], item["permission"]) for item in note["grantable"]],
             [("editor", "share"), ("reader", "share")],

@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { containerChildren } from "@angee/app/testing";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import type { ChatterViewContext } from "@angee/ui/runtime";
+import type { ChatterTabContent, ChatterViewContext } from "@angee/ui/runtime";
 import type { RecordMessageRow } from "./documents";
 
 const mocks = vi.hoisted(() => ({
@@ -30,6 +31,8 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
+    // The delete verb confirms through the shared ceremony; the test answers yes.
+    useConfirm: () => async () => true,
     useNamespaceT:
       (_namespace: string, messages: Record<string, string>) =>
       (key: string, vars?: Record<string, unknown>) =>
@@ -57,6 +60,7 @@ vi.mock("@angee/storage", () => ({
 }));
 
 import { RecordChatterPane } from "./RecordChatterPane";
+import messaging from "./index";
 
 function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
   return {
@@ -94,8 +98,6 @@ function threadPayload(messages: RecordMessageRow[]): unknown {
       error_code: null,
       thread: { id: "thr_1", title: { text: "Rec" }, message_count: messages.length, last_message_at: null },
       message_result_count: messages.length,
-      timeline_count: messages.length,
-      timeline: messages.map((message) => ({ ...message, __typename: "RecordMessageType" as const })),
       audience_label: null,
       post_kinds: ["COMMENT", "NOTE"],
       messages,
@@ -131,7 +133,7 @@ beforeEach(() => {
   mocks.useAuthoredQuery.mockImplementation((document: unknown) => {
     const op = operationName(document);
     if (op === "MessagingRecordThread") {
-      return { data: mocks.threadData, fetching: false, error: null, refetch: vi.fn() };
+      return { data: mocks.threadData, isFetching: mocks.threadData === undefined, error: null, refetch: vi.fn() };
     }
     if (op === "MessagingRecipientUsers") {
       return { data: mocks.recipientData, fetching: false, error: null, refetch: vi.fn() };
@@ -140,9 +142,71 @@ beforeEach(() => {
   });
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("RecordChatterPane", () => {
+  test("a Timeline selection clears retained filters and focuses the message when its window arrives", async () => {
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+    const discussion = containerChildren(messaging, "record#aside").find(([id]) => id === "messaging.discussion")?.[1].content as ChatterTabContent;
+    mocks.threadData = threadPayload([message()]);
+    const view = render(<>{discussion.render?.(context)}</>);
+    fireEvent.click(screen.getByRole("button", { name: "Notes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Search comments" }));
+    fireEvent.change(screen.getByLabelText("Search comments", { selector: "input" }), { target: { value: "unrelated" } });
+    await waitFor(() => {
+      const last = mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread").at(-1);
+      expect(last?.[1]).toMatchObject({ search: "unrelated", messageTypes: ["notification"] });
+    });
+
+    const selection = { target: "msg_older", focus: "message" };
+    mocks.threadData = threadPayload([]);
+    mocks.useAuthoredQuery.mockClear();
+    view.rerender(<>{discussion.render?.(context, selection)}</>);
+    const reads = mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread");
+    expect(reads.length).toBeGreaterThan(0);
+    for (const [, variables] of reads) {
+      expect(variables).toMatchObject({ around: "msg_older", search: "", messageTypes: [] });
+    }
+    expect(screen.getByRole("button", { name: "All" }).getAttribute("aria-pressed")).toBe("true");
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    mocks.threadData = threadPayload([message({ id: "msg_older", can_edit: true }), message({ id: "msg_newer" })]);
+    view.rerender(<>{discussion.render?.(context, selection)}</>);
+    const focused = document.getElementById("message-msg_older");
+    expect(focused?.getAttribute("aria-current")).toBe("true");
+    expect(document.getElementById("message-msg_newer")?.hasAttribute("aria-current")).toBe(false);
+    expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({ block: "center" });
+    expect(scrollIntoView.mock.instances[0]).toBe(focused);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+    expect(document.getElementById("message-msg_older")?.getAttribute("aria-current")).toBe("true");
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+
+    view.rerender(<>{discussion.render?.(context, { target: "msg_newer", focus: "message" })}</>);
+    expect(document.getElementById("message-msg_older")?.hasAttribute("aria-current")).toBe(false);
+    expect(document.getElementById("message-msg_newer")?.getAttribute("aria-current")).toBe("true");
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
+    expect(scrollIntoView.mock.instances[1]).toBe(document.getElementById("message-msg_newer"));
+  });
+
+  test.each([
+    undefined,
+    { focus: "message" },
+    { target: "msg_1", focus: "field" },
+    { target: "msg_1" },
+  ])("does not focus a message without a message selection: %j", (selection) => {
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+    mocks.threadData = threadPayload([message()]);
+    render(<RecordChatterPane context={context} selection={selection} />);
+    const last = mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread").at(-1);
+    expect(last?.[1].around).toBeUndefined();
+    expect(document.getElementById("message-msg_1")?.hasAttribute("aria-current")).toBe(false);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
   test("renders the feed with author and the composer", () => {
     mocks.threadData = threadPayload([message()]);
 
@@ -150,9 +214,49 @@ describe("RecordChatterPane", () => {
 
     expect(screen.getByText("Hello there")).toBeTruthy();
     expect(screen.getByText("Ada Lovelace")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Following" }).getAttribute("aria-pressed")).toBe("false");
-    // The composer send affordance.
+    // The composer send affordance; the head carries no Following button (that is the record header's).
     expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Following" })).toBeNull();
+  });
+
+  test("the head's scope narrows the thread read to the picked message types", () => {
+    mocks.threadData = threadPayload([message()]);
+    render(<RecordChatterPane context={context} />);
+    fireEvent.click(screen.getByRole("button", { name: "Notes" }));
+    const last = mocks.useAuthoredQuery.mock.calls
+      .filter(([document]) => operationName(document) === "MessagingRecordThread").at(-1);
+    expect(last?.[1]).toMatchObject({ messageTypes: ["notification"] });
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    const after = mocks.useAuthoredQuery.mock.calls
+      .filter(([document]) => operationName(document) === "MessagingRecordThread").at(-1);
+    expect(after?.[1]).toMatchObject({ messageTypes: [] });
+  });
+
+  test("the head reveals search on demand and marks the thread read from its badge", () => {
+    mocks.threadData = threadPayload([message()]);
+    (mocks.threadData as { record_thread: { unread_count: number } }).record_thread.unread_count = 2;
+    render(<RecordChatterPane context={context} />);
+    expect(screen.queryByLabelText("Search comments", { selector: "input" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Search comments" }));
+    expect(screen.getByLabelText("Search comments", { selector: "input" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Mark read" }));
+    expect(mocks.mutateCalls.some((call) => call.op === "MessagingMarkRecordThreadRead")).toBe(true);
+  });
+
+  test("search stays open through a query change and closes with its filter cleared", () => {
+    mocks.threadData = threadPayload([message()]);
+    const view = render(<RecordChatterPane context={context} />);
+    fireEvent.click(screen.getByRole("button", { name: "Search comments" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search comments" }), { target: { value: "Hello" } });
+    mocks.threadData = undefined;
+    view.rerender(<RecordChatterPane context={context} />);
+    expect(screen.getByRole("searchbox", { name: "Search comments" })).toBeTruthy();
+    mocks.threadData = threadPayload([message()]);
+    view.rerender(<RecordChatterPane context={context} />);
+    fireEvent.click(screen.getByRole("button", { name: "Search comments" }));
+    expect(screen.queryByRole("searchbox", { name: "Search comments" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Search comments" }));
+    expect((screen.getByRole("searchbox", { name: "Search comments" }) as HTMLInputElement).value).toBe("");
   });
 
   test("passes the host's submit key to its record conversation", () => {
@@ -196,7 +300,7 @@ describe("RecordChatterPane", () => {
     expect(screen.getByRole("button", { name: "👍 reaction, 2" })).toBeTruthy();
   });
 
-  test("deletes through the mutation keyed by message id", () => {
+  test("deletes through the mutation keyed by message id", async () => {
     mocks.threadData = threadPayload([
       message({ id: "msg_editable", can_edit: true, can_delete: true }),
     ]);
@@ -204,12 +308,13 @@ describe("RecordChatterPane", () => {
     render(<RecordChatterPane context={context} />);
     fireEvent.click(screen.getByRole("button", { name: "Delete message" }));
 
-    expect(
+    // The verb confirms first (answered yes by the mock), then fires.
+    await waitFor(() => expect(
       mocks.mutateCalls.some(
         (call) =>
           call.op === "MessagingDeleteRecordMessage" && call.vars.messageId === "msg_editable",
       ),
-    ).toBe(true);
+    ).toBe(true));
   });
 
   test("shows the not-enabled state for a record without a thread", () => {

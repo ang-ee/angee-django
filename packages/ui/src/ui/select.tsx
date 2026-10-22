@@ -25,6 +25,9 @@ import { POPUP_BASE, PORTALED_CONTROL_LAYER } from "./popover";
 import { sectionEyebrowVariants } from "./section-eyebrow";
 import { widgetControlSurface, widgetControlPresentationProps, type WidgetControlSurfaceProps } from "./widget-control";
 
+/**
+ * @kind token
+ */
 export const selectVariants = tv({
   slots: {
     // Box chrome (border / surface / focus / disabled / invalid / read-only) is
@@ -52,9 +55,9 @@ export const selectVariants = tv({
   variants: {
     size: {
       sm: {
-        trigger: "h-7 text-13",
+        trigger: "h-control-xs text-13",
         content: "text-13",
-        item: "h-7",
+        item: "h-control-xs",
       },
       md: {
         trigger: "h-9",
@@ -110,12 +113,30 @@ export type SelectBackdropProps = BaseSelectBackdropProps;
 export type SelectArrowProps = BaseSelectArrowProps;
 export type SelectGroupProps = BaseSelectGroupProps;
 
+/**
+ * @owner Select
+ */
 export const SelectRoot = BaseSelect.Root;
+/**
+ * @owner Select
+ */
 export const SelectPortal = BaseSelect.Portal;
+/**
+ * @owner Select
+ */
 export const SelectBackdrop = BaseSelect.Backdrop;
+/**
+ * @owner Select
+ */
 export const SelectArrow = BaseSelect.Arrow;
+/**
+ * @owner Select
+ */
 export const SelectGroup = BaseSelect.Group;
 
+/**
+ * @owner Select
+ */
 export const SelectPositioner = React.forwardRef<
   HTMLDivElement,
   SelectPositionerProps
@@ -136,6 +157,9 @@ export type SelectTriggerProps = Omit<BaseSelectTriggerProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Select
+ */
 export const SelectTrigger = React.forwardRef<
   HTMLButtonElement,
   SelectTriggerProps
@@ -168,6 +192,9 @@ export type SelectValueProps = Omit<BaseSelectValueProps, "className"> & {
   className?: string;
 };
 
+/**
+ * @owner Select
+ */
 export const SelectValue = React.forwardRef<
   HTMLSpanElement,
   SelectValueProps
@@ -187,6 +214,9 @@ export type SelectIconProps = Omit<BaseSelectIconProps, "className"> & {
   className?: string;
 };
 
+/**
+ * @owner Select
+ */
 export const SelectIcon = React.forwardRef<
   HTMLSpanElement,
   SelectIconProps
@@ -213,6 +243,9 @@ export type SelectContentProps = Omit<BaseSelectPopupProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Select
+ */
 export const SelectContent = React.forwardRef<
   HTMLDivElement,
   SelectContentProps
@@ -232,6 +265,9 @@ export type SelectListProps = Omit<BaseSelectListProps, "className"> & {
   className?: string;
 };
 
+/**
+ * @owner Select
+ */
 export const SelectList = React.forwardRef<
   HTMLDivElement,
   SelectListProps
@@ -252,6 +288,9 @@ export type SelectItemProps = Omit<BaseSelectItemProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Select
+ */
 export const SelectItem = React.forwardRef<
   HTMLDivElement,
   SelectItemProps
@@ -277,6 +316,9 @@ export type SelectItemTextProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner Select
+ */
 export const SelectItemText = React.forwardRef<
   HTMLDivElement,
   SelectItemTextProps
@@ -299,6 +341,9 @@ export type SelectItemIndicatorProps = Omit<
   className?: string;
 };
 
+/**
+ * @owner Select
+ */
 export const SelectItemIndicator = React.forwardRef<
   HTMLSpanElement,
   SelectItemIndicatorProps
@@ -323,6 +368,9 @@ export type SelectLabelProps = Omit<BaseSelectGroupLabelProps, "className"> & {
   className?: string;
 };
 
+/**
+ * @owner Select
+ */
 export const SelectLabel = React.forwardRef<
   HTMLDivElement,
   SelectLabelProps
@@ -344,6 +392,9 @@ export type SelectSeparatorProps = React.ComponentPropsWithoutRef<
   className?: string;
 };
 
+/**
+ * @owner Select
+ */
 export const SelectSeparator = React.forwardRef<
   HTMLDivElement,
   SelectSeparatorProps
@@ -383,6 +434,9 @@ export type SelectProps = Omit<
     ) => void;
   };
 
+/**
+ * @kind primitive
+ */
 export const Select = function Select({
   options = [],
   placeholder,
@@ -485,6 +539,9 @@ export const Select = function Select({
   );
 };
 
+/**
+ * @owner Select
+ */
 export const SelectPrimitive = {
   Root: SelectRoot,
   Trigger: SelectTrigger,

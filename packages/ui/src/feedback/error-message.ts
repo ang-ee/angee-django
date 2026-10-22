@@ -5,6 +5,8 @@ import { errorFromUnknown } from "../data/errors";
  * container, or `fallback` for opaque values. The one owner for user-facing
  * catch-site copy that rendered surfaces would otherwise re-inline at every
  * action boundary.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function errorMessage(caught: unknown, fallback: string): string {
   if (!(caught instanceof Error) && (caught == null || typeof caught !== "object")) return fallback;

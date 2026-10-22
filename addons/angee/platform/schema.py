@@ -28,6 +28,7 @@ from angee.graphql.actions import ActionResult
 from angee.graphql.data import hasura_model_resource, hasura_pydantic_resource
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.platform import composed
+from angee.platform.models import Addon as AddonModel
 
 _EXPLORER = ObjectRef("platform/explorer", "default")
 _Addon = apps.get_model("platform", "Addon")
@@ -144,7 +145,7 @@ class PlatformAddon:
     id: str = strawberry.field(resolver=_addon_id)
     label: str = strawberry.field(resolver=_Addon.get_display_label)
     namespace: str
-    kind: _Addon.AddonKind
+    kind: AddonModel.AddonKind
     model_count: int
     field_count: int
     resource_count: int

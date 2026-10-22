@@ -21,23 +21,57 @@ away from zero. That mode is **this addon's stated policy** for quantity
 rounding, deliberately fixed here rather than caller-supplied (unlike the
 money/tax owners, whose amount rounding takes an explicit mode from company
 policy). ``rounding`` is a decimal step and, because unit steps are powers of ten,
-is read as a signed decimal-place position by :func:`angee.base.numeric.quantize`.
+is read as a signed decimal-place position by :func:`angee.numeric.quantize`.
 """
 
 from __future__ import annotations
 
 import decimal
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
 from django.db import models
+from django.db.models.functions import Abs, Cast, Coalesce, Floor, Log, Power, Round, Sign
+from django.db.models.lookups import Exact
 
-from angee.base.mixins import (
+from angee.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
     ArchiveMixin,
     ArchiveQuerySet,
+    role_anchor,
 )
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
-from angee.base.numeric import quantize
+from angee.numeric import quantize
+
+
+@dataclass(frozen=True, slots=True)
+class UomExpressions:
+    """ORM expressions describing one unit in an annotated query."""
+
+    category_id: Any
+    ratio: Any
+    offset: Any
+    rounding: Any
+
+    @classmethod
+    def from_path(cls, path: str, *, fallback: str | None = None) -> UomExpressions:
+        """Build unit expressions from a relation path, optionally falling back to another unit."""
+
+        def field(name: str) -> models.expressions.BaseExpression | models.F:
+            primary = models.F(f"{path}__{name}" if path else name)
+            if fallback is None:
+                return primary
+            alternate = models.F(f"{fallback}__{name}" if fallback else name)
+            return Coalesce(primary, alternate)
+
+        return cls(
+            category_id=field("category_id"),
+            ratio=field("ratio"),
+            offset=field("offset"),
+            rounding=field("rounding"),
+        )
 
 
 class UomCategory(AngeeDataModel):
@@ -120,10 +154,7 @@ class Uom(ArchiveMixin, AngeeDataModel):
                 name="%(app_label)s_uom_one_reference_per_category",
             ),
             models.CheckConstraint(
-                condition=(
-                    models.Q(is_reference=False)
-                    | (models.Q(ratio=Decimal(1)) & models.Q(offset=Decimal(0)))
-                ),
+                condition=(models.Q(is_reference=False) | (models.Q(ratio=Decimal(1)) & models.Q(offset=Decimal(0)))),
                 name="%(app_label)s_uom_reference_is_identity",
             ),
         )
@@ -138,7 +169,7 @@ class Uom(ArchiveMixin, AngeeDataModel):
         """Return the signed decimal-place position of this unit's ``rounding`` step.
 
         ``rounding`` is a decimal step (``0.001`` rounds to a milligram, ``1`` to a
-        whole unit, and ``10`` rounds to tens). :func:`angee.base.numeric.quantize`
+        whole unit, and ``10`` rounds to tens). :func:`angee.numeric.quantize`
         accepts signed places, so the step is the inverse of its normalized
         exponent — exact because unit steps are powers of ten. A non-power-of-ten
         step such as ``0.5`` is not representable this way; see the module docstring.
@@ -159,6 +190,68 @@ class Uom(ArchiveMixin, AngeeDataModel):
 
         return quantize(qty, self.rounding_places, decimal.ROUND_HALF_UP)
 
+    @staticmethod
+    def quantize_expression(
+        qty: models.expressions.BaseExpression | models.F,
+        unit: UomExpressions,
+        *,
+        output_field: models.Field | None = None,
+    ) -> models.Expression:
+        """Quantize an ORM quantity expression to ``unit`` with the scalar policy.
+
+        Unit rounding steps are powers of ten, so their inverse base-ten
+        logarithm gives a scale for the explicit half-away-from-zero formula.
+        Spelling the policy as ``sign(qty) * floor(abs(qty) * scale + .5) /
+        scale`` avoids SQLite's binary-float error at decimal half boundaries
+        and supports negative decimal positions (steps such as ``10``), which
+        SQLite's two-argument ``ROUND`` does not.
+        """
+
+        result_field = output_field or models.DecimalField(max_digits=26, decimal_places=10)
+        places = Cast(
+            Round(-Log(models.Value(Decimal(10)), unit.rounding)),
+            models.IntegerField(),
+        )
+        scale = Power(models.Value(Decimal(10)), places)
+        rounded = models.ExpressionWrapper(
+            Sign(qty) * Floor(Abs(qty) * scale + models.Value(Decimal("0.5"))) / scale,
+            output_field=result_field,
+        )
+        # ExpressionWrapper declares the Python type but does not emit a SQL
+        # cast. PostgreSQL can otherwise select a floating POWER overload and
+        # return binary residue (for example 0.920000...39968) from an exactly
+        # quantized value. Materialize the declared decimal scale at the owner.
+        return Cast(rounded, output_field=result_field)
+
+    @staticmethod
+    def convert_expression(
+        qty: models.expressions.BaseExpression | models.F,
+        source: UomExpressions,
+        destination: UomExpressions,
+        *,
+        output_field: models.Field | None = None,
+    ) -> models.Expression:
+        """Convert an ORM quantity through the shared affine and rounding owner.
+
+        Scalar conversion raises for unlike categories. A set expression cannot
+        portably raise per row, so an incompatible row projects ``NULL``; an
+        aggregate then rejects it exactly as an explicit compatibility filter
+        would. Callers no longer reproduce either the affine formula or category
+        comparison locally.
+        """
+
+        result_field = output_field or models.DecimalField(max_digits=26, decimal_places=10)
+        converted = models.ExpressionWrapper(
+            (qty * source.ratio + source.offset - destination.offset) / destination.ratio,
+            output_field=result_field,
+        )
+        rounded = Uom.quantize_expression(converted, destination, output_field=result_field)
+        return models.Case(
+            models.When(Exact(source.category_id, destination.category_id), then=rounded),
+            default=models.Value(None, output_field=result_field),
+            output_field=result_field,
+        )
+
     def convert(self, qty: Decimal, to_uom: Uom) -> Decimal:
         """Return ``qty`` of this unit expressed in ``to_uom`` (same category only).
 
@@ -173,14 +266,11 @@ class Uom(ArchiveMixin, AngeeDataModel):
         """
 
         if self.category_id != to_uom.category_id:
-            raise ValueError(
-                f"cannot convert {self.name!r} to {to_uom.name!r}: "
-                "units belong to different categories"
-            )
+            raise ValueError(f"cannot convert {self.name!r} to {to_uom.name!r}: units belong to different categories")
         return to_uom.quantize((qty * self.ratio + self.offset - to_uom.offset) / to_uom.ratio)
 
 
 UomRole = role_anchor("uom/role")
 """The ``uom/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective uom manager. See :func:`angee.base.models.role_anchor`.
+an effective uom manager. See :func:`angee.models.role_anchor`.
 """

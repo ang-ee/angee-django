@@ -5,6 +5,7 @@ import { createNamespaceT } from "@angee/ui";
 export const enTagsMessages: Record<string, string> = {
   "col.name": "Name",
   "col.color": "Color",
+  "col.attention": "Attention",
   "form.details": "Details",
   "record.label": "Tags",
   "record.error": "Could not update tags.",

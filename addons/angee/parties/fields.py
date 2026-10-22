@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import pycountry
@@ -56,7 +57,7 @@ class CountryCodeField(models.CharField):
         kwargs["choices"] = country_choices
         super().__init__(*args, **kwargs)
 
-    def deconstruct(self) -> tuple[str, str, list[Any], dict[str, Any]]:
+    def deconstruct(self) -> tuple[str, str, Sequence[Any], dict[str, Any]]:
         name, path, args, kwargs = super().deconstruct()
         kwargs.pop("choices", None)
         kwargs.pop("max_length", None)

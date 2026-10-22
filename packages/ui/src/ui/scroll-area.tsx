@@ -9,8 +9,11 @@ import type {
   ScrollAreaViewportProps as BaseScrollAreaViewportProps,
 } from "@base-ui/react/scroll-area";
 
-import { tv, type VariantProps } from "../lib/variants";
+import { tv } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const scrollAreaVariants = tv({
   slots: {
     root: "relative min-h-0 overflow-hidden",
@@ -23,8 +26,6 @@ export const scrollAreaVariants = tv({
     corner: "bg-transparent",
   },
 });
-
-export type ScrollAreaRecipeProps = VariantProps<typeof scrollAreaVariants>;
 
 export type ScrollAreaScrollbarPolicy =
   | "both"
@@ -51,6 +52,9 @@ export type ScrollAreaCornerProps = BaseScrollAreaCornerProps & {
   className?: string;
 };
 
+/**
+ * @owner ScrollArea
+ */
 export const ScrollAreaRoot = React.forwardRef<
   HTMLDivElement,
   ScrollAreaRootProps
@@ -66,6 +70,9 @@ export const ScrollAreaRoot = React.forwardRef<
 });
 ScrollAreaRoot.displayName = "ScrollAreaRoot";
 
+/**
+ * @owner ScrollArea
+ */
 export const ScrollAreaViewport = React.forwardRef<
   HTMLDivElement,
   ScrollAreaViewportProps
@@ -81,6 +88,9 @@ export const ScrollAreaViewport = React.forwardRef<
 });
 ScrollAreaViewport.displayName = "ScrollAreaViewport";
 
+/**
+ * @owner ScrollArea
+ */
 export const ScrollAreaContent = React.forwardRef<
   HTMLDivElement,
   ScrollAreaContentProps
@@ -96,6 +106,9 @@ export const ScrollAreaContent = React.forwardRef<
 });
 ScrollAreaContent.displayName = "ScrollAreaContent";
 
+/**
+ * @owner ScrollArea
+ */
 export const ScrollAreaScrollbar = React.forwardRef<
   HTMLDivElement,
   ScrollAreaScrollbarProps
@@ -111,6 +124,9 @@ export const ScrollAreaScrollbar = React.forwardRef<
 });
 ScrollAreaScrollbar.displayName = "ScrollAreaScrollbar";
 
+/**
+ * @owner ScrollArea
+ */
 export const ScrollAreaThumb = React.forwardRef<
   HTMLDivElement,
   ScrollAreaThumbProps
@@ -126,6 +142,9 @@ export const ScrollAreaThumb = React.forwardRef<
 });
 ScrollAreaThumb.displayName = "ScrollAreaThumb";
 
+/**
+ * @owner ScrollArea
+ */
 export const ScrollAreaCorner = React.forwardRef<
   HTMLDivElement,
   ScrollAreaCornerProps
@@ -152,6 +171,9 @@ export type ScrollAreaProps = Omit<ScrollAreaRootProps, "children"> &
     viewportClassName?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const ScrollArea = React.forwardRef<HTMLDivElement, ScrollAreaProps>(
   function ScrollArea(
     {

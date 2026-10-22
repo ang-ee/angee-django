@@ -1,0 +1,8 @@
+{
+  "criticalExports": [
+    {
+      "name": "TIMELINE_TAB_ID",
+      "ownerFile": "src/index.tsx"
+    }
+  ]
+}

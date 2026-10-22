@@ -1,7 +1,7 @@
 {
   "dynamicI18nKeyFamilies": [
     {
-      "namespace": "storage",
+      "namespace": "storage-integrate",
       "owner": "ConnectMountAction i18nPrefix",
       "prefix": "",
       "values": ["mount.localFolder", "iphone.mount.connect"],

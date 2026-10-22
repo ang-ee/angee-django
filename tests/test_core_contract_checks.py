@@ -4,16 +4,13 @@
 import pytest
 from django.apps import apps
 from django.core.checks.registry import registry
-from django.db import models
 
-from angee.base.checks import (
-    check_creation_key_constraints,
+from angee.checks import (
     check_ownership,
     check_rebac_caveats,
 )
-from angee.base.mixins import CreationKeyMixin
 from angee.compose.permissions import apply_schema_paths, extension_source_map
-from tests.core_persistence import OWNERSHIP_SCHEMA, CreationRow, OwnedRow
+from tests.core_persistence import OWNERSHIP_SCHEMA, OwnedRow
 from tests.test_zed_extensions import _base_addon, _contrib_addon
 
 
@@ -55,6 +52,10 @@ def test_ownership_requires_transfer_backing_and_the_owner_gate(ownership_schema
     elif mutation == "no-definition":
         assert [error.id for error in errors] == ["angee.E022", "angee.E027"]
         assert all(error.obj is OwnedRow for error in errors)
+    elif mutation in {"stored-owner", "audit-owner"}:
+        # An owner relation off the owner column is also a second spelling of ownership.
+        assert [error.id for error in errors] == ["angee.E045", "angee.E022"]
+        assert all(error.obj is OwnedRow for error in errors)
     else:
         [error] = errors
         assert error.obj is OwnedRow
@@ -87,26 +88,6 @@ def test_e025_requires_a_foreign_key_to_an_item_owning_model(ownership_schema, m
     else:
         [error] = errors
         assert error.id == "angee.E025" and error.obj is OwnedRow
-
-
-@pytest.mark.parametrize("constraint", ["valid", "renamed", "absent", "wrong-scope", "unconditional"])
-def test_e023_requires_exact_scoped_partial_uniqueness(monkeypatch, constraint):
-    constraints = {
-        "valid": [CreationKeyMixin.creation_key_constraint(name="valid")],
-        "renamed": [CreationKeyMixin.creation_key_constraint(name="retained_historical_name")],
-        "absent": [],
-        "wrong-scope": [CreationKeyMixin.creation_key_constraint(scope="title", name="wrong")],
-        "unconditional": [models.UniqueConstraint(fields=("created_by", "client_creation_key"), name="wrong")],
-    }
-    monkeypatch.setattr(CreationRow._meta, "constraints", constraints[constraint])
-    config = apps.get_app_config("scopedemo")
-    monkeypatch.setattr(config, "get_models", lambda *args, **kwargs: iter([CreationRow]))
-    errors = check_creation_key_constraints([config])
-    if constraint in ("valid", "renamed"):
-        assert errors == []
-    else:
-        [error] = errors
-        assert error.id == "angee.E023" and error.obj is CreationRow
 
 
 @pytest.mark.parametrize("caveated", [False, True])
@@ -143,5 +124,5 @@ def test_e024_accepts_the_installed_composed_schema():
 
 
 def test_contract_checks_are_registered_once_by_base():
-    for check in (check_ownership, check_creation_key_constraints, check_rebac_caveats):
+    for check in (check_ownership, check_rebac_caveats):
         assert sum(candidate is check for candidate in registry.registered_checks) == 1

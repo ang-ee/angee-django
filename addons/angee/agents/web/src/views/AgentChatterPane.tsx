@@ -1,9 +1,8 @@
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Card, CardContent, EmptyState, LazyBoundary, buttonVariants, cn, textRoleVariants, useRouteHref } from "@angee/ui";
+import { EmptyState, LazyBoundary, LoadingPanel, NavLink, buttonVariants, useRouteHref } from "@angee/ui";
 
 import type { ChatterView } from "@angee/ui/runtime";
-import { Link } from "@tanstack/react-router";
 
 import { useAgentsT } from "../i18n";
 import {
@@ -79,7 +78,7 @@ export function AgentChatterPane({
   const { openedIds } = useOpenedAgents({ selectedId });
 
   if (loading) {
-    return <PaneMessage>{t("chat.resolving")}</PaneMessage>;
+    return <LoadingPanel message={t("chat.resolving")} />;
   }
   if (session === null) {
     return (
@@ -88,14 +87,11 @@ export function AgentChatterPane({
         title={t("agent.noRunningAgent")}
         description={t("agent.chatUnavailable")}
         actions={
-          <Link
-            className={buttonVariants({ variant: "primary", size: "sm" })}
-            to={routeHref("agents.agents")}
-          >
+          // A link wearing the button recipe: the shared idiom for a navigating verb.
+          <NavLink className={buttonVariants({ variant: "primary", size: "sm" })} href={routeHref("agents.agents")} variant="unstyled">
             {t("agent.setupAssistant")}
-          </Link>
+          </NavLink>
         }
-        className="min-h-48 p-4"
       />
     );
   }
@@ -108,9 +104,9 @@ export function AgentChatterPane({
         const rosterAgent = agents.find((agent) => agent.id === id);
         const runtimeClass = rosterAgent?.runtime_class
           ?? (id === resolved.agent_id ? resolved.runtime_class : undefined);
-        if (runtimeClass === undefined) return <PaneMessage>{t("chat.resolving")}</PaneMessage>;
+        if (runtimeClass === undefined) return <LoadingPanel message={t("chat.resolving")} />;
         return (
-          <LazyBoundary pending={<PaneMessage>{t("chat.resolving")}</PaneMessage>}>
+          <LazyBoundary pending={<LoadingPanel message={t("chat.resolving")} />}>
             <AgentChat
               agentId={id}
               view={liveView}
@@ -137,14 +133,4 @@ function normalizeAgentChatView(view: ChatterView | AgentChatView): AgentChatVie
     ...(view.sqids ? { sqids: [...view.sqids] } : {}),
     ...(view.params ? { params: { ...view.params } } : {}),
   };
-}
-
-function PaneMessage({ children }: { children: React.ReactNode }): React.ReactElement {
-  return (
-    <Card>
-      <CardContent>
-        <p className={cn(textRoleVariants({ role: "meta" }), "leading-relaxed")}>{children}</p>
-      </CardContent>
-    </Card>
-  );
 }

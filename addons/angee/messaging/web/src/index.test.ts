@@ -1,45 +1,46 @@
-import { expectValidBaseAddon } from "@angee/app/testing";
+import { containerChildren, expectValidBaseAddon } from "@angee/app/testing";
 import { createRouteHref } from "@angee/ui";
-import type { ChatterTabContent, ChatterViewContext, ContainerChild } from "@angee/ui/runtime";
+import type { ChatterTabContent, ChatterViewContext } from "@angee/ui/runtime";
+import { isValidElement } from "react";
 import { describe, expect, test } from "vitest";
 
-import messaging, { defineMessagingAddon, recordCommentsTab } from "./index";
+import messaging from "./index";
+import { RecordChatterPane, type RecordChatterPaneProps } from "./RecordChatterPane";
+import { RecordConversationPane, type RecordConversationPaneProps } from "./RecordConversationPane";
 
 describe("messaging addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
     expect(() => expectValidBaseAddon(messaging)).not.toThrow();
   });
 
-  test("contributes gated Comments and Conversations; provenance owns History", () => {
-    const aside = messaging.containers?.["record#aside"] as Record<string, unknown>;
-    expect(aside).toMatchObject({
-      "messaging.comments": { sequence: 10, content: { aliases: ["comments"] } },
-      "messaging.related": { sequence: 60, content: { aliases: ["messaging.sources", "sources"] } },
+  test("contributes the comment and conversation kinds to the Timeline, the Discussion tab, the Follow control and the Conversations group", () => {
+    expect(Object.keys(messaging.containers?.["timeline#kinds"] ?? {})).toEqual(["messaging.comment", "messaging.conversation"]);
+    expect(messaging.containers?.["timeline#kinds"]).toMatchObject({
+      "messaging.comment": { content: { target: { tab: "messaging.discussion", focus: "message" } } },
+      "messaging.conversation": { content: { verb: "Open conversation", target: { tab: "messaging.conversation" } } },
     });
+    expect(messaging.containers?.["record#aside"]).toMatchObject({ "messaging.discussion": { sequence: 20 } });
+    expect(messaging.containers?.["record#aside"]).toMatchObject({ "messaging.conversation": { content: {
+      strip: false, target: { model: "messaging.ThreadAttachment" },
+    } } });
+    expect(Object.keys(messaging.containers?.["form#chrome"] ?? {})).toEqual(["messaging.follow"]);
+    expect(messaging.containers?.["related#groups"]).toMatchObject({ "messaging.conversations": { sequence: 40, content: { label: "Conversations", edge: { model: "messaging.ThreadAttachment" } } } });
   });
 
-  test("offers the Conversations tab only where the record's type can retain source conversations", () => {
-    const sources = (messaging.containers?.["record#aside"] as Record<string, ContainerChild<ChatterTabContent>>)["messaging.related"]!;
-    const record = (recordEdges?: readonly string[]): ChatterViewContext => ({
-      pathname: "/records/rec_1", params: { id: "rec_1" },
-      route: { name: "record", path: "/records/$id", viewType: "example/record", modelLabel: "example.Record", ...(recordEdges ? { recordEdges } : {}) },
-      view: { kind: "record", type: "example/record", sqid: "rec_1" },
-    });
-    expect(sources.content.when?.(record(["messaging.ThreadAttachment"]))).toBe(true);
-    expect(sources.content.when?.(record(["storage.FileAttachment"]))).toBe(false);
-    expect(sources.content.when?.(record())).toBe(false);
-  });
-
-  test("offers Comments only where the record's type keeps chatter, not on every thread attachment target", () => {
-    const comments = (messaging.containers?.["record#aside"] as Record<string, ContainerChild<ChatterTabContent>>)["messaging.comments"]!;
-    const record = (recordEdges: readonly string[]): ChatterViewContext => ({
-      pathname: "/records/rec_1", params: { id: "rec_1" },
-      route: { name: "record", path: "/records/$id", viewType: "example/record", modelLabel: "example.Record", recordEdges },
-      view: { kind: "record", type: "example/record", sqid: "rec_1" },
-    });
-    expect(comments.content.when?.(record(["messaging.ThreadAttachment", "messaging.ThreadAttachment:chatter"]))).toBe(true);
-    // A file retains source conversations but keeps no chatter of its own.
-    expect(comments.content.when?.(record(["messaging.ThreadAttachment", "tags.TagAssignment"]))).toBe(false);
+  test("passes the shell selection to Discussion and keys its filters by target", () => {
+    const context: ChatterViewContext = {
+      pathname: "/notes/nte_1", params: { id: "nte_1" },
+      view: { kind: "record", type: "notes.Note", sqid: "nte_1" },
+    };
+    const selection = { target: "msg_1", focus: "message" };
+    const discussion = containerChildren(messaging, "record#aside").find(([id]) => id === "messaging.discussion")?.[1].content as ChatterTabContent;
+    const rendered = discussion.render?.(context, selection);
+    expect(isValidElement<RecordChatterPaneProps>(rendered)).toBe(true);
+    if (!isValidElement<RecordChatterPaneProps>(rendered)) throw new Error("Discussion must render its pane");
+    expect(rendered.type).toBe(RecordChatterPane);
+    expect(rendered.key).toBe(selection.target);
+    expect(rendered.props.context).toBe(context);
+    expect(rendered.props.selection).toBe(selection);
   });
 
   test("registers the message resources", () => {
@@ -58,28 +59,22 @@ describe("messaging addon manifest", () => {
     expect(messaging.menus["messaging.threads"]?.sequence).toBe(20);
   });
 
+  test("opens an attachment in the conversation drill-in", () => {
+    const context: ChatterViewContext = {
+      pathname: "/notes/nte_1", params: { id: "nte_1" },
+      view: { kind: "record", type: "notes.Note", sqid: "nte_1" },
+    };
+    const conversation = containerChildren(messaging, "record#aside").find(([id]) => id === "messaging.conversation")?.[1].content as ChatterTabContent;
+    const rendered = conversation.render?.(context, { target: "tat_1" });
+    if (!isValidElement<RecordConversationPaneProps>(rendered)) throw new Error("Conversation must render its pane");
+    expect(rendered.type).toBe(RecordConversationPane);
+    expect(rendered.props).toEqual({ context, attachmentId: "tat_1" });
+  });
+
   test("builds message list and record links from the renamed route claims", () => {
     const routeHref = createRouteHref(messaging.routes ?? []);
     expect(routeHref("messaging.messages")).toBe("/messaging/messages");
     expect(routeHref("messaging.messages.record", { id: "message 1" })).toBe("/messaging/messages/message%201");
     expect(messaging.routes?.find((route) => route.resource === "messaging.Message")?.name).toBe("messaging.messages");
-  });
-
-  test("passes the app's submit key into the built-in Comments tab", () => {
-    const comments = (addon: typeof messaging) =>
-      (addon.containers?.["record#aside"] as Record<string, ContainerChild<ChatterTabContent>>)["messaging.comments"]!;
-    const configured = defineMessagingAddon({ submitKey: "mod-enter" });
-    expect(() => expectValidBaseAddon(configured)).not.toThrow();
-    expect(comments(configured).content.render?.({} as ChatterViewContext))
-      .toMatchObject({ props: { submitKey: "mod-enter" } });
-    expect(comments(messaging).content.render?.({} as ChatterViewContext))
-      .toMatchObject({ props: { submitKey: "enter" } });
-  });
-
-  test("recordCommentsTab builds the same Comments tab for another addon's aside", () => {
-    const tab = recordCommentsTab({ submitKey: "mod-enter", aliases: ["comments"] });
-    expect(tab).toMatchObject({ sequence: 10, content: { label: "Comments", icon: "comments", aliases: ["comments"] } });
-    expect(tab.content.render?.({} as ChatterViewContext)).toMatchObject({ props: { submitKey: "mod-enter" } });
-    expect(recordCommentsTab().content.aliases).toBeUndefined();
   });
 });

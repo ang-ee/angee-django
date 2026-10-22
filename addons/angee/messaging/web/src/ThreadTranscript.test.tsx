@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { formatDayLabel } from "@angee/ui";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ThreadTranscript } from "./ThreadTranscript";
@@ -38,6 +39,13 @@ vi.mock("@angee/ui", async (importOriginal) => {
       (_namespace: string, messages: Record<string, string>) =>
       (key: string) =>
         messages[key] ?? key,
+    // The jump-to-date control is the runtime's date widget; the suite stands in a plain field for it.
+    useResolvedWidget: (key: string) => key === "date" ? {
+      edit: ({ value, onChange, field }: { value: unknown; onChange?: (next: unknown) => void; field?: { label?: string } }) => (
+        <input aria-label={field?.label} value={typeof value === "string" ? value : ""}
+          onChange={(event) => onChange?.(event.target.value || null)} />
+      ),
+    } : undefined,
   };
 });
 
@@ -230,7 +238,8 @@ describe("ThreadTranscript", () => {
       message({ id: "z", feed_order_key: "v1:0001", parts: [{ role: "BODY", fragment: { text: "Oldest" }, file: null }] as never }),
     ];
     render(<ThreadTranscript threadId="thr_1" />);
-    const items = screen.getAllByRole("listitem");
+    // The transcript's own rows (each wraps its feed row), in reading order.
+    const items = Array.from(screen.getByRole("list", { name: "Conversation transcript" }).querySelectorAll(":scope > li"));
     expect(items[0]?.textContent).toContain("Oldest");
     expect(items[1]?.textContent).toContain("Newest");
   });
@@ -253,7 +262,7 @@ test("day separators and date anchors share the explicitly selected timezone", (
   ];
   const onAnchorChange = vi.fn();
   render(<ThreadTranscript threadId="thr_1" order="history" timezone="America/New_York" onAnchorChange={onAnchorChange} />);
-  const day = new Intl.DateTimeFormat(undefined, { timeZone: "America/New_York" }).format(new Date("2026-07-02T00:30:00Z"));
+  const day = formatDayLabel("2026-07-02T00:30:00Z", { timeZone: "America/New_York" });
   expect(screen.getAllByText(day)).toHaveLength(1);
   fireEvent.change(screen.getByLabelText("Jump to date"), { target: { value: "2026-07-01" } });
   expect(onAnchorChange).toHaveBeenCalledWith("date:2026-07-01@America/New_York");

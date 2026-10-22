@@ -102,7 +102,7 @@ test("theme, scheme and options edit the live provider draft and both previews w
   const resolved = resolveThemeOptions(ink.definition, f.appearance().currentPreferences.options);
   expect(document.documentElement.style.getPropertyValue("--brand")).toBe(resolved.tokens.dark["--brand"]);
   for (const scheme of ["light", "dark"] as const) {
-    const frame = screen.getByTitle<HTMLIFrameElement>(`${ink.definition.id} ${scheme} preview`);
+    const frame = screen.getByTitle<HTMLIFrameElement>(`${ink.definition.labelKey} ${scheme === "light" ? "Light" : "Dark"} preview`);
     fireEvent.load(frame);
     await waitFor(() => expect(frame.contentDocument?.documentElement.style.getPropertyValue("--brand")).toBe(resolved.tokens[scheme]["--brand"]));
     expect(frame.contentDocument?.documentElement.dataset.colorScheme).toBe(scheme);

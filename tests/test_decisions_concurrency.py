@@ -9,10 +9,9 @@ import pytest
 from django.db import close_old_connections, connection, connections, transaction
 from rebac import system_context
 
-from angee.base.mixins import StaleRevisionError
-from angee.base.scoping import system_queryset
 from angee.decisions.testing.drivers import seed_decision
 from angee.decisions.testing.models import Decision
+from angee.models import StaleRevisionError
 from tests.conftest import create_user, vault_for
 
 pytestmark = [
@@ -69,7 +68,7 @@ def test_competing_assignees_cannot_replace_the_first_answer(composed_tables):
     decision = seed_decision(actor=requester, assignees=(requester, reviewer), reference=subject, requester=None)
     with ThreadPoolExecutor(max_workers=1) as pool:
         with transaction.atomic(), system_context(reason="test.answer_race"):
-            system_queryset(Decision).select_for_update().get(pk=decision.pk)
+            Decision.system_queryset().select_for_update().get(pk=decision.pk)
             contender, pid = submit(
                 pool,
                 lambda: Decision.objects.decide(
@@ -80,5 +79,5 @@ def test_competing_assignees_cannot_replace_the_first_answer(composed_tables):
             Decision.objects.decide(decision, actor=requester, chosen=["accept"], revision=decision.revision)
         with pytest.raises(StaleRevisionError):
             contender.result(timeout=10)
-    retained = system_queryset(Decision).get(pk=decision.pk)
+    retained = Decision.system_queryset().get(pk=decision.pk)
     assert retained.verdict == ["accept"] and retained.answered_by_id == requester.pk

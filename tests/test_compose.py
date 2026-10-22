@@ -21,8 +21,6 @@ from rebac import schema_changes
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
 from angee.addons import addon_manifest
-from angee.base.mixins import HistoryMixin
-from angee.base.models import AngeeModel, role_anchor
 from angee.compose.appgraph import AppGraph
 from angee.compose.apps import ComposeConfig
 from angee.compose.dependencies import AddonDependencyGroupResult
@@ -33,6 +31,7 @@ from angee.compose.rendering import render_models
 from angee.compose.runtime import Runtime
 from angee.compose.web import WebRuntime
 from angee.fs import GENERATED_SENTINEL
+from angee.models import AngeeModel, HistoryMixin, role_anchor
 from tests.conftest import make_addon
 
 
@@ -336,6 +335,24 @@ def test_nexus_aggregation_dependencies_reach_web_runtime() -> None:
     assert {"angee.messaging", "angee.parties", "angee.spaces", "angee.posts"} <= set(nexus["dependsOn"])
 
 
+def test_oidc_web_documents_follow_the_enabled_backend_addon() -> None:
+    """An IAM-only host never scans operations belonging to the optional OIDC schema."""
+
+    iam_configs = AppGraph().resolve(("angee.iam",))
+    oidc_configs = AppGraph().resolve(("angee.iam_integrate_oidc",))
+    iam_manifest = WebRuntime(iam_configs).manifest
+    oidc_manifest = WebRuntime(oidc_configs).manifest
+
+    assert "@angee/iam-integrate-oidc" not in {entry["package"] for entry in iam_manifest["addonPackages"]}
+    oidc = next(entry for entry in oidc_manifest["addonPackages"] if entry["app"] == "angee.iam_integrate_oidc")
+    assert oidc["package"] == "@angee/iam-integrate-oidc"
+    assert {"angee.iam", "angee.integrate", "angee.parties"} <= set(oidc["dependsOn"])
+    iam_config = next(config for config in iam_configs if config.name == "angee.iam")
+    assert not (Path(iam_config.path) / "web/src/documents.public.ts").exists()
+    oidc_config = next(config for config in oidc_configs if config.name == "angee.iam_integrate_oidc")
+    assert (Path(oidc_config.path) / "web/src/documents.public.ts").is_file()
+
+
 def test_web_runtime_carries_the_deployment_ui_layer() -> None:
     """``ANGEE_UI`` reaches the web runtime as the last layer; unknown keys fail composition."""
 
@@ -489,8 +506,7 @@ def test_runtime_renders_iam_user_sources(tmp_path: Path) -> None:
     assert "class User" in user_source
     assert "app_label = 'iam'" in user_source
     assert "rebac_resource_type = 'auth/user'" in user_source
-    assert "_UserMeta = getattr(AbstractUser, 'Meta', object)" in user_source
-    assert "class Meta(_UserMeta):" in user_source
+    assert "class Meta(AbstractUser.Meta):" in user_source
     assert "swappable = 'AUTH_USER_MODEL'" not in user_source
 
 
@@ -521,9 +537,8 @@ def test_role_anchor_emits_the_hand_rolled_runtime_source(tmp_path: Path) -> Non
     source = render_models(ModelComposition({"tests": (probe,)}, {}), "tests")
 
     assert "from tests.role_anchor_probe import ProbeRole as AbstractProbeRole" in source
-    assert "_ProbeRoleMeta = getattr(AbstractProbeRole, 'Meta', object)" in source
     assert "class ProbeRole(AbstractProbeRole):" in source
-    assert "class Meta(_ProbeRoleMeta):" in source
+    assert "class Meta(AbstractProbeRole.Meta):" in source
     assert "abstract = False" in source
     assert "rebac_resource_type = 'tests/role'" in source
 
@@ -1433,6 +1448,20 @@ def test_provision_post_build_runs_remaining_steps_in_order_without_respawning(
     assert "angee provision: ok" not in messages
 
 
+def test_provision_runs_declared_installed_addon_commands_after_migrations(monkeypatch) -> None:
+    calls = []
+    command = Command()
+    monkeypatch.setattr(command, "_run_step", calls.append)
+    monkeypatch.setattr(
+        "angee.compose.management.commands.angee.get_commands", lambda: {"addon_post_build": "timeline"},
+    )
+    command._handle_provision(_provision_options(
+        post_build=True, after_if_installed=["addon_post_build", "absent_addon_command"],
+    ))
+    assert calls[-1] == ["addon_post_build"]
+    assert calls.index(["migrate", "--noinput", "--skip-checks"]) < len(calls) - 1
+
+
 def test_provision_post_build_aborts_on_the_first_failed_step(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1757,7 +1786,7 @@ def test_appgraph_distinguishes_project_roots_from_injected_runtime_roots() -> N
 def test_appgraph_rejects_duplicate_dependencies() -> None:
     """Repeated dependencies are rejected at their declaring owner."""
 
-    config = make_addon(name="tests.duplicate_dependency", depends_on=("angee.base", "angee.base"))
+    config = make_addon(name="tests.duplicate_dependency", depends_on=("angee", "angee"))
 
     with pytest.raises(ImproperlyConfigured, match="duplicate dependency"):
         AppGraph().resolve([config])
@@ -2014,7 +2043,7 @@ import angee.compose.project
 import angee.compose.bootstrap
 import angee.compose.composer
 assert not settings.configured
-for module in ('angee.compose.runtime', 'angee.base.models', 'rebac.models'):
+for module in ('angee.compose.runtime', 'angee.models', 'rebac.models'):
     assert module not in sys.modules, module
 """,
         ],

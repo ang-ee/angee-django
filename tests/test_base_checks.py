@@ -15,46 +15,30 @@ from django.test.utils import isolate_apps
 from rebac import RebacMixin
 from rebac.models import RebacResource, Relationship, RelationshipRegistry
 
-from angee.base import checks as base_checks
-from angee.base.apps import BaseConfig
-from angee.base.checks import (
-    check_expat_version,
+from angee import checks as base_checks
+from angee.apps import BaseConfig
+from angee.checks import (
     check_hierarchy_queryset_order,
     check_hooks,
     check_impl_registries,
     check_ownership,
     check_rebac_database,
 )
-from angee.base.fields import StateField
-from angee.base.impl import ImplClassField
-from angee.base.mixins import (
+from angee.fields import StateField
+from angee.impl import ImplClassField
+from angee.models import (
+    AngeeManager,
+    AngeeModel,
     AppendOnlyModel,
     AppendOnlyQuerySet,
+    AuditMixin,
     HierarchyQuerySet,
     OwnerMixin,
     TrashMixin,
     TrashQuerySet,
 )
-from angee.base.models import AngeeManager, AngeeModel
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
-
-
-@pytest.mark.parametrize("version", [(2, 6, 0), (2, 7, 1), (2, 7, 2), (2, 7, 3), (3, 0, 0)])
-def test_expat_check_requires_amplification_protections(
-    monkeypatch: pytest.MonkeyPatch, version: tuple[int, int, int],
-) -> None:
-    monkeypatch.setattr(base_checks.pyexpat, "version_info", version)
-    errors = checks.run_checks(app_configs=[], tags=[checks.Tags.security])
-    expat_errors = [error for error in errors if error.id == "angee.E035"]
-    if version >= (2, 7, 2):
-        assert expat_errors == []
-    else:
-        [error] = expat_errors
-        assert isinstance(error, checks.Error)
-        assert "Expat 2.7.2 or later" in error.msg
-        assert ".".join(str(part) for part in version) in error.msg
-        assert error.hint == "Upgrade Python or its linked Expat library."
 
 
 @pytest.mark.parametrize("guarded", [False, True])
@@ -166,7 +150,6 @@ def test_installed_hook_owners_declare_their_settings() -> None:
         "ANGEE_TASK_LOCK_BACKEND",
         "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS",
         "ANGEE_PARTIES_SIGNING_PROVIDERS",
-        "ANGEE_PARTIES_STATEMENT_FOLDS",
         "ANGEE_MERGE_GUARDS",
     } <= set(settings.ANGEE_HOOKS)
     assert check_hooks() == []
@@ -237,10 +220,9 @@ def test_rebac_database_check_registered_by_base() -> None:
 
     config = apps.get_app_config("base")
     assert isinstance(config, BaseConfig)
+    assert config.name == "angee"
     config.ready()
     config.ready()
-    assert sum(check is check_expat_version for check in registry.registered_checks) == 1
-    assert checks.Tags.security in check_expat_version.tags
     assert sum(check is check_rebac_database for check in registry.registered_checks) == 1
     assert checks.Tags.models in check_rebac_database.tags
     assert sum(check is check_hierarchy_queryset_order for check in registry.registered_checks) == 1
@@ -363,3 +345,82 @@ definition tests/owned_child {
         assert error.id == "angee.E027" and error.obj is OwnedChild
         assert "contenttypes.OwnedChild" in error.msg and "tests/owned_child" in error.msg
         assert "->reassign" in error.msg
+
+
+def test_a_child_sharing_its_owners_definition_takes_its_transfer_gate(tmp_path, monkeypatch):
+    with isolate_apps("django.contrib.contenttypes") as isolated:
+        class SharedParent(OwnerMixin, AngeeModel):
+            class Meta:
+                app_label = "contenttypes"
+                rebac_resource_type = "tests/shared_parent"
+
+        class SharedChild(SharedParent):
+            class Meta:
+                app_label = "contenttypes"
+                rebac_resource_type = "tests/shared_parent"
+
+        path = tmp_path / "ownership.zed"
+        path.write_text(
+            "definition tests/shared_parent {\n    relation owner: auth/user // rebac:field=owner\n"
+            "    permission transfer = owner\n    permission write__owner = transfer\n}\n"
+        )
+        monkeypatch.setattr(apps.get_app_config("contenttypes"), "rebac_schema", str(path), raising=False)
+        assert check_ownership([isolated.get_app_config("contenttypes")]) == []
+
+
+@pytest.mark.parametrize(
+    ("owned", "relation", "flagged"),
+    [
+        (True, "relation owner: auth/user // rebac:field=owner", False),
+        (True, "relation owner: auth/user // rebac:field=created_by", True),
+        (False, "relation owner: auth/user // rebac:field=created_by", True),
+        (False, "relation owner: auth/user", True),
+        (False, "relation creator: auth/user // rebac:field=created_by", False),
+    ],
+)
+def test_owner_names_only_the_owner_mixin_column(tmp_path, monkeypatch, owned, relation, flagged):
+    """A relation named owner is OwnerMixin's column; attribution and roles take their own words."""
+
+    with isolate_apps("django.contrib.contenttypes") as isolated:
+        if owned:
+
+            class OwnedRow(OwnerMixin, AngeeModel):
+                class Meta:
+                    app_label = "contenttypes"
+                    rebac_resource_type = "tests/row"
+
+            row = OwnedRow
+        else:
+
+            class AttributedRow(AuditMixin, AngeeModel):
+                class Meta:
+                    app_label = "contenttypes"
+                    rebac_resource_type = "tests/row"
+
+            row = AttributedRow
+        name = relation.split()[1].rstrip(":")
+        path = tmp_path / "ownership.zed"
+        path.write_text(
+            f"definition tests/row {{\n    {relation}\n    permission transfer = {name}\n"
+            "    permission write__owner = transfer\n}\n"
+        )
+        monkeypatch.setattr(apps.get_app_config("contenttypes"), "rebac_schema", str(path), raising=False)
+        errors = check_ownership([isolated.get_app_config("contenttypes")])
+
+    spelling = [error for error in errors if error.id == "angee.E045"]
+    if flagged:
+        [error] = spelling
+        assert error.obj is row and "tests/row" in error.msg
+    else:
+        assert errors == []
+
+
+@pytest.mark.django_db
+def test_installed_models_spell_ownership_one_way() -> None:
+    """No installed definition names a relation owner other than OwnerMixin's column.
+
+    Test modules register their own models in the shared registry, so this
+    asserts the spelling rule alone; E022 and E027 have their focused tests.
+    """
+
+    assert [error.msg for error in check_ownership() if error.id == "angee.E045"] == []

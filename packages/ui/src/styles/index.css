@@ -49,22 +49,6 @@
   /* shadcn alias layer — additive aliases over the angee tokens so
      shadcn-shaped snippets compile while the semantic token tree stays
      the only source of visual values. */
-  --color-background:           var(--surface-canvas);
-  --color-foreground:           var(--text-primary);
-  --color-primary:              var(--brand);
-  --color-primary-foreground:   var(--text-on-brand);
-  --color-secondary:            var(--surface-inset);
-  --color-secondary-foreground: var(--text-primary);
-  --color-muted:                var(--surface-inset);
-  --color-muted-foreground:     var(--text-muted);
-  --color-accent-foreground:    var(--accent-soft-text);
-  --color-destructive:          var(--danger);
-  --color-destructive-foreground: var(--on-danger);
-  --color-card:                 var(--surface-sheet);
-  --color-card-foreground:      var(--text-primary);
-  --color-popover-foreground:   var(--text-primary);
-  --color-input:                var(--border-default);
-  --color-ring:                 var(--border-focus);
 
   /* Foreground / text */
   --color-fg:            var(--text-primary);
@@ -94,25 +78,11 @@
   --color-brand-soft-text:  var(--brand-soft-text);
 
   /* Brand ramp — for fills that need a specific shade. */
-  --color-brand-50:  var(--b-50);
-  --color-brand-100: var(--b-100);
-  --color-brand-200: var(--b-200);
-  --color-brand-300: var(--b-300);
-  --color-brand-400: var(--b-400);
-  --color-brand-500: var(--b-500);
-  --color-brand-600: var(--b-600);
-  --color-brand-700: var(--b-700);
-  --color-brand-800: var(--b-800);
-  --color-brand-900: var(--b-900);
 
   /* Accent (teal — AI / chatter highlight) */
   --color-accent:           var(--accent);
   --color-accent-soft:      var(--accent-soft);
   --color-accent-soft-text: var(--accent-soft-text);
-  --color-accent-300:       var(--t-300);
-  --color-accent-500:       var(--t-500);
-  --color-accent-600:       var(--t-600);
-  --color-accent-700:       var(--t-700);
 
   /* Semantic status (soft fill + readable text) */
   --color-success-soft: var(--success-soft);
@@ -175,24 +145,6 @@
 
   /* Status palette — raw 100/500/700 for literal fills (dots, charts,
      hard-coded `red-500` button danger variants). Reuse the primitive ramp. */
-  --color-green-100:  var(--green-100);
-  --color-green-500:  var(--green-500);
-  --color-green-700:  var(--green-700);
-  --color-amber-100:  var(--amber-100);
-  --color-amber-500:  var(--amber-500);
-  --color-amber-700:  var(--amber-700);
-  --color-red-100:    var(--red-100);
-  --color-red-500:    var(--red-500);
-  --color-red-700:    var(--red-700);
-  --color-blue-100:   var(--blue-100);
-  --color-blue-500:   var(--blue-500);
-  --color-blue-700:   var(--blue-700);
-  --color-purple-100: var(--purple-100);
-  --color-purple-500: var(--purple-500);
-  --color-purple-700: var(--purple-700);
-  --color-pink-100:   var(--pink-100);
-  --color-pink-500:   var(--pink-500);
-  --color-pink-700:   var(--pink-700);
 
   /* Avatar default background — token reference for slot-less avatars. */
   --color-avatar-default-bg: var(--avatar-default-bg);
@@ -200,18 +152,8 @@
   /* Neutral ramp — for chrome needing a specific gray (rail tooltips,
      dark-only surfaces, modal scrims). */
   --color-n-0:    var(--n-0);
-  --color-n-50:   var(--n-50);
   --color-n-100:  var(--n-100);
-  --color-n-150:  var(--n-150);
   --color-n-200:  var(--n-200);
-  --color-n-300:  var(--n-300);
-  --color-n-400:  var(--n-400);
-  --color-n-500:  var(--n-500);
-  --color-n-600:  var(--n-600);
-  --color-n-700:  var(--n-700);
-  --color-n-800:  var(--n-800);
-  --color-n-850:  var(--n-850);
-  --color-n-900:  var(--n-900);
   --color-n-950:  var(--n-950);
 
   /* ----------------------------------------------------------------
@@ -224,14 +166,14 @@
   --spacing-topbar-h:      var(--topbar-h);
   --spacing-breadcrumbbar-h: var(--breadcrumbbar-h);
   --spacing-control-h:     var(--controlpanel-h);
-  --spacing-chatter-w:     var(--chatter-w);
   --spacing-search-w:      13.5rem;  /* 216px — topbar global-search pill */
 
   /* Per-component sizing referenced from multiple primitives. */
+  --spacing-control-xs:    var(--control-h-xs);  /* h-control-xs / size-control-xs: the 28px pane control */
   --spacing-btn-sm:        var(--control-h-sm);
   --spacing-btn-md:        var(--control-h-md);
   --spacing-btn-lg:        var(--control-h-lg);
-  --spacing-icon-btn-sm:   1.5rem;   /* 24px */
+  --spacing-icon-btn-sm:   var(--control-h-xs);  /* the 28px pane/band icon control */
   --spacing-icon-btn-md:   var(--control-h-md);
   --spacing-icon-btn-lg:   var(--control-h-lg);
   --spacing-avatar-sm:     1.25rem;  /* 20px */
@@ -248,8 +190,6 @@
      per-component one-offs stay inline. */
   --spacing-modal-w:           40rem;   /* 640px — Spotlight popup */
   --spacing-modal-top:         20vh;    /* Spotlight vertical offset */
-  --spacing-fields-chooser-w:  45rem;   /* 720px — resource toolbar field chooser */
-  --spacing-preview-max-h:     60vh;    /* FilePreview content cap */
   --spacing-modal-list-max-h:  50vh;    /* Spotlight list cap */
 
   /* ----------------------------------------------------------------
@@ -294,10 +234,6 @@
   --font-sans: var(--font-family-sans);
   --font-mono: var(--font-family-mono);
 
-  --text-28:                1.75rem;   /* 28px */
-  --text-28--line-height:   2.25rem;   /* 36px */
-  --text-34:                2.125rem;  /* 34px */
-  --text-34--line-height:   2.625rem;  /* 42px */
 
   /* ----------------------------------------------------------------
    *  ELEVATION — `shadow-X` utilities. The shadow values themselves
@@ -328,18 +264,30 @@
   --font-weight-semibold: var(--fw-semibold);
   --font-weight-bold:     var(--fw-bold);
 
-  /* Theme bridges for custom scale keys and Tailwind's text-lg.
-     12/14/16 align with text-xs/text-sm/text-base already. */
-  --text-2xs:               var(--fs-11); /* 11px */
-  --text-2xs--line-height:  var(--lh-11); /* 16px */
-  --text-13:                var(--fs-13); /* 13px */
-  --text-13--line-height:   var(--lh-13); /* 20px */
-  --text-15:                var(--fs-15); /* 15px */
-  --text-15--line-height:   var(--lh-15); /* 22px */
-  --text-lg:                var(--fs-18); /* 18px */
-  --text-lg--line-height:   var(--lh-18); /* 28px */
-  --text-22:                var(--fs-22); /* 22px */
-  --text-22--line-height:   var(--lh-22); /* 30px */
+  /* The whole type scale reads the theme's --fs/--lh tokens. One name per size:
+     text-2xs (11), text-12, text-13, text-sm (14), text-15, text-base (16),
+     text-lg (18), text-22, text-28, text-34. Tailwind's text-xs is not bridged;
+     12px is text-12. */
+  --text-2xs:               var(--fs-11);
+  --text-2xs--line-height:  var(--lh-11);
+  --text-12:                var(--fs-12);
+  --text-12--line-height:   var(--lh-12);
+  --text-13:                var(--fs-13);
+  --text-13--line-height:   var(--lh-13);
+  --text-sm:                var(--fs-14);
+  --text-sm--line-height:   var(--lh-14);
+  --text-15:                var(--fs-15);
+  --text-15--line-height:   var(--lh-15);
+  --text-base:              var(--fs-16);
+  --text-base--line-height: var(--lh-16);
+  --text-lg:                var(--fs-18);
+  --text-lg--line-height:   var(--lh-18);
+  --text-22:                var(--fs-22);
+  --text-22--line-height:   var(--lh-22);
+  --text-28:                var(--fs-28);
+  --text-28--line-height:   var(--lh-28);
+  --text-34:                var(--fs-34);
+  --text-34--line-height:   var(--lh-34);
 }
 
 /* ============================================================================
@@ -386,6 +334,15 @@
   }
 }
 
+/* The one selected / active / pressed surface (a tree row, a pressed toggle, a
+   tab, a chip, the current pane row). Declared as a utility so variants compose
+   it: `data-[pressed]:selected`, `aria-[current=true]:selected`. The same tokens
+   back `toneClass("brand", "soft")`, the pill owner. */
+@utility selected {
+  background-color: var(--brand-soft);
+  color: var(--brand-soft-text);
+}
+
 /* ============================================================================
    ConsoleLayout grid utilities — declared via Tailwind 4 @utility so the
    layout sets layout with single class names instead of arbitrary-value
@@ -420,13 +377,6 @@
 @utility area-control { grid-area: control; }
 @utility area-content { grid-area: content; }
 @utility area-status  { grid-area: status; }
-
-.console-route-viewport { min-height: calc(100vh - var(--spacing-topbar-h) - var(--breadcrumbbar-current-h, var(--spacing-breadcrumbbar-h))); }
-
-.console-route-canvas {
-  height: calc(100vh - var(--spacing-topbar-h) - var(--breadcrumbbar-current-h, var(--spacing-breadcrumbbar-h)));
-  min-height: 32rem;
-}
 
 .console-statusline-host {
   position: fixed;
@@ -610,7 +560,8 @@
   background-color: var(--border-strong);
 }
 
-@container (min-width: 32rem) {
+/* The standard aside (24rem) shows its tab labels; only a narrower host goes icon-only. */
+@container (min-width: 20rem) {
   .chatter-tab-label {
     display: inline;
   }

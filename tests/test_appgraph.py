@@ -15,14 +15,14 @@ from tests.conftest import make_addon
 
 
 def test_folder_addon_dependency_resolves_manifest_free_core_app() -> None:
-    """An addon may depend on ``angee.base`` after core stops being an addon."""
+    """An addon may depend on ``angee`` after core stops being an addon."""
 
-    consumer = make_addon(name="example.consumer", depends_on=("angee.base",))
+    consumer = make_addon(name="example.consumer", depends_on=("angee",))
 
     resolved = AppGraph().resolve((consumer,))
     base, resolved_consumer = resolved
 
-    assert base.name == "angee.base"
+    assert base.name == "angee"
     assert addon_manifest(base) is None
     assert not hasattr(base, "angee_depends_on")
     assert base.angee_forced is True
@@ -91,7 +91,7 @@ def test_app_dependency_cycles_are_rejected_for_both_discovery_paths(
 def test_manifest_dependency_projection_excludes_unselected_cycles_and_plain_apps(tmp_path: Path) -> None:
     """Availability is not activation, and manifest-free dependencies need no import."""
 
-    consumer = make_addon(name="example.consumer", path=tmp_path / "consumer", depends_on=("angee.base",))
+    consumer = make_addon(name="example.consumer", path=tmp_path / "consumer", depends_on=("angee",))
     disabled = make_addon(name="example.disabled", path=tmp_path / "disabled", depends_on=("example.disabled",))
 
     resolved = resolve_manifest_roots(
@@ -125,7 +125,7 @@ def test_dependency_aliases_resolve_to_the_same_app_order(tmp_path: Path, manife
     ("roots", "dependencies", "message"),
     (
         (("example.consumer", "example.consumer"), (), "Duplicate root app"),
-        (("example.consumer",), ("angee.base", "angee.base"), "declares duplicate dependency"),
+        (("example.consumer",), ("angee", "angee"), "declares duplicate dependency"),
     ),
 )
 def test_manifest_graph_rejects_duplicate_declarations(

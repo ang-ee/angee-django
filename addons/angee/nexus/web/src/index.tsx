@@ -1,11 +1,11 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
+import { Tab, useRecordChromeContext } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import { CalendarClock, History, Inbox, Radar, Share2 } from "lucide-react";
+import { CalendarClock, Inbox, Radar, Share2 } from "lucide-react";
 
-import { enNexusMessages } from "./i18n";
+import { enNexusMessages, useNexusT } from "./i18n";
 import { NetworkPane } from "./NetworkPane";
 import { NexusOverviewContribution } from "./NexusOverviewContribution";
-import { TimelinePane } from "./TimelinePane";
 
 const nexus = defineBaseAddon({
   id: "nexus",
@@ -34,46 +34,26 @@ const nexus = defineBaseAddon({
     "nexus.ties": { parent: "nexus", label: "Ties", route: "nexus.ties", icon: "radar", sequence: 30, hide: true },
     "nexus.cadences": { parent: "nexus", label: "Cadences", route: "nexus.cadences", icon: "cadence", sequence: 40 },
   },
-  icons: { cadence: CalendarClock, network: Share2, radar: Radar, timeline: History, "nexus-inbox": Inbox },
+  icons: { cadence: CalendarClock, network: Share2, radar: Radar, "nexus-inbox": Inbox },
   i18n: { nexus: enNexusMessages },
-  // The cross-channel timeline rides the record chatter seam; the shell applies
-  // each canonical model and record predicate before rendering the contribution.
   containers: {
     "parties.overview#items": {
       "nexus.relationship-health": { sequence: 20, content: <NexusOverviewContribution /> },
     },
-    "parties.Party#aside": {
-      "nexus.timeline": {
-        sequence: 30,
+    "timeline#kinds": {
+      "nexus.correspondence": {
         content: {
-          label: "Timeline",
-          icon: "timeline",
-          aliases: ["timeline"],
-          when: (context) => context.view.kind === "record",
-          render: (context) => <TimelinePane partyId={context.view.sqid ?? ""} />,
-        },
-      },
-      "nexus.network": {
-        sequence: 31,
-        content: {
-          label: "Network",
-          icon: "network",
-          aliases: ["network"],
-          when: (context) => context.view.kind === "record",
-          render: (context) => <NetworkPane partyId={context.view.sqid ?? ""} />,
+          label: "Correspondence",
+          icon: "channel",
+          verb: "Open message",
+          target: { page: true },
         },
       },
     },
-    "parties.Circle#aside": {
-      "nexus.feed": {
-        sequence: 32,
-        content: {
-          label: "Feed",
-          icon: "timeline",
-          aliases: ["feed"],
-          when: (context) => context.view.kind === "record",
-          render: (context) => <TimelinePane circleId={context.view.sqid ?? ""} />,
-        },
+    "parties.Party#sections": {
+      "nexus.network": {
+        sequence: 31,
+        content: <Tab id="network" label={<NetworkLabel />}><NetworkSection /></Tab>,
       },
     },
   },
@@ -81,3 +61,13 @@ const nexus = defineBaseAddon({
 });
 
 export default nexus;
+
+function NetworkSection() {
+  const { recordId } = useRecordChromeContext();
+  return recordId ? <NetworkPane partyId={recordId} /> : null;
+}
+
+function NetworkLabel() {
+  const t = useNexusT();
+  return t("network.label");
+}

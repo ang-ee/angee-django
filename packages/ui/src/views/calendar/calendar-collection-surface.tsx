@@ -57,6 +57,9 @@ export interface CalendarCollectionSurfaceProps {
   className?: string;
 }
 
+/**
+ * @kind surface
+ */
 export function CalendarCollectionSurface({
   resourceView,
   calendar,

@@ -13,7 +13,6 @@ from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.schema import UserType
 
@@ -51,7 +50,7 @@ class NoteDeletePreviewMutation:
             Note,
             str(id),
             confirm=confirm,
-            queryset=write_queryset(Note),
+            queryset=Note.objects.for_write(),
         )
 
 

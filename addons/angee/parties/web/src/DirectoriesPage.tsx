@@ -1,117 +1,39 @@
-import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import { Button, Column, ResourceList, Glyph, List, MutationDialog, mutationDialogValueCodecs, type DescriptorField, type MutationDialogValues } from "@angee/ui";
+import { ActionMenu, Column, ContainerOutlet, ResourceList, List, containerHasContent, useContainer } from "@angee/ui";
 import { IntegrationSyncColumns } from "@angee/integrate";
 
-import { ConnectCardDavDirectory } from "./documents";
 import { directoryForm } from "./DirectoryForm";
 import { usePartiesT } from "./i18n";
 
 const MODEL = "parties.Directory";
 
 /**
- * Connected contacts directories. The "Connect CardDAV" control opens a connect
- * dialog (one mutation creates the credential + directory); rows are model-driven
- * via ResourceList, each detail carrying a declarative "Sync now" record action.
+ * Connected contacts directories. Connect verbs come from the
+ * `parties.directories#toolbar` container (this addon contributes CardDAV; vendor
+ * addons add theirs) and render as one Connect menu; rows are model-driven via
+ * ResourceList, each detail carrying a declarative "Sync now" record action.
  * Directories are created through the connect flow and have no delete root, so the
  * form is read-only (`hideCreate`) and no delete affordance renders — a directory
  * is removed by deleting the integration, and its synced contacts by the source.
  */
 export function DirectoriesPage(): React.ReactElement {
   const t = usePartiesT();
+  const toolbarEntries = useContainer("parties.directories#toolbar");
   return (
-    <ResourceList resource={MODEL} form={directoryForm} placement="inline" routed hideCreate toolbarActions={<ConnectCardDav />}>
+    <ResourceList resource={MODEL} form={directoryForm} placement="inline" routed hideCreate toolbarActions={
+      containerHasContent(toolbarEntries) ? (
+        <ActionMenu label={t("directory.connect.menu")} glyph="plus" variant="primary" size="sm">
+          <ContainerOutlet entries={toolbarEntries} />
+        </ActionMenu>
+      ) : null
+    }>
       <List resource={MODEL}>
         <Column field="display_name" header={t("directory.name")} />
         <Column field="lifecycle" widget="statusBadge" />
-        <Column field="runtime_status" />
+        <Column field="runtime_status" widget="statusBadge" />
         <Column field="backend_class" />
         {IntegrationSyncColumns()}
       </List>
     </ResourceList>
   );
-}
-
-/** Button + dialog that connects a CardDAV account, for the list toolbar slot. */
-function ConnectCardDav(): React.ReactElement {
-  const t = usePartiesT();
-  const [open, setOpen] = React.useState(false);
-  return (
-    <>
-      <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
-        <Glyph decorative name="plus" />
-        {t("directory.connect.button")}
-      </Button>
-      <ConnectDialog open={open} onOpenChange={setOpen} />
-    </>
-  );
-}
-
-function ConnectDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}): React.ReactElement {
-  // Correct as-is: parties.Directory declares changes(Directory, field="directoryChanged").
-  const [connect] = useAuthoredMutation(ConnectCardDavDirectory, {
-    invalidateModels: [MODEL],
-  });
-  const t = usePartiesT();
-  const fields = React.useMemo<readonly DescriptorField[]>(
-    () => [
-      {
-        name: "name",
-        label: t("directory.connect.name"),
-        placeholder: t("directory.connect.namePlaceholder"),
-        required: true,
-      },
-      {
-        name: "serverUrl",
-        label: t("directory.connect.serverUrl"),
-        placeholder: t("directory.connect.serverUrlPlaceholder"),
-        required: true,
-      },
-      {
-        name: "username",
-        label: t("directory.connect.username"),
-        required: true,
-      },
-      {
-        name: "password",
-        label: t("directory.connect.password"),
-        widget: "password",
-        required: true,
-      },
-    ],
-    [t],
-  );
-
-  return (
-    <MutationDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title={t("directory.connect.title")}
-      description={t("directory.connect.description")}
-      fields={fields}
-      submitLabel={t("directory.connect.submit")}
-      submittingLabel={t("directory.connect.submitting")}
-      errorFallback={t("directory.connect.error")}
-      parseValues={parseDirectoryValues}
-      onSubmit={async (values) => ({ status: "ok", data: await connect(values) })}
-    />
-  );
-}
-
-function parseDirectoryValues(values: MutationDialogValues) {
-  return {
-    name: mutationDialogValueCodecs.requiredString(values.name, "name"),
-    serverUrl: mutationDialogValueCodecs.requiredString(
-      values.serverUrl,
-      "serverUrl",
-    ),
-    username: mutationDialogValueCodecs.requiredString(values.username, "username"),
-    password: mutationDialogValueCodecs.verbatimString(values.password, "password"),
-  };
 }

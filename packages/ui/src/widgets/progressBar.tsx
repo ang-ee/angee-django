@@ -23,7 +23,7 @@ const progressBarVariants = tv({
       compact: {
         root: "min-w-[5rem] gap-1.5",
         track: "h-1.5",
-        value: "w-8 text-xs",
+        value: "w-8 text-12",
       },
     },
   },

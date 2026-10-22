@@ -1,7 +1,7 @@
 // Authorization schema for the local-scope create-gate demo (test-only).
 // @rebac_package: scopedemo
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 5
+// @rebac_schema_revision: 6
 
 definition scopedemo/proposal_target {
     relation owner: auth/user // rebac:field=owner
@@ -10,6 +10,8 @@ definition scopedemo/proposal_target {
     permission read = owner + admin->member
     permission write = owner + admin->member
     permission delete = owner + admin->member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
 }
 
 definition scopedemo/scope {

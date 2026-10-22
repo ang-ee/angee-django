@@ -52,6 +52,12 @@ export function usePartyStatementRowActions<TRow extends PartyStatementActionRow
         document: DismissPartyStatement,
         variables: rowIdVariables,
         invalidateModels: PARTY_STATEMENT_DECISION_INVALIDATES,
+        // The anti-link is durable: the pair is never re-proposed, so it asks first.
+        confirm: {
+          title: () => t("identity.dismissTitle"),
+          body: () => t("identity.dismissBody"),
+          confirm: () => t("identity.dismiss"),
+        },
         toast: {
           title: () => t("identity.dismissError"),
           description: () => t("identity.dismissError"),

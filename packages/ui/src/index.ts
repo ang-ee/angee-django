@@ -29,11 +29,11 @@ export * from "./ui/skeleton";
 export * from "./ui/field";
 export * from "./ui/form";
 export * from "./ui/inline-text-action";
-export * from "./ui/label";
 export * from "./ui/input";
 export * from "./ui/textarea";
 export * from "./ui/text";
 export * from "./ui/select";
+export * from "./ui/combobox";
 export * from "./ui/pager";
 export * from "./ui/checkbox";
 export * from "./ui/switch";
@@ -50,7 +50,7 @@ export * from "./ui/collapsible";
 export * from "./ui/drawer";
 export * from "./ui/toggle";
 export * from "./ui/toggle-group";
-export * from "./ui/badge";
+export * from "./ui/count-badge";
 export * from "./ui/chip";
 export * from "./ui/avatar";
 export * from "./ui/status-icon";
@@ -71,6 +71,7 @@ export * from "./ui/scroll-area";
 export * from "./ui/toolbar";
 export * from "./ui/form-layout";
 export * from "./ui/upload-drop-target";
+export * from "./ui/file-picker";
 
 // Widgets — the field renderers + the default widget registry — and the
 // feedback surface (modals, toasts, the Refine notification bridge).

@@ -36,14 +36,6 @@ export function layerAncestry(layers: readonly Layer[]): Map<string, Set<string>
   return closures;
 }
 
-/** The candidates no other candidate depends on, in input order. */
-export function mostSpecific(
-  candidates: readonly string[],
-  ancestors: ReadonlyMap<string, ReadonlySet<string>>,
-): string[] {
-  return candidates.filter((id) => !candidates.some((other) => other !== id && ancestors.get(other)?.has(id)));
-}
-
 /** The candidate every other candidate depends on, if one does. */
 export function commonBase(
   candidates: readonly string[],

@@ -1,6 +1,6 @@
 import * as React from "react";
 import {
-  Button, Chip, MessageComposer, MessageComposerHint, Textarea, UploadDropTarget,
+  Button, Chip, FormRoot, MessageComposer, MessageComposerHint, Textarea, UploadDropTarget,
   messageComposerInputClassName, textRoleVariants,
 } from "@angee/ui";
 
@@ -54,10 +54,10 @@ export function StreamComposer({ value, onChange, onSubmit, disabled, ready, sub
       {actions}
       <Button type="submit" variant="primary" size="sm" disabled={disabled || !ready}>{submitLabel}</Button>
     </>} />;
-  return <form className="mt-auto space-y-2" onSubmit={(event) => { event.preventDefault(); if (ready && !disabled) onSubmit(); }}>
+  return <FormRoot className="mt-auto space-y-2" onSubmit={(event) => { event.preventDefault(); if (ready && !disabled) onSubmit(); }}>
     {before}
     {onFiles ? <UploadDropTarget disabled={disabled} overlay={t("composer.dropFiles")}
       overlayClassName="rounded-6" onFiles={onFiles}>{composer}</UploadDropTarget> : composer}
     {after}
-  </form>;
+  </FormRoot>;
 }

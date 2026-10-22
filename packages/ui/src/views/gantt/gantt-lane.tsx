@@ -20,7 +20,9 @@ export interface GanttLaneDetails {
   note?: string | null;
 }
 
-/** Shared label for collection Gantt lanes. The record link is a real anchor when declared. */
+/** Shared label for collection Gantt lanes. The record link is a real anchor when declared.
+ * @kind surface
+ */
 export function GanttLane({ details, onOpen }: {
   details: GanttLaneDetails;
   onOpen?: () => void;
@@ -34,9 +36,9 @@ export function GanttLane({ details, onOpen }: {
       {href ? <a className={titleClass} href={href} title={title} {...link}>{title}</a>
         : onOpen ? <button type="button" className={titleClass} onClick={(event) => { event.stopPropagation(); onOpen(); }} title={title}>{title}</button>
           : <span className="block truncate font-medium" title={title}>{title}</span>}
-      {secondary?.trim() ? <span className="block truncate text-xs text-fg-muted" title={secondary}>{secondary}</span> : null}
+      {secondary?.trim() ? <span className="block truncate text-12 text-fg-muted" title={secondary}>{secondary}</span> : null}
       {visiblePeople?.length ? <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-        {visiblePeople.map((person) => <span key={person.id} className="inline-flex min-w-0 shrink items-center gap-1 text-xs text-fg-muted">
+        {visiblePeople.map((person) => <span key={person.id} className="inline-flex min-w-0 shrink items-center gap-1 text-12 text-fg-muted">
           <Avatar size="sm" initials={avatarInitials(person.name)} src={person.image ?? undefined} aria-hidden />
           <span className="truncate">{person.name}</span>
         </span>)}

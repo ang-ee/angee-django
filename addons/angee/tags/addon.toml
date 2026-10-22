@@ -7,8 +7,3 @@ depends_on = ["angee.provenance", "angee.iam", "angee.resources", "angee.graphql
 
 [resources]
 demo = ["resources/demo/010_tags.tag.yaml"]
-
-[[migrations]]
-name = "shared_reader_cleanup"
-app_label = "tags"
-module = "runtime_migrations.shared_reader_cleanup"

@@ -8,8 +8,8 @@ import {
 import { useBusyRun, useDeleteWithPreview } from "@angee/ui";
 import {
   useModelMetadata,
+  useResourceInvalidates,
 } from "@angee/metadata";
-import type { DataResourceMetadata } from "@angee/metadata";
 
 export interface FolderActions {
   busy: boolean;
@@ -37,6 +37,7 @@ export function useFolderActions(
   const metadata = useModelMetadata(FOLDER_MODEL);
   const resource = metadata?.resource ?? null;
   const fileResource = useModelMetadata(FILE_MODEL)?.resource ?? null;
+  const fileInvalidations = useResourceInvalidates(fileResource ? [fileResource.modelLabel] : undefined);
   const resourceName = refineResourceName(resource);
   const fields = refineFieldsFromPaths(["name"]);
   const createFolder = useCreate<RowRecord, HttpError, Record<string, unknown>>({
@@ -54,6 +55,12 @@ export function useFolderActions(
   const deleteWithPreview = useDeleteWithPreview(resource);
   const invalidate = useInvalidate();
   const { busy, run } = useBusyRun(onChanged);
+  const invalidateFiles = async () => {
+    if (!fileResource) {
+      throw new Error(`Resource metadata for "${FILE_MODEL}" is not available.`);
+    }
+    await Promise.all(fileInvalidations.map((target) => invalidate(target)));
+  };
 
   return {
     busy,
@@ -66,13 +73,13 @@ export function useFolderActions(
       run(async () => {
         requireFolderResource(resource);
         await updateFolder.mutateAsync({ id, values: { name } });
-        await invalidateFiles(invalidate, fileResource);
+        await invalidateFiles();
       }),
     remove: (id) =>
       run(async () => {
         requireFolderResource(resource);
         await deleteWithPreview.remove(id);
-        await invalidateFiles(invalidate, fileResource);
+        await invalidateFiles();
       }),
   };
 }
@@ -88,18 +95,4 @@ function requireFolderResource(
   if (!resource) {
     throw new Error(`Resource metadata for "${FOLDER_MODEL}" is not available.`);
   }
-}
-
-async function invalidateFiles(
-  invalidate: ReturnType<typeof useInvalidate>,
-  resource: DataResourceMetadata | null,
-): Promise<void> {
-  if (!resource) {
-    throw new Error(`Resource metadata for "${FILE_MODEL}" is not available.`);
-  }
-  await invalidate({
-    resource: refineResourceName(resource),
-    dataProviderName: resource.schemaName,
-    invalidates: ["list", "many", "detail"],
-  });
 }

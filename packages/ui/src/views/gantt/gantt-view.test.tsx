@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { Gantt } from "./gantt";
-import { GanttView } from "./gantt-view";
+import { GanttGrid } from "./gantt-view";
 import GanttSurface from "./gantt-surface";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
@@ -76,10 +76,10 @@ describe("Gantt row and control geometry", () => {
 
   test("the headless range renders bars beyond the anchor period and updates with new bounds", () => {
     const view = render(<Gantt resources={resources} events={events} defaultScale="quarter" date={new Date(2026, 0, 1)}
-      range={{ start: new Date(2026, 8, 21), end: new Date(2026, 10, 23) }}><GanttView /></Gantt>);
+      range={{ start: new Date(2026, 8, 21), end: new Date(2026, 10, 23) }}><GanttGrid /></Gantt>);
     expect(view.container.querySelectorAll("[data-lane]")).toHaveLength(3);
     view.rerender(<Gantt resources={resources} events={events} defaultScale="quarter" date={new Date(2026, 0, 1)}
-      range={{ start: new Date(2026, 11, 1), end: new Date(2027, 0, 1) }}><GanttView /></Gantt>);
+      range={{ start: new Date(2026, 11, 1), end: new Date(2027, 0, 1) }}><GanttGrid /></Gantt>);
     expect(view.container.querySelectorAll("[data-lane]")).toHaveLength(0);
   });
 });

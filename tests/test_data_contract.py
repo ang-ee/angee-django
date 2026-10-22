@@ -47,10 +47,11 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
         type_names=DataResourceTypeNames(node="CatalogItem", filter="catalog_items_bool_exp"),
         contributors=("CatalogItemQuery", "CatalogItemMutation"),
         capabilities=("list", "detail", "create"),
-        create_arguments=(DataMutationArgument("client_creation_key", "String"),),
+        create_arguments=(DataMutationArgument("idempotency_key", "String"),),
         update_arguments=(DataMutationArgument("expected_revision", "Int"),),
         save_arguments=(DataMutationArgument("expected_revision", "Int"),),
         fields=(title_field, status_field),
+        context_fields=("status",),
         subtitle=DataResourceSubtitleMetadata(created="created_at", word_count="body.word_count"),
         lines=DataLinesMetadata(field="items", model_label="catalog.line", fields=(title_field,)),
     )
@@ -78,11 +79,12 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
     assert wire["fields"][1]["statusDisplay"] == "dot"
     assert "modelFieldName" not in wire["fields"][0]
     assert wire["subtitle"] == {"created": "created_at", "updated": None, "wordCount": "body.word_count"}
+    assert wire["contextFields"] == ["status"]
     assert wire["linesResource"]["modelLabel"] == "catalog.line"
     assert wire["linesResource"]["fields"] == [wire["fields"][0]]
     assert wire["linesResource"]["defaults"] == {}
     assert wire["aggregateFields"] == []
-    assert wire["createArguments"] == [{"name": "client_creation_key", "type": "String"}]
+    assert wire["createArguments"] == [{"name": "idempotency_key", "type": "String"}]
     assert wire["updateArguments"] == [{"name": "expected_revision", "type": "Int"}]
     assert wire["saveArguments"] == [{"name": "expected_revision", "type": "Int"}]
     assert wire["query"]["axes"] == {}

@@ -27,6 +27,7 @@ from rebac import (
     PermissionDenied,
     RebacMixin,
     RelationshipTuple,
+    SubjectRef,
     system_context,
     to_object_ref,
     to_subject_ref,
@@ -39,9 +40,7 @@ from rebac.middleware import ActorMiddleware
 from strawberry.django.views import GraphQLView
 from strawberry.extensions import SchemaExtension
 
-from angee.base.fields import StateField
-from angee.base.models import AngeeModel
-from angee.base.transitions import TransitionNotAllowed
+from angee.fields import StateField
 from angee.graphql import schema as schema_module
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
@@ -54,7 +53,10 @@ from angee.graphql.schema import (
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.iam.permissions import session_user
+from angee.models import AngeeModel, TransitionNotAllowed
+from angee.permissions import require_rebac_queryset
 from tests.conftest import make_addon
+from tests.core_persistence import OwnedRow
 from tests.hierdemo.models import HierNode
 
 
@@ -275,7 +277,7 @@ class UnexpectedErrorQuery:
         )
 
 
-def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
+def test_hasura_write_backend_decodes_public_relations_through_write_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Relation public IDs in writes resolve through the actor-scoped write owner."""
@@ -284,8 +286,8 @@ def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
     related = SimpleNamespace(pk=7)
     calls: dict[str, Any] = {}
 
-    def fake_write_queryset(model: type[models.Model]) -> object:
-        calls["write_model"] = model
+    def fake_for_write() -> object:
+        calls["write_model"] = ManagedThing
         return sentinel_queryset
 
     def fake_require_instance_for_id(
@@ -297,7 +299,7 @@ def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
         calls["decode"] = (model, value, queryset)
         return related
 
-    monkeypatch.setattr(hasura_data, "write_queryset", fake_write_queryset)
+    monkeypatch.setattr(ManagedThing.objects, "for_write", fake_for_write)
     monkeypatch.setattr(hasura_data, "require_instance_for_id", fake_require_instance_for_id)
 
     backend = AngeeHasuraWriteBackend(GatedWriteThing, public_id_fields=("owner",))
@@ -549,6 +551,7 @@ def test_type_extension_is_idempotent_across_collections() -> None:
 @strawberry_django.type(HierNode)
 class OptimizedExtensionNode:
     id: strawberry.auto
+    children: list["OptimizedExtensionNode"]
 
 
 @strawberry_django.type(HierNode, name="OptimizedExtensionNode", extend=True)
@@ -589,7 +592,7 @@ def test_type_extension_optimizer_hints_are_selected_and_batched(count: int, dja
     schema = schemas.build("console")
     public = schemas.build("public")
     assert "upper_name" not in public.as_str()
-    assert len(OptimizedExtensionNode.__strawberry_definition__.fields) == 1
+    assert len(OptimizedExtensionNode.__strawberry_definition__.fields) == 2
     with system_context(reason="test.graphql.extension_hints"):
         root = HierNode.objects.create(name="root")
         for _ in range(count):
@@ -610,6 +613,26 @@ def test_type_extension_optimizer_hints_are_selected_and_batched(count: int, dja
         assert result.data == {"nodes": [
             {"value": "BRANCH", "label": "branch", "parent_label": "root", "child_labels": ["leaf"]}
         ] * count}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("count", [1, 6])
+def test_nested_type_extension_optimizer_hints_are_batched(count: int, django_assert_num_queries: Any) -> None:
+    schemas = GraphQLSchemas([addon(
+        public={"query": [OptimizedExtensionQuery]},
+        console={"query": [OptimizedExtensionQuery], "type_extensions": [OptimizedExtensionFields]},
+    )])
+    schema = schemas.build("console")
+    assert "upper_name" not in schemas.build("public").as_str()
+    assert len(OptimizedExtensionNode.__strawberry_definition__.fields) == 2
+    with system_context(reason="test.graphql.nested_extension_hints"):
+        for _ in range(count):
+            branch = HierNode.objects.create(name="branch")
+            HierNode.objects.create(name="leaf", parent=branch)
+        with django_assert_num_queries(2):
+            result = schema.execute_sync("{ nodes { children { value: upper_name label } } }")
+        assert result.errors is None
+        assert result.data == {"nodes": [{"children": [{"value": "LEAF", "label": "leaf"}]}] * count}
 
 
 def test_type_extension_rejects_field_collision() -> None:
@@ -914,7 +937,7 @@ def test_graphql_identity_exports_public_node() -> None:
 
 
 def test_rebac_graphql_types_require_rebac_default_manager() -> None:
-    """GraphQL-exposed REBAC models fail fast without the library manager."""
+    """GraphQL-exposed REBAC models fail fast without the native query contract."""
 
     assert isinstance(ManagedThing._default_manager, RebacManager)
     GraphQLSchemas(
@@ -928,7 +951,7 @@ def test_rebac_graphql_types_require_rebac_default_manager() -> None:
         ]
     ).build("public")
 
-    with pytest.raises(ImproperlyConfigured, match="RebacManager"):
+    with pytest.raises(ImproperlyConfigured, match="RebacQuerySet"):
         GraphQLSchemas(
             [
                 addon(
@@ -939,6 +962,17 @@ def test_rebac_graphql_types_require_rebac_default_manager() -> None:
                 )
             ]
         ).build("public")
+
+
+def test_rebac_query_contract_accepts_django_as_manager() -> None:
+    """A native queryset-generated manager retains its model and actor policy."""
+
+    assert not isinstance(OwnedRow._default_manager, RebacManager)
+    actor = SubjectRef("auth/user", "123")
+    rows = require_rebac_queryset(OwnedRow).with_actor(actor)
+    assert rows.model is OwnedRow
+    assert rows.actor() == actor
+    assert type(rows) is type(OwnedRow._default_manager.get_queryset())
 
 
 def test_choice_enum_value_descriptions_come_from_django_labels() -> None:

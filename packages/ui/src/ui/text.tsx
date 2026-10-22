@@ -1,4 +1,4 @@
-import { tv, type VariantProps } from "../lib/variants";
+import { tv } from "../lib/variants";
 
 // The small set of named text roles shared across panels, lists, and headers.
 // `display` is the 22px page/record display title; `title` is the 15px inline
@@ -12,6 +12,9 @@ import { tv, type VariantProps } from "../lib/variants";
 // `numeric`/`mono` add tabular figures or monospaced text, and `truncate` adds
 // the shared overflow treatment. Call sites compose this recipe instead of
 // re-spelling size/weight/color literals.
+/**
+ * @kind token
+ */
 export const textRoleVariants = tv({
   variants: {
     role: {
@@ -44,6 +47,3 @@ export const textRoleVariants = tv({
     tone: "fg",
   },
 });
-
-export type TextRoleRecipeProps = VariantProps<typeof textRoleVariants>;
-export type TextRole = NonNullable<TextRoleRecipeProps["role"]>;

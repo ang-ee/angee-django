@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { StatusDot, StatusIcon, TONES } from "@angee/ui";
+import { StatusDot, StatusIcon, StatusIconGroup, TONES } from "@angee/ui";
 
 const meta = {
   title: "Primitives/StatusIcon",
@@ -47,4 +47,15 @@ export const Dots: Story = {
       ))}
     </div>
   ),
+};
+
+export const CheckGroup: Story = {
+  parameters: { owner: StatusIconGroup },
+  render: () => <StatusIconGroup label="Record checks" items={[
+    { key: "identity", label: "Identity: matched", tone: "success" },
+    { key: "duplicate", label: "Duplicate: none found", tone: "success" },
+    { key: "source", label: "Source: review needed", tone: "warning", description: "The source differs from the previous submission." },
+    { key: "contents", label: "Contents: conflict", tone: "danger", description: "The submitted value disagrees with the reference." },
+    { key: "reference", label: "Reference: unresolved", tone: "muted", description: "The supporting document has not arrived." },
+  ]} />,
 };

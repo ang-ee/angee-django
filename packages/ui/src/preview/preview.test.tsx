@@ -1,14 +1,17 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { AppRuntimeProvider } from "../runtime";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { displayMime, normaliseMime } from "./model";
 import { PreviewPane } from "./PreviewPane";
 import { resolvePreviewProvider, type PreviewProvider } from "./registry";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("preview model", () => {
   test("displayMime falls back to the extension then octet-stream", () => {
@@ -80,5 +83,19 @@ describe("PreviewPane", () => {
     );
     // base.fallback renders an EmptyState titled with the file name.
     expect(screen.getByText("x.bin")).toBeTruthy();
+  });
+
+  test.each([
+    ["text/xml", "<root><value>one very long XML value</value></root>", "<root><value>one very long XML value</value></root>"],
+    ["application/json", '{"answer":42}', '{\n  "answer": 42\n}'],
+  ])("formats and wraps %s text previews", async (mime, body, expected) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 200 })));
+    const rendered = render(
+      <PreviewPane file={{ url: "/document", name: "document", mime }} />,
+    );
+
+    await waitFor(() => expect(rendered.container.querySelector("pre")?.textContent).toBe(expected));
+    expect(rendered.container.querySelector("pre")?.className).toContain("whitespace-pre-wrap");
+    expect(rendered.container.querySelector("pre")?.className).toContain("break-words");
   });
 });

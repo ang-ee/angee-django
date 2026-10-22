@@ -17,8 +17,8 @@ from strawberry import auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
 
-from angee.base.identity import instance_from_public_id
 from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import (
@@ -27,12 +27,13 @@ from angee.graphql.ids import (
     require_instance_for_id,
 )
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import actor_scoped_public_id
+from angee.graphql.relations import RecordReferenceNode, actor_scoped_public_id, with_record_reference_access
 from angee.graphql.subscriptions import changes
-from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.permissions import RolePermission, request_from_info
+from angee.identity import instance_from_public_id
 from angee.storage import exceptions
+from angee.storage.models import File as FileModel
 from angee.storage.models import FileVisibility, UploadState
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
@@ -107,6 +108,10 @@ class FolderType(AngeeNode):
 class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     """GraphQL projection of a file row."""
 
+    permissions = permissions_field(("read", "write", "share", "delete"))
+    """The verbs record chrome gates on (``holdsPermission``), e.g. a contributed
+    ``storage.File#actions`` child declaring ``permission: "read"``."""
+
     display_name: str = strawberry_django.field(
         resolver=AngeeNode.display_name,
         only=["title", "filename"],
@@ -144,13 +149,26 @@ class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
         return str(row.download_url())
 
 
-@strawberry.type
-class RecordFileAttachmentType:
-    """An actor-readable attachment and its independently authorized file."""
+@strawberry_django.type(FileAttachment)
+class FileAttachmentType(RecordReferenceNode):
+    """An actor-readable file edge, with its target identity redacted when unreadable."""
 
-    id: strawberry.ID
-    label: str
+    label: auto
     file: FileType
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name,
+        only=["label", "file_id"],
+        description=NODE_DISPLAY_NAME_DESCRIPTION,
+    )
+
+    model_label: str | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_model,
+        only=["content_type_id", "object_id"],
+    )
+    record_id: PublicID | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_id,
+        only=["content_type_id", "object_id"],
+    )
 
 
 @strawberry.type
@@ -158,12 +176,21 @@ class RecordFilesType:
     """The upload capability and visible edges of one readable record."""
 
     can_upload: bool
-    attachments: list[RecordFileAttachmentType]
+    attachments: list[FileAttachmentType]
 
 
 @strawberry.type
 class StorageQuery:
     """Record-scoped attachment reads shared by public and console schemas."""
+
+    @strawberry.field(name="file_attachments")
+    def file_attachments(self, file: PublicID) -> list[FileAttachmentType]:
+        """Read one file's edges through the shared target-access projection."""
+
+        source = instance_for_id(File, file)
+        if source is None:
+            return []
+        return list(with_record_reference_access(source.attachments.select_related("file")))
 
     @strawberry.field(name="record_files")
     def record_files(self, model_label: str, record_id: PublicID) -> RecordFilesType:
@@ -176,7 +203,7 @@ class StorageQuery:
 
         try:
             model = apps.get_model(model_label.strip())
-        except (LookupError, ValueError):
+        except LookupError, ValueError:
             return RecordFilesType(can_upload=False, attachments=[])
         if model_resource_type(model) is None:
             return RecordFilesType(can_upload=False, attachments=[])
@@ -186,10 +213,7 @@ class StorageQuery:
         manager = FileAttachment._default_manager
         return RecordFilesType(
             can_upload=manager.has_record_arm(generic_target(record)) and record.has_access("write"),
-            attachments=[
-                RecordFileAttachmentType(id=strawberry.ID(str(edge.sqid)), label=edge.label, file=edge.file)
-                for edge in manager.for_record(record)
-            ],
+            attachments=list(with_record_reference_access(manager.for_record(record))),
         )
 
 
@@ -227,7 +251,7 @@ class FileUploadBeginPayload:
     """
 
     method: str = ""
-    file: FileType | None = None
+    file: FileModel | None = strawberry.field(graphql_type=FileType | None, default=None)
     upload_url: str = strawberry.field(name="upload_url", default="")
     upload_token: str = strawberry.field(name="upload_token", default="")
     error: str | None = None
@@ -247,7 +271,7 @@ class FileUploadFinalizeInput:
 class FileUploadFinalizePayload:
     """Verified file row, or the error that rejected the upload."""
 
-    file: FileType | None = None
+    file: FileModel | None = strawberry.field(graphql_type=FileType | None, default=None)
     error: str | None = None
     error_code: str | None = strawberry.field(name="error_code", default=None)
 
@@ -269,12 +293,10 @@ _STORAGE_ADMIN_CLASSES: list[type[BasePermission]] = [StorageAdminPermission]
 class FolderWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for folders: create belongs to the manager factory."""
 
-    def create(self, info: strawberry.Info, data: dict[str, Any], *, client_creation_key: str | None = None) -> Any:
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
         """Create a real folder through ``Folder.objects.create_in_drive``."""
 
         del info
-        if client_creation_key is not None:
-            raise ValidationError({"client_creation_key": "Folder creation does not support creation keys."})
         try:
             return Folder.objects.create_in_drive(
                 drive_id=str(data["drive"]),
@@ -418,7 +440,9 @@ class StorageMutation:
                     raise exceptions.UploadRecordDenied()
                 try:
                     record = resolve_action_target(
-                        model, input.record.record_id, reason="storage.upload.record_target",
+                        model,
+                        input.record.record_id,
+                        reason="storage.upload.record_target",
                     )
                 except GraphQLError as error:
                     raise exceptions.UploadRecordDenied() from error
@@ -474,7 +498,7 @@ class StorageMutation:
             File,
             str(id),
             confirm=confirm,
-            queryset=write_queryset(File).all(),
+            queryset=File.objects.for_write(),
         )
 
     @strawberry.mutation(name="delete_folder")
@@ -485,7 +509,7 @@ class StorageMutation:
             Folder,
             str(id),
             confirm=confirm,
-            queryset=write_queryset(Folder).all(),
+            queryset=Folder.objects.for_write(),
         )
 
 
@@ -535,7 +559,7 @@ _SHARED_TYPES = [
     DriveType,
     FolderType,
     FileType,
-    RecordFileAttachmentType,
+    FileAttachmentType,
     RecordFilesType,
     FileUploadBeginPayload,
     FileUploadFinalizePayload,

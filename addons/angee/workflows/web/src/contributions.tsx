@@ -1,50 +1,33 @@
 import { useDecision } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
-import { useMemo, type ReactNode } from "react";
-import { ErrorBanner, MetaSection, NavLink, REFINE_CREATE_ID, useRouteHref, type ChatterTabContent, type ContainerChild } from "@angee/ui";
+import type { ReactNode } from "react";
+import { ErrorBanner, NavLink, useRouteHref, type ContainerChild } from "@angee/ui";
 
-import { DecisionWaitingRunsDocument } from "./documents.console";
+import { DecisionStepsDocument, STEP_RUN_MODEL } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 
-import { RecordTimeline } from "./RecordTimeline";
-import { useRecordTimelineAttention } from "./timeline-pane";
+const DECISION_MODEL = "decisions.Decision";
 
+/** Where a question came from: the run and step that asked it, waiting or settled. */
 export function DecisionRunOrigin() {
   const { decision } = useDecision();
   const t = useWorkflowsT();
   const href = useRouteHref();
   const decisionId = decision.id;
-  const query = useAuthoredQuery(DecisionWaitingRunsDocument, { decision: decisionId }, {
-    models: ["decisions.Decision", "workflows.StepRun"],
-    records: [{ model: "decisions.Decision", id: decisionId }],
-    relatedModels: ["workflows.StepRun"],
+  const query = useAuthoredQuery(DecisionStepsDocument, { decision: decisionId }, {
+    models: [DECISION_MODEL, STEP_RUN_MODEL],
+    records: [{ model: DECISION_MODEL, id: decisionId }],
+    relatedModels: [STEP_RUN_MODEL],
   });
   if (query.isLoading) return null;
   if (query.error) return <ErrorBanner description={t("catalogue.originUnavailable")} />;
   const steps = query.data?.steprun.flatMap((step) => step.run ? [{ ...step, run: step.run }] : []) ?? [];
   if (!steps.length) return null;
-  return <MetaSection headingLevel={2} title={t("catalogue.waitingRuns")}><ul className="space-y-2">{steps.map((step) =>
-    <li key={step.id}><NavLink href={href("workflows.runs.record", { id: step.run.id })} variant="inline">
-      {step.run.display_name}</NavLink>{" · "}{step.node_label}{step.is_mapped ? ` [${step.map_index}]` : ""}</li>)}</ul></MetaSection>;
+  return <span>{t("origin.askedIn")} {steps.map((step, index) => <span key={step.id}>{index ? "; " : ""}
+    <NavLink variant="inline" href={href("workflows.runs.record", { id: step.run.id })}>{step.run.version?.workflow?.display_name ?? step.run.display_name}</NavLink>
+    {" · "}{step.is_mapped ? t("timeline.mappedStep", { label: step.node_label, index: step.map_index + 1 }) : step.node_label}
+  </span>)}</span>;
 }
 
-/** The record aside uses the same timeline a page can publish on the left. */
-export const recordRunsTab: ContainerChild<ChatterTabContent> = {
-  sequence: 30,
-  content: {
-    icon: "versions", label: <RunsLabel />,
-    aliases: ["workflows.timeline"],
-    useCount: ({ view, route }) => {
-      const record = useMemo(() => ({ model: route!.canonicalLabel!, id: view.sqid! }), [route?.canonicalLabel, view.sqid]);
-      return useRecordTimelineAttention(record);
-    },
-    when: ({ view, route }) => view.kind === "record" && Boolean(view.sqid && route?.canonicalLabel) && view.sqid !== REFINE_CREATE_ID,
-    render: ({ view, route }) => view.sqid && route?.canonicalLabel
-      ? <RecordTimeline record={{ model: route.canonicalLabel, id: view.sqid }} /> : null,
-  },
-};
-
-/** The run a decision waits in, as a `decisions#origin` child. */
+/** The run a decision was asked in, as a `decisions#origin` child. */
 export const decisionRunOrigin: ContainerChild<ReactNode> = { content: <DecisionRunOrigin /> };
-
-function RunsLabel() { const t = useWorkflowsT(); return <>{t("runs.title")}</>; }

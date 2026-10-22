@@ -16,6 +16,9 @@ export interface GlyphProps {
   label?: string;
 }
 
+/**
+ * @kind primitive
+ */
 export function Glyph({
   name,
   fallbackName,
@@ -50,6 +53,7 @@ export function Glyph({
  * any other node passes through. The one owner for the
  * `typeof icon === "string" ? <Glyph name={icon}/> : icon` adapter that the
  * fragments each re-inlined.
+ * @owner Glyph
  */
 export function renderGlyph(icon: ReactNode): ReactNode {
   return typeof icon === "string" ? <Glyph decorative name={icon} /> : icon;

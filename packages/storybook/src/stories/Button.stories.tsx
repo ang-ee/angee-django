@@ -10,7 +10,7 @@ const meta = {
   argTypes: {
     variant: {
       control: "select",
-      options: ["primary", "secondary", "ghost", "danger", "link", "icon"],
+      options: ["primary", "secondary", "ghost", "danger", "link"],
     },
     size: {
       control: "select",
@@ -38,8 +38,28 @@ export const Variants: Story = {
       <Button variant="ghost">Ghost</Button>
       <Button variant="danger">Danger</Button>
       <Button variant="link">Link</Button>
-      <Button variant="icon" size="iconMd" aria-label="Search">
+      <Button variant="ghost" size="iconMd" aria-label="Search">
         <Glyph name="search" size={16} />
+      </Button>
+    </div>
+  ),
+};
+
+/** The one icon button: a ghost `iconSm` carries every pane, band and header control. */
+export const IconControls: Story = {
+  render: () => (
+    <div className="flex flex-wrap items-center gap-3">
+      <Button variant="ghost" size="iconSm" aria-label="Search">
+        <Glyph name="search" />
+      </Button>
+      <Button variant="ghost" size="iconSm" aria-label="Following" pressed>
+        <Glyph name="bell" />
+      </Button>
+      <Button variant="ghost" size="iconSm" aria-label="Needs you · 3" badge={3}>
+        <Glyph name="triangle-alert" />
+      </Button>
+      <Button variant="ghost" size="iconSm" aria-label="Search" disabled>
+        <Glyph name="search" />
       </Button>
     </div>
   ),

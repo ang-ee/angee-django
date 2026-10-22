@@ -16,7 +16,7 @@ import { selectionText } from "./selections";
 /** Write preconditions are root arguments, never editable object fields. */
 export interface MutationRootArguments {
   expected_revision?: number | null;
-  client_creation_key?: string | null;
+  idempotency_key?: string | null;
 }
 
 /** Executable mutation facts supplied by the metadata edge. */
@@ -55,9 +55,9 @@ export function resourceMutationMeta(
   for (const { name, type } of target.arguments) {
     const value = values[name];
     switch (name) {
-      case "client_creation_key":
+      case "idempotency_key":
         if (value !== undefined && value !== null && typeof value !== "string") {
-          throw new TypeError("client_creation_key must be a string or null.");
+          throw new TypeError("idempotency_key must be a string or null.");
         }
         break;
       case "expected_revision":

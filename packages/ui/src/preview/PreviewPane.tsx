@@ -29,6 +29,7 @@ export interface PreviewPaneProps {
  * it inside a Suspense boundary (renderers may lazy-load their deps) and an error
  * boundary (a renderer crash degrades to the fallback, not a blank pane). With no
  * match it renders the fallback.
+ * @kind surface
  */
 export function PreviewPane({
   file,

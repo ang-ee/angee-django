@@ -35,16 +35,18 @@ among the concerns. Field names must be editable scalar fields on their canonica
 models or updatable many-to-many fields; to-one sets use readable public identities or null, and many-to-many `set`/`choose` values are lists of readable public ids (empty clears); one-to-many stays refused. Values and field
 editability are validated when asking. Multiple alternatives cannot write the
 same field of the same record. A record action may call only a method named by
-the model's class-level `decision_methods` tuple, taking no required arguments;
-optional keyword `arguments` are checked against its signature. `delete` is
+the model's class-level `decision_methods` tuple; the proposal's keyword
+`arguments` are bound to the method's signature when the request is validated, so
+a method with required parameters (a strict `cancel(reason)`) is a valid call
+when the proposal names them and refused when it does not. `delete` is
 never permitted. JSON null values are retained.
 
 `Decision.objects.decide(decision, actor=actor, chosen=keys, revision=revision)`
 validates distinct offered keys and the single/multiple choice rule, stores the
 verdict in authored order, increments the optimistic revision and emits
-`decision_answered` inside the answer transaction. Non-workflow askers apply there,
-so refusal rolls the verdict back. Workflow subscribers schedule their wake after
-commit and apply when the step resumes. The Python revision is optional; the card's
+`decision_answered` under the answerer's actor inside the answer transaction.
+Non-workflow askers apply there, so refusal rolls the verdict back. Workflow
+subscribers schedule their wake after commit and apply when the step resumes. The Python revision is optional; the card's
 GraphQL mutation requires its observed revision. Invalid choices write nothing.
 Decisions execute no proposal actions. The asker consumes the answer through the
 records' owners. Free correction means editing the record and then choosing the
@@ -69,13 +71,7 @@ only when selected, and the resource owner prepares its filter only when request
 permission compilation. There is no custom expression or separate scoping path.
 
 The [web fragment](web/README.md) exports `DecisionCard`,
-`decisionFieldMarks`, `decisionAttentionColumn` and `openDecisionFilter`. Cards show each alternative and its per-record
+`decisionFieldMarks`, `attentionColumn` and `openDecisionFilter`. Cards show each alternative and its per-record
 changes, select radio buttons or checkboxes, and display the chosen verdict and
 answer attribution after closure. The `decisions#origin` seam is supplied by
 askers.
-
-Schema-only migrations drop and recreate the old decision tables. Existing
-decisions and workflow execution rows, including steps waiting on them, are
-discarded. Incoming legacy links retire first; `StepRun.decision` belongs to the
-workflow owner. There is no data conversion or compatibility layer. Fresh hosts
-generate initial migrations from the current models.

@@ -12,11 +12,8 @@ import {
 } from "./account-actions";
 import { ShareListChrome, ShareRecordChrome } from "./ShareAccess";
 import { enIamMessages } from "./i18n";
-import { OAuthLoginMethods } from "./OAuthLoginMethods";
-import { LOGIN_CALLBACK_PATH } from "./redirects";
 import { subjectsWidget } from "./assignment-subject-widget";
 import { USER_LIST_COLUMNS, USER_LIST_PRESETS } from "./users-list";
-import { oidcLoginSection } from "./views/oidc-section";
 
 export {
   offersAccountAction,
@@ -32,6 +29,7 @@ export {
   type IamLoginPageProps,
 } from "./IamLoginPage";
 export { userDisplayName, type UserDisplayNameInput } from "./identity-labels";
+export { USER_SUBJECT_PREFIX, subjectUserId, userSubject } from "./subjects";
 export { ShareAccessCompact, ShareAccessDialog, ShareAccessRailGroup, useAccessRole, useAccessVisibility,
   type AccessRoleOwnerProps, type AccessRoleState, type ShareAccessDialogProps } from "./ShareAccess";
 export {
@@ -48,8 +46,8 @@ export {
 // The managed people list mounts lazily from `@angee/iam/users` (UsersPage); its columns and presets:
 export { USER_LIST_COLUMNS, USER_LIST_PRESETS, USER_LIST_PRESET_IDS, USER_MODEL } from "./users-list";
 
-// IAM is a first-class app-rail destination, including the inbound OIDC sign-in
-// provider admin; a route-less parent inherits its first child's target.
+// IAM is a first-class app-rail destination; a route-less parent inherits its
+// first child's target.
 const identityMenu: readonly BaseMenuItem[] = [
   {
     // Route-less app root: the rail icon inherits its target from the first
@@ -91,12 +89,6 @@ const iam = defineBaseAddon({
     assignmentUsers: subjectsWidget({ kinds: ["user"] }),
   },
   routes: [
-    {
-      name: "iam.login.callback",
-      path: LOGIN_CALLBACK_PATH,
-      layout: "public",
-      component: lazyRouteComponent(() => import("./OAuthCallbackPage"), "OAuthCallbackPage"),
-    },
     { name: "iam.overview", path: "/iam", component: lazyRouteComponent(() => import("./views/OverviewPage"), "OverviewPage") },
     ...resourcePageRoutes("iam.users", "/iam/users", lazyRouteComponent(() => import("./views/UsersPage"), "UsersPage"), "iam.User"),
     { name: "iam.roles", path: "/iam/roles", resource: "iam.Role", component: lazyRouteComponent(() => import("./views/RolesPage"), "RolesPage") },
@@ -112,9 +104,6 @@ const iam = defineBaseAddon({
     // A model's access owners register their roles and visibility for the Share panel.
     "iam#access-roles": { models: true },
     "iam#access-visibility": { models: true },
-    "auth.login#method": {
-      "iam.oauth-login": { content: createElement(OAuthLoginMethods) },
-    },
     // Account verbs on every saved user form, each offered by the row's `account_actions`.
     "iam.User#actions-menu": {
       "iam.set-active": {
@@ -145,15 +134,6 @@ const iam = defineBaseAddon({
     },
     "form#chrome": {
       "iam.share-record": { sequence: 20, content: createElement(ShareRecordChrome) },
-    },
-    "integrate.OAuthClient#sections": {
-      "iam.oidc-login": {
-        sequence: 10,
-        // OIDC login lives on the OAuth client itself; this contributes the OIDC tab
-        // into integrate's OAuth-client form, gated to the OIDC provider types this
-        // addon owns. No separate OIDC page/model — it's the same OAuthClient row.
-        content: oidcLoginSection,
-      },
     },
   },
 });

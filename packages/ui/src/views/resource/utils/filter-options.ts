@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { filterFieldType as metadataFilterFieldType, isDateField, supportsChoiceFacet as metadataSupportsChoiceFacet, type ResourceQuery, type ModelFieldMetadata, type ModelMetadata, type Row } from "@angee/metadata";
+import { filterFieldType as metadataFilterFieldType, supportsChoiceFacet as metadataSupportsChoiceFacet, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { queryForColumns } from "../resource-query";
 import { statusLabel } from "../../../lib/labels";
 import type { FilterClauseField, ResourceToolbarFilterOption } from "../../../toolbars";
@@ -120,13 +120,6 @@ function filterFieldType<TRow extends Row>(
     hasTone: Boolean(column?.tone),
     allowStatusFallback: Boolean(column),
   }) ?? "text";
-}
-
-export function dateGroupType(
-  fieldName: string,
-  field: ModelFieldMetadata | undefined,
-): boolean {
-  return isDateField(field, fieldName);
 }
 
 export function supportsChoiceFacet<TRow extends Row>(

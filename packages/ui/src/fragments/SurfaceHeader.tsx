@@ -2,10 +2,13 @@ import * as React from "react";
 
 import { tv } from "../lib/variants";
 import { PageHeader, type PageHeaderProps } from "../page";
-import { Tag } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import { IconTile } from "../ui/icon-tile";
 import { textRoleVariants } from "../ui/text";
 
+/**
+ * @kind token
+ */
 export const surfaceHeaderVariants = tv({
   slots: {
     main: "min-w-0 flex-1",
@@ -39,16 +42,22 @@ type SurfaceHeaderHeadingTag = `h${SurfaceHeaderHeadingLevel}`;
 
 export type SurfaceHeaderProps = Omit<
   PageHeaderProps,
-  "actions" | "children" | "crumbs" | "description" | "eyebrow" | "title"
+  "actions" | "children" | "crumbs" | "description" | "eyebrow" | "headingLevel" | "title"
 > & {
   actions?: React.ReactNode;
   children?: React.ReactNode;
   fetching?: boolean;
   icon?: React.ReactNode | string;
+  /** null when the title is a labelled editing control rather than a heading. */
+  headingLevel?: SurfaceHeaderHeadingLevel | null;
   subtitle?: React.ReactNode;
   title: React.ReactNode;
 };
 
+/**
+ * @kind region
+ * @region record-header
+ */
 export const SurfaceHeader = React.forwardRef<HTMLElement, SurfaceHeaderProps>(
   function SurfaceHeader(
     {
@@ -67,7 +76,7 @@ export const SurfaceHeader = React.forwardRef<HTMLElement, SurfaceHeaderProps>(
     ref,
   ) {
     const styles = surfaceHeaderVariants({ density });
-    const Heading = `h${headingLevel}` as SurfaceHeaderHeadingTag;
+    const Heading = headingLevel === null ? "div" : `h${headingLevel}` as SurfaceHeaderHeadingTag;
     const headerActions = actions ?? children;
 
     return (
@@ -82,7 +91,7 @@ export const SurfaceHeader = React.forwardRef<HTMLElement, SurfaceHeaderProps>(
           <div className={styles.titleRow()}>
             {icon ? <IconTile icon={icon} size="lg" tone="brand" /> : null}
             <Heading className={styles.title()}>{title}</Heading>
-            {fetching ? <Tag tone="info">Refreshing</Tag> : null}
+            {fetching ? <Chip tone="info">Refreshing</Chip> : null}
           </div>
           {subtitle ? <p className={styles.subtitle()}>{subtitle}</p> : null}
         </div>

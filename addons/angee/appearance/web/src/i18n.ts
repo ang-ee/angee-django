@@ -7,6 +7,8 @@ export const enAppearanceMessages: Record<string, string> = {
   "scheme.host": "Follow app default", "scheme.system": "System", "scheme.light": "Light", "scheme.dark": "Dark",
   "options.title": "Customize theme", "options.description": "Preview changes throughout the app and in both schemes, then Save in the control band to keep them.",
   "preview.title": "Full preview", "preview.description": "Review shared controls and data surfaces in isolated light and dark documents.",
+  "preview.frame": "{theme} {scheme} preview", "preview.card": "{theme} {scheme} card preview", "preview.hostCard": "App default {scheme} card preview",
+  "menu.appearance": "Appearance",
   "reset": "Reset appearance", "unavailable": "Your selected theme is not currently installed. The app default is shown while the saved choice is retained.",
   "invalidOptions": "The saved options cannot be used by this theme. Its defaults are shown until you edit and save new options.",
   "unsupported": "This appearance preference was written by a newer version. Reset it to edit here.",

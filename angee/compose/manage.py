@@ -8,7 +8,7 @@ from collections.abc import Sequence
 
 from django.core.management import execute_from_command_line
 
-from angee.base.changesets import changeset
+from angee.changesets import changeset
 from angee.project import PROJECT_DIR_ENV, find_project_dir
 
 SERVER_COMMANDS = frozenset({"runserver", "serve", "test"})

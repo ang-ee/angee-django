@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import fields
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Any, Self, cast
+from typing import Any, Self, cast
 
 import strawberry
 import strawberry_django
@@ -26,8 +26,6 @@ from rebac import PermissionDenied, current_actor
 from rebac.resources import model_resource_type
 from strawberry import auto
 
-from angee.base.identity import instance_from_public_id
-from angee.base.querysets import record_history
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -55,17 +53,25 @@ from angee.graphql.relations import (
     with_record_reference_access,
 )
 from angee.graphql.subscriptions import changes
-from angee.graphql.writes import write_queryset
 from angee.iam.audit import TrashedRefMixin
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, request_from_info
 from angee.iam.schema import UserType
+from angee.identity import instance_from_public_id
 from angee.integrate.live import PairingProjection, PairingState
 from angee.integrate.schema import BridgeTypeMixin
 from angee.messaging import connect
-from angee.messaging.managers import MessageQuerySet, message_subtype_options, strip_null_bytes
+from angee.messaging.managers import (
+    ChannelQuerySet,
+    MessageQuerySet,
+    ThreadQuerySet,
+    message_subtype_options,
+    strip_null_bytes,
+)
+from angee.messaging.models import Message as MessageModel
+from angee.messaging.models import Part as PartModel
+from angee.messaging.models import Thread as ThreadModel
 from angee.messaging.models import ThreadedModelMixin, chatter_record
 from angee.parties.schema import HandleType, PartyType
-from angee.provenance.schema import HistorySummaryType, RecordHistory
 from angee.storage.schema import FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
@@ -266,7 +272,7 @@ class MessagingChannelMutation:
         """
 
         with transaction.atomic():
-            channel = require_instance_for_id(Channel, str(id), queryset=write_queryset(Channel).of_concrete_type())
+            channel = require_instance_for_id(Channel, str(id), queryset=Channel.objects.for_write().of_concrete_type())
             preview = DeletePreview.from_counts(
                 channel, Channel.objects.inventory(channel), blockers=channel.purge_blockers(),
             )
@@ -447,11 +453,14 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(prefetch_related=["parts__fragment", "parts__file__mime_type"])
-    def parts(self) -> list[PartType]:
+    @strawberry_django.field(
+        graphql_type=list[PartType], prefetch_related=["parts__fragment", "parts__file__mime_type"]
+    )
+    @staticmethod
+    def parts(parent: strawberry.Parent[MessageModel]) -> list[PartModel]:
         """Return this message's MIME parts in depth-first reading order."""
 
-        return cast(list[PartType], Part.objects.reading_order_for_message(self))
+        return Part.objects.reading_order_for_message(parent)
 
     @strawberry.field
     def title(self) -> str:
@@ -573,11 +582,12 @@ class RecordMessageType(TrashedRefMixin, AngeeNode):
 
         return cast(Any, self).sender_name() or None
 
-    @strawberry.field
-    def parts(self) -> list[PartType]:
+    @strawberry.field(graphql_type=list[PartType])
+    @staticmethod
+    def parts(parent: strawberry.Parent[MessageModel]) -> list[PartModel]:
         """Return this record message's MIME parts in depth-first reading order."""
 
-        return cast(list[PartType], Part.objects.reading_order_for_message(self))
+        return Part.objects.reading_order_for_message(parent)
 
     @strawberry.field
     def title(self) -> str:
@@ -905,8 +915,6 @@ class RecordThreadInput(RecordReferenceInput):
     after: strawberry.ID | None = None
     around: strawberry.ID | None = None
     message_types: list[str] = strawberry.field(name="message_types", default_factory=list)
-    include_history: bool = strawberry.field(name="include_history", default=False)
-    timeline_offset: int = strawberry.field(name="timeline_offset", default=0)
 
 
 @strawberry.enum
@@ -1016,7 +1024,7 @@ class RecordErrorPayload:
 class RecordThreadStatePayload:
     """Refreshed thread state shared by reads and message write results."""
 
-    thread: RecordThreadType | None = None
+    thread: ThreadModel | None = strawberry.field(graphql_type=RecordThreadType | None, default=None)
     followers: list[RecordThreadFollowerType] = strawberry.field(default_factory=list)
     follower_count: int = strawberry.field(name="follower_count", default=0)
     is_following: bool = strawberry.field(name="is_following", default=False)
@@ -1043,11 +1051,6 @@ class RecordPostKind(StrEnum):
     NOTE = "note"
 
 
-RecordTimelineEntry = Annotated[
-    RecordMessageType | HistorySummaryType, strawberry.union("RecordTimelineEntry"),
-]
-
-
 @strawberry.type
 class RecordThreadPayload(RecordThreadStatePayload, RecordErrorPayload):
     """A record chatter thread, or the error that prevented resolving it."""
@@ -1057,8 +1060,6 @@ class RecordThreadPayload(RecordThreadStatePayload, RecordErrorPayload):
     thread_post_access: str | None = strawberry.field(name="thread_post_access", default=None)
     permissions: list[str] = strawberry.field(default_factory=list)
     messages: list[RecordMessageType] = strawberry.field(default_factory=list)
-    timeline: list[RecordTimelineEntry] = strawberry.field(default_factory=list)
-    timeline_count: int = strawberry.field(name="timeline_count", default=0)
     message_result_count: int = strawberry.field(name="message_result_count", default=0)
     _reply_search: strawberry.Private[str] = ""
     _reply_message_types: strawberry.Private[tuple[str, ...]] = ()
@@ -1157,7 +1158,7 @@ class RecordMessageDonePayload(RecordErrorPayload):
     """A message marked done for the user, or the error that prevented it."""
 
     message: RecordMessageType | None = None
-    thread: RecordThreadType | None = None
+    thread: ThreadModel | None = strawberry.field(graphql_type=RecordThreadType | None, default=None)
     notifications: list[RecordThreadNotificationType] = strawberry.field(default_factory=list)
     unread_count: int = strawberry.field(name="unread_count", default=0)
     needaction_count: int = strawberry.field(name="needaction_count", default=0)
@@ -1168,7 +1169,7 @@ class RecordFollowPayload(RecordErrorPayload):
     """A record follower update result, or the error that prevented it."""
 
     follower: RecordThreadFollowerType | None = None
-    thread: RecordThreadType | None = None
+    thread: ThreadModel | None = strawberry.field(graphql_type=RecordThreadType | None, default=None)
     followers: list[RecordThreadFollowerType] = strawberry.field(default_factory=list)
     follower_count: int = strawberry.field(name="follower_count", default=0)
     is_following: bool = strawberry.field(name="is_following", default=False)
@@ -1292,13 +1293,13 @@ class MessagingQuery:
             Message.objects.inbox().untrashed().for_thread(thread), ids, search=search, all_copies=all_copies,
         )
 
-    @strawberry.field(name="message_source_copies")
-    def message_source_copies(self, id: strawberry.ID) -> list[MessageType]:
+    @strawberry.field(name="message_source_copies", graphql_type=list[MessageType])
+    def message_source_copies(self, id: strawberry.ID) -> models.QuerySet[MessageModel]:
         """The readable channel occurrences of one message: its survivor and every copy folded into it."""
 
         rows = Message.objects.inbox().untrashed()
         survivor = require_instance_for_id(Message, id, queryset=rows).canonical()
-        return rows.filter(models.Q(pk=survivor.pk) | models.Q(merged_into=survivor)).order_by("channel_id", "pk")
+        return rows.redirect_group(survivor).order_by("channel_id", "pk")
 
     @strawberry.field(name="record_thread")
     def record_thread(self, info: strawberry.Info, input: RecordThreadInput) -> RecordThreadPayload:
@@ -1320,8 +1321,6 @@ class MessagingQuery:
             after=input.after,
             around=input.around,
             message_types=tuple(input.message_types),
-            include_history=input.include_history,
-            timeline_offset=input.timeline_offset,
         )
 
     @strawberry.field(name="record_removed_messages")
@@ -1352,28 +1351,6 @@ class MessagingQuery:
             return []
         edges = ThreadAttachment.objects.source_threads_for_record(record).order_by("-created_at", "pk")
         return list(with_record_reference_access(edges))
-
-    @strawberry.field(name="record_thread_unread_count")
-    def record_thread_unread_count(
-        self,
-        info: strawberry.Info,
-        model_label: Annotated[str, strawberry.argument(name="model_label")],
-        record_id: Annotated[strawberry.ID, strawberry.argument(name="record_id")],
-    ) -> int:
-        """Return the request actor's unread count for a readable record thread."""
-
-        user = _request_user(info)
-        if user is None:
-            return 0
-        try:
-            record = chatter_record(model_label, record_id)
-        except ValueError:
-            return 0
-        if record is None:
-            return 0
-        return ThreadFollower.objects.unread_count_for_record(record, user=user, role="chatter")
-
-
 
 @strawberry.type
 class MessagingMutation:
@@ -1445,7 +1422,7 @@ class MessagingMutation:
         self,
         info: strawberry.Info,
         input: RecordMessagePostInput,
-        client_creation_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> RecordMessagePostPayload:
         """Post an internal comment to the record's chatter thread."""
 
@@ -1463,7 +1440,7 @@ class MessagingMutation:
                 if recipient_user_ids or input.autofollow_recipients:
                     raise ValueError("Internal notes cannot target recipients.")
                 message = cast(Any, record).message_log(
-                    input.body, attachments=attachments, parent=parent, client_creation_key=client_creation_key
+                    input.body, attachments=attachments, parent=parent, idempotency_key=idempotency_key
                 )
             else:
                 message = cast(Any, record).message_post(
@@ -1472,7 +1449,7 @@ class MessagingMutation:
                     recipient_user_ids=recipient_user_ids,
                     autofollow_recipients=input.autofollow_recipients,
                     parent=parent,
-                    client_creation_key=client_creation_key,
+                    idempotency_key=idempotency_key,
                 )
         except (PermissionDenied, ValueError, ValidationError) as error:
             return RecordMessagePostPayload.from_error(error, invalid_code="BAD_MESSAGE")
@@ -1750,7 +1727,10 @@ class _InboxWriteBackend(AngeeHasuraWriteBackend):
     def write_target_queryset(self) -> Any:
         """Scope the update/delete/save target queryset to non-record rows."""
 
-        return super().write_target_queryset().inbox()
+        queryset = super().write_target_queryset()
+        if not isinstance(queryset, (MessageQuerySet, ThreadQuerySet)):
+            raise ImproperlyConfigured("The inbox write backend requires a message or thread queryset.")
+        return queryset.inbox()
 
 
 class _ChannelWriteBackend(AngeeHasuraWriteBackend):
@@ -1769,6 +1749,8 @@ class _ChannelWriteBackend(AngeeHasuraWriteBackend):
 
         del info
         queryset = self.write_target_queryset()
+        if not isinstance(queryset, ChannelQuerySet):
+            raise ImproperlyConfigured("The channel write backend requires a channel queryset.")
         channel = require_instance_for_id(Channel, str(pk), queryset=queryset.of_concrete_type())
         Channel.objects.purge(channel)
         return channel
@@ -1854,10 +1836,15 @@ _MESSAGE_RESOURCE = hasura_model_resource(
     ],
     sortable_aliases={
         "title": "_title_text",
-        "sender_name": SortAlias("_sender_name", lambda _info, queryset: queryset.sender_name_expression()),
-        "thread_title": SortAlias("_thread_title", lambda _info, queryset: queryset.thread_title_expression()),
+        "sender_name": SortAlias(
+            "_sender_name", lambda _info, queryset: cast(MessageQuerySet, queryset).sender_name_expression()
+        ),
+        "thread_title": SortAlias(
+            "_thread_title", lambda _info, queryset: cast(MessageQuerySet, queryset).thread_title_expression()
+        ),
         "channel_vendor_name": SortAlias(
-            "_channel_vendor_name", lambda _info, queryset: queryset.channel_vendor_name_expression()
+            "_channel_vendor_name",
+            lambda _info, queryset: cast(MessageQuerySet, queryset).channel_vendor_name_expression(),
         ),
     },
     aggregatable=["id"],
@@ -2189,7 +2176,9 @@ def _prime_follower_identities(followers: list[Any], actor: Any) -> None:
         .filter(pk__in={p.user_id for p in people.values() if p.user_id})
     }
     for person in people.values():
-        person._meta.get_field("user").set_cached_value(person, users.get(person.user_id))
+        person._meta.get_field("user").set_cached_value(
+            person, users.get(person.user_id) if person.user_id is not None else None
+        )
     for party in parties.values():
         party._meta.get_field("person").set_cached_value(party, people.get(party.pk))
     for follower in followers:
@@ -2254,50 +2243,6 @@ def _prime_record_messages(messages: list[Any]) -> None:
         setattr(message, "_sender_name", sender_names.get(message.pk, ""))
 
 
-def _record_timeline(
-    record: Any, *, role: str, search: str, message_types: tuple[str, ...], limit: int, offset: int,
-) -> tuple[list[Any], list[Any], int, int]:
-    """One chronological SQL window over messages and the record's native history.
-
-    Select keys first, then hydrate only the selected rows through their owners.
-    The kind distinguishes equal timestamps and primary keys across the two tables.
-    """
-
-    if offset < 0:
-        raise ValidationError("The timeline offset cannot be negative.")
-    limit = max(1, min(int(limit or 50), 100))
-    messages = Message.objects.record_scope(record, role=role, search=search, message_types=message_types)
-    message_count = messages.count()
-    keys = messages.order_by().values(
-        _timeline_id=models.F("pk"), _timeline_at=models.F("_order_at"),
-        _timeline_kind=models.Value("message", output_field=models.CharField()),
-    )
-    history = RecordHistory(record, current_actor()) if record_history(type(record)) is not None else None
-    changesets = history.changesets() if history is not None else None
-    if changesets is not None:
-        for term in strip_null_bytes(search or "").split():
-            changesets = changesets.filter(
-                models.Q(change_reason__icontains=term) | models.Q(actor__icontains=term)
-                | models.Q(action__icontains=term) | models.Q(activity__icontains=term),
-            )
-        keys = keys.union(changesets.order_by().values(
-            _timeline_id=models.F("pk"), _timeline_at=models.F("recorded_at"),
-            _timeline_kind=models.Value("change", output_field=models.CharField()),
-        ), all=True)
-    selected = list(keys.order_by("-_timeline_at", "-_timeline_kind", "-_timeline_id")[offset:offset + limit])
-    message_ids = [row["_timeline_id"] for row in selected if row["_timeline_kind"] == "message"]
-    loaded = {("message", row.pk): row for row in messages.filter(pk__in=message_ids)}
-    if changesets is not None and history is not None:
-        change_ids = [row["_timeline_id"] for row in selected if row["_timeline_kind"] == "change"]
-        page = list(changesets.filter(pk__in=change_ids))
-        loaded.update((('change', row.pk), entry) for row, entry in zip(page, history.summaries(page), strict=True))
-    # A row deleted after key selection is omitted, never replaced outside this window.
-    timeline = [loaded[key] for row in reversed(selected)
-                if (key := (row["_timeline_kind"], row["_timeline_id"])) in loaded]
-    total = message_count + (changesets.count() if changesets is not None else 0)
-    return [entry for entry in timeline if isinstance(entry, Message)], timeline, message_count, total
-
-
 def _record_thread_payload(
     record: Any,
     info: strawberry.Info | None,
@@ -2309,36 +2254,25 @@ def _record_thread_payload(
     after: strawberry.ID | None = None,
     around: strawberry.ID | None = None,
     message_types: tuple[str, ...] = (),
-    include_history: bool = False,
-    timeline_offset: int = 0,
 ) -> RecordThreadPayload:
     """Return a record thread payload with follower state for the request user."""
 
     attachment = ThreadAttachment.objects.for_record(record, role=role)
     thread = attachment.thread if attachment is not None else None
-    if include_history:
-        if any(value not in (None, "") for value in (before, after, around)):
-            raise ValidationError("The combined timeline uses its own offset, not message anchors.")
-        messages, timeline, message_result_count, timeline_count = _record_timeline(
-            record, role=role, search=search, message_types=message_types,
-            limit=message_limit, offset=timeline_offset,
+    messages, message_result_count = (
+        Message.objects.for_record(
+            record,
+            role=role,
+            search=search,
+            limit=message_limit,
+            before=before,
+            after=after,
+            around=around,
+            message_types=message_types,
         )
-    else:
-        messages, message_result_count = (
-            Message.objects.for_record(
-                record,
-                role=role,
-                search=search,
-                limit=message_limit,
-                before=before,
-                after=after,
-                around=around,
-                message_types=message_types,
-            )
-            if thread is not None
-            else ([], 0)
-        )
-        timeline, timeline_count = messages, message_result_count
+        if thread is not None
+        else ([], 0)
+    )
     _prime_record_messages(messages)
     followers = list(cast(Any, record).message_followers()) if thread is not None else []
     _prime_follower_identities(followers, current_actor())
@@ -2413,8 +2347,6 @@ def _record_thread_payload(
         permissions=[record.thread_post_access] if record_access[0] else [],
         thread=thread,
         messages=messages,
-        timeline=timeline,
-        timeline_count=timeline_count,
         message_result_count=message_result_count,
         _reply_search=search,
         _reply_message_types=message_types,

@@ -20,12 +20,12 @@ class SimilarLookup(models.Lookup):
 
     lookup_name = "angee_similar"
 
-    def as_sql(self, compiler: Any, connection: Any) -> tuple[str, list[Any]]:
+    def as_sql(self, compiler: Any, connection: Any) -> tuple[str, tuple[Any, ...]]:
         if connection.vendor != "postgresql":
             raise NotSupportedError("SIMILAR TO requires PostgreSQL.")
         lhs, lhs_params = self.process_lhs(compiler, connection)
         rhs, rhs_params = self.process_rhs(compiler, connection)
-        return f"{lhs} SIMILAR TO {rhs}", [*lhs_params, *rhs_params]
+        return f"{lhs} SIMILAR TO {rhs}", (*lhs_params, *rhs_params)
 
 
 def resource_filter_lookups(model: type[models.Model], fields: tuple[str, ...]) -> dict[str, tuple[str, bool]]:

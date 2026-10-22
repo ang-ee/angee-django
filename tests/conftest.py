@@ -35,7 +35,8 @@ from angee.integrate.models import ExternalAccount as AbstractExternalAccount
 from angee.integrate.models import OAuthClient as AbstractOAuthClient
 from angee.integrate.models import Vendor as AbstractVendor
 from angee.integrate.models import WebhookSubscription as AbstractWebhookSubscription
-from angee.integrate.streams import StreamDefinition, StreamPage
+from angee.integrate.states import StreamDefinition
+from angee.integrate.streams import StreamPage
 from angee.integrate.testing.integration import Integration
 from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 from angee.integrate_vcs.models import Repository as AbstractRepository
@@ -90,13 +91,13 @@ def composed_tables(composed_tables: None) -> None:
 
     Extends the ``angee.testing`` plugin fixture of the same name: after its REBAC
     sync, the install-tier principals and grants that admission reads are loaded
-    (``angee.parties.testing.fixtures.load_statement_sources``), exactly as the
-    composed host does.
+    (``angee.provenance.testing.load_statement_sources``), exactly as the composed
+    host does.
     """
 
     del composed_tables
-    load_statement_sources()
-    load_source_identity()
+    load_statement_sources("parties")
+    load_statement_sources("messaging")
 
 
 @pytest.fixture
@@ -357,6 +358,14 @@ def make_integration(
         return model.objects.create(**values)
 
 
+def current_stream(bridge: Any, key: str, partition: str = "", **facts: Any) -> Any:
+    """Open a test stream through its declaration-owned manager contract."""
+
+    from angee.integrate.testing.models import SyncStream
+
+    return SyncStream.objects.current(bridge, StreamDefinition(key, partition, **facts))
+
+
 class StubVCSBackend(VCSBackend):
     """In-memory VCS backend for tests; canned data rides on ``VcsBridge.config``.
 
@@ -608,12 +617,11 @@ class ExtcontribRole(Role):
 # Register the projects concretes only after their storage FK targets above.
 # Proposal concretes depend on the project graph and register their role anchor.
 # Every installed backing needs its concrete model before native database setup.
-from angee.messaging.testing.fixtures import load_source_identity  # noqa: E402
 from angee.nexus.testing import models as nexus_models  # noqa: E402, F401
 from angee.operator.testing import models as operator_models  # noqa: E402, F401
-from angee.parties.testing.fixtures import load_statement_sources  # noqa: E402
 from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401
 from angee.projects.testing import models as projects_models  # noqa: E402, F401
+from angee.provenance.testing import load_statement_sources  # noqa: E402
 from angee.sequence.testing import models as sequence_models  # noqa: E402, F401
 from angee.tags.testing import models as tags_models  # noqa: E402, F401
 from angee.uom.testing import models as uom_models  # noqa: E402, F401

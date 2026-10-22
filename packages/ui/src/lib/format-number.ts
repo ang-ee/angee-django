@@ -29,7 +29,10 @@ function formatNumericValue(
   return format(value);
 }
 
-/** Build one formatter for repeated values while retaining the shared input rules. */
+/** Build one formatter for repeated values while retaining the shared input rules.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function numberFormatter(
   options?: NumberFormatOptions,
 ): (value: NumberInput) => string {
@@ -37,7 +40,10 @@ export function numberFormatter(
   return (value) => formatNumericValue(formatter, value);
 }
 
-/** Format a number-like value with native Intl options and no house defaults. */
+/** Format a number-like value with native Intl options and no house defaults.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function formatNumber(
   value: NumberInput,
   options?: NumberFormatOptions,

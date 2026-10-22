@@ -8,6 +8,17 @@ export {
   type ControlBandProviderProps,
 } from "./ControlBand";
 export {
+  PaneToolbar,
+  PaneToolbarHost,
+  type PaneToolbarAction,
+  type PaneToolbarHostProps,
+  PaneToolbarMenu,
+  type PaneToolbarMenuItem,
+  type PaneToolbarMenuProps,
+  type PaneToolbarMenuRadioGroup,
+  type PaneToolbarProps,
+} from "./PaneToolbar";
+export {
   DrawerProvider,
   drawerPanelId,
   useDrawerState,

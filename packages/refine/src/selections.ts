@@ -21,8 +21,20 @@ export function refineFieldsFromPaths(paths: readonly string[]): Fields {
   return fields(root);
 }
 
-/** Print Refine's field tree without interpreting resource or query semantics. */
-export function selectionText(fields: Fields): string {
-  return fields.map((field) => typeof field === "string" ? field
-    : Object.entries(field).map(([name, children]) => `${name} { ${selectionText(children as Fields)} }`).join(" ")).join(" ");
+/** Print Refine's field tree, optionally binding authored argument text by dotted path. */
+export function selectionText(
+  fields: Fields,
+  argumentsByPath: Readonly<Record<string, string>> = {},
+  parentPath = "",
+): string {
+  return fields.map((field) => {
+    if (typeof field === "string") {
+      const path = parentPath ? `${parentPath}.${field}` : field;
+      return `${field}${argumentsByPath[path] ?? ""}`;
+    }
+    return Object.entries(field).map(([name, children]) => {
+      const path = parentPath ? `${parentPath}.${name}` : name;
+      return `${name}${argumentsByPath[path] ?? ""} { ${selectionText(children as Fields, argumentsByPath, path)} }`;
+    }).join(" ");
+  }).join(" ");
 }

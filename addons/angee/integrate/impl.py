@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
-from angee.base.impl import ImplBase
+from angee.impl import ImplBase
 from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.live import PairingProjection, SessionLoggedOut
@@ -17,11 +17,11 @@ from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey
 
 if TYPE_CHECKING:
+    from angee.integrate.states import StreamDefinition
     from angee.integrate.streams import (
         ApplyResult,
         LocalChange,
         RecordChange,
-        StreamDefinition,
         StreamPage,
         WriteBackResult,
     )
@@ -74,9 +74,19 @@ class BridgeImpl(IntegrationImpl):
     icon = "plug"
     oauth_client: ClassVar[str] = "{vendor}"
     sync_parallelism: ClassVar[int | None] = None
-    """Optional protocol cap; the bridge config and database may lower it."""
+    """Optional protocol cap; direct sync config and database may lower it.
+
+    Workflow IO uses the shared bridge lock for an exact-one cap. Other workflow
+    caps retain native map concurrency, without a separate protocol semaphore.
+    """
     supports_identity_reads: ClassVar[bool] = False
     """Declare identity reads; otherwise retries request a fresh baseline."""
+
+    def source_url(self, link: Any) -> str | None:
+        """Return the provider URL for ``link``, or none when it has no web view."""
+
+        del link
+        return None
 
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Declare each independently ordered partition exactly once.

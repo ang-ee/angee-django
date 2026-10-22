@@ -22,7 +22,9 @@ interface DeclaredRelationFacet {
   group: SearchFacet["group"];
 }
 
-/** Declared facet choices and bucket predicates share the resource query's axis. */
+/** Declared facet choices and bucket predicates share the resource query's axis.
+ * @owner RelationFieldWidget
+ */
 export function useRelationFacets(
   resource: string,
   options: readonly RelationFacetOptions[] | undefined = EMPTY_OPTIONS,

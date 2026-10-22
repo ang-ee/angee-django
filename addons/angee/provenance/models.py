@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from contextlib import nullcontext
 from graphlib import CycleError, TopologicalSorter
@@ -11,8 +12,8 @@ from typing import Any, ClassVar, cast
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
-from django.db import models, router, transaction
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.db import IntegrityError, connections, models, transaction
 from django.utils import timezone
 from rebac import (
     RebacMixin,
@@ -31,63 +32,110 @@ from rebac.errors import PermissionDenied
 from rebac.resources import model_resource_type
 from rebac.schema.walker import subject_allowed_by_relation
 
-from angee.base.actors import instance_actor
-from angee.base.changesets import changeset, current_changeset
-from angee.base.fields import StateField
-from angee.base.mixins import (
+from angee.actors import instance_actor
+from angee.changesets import changeset, current_changeset, discard_changeset_claim, require_changeset
+from angee.errors import CreationKeyConflict
+from angee.fields import StateField
+from angee.graphql.publishing import publish_change
+from angee.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeUnscopedManager,
+    ChangesetQuerySet,
+    HistoryMixin,
     SourceKind,
     SqidMixin,
     StatementSourceMixin,
+    model_history,
+    role_anchor,
 )
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeUnscopedManager, role_anchor
-from angee.base.querysets import model_history
-from angee.base.refs import MergePolicy, RecordRefMixin
-from angee.base.serialization import canonical_json, canonical_json_sha256, json_safe
+from angee.refs import MergePolicy, RecordRefMixin
+from angee.serialization import canonical_json, canonical_json_sha256, json_safe
 
 ProvenanceRole = role_anchor("provenance/role")
 
 
-class StatementPrincipalManager(AngeeManager):
-    """Resolve a source's durable identity without creating duplicate principals."""
-
-    def for_key(self, key: str) -> Any:
-        """Return the principal bootstrapped by its owning resource declaration."""
-
-        if not key:
-            raise ValueError("A statement principal requires a nonempty key.")
-        return self.get(key=key)
+# A dotted machine identifier, the shape of a ``system_context`` reason code.
+MACHINE_REASON = re.compile(r"[a-z0-9_]+(?:\.[a-z0-9_]+)+")
 
 
-class Rule(StatementSourceMixin, AngeeDataModel):
+_ChangesetManagerBase = AngeeManager.from_queryset(ChangesetQuerySet)
+
+
+class ChangesetManager[ChangesetT: Changeset](_ChangesetManagerBase[ChangesetT]):
+    """Atomic idempotency claims on logical write boundaries."""
+
+    def claim(self, scope: str, key: str, *, fingerprint: str) -> ChangesetT | None:
+        """Claim ``(scope, key)`` on the fresh current boundary or return its completed match."""
+
+        for name, value in (("scope", scope), ("key", key), ("fingerprint", fingerprint)):
+            error_name = "idempotency_key" if name == "key" else name
+            try:
+                field = self.model._meta.get_field(name)
+                assert isinstance(field, models.Field)
+                field.clean(value, None)
+            except ValidationError as error:
+                raise ValidationError({error_name: error}) from error
+            if not value.strip():
+                raise ValidationError({error_name: f"A changeset {name} must not be blank."})
+        if not connections[self.db].in_atomic_block:
+            raise RuntimeError("Changeset claims require an outer transaction.atomic() boundary.")
+        claimed = require_changeset()
+        if not isinstance(claimed, self.model):
+            raise RuntimeError("Claims must use the configured changeset model.")
+        if not claimed._state.adding or claimed.pk is not None:
+            raise RuntimeError("Claim an idempotency key before the boundary records any writes.")
+        claimed.scope = scope
+        claimed.key = key
+        claimed.fingerprint = fingerprint
+        try:
+            with transaction.atomic(using=self.db):
+                current_changeset(required=True, record=True)
+        except IntegrityError:
+            discard_changeset_claim(claimed)
+            existing = self.model._base_manager.using(self.db).filter(scope=scope, key=key).first()
+            if existing is None:
+                raise
+            if existing.fingerprint != fingerprint:
+                raise CreationKeyConflict("This idempotency key was already used for different content.")
+            return existing
+        return None
+
+
+class StatementPrincipal(StatementSourceMixin, AngeeDataModel):
+    """Persisted statement-source principal keyed by its declared identity."""
+
+    key = models.CharField(max_length=255, unique=True)
+    statement_source_kind: ClassVar[SourceKind]
+
+    @property
+    def source_kind(self) -> SourceKind:
+        return self.statement_source_kind
+
+    class Meta:
+        abstract = True
+
+
+class Rule(StatementPrincipal):
     """Persisted principal for one registered rule or matcher, keyed by its name."""
 
     runtime = True
     sqid_prefix = "rul_"
-    key = models.CharField(max_length=255, unique=True)
-    objects = StatementPrincipalManager()
+    statement_source_kind = cast(SourceKind, SourceKind.RULE)
 
-    @property
-    def source_kind(self) -> SourceKind:
-        return cast(SourceKind, SourceKind.RULE)
-
-    class Meta:
+    class Meta(StatementPrincipal.Meta):
         abstract = True
         rebac_resource_type = "provenance/rule"
 
 
-class Seed(StatementSourceMixin, AngeeDataModel):
+class Seed(StatementPrincipal):
     """Persisted principal for one seed load, keyed by that load's identity."""
 
     runtime = True
     sqid_prefix = "sed_"
-    key = models.CharField(max_length=255, unique=True)
-    objects = StatementPrincipalManager()
+    statement_source_kind = cast(SourceKind, SourceKind.SEED)
 
-    @property
-    def source_kind(self) -> SourceKind:
-        return cast(SourceKind, SourceKind.SEED)
-
-    class Meta:
+    class Meta(StatementPrincipal.Meta):
         abstract = True
         rebac_resource_type = "provenance/seed"
 
@@ -95,7 +143,8 @@ class Seed(StatementSourceMixin, AngeeDataModel):
 class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
     """One logical write's attribution and touched-model index; never historized.
 
-    ``actor`` is the native SubjectRef wire representation. Its relationship
+    ``actor_ref`` stores the native SubjectRef wire representation in the historical
+    ``actor`` database column. Its relationship
     tuple is a permission projection, inserted atomically through REBAC's trusted
     proposed-relationships contract. History user stamps derive from the column.
     """
@@ -103,7 +152,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
     runtime = True
     sqid_prefix = "cst_"
     merge_policy: ClassVar[MergePolicy] = MergePolicy.KEEP
-    objects = AngeeManager()
+    objects = ChangesetManager()
     _angee_base = AngeeUnscopedManager()
 
     class Action(models.TextChoices):
@@ -130,17 +179,24 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         SUCCESS = "success", "Success"
         FAILURE = "failure", "Failure"
 
-    actor = models.TextField(blank=True, editable=False)
+    actor_ref = models.TextField(db_column="actor", blank=True, editable=False)
     action = StateField(choices_enum=Action, default=Action.UPDATE)
     activity = StateField(choices_enum=Activity, default=Activity.MANUAL)
     change_reason = models.TextField(blank=True)
     correlation_id = models.CharField(max_length=255, blank=True, db_index=True)
-    idempotency_key = models.CharField(max_length=255, blank=True, db_index=True)
+    scope = models.CharField(max_length=255, blank=True, editable=False)
+    key = models.CharField(max_length=128, blank=True, editable=False)
+    fingerprint = models.CharField(max_length=64, blank=True, editable=False)
     origin_content_type = models.ForeignKey(
         ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
     )
     origin_object_id = models.CharField(max_length=1024, null=True, blank=True)
     origin = GenericForeignKey("origin_content_type", "origin_object_id")
+    created_content_type = models.ForeignKey(
+        ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+    created_object_id = models.CharField(max_length=1024, null=True, blank=True)
+    created_row = GenericForeignKey("created_content_type", "created_object_id")
     occurred_at = models.DateTimeField(default=timezone.now)
     recorded_at = models.DateTimeField(default=timezone.now, editable=False)
     state = StateField(choices_enum=State, default=State.OPEN)
@@ -159,13 +215,63 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             models.Index(fields=("-recorded_at", "-id")),
             models.Index(fields=("origin_content_type", "origin_object_id")),
         )
+        constraints = (
+            models.UniqueConstraint(
+                fields=("scope", "key"),
+                condition=~models.Q(scope="") & ~models.Q(key=""),
+                name="%(app_label)s_%(class)s_claim",
+            ),
+        )
+
+    def offset_in(self, queryset: models.QuerySet[Any]) -> int:
+        """Position in a scoped changeset sequence, using this owner's newest-first order."""
+
+        return queryset.filter(
+            models.Q(recorded_at__gt=self.recorded_at) | models.Q(recorded_at=self.recorded_at, pk__gt=self.pk)
+        ).count()
+
+    @property
+    def reason_display(self) -> str:
+        """The reason as user text: a human sentence passes through, a machine reason is silent.
+
+        Automated changes record the ``system_context(reason=...)`` code (``integrate.stream.advance``)
+        as their reason; the action and activity already say what happened, so the code never
+        reaches a user. Every presentation (API, timeline) reads this, not ``change_reason``.
+        """
+
+        reason = self.change_reason.strip()
+        return "" if MACHINE_REASON.fullmatch(reason) else reason
+
+    @classmethod
+    def record_ref_field(cls) -> GenericForeignKey:
+        """Keep the authored origin as this edge's canonical record reference."""
+
+        return cast(GenericForeignKey, cls._meta.get_field("origin"))
+
+    def record_created(self, row: models.Model) -> None:
+        """Attach the claimed create result inside the claim's transaction."""
+
+        if not self.scope or not self.key:
+            raise RuntimeError("Only a claimed changeset can record a created row.")
+        self.created_row = row
+        type(self)._base_manager.db_manager(hints={"instance": self}).filter(pk=self.pk).update(
+            created_content_type_id=self.created_content_type_id,
+            created_object_id=self.created_object_id,
+        )
+
+    def revertable(self, record: models.Model, *, actor: Any = None) -> bool:
+        """Return whether ``record`` admits this boundary under its declared permission."""
+
+        if not isinstance(record, HistoryMixin):
+            return False
+        return self.pk in record.revertable_changesets((self,), actor=actor)
 
     def proposed_relationships(self, *, using: str | None = None) -> Mapping[str, tuple[SubjectRef, ...]]:
         """Promise the actor tuple that this owner persists immediately after insert."""
 
-        if not self.actor:
+        if not self.actor_ref:
             return {}
-        actor = SubjectRef.parse(self.actor)
+        actor = SubjectRef.parse(self.actor_ref)
         if is_anonymous_actor(actor):
             return {}
         definition = backend().schema().get_definition(model_resource_type(type(self)) or "")
@@ -186,12 +292,14 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         """
 
         inserting = self._state.adding
-        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        manager = type(self)._base_manager.db_manager(hints={"instance": self})
+        alias = manager.db
         recording = inserting and current_changeset() is self
         with (
-            transaction.atomic(using=using),
+            transaction.atomic(using=alias),
             system_context(reason="changeset.record") if recording else nullcontext(),
         ):
+            kwargs["using"] = alias
             super().save(*args, **kwargs)
             if inserting:
                 write_relationships(
@@ -201,7 +309,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
                             relation=relation,
                             subject=subject,
                         )
-                        for relation, subjects in self.proposed_relationships(using=using).items()
+                        for relation, subjects in self.proposed_relationships().items()
                         for subject in subjects
                     ]
                 )
@@ -210,7 +318,8 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         """Close persisted attribution as model bookkeeping, outside actor gates.
 
         Closing writes one row and never re-reads the boundary's history: the
-        document digest belongs to export (:meth:`document`).
+        document digest belongs to export (:meth:`document`). The published
+        change lets observers queue independent projections after commit.
         """
 
         self.state = self.State(self.State.CLOSED)
@@ -222,11 +331,12 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             touched=self.touched,
             counts=self.counts,
         )
+        publish_change(self, action="update", update_fields=("state", "outcome", "touched", "counts"), broadcast=False)
 
     def history_rows(self) -> Any:
         """Yield touched owners and their native versions in deterministic order."""
 
-        using = self._state.db or router.db_for_read(type(self), instance=self)
+        using = type(self)._base_manager.db_manager(hints={"instance": self}).db
         for label in sorted(set(self.touched)):
             model = apps.get_model(label)
             if model_history(model) is None:
@@ -280,7 +390,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         detection queues the corrected projection on the next sync.
         """
 
-        using = self._state.db or router.db_for_write(type(self), instance=self)
+        using = type(self)._base_manager.db_manager(hints={"instance": self}).db
         actor = instance_actor(self) or current_actor()
         if self.state != self.State.CLOSED or self.outcome != self.Outcome.SUCCESS:
             raise ValidationError("Only a successfully closed changeset can be reverted.")
@@ -289,26 +399,43 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             transaction.atomic(using=using),
             changeset(fresh=True, activity="revert", origin=self),
         ):
-            states = []
+            histories = []
+            subjects: dict[tuple[type[models.Model], Any], Any] = {}
             for model, _ in self.history_rows():
                 history = model_history(model)
                 if history is None:
                     raise ValidationError(f"{model._meta.label}: no history owner.")
-                # Acquire subject-owned locks before checking later touches.
-                for first in model.history.using(using).filter(changeset_id=self.pk).order_by("history_id").iterator():
-                    history.lock_revert(first, first, None)
+                histories.append((model, history))
+                for version in (
+                    model.history.using(using)
+                    .filter(
+                        changeset_id=self.pk,
+                    )
+                    .order_by("history_id")
+                    .iterator()
+                ):
+                    subject = version.history_object
+                    subjects.setdefault((type(subject), subject.pk), subject)
+            for subject in sorted(subjects.values(), key=lambda row: (row._meta.label_lower, str(row.pk))):
+                try:
+                    subject.lock_subject()
+                except ObjectDoesNotExist:
+                    # A deleted row has no operational lock to acquire; its retained
+                    # snapshot remains the restoration input below.
+                    pass
+            states = []
+            for model, history in histories:
                 for first, last, previous in history.changeset_states(model, self, using=using):
-                    history.lock_revert(first, last, previous)
                     history.authorize_revert(first, last, previous, actor)
                     states.append((history, first, last, previous))
-            subjects = {}
+            affected = {}
             with system_context(reason="changeset.revert"):
                 for history, first, last, previous in states:
                     history.stage_revert(first, last, previous)
                 for history, first, last, previous in self._revert_states(states):
                     for subject in history.revert_row(first, last, previous):
-                        subjects[(type(subject), subject.pk)] = subject
-                for subject in subjects.values():
+                        affected[(type(subject), subject.pk)] = subject
+                for subject in affected.values():
                     if type(subject)._base_manager.using(using).filter(pk=subject.pk).exists():
                         for manager in subject.statement_managers():
                             manager.resolve()
@@ -331,9 +458,10 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             identities = {
                 (type(row), field.name, getattr(row, field.attname)): index
                 for index, row in enumerate(snapshots)
-                for field in row._meta.concrete_fields if field.unique
+                for field in row._meta.concrete_fields
+                if field.unique
             }
-            graph = {index: set() for index in range(len(batch))}
+            graph: dict[int, set[int]] = {index: set() for index in range(len(batch))}
             for index, row in enumerate(snapshots):
                 for field in row._meta.concrete_fields:
                     if not field.is_relation or not field.many_to_one and not field.one_to_one:

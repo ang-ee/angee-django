@@ -11,7 +11,7 @@ from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
 _READ = """query Queue($id: String!) {
-  work_queues_by_pk(id: $id) { id stages { id name category tone position rule_owned conceals locked_fields } }
+  work_queues_by_pk(id: $id) { id stages { id name category tone position rule_owned locked_fields } }
 }"""
 
 _SAVE = """mutation SaveQueue($pk: ID!, $lines: [work_queues_stages_insert_input!]) {
@@ -52,7 +52,6 @@ class StageLinesTests(WorkCase):
                 "tone": row["tone"].lower(),
                 "position": index,
                 "rule_owned": row["rule_owned"],
-                "conceals": row["conceals"],
             }
             line.update(changes.get(row["name"], {}))
             payload.append(line)
@@ -134,10 +133,9 @@ class StageLinesTests(WorkCase):
         self.assertEqual((triage.name, triage.tone, triage.position), ("Triage", "danger", 1))
 
     def test_lines_keep_the_stage_validations(self):
-        self.assert_refused(self.lines(Ready={"rule_owned": True, "conceals": True}), "cannot conceal")
         with system_context(reason="tests.work.stage_lines.default"):
             self.Queue._base_manager.filter(pk=self.queue.pk).update(default_stage=self.stages["Ready"])
-        self.assert_refused(self.lines(Ready={"conceals": True}), "default stage")
+        self.assert_refused(self.lines(Ready={"rule_owned": True}), "default stage")
 
     def test_a_reader_cannot_save_stage_lines(self):
         variables = {"pk": self.queue.sqid, "lines": self.lines(Ready={"name": "Mine"})}

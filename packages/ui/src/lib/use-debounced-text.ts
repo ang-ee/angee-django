@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { useDebouncedCallback } from "use-debounce";
 
-/** Input drafts stay local; debounced commits belong to the external query owner. */
+/** Input drafts stay local; debounced commits belong to the external query owner.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useDebouncedText(value: string, onCommit?: (value: string) => void, delay = 300) {
   const [draft, setDraft] = useState(value);
   const commit = useDebouncedCallback((next: string) => {

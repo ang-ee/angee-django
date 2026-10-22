@@ -22,7 +22,7 @@ from typing import Any
 from django.apps import apps
 from django.db.models import Q
 
-from angee.base.impl import ImplBase
+from angee.impl import ImplBase
 
 
 class RetrievalBackend(ImplBase):

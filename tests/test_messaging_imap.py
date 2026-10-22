@@ -23,7 +23,8 @@ from imapclient.exceptions import IMAPClientError, LoginError
 from rebac import system_context
 
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.streams import BridgeSyncError, CursorInvalid, StreamDefinition, advance_stream, open_stream
+from angee.integrate.states import StreamDefinition
+from angee.integrate.streams import BridgeSyncError, CursorInvalid, advance_stream, open_stream
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.managers import AUTOMATED_MAIL_HEADERS
 from angee.messaging.testing.models import Handle, Message, MessageEdge, Part, Participant, Thread
@@ -42,7 +43,7 @@ from angee.messaging_integrate_imap.parser import (
     split_plain_text,
     synthetic_external_id,
 )
-from tests.conftest import make_integration
+from tests.conftest import current_stream, make_integration
 from tests.stream_adapters import AdapterPages
 from tests.test_messaging import _storage_drive
 from tests.test_messaging_graphql import Channel
@@ -1723,7 +1724,7 @@ def test_legacy_imap_position_seeds_only_an_empty_stream(
         channel.cursor = {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}}}
         channel.save(update_fields=["cursor"])
         if existing_stream:
-            SyncStream.objects.current(channel, "messages", "INBOX", cursor={"uidvalidity": 100, "last_uid": 2})
+            current_stream(channel, "messages", "INBOX", cursor={"uidvalidity": 100, "last_uid": 2})
         assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == (1 if existing_stream else 2)
         assert seeds == ([] if existing_stream else ["INBOX"])
         channel.cursor = {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 0}}}
@@ -1757,7 +1758,7 @@ def test_legacy_future_only_policy_survives_a_stream_reset(
         }
         channel.save(update_fields=["cursor"])
         assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == 0
-        stream = SyncStream.objects.current(channel, "messages", "INBOX")
+        stream = current_stream(channel, "messages", "INBOX")
         channel.refresh_from_db()
         assert channel.config["delivery_mode"] == "new_only"
         assert channel.config["source_identity"] == identity
@@ -1769,7 +1770,7 @@ def test_legacy_future_only_policy_survives_a_stream_reset(
         stream.resync_required = True
         stream.save(update_fields=["resync_required"])
         assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == 0
-        successor = SyncStream.objects.current(channel, "messages", "INBOX")
+        successor = current_stream(channel, "messages", "INBOX")
         assert successor.generation == stream.generation + 1
         assert successor.config == stream.config
         assert successor.cursor == {"uidvalidity": 200, "last_uid": 2}
@@ -1930,7 +1931,7 @@ def test_channel_sync_partitions_mailboxes(
         try:
             definitions = backend.streams()
             assert {definition.partition for definition in definitions} == {"INBOX", "Archive"}
-            stream = SyncStream.objects.current(channel, "messages", "Archive")
+            stream = current_stream(channel, "messages", "Archive")
             result = advance_stream(stream, backend)
             assert result.count == 1
             assert {row.partition for row in SyncStream.objects.current_for_bridge(channel, "messages")} == {"Archive"}
@@ -2199,7 +2200,7 @@ def test_channel_sync_lands_threads_parts_and_attachments(
     assert Participant._base_manager.filter(message=reply).count() == 2  # from + to
 
     channel.refresh_from_db()
-    assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 3}
+    assert current_stream(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 3}
     assert channel.sync_stage == channel.SyncStage.COMPLETED
     assert channel.last_sync_items == 3
     assert channel.sync_stage == Channel.SyncStage.COMPLETED
@@ -2355,7 +2356,7 @@ def test_channel_resync_is_incremental_and_idempotent(
 
     assert Message._base_manager.count() == 3  # refetch converged, no duplicates
     channel.refresh_from_db()
-    stream = SyncStream.objects.current(channel, "messages", "INBOX")
+    stream = current_stream(channel, "messages", "INBOX")
     assert stream.cursor == {"uidvalidity": 999, "last_uid": 103}
     assert stream.generation == 2
     assert RecordLink._base_manager.count() == 0
@@ -2383,7 +2384,7 @@ def test_failed_run_never_persists_the_cursor(
     assert isinstance(refused.value.__cause__, RuntimeError)
     assert str(refused.value.__cause__) == "ingest died"
     channel.refresh_from_db()
-    assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {}
+    assert current_stream(channel, "messages", "INBOX").cursor == {}
     assert Message._base_manager.count() == 0
     assert channel.sync_stage == channel.SyncStage.FAILED
     assert channel.sync_stage == Channel.SyncStage.FAILED
@@ -2442,7 +2443,7 @@ def test_failed_run_keeps_successfully_ingested_batch_cursor(
     assert str(refused.value.__cause__) == "second batch died"
     assert Message._base_manager.count() == 2
     channel.refresh_from_db()
-    assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 2}
+    assert current_stream(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 2}
     assert channel.sync_stage == channel.SyncStage.FAILED
     assert channel.sync_error == channel.last_error == "messages (INBOX): Integration operation failed."
 
@@ -2475,7 +2476,7 @@ def test_failed_second_record_rolls_back_the_whole_page(
     assert isinstance(refused.value.__cause__, RuntimeError)
     assert str(refused.value.__cause__) == "second record failed"
     assert Message._base_manager.count() == 0
-    assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {}
+    assert current_stream(channel, "messages", "INBOX").cursor == {}
 
 
 @pytest.mark.django_db(transaction=True)

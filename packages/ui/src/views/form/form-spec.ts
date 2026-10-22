@@ -69,7 +69,10 @@ const TYPE_WIDGETS: Readonly<Record<FormSpecFieldType, string>> = {
   any: "json",
 };
 
-/** Deserialize a backend-owned form spec through the composed widget registry. */
+/** Deserialize a backend-owned form spec through the composed widget registry.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function deserializeFormSpec(
   value: unknown,
   widgets: WidgetMap,
@@ -78,7 +81,9 @@ export function deserializeFormSpec(
   return deserializeObjectFields(schema, widgets, "form spec", schema, []);
 }
 
-/** Resolve a form spec against the current app's build-time widget registry. */
+/** Resolve a form spec against the current app's build-time widget registry.
+ * @owner FormView
+ */
 export function useFormSpecFields(
   value: unknown,
 ): readonly FormSpecFieldDescriptor[] {
@@ -89,7 +94,10 @@ export function useFormSpecFields(
   );
 }
 
-/** Whether the projected descriptors render a control that can display this issue. */
+/** Whether the projected descriptors render a control that can display this issue.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function formSpecHasControlForPath(fields: readonly FormSpecFieldDescriptor[], path: string, values: FormValues = {}): boolean {
   const field = fields.find((field) => path === field.name || path.startsWith(`${field.name}.`));
   return field !== undefined && isFieldControlVisible(field, values)
@@ -119,6 +127,8 @@ function fieldHasControlForPath(field: FormSpecFieldDescriptor, path: string, va
  * spec remains the whitelist: payload keys absent from it are ignored. An
  * authored structured value retains omitted optional children instead of
  * inventing invalid empty placeholders inside that retained object.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function formSpecInitialValues(
   fields: readonly FormSpecFieldDescriptor[],
@@ -186,7 +196,10 @@ export function initialFormSpecValue(field: FormSpecFieldDescriptor): unknown {
   return emptyValueForField(field);
 }
 
-/** Remove omitted descriptor keys while preserving explicit JSON values. */
+/** Remove omitted descriptor keys while preserving explicit JSON values.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function normalizeFormSpecValues(
   fields: readonly FormSpecFieldDescriptor[],
   values: Readonly<Record<string, unknown>>,
@@ -206,7 +219,10 @@ export function normalizeFormSpecValues(
   }));
 }
 
-/** Resolve a root-local definition; callers decide how to present missing or recursive references. */
+/** Resolve a root-local definition; callers decide how to present missing or recursive references.
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export function resolveSchemaReference<T>(
   reference: string,
   root: { $defs?: Readonly<Record<string, T>>; definitions?: Readonly<Record<string, T>> },

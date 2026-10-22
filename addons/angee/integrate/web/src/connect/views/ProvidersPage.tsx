@@ -4,12 +4,9 @@ import { Action, Column, ResourceList, Field, Form, Group, List, useEnumOptions,
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../../i18n";
-import {
-  IntegrateConnectAccountComplete,
-  IntegrateConnectAccountStart,
-} from "../documents.public";
-import { parseManualCode } from "../ConnectOAuthButton";
+import { IntegrateConnectAccountStart } from "../documents.public";
 import { connectCallbackRedirectUri } from "../redirects";
+import { useOAuthAuthorization } from "../use-oauth-authorization";
 
 const MODEL = "integrate.OAuthClient";
 
@@ -43,9 +40,7 @@ export function ProvidersPage(): React.ReactElement {
   const t = useIntegrateT();
   const routeHref = useRouteHref();
   const [connectAccountStart] = useAuthoredMutation(IntegrateConnectAccountStart);
-  const [connectAccountComplete] = useAuthoredMutation(
-    IntegrateConnectAccountComplete,
-  );
+  const { authorize } = useOAuthAuthorization();
   // Fill and persist transport endpoints from the client's discovery URL.
   const [discover] = useRecordActionMutation<ActionFieldName>(
     "discover_oauth_endpoints",
@@ -64,55 +59,16 @@ export function ProvidersPage(): React.ReactElement {
       if (!payload?.authorize_url) {
         throw new Error(payload?.error ?? t("providers.connect.startError"));
       }
+      // Redirect-back providers take the browser away; manual ones finish in the shared prompt.
       if (payload.mode !== "manual") {
-        // Redirect-back flow: the browser leaves and the callback page completes.
-        window.location.assign(payload.authorize_url);
+        await authorize(payload, t("providers.action.connect"));
         return t("providers.connect.redirecting");
       }
-      // Manual flow: the provider only displays the code (no redirect back), so keep
-      // this tab/session alive and let the user paste the `code#state` it shows. The
-      // link is a real user gesture, so it is never popup-blocked.
-      const entered = await ctx.prompt({
-        title: t("providers.action.connect"),
-        body: (
-          <span>
-            <a
-              href={payload.authorize_url}
-              target="_blank"
-              rel="noreferrer"
-              className="underline"
-            >
-              {t("providers.connect.openAuthorize")}
-            </a>
-            {t("providers.connect.instructions")}
-          </span>
-        ),
-        fields: [
-          {
-            name: "pasted",
-            label: t("providers.connect.codeLabel"),
-            placeholder: t("providers.connect.codePlaceholder"),
-          },
-        ],
-      });
-      if (!entered) return;
-      const { code, state } = parseManualCode(entered.pasted, payload.state ?? "", t);
-      if (!payload.redirect_uri) {
-        throw new Error(t("providers.connect.stateIncomplete"));
-      }
-      const completed = await connectAccountComplete({
-        code,
-        state,
-        redirectUri: payload.redirect_uri,
-      });
-      const done = completed?.connect_account_complete;
-      if (done?.error) {
-        throw new Error(done.error);
-      }
+      if (!(await authorize(payload, t("providers.action.connect")))) return;
       ctx.refresh();
       return t("providers.connect.connected");
     },
-    [connectAccountStart, connectAccountComplete, routeHref, t],
+    [authorize, connectAccountStart, routeHref, t],
   );
   const connect = useRecordAction(connectById, { refresh: false });
 

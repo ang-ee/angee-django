@@ -27,7 +27,10 @@ export interface StatuslineProviderProps {
   host: HTMLElement | null | undefined;
 }
 
-/** Provide the statusline host (`area-status`) for the bar rendered below. */
+/** Provide the statusline host (`area-status`) for the bar rendered below.
+ * @kind null
+ * @reason Provider infrastructure: Statusline context.
+ */
 export const StatuslineProvider: (
   props: StatuslineProviderProps,
 ) => React.ReactElement = band.Provider;
@@ -44,6 +47,8 @@ export interface StatuslineProps {
  * opt-in: a page renders `<Statusline>` to fill the row, which otherwise stays
  * collapsed. Under a `ConsoleLayout` it portals into `area-status`; standalone
  * it renders inline. Use `<StatuslineSpacer />` to push trailing segments right.
+ * @kind region
+ * @region status-line
  */
 export const Statusline: (
   props: StatuslineProps,
@@ -59,7 +64,9 @@ export interface StatusSegmentProps {
   onClick?: () => void;
 }
 
-/** One statusline segment: an optional glyph plus a short label. */
+/** One statusline segment: an optional glyph plus a short label.
+ * @owner Statusline
+ */
 export function StatusSegment({
   icon,
   tone = "default",
@@ -88,7 +95,9 @@ export function StatusSegment({
   );
 }
 
-/** Push the segments after it to the right edge of the statusline. */
+/** Push the segments after it to the right edge of the statusline.
+ * @owner Statusline
+ */
 export function StatuslineSpacer(): React.ReactElement {
   return <span className="flex-1" />;
 }

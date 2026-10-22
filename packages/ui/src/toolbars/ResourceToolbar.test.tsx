@@ -7,9 +7,42 @@ import { activeItems } from "../views/resource/search/active";
 import { createResourceViewState } from "../views/resource/resource-view-model";
 import { ResourceViewProvider, useResourceView } from "../views/resource/resource-view-context";
 import { useResourceSearch } from "../views/resource/search/use-resource-search";
+import { PaneToolbarHost } from "../layouts/PaneToolbar";
+import { AppRuntimeProvider, containersFromChildren } from "../runtime";
+import { RESOURCE_CONTAINERS } from "../views/resource/resource-view-kinds";
+import { ResourceViewUtilities } from "../views/resource/resource-view-utilities";
 
 const PAGER = { total: 0, page: 1, pageSize: 20 };
 const status = { id: "status", label: "Status", group: { field: "status" } };
+
+test("pane controls retain contributed search, utilities, chips and native radio state without a toolbar pager", async () => {
+  const sort = vi.fn();
+  const search = searchFixture({ groupingEnabled: true, groupStack: [status.group],
+    active: [{ id: "text:title", kind: "text", field: "title", label: "Title", value: "needle" }],
+    catalog: { filters: [{ id: "mine", label: "Mine", filter: { owner: { exact: "me" } } }],
+      groups: [status], curatedGroups: [status] } });
+  const containers = containersFromChildren(RESOURCE_CONTAINERS, {
+    "resource#search": { "notes.mine": { content: { kind: "toggle", id: "mine" } } },
+    "resource#utilities": { "notes.export": { content: <button>Export</button> } },
+  });
+  render(<AppRuntimeProvider runtime={{ containers }}><PaneToolbarHost>
+    <ResourceToolbar search={search} pager={{ total: 50, page: 1, pageSize: 20 }} pane={{ selector: "Inbox", scope: "People" }}
+      sorting={[{ id: "title", desc: true }]} sortOptions={[{ value: "title", label: "Title" }]} onSortingChange={sort}
+      utilityActions={<ResourceViewUtilities modelBacked={false}
+        value={{ resource: "notes.Note", fields: [], selectable: false, refresh: vi.fn() }} />} />
+  </PaneToolbarHost></AppRuntimeProvider>);
+  expect(screen.getByRole("button", { name: "Mine" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Export" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Next page" })).toBeNull();
+  const chip = screen.getByRole("button", { name: /needle/, pressed: true });
+  fireEvent.click(chip);
+  expect(search.clear).toHaveBeenCalledWith("text:title");
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  expect((await screen.findByRole("menuitemradio", { name: "Title, descending" })).getAttribute("aria-checked")).toBe("true");
+  expect(screen.getByRole("menuitemradio", { name: "Status" }).getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(screen.getByRole("menuitemradio", { name: "Title, ascending" }));
+  expect(sort).toHaveBeenCalledWith([{ id: "title", desc: false }]);
+});
 function toolbar(props: Partial<ResourceToolbarProps> = {}) {
   return render(<ResourceToolbar pager={PAGER} search={searchFixture()} onViewChange={vi.fn()} {...props} />);
 }
@@ -168,7 +201,7 @@ test("shared utilities stay between query controls and pager; wrapping is opt-in
   expect(share.parentElement?.className).toContain("resource-toolbar-utilities");
   expect(filter.compareDocumentPosition(share) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(share.compareDocumentPosition(screen.getByLabelText("Previous page")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(filter.closest("section")?.className).toContain("resource-toolbar-wrap");
+  expect(filter.closest(".resource-toolbar")?.className).toContain("resource-toolbar-wrap");
 });
 
 test("providers without writable preferences keep the complete box reachable", () => {

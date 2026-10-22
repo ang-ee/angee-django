@@ -2,8 +2,7 @@
 
 from django.db import models
 
-from angee.base.mixins import Aspect, HistoryMixin, PairAspect, StatementRecords, StatementsMixin
-from angee.base.models import AngeeDataModel
+from angee.models import AngeeDataModel, Aspect, HistoryMixin, PairAspect, StatementRecords, StatementsMixin
 from angee.money.fields import MoneyField
 
 

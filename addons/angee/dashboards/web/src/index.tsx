@@ -87,12 +87,11 @@ const dashboards = defineBaseAddon({
   id: "dashboards",
   routes,
   // A low sequence tops the rail: without a declared home or a person's own order, `/` lands here.
-  menus: { dashboards: { label: "Dashboards", icon: "dashboards", route: "dashboards.index", sequence: 10 } },
+  menus: { dashboards: { label: "Dashboards", icon: "dashboard", route: "dashboards.index", sequence: 10 } },
   i18n: { dashboards: enDashboardsMessages },
   dashboards: [overview],
   icons: {
     dashboard: LayoutDashboard,
-    dashboards: LayoutDashboard,
     "dashboard-diagnostics": Gauge,
   },
   dashboardStore,

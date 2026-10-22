@@ -1,24 +1,10 @@
-"""Retire roster provenance labels without reinterpreting any decision.
-
-Confidence and confirmed/dismissed flags remain unchanged. The old source label
-is discarded: a roster decision is not a PERSON provenance statement.
-Reverse restores the schema default, not the discarded origin label.
-
-The guard waits for the statement schema: the label leaves with the other
-LinkSource carriers, after the folds the preflight has cleared, so a fold refusal
-never leaves the pre-cutover release without the column it reads.
-"""
-
-from django.db import migrations
+"""Retired fold body; see the package docstring."""
 
 
-def applies(state):
-    model = state.models.get(("parties", "circlemember"))
-    if model is None or "source" not in model.fields:
-        return False
-    return ("parties", "partysameaspairstatement") in state.models
+def plan(*args, **kwargs):
+    """Refuse to replay a fold that every stack applied before this release."""
 
-
-class Migration(migrations.Migration):
-    dependencies: list[tuple[str, str]] = []
-    operations = [migrations.RemoveField(model_name="circlemember", name="source")]
+    raise RuntimeError(
+        "The parties fold migrations are retired history; collapse the stack's migration history "
+        "(reset_migration_history) instead of replaying them."
+    )

@@ -7,9 +7,9 @@ from typing import cast
 import strawberry
 from django.db import models
 
-from angee.base.fields import ColorField, StateField
 from angee.data.field_classification import RESOURCE_FIELD_SCALARS, is_to_one_relation, resource_field_widget
 from angee.data.metadata import DataResourceRoots, DataResourceTypeNames, serialize_data_resources
+from angee.fields import ColorField, StateField
 from angee.graphql.data.metadata import _finalize_data_resource
 
 

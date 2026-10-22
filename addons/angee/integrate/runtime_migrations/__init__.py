@@ -1,1 +1,1 @@
-"""Historical upgrade paths owned by the integrate addon."""
+"""Self-contained upgrade transitions copied into composed runtime history."""

@@ -14,18 +14,17 @@ from rebac import system_context
 
 from angee.agents.models import AgentLifecycle, SessionStatus, TurnStatus
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceProvider
-from angee.base import transitions
-from angee.base.fields import StateField
-from angee.base.models import AngeeModel
-from angee.base.transitions import (
+from angee.fields import StateField
+from angee.integrate.models import IntegrationLifecycle
+from angee.integrate.testing.integration import Integration
+from angee.models import (
+    AngeeModel,
     StateTransitions,
     TransitionNotAllowed,
     get_transition_save_field,
     save_state,
     transition,
 )
-from angee.integrate.models import IntegrationLifecycle
-from angee.integrate.testing.integration import Integration
 from tests.conftest import make_integration
 from tests.tables import model_tables
 
@@ -217,14 +216,15 @@ def test_deferred_transition_refreshes_state_and_locks_before_saving(
 
     task = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
     task = TransitionTask.objects.defer("state").get(pk=task.pk)
-    reader = transitions.system_queryset
+    reader = TransitionTask.system_queryset
     lock_requests = []
 
-    def checked_reader(model: type[models.Model], **kwargs: Any) -> Any:
+    def checked_reader(cls: type[models.Model], **kwargs: Any) -> Any:
+        assert cls is TransitionTask
         lock_requests.append(kwargs["lock"])
-        return reader(model, **kwargs)
+        return reader(**kwargs)
 
-    monkeypatch.setattr(transitions, "system_queryset", checked_reader)
+    monkeypatch.setattr(TransitionTask, "system_queryset", classmethod(checked_reader))
     with transaction.atomic():
         task.persist_with_body_write()
         assert task.commit_states == []
@@ -457,56 +457,6 @@ def test_save_state_persists_transition_and_touched_fields(transition_task_table
     task.refresh_from_db()
     assert task.state == TransitionTask.State.DONE
     assert task.note == "persisted"
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("outcome", ["saved", "callback_error", "concurrent"])
-def test_composed_persist_keeps_atomicity_and_concurrency_guard(transition_task_table: None, outcome: str) -> None:
-    """A custom final saver receives the guarded write and shares its transaction."""
-
-    task = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
-    calls: list[set[str]] = []
-
-    def persist(row: TransitionTask, *, update_fields: set[str]) -> None:
-        assert row is task
-        assert row.state == TransitionTask.State.DONE
-        assert transaction.get_connection().in_atomic_block
-        calls.append(update_fields)
-        row.save(update_fields=update_fields)
-        if outcome == "callback_error":
-            raise RuntimeError("callback failed")
-
-    if outcome == "concurrent":
-        TransitionTask.objects.filter(pk=task.pk).update(state=TransitionTask.State.DONE)
-        with pytest.raises(TransitionNotAllowed):
-            task.persist_done(persist=persist)
-    elif outcome == "callback_error":
-        with pytest.raises(RuntimeError, match="callback failed"):
-            task.persist_done(persist=persist)
-    else:
-        task.persist_done(persist=persist)
-
-    assert calls == ([] if outcome == "concurrent" else [{"state", "note"}])
-    stored = TransitionTask.objects.get(pk=task.pk)
-    expected_state = TransitionTask.State.RUNNING if outcome == "callback_error" else TransitionTask.State.DONE
-    assert stored.state == expected_state
-    assert stored.note == ("persisted" if outcome == "saved" else "")
-    assert get_transition_save_field(task) is None
-    assert not hasattr(task, "_transition_fields")
-
-
-def test_composed_persist_requires_a_success_hook() -> None:
-    """A callback cannot silently disappear when the declaration has no save hook."""
-
-    task = TransitionTask(state=TransitionTask.State.RUNNING)
-    calls: list[models.Model] = []
-
-    with pytest.raises(ImproperlyConfigured, match="requires an explicit success hook"):
-        task.mark_done(persist=lambda row, **kwargs: calls.append(row))
-
-    assert calls == []
-    assert task.state == TransitionTask.State.RUNNING
-    assert not hasattr(task, "body_state")
 
 
 @pytest.mark.django_db(transaction=True)

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { senderAvatarUrl, senderDisplayName, type SenderIdentity } from "@angee/parties";
-import { Avatar, Glyph, RelativeTime, avatarInitials } from "@angee/ui";
+import { AbsoluteTime, Avatar, Glyph, PaneRow, avatarInitials, optionLabel, useEnumOptions, type PaneRowProps } from "@angee/ui";
 
 import { useMessagingT } from "./i18n";
 
@@ -13,6 +13,31 @@ export interface MessageSummaryData {
   created_at: string;
   sender?: SenderIdentity | null;
   channel?: { display_name: string } | null;
+}
+
+const MESSAGE_MODEL = "messaging.Message";
+
+/** Where a message came from: its channel's name, else its platform's authored label. */
+export function useMessageChannelLabel(): (message: { channel?: { display_name: string } | null; platform?: string | null }) => string | undefined {
+  const platforms = useEnumOptions(MESSAGE_MODEL, "platform", { casing: "upper" });
+  return React.useCallback((message) => {
+    if (message.channel?.display_name) return message.channel.display_name;
+    const label = message.platform ? optionLabel(platforms, message.platform) : undefined;
+    return typeof label === "string" ? label : undefined;
+  }, [platforms]);
+}
+
+/** Messaging's compact pointer for a pane; the caller owns its destination. */
+export function MessagePaneRow({ message, ...props }: {
+  message: MessageSummaryData & { platform?: string | null };
+} & Pick<PaneRowProps, "onOpen" | "href" | "selected" | "detail" | "sub" | "meta" | "icon" | "verb">): React.ReactElement {
+  const t = useMessagingT();
+  const channelLabel = useMessageChannelLabel();
+  return <PaneRow icon="channel" title={message.title || message.preview}
+    detail={channelLabel(message)}
+    meta={<AbsoluteTime value={message.sent_at || message.created_at} display="date" />}
+    sub={senderDisplayName(message.sender, t("message.unknownSender"))} verb={t("message.read")}
+    {...props} />;
 }
 
 /** The leaf paths a resource list selects so its rows can render as `MessageSummary`. */
@@ -47,14 +72,14 @@ export function MessageSummary({ message }: { message: MessageSummaryData }): Re
           {message.starred ? (
             <Glyph name="star" className="text-warning-text" label={t("message.starred")} />
           ) : null}
-          <span className="ml-auto whitespace-nowrap text-2xs text-fg-muted">
-            <RelativeTime value={message.sent_at ?? message.created_at} />
+          <span className="ml-auto whitespace-nowrap text-12 text-fg-muted">
+            <AbsoluteTime value={message.sent_at ?? message.created_at} display="date" />
           </span>
         </div>
         {message.title ? <p className="truncate text-13 font-medium">{message.title}</p> : null}
         <p className="line-clamp-2 text-13 text-fg-muted">{message.preview}</p>
         {message.channel ? (
-          <p className="truncate text-2xs text-fg-muted">{message.channel.display_name}</p>
+          <p className="truncate text-12 text-fg-muted">{message.channel.display_name}</p>
         ) : null}
       </div>
     </div>

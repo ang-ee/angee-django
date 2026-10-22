@@ -35,6 +35,9 @@ export interface SpotlightProps {
   placeholder?: string;
 }
 
+/**
+ * @owner Spotlight
+ */
 export function useSpotlightShortcut(onToggle: () => void): void {
   // Keep the latest callback in a ref so the global listener mounts once —
   // callers can pass a fresh arrow each render without re-subscribing.
@@ -56,6 +59,10 @@ export function useSpotlightShortcut(onToggle: () => void): void {
   }, []);
 }
 
+/**
+ * @kind region
+ * @region command-palette
+ */
 export function Spotlight({
   commands,
   onOpenChange,

@@ -6,21 +6,24 @@ import {
   Button,
   DashboardSurface,
   DropdownMenu,
-  ErrorBanner,
   Glyph,
   HOME_PATH_PREFERENCE_KEY,
-  Input,
+  MutationDialog,
   Page,
   PageToolbar,
+  mutationDialogValueCodecs,
   readRuntimeRouteShortcuts,
   ROUTE_SHORTCUTS_PREFERENCE_KEY,
   RecordChrome,
+  useActionResultRun,
   useBreadcrumbLeafLabel,
   useDashboardRegistry,
   useRouteParam,
   useRouteHref,
   useRuntimeUserPreferences,
   useTrashRecord,
+  type DescriptorField,
+  type MutationDialogValues,
 } from "@angee/ui";
 import { useModelMetadata } from "@angee/metadata";
 import type { DashboardTarget } from "@angee/ui/dashboard/headless";
@@ -60,70 +63,42 @@ function StoredDashboardPage({ target, registry, store }: {
   const routeHref = useRouteHref();
   const t = useDashboardsT();
   const trashRecord = useTrashRecord(useModelMetadata("dashboards.Dashboard")?.resource);
+  // Every page verb settles through the shared run: one pending state, toasts for the outcome.
+  const settle = useActionResultRun({ noResultTitle: t("common.actionFailed") });
   const state = binding.state;
   useBreadcrumbLeafLabel(state.status === "ready" ? state.name : null);
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<Error | null>(null);
-  const [editingDetails, setEditingDetails] = React.useState(false);
-  const [dashboardName, setDashboardName] = React.useState("");
-  const [dashboardDescription, setDashboardDescription] = React.useState("");
   const href = target.scope === "personal" ? routeHref("dashboards.detail", { id: target.id }) : null;
   const shortcutId = state.status === "ready" ? `dashboard:${state.persistedId}` : "";
   const pinned = shortcutId
     ? readRuntimeRouteShortcuts(preferences.preferences).some((shortcut) => shortcut.id === shortcutId)
     : false;
   const isHome = href !== null && preferences.preferences[HOME_PATH_PREFERENCE_KEY] === href;
-  React.useEffect(() => {
-    if (state.status !== "ready" || editingDetails) return;
-    setDashboardName(state.name);
-    setDashboardDescription(state.description ?? "");
-  }, [editingDetails, state]);
 
-  const duplicate = async () => {
-    if (state.status !== "ready") return;
+  const run = async (work: () => Promise<void>, message: string): Promise<void> => {
     setPending(true);
-    setError(null);
     try {
+      await settle(async () => { await work(); return { ok: true, message }; });
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const duplicate = () => {
+    if (state.status !== "ready") return;
+    void run(async () => {
       const result = await binding.duplicate(target, {
-        name: `${state.name} copy`,
-        clientCreationKey: globalThis.crypto?.randomUUID?.() ?? `dashboard-copy-${Date.now()}`,
+        name: t("common.copyName", { name: state.name }),
+        idempotencyKey: globalThis.crypto?.randomUUID?.() ?? `dashboard-copy-${Date.now()}`,
         snapshot: visibleDashboardSnapshot(registry, target, state),
       });
       await navigate({ to: routeHref("dashboards.detail", { id: result.persistedId }) });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause : new Error(String(cause)));
-    } finally {
-      setPending(false);
-    }
+    }, t("common.duplicated"));
   };
 
-  const saveDetails = async () => {
-    if (state.status !== "ready" || !dashboardName.trim()) return;
-    setPending(true);
-    setError(null);
-    try {
-      await binding.save({
-        target,
-        persistedId: state.persistedId,
-        expectedRevision: state.revision,
-        declarationRevision: state.declarationRevision,
-        name: dashboardName.trim(),
-        description: dashboardDescription,
-        snapshot: state.snapshot,
-      });
-      setEditingDetails(false);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause : new Error(String(cause)));
-    } finally {
-      setPending(false);
-    }
-  };
-
-  const trash = async () => {
+  const trash = () => {
     if (state.status !== "ready" || target.scope !== "personal") return;
-    setPending(true);
-    setError(null);
-    try {
+    void run(async () => {
       // The shared verb confirms, moves the dashboard to the trash and settles the outcome.
       if (!(await trashRecord.trash(target.id, state.name))) return;
       await preferences.patchPreferences((current) => ({
@@ -132,95 +107,101 @@ function StoredDashboardPage({ target, registry, store }: {
         ...(current[HOME_PATH_PREFERENCE_KEY] === href ? { [HOME_PATH_PREFERENCE_KEY]: null } : {}),
       }));
       await navigate({ to: routeHref("dashboards.index") });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause : new Error(String(cause)));
-    } finally {
-      setPending(false);
-    }
+    }, t("common.trashed"));
   };
+
+  const detailFields = React.useMemo<readonly DescriptorField[]>(() => [
+    { name: "name", label: t("details.name"), required: true },
+    { name: "description", label: t("details.description") },
+  ], [t]);
 
   return (
     <Page>
       <DashboardSurface
         target={target}
         toolbar={(
-          <>
-            <PageToolbar
-              className="flex-wrap"
-              start={target.scope === "personal" && state.status === "ready" && state.capabilities.canEdit ? (
-                <Button type="button" variant="secondary" size="sm" disabled={pending} onClick={() => setEditingDetails((value) => !value)}>
-                  <Glyph name="pencil" />{t("common.details")}
-                </Button>
-              ) : null}
-              end={state.status === "ready" ? (
-                <>
-                  <RecordChrome value={{
-                    resource: "dashboards.Dashboard",
-                    canonicalResource: "dashboards.Dashboard",
-                    dataProviderName: "console",
-                    recordId: state.persistedId,
-                    record: { id: state.persistedId, displayName: state.name, name: state.name },
-                    formReadOnly: !state.capabilities.canEdit,
-                  }} />
-                  <ActionMenu label={t("common.moreActions")} glyph="more-horizontal"
-                    size="sm" align="end" blocked={pending} loading={pending}>
-                    {href && preferences.available ? (
-                      <>
-                        <ActionTrigger glyph="star" onClick={() => {
-                          setPending(true);
-                          setError(null);
-                          void preferences.patchPreferences((current) => {
-                            const shortcuts = readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId);
-                            if (!pinned) shortcuts.push({ id: shortcutId, label: state.name, path: href, icon: "dashboard" });
-                            return { ...current, [ROUTE_SHORTCUTS_PREFERENCE_KEY]: shortcuts };
-                          }).catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause)))).finally(() => setPending(false));
-                        }}>
-                          {pinned ? t("common.unpin") : t("common.pin")}
-                        </ActionTrigger>
-                        <ActionTrigger glyph="home" onClick={() => {
-                          setPending(true);
-                          setError(null);
-                          void preferences.patchPreferences((current) => ({
-                            ...current,
-                            [HOME_PATH_PREFERENCE_KEY]: isHome ? null : href,
-                          })).catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause)))).finally(() => setPending(false));
-                        }}>
-                          {isHome ? t("common.unsetHome") : t("common.setAsHome")}
-                        </ActionTrigger>
-                      </>
-                    ) : null}
-                    <ActionTrigger glyph="copy" onClick={() => void duplicate()}>
-                      {t("common.duplicate")}
-                    </ActionTrigger>
-                    {target.scope === "personal" && state.capabilities.canTrash ? (
-                      <>
-                        <DropdownMenu.Separator />
-                        <ActionTrigger variant="danger" glyph="trash" onClick={() => void trash()}>
-                          {t("common.trash")}
-                        </ActionTrigger>
-                      </>
-                    ) : null}
-                  </ActionMenu>
-                </>
-              ) : null}
-            />
-            <ErrorBanner description={error?.message ?? null} />
-            {editingDetails && target.scope === "personal" && state.status === "ready" && state.capabilities.canEdit ? (
-        <section
-          className="flex flex-wrap items-center gap-2 border-b border-border-subtle bg-inset p-3"
-          aria-label={t("details.label")}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") setEditingDetails(false);
-          }}
-        >
-          <Input size="sm" value={dashboardName} onChange={(event) => setDashboardName(event.target.value)} aria-label={t("details.name")} placeholder={t("details.name")} className="min-w-40 flex-1 sm:w-64 sm:flex-none" />
-          <Input size="sm" value={dashboardDescription} onChange={(event) => setDashboardDescription(event.target.value)} aria-label={t("details.description")} placeholder={t("details.description")} className="min-w-40 flex-1" />
-          <Button type="button" variant="primary" size="sm" disabled={pending || !dashboardName.trim()} onClick={() => void saveDetails()}>{t("details.save")}</Button>
-          <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => setEditingDetails(false)}>{t("common.cancel")}</Button>
-        </section>
+          <PageToolbar
+            className="flex-wrap"
+            start={target.scope === "personal" && state.status === "ready" && state.capabilities.canEdit ? (
+              // The dashboard's own facts edit in the shared mutation dialog.
+              <MutationDialog
+                trigger={(
+                  <Button type="button" variant="secondary" size="sm" disabled={pending}>
+                    <Glyph name="pencil" />{t("common.details")}
+                  </Button>
+                )}
+                title={t("details.label")}
+                fields={detailFields}
+                initialValues={{ name: state.name, description: state.description ?? "" }}
+                submitLabel={t("details.save")}
+                submittingLabel={t("details.saving")}
+                errorFallback={t("common.actionFailed")}
+                parseValues={(values: MutationDialogValues) => ({
+                  name: mutationDialogValueCodecs.requiredString(values.name, "name"),
+                  description: mutationDialogValueCodecs.string(values.description) ?? "",
+                })}
+                onSubmit={async ({ name, description }) => {
+                  await binding.save({
+                    target,
+                    persistedId: state.persistedId,
+                    expectedRevision: state.revision,
+                    declarationRevision: state.declarationRevision,
+                    name,
+                    description,
+                    snapshot: state.snapshot,
+                  });
+                  return { status: "ok", data: undefined, message: t("details.saved") };
+                }}
+              />
             ) : null}
-
-          </>
+            end={state.status === "ready" ? (
+              <>
+                <RecordChrome value={{
+                  resource: "dashboards.Dashboard",
+                  canonicalResource: "dashboards.Dashboard",
+                  dataProviderName: "console",
+                  recordId: state.persistedId,
+                  record: { id: state.persistedId, displayName: state.name, name: state.name },
+                  formReadOnly: !state.capabilities.canEdit,
+                }} />
+                <ActionMenu label={t("common.moreActions")} glyph="more-horizontal"
+                  size="sm" align="end" blocked={pending} loading={pending}>
+                  {href && preferences.available ? (
+                    <>
+                      <ActionTrigger glyph="star" onClick={() => void run(async () => {
+                        await preferences.patchPreferences((current) => {
+                          const shortcuts = readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId);
+                          if (!pinned) shortcuts.push({ id: shortcutId, label: state.name, path: href, icon: "dashboard" });
+                          return { ...current, [ROUTE_SHORTCUTS_PREFERENCE_KEY]: shortcuts };
+                        });
+                      }, t(pinned ? "common.unpinned" : "common.pinned"))}>
+                        {pinned ? t("common.unpin") : t("common.pin")}
+                      </ActionTrigger>
+                      <ActionTrigger glyph="home" onClick={() => void run(async () => {
+                        await preferences.patchPreferences((current) => ({
+                          ...current,
+                          [HOME_PATH_PREFERENCE_KEY]: isHome ? null : href,
+                        }));
+                      }, t(isHome ? "common.homeUnset" : "common.homeSet"))}>
+                        {isHome ? t("common.unsetHome") : t("common.setAsHome")}
+                      </ActionTrigger>
+                    </>
+                  ) : null}
+                  <ActionTrigger glyph="copy" onClick={duplicate}>
+                    {t("common.duplicate")}
+                  </ActionTrigger>
+                  {target.scope === "personal" && state.capabilities.canTrash ? (
+                    <>
+                      <DropdownMenu.Separator />
+                      <ActionTrigger variant="danger" glyph="trash" onClick={trash}>
+                        {t("common.trash")}
+                      </ActionTrigger>
+                    </>
+                  ) : null}
+                </ActionMenu>
+              </>
+            ) : null}
+          />
         )}
       />
     </Page>

@@ -11,7 +11,10 @@ export type UiMessageVars = MessageVars;
 // take a translator parameter use this type instead of respelling the signature.
 export type UiTranslate = (key: string, vars?: UiMessageVars) => string;
 
-/** Resolve an optional composed message without rendering its unresolved key. */
+/** Resolve an optional composed message without rendering its unresolved key.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function optionalTranslation(
   t: UiTranslate,
   key: string,
@@ -24,6 +27,10 @@ export function optionalTranslation(
 // A translator bound to the `ui` namespace: resolves against the host runtime's
 // merged i18n first, then falls back to the bundled English. Thin alias over the
 // shared `useNamespaceT` owner (the same pattern every addon's `useXT` uses).
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useUiT(): (
   key: string,
   vars?: UiMessageVars,
@@ -31,6 +38,10 @@ export function useUiT(): (
   return useNamespaceT("ui", enUiMessages);
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function createNamespaceT(
   namespace: string,
   messages: Record<string, string>,

@@ -204,6 +204,9 @@ function RefineLayoutRoute({
   );
 }
 
+/**
+ * @kind page
+ */
 export function PassthroughChrome({ children }: { children: ReactNode }): ReactNode {
   return <>{children}</>;
 }

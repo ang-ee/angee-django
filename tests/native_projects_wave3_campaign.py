@@ -214,14 +214,14 @@ class ProjectSurfaceCampaign(WorkCase):
         self.assertEqual(project.target_date, date(2027, 1, 1))
         self.assertEqual(task.visibility, "restricted")
 
-    def test_mapped_stage_configuration_cannot_be_cleared_concealed_or_moved(self):
+    def test_mapped_stage_configuration_cannot_be_cleared_or_moved(self):
         task = self.task()
         with actor_context(self.owner):
             project = self.as_user(task).promote_to_project()
         with system_context(reason="tests.t3.mapping"):
             self.Milestone.objects.create(project=project, name="Mapped", active_stage=self.stages["Final"])
             other = self.Queue.objects.create(name="Other", key="OTHER", owner=self.manager)
-            for field, value in (("rule_owned", False), ("conceals", True), ("queue", other)):
+            for field, value in (("rule_owned", False), ("queue", other)):
                 for method in ("clean", "save"):
                     with self.subTest(field=field, method=method):
                         stage = self.Stage._base_manager.get(pk=self.stages["Final"].pk)
@@ -229,9 +229,7 @@ class ProjectSurfaceCampaign(WorkCase):
                         with self.assertRaises(ValidationError):
                             getattr(stage, method)()
             persisted = self.Stage._base_manager.get(pk=self.stages["Final"].pk)
-            self.assertEqual(
-                (persisted.rule_owned, persisted.conceals, persisted.queue_id), (True, False, self.queue.pk)
-            )
+            self.assertEqual((persisted.rule_owned, persisted.queue_id), (True, self.queue.pk))
 
     def test_public_queue_withheld_scope_removes_stages_tasks_and_keeps_managers(self):
         with system_context(reason="tests.t3.public_queue"):

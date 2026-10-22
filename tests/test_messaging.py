@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 
 import pytest
@@ -24,7 +26,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ValidationError
-from django.db import IntegrityError, connection, models, transaction
+from django.db import IntegrityError, close_old_connections, connection, models, transaction
 from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import (
@@ -40,10 +42,8 @@ from rebac.actors import current_sudo_reason, is_sudo
 
 import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
+from angee.actors import source_kind_for
 from angee.agents.testing.models import Agent
-from angee.base.mixins import AuditMixin, HistoryMixin, SourceKind, SqidMixin, StatementSourceMixin
-from angee.base.models import AngeeModel
-from angee.base.serialization import strip_null_bytes
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
@@ -78,7 +78,9 @@ from angee.messaging.testing.models import (
     ThreadFollower,
     ThreadNotification,
 )
+from angee.models import AngeeModel, AuditMixin, HistoryMixin, SourceKind, SqidMixin
 from angee.projects.testing.models import Task as ProjectTask
+from angee.serialization import strip_null_bytes
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
 from tests.conftest import Backend, Drive, MimeType, make_integration
 from tests.conftest import (
@@ -162,11 +164,11 @@ def test_channel_source_kind_is_its_backends_declaration(channel: Any, monkeypat
     """A channel is admitted as a statement source only as the kind its protocol declares."""
 
     principal = to_subject_ref(channel.integration_ptr)
-    assert (channel.source_kind, StatementSourceMixin.kind_for(principal)) == (None, None)
+    assert (channel.source_kind, source_kind_for(principal)) == (None, None)
 
     # An import-only protocol declares its channels' classification once, on the backend class.
     monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.IMPORT)
-    assert (channel.source_kind, StatementSourceMixin.kind_for(principal)) == (SourceKind.IMPORT, SourceKind.IMPORT)
+    assert (channel.source_kind, source_kind_for(principal)) == (SourceKind.IMPORT, SourceKind.IMPORT)
 
 
 def _parsed(
@@ -526,6 +528,109 @@ def test_explicit_ingest_rejects_same_channel_message_reassignment(channel: Any,
 
 
 @pytest.mark.django_db(transaction=True)
+def test_source_thread_correction_compares_locked_prior_and_keeps_native_counters(channel: Any) -> None:
+    with system_context(reason="test source thread correction"):
+        first, second, third = (
+            Thread.objects.create(channel=channel, platform="other", external_id=f"source-audience-{index}")
+            for index in range(3)
+        )
+        write_relationships([RelationshipTuple(to_object_ref(first), "reader", to_subject_ref(channel.owner))])
+        parsed = _parsed("source-audience-message", sent_at=datetime(2026, 1, 2, tzinfo=timezone.utc))
+        original = Message.objects.ingest([parsed], channel=channel, explicit_thread=first, historical=True)[0]
+        moved = Message.objects.ingest([parsed], channel=channel, explicit_thread=second, expected_thread=first,
+                                       historical=True)[0]
+        assert moved.pk == original.pk and moved.thread_id == second.pk
+        first.refresh_from_db()
+        second.refresh_from_db()
+        assert (first.message_count, second.message_count) == (0, 1)
+        assert parsed.sent_at is not None
+        later_parsed = replace(parsed, sent_at=parsed.sent_at + timedelta(days=1))
+        moved = Message.objects.ingest([later_parsed], channel=channel, explicit_thread=third, expected_thread=second,
+                                       historical=True)[0]
+        third.refresh_from_db()
+        assert (third.message_count, third.last_message_at) == (1, later_parsed.sent_at)
+        with pytest.raises(ValueError, match="changed after"):
+            Message.objects.ingest([parsed], channel=channel, explicit_thread=third, expected_thread=first,
+                                   historical=True)
+        moved.refresh_from_db()
+        assert moved.thread_id == third.pk
+        other_channel = make_integration("foreign-correction-source", model=Channel, backend_class="manual")
+        foreign = Thread.objects.create(channel=other_channel, platform="other", external_id="foreign-source-thread")
+        with pytest.raises(ValueError, match="different source channel"):
+            Message.objects.ingest([parsed], channel=channel, explicit_thread=foreign, expected_thread=third)
+        # The provider's historical import cannot move a locally authored envelope.
+        Message.objects.filter(pk=moved.pk).update(status=Message.MessageStatus.SENT)
+        with pytest.raises(ValueError, match="locally authored"):
+            Message.objects.ingest([parsed], channel=channel, explicit_thread=first, expected_thread=third)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_source_thread_correction_race_has_one_compare_and_set_winner(channel: Any) -> None:
+    if connection.vendor != "postgresql":
+        pytest.skip("Concurrent row-lock admission requires PostgreSQL.")
+    with system_context(reason="prepare source correction race"):
+        first, second, third = (
+            Thread.objects.create(channel=channel, platform="other", external_id=f"source-cas-race-{index}")
+            for index in range(3)
+        )
+        write_relationships([RelationshipTuple(to_object_ref(first), "reader", to_subject_ref(channel.owner))])
+        original = Message.objects.ingest([_parsed("source-cas-race")], channel=channel,
+                                           explicit_thread=first, historical=True)[0]
+    barrier = Barrier(2)
+
+    def move(target: Any) -> str:
+        close_old_connections()
+        try:
+            with system_context(reason="race source correction"):
+                barrier.wait(timeout=10)
+                try:
+                    Message.objects.correct_source_thread(
+                        original, channel=channel, expected_thread=first, thread=target,
+                    )
+                except ValueError as error:
+                    assert "changed after" in str(error)
+                    return "stale"
+                return "moved"
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(move, (second, third)))
+    assert sorted(results) == ["moved", "stale"]
+    with system_context(reason="inspect source correction race"):
+        first.refresh_from_db()
+        second.refresh_from_db()
+        third.refresh_from_db()
+        assert first.message_count == 0
+        assert second.message_count + third.message_count == 1
+        assert Message.objects.filter(external_id="source-cas-race", channel=channel).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("historical", (False, True))
+def test_source_thread_correction_same_content_preserves_event_policy(channel: Any, historical: bool) -> None:
+    with system_context(reason="source correction events"):
+        first, second = (
+            Thread.objects.create(channel=channel, platform="other", external_id=f"source-events-{index}")
+            for index in range(2)
+        )
+        parsed = _parsed("source-events")
+        original = Message.objects.ingest([parsed], channel=channel, explicit_thread=first, historical=True)[0]
+        received = []
+
+        def receive(sender: Any, instance: Any, **kwargs: Any) -> None:
+            received.append(instance.pk)
+
+        message_ingested.connect(receive, sender=Message)
+        try:
+            Message.objects.ingest([parsed], channel=channel, explicit_thread=second, expected_thread=first,
+                                   historical=historical)
+        finally:
+            message_ingested.disconnect(receive, sender=Message)
+        assert received == ([] if historical else [original.pk])
+
+
+@pytest.mark.django_db(transaction=True)
 def test_record_chatter_dedups_across_mti_levels(composed_tables: None) -> None:
     """A record and its REBAC-typed MTI ancestor share one canonical chatter edge.
 
@@ -640,7 +745,7 @@ def test_threaded_model_toggles_message_reaction(composed_tables: None) -> None:
     assert reaction.handle is not None
     assert reaction.handle.platform == "email"
     assert reaction.handle.value == "reactor@example.com"
-    assert reaction.handle.owner_id == user.pk
+    assert reaction.handle.controller_id == user.pk
     person = Person._base_manager.get(user=user)
     link = Party.statements.get(handle=reaction.handle, subject=person)
     assert link.confidence == 1.0
@@ -801,7 +906,7 @@ def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tabl
             [
                 RelationshipTuple(
                     resource=to_object_ref(doc),
-                    relation="owner",
+                    relation="manager",
                     subject=to_subject_ref(owner),
                 ),
                 RelationshipTuple(resource=to_object_ref(doc), relation="reader", subject=to_subject_ref(watcher)),
@@ -868,9 +973,8 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
 
     The ``GenericForeignKey`` the attachment binds through points *at* the thread, so the
     delete collector can never cascade from a deleted record up to its private ``Thread``
-    or that thread's messages. The ``pre_delete`` teardown receiver fires per collected
-    row on the bulk path exactly as on the instance path, so filtering-then-deleting a
-    chattered record leaves no orphaned thread, message or follower behind.
+    or that thread's messages. The generic target-delete owner must remove the edge and
+    its private graph on both instance and queryset paths.
     """
 
     del composed_tables
@@ -905,10 +1009,10 @@ def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: Non
     """Deleting a threaded MTI child collects its chatter attachment, leaving no orphan.
 
     ``TrackedRecordChild`` composes ``ThreadedModelMixin`` through its MTI parent, so the
-    chatter edge, the reverse ``thread_attachments`` GenericRelation, and the ``pre_delete``
-    teardown must all agree on the child's canonical content type. A leftover attachment on
+    chatter edge, reverse ``thread_attachments`` relation and target-delete policy must all
+    agree on the child's canonical content type. A leftover attachment on
     a reused primary key would mis-resolve, so the delete must remove it (the placement
-    invariant in ``angee.base.refs``).
+    invariant in ``angee.refs``).
     """
 
     del composed_tables
@@ -1268,6 +1372,13 @@ def test_unread_count_respects_default_subtype_subscription(composed_tables: Non
     # The explicit follower counts only their chosen subtype.
     explicit_unread = ThreadFollower.objects.unread_messages(thread, user=promo_watcher)
     assert [message.pk for message in explicit_unread] == [promo.pk]
+    messages = ThreadedTicket.thread_messages_expression(ticket.pk)
+    assert set(messages.unread_for(default_watcher).values_list("pk", flat=True)) == {comment.pk}
+    assert set(messages.unread_for(promo_watcher).values_list("pk", flat=True)) == {promo.pk}
+    assert not messages.unread_for(None).exists()
+    with system_context(reason="test unread muted projection"):
+        ticket.message_subscribe(user=default_watcher, notification_policy="muted")
+    assert not messages.unread_for(default_watcher).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1790,7 +1901,9 @@ def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmat
     assert confirmed.is_confirmed and not confirmed.is_dismissed
     assert (handle.party_id, handle.party_link_confirmed) == (party.pk, True)
     assert (claim.source_kind, claim.confidence, claim.applied) == ("rule", 0.4, False)
-    assert claim.evidence == [{"model": "messaging.Message", "id": str(message.sqid)} for message in messages]
+    assert claim.evidence == [
+        {"model": "messaging.Message", "id": str(message.sqid), "pointer": ""} for message in messages
+    ]
     assert claim.evidence_truncated
     assert len(readable) == 20
 
@@ -2490,7 +2603,8 @@ def test_resync_with_changed_body_appends_edit_history(channel: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_read_receipts_anchor_unread_and_never_regress(composed_tables: None) -> None:
+@pytest.mark.parametrize("equal_timestamps", [False, True])
+def test_read_receipts_anchor_unread_and_never_regress(composed_tables: None, equal_timestamps: bool) -> None:
     """Unread is everything past the receipt; the receipt only ever advances.
 
     A follower with no receipt sees the whole thread unread; marking read up to the
@@ -2511,11 +2625,22 @@ def test_read_receipts_anchor_unread_and_never_regress(composed_tables: None) ->
         first = ticket.message_post("First.")
         second = ticket.message_post("Second.")
         third = ticket.message_post("Third.")
+    if equal_timestamps:
+        # Equal chronological timestamps use primary-key order, including the
+        # creation-time fallback for a provider row with no send timestamp.
+        with system_context(reason="test.receipts.equal_timestamps"):
+            Message.objects.filter(pk__in=[first.pk, second.pk, third.pk]).update(sent_at=_AT, created_at=_AT)
+            Message.objects.filter(pk=second.pk).update(sent_at=None)
+        for message in (first, second, third):
+            message.refresh_from_db()
     thread = ticket.message_thread(create=False)
     assert thread is not None
 
     def unread_pks(user: Any) -> set[Any]:
-        return set(ThreadFollower.objects.unread_messages(thread, user=user).values_list("pk", flat=True))
+        expected = set(ThreadFollower.objects.unread_messages(thread, user=user).values_list("pk", flat=True))
+        projected = ThreadedTicket.thread_messages_expression(ticket.pk).unread_for(user)
+        assert set(projected.values_list("pk", flat=True)) == expected
+        return expected
 
     # No receipt yet: the whole thread is unread for the watcher.
     assert unread_pks(watcher) == {first.pk, second.pk, third.pk}
@@ -2607,7 +2732,6 @@ def _collecting_broadcasts(
     sent: list[tuple[Any, dict[str, Any]]] = []
     monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append((model, payload)))
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
-    publishing.connect_change_broadcast_receiver()
     already_wired = {model: publishing.disconnect_publishers(model) for model in models}
     for model in models:
         publishing.connect_publishers(model)

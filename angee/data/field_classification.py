@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
-import datetime
-import decimal
 import re
 from collections.abc import Mapping
 from typing import Any, cast
 
 from django.db import models
+from django.db.models.fields.reverse_related import ForeignObjectRel
 
-from angee.base.mixins import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD
 from angee.data.metadata import StatusDisplay
+
+ARCHIVE_FLAG_FIELD = "is_archived"
+"""Shared model and resource-metadata name for the archive flag."""
+
+TRASH_FLAG_FIELD = "is_trashed"
+"""Shared model and resource-metadata name for the trash flag."""
 
 RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list", "object"})
 """Supported resource field kind names."""
@@ -46,13 +50,13 @@ def is_resource_field_widget(value: str) -> bool:
     )
 
 
-def is_to_many_relation(field: models.Field[Any, Any]) -> bool:
+def is_to_many_relation(field: models.Field[Any, Any] | ForeignObjectRel) -> bool:
     """Return whether a Django field represents a to-many relation path."""
 
     return bool(getattr(field, "many_to_many", False) or getattr(field, "one_to_many", False))
 
 
-def is_to_one_relation(field: models.Field[Any, Any]) -> bool:
+def is_to_one_relation(field: models.Field[Any, Any] | ForeignObjectRel) -> bool:
     """Return whether ``field`` is a forward to-one relation."""
 
     return bool(
@@ -62,7 +66,7 @@ def is_to_one_relation(field: models.Field[Any, Any]) -> bool:
 
 
 def resource_field_kind(
-    field: models.Field[Any, Any] | None,
+    field: models.Field[Any, Any] | ForeignObjectRel | None,
     *,
     has_relation_axis: bool = False,
     is_list: bool = False,
@@ -99,7 +103,7 @@ def model_field_scalar(field: models.Field[Any, Any]) -> str | None:
         return declared
     if isinstance(field, models.GeneratedField):
         # A generated column projects as its declared output field.
-        return model_field_scalar(field.output_field)
+        return model_field_scalar(field.output_field) if field.output_field is not None else None
     if isinstance(field, models.BooleanField):
         return "Boolean"
     if isinstance(field, models.IntegerField):
@@ -119,26 +123,11 @@ def model_field_scalar(field: models.Field[Any, Any]) -> str | None:
     return None
 
 
-def python_type_scalar(python_type: object) -> str | None:
-    """Return the metadata scalar for one native Python value type."""
-
-    scalars: dict[object, str] = {
-        str: "String",
-        bool: "Boolean",
-        int: "Int",
-        float: "Float",
-        decimal.Decimal: "Decimal",
-        datetime.datetime: "DateTime",
-        datetime.date: "Date",
-    }
-    return scalars.get(python_type)
-
-
-def is_archive_field(field: models.Field[Any, Any] | None) -> bool:
-    """Return whether ``field`` is the :class:`~angee.base.mixins.ArchiveMixin` flag.
+def is_archive_field(field: models.Field[Any, Any] | ForeignObjectRel | None) -> bool:
+    """Return whether ``field`` is the :class:`~angee.models.ArchiveMixin` flag.
 
     The archive vocabulary is name-based — one column name across the platform
-    (:data:`angee.base.mixins.ARCHIVE_FLAG_FIELD`) — so any model composing
+    (:data:`angee.models.ARCHIVE_FLAG_FIELD`) — so any model composing
     ``ArchiveMixin`` is recognised by that column and marked ``archivable`` in
     resource metadata. A same-typed boolean under a different contract (the
     trash flag, an enablement ``is_enabled``/``is_active``) is deliberately not
@@ -148,11 +137,11 @@ def is_archive_field(field: models.Field[Any, Any] | None) -> bool:
     return field is not None and getattr(field, "name", None) == ARCHIVE_FLAG_FIELD
 
 
-def is_trash_field(field: models.Field[Any, Any] | None) -> bool:
-    """Return whether ``field`` is the :class:`~angee.base.mixins.TrashMixin` flag.
+def is_trash_field(field: models.Field[Any, Any] | ForeignObjectRel | None) -> bool:
+    """Return whether ``field`` is the :class:`~angee.models.TrashMixin` flag.
 
     Like the archive flag, trash is recognised by its one column name
-    (:data:`angee.base.mixins.TRASH_FLAG_FIELD`); resource metadata marks it
+    (:data:`angee.models.TRASH_FLAG_FIELD`); resource metadata marks it
     ``trashable`` so shared views offer a removed-records list and the shared
     ``trash_record`` / ``restore_record`` verbs for the resource.
     """
@@ -161,7 +150,7 @@ def is_trash_field(field: models.Field[Any, Any] | None) -> bool:
 
 
 def money_currency_field(
-    field: models.Field[Any, Any] | None,
+    field: models.Field[Any, Any] | ForeignObjectRel | None,
     metadata: Mapping[str, object] | None = None,
 ) -> str | None:
     """Return the currency path a field declares for money metadata, if any."""
@@ -170,7 +159,7 @@ def money_currency_field(
 
 
 def status_display(
-    field: models.Field[Any, Any] | None,
+    field: models.Field[Any, Any] | ForeignObjectRel | None,
     metadata: Mapping[str, object] | None = None,
 ) -> StatusDisplay | None:
     """Return the status shape a field declares for presentation metadata, if any."""
@@ -182,7 +171,7 @@ def status_display(
 
 
 def resource_field_widget(
-    field: models.Field[Any, Any] | None,
+    field: models.Field[Any, Any] | ForeignObjectRel | None,
     kind: str,
     metadata: Mapping[str, object] | None = None,
     *,
@@ -235,7 +224,7 @@ STATUS_DISPLAY_METADATA_KEY = "angee_status_display"
 
 
 def _declared_projection_fact(
-    field: models.Field[Any, Any] | None,
+    field: models.Field[Any, Any] | ForeignObjectRel | None,
     metadata: Mapping[str, object] | None,
     name: str,
 ) -> str | None:

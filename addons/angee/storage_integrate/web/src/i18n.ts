@@ -14,7 +14,9 @@ export const enStorageIntegrateMessages: Record<string, string> = {
   "mount.connect.modeReference": "Leave files in place",
   "mount.connect.submit": "Connect",
   "mount.connect.submitting": "Connecting…",
+  "mount.connect.menu": "Connect",
   "mount.browse.up": "Up",
+  "mount.browse.open": "Open folder",
   "mount.browse.useThisFolder": "Use this folder",
   "mount.browse.loading": "Loading folders",
   "mount.browse.empty": "This location has no child folders.",
@@ -30,6 +32,6 @@ export const enStorageIntegrateMessages: Record<string, string> = {
 };
 
 export const useStorageIntegrateT = createNamespaceT(
-  "storage",
+  "storage-integrate",
   enStorageIntegrateMessages,
 );

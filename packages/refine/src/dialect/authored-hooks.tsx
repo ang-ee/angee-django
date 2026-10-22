@@ -56,6 +56,12 @@ export interface AuthoredOperationOptions {
 
 export interface AuthoredQueryOptions extends AuthoredOperationOptions {
   enabled?: boolean;
+  /**
+   * `false` turns off refine's generic error notification, for a read whose
+   * surface renders the failure itself (an error banner in place of the record).
+   * The auth policy still runs and the query still reports its error.
+   */
+  errorNotification?: false;
   /** Retain the last result while a new variable set loads, using native Query placeholders. */
   keepPreviousData?: boolean;
   /** Exact rows whose live changes invalidate this read; omitted keeps model-wide semantics. */
@@ -74,13 +80,12 @@ export interface AuthoredQueryOptions extends AuthoredOperationOptions {
 }
 
 /** One authored read in a dynamic batch, addressed by a caller-stable key. */
-export interface AuthoredQueryBatchScope<TDocument extends AuthoredDocument> {
+export interface AuthoredQueryBatchScope<TDocument extends AuthoredDocument>
+  extends Pick<AuthoredQueryOptions, "models" | "records" | "relatedModels"> {
   /** Result label only; document/provider/variables own query identity. */
   key: string;
   document: TDocument;
   variables?: AuthoredVariables<TDocument>;
-  /** Canonical model labels whose changes invalidate this read. */
-  models?: readonly string[];
 }
 
 export function useAuthoredQuery<TDocument extends AuthoredDocument>(
@@ -104,21 +109,23 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
     refetchInterval: options.refetchInterval,
   });
   useAuthoredLiveInterest(options.enabled ?? true, models);
-  useAuthoredErrorPolicy([configured.queryKey]);
+  useAuthoredErrorPolicy([configured.queryKey], { notify: options.errorNotification !== false });
   return result;
 }
 
 /** Native query results addressed by a domain label; labels never key the cache. */
 export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
   scopes: readonly AuthoredQueryBatchScope<TDocument>[],
-  options: AuthoredOperationOptions & { enabled?: boolean } = {},
+  options: AuthoredOperationOptions & Pick<AuthoredQueryOptions, "enabled" | "errorNotification"> = {},
 ): ReadonlyMap<string, UseQueryResult<DocumentData<TDocument>, Error>> {
   const activeProvider = useActiveDataProviderName();
   const provider = options.dataProviderName ?? activeProvider ?? "default";
   const dataProvider = useDataProvider();
   const client = useQueryClient();
   const queries = scopes.map((scope) => {
-    const configured = authoredQueryOptions(client, dataProvider, provider, scope.document, scope.variables, scope.models);
+    const configured = authoredQueryOptions(
+      client, dataProvider, provider, scope.document, scope.variables, scope.models, scope.records, scope.relatedModels,
+    );
     return {
       ...configured, enabled: options.enabled ?? true,
     };
@@ -126,7 +133,7 @@ export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
   const results = useQueries({ queries });
   const models = useStableArray([...new Set(scopes.flatMap((scope) => scope.models ?? []))].sort());
   useAuthoredLiveInterest(options.enabled ?? true, models);
-  useAuthoredErrorPolicy(queries.map((query) => query.queryKey));
+  useAuthoredErrorPolicy(queries.map((query) => query.queryKey), { notify: options.errorNotification !== false });
   return new Map(scopes.map((scope, index) => [scope.key, results[index]!]));
 }
 

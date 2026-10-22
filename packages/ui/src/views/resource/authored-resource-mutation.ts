@@ -28,6 +28,8 @@ import {
  * unknown spellings warn in development and are omitted. A non-resource authored
  * read model stays on plain `useAuthoredMutation`. The canonical labels are also
  * forwarded, so authored reads registered on those exact models refetch too.
+ * @kind null
+ * @reason Codec and transport infrastructure: adds resource-cache invalidation to authored GraphQL mutations.
  */
 export function useAuthoredResourceMutation<TDocument extends AuthoredDocument>(
   document: TDocument,

@@ -29,8 +29,8 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import current_actor
 
-from angee.base.actors import actor_user_id
-from angee.base.models import AngeeDataModel
+from angee.actors import actor_user_id
+from angee.models import AngeeDataModel
 from angee.nexus.managers import CadenceManager, TieManager
 
 

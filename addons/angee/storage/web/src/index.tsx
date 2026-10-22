@@ -3,12 +3,13 @@
 import type { BaseAddonRoute } from "@angee/app";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import type { BaseMenuItem } from "@angee/ui";
-import { Tab, useRecordChromeContext, useRecordPeekContext, useRouteSearch } from "@angee/ui";
+import { Tab, useRecordChromeContext, useRouteSearch } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import { ArchiveRestore, Download, HardDrive, Image, Pencil } from "lucide-react";
+import { ArchiveRestore, Download, HardDrive, Image, Pencil, Upload } from "lucide-react";
 
 import { enStorageMessages } from "./i18n";
-import { FILE_ATTACHMENT_MODEL, RecordFilesPane, recordFilesTarget, useRecordFilesCount } from "./RecordFilesPane";
+import { fileAttachedToGroup } from "./FileAttachedToPane";
+import { recordFilesGroup } from "./RecordFilesPane";
 import { FileRecordPreview, filePreviewPageFromSearch } from "./views/FilePreview";
 import { storagePreviews } from "./previews";
 import { fileForm } from "./views/file-form";
@@ -60,36 +61,28 @@ const storage = defineBaseAddon({
         content: <Tab id="preview" label={{ namespace: "storage", key: "preview.label", fallback: enStorageMessages["preview.label"] }}><FilePreviewSection /></Tab>,
       },
     },
-    "record#aside": {
-      "storage.files": {
-        sequence: 40,
-        content: {
-          label: "Files",
-          icon: "file",
-          aliases: ["files"],
-          // Only on types whose schema lets a record carry attachments.
-          when: (context) => context.route?.recordEdges?.includes(FILE_ATTACHMENT_MODEL) ?? false,
-          useCount: useRecordFilesCount,
-          render: (context) => <RecordFilesPane target={recordFilesTarget(context)} />,
-        },
-      },
-    },
+    // The Related tab's Files group, on types whose schema lets a record carry attachments.
+    "related#groups": { "storage.files": recordFilesGroup },
+    "storage.File#groups": { "storage.attached-to": fileAttachedToGroup },
   },
   i18n: { storage: enStorageMessages },
+  // Upload-task stages the framework vocabulary does not name; done and failed are framework words.
+  statusTones: { hashing: "warning", uploading: "warning", finalizing: "warning", deduped: "success" },
   icons: {
     drive: HardDrive,
     image: Image,
     download: Download,
     restore: ArchiveRestore,
     edit: Pencil,
+    upload: Upload,
   },
   // Rich file renderers (PDF, media, HEIC) contributed to `PreviewPane`.
   previews: storagePreviews,
 });
 
 export { useStorageUpload } from "./data/use-upload";
-export { RecordFilesPane, recordFilesTarget, type RecordFilesTarget } from "./RecordFilesPane";
-export { FileRecordPreview, filePreviewReference } from "./views/FilePreview";
+export { recordFilesGroup } from "./RecordFilesPane";
+export { FileRecordPreview } from "./views/FilePreview";
 export type { StorageUpload, UploadedFile, UploadTarget, UploadTask } from "./data/use-upload";
 export { StorageUploadTasks } from "./views/StorageUploadTasks";
 export { useStorageT } from "./i18n";
@@ -99,8 +92,7 @@ export default storage;
 
 function FilePreviewSection() {
   const record = useRecordChromeContext();
-  const peek = useRecordPeekContext();
   const search = useRouteSearch();
-  const page = peek ? peek.reference.page : filePreviewPageFromSearch(search, record.recordId);
+  const page = filePreviewPageFromSearch(search, record.recordId);
   return <div className="h-[65vh] min-h-80"><FileRecordPreview id={record.recordId} page={page} /></div>;
 }

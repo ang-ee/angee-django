@@ -16,6 +16,10 @@ export type PageElementKind =
   | "metric"
   | "tab";
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const PAGE_ELEMENT_SLOT = Symbol.for("@angee/ui.page.element");
 
 export type PageElementType = {
@@ -26,12 +30,20 @@ export type PageElement<Props> = ReactElement<Props> & {
   type: PageElementType;
 };
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function pageChildren(children: ReactNode): ReactNode[] {
   const nodes: ReactNode[] = [];
   appendPageChildren(nodes, children);
   return nodes;
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function pageElementProps<Props>(
   child: ReactNode,
   kind: PageElementKind,

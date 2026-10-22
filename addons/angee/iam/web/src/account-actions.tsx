@@ -6,8 +6,8 @@ import {
   RecordActionBar,
   useActionOutcomeMutation,
   useActionResultMutation,
-  usePrompt,
   useRecordAction,
+  useSecretReveal,
   useRecordChromeContext,
   type ActionArg,
   type ActionDescriptor,
@@ -40,27 +40,25 @@ interface SignInDetails {
   password: string;
 }
 
-/** Reveal one-time sign-in details only through the read-only prompt; nothing reaches a cache. */
+/** Reveal one-time sign-in details through the shared secret reveal; nothing reaches a cache. */
 function useSignInReveal(): (title: string, details: SignInDetails | null | undefined) => Promise<void> {
   const t = useIamT();
-  const prompt = usePrompt();
+  const reveal = useSecretReveal();
   return React.useCallback(async (title: string, details: SignInDetails | null | undefined) => {
     if (!details?.password) throw new Error(t("users.access.noPassword"));
-    await prompt({
+    await reveal({
       title,
       body: t("users.access.revealBody"),
-      fields: [
-        { name: "username", label: t("users.access.username"), defaultValue: details.username,
-          readOnly: true, copyable: true },
-        { name: "password", label: t("users.access.password"), defaultValue: details.password,
-          readOnly: true, copyable: true },
+      secrets: [
+        { name: "username", label: t("users.access.username"), value: details.username },
+        { name: "password", label: t("users.access.password"), value: details.password },
       ],
       copy: {
         label: t("users.access.copySignIn"),
         value: t("users.access.signInDetails", { username: details.username, password: details.password }),
       },
     });
-  }, [prompt, t]);
+  }, [reveal, t]);
 }
 
 /** Give a passwordless person a first password, revealed once with their username. */

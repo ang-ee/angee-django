@@ -1,8 +1,9 @@
 import * as React from "react";
 import { useSchemaFieldMetadata } from "@angee/metadata";
-import { Glyph } from "../chrome/Glyph";
-import { cn } from "../lib/cn";
+import { formatNumber } from "../lib/format-number";
+import { EmptyState } from "../fragments/EmptyState";
 import { Button } from "../ui/button";
+import { Chip } from "../ui/chip";
 import {
   DialogBackdrop,
   DialogBody,
@@ -14,7 +15,7 @@ import {
   DialogRoot,
   DialogTitle,
 } from "../ui/dialog";
-import { Input } from "../ui/input";
+import { SearchInput } from "../ui/input";
 import { SectionEyebrow } from "../ui/section-eyebrow";
 import { Select } from "../ui/select";
 import type { DashboardRegistry } from "./headless";
@@ -101,17 +102,15 @@ export function DashboardWidgetPickerDialog({
           </DialogHeader>
           <DialogBody className="grid min-h-0 gap-3 overflow-hidden">
             <div className="flex flex-col gap-2 sm:flex-row">
-              <div className="relative min-w-0 flex-1">
-                <Glyph name="search" size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-fg-subtle" />
-                <Input
-                  autoFocus
-                  aria-label={t("picker.search")}
-                  className="pl-8"
-                  placeholder={t("picker.searchPlaceholder")}
-                  value={query}
-                  onChange={(event) => setQuery(event.currentTarget.value)}
-                />
-              </div>
+              <SearchInput
+                autoFocus
+                aria-label={t("picker.search")}
+                className="min-w-0 flex-1"
+                placeholder={t("picker.searchPlaceholder")}
+                value={query}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+                onClear={() => setQuery("")}
+              />
               <Select
                 aria-label={t("picker.section")}
                 className="sm:w-48"
@@ -121,33 +120,19 @@ export function DashboardWidgetPickerDialog({
               />
             </div>
             <div className="flex flex-wrap items-center gap-1.5" aria-label={t("picker.typeLabel")}>
-              <span className="mr-1 text-11 text-fg-muted">{t("picker.type")}</span>
+              <span className="mr-1 text-2xs text-fg-muted">{t("picker.type")}</span>
               {[{ value: "", label: t("picker.all") }, ...kindOptions].map(({ value, label }) => (
-                <button
-                  key={value || "__all__"}
-                  type="button"
-                  aria-pressed={kind === value}
-                  className={cn(
-                    "rounded-full border px-2 py-0.5 text-11 transition-colors focus-visible:focus-ring",
-                    kind === value
-                      ? "border-brand bg-brand-soft text-brand-soft-text"
-                      : "border-border text-fg-muted hover:bg-inset hover:text-fg",
-                  )}
-                  onClick={() => setKind(value)}
-                >
+                <Chip key={value || "__all__"} size="sm" tone="muted" variant="outline" pressed={kind === value} onClick={() => setKind(value)}>
                   {label}
-                </button>
+                </Chip>
               ))}
-              <span className="ml-auto text-11 text-fg-subtle">
+              <span className="ml-auto text-2xs text-fg-subtle">
                 {t("picker.result", { count: matches.length })}
               </span>
             </div>
             <div className="min-h-0 overflow-y-auto pr-1">
               {grouped.length === 0 ? (
-                <div className="grid min-h-40 place-content-center text-center">
-                  <p className="text-13 font-medium text-fg">{t("picker.empty.title")}</p>
-                  <p className="mt-1 text-12 text-fg-muted">{t("picker.empty.description")}</p>
-                </div>
+                <EmptyState className="min-h-40" title={t("picker.empty.title")} description={t("picker.empty.description")} />
               ) : (
                 <div className="grid gap-4">
                   {grouped.map(([group, choices]) => (
@@ -167,18 +152,16 @@ export function DashboardWidgetPickerDialog({
                         >
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-13 font-medium text-fg">{entry.title}</span>
-                            <span className="block truncate text-11 text-fg-subtle">{entry.resource}</span>
+                            <span className="block truncate text-2xs text-fg-subtle">{entry.resource}</span>
                           </span>
-                          <span className="shrink-0 rounded-full bg-inset px-2 py-0.5 text-11 text-fg-muted">
-                            {entry.kindLabel}
-                          </span>
+                          <Chip size="sm" tone="muted">{entry.kindLabel}</Chip>
                         </button>
                       ))}
                     </section>
                   ))}
                   {matches.length > visible.length ? (
-                    <p className="pb-2 text-center text-11 text-fg-subtle">
-                      {t("picker.showingFirst", { count: visible.length.toLocaleString() })}
+                    <p className="pb-2 text-center text-2xs text-fg-subtle">
+                      {t("picker.showingFirst", { count: formatNumber(visible.length) })}
                     </p>
                   ) : null}
                 </div>

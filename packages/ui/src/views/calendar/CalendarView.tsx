@@ -87,10 +87,11 @@ const CalendarSurface = lazy(() => import("./calendar-surface"));
 
 /**
  * The month/week/day event calendar — a standalone `@angee/ui` primitive
- * (occurrences in, interaction callbacks out, the `TimelineView`/`GraphView`
+ * (occurrences in, interaction callbacks out, the `GraphView`
  * shape) composed over FullCalendar. Recurrence is not its concern: it renders
  * server-expanded occurrences and wires drag/resize/select/click back to the
  * caller. Pair it with {@link useCalendarWindow} for the fetch + window refetch.
+ * @kind surface
  */
 export function CalendarView(props: CalendarViewProps): ReactElement {
   const t = useUiT();

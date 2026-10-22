@@ -23,6 +23,33 @@ const fields: readonly FieldDescriptor[] = [
   { name: "config.local_name", widget: "text" },
 ];
 
+test("untouched optional strings leave create defaults to the backend", () => {
+  expect(mutationData(
+    { title: "", color: "", description: "" },
+    [{ name: "title" }, { name: "color", widget: "color" }, { name: "description" }],
+    {
+      dirtyFields: {}, isCreate: true,
+      fieldMetadata: {
+        title: { name: "title", kind: "scalar", scalar: "String", requiredOnCreate: true },
+        color: { name: "color", kind: "scalar", scalar: "String", requiredOnCreate: false },
+        description: { name: "description", kind: "scalar", scalar: "String", requiredOnCreate: false },
+      },
+    },
+  )).toEqual({ title: "" });
+});
+
+test.each([
+  { label: "an explicit clear", field: { name: "color" }, dirtyFields: { color: true } },
+  { label: "a descriptor default", field: { name: "color", defaultValue: "" }, dirtyFields: {} },
+  { label: "a supplied default", field: { name: "color" }, dirtyFields: {}, seededFieldNames: new Set(["color"]) },
+  { label: "required presence", field: { name: "color", presenceRequired: true }, dirtyFields: {} },
+])("create preserves $label as a blank string", ({ field, dirtyFields, seededFieldNames }) => {
+  expect(mutationData({ color: "" }, [field], {
+    dirtyFields, seededFieldNames, isCreate: true,
+    fieldMetadata: { color: { name: "color", kind: "scalar", scalar: "String", requiredOnCreate: false } },
+  })).toEqual({ color: "" });
+});
+
 test.each<{ field: FormSpecFieldDescriptor; composite: boolean }>([
   { field: { name: "title", widget: "text" }, composite: false },
   { field: { name: "config", widget: "json" }, composite: false },

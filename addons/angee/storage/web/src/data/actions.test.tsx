@@ -43,6 +43,16 @@ vi.mock("@angee/ui", async (importOriginal) => {
         return result;
       },
     })),
+    // Restore rides the shared trash owner; the test records the ids it is asked for.
+    useTrashRecord: vi.fn(() => ({
+      available: true,
+      busy: false,
+      trash: vi.fn(async () => true),
+      restore: vi.fn(async (id: string) => {
+        sdk.authoredCalls.push({ id });
+        return true;
+      }),
+    })),
   };
 });
 
@@ -182,20 +192,19 @@ describe("storage file/folder actions", () => {
     ]);
     expect(sdk.invalidations).toEqual([
       {
-        resource: "files",
+        resource: "console:storage.File",
         dataProviderName: "console",
-        invalidates: ["list", "many", "detail"],
+        invalidates: ["resourceAll"],
       },
       {
-        resource: "folders",
+        resource: "console:storage.Folder",
         dataProviderName: "console",
-        id: "fld_1",
-        invalidates: ["list", "many", "detail"],
+        invalidates: ["resourceAll"],
       },
       {
-        resource: "files",
+        resource: "console:storage.File",
         dataProviderName: "console",
-        invalidates: ["list", "many", "detail"],
+        invalidates: ["resourceAll"],
       },
     ]);
   });

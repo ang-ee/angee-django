@@ -15,18 +15,14 @@ import {
   DialogRoot,
   DialogTitle,
   DialogTrigger,
-  type DialogBackdropProps,
   type DialogBodyProps,
-  type DialogCloseProps,
-  type DialogDescriptionProps,
   type DialogFooterProps,
   type DialogHeaderProps,
-  type DialogPortalProps,
-  type DialogRootProps,
-  type DialogTitleProps,
-  type DialogTriggerProps,
 } from "./dialog";
 
+/**
+ * @kind token
+ */
 export const drawerVariants = tv({
   slots: {
     content:
@@ -63,25 +59,37 @@ export const drawerVariants = tv({
 });
 
 type DrawerRecipeProps = VariantProps<typeof drawerVariants>;
-
-export type DrawerSide = NonNullable<DrawerRecipeProps["side"]>;
-export type DrawerRootProps<Payload = unknown> = DialogRootProps<Payload>;
-export type DrawerTriggerProps<Payload = unknown> = DialogTriggerProps<Payload>;
-export type DrawerPortalProps = DialogPortalProps;
-export type DrawerBackdropProps = DialogBackdropProps;
 export type DrawerHeaderProps = DialogHeaderProps;
 export type DrawerBodyProps = DialogBodyProps;
 export type DrawerFooterProps = DialogFooterProps;
-export type DrawerTitleProps = DialogTitleProps;
-export type DrawerDescriptionProps = DialogDescriptionProps;
-export type DrawerCloseProps = DialogCloseProps;
 
+/**
+ * @owner Drawer
+ */
 export const DrawerRoot = DialogRoot;
+/**
+ * @owner Drawer
+ */
 export const DrawerTrigger = DialogTrigger;
+/**
+ * @owner Drawer
+ */
 export const DrawerPortal = DialogPortal;
+/**
+ * @owner Drawer
+ */
 export const DrawerBackdrop = DialogBackdrop;
+/**
+ * @owner Drawer
+ */
 export const DrawerTitle = DialogTitle;
+/**
+ * @owner Drawer
+ */
 export const DrawerDescription = DialogDescription;
+/**
+ * @owner Drawer
+ */
 export const DrawerClose = DialogClose;
 
 export type DrawerContentProps = BaseDialogPopupProps &
@@ -89,6 +97,9 @@ export type DrawerContentProps = BaseDialogPopupProps &
     className?: string;
   };
 
+/**
+ * @owner Drawer
+ */
 export const DrawerContent = React.forwardRef<
   HTMLDivElement,
   DrawerContentProps
@@ -105,6 +116,9 @@ export const DrawerContent = React.forwardRef<
 });
 DrawerContent.displayName = "DrawerContent";
 
+/**
+ * @owner Drawer
+ */
 export const DrawerHeader = React.forwardRef<
   HTMLDivElement,
   DrawerHeaderProps
@@ -114,6 +128,9 @@ export const DrawerHeader = React.forwardRef<
 });
 DrawerHeader.displayName = "DrawerHeader";
 
+/**
+ * @owner Drawer
+ */
 export const DrawerBody = React.forwardRef<HTMLDivElement, DrawerBodyProps>(
   function DrawerBody({ className, ...props }, ref) {
     const styles = drawerVariants();
@@ -122,6 +139,9 @@ export const DrawerBody = React.forwardRef<HTMLDivElement, DrawerBodyProps>(
 );
 DrawerBody.displayName = "DrawerBody";
 
+/**
+ * @owner Drawer
+ */
 export const DrawerFooter = React.forwardRef<
   HTMLDivElement,
   DrawerFooterProps
@@ -131,6 +151,9 @@ export const DrawerFooter = React.forwardRef<
 });
 DrawerFooter.displayName = "DrawerFooter";
 
+/**
+ * @kind primitive
+ */
 export const Drawer = Object.assign(DrawerRoot, {
   Root: DrawerRoot,
   Trigger: DrawerTrigger,
@@ -145,8 +168,7 @@ export const Drawer = Object.assign(DrawerRoot, {
   Close: DrawerClose,
 });
 
+/**
+ * @kind primitive
+ */
 export const Sheet = Drawer;
-export const SheetContent = DrawerContent;
-export const SheetHeader = DrawerHeader;
-export const SheetBody = DrawerBody;
-export const SheetFooter = DrawerFooter;

@@ -1,15 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import {
-  Filter,
-  routeSearchParam,
-  updateRouteSearch,
-  useRouteSearch,
-  type ResourceViewFilter,
-  type ResourceViewState,
-  mergeResourceViewSearch,
-  resourceViewStateToSearch,
-} from "@angee/ui";
+import { Filter, localTimeZone, mergeResourceViewSearch, resourceViewStateToSearch, routeSearchParam, updateRouteSearch, useRouteSearch, type ResourceViewFilter, type ResourceViewState } from "@angee/ui";
 import {
   InboxFilter,
   NAVIGATOR_LENSES,
@@ -58,7 +49,7 @@ export const RELATED_TAB = "nexus-related";
 /** Translate the native collection filter to the Messaging input contract. */
 export function inboxQuery(
   filter: ResourceViewFilter,
-  timezone = Intl.DateTimeFormat().resolvedOptions().timeZone,
+  timezone = localTimeZone(),
 ) {
   const value = new InboxFilter(filter);
   return { coverage: value.coverage(timezone), search: value.search() };

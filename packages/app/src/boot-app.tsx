@@ -29,6 +29,8 @@ export interface SelectAppInput {
  * with the shell's brand and theme. No choice is stored. A root id is the
  * one-root app; a named app takes its own brand, theme and home, else its first
  * rail root's. An unknown `?app=` is reported and falls back.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function selectApp({ search, hostname, shell = {}, roots }: SelectAppInput): RuntimeSelection {
   const diagnostics: string[] = [];
@@ -60,6 +62,8 @@ export function selectApp({ search, hostname, shell = {}, roots }: SelectAppInpu
  * app, an `ANGEE_UI.shell.apps` name its declared rail. Unset facts come from
  * the first rail root, whose brand defaults to its label and icon; an unset
  * theme falls back to the shell's. Undefined when `key` names neither.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function appSelection(
   key: string,
@@ -97,7 +101,10 @@ export function appSelection(
   };
 }
 
-/** Refuse a malformed `ANGEE_UI.shell`, which would otherwise select the wrong app silently. */
+/** Refuse a malformed `ANGEE_UI.shell`, which would otherwise select the wrong app silently.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function assertShellSettings(shell: unknown): asserts shell is ShellSettings {
   const mapping = (value: unknown, where: string, keys?: readonly string[]): Record<string, unknown> => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${where} must be a mapping.`);
@@ -144,7 +151,10 @@ export interface BootAppInput<Schemas> {
   errorReporting?: ErrorReportingInput | undefined;
 }
 
-/** Load generated metadata before synchronous app composition and route creation. */
+/** Load generated metadata before synchronous app composition and route creation.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export async function bootApp<Schemas>({
   target,
   loadSchemas,

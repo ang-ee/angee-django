@@ -282,9 +282,10 @@ describe("SpacesPage", () => {
   ])("offers only the server-returned roles for %s", (_seat, roles) => {
     pageMocks.groupRecord = { membership_roles: roles };
     renderRoster();
+    // The add verb and its dialog exist only while the server offers a role to grant.
     const dialog = pageMocks.mutationDialogs.find((entry) => entry.title === "group.roster.add");
-    const fields = dialog?.fields as Array<{ name: string; options?: Array<{ value: string }> }>;
-    expect(fields.find((field) => field.name === "role")?.options?.map((option) => option.value)).toEqual(roles ?? []);
+    const fields = (dialog?.fields ?? []) as Array<{ name: string; options?: Array<{ value: string }> }>;
+    expect(fields.find((field) => field.name === "role")?.options?.map((option) => option.value) ?? []).toEqual(roles ?? []);
     expect(screen.queryByRole("button", { name: "group.roster.add" }) !== null).toBe((roles?.length ?? 0) > 0);
   });
 

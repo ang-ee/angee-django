@@ -11,7 +11,7 @@ including public visibility from the group column.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -19,10 +19,9 @@ from django.db import models, transaction
 from django.utils.text import slugify
 from rebac import PermissionDenied, current_actor
 
-from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, HierarchyMixin, OwnerMixin
-from angee.base.models import AngeeDataModel
+from angee.fields import StateField
 from angee.messaging.models import AudienceMember, NotificationPolicy, ThreadAudienceMixin
+from angee.models import AngeeDataModel, AuditMixin, HierarchyMixin, OwnerMixin
 from angee.parties.mixins import MembershipDecisionMixin
 from angee.spaces.managers import GroupManager, MembershipManager
 
@@ -100,10 +99,11 @@ class Group(ThreadAudienceMixin, HierarchyMixin, OwnerMixin, AngeeDataModel):
     def _available_slug(self) -> str:
         """Return the first name-derived slug unused in the shared Group table."""
 
-        slug_field = self._meta.get_field("slug")
+        slug_field = type(self).slug.field
         max_length = slug_field.max_length or 50
         base = slugify(self.name)[:max_length] or "group"
         owner_model = slug_field.model
+        assert issubclass(owner_model, Group)
         candidates = owner_model.system_queryset(lock=("self",))
         if self.pk is not None:
             candidates = candidates.exclude(pk=self.pk)
@@ -224,7 +224,7 @@ class Membership(MembershipDecisionMixin, AuditMixin, AngeeDataModel):
 class ThreadSpace(models.Model):
     """Group audience contributed onto ``messaging.Thread`` as a same-row field."""
 
-    extends = "messaging.Thread"
+    extends: ClassVar[str | None] = "messaging.Thread"
 
     groups = models.ManyToManyField(
         "spaces.Group",
@@ -241,11 +241,11 @@ class ThreadSpace(models.Model):
 class ChannelSpace(models.Model):
     """Bind a messaging channel to a team through its integration parent."""
 
-    extends = "messaging.Channel"
-    hasura_readable_fields = ("team",)
-    hasura_filterable_fields = hasura_readable_fields
-    hasura_insertable_fields = hasura_readable_fields
-    hasura_updatable_fields = hasura_readable_fields
+    extends: ClassVar[str | None] = "messaging.Channel"
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = ("team",)
+    hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_insertable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
 
     team = models.ForeignKey(
         "spaces.Group",
@@ -270,11 +270,11 @@ class VaultSpace(models.Model):
     roster. Group viewers and public readers gain nothing through it.
     """
 
-    extends = "knowledge.Vault"
-    hasura_readable_fields = ("team",)
-    hasura_filterable_fields = hasura_readable_fields
-    hasura_insertable_fields = hasura_readable_fields
-    hasura_updatable_fields = hasura_readable_fields
+    extends: ClassVar[str | None] = "knowledge.Vault"
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = ("team",)
+    hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_insertable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
 
     team = models.ForeignKey(
         "spaces.Group",

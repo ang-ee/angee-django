@@ -166,7 +166,7 @@ describe("bulk delete flow", () => {
       within(dialog).getByRole("button", { name: "Delete" }).querySelector("svg"),
     ).toBeTruthy();
     expect(within(dialog).getByText("First record")).toBeTruthy();
-    expect(within(dialog).getByRole("button", { name: "2 line items" })).toBeTruthy();
+    expect(within(dialog).getByRole("treeitem", { name: /2 line items/ })).toBeTruthy();
     expect(within(dialog).getByText("Line 1")).toBeTruthy();
   });
 
@@ -267,11 +267,12 @@ describe("bulk delete flow", () => {
 
     expect(screen.getByText("Line 1")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "2 line items" }));
+    const group = screen.getByRole("treeitem", { name: /2 line items/ });
+    fireEvent.click(within(group).getByRole("button", { name: "Collapse" }));
 
     expect(screen.queryByText("Line 1")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "2 line items" }));
+    fireEvent.click(within(group).getByRole("button", { name: "Expand" }));
 
     expect(screen.getByText("Line 1")).toBeTruthy();
   });

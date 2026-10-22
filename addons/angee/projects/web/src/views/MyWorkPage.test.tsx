@@ -30,7 +30,8 @@ vi.mock("@angee/ui", async (importOriginal) => {
   };
 });
 
-vi.mock("../task-actions", () => ({
+vi.mock("../task-actions", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../task-actions")>(),
   useTaskRowActions: () => mocks.rowActions,
 }));
 

@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 20
+// @rebac_schema_revision: 22
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -18,6 +18,7 @@ definition messaging/channel {
     permission reply  = replier + integration->write + admin->member
     permission write  = integration->write + admin->member
     permission delete = integration->write + admin->member
+    permission write__owner = integration->transfer
 }
 
 definition messaging/thread {
@@ -63,7 +64,8 @@ definition messaging/message {
     relation identity_role: provenance/role // rebac:const=messaging_identity_source
     permission identity_source = identity_role->effective_member
     permission create = authenticated
-    permission read   = ((thread->read + channel->read + editor + reader) - withheld) + channel->write + identity_source + admin->member
+    permission read_granted = thread->read + channel->read + editor + reader
+    permission read = (read_granted - withheld) + channel->write + identity_source + admin->member
     permission send_held = channel->write + admin->member
     permission write  = thread->write + channel->write + editor + identity_source + admin->member
     permission delete = thread->delete + channel->write + editor + admin->member

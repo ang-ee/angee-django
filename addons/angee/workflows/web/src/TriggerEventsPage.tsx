@@ -25,7 +25,7 @@ export function TriggerEventsList({ triggerId }: { triggerId?: string }) {
       }} />
       <Column field="rejection" header={t("trigger.rejection")} />
     </List>
-    <Form readOnly returning={["record_model", "record_id"]} headerExtras={({ record }) =>
+    <Form readOnly eyebrow={t("trigger.event")} returning={["record_model", "record_id"]} headerExtras={({ record }) =>
       typeof record?.record_model === "string" && typeof record.record_id === "string"
         ? <RecordReference model={record.record_model} id={record.record_id} /> : null}>
       <Field name="display_name" title />

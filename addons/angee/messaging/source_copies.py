@@ -3,11 +3,11 @@
 A source thread or message is one channel's occurrence. When evidence says two
 occurrences are the same (an RFC Message-ID received through two accounts, or a
 person's decision), the pair's ``same_as`` statement is the fact and
-:class:`~angee.base.merge.MergeableMixin` the mechanism: applying the statement
+:class:`~angee.models.MergeableMixin` the mechanism: applying the statement
 folds the newer copy into the older through ``merged_into`` and nothing else
 moves, so reply transport, delivery, cursors and purge keep addressing the
 physical row. Readers collapse copies through
-:meth:`~angee.base.querysets.MergeableQuerySet.canonical`, which still shows a
+:meth:`~angee.models.MergeableQuerySet.canonical`, which still shows a
 copy whose survivor the reader cannot see.
 """
 
@@ -21,10 +21,10 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import system_context, to_subject_ref
 
-from angee.base.changesets import changeset
-from angee.base.evidence import EvidenceReference
-from angee.base.merge import MergeableMixin
-from angee.base.mixins import PairAspect, StatementsMixin
+from angee.changesets import changeset
+from angee.evidence import EvidenceReference
+from angee.models import MergeableMixin, PairAspect, StatementsMixin
+from angee.parties.models import Handle
 
 SOURCE_IDENTITY_RULE = "messaging.source_identity"
 """The provenance rule that asserts email copies, and the reason its folds record."""
@@ -32,6 +32,9 @@ SOURCE_IDENTITY_RULE = "messaging.source_identity"
 
 class SourceCopyMixin(MergeableMixin, StatementsMixin, models.Model):
     """A channel occurrence; an applied ``same_as`` statement folds it into its oldest copy."""
+
+    channel_id: int | None
+    platform: Handle.Platform
 
     same_as = PairAspect()
     retains_merged = True
@@ -68,7 +71,7 @@ class SourceCopyMixin(MergeableMixin, StatementsMixin, models.Model):
                 if redirected:
                     row = max(redirected, key=lambda row: row.pk)
                     row.merged_into = None
-                    row.save(using=row._state.db, update_fields=("merged_into",))
+                    row.save(update_fields=("merged_into",))
         return None
 
     def identify_source_copy(self, other: Any, *, same: bool) -> Any:
@@ -80,7 +83,7 @@ class SourceCopyMixin(MergeableMixin, StatementsMixin, models.Model):
         return pair.confirm(aspect="same_as", values={}) if same else pair.dismiss(aspect="same_as")
 
 
-def observe_email_identity(message_id: Any, *, using: str = "default") -> None:
+def observe_email_identity(message: Any) -> None:
     """Assert, once its envelope has committed, that an email's copies in other channels are the same message.
 
     An RFC Message-ID names one email wherever it is received; chat and provider
@@ -90,20 +93,26 @@ def observe_email_identity(message_id: Any, *, using: str = "default") -> None:
     """
 
     message_model = apps.get_model("messaging", "Message")
+    messages = message_model._base_manager.db_manager(hints={"instance": message})
     rule_model = apps.get_model("provenance", "Rule")
     with system_context(reason=SOURCE_IDENTITY_RULE):
         try:
-            source = rule_model.objects.db_manager(using).for_key(SOURCE_IDENTITY_RULE)
+            source = rule_model.objects.db_manager(hints={"instance": message}).get(key=SOURCE_IDENTITY_RULE)
         except rule_model.DoesNotExist:
             # The envelope landed before the install resources (the rule and its grants).
             return
-        message = message_model._base_manager.using(using).select_related("thread").filter(pk=message_id).first()
+        message = messages.select_related("thread").filter(pk=message.pk).first()
     if message is None or message.message_type != "email" or not message.external_id or message.channel_id is None:
         return
     actor = to_subject_ref(source)
-    copies = message_model.objects.using(using).with_actor(actor).with_external_ids((message.external_id,)).filter(
-        platform=message.platform, message_type="email", channel__isnull=False,
-    ).exclude(channel_id=message.channel_id).select_related("thread").order_by("pk")
+    copies = (
+        message_model.objects.db_manager(hints={"instance": message}).with_actor(actor)
+        .with_external_ids((message.external_id,))
+        .filter(platform=message.platform, message_type="email", channel__isnull=False)
+        .exclude(channel_id=message.channel_id)
+        .select_related("thread")
+        .order_by("pk")
+    )
     with changeset(fresh=True, activity="system", change_reason=SOURCE_IDENTITY_RULE, origin=source):
         for copy in copies:
             evidence = [EvidenceReference.of(row) for row in sorted((message, copy), key=lambda row: row.pk)]

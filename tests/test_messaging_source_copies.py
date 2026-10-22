@@ -146,6 +146,8 @@ def test_subscribe_reuses_effective_retained_follow_and_receipt(composed_tables)
         unread = set(ThreadFollower.objects.unread_messages(kept_thread, user=watcher).values_list("pk", flat=True))
         assert later.pk in unread
         assert first.pk not in unread
+        messages = ThreadedTicket.thread_messages_expression(kept.pk)
+        assert set(messages.unread_for(watcher).values_list("pk", flat=True)) == unread
 
         changed = kept.message_subscribe(user=watcher, notification_policy="muted", subtype_keys=())
         assert changed.pk == follow.pk
@@ -153,6 +155,7 @@ def test_subscribe_reuses_effective_retained_follow_and_receipt(composed_tables)
         assert changed.subtype_keys == []
         assert changed.last_read_message_id == first.pk
         assert ThreadFollower.objects.for_thread(kept_thread).filter(party_id=follow.party_id).count() == 1
+        assert not messages.unread_for(watcher).exists()
 
 
 @pytest.mark.parametrize("bulk", [False, True])

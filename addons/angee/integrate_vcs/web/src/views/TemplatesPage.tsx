@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Action, Column, ControlBandProvider, ResourceList, DrawerResourceList, Facet, Field, Form, Group, List, REFINE_CREATE_ID, SettingsSection, SettingsShell, useRecordActionMutation } from "@angee/ui";
+import { Action, Column, ResourceList, DrawerResourceList, Facet, Field, Form, Group, List, REFINE_CREATE_ID, SettingsSection, SettingsShell, useRecordActionMutation } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateVcsT } from "../i18n";
@@ -8,9 +8,6 @@ const TEMPLATE_MODEL = "integrate_vcs.Template";
 const SOURCE_MODEL = "integrate_vcs.Source";
 const TEMPLATE_SOURCE_KIND = "template";
 const TEMPLATE_SOURCE_DEFAULTS = { kind: TEMPLATE_SOURCE_KIND };
-const TEMPLATE_KIND_OPTIONS = [
-  { value: TEMPLATE_SOURCE_KIND, label: "Template" },
-];
 
 function templateList(t: ReturnType<typeof useIntegrateVcsT>): React.ReactElement {
   return (
@@ -43,6 +40,7 @@ function templateSourceList(
 // sources and then inspects the discovered Copier manifest metadata.
 export function TemplatesPage(): React.ReactElement {
   const t = useIntegrateVcsT();
+  const templateKindOptions = React.useMemo(() => [{ value: TEMPLATE_SOURCE_KIND, label: t("templateSources.kind.template") }], [t]);
   const [syncTemplates] = useRecordActionMutation<ActionFieldName>(
     "refresh_source",
     { invalidateModels: [SOURCE_MODEL, TEMPLATE_MODEL] },
@@ -64,7 +62,7 @@ export function TemplatesPage(): React.ReactElement {
               <Field
                 name="kind"
                 widget="select"
-                options={TEMPLATE_KIND_OPTIONS}
+                options={templateKindOptions}
                 createOnly
               />
               <Field name="ref" />
@@ -83,7 +81,6 @@ export function TemplatesPage(): React.ReactElement {
       </SettingsSection>
 
       <SettingsSection title={t("templates.title")}>
-        <ControlBandProvider host={undefined}>
           <ResourceList resource={TEMPLATE_MODEL} placement="inline" routed hideCreate>
             {templateList(t)}
             <Form resource={TEMPLATE_MODEL}>
@@ -96,7 +93,6 @@ export function TemplatesPage(): React.ReactElement {
               <Field name="inputs" widget="json" readOnly />
             </Form>
           </ResourceList>
-        </ControlBandProvider>
       </SettingsSection>
     </SettingsShell>
   );

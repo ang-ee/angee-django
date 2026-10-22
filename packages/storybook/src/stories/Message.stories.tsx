@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Avatar, Button, Glyph, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageDaySeparator, MessageFeed, MessageRow, ReactionBar, ReactionPicker, Tag, messageComposerInputClassName } from "@angee/ui";
+import { Avatar, Button, Glyph, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageDaySeparator, MessageFeed, MessageRow, ReactionBar, ReactionPicker, Chip, messageComposerInputClassName } from "@angee/ui";
 
 import { StorySurface } from "./chrome-fixtures";
 
@@ -68,15 +68,15 @@ export const Feed: Story = {
           actions={<RowActions />}
         />
 
-        <MessageDaySeparator>Today</MessageDaySeparator>
+        <MessageDaySeparator date={new Date()} />
 
         <MessageRow
           avatar={<Avatar size="sm" initials="RC" />}
           author="Robin Chase"
           channel={
-            <Tag tone="info" density="compact" shape="pill">
+            <Chip tone="info">
               Email · Inbound
-            </Tag>
+            </Chip>
           }
           timestamp={new Date(now - 20 * 60 * 1000)}
           attachments={

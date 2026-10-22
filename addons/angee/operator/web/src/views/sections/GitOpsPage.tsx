@@ -1,12 +1,12 @@
-import { MetricStrip, RowsListView, textRoleVariants, type ResourceToolbarGroupOption, type ListColumn, type MetricTileValue } from "@angee/ui";
+import { MetricStrip, RowsListView, StatusBadge, type ResourceToolbarGroupOption, type ListColumn, type MetricTileValue } from "@angee/ui";
 import { ResourceQuery } from "@angee/metadata";
 import { useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
 import type { GitOpsLink, GitOpsSummary } from "../../data/types";
+import { formatDrift } from "../../lib/drift";
 import type { DaemonRow } from "../parts/daemon-rows";
 import { useOperatorRows } from "../parts/operator-rows";
-import { StateTag } from "../parts/StateTag";
 
 interface SummaryTile {
   id: keyof GitOpsSummary;
@@ -40,51 +40,16 @@ export function GitOpsPage(): ReactNode {
 
   const columns = useMemo<readonly ListColumn<GitOpsRow>[]>(
     () => [
+      { field: "source", header: t("gitops.column.source") },
+      { field: "workspace", header: t("gitops.column.workspace") },
+      { field: "slot", header: t("gitops.column.slot") },
+      { field: "state", header: t("gitops.column.status"), render: (link) => <StatusBadge value={link.state} /> },
+      { field: "branch", header: t("gitops.column.branch") },
       {
-        field: "source",
-        header: t("gitops.column.source"),
-        render: (link) => <span className="font-medium text-fg">{link.source}</span>,
+        field: "aheadBehind", header: t("gitops.column.aheadBehind"), align: "right", sortable: false,
+        render: (link) => <span className="tabular-nums">{formatDrift(link.ahead, link.behind)}</span>,
       },
-      {
-        field: "workspace",
-        header: t("gitops.column.workspace"),
-        render: (link) => <span className={textRoleVariants({ role: "meta" })}>{link.workspace}</span>,
-      },
-      {
-        field: "slot",
-        header: t("gitops.column.slot"),
-        render: (link) => <span className={textRoleVariants({ role: "meta" })}>{link.slot}</span>,
-      },
-      {
-        field: "state",
-        header: t("gitops.column.status"),
-        render: (link) => <StateTag state={link.state} />,
-      },
-      {
-        field: "branch",
-        header: t("gitops.column.branch"),
-        render: (link) => <span className={textRoleVariants({ role: "meta" })}>{link.branch ?? "—"}</span>,
-      },
-      {
-        field: "aheadBehind",
-        header: t("gitops.column.aheadBehind"),
-        align: "right",
-        sortable: false,
-        render: (link) => (
-          <span className={textRoleVariants({ role: "meta", numeric: true })}>
-            ↑{link.ahead ?? 0} ↓{link.behind ?? 0}
-          </span>
-        ),
-      },
-      {
-        field: "pushed",
-        header: t("gitops.column.pushed"),
-        render: (link) => (
-          <span className={textRoleVariants({ role: "meta" })}>
-            {link.pushed ? t("gitops.pushed.yes") : t("gitops.pushed.no")}
-          </span>
-        ),
-      },
+      { field: "pushed", header: t("gitops.column.pushed"), render: (link) => <StatusBadge value={link.pushed ? "pushed" : "unpushed"} /> },
     ],
     [t],
   );
@@ -120,12 +85,5 @@ function GitOpsSummary({ summary }: { summary: GitOpsSummary }): ReactNode {
     label: t(tile.labelKey),
     value: summary[tile.id],
   }));
-
-  return (
-    <MetricStrip
-      density="prominent"
-      className="grid-cols-2 sm:grid-cols-3 lg:grid-cols-6"
-      metrics={metrics}
-    />
-  );
+  return <MetricStrip density="prominent" className="grid-cols-2 sm:grid-cols-3 lg:grid-cols-6" metrics={metrics} />;
 }

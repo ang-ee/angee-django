@@ -14,6 +14,7 @@ import { drawerPanelId, useDrawerState } from "./drawer-context";
  * level, and a drawer once opened stays mounted while hidden, so its content
  * survives route changes and closing the edge (an agent chat keeps its
  * transcript). `Esc` is not required to return focus (non-modal).
+ * @owner DrawerRail
  */
 export function DrawerOverlay({
   edge,

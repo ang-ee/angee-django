@@ -5,8 +5,8 @@ export { cn } from "./cn";
 export { formatNumber, numberFormatter, type NumberInput } from "./format-number";
 export { titleCase } from "./titleCase";
 export { rowValueAtPath } from "@angee/metadata";
-export { statusLabel } from "./labels";
-export { tv, type VariantProps } from "./variants";
+export { isLabelKey, resolveLabelKey, statusLabel, type LabelKey, type LabelKeyResolver } from "./labels";
+export { tv, recipeAxes, type VariantProps } from "./variants";
 export { ANGEE_TW_MERGE_CONFIG } from "./tailwind-merge-config";
 export {
   TONES,
@@ -25,6 +25,7 @@ export {
 } from "./tones";
 export { useRender } from "./slot";
 export { useLatestRef } from "./use-latest-ref";
+export { useDebouncedText } from "./use-debounced-text";
 export { LARGE_VIEWPORT_QUERY, useMediaQuery } from "./use-media-query";
 export * from "./color-scheme";
 export { useContainerQuery } from "./use-container-query";
@@ -51,3 +52,4 @@ export {
   type UseFileDropTargetOptions,
 } from "./dnd";
 export { InAppLinkProvider, hrefLocation, routerNavigator, routerPreloader, useInAppLink, useInAppNavigator, type InAppLinkHandlers, type InAppNavigator, type InAppPreloader } from "./in-app-link";
+export { EMPTY_VALUE } from "./empty-value";

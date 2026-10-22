@@ -77,7 +77,7 @@ secrets_backend:
 
 secrets:
   # The instance's Django SECRET_KEY, in BOTH modes: encrypted-at-rest fields
-  # (angee.base EncryptedField — e.g. integrate.oauthclient.client_secret) derive
+  # (angee EncryptedField — e.g. integrate.oauthclient.client_secret) derive
   # their Fernet key from it, so switching a stack between process and docker
   # rendering must NEVER rotate it. The env-file backend reuses the value already
   # in .env, so a re-render keeps the key stable.

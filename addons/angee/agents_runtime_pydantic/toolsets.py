@@ -45,9 +45,9 @@ from angee.agents.grants import (
     tool_grant_ids,
     tool_grant_ref,
 )
-from angee.base.serialization import canonical_json, json_safe
 from angee.mcp.graphql import _CompiledTool
 from angee.mcp.server import mcp_server
+from angee.serialization import canonical_json, json_safe
 
 MAX_TOOL_RESULT_CHARS = 32_000
 """Maximum inline characters returned from one in-process tool call."""

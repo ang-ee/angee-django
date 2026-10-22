@@ -23,7 +23,13 @@ vi.mock("@angee/ui", async () => {
   return {
     Avatar: ({ initials }: { initials: string }) => React.createElement("span", {}, initials),
     InlineEmpty: ({ label }: { label: string }) => React.createElement("p", {}, label),
-    Badge: box("span"), Card: box("article"), CardContent: box("div"),
+    // The status pill resolves its tone through the app vocabulary; the mock mirrors the
+    // framework defaults the component relies on.
+    StatusBadge: ({ value, children }: { value: string; children?: ReactNode }) => React.createElement("span", {
+      "data-tone": ({ pending: "warning", approved: "success", denied: "danger" } as Record<string, string>)[value] ?? "neutral",
+    }, children),
+    textRoleVariants: () => "",
+    Card: box("article"), CardContent: box("div"),
     CardFooter: box("div"), CardHeader: box("div"),
     Skeleton: box("div"), SkeletonText: box("div"),
     NavLink: ({ href, children }: { href: string; children: ReactNode }) =>

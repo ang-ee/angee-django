@@ -90,9 +90,23 @@ describe("IAM schema page", () => {
     expect(within(tree).getByRole("treeitem", { name: /Note/ })).toBeTruthy();
     expect(within(tree).getByRole("treeitem", { name: /User/ })).toBeTruthy();
     // The graph canvas (content) renders on the page itself.
-    expect(screen.getByText("Permission Graph")).toBeTruthy();
+    expect(screen.getByText("Permission graph")).toBeTruthy();
     expect(document.querySelector(".react-flow__handle-bottom")).toBeTruthy();
     expect(document.querySelector(".react-flow__handle-right")).toBeNull();
+  });
+
+  test("lays out only the selected resource type's relations and permissions", () => {
+    sdkMocks.schema.data = SCHEMA;
+    renderPage();
+
+    // Schema edges never cross resource types, so the default selection
+    // (`iam/user`) is the whole graph; `notes/note` stays in the navigator.
+    const graph = document.querySelector<HTMLElement>(".react-flow")!;
+    expect(within(graph).getByText("Self")).toBeTruthy();
+    expect(within(graph).getByText("View")).toBeTruthy();
+    expect(within(graph).queryByText("Owner")).toBeNull();
+    expect(within(graph).queryByText("Edit")).toBeNull();
+    expect(screen.getByText("3 nodes")).toBeTruthy();
   });
 
   test("publishes an additive inspector chatter tab for the selected resource", () => {
@@ -102,7 +116,7 @@ describe("IAM schema page", () => {
     // The inspector is an additive secondary tab; the page publishes only it,
     // leaving the shell's default agent/comments/activity tabs in place.
     const inspector = screen.getByTestId("tab-inspector");
-    expect(within(inspector).getAllByText("Inspector")).toHaveLength(2);
+    expect(within(inspector).getAllByText("Inspector")).toHaveLength(1);
     // The default selection (`iam/user`, first after the alpha sort) drives the
     // inspector body.
     expect(within(inspector).getByText("User")).toBeTruthy();

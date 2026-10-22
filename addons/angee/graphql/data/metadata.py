@@ -13,12 +13,6 @@ from django.db import models
 from rebac.resources import model_for_resource_type, model_resource_type
 from strawberry_django_hasura import HasuraResource
 
-from angee.base.impl import ImplClassField
-from angee.base.merge import MergeableMixin
-from angee.base.models import AngeeModel
-from angee.base.permissions import effective_rebac_definition
-from angee.base.querysets import record_history
-from angee.base.refs import concrete_child_models, generic_pointer_model, record_edges_by_target
 from angee.data import metadata as data_contract
 from angee.data.field_classification import is_to_one_relation, model_field_scalar
 from angee.graphql.access import is_gated_read_axis
@@ -47,6 +41,11 @@ from angee.graphql.introspection import (
     FieldPathError,
     require_field_for_path,
 )
+from angee.impl import ImplClassField
+from angee.lineage import concrete_child_models
+from angee.models import AngeeModel, MergeableMixin, record_history
+from angee.permissions import effective_rebac_definition
+from angee.refs import RecordRefMixin, generic_pointer_model, record_edges_by_target
 from graphql import GraphQLSchema, get_named_type
 
 __all__ = [
@@ -84,6 +83,7 @@ class DataResourcePolicy:
     subtitle: data_contract.DataResourceSubtitleMetadata | None = None
     record_representation: str | None = None
     record_search_fields: tuple[str, ...] | None = None
+    context_fields: tuple[str, ...] | None = None
     public_id_field: str | None = None
     subject_field: str | None = None
     row_model: str | None = None
@@ -273,6 +273,7 @@ def finalize_data_resources(
                 _single_policy_value(model_label, contributions, "record_representation"),
             ),
             record_search_fields=_single_sequence(model_label, contributions, "record_search_fields"),
+            context_fields=_single_sequence(model_label, contributions, "context_fields"),
             public_id_field=cast(
                 str,
                 _single_policy_value(model_label, contributions, "public_id_field") or PUBLIC_ID_FIELD_NAME,
@@ -442,6 +443,7 @@ def _finalize_data_resource(
     subtitle: data_contract.DataResourceSubtitleMetadata | None = None,
     record_representation: str | None = None,
     record_search_fields: tuple[str, ...] = (),
+    context_fields: tuple[str, ...] = (),
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
     subject_field: str | None = None,
@@ -474,6 +476,7 @@ def _finalize_data_resource(
     aggregate_fields = _require_unique(exposed_model_label, "aggregate field", aggregate_fields)
     group_by_fields = _require_unique(exposed_model_label, "group axis", group_by_fields)
     record_search_fields = _require_unique(exposed_model_label, "search field", record_search_fields)
+    context_fields = _require_unique(exposed_model_label, "context field", context_fields)
     label_axes = _relation_label_axes(model, group_by_fields) if model is not None else {}
     if model is not None and order_fields and not default_sort:
         default_sort = _default_sort(model, order_fields)
@@ -611,6 +614,13 @@ def _finalize_data_resource(
         fields=active_fields,
         query=query,
     )
+    active_context_fields = _validated_context_fields(
+        model_label=exposed_model_label,
+        graphql_schema=graphql_schema,
+        node_name=type_names.node,
+        declared=context_fields,
+        fields=active_fields,
+    )
     return data_contract.DataResourceMetadata(
         model=model,
         model_label=exposed_model_label,
@@ -625,6 +635,7 @@ def _finalize_data_resource(
         row_model=row_model,
         record_representation=active_record_representation,
         record_search_fields=active_record_search_fields,
+        context_fields=active_context_fields,
         subject_field=active_subject_field,
         subtitle=active_subtitle,
         impl_fields=_impl_fields(model, active_fields),
@@ -642,6 +653,32 @@ def _finalize_data_resource(
         revision_fields=revision_fields,
         lines=lines,
     )
+
+
+def _validated_context_fields(
+    *,
+    model_label: str,
+    graphql_schema: GraphQLSchema,
+    node_name: str | None,
+    declared: tuple[str, ...],
+    fields: tuple[data_contract.DataResourceFieldMetadata, ...],
+) -> tuple[str, ...]:
+    """Resolve header facts against the final readable node surface."""
+
+    if not declared:
+        return ()
+    if node_name is None:
+        raise ImproperlyConfigured(
+            f"resource metadata for {model_label} declares context_fields without a node type."
+        )
+    resolved = final_wire_field_names(graphql_schema, node_name, declared)
+    readable = {field.name for field in fields if field.readable}
+    unavailable = tuple(name for name in resolved if name not in readable)
+    if unavailable:
+        raise ImproperlyConfigured(
+            f"resource metadata for {model_label} declares unreadable context_fields {unavailable!r}."
+        )
+    return resolved
 
 
 def _mutation_arguments(
@@ -680,14 +717,14 @@ def _concrete_kinds(
 
 def _record_edges(
     model: type[models.Model] | None,
-    edges_by_target: Mapping[type[models.Model], tuple[type[models.Model], ...]],
+    edges_by_target: Mapping[type[models.Model], tuple[type[RecordRefMixin], ...]],
 ) -> tuple[str, ...]:
-    """Project the edge models whose schema declares this resource's canonical type a target.
+    """Project the edge models accepting this resource's canonical type as a target.
 
     A record carries only these edges, so a surface listing one (a record's files,
     pages or source conversations) applies to the record types that name it. An
     edge with roles adds ``<label>:<role>`` for each role the type carries
-    (:meth:`~angee.base.refs.RecordRefMixin.record_edge_roles`), so a surface
+    (:meth:`~angee.refs.RecordRefMixin.record_edge_roles`), so a surface
     serving one role (Comments on the chatter role) gates on that entry.
     """
 
@@ -1022,7 +1059,7 @@ def _default_sort(
 
     orderable = set(order_fields)
     sorts: list[data_contract.DataDefaultSortMetadata] = []
-    for term in model._meta.ordering:
+    for term in model._meta.ordering or ():
         if isinstance(term, models.expressions.OrderBy):
             # An expression ordering (F(...).desc(nulls_last=True), say) carries a
             # DB detail — NULL placement — the metadata does not need; expose the
@@ -1105,7 +1142,7 @@ def _require_model_field_for_path(
     path: str,
     *,
     purpose: str,
-) -> models.Field[Any, Any]:
+) -> models.Field[Any, Any] | models.ForeignObjectRel:
     """Return a concrete model field for ``path`` or fail at metadata emission."""
 
     try:
@@ -1132,6 +1169,8 @@ def _model_label_parts(
     """
 
     if model is not None and model_label == model._meta.label:
-        return model._meta.app_label, model._meta.model_name
+        model_name = model._meta.model_name
+        assert model_name is not None
+        return model._meta.app_label, model_name
     app_label, object_name = model_label.split(".", 1)
     return app_label, object_name.lower()

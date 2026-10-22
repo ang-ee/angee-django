@@ -20,9 +20,9 @@ export interface MountedRoutes {
  * the mount's path, anchored to that node, reusing the mounted route's page
  * (`component`, `indexComponent`), layout and model (as `recordModel`, so the
  * canonical resource claim stays with its owner). The mount's
- * `defaultResourceView` and `recordMatch` go onto the alias. A record child
- * (the child ending in a param) gets an alias too, `<id>.record`, with the
- * owner's detail page. Takes and returns resolved routes.
+ * `defaultResourceView`, `defaultFilter` and `recordMatch` go onto the alias. A
+ * record child (the child ending in a param) gets an alias too, `<id>.record`,
+ * with the owner's detail page. Takes and returns resolved routes.
  */
 export function mountRoutes(
   routes: readonly BaseAddonRoute[],
@@ -48,6 +48,7 @@ export function mountRoutes(
     const layout = inheritedRouteFact(source, routesByName, (route) => route.layout);
     const model = inheritedRouteFact(source, routesByName, (route) => route.recordModel ?? route.resource);
     const defaultResourceView = mount.defaultResourceView ?? inheritedRouteFact(source, routesByName, (route) => route.defaultResourceView);
+    const defaultFilter = mount.defaultFilter ?? inheritedRouteFact(source, routesByName, (route) => route.defaultFilter);
     const collection: BaseAddonRoute = {
       name: claim(mount, mount.id),
       path: mount.path,
@@ -57,6 +58,7 @@ export function mountRoutes(
       ...(source.indexComponent ? { indexComponent: source.indexComponent } : {}),
       ...(model ? { recordModel: model } : {}),
       ...(defaultResourceView ? { defaultResourceView } : {}),
+      ...(defaultFilter !== undefined ? { defaultFilter } : {}),
       ...(mount.recordMatch ? { recordMatch: mount.recordMatch } : {}),
     };
     aliases.push(collection);

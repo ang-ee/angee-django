@@ -22,9 +22,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_ai.settings import ThinkingLevel
 from rebac import to_subject_ref
 
+from angee.actors import actor_user_id
 from angee.agents.backends import InferenceBackend
-from angee.base.actors import actor_user_id
-from angee.base.impl import ImplBase
 from angee.extraction.contracts import (
     DocumentPart,
     ExtractionPartKind,
@@ -33,6 +32,7 @@ from angee.extraction.contracts import (
 )
 from angee.extraction.enums import ExtractionSourceKind
 from angee.extraction.profiles import ExtractionProfile
+from angee.impl import ImplBase
 from angee.storage.models import UploadState
 
 

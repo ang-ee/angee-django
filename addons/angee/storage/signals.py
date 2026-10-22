@@ -20,7 +20,7 @@ from django.db.models.signals import post_save
 from django.dispatch import Signal
 from rebac import system_context
 
-from angee.base.changesets import changeset, current_changeset
+from angee.changesets import changeset, current_changeset
 
 logger = logging.getLogger(__name__)
 

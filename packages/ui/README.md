@@ -48,7 +48,7 @@ Console chatter renders the `record#aside` and `<model>#aside` children for the
 active view after every layer's narrowing (`useContainer`). A `record#aside` tab
 appears on record views; a model-level tab on that model's pages. Tabs a page
 publishes follow the composed ones and take the same narrowing. Tab ids are
-namespaced, and `aliases` keep their former ids working in `?chatterTab=` links.
+namespaced and `?chatterTab=` links name those ids directly.
 The view switcher offers a collection's `resource#views` children for its
 models: the built-in `list`, `board`, `calendar`, `gantt` and `dashboard`
 kinds, and kinds addons contribute as `<model>#views` children with namespaced
@@ -61,6 +61,37 @@ the offered kinds per model with `only`, `except` and `hide`. See
 Dashboard widget titles link to the source collection, and table rows use the
 resource record route. Widget options `fullViewRoute`, `recordRoute`, and
 `recordParam` select explicit destinations when the default route is unsuitable.
+
+Dashboard presentation composes the shared `Card` chrome and `MetricStrip`.
+The strip fits its tiles to the available width. A `MetricTile` with `href`
+navigates; one with `onClick` is a native button. `selected` is controlled by
+the surrounding view, including on declarative `DashboardView` metrics. Put
+comparisons and supporting text in `detail`; formatting and number animation
+remain owned by the tile.
+
+`DashboardBars` renders single or stacked series, horizontally or vertically,
+in the supplied order. Declare stack labels and optional semantic tones once
+in `series`, with each point's values keyed by that declaration. Both bars and
+`DashboardDonut` expose selection callbacks; the caller owns the native query
+filter or destination. Accessible data tables accompany the graphics. For a
+stored single-axis bar widget, `options.orientation: "vertical"` selects columns
+and `options.order: "group"` uses the query axis's native order (including date
+buckets), instead of ranking by value. Stacked data currently enters through
+an authored widget; stored query widgets still have one grouping axis.
+
+`StatusIconGroup` presents explicit, labelled outcomes with shared semantic
+glyphs, tooltips and optional evidence actions. The data owner supplies every
+outcome, including unknown ones; an empty group never means that checks passed.
+Use it in an interactive `Column` when its items can be focused or activated.
+Resource-view dashboard widgets can set `options.pager: true` to show their
+hosted list's native pager. The list preset continues to own page size and scope.
+`DashboardSurface.pageScope` also constrains hosted views of the matching
+resource, through the native view's base filter. Authored panels can read
+`useDashboardWidgetData({ kind, data, options }, pageScope)` to share the same
+query validation, actor scope, loading state and live updates as stored widgets.
+Full-view links carry the widget preset and page filter through the native
+resource-view URL codec, keeping a scoped dashboard's destination scoped too.
+
 Collection Gantt `lane` declares selected fields and returns a linked title,
 optional secondary line, named people, and a short note after the last bar.
 The shared `GanttLane` renders those parts; empty parts disappear. Use
@@ -93,8 +124,8 @@ disabling before enabling preview in a host.
 
 `FormView` consumes advertised root mutation arguments: updates use the loaded
 edit baseline's revision and create retries reuse one key until acceptance or a
-creation-key conflict. A stale revision keeps local edits until an explicit reload
-and discard. Custom submit owners receive `baselineRecord` and `clientCreationKey`
+`CREATION_KEY_CONFLICT`. A stale revision keeps local edits until an explicit reload
+and discard. Custom submit owners receive `baselineRecord` and `idempotencyKey`
 and retain responsibility for their own operation arguments.
 
 `GraphView` automatically lays out unpositioned nodes using measured sizes and

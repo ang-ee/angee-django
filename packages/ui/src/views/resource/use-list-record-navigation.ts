@@ -54,6 +54,7 @@ export interface UseListRecordNavigationResult<TRow extends Row> {
  * collection. Only query facts survive in local/Router state; no hidden List
  * (facets, grouping, controls, or duplicate row cache) is mounted for navigation.
  * Local row models keep their non-replayable native table snapshot instead.
+ * @owner ListView
  */
 export function useListRecordNavigation<TRow extends Row>({
   resource, recordId, onSelect, navigationScope: controlledScope, onSetPage,

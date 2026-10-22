@@ -67,7 +67,6 @@ definition projects/task {
     permission read_granted = inherited_project->read + owner + assignee + reader + editor
     relation trashed: projects/task // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
     permission conceal = authenticated
-    // Contributors withhold tasks through `withheld` (a retired clarification).
     permission withheld = nil
     // A trashed task is concealed from everyone but its direct removal authority
     // (project writers, its owner) and administrators, its managers, who keep every
@@ -92,8 +91,7 @@ definition projects/task {
     permission narrow = write
     permission widen = ((((project->share + owner) & unbound->free) + subject_write) - subject_withheld) + admin->member
     permission delete_granted = inherited_project->write + owner
-    permission remove = (((delete_granted & unbound->free) + subject_write) - subject_withheld) + admin->member
-    permission delete = (remove - withheld - concealed) + concealed_keeper + admin->member
+    permission delete = ((((delete_granted & unbound->free) + subject_write) - subject_withheld) - withheld - concealed) + concealed_keeper + admin->member
     permission transfer = (((owner & unbound->free) + subject_write) - subject_withheld) + admin->member
     permission write__owner = transfer
     permission comment_granted = write_granted
@@ -102,7 +100,7 @@ definition projects/task {
     permission write__assignee = share
     // Who brings a withheld task back. Contributors that withhold tasks name their
     // managers here; administrators always may.
-    permission restore = remove + admin->member
+    permission restore = delete
 }
 
 // The resource-declared kinds of record task; everyone reads the catalog.

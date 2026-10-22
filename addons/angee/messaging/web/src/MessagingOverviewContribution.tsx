@@ -1,62 +1,23 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import {
-  Chip,
-  InlineEmpty,
-  MiniCard,
-  RailPanel,
-  RelativeTime,
-  useStatusTone,
-  type Tone,
-} from "@angee/ui";
+import { Chip, InlineEmpty, MiniCard, RailPanel, StatusBadge, formatDateTime, optionLabel, useEnumOptions } from "@angee/ui";
 
-import { MessagingChannelHealth } from "./documents";
-import { useMessagingT, type MessagingT } from "./i18n";
+import { CHANNEL_MODEL, MessagingChannelHealth } from "./documents";
+import { useMessagingT } from "./i18n";
 
 const CHANNEL_LIMIT = 20;
 
-interface PairingHealthDefinition {
-  label: string;
-  tone?: Tone;
-}
-
-const PAIRING_HEALTH_BY_STATE: Readonly<Record<string, PairingHealthDefinition>> = {
-  PAIRED: { label: "overview.channels.paired", tone: "success" },
-  LOGGED_OUT: { label: "overview.channels.loggedOut", tone: "danger" },
-  PAUSED: { label: "overview.channels.paused" },
-  DUPLICATE_ACCOUNT: { label: "overview.channels.duplicate", tone: "danger" },
-  AWAITING_SCAN: { label: "overview.channels.awaitingScan", tone: "info" },
-  AWAITING_PASSWORD: {
-    label: "overview.channels.awaitingPassword",
-    tone: "warning",
-  },
-  STARTING: { label: "overview.channels.starting" },
-  STOPPED: { label: "overview.channels.stopped" },
-};
-
-function pairingHealth(
-  state: string | null | undefined,
-  t: MessagingT,
-  statusTone: ReturnType<typeof useStatusTone>,
-): { label: string; tone: Tone } {
-  const definition = state ? PAIRING_HEALTH_BY_STATE[state] : undefined;
-  const overrides = state && definition?.tone
-    ? { [state]: definition.tone }
-    : undefined;
-  return {
-    label: t(definition?.label ?? "overview.channels.notApplicable"),
-    tone: statusTone(state, overrides),
-  };
-}
-
-/** Messaging-owned channel health contributed into the Parties overview seam. */
+/** Messaging-owned channel health contributed into the Parties overview seam. Every
+ *  state reads through the channel's own enum labels and the composed status tones. */
 export function MessagingOverviewContribution(): React.ReactElement {
-  const statusTone = useStatusTone();
   const t = useMessagingT();
+  const pairingStates = useEnumOptions(CHANNEL_MODEL, "pairing_state", { casing: "upper" });
+  const syncStages = useEnumOptions(CHANNEL_MODEL, "sync_stage", { casing: "upper" });
+  const backends = useEnumOptions(CHANNEL_MODEL, "backend_class");
   const query = useAuthoredQuery(
     MessagingChannelHealth,
     { limit: CHANNEL_LIMIT },
-    { models: ["messaging.Channel"] },
+    { models: [CHANNEL_MODEL] },
   );
   const channels = query.data?.channels ?? [];
   const total = query.data?.channels_aggregate.aggregate?.count ?? channels.length;
@@ -65,27 +26,22 @@ export function MessagingOverviewContribution(): React.ReactElement {
       {channels.length > 0 ? (
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
           {channels.map((channel) => {
-            const syncStatus = String(channel.sync_stage ?? "").toLowerCase();
             const unhealthy = Boolean(channel.sync_error) || channel.sync_stage === "FAILED";
-            const pairing = pairingHealth(channel.pairing_state, t, statusTone);
             return (
               <MiniCard
                 key={channel.id}
                 title={channel.display_name}
                 meta={
                   channel.last_sync_completed_at
-                    ? <RelativeTime value={channel.last_sync_completed_at} />
+                    ? formatDateTime(channel.last_sync_completed_at)
                     : t("overview.channels.neverSynced")
                 }
-                primaryTag={{
-                  label: pairing.label,
-                  tone: pairing.tone,
-                }}
                 tags={
                   <>
-                    <Chip tone="neutral">{channel.backend_class}</Chip>
+                    {channel.pairing_state ? <StatusBadge value={channel.pairing_state} options={pairingStates} /> : null}
+                    <Chip tone="neutral">{optionLabel(backends, channel.backend_class)}</Chip>
                     {unhealthy ? <Chip tone="danger">{t("overview.channels.needsAttention")}</Chip> : null}
-                    {syncStatus ? <Chip tone="muted">{syncStatus}</Chip> : null}
+                    {channel.sync_stage ? <StatusBadge value={channel.sync_stage} options={syncStages} display="text" /> : null}
                   </>
                 }
               />

@@ -1,5 +1,6 @@
 """One question, its immutable proposal, and its final verdict."""
 
+from collections.abc import Iterable
 from typing import Any
 
 from django.conf import settings
@@ -7,12 +8,10 @@ from django.db import models
 from django.utils.text import capfirst
 from rebac import system_context
 
-from angee.base.evidence import DerivedFrom
-from angee.base.mixins import AppendOnlyModel, OptimisticLockMixin
-from angee.base.models import AngeeDataModel
-from angee.base.scoping import system_queryset
 from angee.decisions.managers import DecisionManager, DecisionRecordManager
 from angee.graphql.events import ChangeRelatedRecord
+from angee.models import AngeeDataModel, AppendOnlyModel, OptimisticLockMixin
+from angee.models.derived import DerivedFrom
 
 
 class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
@@ -35,10 +34,20 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
     answered_at = models.DateTimeField(null=True, blank=True)
     objects = DecisionManager()
 
+    @classmethod
+    def requester_querysets(cls) -> tuple[models.QuerySet, ...]:
+        """Owner records annotated with ``_decision_id``, in contribution order."""
+        return ()
+
+    def requesting_records(self) -> Iterable[models.Model]:
+        """Owner records retaining this question, contributed by asking capabilities."""
+        for rows in type(self).requester_querysets():
+            yield from rows.using(self._state.db).filter(_decision_id=self.pk).order_by("pk").distinct()
+
     def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
         """Publish the question's retained concern identities with its verdict."""
         with system_context(reason="decisions.change_concerns"):
-            links = system_queryset(self.records.model).filter(decision_id=self.pk).select_related("content_type")
+            links = self.records.model.system_queryset().filter(decision_id=self.pk).select_related("content_type")
             return ChangeRelatedRecord.for_records(*(link.record_ref for link in links))
 
     class Meta:

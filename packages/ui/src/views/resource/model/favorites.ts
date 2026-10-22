@@ -1,10 +1,13 @@
 import * as v from "valibot";
 import { GroupSpecsSchema, ResourceQuery, type ModelMetadata, type QueryFilter } from "@angee/metadata";
+import { stableSerialize } from "@angee/refine";
 import type { VisibilityState } from "@tanstack/react-table";
 import { RESOURCE_VIEW_SORT_DIRECTIONS, isResourceViewKind } from "./capabilities";
 import type { ResourceViewKind } from "./capabilities";
 import { Filter } from "./filter";
 import type { ResourceViewSort, ResourceViewInitialState } from "./filter";
+import { createResourceViewState, type ResourceViewState } from "./state";
+import { normaliseGroupStack } from "./search";
 export interface ResourceViewFavorite {
   id: string;
   label: string;
@@ -28,12 +31,37 @@ export interface ResourceViewPreset extends ResourceViewFavorite {
   fixedFilter?: QueryFilter;
 }
 
+/** Selected presets own fixed scope; other favorites match their declared query facts. */
+export function resourceViewFavoriteIsActive(favorite: ResourceViewFavorite, state: ResourceViewState): boolean {
+  if (favorite.id === state.preset) return true;
+  try {
+    const expected = createResourceViewState({
+      ...favorite,
+      filter: Filter.from(favorite.filter).value,
+      groupStack: normaliseGroupStack(favorite.groupStack ?? []),
+    });
+    return (favorite.preset ?? undefined) === (state.preset || undefined)
+      && stableSerialize(expected.filter) === stableSerialize(state.filter)
+      && (favorite.groupStack === undefined || stableSerialize(expected.groupStack) === stableSerialize(state.groupStack))
+      && (favorite.sort === undefined || stableSerialize(expected.sorting) === stableSerialize(state.sorting ?? []))
+      && (favorite.view === undefined || expected.view === state.view)
+      && (favorite.columnVisibility === undefined || stableSerialize(expected.columnVisibility) === stableSerialize(state.columnVisibility))
+      && (favorite.pageSize === undefined || expected.pagination.pageSize === state.pagination.pageSize);
+  } catch {
+    // Obsolete saved queries remain available to apply and repair at the native boundary.
+    return false;
+  }
+}
+
 const ResourceViewSortSchema = v.object({
   field: v.string(),
   dir: v.picklist(RESOURCE_VIEW_SORT_DIRECTIONS),
 });
 
-/** Parse boundary for one favorite stored inside the opaque preferences JSON. */
+/** Parse boundary for one favorite stored inside the opaque preferences JSON.
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const ResourceViewFavoriteSchema = v.object({
   id: v.string(),
   label: v.string(),
@@ -47,7 +75,10 @@ export const ResourceViewFavoriteSchema = v.object({
   columnVisibility: v.optional(v.record(v.string(), v.boolean())),
 });
 
-/** Validate shipped query intent eagerly, using the same owner as URL/favorite state. */
+/** Validate shipped query intent eagerly, using the same owner as URL/favorite state.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function validateResourceViewPreset(preset: ResourceViewPreset, model: ModelMetadata): void {
   v.parse(ResourceViewFavoriteSchema, preset);
   if (!preset.label.trim()) throw new Error(`Resource view "${preset.id}" has an empty label.`);
@@ -63,7 +94,10 @@ export function validateResourceViewPreset(preset: ResourceViewPreset, model: Mo
   }
 }
 
-/** Resolve a shipped preset only for the collection it declares. */
+/** Resolve a shipped preset only for the collection it declares.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function resourceViewPreset(
   presets: Readonly<Record<string, ResourceViewPreset>>,
   id: string | undefined,
@@ -96,6 +130,10 @@ export function resourceViewPresetDefaults(
   };
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function resourceViewFavoritesFromJson(
   raw: string | null,
 ): readonly ResourceViewFavorite[] {
@@ -107,6 +145,10 @@ export function resourceViewFavoritesFromJson(
   }
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function resourceViewFavoritesFromUnknown(
   value: unknown,
 ): readonly ResourceViewFavorite[] {

@@ -1,10 +1,15 @@
 import * as React from "react";
 
+import { EMPTY_VALUE } from "../lib/empty-value";
+
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { sectionEyebrowVariants } from "../ui/section-eyebrow";
 import { textRoleVariants } from "../ui/text";
 
+/**
+ * @kind token
+ */
 export const definitionPairVariants = tv({
   slots: {
     root: "min-w-0",
@@ -39,6 +44,12 @@ export const definitionPairVariants = tv({
       },
       compact: {
         root: "text-13",
+      },
+      spacious: {
+        root: "gap-y-3",
+        label: "text-2xs uppercase tracking-wide",
+        value: "truncate text-3xl font-semibold leading-none tabular-nums",
+        detail: "min-h-8 whitespace-normal leading-relaxed",
       },
       prominent: {
         root: "gap-y-3",
@@ -129,6 +140,10 @@ type NormalizedDefinition<T> = T extends DefinitionPairTuple
   ? DefinitionPairValue & { label: T[0]; value: T[1] }
   : T;
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function definitionFromTuple<
   T extends DefinitionPairValue | DefinitionPairTuple,
 >(definition: T): NormalizedDefinition<T> {
@@ -141,6 +156,9 @@ export function definitionFromTuple<
   return definition as NormalizedDefinition<T>;
 }
 
+/**
+ * @kind fragment
+ */
 export const DefinitionPair = React.forwardRef<
   HTMLDivElement,
   DefinitionPairProps
@@ -151,7 +169,7 @@ export const DefinitionPair = React.forwardRef<
     className,
     density = "compact",
     detail,
-    emptyValue = "-",
+    emptyValue = EMPTY_VALUE,
     label,
     layout = "grid",
     orientation = "inline",

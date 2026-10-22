@@ -52,6 +52,10 @@ const BreadcrumbCollectionContext = React.createContext<{
   setLink: React.Dispatch<React.SetStateAction<BreadcrumbCollectionLink | null>>;
 } | null>(null);
 
+/**
+ * @kind null
+ * @reason Provider infrastructure: BreadcrumbLabel context.
+ */
 export function BreadcrumbLabelProvider({
   children,
 }: {
@@ -71,7 +75,9 @@ export function BreadcrumbLabelProvider({
   );
 }
 
-/** Let a route page replace the generic current crumb with its record label. */
+/** Let a route page replace the generic current crumb with its record label.
+ * @owner Breadcrumb
+ */
 export function useBreadcrumbLeafLabel(
   label: string | null | undefined,
   enabled = true,
@@ -85,7 +91,9 @@ export function useBreadcrumbLeafLabel(
   }, [enabled, label, setLeafLabel]);
 }
 
-/** Publish the routed collection owner's return URL for its matching crumb. */
+/** Publish the routed collection owner's return URL for its matching crumb.
+ * @owner Breadcrumb
+ */
 export function useBreadcrumbCollectionLink(to: string, href: string | null): void {
   const setLink = React.useContext(BreadcrumbCollectionContext)?.setLink;
   React.useEffect(() => {
@@ -95,13 +103,19 @@ export function useBreadcrumbCollectionLink(to: string, href: string | null): vo
   }, [to, href, setLink]);
 }
 
+/**
+ * @kind region
+ * @region breadcrumb
+ */
 export function Breadcrumb({
   className,
 }: BreadcrumbProps): ReactElement {
   return <BreadcrumbTrail className={className} items={useNestedBreadcrumbItems()} />;
 }
 
-/** The full trail, including the record's published label and return link. */
+/** The full trail, including the record's published label and return link.
+ * @owner Breadcrumb
+ */
 export function useBreadcrumbItems(): readonly BreadcrumbItem[] {
   const leafLabel = React.useContext(BreadcrumbLeafLabelContext);
   const collection = React.useContext(BreadcrumbCollectionContext)?.link;

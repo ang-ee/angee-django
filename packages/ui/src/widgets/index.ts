@@ -9,7 +9,7 @@ import { datetimeWidget } from "./datetime";
 import { lazyWidget } from "./lazy-widget";
 import { many2manyWidget } from "./many2many";
 import { many2oneWidget } from "./many2one";
-import { floatWidget, integerWidget } from "./number";
+import { floatWidget, integerWidget, percentWidget } from "./number";
 import { ownerCellWidget } from "./ownerCell";
 import { progressBarWidget } from "./progressBar";
 import { emailWidget, passwordWidget, phoneWidget, urlWidget } from "./scalarText";
@@ -50,9 +50,11 @@ export { StatusbarSteps, StatusbarSkeleton, type StatusbarStep, type StatusbarSt
 export { VisibilityControl } from "./visibility";
 export type { VisibilityControlProps } from "./visibility";
 export { JsonValueSchema } from "./json-value";
+export { formatJson } from "./json-format";
 export { widgetLabel } from "./label";
 export { slugify } from "./slug";
 export { useStatusTone } from "./use-status-tone";
+export { StatusBadge, type StatusBadgeProps } from "./statusBadge";
 export { STATUS_TONES, statusTone, type StatusToneMap, type StatusToneOptions } from "./status-tones";
 export {
   DATE_STORAGE_FORMAT,
@@ -64,8 +66,10 @@ export {
   formatDateStorage,
   formatDateTime,
   formatDateTimeStorage,
-  formatDuration,
+  formatDayLabel,
+  formatMonth,
   formatRelativeTime,
+  formatTime,
   formatTimeInput,
   setHumanDateLocale,
   valueLabel,
@@ -88,8 +92,13 @@ const jsonWidget = lazyWidget(() => import("./json").then((m) => m.jsonWidget), 
   edit: true,
   cell: true,
 });
-/** Lazy shared JSON presentations for authored surfaces outside descriptor forms. */
+/** Lazy shared JSON presentations for authored surfaces outside descriptor forms.
+ * @kind surface
+ */
 export const JsonValueView = jsonWidget.read;
+/**
+ * @kind surface
+ */
 export const JsonEditor = jsonWidget.edit!;
 export {
   isJsonObject,
@@ -125,12 +134,16 @@ const listWidget = lazyWidget(
   { edit: true },
 );
 
+/**
+ * @kind contribution
+ */
 export const defaultWidgets = {
   visibility: visibilityWidget,
   text: textWidget,
   textarea: textareaWidget,
   integer: integerWidget,
   float: floatWidget,
+  percent: percentWidget,
   email: emailWidget,
   password: passwordWidget,
   url: urlWidget,
@@ -163,18 +176,28 @@ export const defaultWidgets = {
   list: listWidget,
 } satisfies WidgetMap;
 
+/**
+ * @owner defaultWidgets
+ */
 export function useResolvedWidget(
   id: string,
 ): WidgetDefinition | undefined {
   return asWidgetDefinition(useWidget(id));
 }
 
+/**
+ * @kind contribution
+ */
 export function asWidgetDefinition(
   value: unknown,
 ): WidgetDefinition | undefined {
   return isWidgetDefinition(value) ? value : undefined;
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isWidgetDefinition(value: unknown): value is WidgetDefinition {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<PropertyKey, unknown>;
@@ -184,3 +207,4 @@ export function isWidgetDefinition(value: unknown): value is WidgetDefinition {
     typeof record.cell === "function"
   );
 }
+export { localTimeZone } from "./time-zone";

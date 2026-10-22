@@ -28,11 +28,10 @@ from rebac import evaluator_scope
 
 from angee.agents.models import TurnStatus
 from angee.agents.protocol import ANGEE_META_KEY, TURN_FAILED_STOP_REASON, TURN_FAILURE_CODE, message_id
-from angee.base.errors import classify_error
-from angee.base.identity import instance_from_public_id
-from angee.base.pagination import InvalidKeysetCursor, KeysetOrder
-from angee.base.scoping import read_scoped_queryset
+from angee.errors import classify_error
 from angee.graphql.subscriptions import subscribe
+from angee.identity import instance_from_public_id
+from angee.pagination import InvalidKeysetCursor, KeysetOrder
 
 logger = logging.getLogger(__name__)
 SESSION_PAGE_SIZE = 50
@@ -126,7 +125,7 @@ class SessionAgent(ABC):
         session = await self._db(
             self.session_model.objects.start,
             self.agent,
-            owner=self.user,
+            user=self.user,
             context=context,
             actor=self.user,
         )
@@ -139,7 +138,7 @@ class SessionAgent(ABC):
         )
 
     def _sessions(self) -> Any:
-        return read_scoped_queryset(self.session_model, self.user).filter(agent=self.agent, owner=self.user)
+        return self.session_model.objects.with_actor(self.user).filter(agent=self.agent, user=self.user)
 
     def _session(self, session_id: str) -> Any:
         session = instance_from_public_id(self.session_model, session_id, queryset=self._sessions())
@@ -323,7 +322,7 @@ class SessionAgent(ABC):
                     return instance_from_public_id(
                         self.turn_model,
                         payload.id,
-                        queryset=read_scoped_queryset(self.turn_model, self.user).filter(
+                        queryset=self.turn_model.objects.with_actor(self.user).filter(
                             session_id__in=tuple(attached)
                         ),
                     )

@@ -6,15 +6,15 @@ import contextlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import DataError, models
 from rebac import system_context
 
-from angee.base.fields import StateField
-from angee.base.impl import ImplClassField
+from angee.fields import StateField
+from angee.impl import ImplClassField
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate.sync import current_bridge_progress
 from angee.storage import exceptions
@@ -49,8 +49,8 @@ class Mount(Bridge):
     """
 
     runtime = True
-    extends = "integrate.Integration"
-    integration_create_mode = IntegrationCreateMode.CONNECT
+    extends: ClassVar[str | None] = "integrate.Integration"
+    integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
     live_impl_field = "backend_class"
 
     backend_class = ImplClassField(

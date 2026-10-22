@@ -16,15 +16,12 @@ import strawberry_django
 from django.apps import apps
 from django.db import transaction
 from django.db.models import Exists, OuterRef, Prefetch
-from rebac import SubjectRef, system_context
+from rebac import system_context
 from rebac.graphql.strawberry_django import optimize
-from rebac.resources import model_for_subject_type
 from strawberry import auto
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
-from angee.base.identity import public_subject_ref
-from angee.base.scoping import read_scoped_queryset
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
@@ -39,8 +36,11 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
+from angee.identity import public_subject_ref
 from angee.integrate.schema import BridgeTypeMixin
 from angee.parties.managers import DisplayAvatarPrefetches
+from angee.parties.models import Party as PartyModel
+from angee.parties.models import RelationshipKind as RelationshipKindModel
 from angee.storage.schema import FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
@@ -93,7 +93,7 @@ def _display_avatar_prefetch(name: str) -> Callable[[strawberry.Info], Prefetch]
     def prefetch(info: strawberry.Info) -> Prefetch:
         actor = session_user(info)
         field = cast(StrawberryDjangoField, info._field)
-        files = read_scoped_queryset(apps.get_model("storage", "File"), actor)
+        files = apps.get_model("storage", "File").objects.with_actor(actor)
         avatars = optimize(run_type_get_queryset(files, field.django_type, info), info)
         return cast(Prefetch, getattr(Party.objects.display_avatar_prefetches(actor, avatars=avatars), name))
 
@@ -123,10 +123,10 @@ class PartyType(AuthoredRefMixin, AngeeNode):
         return cast(Any, Party.objects.display_avatar(cast(Any, self), actor=session_user(info)))
 
     @strawberry.field
-    def concrete_kind(self) -> RelationshipKind.PartyKind | None:
+    def concrete_kind(parent: strawberry.Parent[PartyModel]) -> RelationshipKindModel.PartyKind | None:
         """Return the native MTI subtype used for canonical Party navigation."""
 
-        return Party.concrete_kind.fget(self)
+        return parent.concrete_kind
 
     handles: list["HandleType"]
 
@@ -134,7 +134,9 @@ class PartyType(AuthoredRefMixin, AngeeNode):
         only=["id"],
         prefetch_related=lambda info: Prefetch(
             "partystatement_set",
-            queryset=Party.objects.handle_statements(actor=session_user(info)).select_related("subject", "handle"),
+            queryset=Party.objects.handle_statements()
+            .for_reader(session_user(info))
+            .select_related("subject", "handle"),
             to_attr="_readable_handle_statements",
         ),
     )
@@ -200,11 +202,11 @@ class HandleType(AngeeNode):
     party: PartyType | None = actor_scoped_to_one("party")
     avatar: FileType | None = actor_scoped_to_one("avatar")
 
-    @strawberry_django.field(only=["owner_id"])
-    def owner(self) -> strawberry.ID | None:
+    @strawberry_django.field(only=["controller_id"])
+    def controller(self) -> strawberry.ID | None:
         """Return the controlling user's public id, when a user has claimed this handle."""
 
-        return optional_public_id(user_public_id(cast(Any, self).owner_id))
+        return optional_public_id(user_public_id(cast(Any, self).controller_id))
 
     @strawberry_django.field(
         only=["party_id"],
@@ -225,6 +227,7 @@ class StatementEvidenceType:
 
     model: str
     id: strawberry.ID
+    pointer: str
 
 
 @strawberry_django.type(PartyStatement)
@@ -243,7 +246,7 @@ class PartyStatementType(AngeeNode):
     updated_at: auto
 
     @strawberry_django.field(only=["asserted_by", "source_kind"])
-    def asserted_by(self, info: strawberry.Info) -> str:
+    def asserted_by(self) -> str:
         """The asserting principal when the reader may read it; otherwise only its source kind.
 
         A statement read never widens what the party reader sees: the principal
@@ -251,12 +254,9 @@ class PartyStatementType(AngeeNode):
         """
 
         row = cast(Any, self)
-        source = SubjectRef.parse(row.asserted_by)
-        resolved = model_for_subject_type(source.subject_type)
-        if resolved is not None:
-            model, id_attr = resolved
-            if read_scoped_queryset(model, session_user(info)).filter(**{id_attr: source.subject_id}).exists():
-                return str(public_subject_ref(source))
+        source = row.readable_asserting_source
+        if source is not None:
+            return str(public_subject_ref(source))
         return str(row.source_kind)
 
     @strawberry_django.field(only=["rank", "snak"])
@@ -269,8 +269,11 @@ class PartyStatementType(AngeeNode):
 
     @strawberry_django.field(only=["subject_id", "evidence"])
     def evidence(self, info: strawberry.Info) -> list[StatementEvidenceType]:
-        refs = cast(Any, self).readable_evidence(session_user(info))
-        return [StatementEvidenceType(model=ref.model, id=strawberry.ID(ref.id)) for ref in refs]
+        row = cast(Any, self)
+        refs = row.__dict__.get("_readable_evidence")
+        if refs is None:
+            refs = row.readable_evidence(session_user(info))
+        return [StatementEvidenceType(model=ref.model, id=strawberry.ID(ref.id), pointer=ref.pointer) for ref in refs]
 
     @strawberry_django.field(only=["subject_id", "evidence"])
     def evidence_truncated(self, info: strawberry.Info) -> bool:
@@ -518,7 +521,7 @@ class PartiesIdentityMutation:
         link = require_instance_for_id(
             PartyStatement,
             id,
-            queryset=Party.objects.handle_statements(actor=session_user(info)),
+            queryset=Party.objects.handle_statements().for_reader(session_user(info)),
             not_found="party statement not found",
         )
         return cast(PartyStatementType, link.with_actor(session_user(info)).confirm())
@@ -530,7 +533,7 @@ class PartiesIdentityMutation:
         link = require_instance_for_id(
             PartyStatement,
             id,
-            queryset=Party.objects.handle_statements(actor=session_user(info)),
+            queryset=Party.objects.handle_statements().for_reader(session_user(info)),
             not_found="party statement not found",
         )
         return cast(PartyStatementType, link.with_actor(session_user(info)).dismiss())
@@ -588,11 +591,8 @@ class PartiesDirectoryMutation:
         user = session_user(info)
         credential_model = apps.get_model("integrate", "Credential")
         vendor_model = apps.get_model("integrate", "Vendor")
-        credential_values = {
-            "kind": "basic_auth",
-            "name": f"CardDAV — {name}",
-            "material": {"username": username, "password": password},
-        }
+        credential_name = f"CardDAV — {name}"
+        credential_material = {"username": username, "password": password}
         directory_values = {
             "owner": user,
             "backend_class": "carddav",
@@ -604,12 +604,22 @@ class PartiesDirectoryMutation:
 
         # Complete validation and network discovery before opening the database
         # transaction. Both rows are intentionally unsaved probe inputs.
-        probe_credential = credential_model.objects.prepare_local_credential(user, **credential_values)
+        probe_credential = credential_model.objects.prepare_local_credential(
+            user,
+            kind="basic_auth",
+            name=credential_name,
+            material=credential_material,
+        )
         Directory(credential=probe_credential, **directory_values).backend.probe()
 
         # Persist every owned row in one write-only transaction after the probe.
         with system_context(reason="parties.graphql.connect_carddav"), transaction.atomic():
-            credential = credential_model.objects.create_local_credential(user, **credential_values)
+            credential = credential_model.objects.create_local_credential(
+                user,
+                kind="basic_auth",
+                name=credential_name,
+                material=credential_material,
+            )
             vendor, _created = vendor_model.objects.get_or_create(slug="carddav", defaults={"display_name": "CardDAV"})
             directory = Directory.objects.create(
                 vendor=vendor,
@@ -617,15 +627,15 @@ class PartiesDirectoryMutation:
                 **directory_values,
             )
             # The connected account's own login address is the admin's own handle:
-            # claim it (control ownership + normal person identity statement). Synced
+            # claim it (control + normal person identity statement). Synced
             # *contacts'* handles get neither fact — only this connected account's.
             if username.strip():
-                Handle.objects.claim_own(
+                Handle.objects.claim_control(
                     user,
                     platform=Handle.Platform.for_value(username),
                     value=username.strip(),
                     asserted_by=user,
-                    evidence=[directory.integration_ptr],
+                    evidence=[directory],
                     display_name=name,
                 )
         return cast(DirectoryType, directory)
@@ -877,7 +887,11 @@ _PARTY_STATEMENT_RESOURCE = hasura_model_resource(
     delete=False,
     field_id_decode={"subject": public_pk_decoder(Party), "handle": public_pk_decoder(Handle)},
     get_queryset=lambda info: (
-        Party.objects.handle_statements(actor=session_user(info)).members().select_related("subject", "handle")
+        Party.objects.handle_statements()
+        .for_reader(session_user(info))
+        .with_readable_records(session_user(info))
+        .members()
+        .select_related("subject", "handle")
     ),
 )
 _CIRCLE_RESOURCE = hasura_model_resource(

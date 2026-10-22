@@ -18,6 +18,9 @@ const heroPageMaxWidth: Record<NonNullable<HeroPageProps["maxWidth"]>, string> =
   xl: "max-w-6xl",
 };
 
+/**
+ * @kind page
+ */
 export function HeroPage({
   align = "center",
   chrome = true,

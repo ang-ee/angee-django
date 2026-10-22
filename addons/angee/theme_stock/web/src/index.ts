@@ -7,7 +7,7 @@ export default defineBaseAddon({
   i18n: {
     themes: {
       "stock.label": "Default",
-      "stock.description": "The original blue Angee design, ready to personalize.",
+      "stock.description": "The Angee default: an indigo brand on neutral surfaces, ready to personalize.",
     },
   },
 });

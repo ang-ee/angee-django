@@ -17,7 +17,9 @@ export interface SubjectPickerProps extends Pick<RelationPickerProps,
   onChange: (subject: string) => void;
 }
 
-/** Select a canonical subject through its resource's declared subject field. */
+/** Select a canonical subject through its resource's declared subject field.
+ * @kind surface
+ */
 export function SubjectPicker({ resource, value, onChange, readOnly, ...control }: SubjectPickerProps): React.ReactElement {
   const t = useUiT();
   const model = useModelMetadata(resource);

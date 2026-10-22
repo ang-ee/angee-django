@@ -11,7 +11,7 @@ from django.db import models
 from django.test.utils import isolate_apps
 
 from angee.addons import addon_manifest
-from angee.base.models import AngeeModel
+from angee.models import AngeeModel
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.models import Resource
 from tests.conftest import make_addon

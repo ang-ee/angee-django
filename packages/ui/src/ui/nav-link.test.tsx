@@ -54,7 +54,7 @@ test("muted and block-card variants retain their owned visual recipes", () => {
 
   expect(screen.getByRole("link", { name: "Muted" }).className).toContain("text-fg-muted");
   const card = screen.getByRole("link", { name: "Card" });
-  expect(card.className).toContain("rounded-6");
+  expect(card.className).toContain("rounded-8");
   expect(card.className).toContain("border-border-subtle");
   expect(card.className).toContain("hover:border-border-strong");
   expect(card.className).toContain("hover:shadow-sm");

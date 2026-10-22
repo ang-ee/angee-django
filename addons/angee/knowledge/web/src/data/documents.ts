@@ -24,13 +24,13 @@ export const KnowledgeCreateVaultFrom = graphql(`
     $template: ID!
     $name: String!
     $owned: Boolean! = true
-    $client_creation_key: String
+    $idempotency_key: String
   ) {
     create_vault_from(
       template: $template
       name: $name
       owned: $owned
-      client_creation_key: $client_creation_key
+      idempotency_key: $idempotency_key
     ) {
       ok
       message
@@ -81,8 +81,8 @@ export const KnowledgeVaultByName = graphql(`
 `);
 
 export const KnowledgePages = graphql(`
-  query KnowledgePages($limit: Int, $offset: Int) {
-    pages(limit: $limit, offset: $offset) {
+  query KnowledgePages($limit: Int, $offset: Int, $where: pages_bool_exp) {
+    pages(where: $where, limit: $limit, offset: $offset) {
       id
       permissions
       title
@@ -109,6 +109,18 @@ export const KnowledgeRecordPages = graphql(`
       page_can_write
     }
     record_knowledge_can_bind(model_label: $modelLabel, record_id: $recordId)
+  }
+`);
+
+/** The records one page is bound to; shared reference hooks resolve their labels and routes. */
+export const KnowledgePageRecordBindings = graphql(`
+  query KnowledgePageRecordBindings($page: ID!) {
+    page_record_bindings(page: $page) {
+      id
+      role
+      model_label
+      record_id
+    }
   }
 `);
 
@@ -173,6 +185,3 @@ export type KnowledgePageRow =
 export type KnowledgePageDetail = NonNullable<
   DocumentType<typeof KnowledgePage>["pages_by_pk"]
 >;
-
-/** One resolved page that links to the page being viewed. */
-export type Backlink = KnowledgePageDetail["backlinks"][number];

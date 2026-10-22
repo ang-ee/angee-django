@@ -193,7 +193,7 @@ async function fixture(options: {
   const formResource = options.resourceMetadata ?? (options.rootArguments
     ? {
         ...resource,
-        createArguments: [{ name: "client_creation_key", type: "String" }],
+        createArguments: [{ name: "idempotency_key", type: "String" }],
         updateArguments: [{ name: "expected_revision", type: "Int" }],
         fields: [...(resource.fields ?? []), {
           name: "revision", kind: "scalar" as const, scalar: "Int", readable: true,
@@ -713,7 +713,7 @@ test("updates send the edit baseline revision and retain a stale draft", async (
   expect(f.surface().form.getValues("title")).toBe("Local edit");
 });
 
-test("create retries reuse the form session's creation key", async () => {
+test("create retries reuse the form session's idempotency key", async () => {
   const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
   edit("title", "New record");
   edit("deadline", "2026-09-28");
@@ -721,9 +721,9 @@ test("create retries reuse the form session's creation key", async () => {
   await act(async () => f.surface().submitForm());
   await act(async () => f.surface().submitForm());
   expect(f.update).toHaveBeenCalledTimes(2);
-  const key = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.client_creation_key;
+  const key = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.idempotency_key;
   expect(key).toEqual(expect.any(String));
-  expect(f.update.mock.calls[1]?.[0].meta?.gqlVariables?.client_creation_key).toBe(key);
+  expect(f.update.mock.calls[1]?.[0].meta?.gqlVariables?.idempotency_key).toBe(key);
 });
 
 test("an accepted create renews the key for the next record without remounting", async () => {
@@ -731,16 +731,16 @@ test("an accepted create renews the key for the next record without remounting",
   edit("title", "One");
   edit("deadline", "2026-09-28");
   await act(async () => f.surface().submitForm());
-  const first = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.client_creation_key;
+  const first = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.idempotency_key;
   edit("title", "Two");
   await act(async () => f.surface().submitForm());
-  const second = f.update.mock.calls[1]?.[0].meta?.gqlVariables?.client_creation_key;
+  const second = f.update.mock.calls[1]?.[0].meta?.gqlVariables?.idempotency_key;
   expect(first).toEqual(expect.any(String));
   expect(second).toEqual(expect.any(String));
   expect(second).not.toBe(first);
 });
 
-test("a creation-key conflict keeps the draft and renews the next attempt's key", async () => {
+test("CREATION_KEY_CONFLICT keeps the draft and renews the next attempt's key", async () => {
   const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
   edit("title", "My record");
   edit("deadline", "2026-09-28");
@@ -748,9 +748,9 @@ test("a creation-key conflict keeps the draft and renews the next attempt's key"
   await act(async () => f.surface().submitForm());
   expect(f.surface().saveConflict).toBe(true);
   expect(f.surface().form.getValues("title")).toBe("My record");
-  const first = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.client_creation_key;
+  const first = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.idempotency_key;
   await act(async () => f.surface().submitForm());
-  const next = f.update.mock.calls[1]?.[0].meta?.gqlVariables?.client_creation_key;
+  const next = f.update.mock.calls[1]?.[0].meta?.gqlVariables?.idempotency_key;
   expect(next).toEqual(expect.any(String));
   expect(next).not.toBe(first);
 });
@@ -763,12 +763,12 @@ test("custom create owners receive a retry-stable key that clears on acceptance"
   edit("deadline", "2026-09-28");
   await act(async () => f.surface().submitForm());
   await act(async () => f.surface().submitForm());
-  const first = submit.mock.calls[0]?.[1].clientCreationKey;
+  const first = submit.mock.calls[0]?.[1].idempotencyKey;
   expect(first).toEqual(expect.any(String));
-  expect(submit.mock.calls[1]?.[1].clientCreationKey).toBe(first);
+  expect(submit.mock.calls[1]?.[1].idempotencyKey).toBe(first);
   edit("title", "Two");
   await act(async () => f.surface().submitForm());
-  expect(submit.mock.calls[2]?.[1].clientCreationKey).not.toBe(first);
+  expect(submit.mock.calls[2]?.[1].idempotencyKey).not.toBe(first);
 });
 
 test("plain updates ignore save-only revision arguments and unexposed revision fields", async () => {
@@ -1007,12 +1007,13 @@ test.each([false, true])("a native create accepts an unmounted server-assigned r
   let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.update).toHaveBeenCalledTimes(1));
-  expect(f.update).toHaveBeenCalledWith(expect.objectContaining({ variables: { title: "Submitted title", body: "" } }));
+  expect(f.update).toHaveBeenCalledWith(expect.objectContaining({ variables: { title: "Submitted title" } }));
   if (laterEdit) fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Later title" } });
   const parent = { id: "note-parent", title: "Server-assigned parent" };
-  const accepted = { id: "note-created", title: "Submitted title", body: "", parent };
+  const accepted = { id: "note-created", title: "Submitted title", body: "Server default body", parent };
   await act(async () => { resolve({ data: accepted }); await saving; });
   expect(f.surface().form.getValues("parent")).toEqual(parent);
+  expect(f.surface().form.getValues("body")).toBe(accepted.body);
   expect(f.surface().form.formState.defaultValues?.parent).toEqual(parent);
   expect(f.surface().form.getFieldState("parent").isDirty).toBe(false);
   expect(f.surface().form.getValues("title")).toBe(laterEdit ? "Later title" : "Submitted title");

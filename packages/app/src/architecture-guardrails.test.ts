@@ -4,8 +4,12 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-import { RecordIssues, SaveDiscardActions, baseIcons, dirtyControlBandClassName } from "@angee/ui";
+import { MIME_KINDS, RecordIssues, SaveDiscardActions, baseIcons, dirtyControlBandClassName } from "@angee/ui";
 import { FILTER_OPERATORS } from "@angee/metadata";
+
+import {
+  UX_GUARD_ALLOWANCES, formatUxGuardViolation, uxGuardViolations, uxGuardViolationsInFile, type UxGuardRule,
+} from "./ux-ontology-guard";
 
 const MONOREPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const PACKAGES_ROOT = join(MONOREPO_ROOT, "packages");
@@ -34,6 +38,13 @@ const REQUIRED_ADDON_ROOTS = [
 ] as const;
 const OPTIONAL_ADDON_ROOTS = [
   resolve(MONOREPO_ROOT, "../angee-messaging-bridges/addons"),
+] as const;
+// Consumer repositories materialized beside this slot compose the same owners; the
+// UX ontology guard covers them when present, the layering guards stay in-repo.
+const CONSUMER_ADDON_ROOTS = [
+  resolve(MONOREPO_ROOT, "../angee-arp/addons"),
+  resolve(MONOREPO_ROOT, "../angee-odoo/addons"),
+  resolve(MONOREPO_ROOT, "../angee-phrogg/addons"),
 ] as const;
 // Parsing every framework, tooling, and addon source file grows with the tree,
 // not with a hang; Vitest's 5s unit default fails it on loaded CI runners.
@@ -135,7 +146,7 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("JsonValueSchema", "@angee/ui", "src/widgets/json-value.ts"),
   frameworkCriticalExport("FORM_SPEC_ANNOTATIONS", "@angee/ui", "src/views/form/form-spec-schema.ts"),
   frameworkCriticalExport("textValue", "@angee/ui", "src/views/form/field-values.ts"),
-  frameworkCriticalExport("DISABLED_RESOURCE", "@angee/metadata", "src/resources.ts"),
+  frameworkCriticalExport("refineResourceName", "@angee/metadata", "src/resources.ts"),
   frameworkCriticalExport("graphNodeStyle", "@angee/ui", "src/views/GraphView.tsx"),
   frameworkCriticalExport("ScopedExplorerPane", "@angee/ui", "src/views/tree/ScopedExplorerPane.tsx"),
   frameworkCriticalExport("PrimaryPanePublisher", "@angee/ui", "src/layouts/primary-pane-context.tsx"),
@@ -161,6 +172,12 @@ const UI_DYNAMIC_I18N_KEY_FAMILIES: readonly DynamicI18nKeyFamily[] = [
     owner: "@angee/ui FilterClauseOperator",
     prefix: "search.operator.",
     values: [...FILTER_OPERATORS, "isNotNull"],
+  },
+  {
+    namespace: "ui",
+    owner: "@angee/ui MimeKind",
+    prefix: "mime.",
+    values: [...MIME_KINDS],
   },
   {
     namespace: "ui",
@@ -212,9 +229,13 @@ const UI_DYNAMIC_I18N_KEY_FAMILIES: readonly DynamicI18nKeyFamily[] = [
 ];
 
 describe("React architecture guardrails", () => {
-  test("framework and tooling imports follow layering and declared dependencies", () => {
-    expect(importViolations(repositoryPackageRoots())).toEqual([]);
-  });
+  test(
+    "framework and tooling imports follow layering and declared dependencies",
+    () => {
+      expect(importViolations(repositoryPackageRoots())).toEqual([]);
+    },
+    FULL_TREE_SCAN_TIMEOUT_MS,
+  );
 
   test(
     "framework, tooling, and addon imports follow layering and declared dependencies",
@@ -479,6 +500,21 @@ describe("React architecture guardrails", () => {
     ]);
   });
 
+  test("i18n manifests declare literal and constant-computed namespaces without translation hooks", () => {
+    const source = ts.createSourceFile("index.ts", `
+      const NAMESPACE = "computed";
+      export default defineBaseAddon({
+        i18n: { literal: messages, "quoted": messages, [NAMESPACE]: messages },
+      });
+    `, ts.ScriptTarget.Latest, true);
+    expect(i18nManifestNamespaces(source)).toEqual(["literal", "quoted", "computed"]);
+    const dynamic = ts.createSourceFile("index.ts", `
+      const NAMESPACE = resolveNamespace();
+      export default defineBaseAddon({ i18n: { [NAMESPACE]: messages } });
+    `, ts.ScriptTarget.Latest, true);
+    expect(i18nManifestNamespaces(dynamic)).toEqual([]);
+  });
+
   test("every repository i18n key is referenced statically or by a typed dynamic family", () => {
     const packages = repositoryPackageRoots();
     const bundles = i18nBundleKeys(packages);
@@ -562,6 +598,58 @@ describe("React architecture guardrails", () => {
       "sun",
     ]);
   });
+
+  test.each<[UxGuardRule, string, string]>([
+    ["raw-element", '<button type="button">Go</button>', "renders a raw <button>"],
+    ["raw-element", '<input value="x" />', "renders a raw <input>"],
+    ["lucide-import", 'import { Check } from "lucide-react"; const v = <Check />;', "renders the lucide icon Check directly"],
+    ["class-literal", 'const c = "bg-brand-soft text-brand-soft-text";', "spells the selected surface by hand"],
+    ["class-literal", 'const c = "px-2 text-xs";', "uses the deleted class text-xs"],
+    ["class-literal", 'const c = "w-[240px]";', "sizes with a raw pixel class"],
+    ["class-literal", 'import { Button } from "@angee/ui"; const c = "h-7 px-2";', "sizes a control with a raw h-N/size-N class"],
+    ["locale-bypass", "const s = value.toLocaleString();", "calls toLocaleString()"],
+    ["locale-bypass", "const f = new Intl.NumberFormat();", "constructs Intl.NumberFormat"],
+    ["locale-bypass", "const v = <span>{new Date(at).toISOString()}</span>;", "renders new Date(...).toISOString()"],
+    ["locale-bypass", 'import { format } from "date-fns"; const s = format(at, "yyyy-MM-dd");', 'formats with the date-fns pattern "yyyy-MM-dd"'],
+    ["deleted-owner-import", 'import { Badge } from "@angee/ui";', "imports deleted @angee/ui export Badge"],
+    ["local-recipe", 'import { Chip, tv } from "@angee/ui"; const pill = tv({ base: "x" });', "declares a local tv() recipe"],
+    ["local-tone-map", 'const TONES = { DONE: "success", FAILED: "danger" } as const;', "maps status values to tones locally"],
+  ])("UX ontology guard %s reports a seeded violation", (rule, text, detail) => {
+    const hits = uxGuardViolations("addons/fixture/web/src/View.tsx", text);
+    expect(hits.map((hit) => hit.rule)).toContain(rule);
+    expect(hits.find((hit) => hit.rule === rule)?.detail).toContain(detail);
+  });
+
+  test("UX ontology guard ignores the owners' own shapes", () => {
+    const text = [
+      'import { Button, Chip, formatDate } from "@angee/ui";',
+      'import { Tag as TagIcon } from "lucide-react";',
+      'export const icons = { icons: { tag: TagIcon } };',
+      'const STATUS_TONES = { DONE: "success", FAILED: "danger" };',
+      'export const manifest = { statusTones: STATUS_TONES };',
+      'const v = <Button size="iconSm" className="shrink-0 text-12"><Chip tone="muted">x</Chip></Button>;',
+      'const hidden = <input type="hidden" value="x" />;',
+      "const when = formatDate(at);",
+    ].join("\n");
+    expect(uxGuardViolations("addons/fixture/web/src/View.tsx", text)).toEqual([]);
+  });
+
+  test(
+    "addon web sources compose @angee/ui owners (UX component ontology)",
+    () => {
+      const allowed = new Set(UX_GUARD_ALLOWANCES.map((entry) => `${entry.rule}\0${entry.file}`));
+      const files = uxGuardPackageRoots().flatMap((pkg) =>
+        sourceFiles(pkg.root).filter((file) => !isTestFile(file) && !isStoryFile(file)));
+      const violations = files.flatMap((file) => {
+        const rel = workspaceRelative(file);
+        return uxGuardViolationsInFile(file)
+          .filter((hit) => !allowed.has(`${hit.rule}\0${rel}`))
+          .map((hit) => formatUxGuardViolation(hit, rel));
+      });
+      expect(violations).toEqual([]);
+    },
+    FULL_TREE_SCAN_TIMEOUT_MS,
+  );
 });
 
 function frameworkCriticalExport(
@@ -625,6 +713,20 @@ function addonRepositoryRoots(): string[] {
     ...REQUIRED_ADDON_ROOTS,
     ...OPTIONAL_ADDON_ROOTS.filter((root) => existsSync(root) && statSync(root).isDirectory()),
   ].sort();
+}
+
+/** Framework, example and (when materialized beside this slot) consumer addon packages. */
+function uxGuardPackageRoots(): PackageRoot[] {
+  const roots: PackageRoot[] = [...addonPackageRoots()];
+  for (const addonsRoot of CONSUMER_ADDON_ROOTS) {
+    if (!existsSync(addonsRoot) || !statSync(addonsRoot).isDirectory()) continue;
+    visitDirectories(addonsRoot, (directory) => {
+      if (basename(directory) !== "web" || !existsSync(join(directory, "package.json"))) return false;
+      roots.push(packageRoot(directory));
+      return true;
+    });
+  }
+  return roots.sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function importViolations(packages: readonly PackageRoot[]): string[] {
@@ -1168,10 +1270,9 @@ function i18nNamespace(file: string, text: string): string {
   const packageRootPath = resolve(dirname(file), "..");
   const manifestNamespaces = sourceFiles(packageRootPath).flatMap((sourceFile) => {
     if (isTestFile(sourceFile) || isStoryFile(sourceFile)) return [];
-    const sourceText = readFileSync(sourceFile, "utf8");
-    return [...sourceText.matchAll(/\bi18n\s*:\s*\{\s*(?:["']([^"']+)["']|([a-zA-Z][\w-]*))\s*:/g)]
-      .map((match) => match[1] ?? match[2])
-      .filter((namespace): namespace is string => Boolean(namespace));
+    return i18nManifestNamespaces(ts.createSourceFile(
+      sourceFile, readFileSync(sourceFile, "utf8"), ts.ScriptTarget.Latest, true,
+    ));
   });
   const namespaces = [...new Set(manifestNamespaces)];
   if (namespaces.length === 1) return namespaces[0] ?? "";
@@ -1179,6 +1280,38 @@ function i18nNamespace(file: string, text: string): string {
     `Could not resolve one owning i18n namespace for ${workspaceRelative(file)}; `
     + "declare it with createNamespaceT or the addon's i18n manifest contribution",
   );
+}
+
+function i18nManifestNamespaces(source: ts.SourceFile): string[] {
+  const constants = new Map<string, string>();
+  for (const statement of source.statements) {
+    if (!ts.isVariableStatement(statement) || !(statement.declarationList.flags & ts.NodeFlags.Const)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (ts.isIdentifier(declaration.name) && declaration.initializer && ts.isStringLiteralLike(declaration.initializer)) {
+        constants.set(declaration.name.text, declaration.initializer.text);
+      }
+    }
+  }
+  const namespaces: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isPropertyAssignment(node) && (ts.isIdentifier(node.name) || ts.isStringLiteralLike(node.name))
+      && node.name.text === "i18n" && ts.isObjectLiteralExpression(node.initializer)) {
+      for (const property of node.initializer.properties) {
+        const name = property.name;
+        if (!name) continue;
+        if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) namespaces.push(name.text);
+        else if (ts.isComputedPropertyName(name)) {
+          const expression = name.expression;
+          const namespace = ts.isStringLiteralLike(expression) ? expression.text
+            : ts.isIdentifier(expression) ? constants.get(expression.text) : undefined;
+          if (namespace) namespaces.push(namespace);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return namespaces;
 }
 
 function i18nSourceTexts(

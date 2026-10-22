@@ -30,9 +30,9 @@ edits converge, as accepted by the commit 8 review ruling. Adapters revalidate
 their local projection under domain locks before applying.
 
 A conditional write returns authoritative source evidence and version, retained
-with the local projection so the driver recognizes its next pull echo. Separate
-JSON Patch `test` operations check each retained reflection precondition beside
-the transport's remote-version fence. Neither makes the two systems atomic.
+with the local projection so the driver recognizes its next pull echo. The link
+checks its complete retained reflection precondition beside the transport's
+remote-version fence. Neither makes the two systems atomic.
 Only the driver promotes a primary link; adapters return `ApplyResult` evidence.
 
 Each applied record retains the observe row and the application-evidence row
@@ -47,7 +47,8 @@ as field deltas, read through the link's own authorization.
 A baseline adopts matching local identities without an applied base using remote
 values. Local-only rows may then be created remotely when a writable baseline
 completes. Before enabling two-way sync, review the synchronized local scope.
-A declaration's `authoritative` flag marks the source as the system of record for
+The adapter's `StreamDefinition` declaration owns every stream policy knob.
+Its `authoritative` flag marks the source as the system of record for
 what the stream states (`SyncStream.authoritative`, read by statement survivorship);
 changing it re-derives the linked subjects through `SyncStreamManager.set_authoritative`.
 Direction or snapshot changes open a new baseline generation and retain links,
@@ -194,3 +195,11 @@ queryset, so hidden credentials are refused as not found. Authored console
 patches retain their administrator gate. Both dispatch attachment to the model
 owner.
 
+`Integration`, `WebhookSubscription` and `ExternalAccount` compose `OwnerMixin`:
+`owner` is a column, never a stored tuple. Authored integration patches change it
+through `transfer_ownership`; generic Hasura resources never write the column. A
+platform-managed integration is inserted with `save(ownerless=True)`. An external
+account takes only the owner its linking verb names; that verb claims an unowned
+account, and disconnect releases only the caller's ownership. Its transfer is
+admin-only because sign-in resolves an identity to its owner. A credential's
+`user` relation names whose authority it carries; it is not ownership.

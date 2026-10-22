@@ -5,7 +5,6 @@ import {
   List,
   relationValueId,
   useRecordChromeContextMaybe,
-  useResourceRecordHref,
   type ListProps,
   type RecordPanelContext,
   type RecordTabDescriptor,
@@ -17,6 +16,7 @@ import { TASK_MODEL } from "./resources";
 import {
   useTaskFormDeclaration,
   useTaskRowActions,
+  useTaskRowHref,
   type TaskActionRow,
 } from "./task-actions";
 
@@ -58,7 +58,7 @@ export interface TaskManagementTabProps extends RecordPanelContext {
 /** One task-management surface for a project or a task's subtasks. */
 export function TaskManagementTab({ recordId, relation, projectIds }: TaskManagementTabProps): React.ReactElement {
   const record = useRecordChromeContextMaybe();
-  const recordHref = useResourceRecordHref(TASK_MODEL);
+  const rowHref = useTaskRowHref();
   const parentProject = relationValueId(record?.record?.project);
   const createDefaults = relation === "project"
     ? { project: recordId }
@@ -70,7 +70,7 @@ export function TaskManagementTab({ recordId, relation, projectIds }: TaskManage
     scope: "local",
     baseFilter,
     order: { [relation === "project" ? "sort_order" : "sub_sort_order"]: "ASC" },
-    rowHref: recordHref ? (row) => recordHref(row.id, row) ?? "" : undefined,
+    rowHref,
     laneSource: { field: "assignee" },
     gantt: { start: "due_date", end: "due_date", label: "title" },
   });

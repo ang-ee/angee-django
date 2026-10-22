@@ -12,7 +12,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.changesets import changeset
+from angee.changesets import changeset
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.live import PairingState, SessionLoggedOut
 from angee.integrate.locks import bridge_advisory_lock

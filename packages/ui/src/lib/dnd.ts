@@ -24,10 +24,16 @@ import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
  * exactly the cross-pane move the Explorer needs.
  */
 
-/** The single payload MIME; the payload's `type` field discriminates kinds. */
+/** The single payload MIME; the payload's `type` field discriminates kinds.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const DND_MIME = "application/vnd.angee.dnd+json";
 
-/** Shared dnd-kit sensors for sortable in-app interactions. */
+/** Shared dnd-kit sensors for sortable in-app interactions.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function useDndKitSensors(activationDistance: number) {
   return useSensors(
     useSensor(PointerSensor, {
@@ -56,7 +62,10 @@ export interface DndPayload<TData = unknown> {
   data: TData;
 }
 
-/** Write a payload onto a drag event's DataTransfer (body + type marker). */
+/** Write a payload onto a drag event's DataTransfer (body + type marker).
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function writeDndPayload(
   dataTransfer: DataTransfer,
   payload: DndPayload,
@@ -66,7 +75,10 @@ export function writeDndPayload(
   dataTransfer.effectAllowed = "move";
 }
 
-/** Read a payload from a DataTransfer, or `null` if absent/invalid. */
+/** Read a payload from a DataTransfer, or `null` if absent/invalid.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function readDndPayload<TData = unknown>(
   dataTransfer: DataTransfer,
 ): DndPayload<TData> | null {
@@ -91,6 +103,8 @@ function acceptList(
  * Whether an in-flight drag carries an accepted payload, judged from the
  * visible type markers (usable during `dragover`). With no `accept`, any angee
  * payload qualifies.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function dragHasAcceptedType(
   dataTransfer: Pick<DataTransfer, "types">,
@@ -102,7 +116,10 @@ export function dragHasAcceptedType(
   return wanted.some((type) => types.includes(typeMarker(type)));
 }
 
-/** Whether the native browser drag currently carries one or more files. */
+/** Whether the native browser drag currently carries one or more files.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function dragHasFiles(
   dataTransfer: Pick<DataTransfer, "types" | "files">,
 ): boolean {
@@ -113,6 +130,8 @@ export function dragHasFiles(
 /**
  * Make an element draggable with a typed payload — spread the result onto any
  * element. Pass `null` (or a getter returning `null`) to disable for a render.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function useDraggable<TData = unknown>(
   payload: DndPayload<TData> | null | (() => DndPayload<TData> | null),
@@ -144,6 +163,8 @@ export type DragSourceProps =
  * is null, so a non-draggable row/card stays inert. The non-hook companion to
  * {@link useDraggable}, for per-item maps where a hook can't run (list rows,
  * gallery cards).
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function dragSourceProps(payload: DndPayload | null): DragSourceProps {
   if (!payload) return undefined;
@@ -173,6 +194,8 @@ export interface UseFileDropTargetOptions {
  * payload hovers — for highlight) and `dropProps` to spread. `accept` gates the
  * hover highlight via the visible type markers; `canDrop` runs once the body is
  * readable at drop time.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function useDropTarget<TData = unknown>({
   accept,
@@ -231,6 +254,8 @@ export function useDropTarget<TData = unknown>({
  * Make an element a native file drop target. This is separate from Angee's
  * internal typed DnD payload seam: browser file drops use `DataTransfer.files`,
  * not the JSON payload MIME used for row/card moves.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function useFileDropTarget({
   disabled = false,

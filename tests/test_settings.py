@@ -15,9 +15,10 @@ from django.core.exceptions import ImproperlyConfigured
 
 from angee.compose.autoconfig import AutoConfig
 from angee.compose.composer import Composer
+from angee.compose.project import prepend_import_paths
 from angee.project import PROJECT_DIR_ENV, find_project_dir, project_dir
 
-BASE_APP = "angee.base.apps.BaseConfig"
+BASE_APP = "angee.apps.BaseConfig"
 GRAPHQL_APP = "angee.graphql.apps.GraphQLConfig"
 
 
@@ -256,6 +257,7 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "django.contrib.auth.apps.AuthConfig",
         "django.contrib.sessions.apps.SessionsConfig",
         "angee.iam.apps.IAMConfig",
+        "angee.timeline.apps.TimelineConfig",
         "angee.provenance",
         "angee.integrate.apps.IntegrateConfig",
         "angee.integrate_vcs.apps.IntegrateVcsConfig",
@@ -704,6 +706,27 @@ def test_compose_settings_module_reads_settings_yaml(
     assert installed.index("angee.compose.apps.ComposeConfig") < installed.index("angee.resources")
 
 
+def test_prepend_import_paths_refreshes_the_loaded_foundation_package(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Configured addon roots join ``angee.__path__`` after settings imports the foundation."""
+
+    import angee
+
+    addon_root = tmp_path / "addons"
+    addon_portion = addon_root / "angee"
+    addon_portion.mkdir(parents=True)
+    foundation_paths = list(angee.__path__)
+    monkeypatch.setattr(angee, "__path__", foundation_paths.copy())
+    monkeypatch.setattr(sys, "path", [path for path in sys.path if path != str(addon_root)])
+
+    prepend_import_paths((addon_root,))
+
+    assert angee.__path__[0] == str(addon_portion)
+    assert all(path in angee.__path__ for path in foundation_paths)
+
+
 def test_compose_settings_module_uses_configured_addon_dirs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1082,7 +1105,7 @@ def test_defaults_module_seeds_compose_installed_app(tmp_path: Path) -> None:
         "django.contrib.contenttypes",
         "rebac",
         "simple_history",
-        "angee.base",
+        "angee",
         "django_celery_beat",
         "angee.jobs",
         "angee.resources",

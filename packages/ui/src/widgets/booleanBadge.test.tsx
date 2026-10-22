@@ -11,12 +11,12 @@ describe("booleanBadge widget", () => {
   });
 
   test("renders true and false labels as badges", () => {
-    const Badge = defaultWidgets.booleanBadge.read;
+    const Chip = defaultWidgets.booleanBadge.read;
 
     render(
       <>
-        <Badge value />
-        <Badge
+        <Chip value />
+        <Chip
           value={false}
           field={{
             options: [

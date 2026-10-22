@@ -1,21 +1,5 @@
-import {
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  Badge,
-  LogStream,
-  RowsListView,
-  defineRowAction,
-  useStatusTone,
-  textRoleVariants,
-  useConfirm,
-  useToast,
-  errorMessage,
-  type ListColumn,
-  type RowActionDeclaration,
-} from "@angee/ui";
+import { Card, CardContent, CardHeader, CardTitle, DetailSection, LogStream, RecordActionBar, RowsListView, StatusBadge, defineRowAction, statusLabel, useConfirm, useToast, errorMessage, type ActionDescriptor, type ListColumn, type RowActionDeclaration } from "@angee/ui";
+import type { Row } from "@angee/metadata";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
@@ -31,17 +15,7 @@ import { useJobRunOperation } from "../../data/job-run";
 import type { JobState } from "../../data/types";
 import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
 import { useOperatorRows } from "../parts/operator-rows";
-import { useRunDaemonAction } from "../parts/run-action";
-
-/** A stack lifecycle control: its label, tone, variables, and handler. */
-interface StackAction {
-  field: string;
-  label: string;
-  variant: "secondary" | "ghost";
-  /** Destructive — require a styled confirmation first. */
-  dangerous?: boolean;
-  perform: () => Promise<boolean>;
-}
+import { useDaemonMutationRun } from "../parts/daemon-verbs";
 
 type JobRowData = DaemonRow<JobState>;
 
@@ -55,13 +29,12 @@ interface PreviewRequest {
 
 /** Operations page: the daemon job list with run + stack lifecycle controls. */
 export function OperationsPage(): ReactNode {
-  const statusTone = useStatusTone();
   const t = useOperatorT();
   const { rows, fetching, error, refetch } = useOperatorRows(
     { operations: true },
     (snapshot) => daemonRowsByName(snapshot.jobs),
   );
-  const { runJob, runJobAndRestart, stackActions, runStack, busy, operation } = useOperationActions(refetch);
+  const { runJob, runJobAndRestart, stackActions, busy, operation } = useOperationActions(refetch);
   const rowActions = useMemo<readonly RowActionDeclaration<JobRowData>[]>(
     () => [
       defineRowAction({
@@ -88,16 +61,8 @@ export function OperationsPage(): ReactNode {
 
   const columns = useMemo<readonly ListColumn<JobRowData>[]>(
     () => [
-      {
-        field: "name",
-        header: t("operations.column.name"),
-        render: (job) => <span className="font-medium text-fg">{job.name}</span>,
-      },
-      {
-        field: "runtime",
-        header: t("operations.column.runtime"),
-        render: (job) => <span className={textRoleVariants({ role: "meta" })}>{job.runtime}</span>,
-      },
+      { field: "name", header: t("operations.column.name") },
+      { field: "runtime", header: t("operations.column.runtime") },
     ],
     [t],
   );
@@ -113,36 +78,22 @@ export function OperationsPage(): ReactNode {
         emptyContent={t("operations.empty")}
       />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("operations.stack.title")}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap gap-2">
-            {stackActions.map((action) => (
-              <Button
-                disabled={busy}
-                key={action.field}
-                onClick={() => runStack(action)}
-                size="sm"
-                variant={action.variant}
-              >
-                {action.label}
-              </Button>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+      {/* The stack's lifecycle verbs: the shared verb bar, confirming the destructive one. */}
+      <DetailSection title={t("operations.stack.title")}>
+        <RecordActionBar record={{} as Row} actions={stackActions} blocked={busy} menuPlacement="leading" />
+      </DetailSection>
       {operation ? (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2">
             <CardTitle>{operation.rootJob}</CardTitle>
-            <Badge density="compact" shape="pill" tone={statusTone(operation.status)}>
-              {operation.status.toLowerCase()}
-            </Badge>
+            <StatusBadge value={operation.status} />
           </CardHeader>
           <CardContent>
-            <LogStream lines={[...operation.nodes.map((node) => `${node.kind.toLowerCase()} ${node.name}: ${node.status.toLowerCase()}${node.message ? ` — ${node.message}` : ""}`), ...(operation.output ? operation.output.split("\n") : []), ...(operation.error ? [operation.error] : [])]} />
+            <LogStream lines={[
+              ...operation.nodes.map((node) => `${statusLabel(node.kind)} ${node.name}: ${statusLabel(node.status)}${node.message ? ` — ${node.message}` : ""}`),
+              ...(operation.output ? operation.output.split("\n") : []),
+              ...(operation.error ? [operation.error] : []),
+            ]} />
           </CardContent>
         </Card>
       ) : null}
@@ -154,15 +105,14 @@ export function OperationsPage(): ReactNode {
 function useOperationActions(refetch: () => void): {
   runJob: (job: JobState) => Promise<void>;
   runJobAndRestart: (job: JobState) => Promise<void>;
-  stackActions: readonly StackAction[];
-  runStack: (action: StackAction) => void;
+  stackActions: readonly ActionDescriptor[];
   busy: boolean;
   operation: ReturnType<typeof useJobRunOperation>["operation"];
 } {
   const t = useOperatorT();
   const confirm = useConfirm();
   const toast = useToast();
-  const runDaemon = useRunDaemonAction(refetch);
+  const runDaemon = useDaemonMutationRun(refetch);
   const jobRun = useJobRunOperation();
   const [previewRequest, setPreviewRequest] = useState<PreviewRequest | null>(null);
   const previewRequestRef = useRef<PreviewRequest | null>(null);
@@ -275,78 +225,20 @@ function useOperationActions(refetch: () => void): {
     })();
   }, [confirm, jobRun.run, preview.data, preview.error, preview.isFetching, previewRequest, refetch, t, toast]);
 
-  const stackActions = useMemo<readonly StackAction[]>(
+  const stackActions = useMemo<readonly ActionDescriptor[]>(
     () => [
-      {
-        field: "stackBuild",
-        label: t("operations.stack.build"),
-        variant: "secondary",
-        perform: () =>
-          runDaemon({
-            run: build.run,
-            field: "stackBuild",
-            variables: {},
-            label: t("operations.stack.build"),
-          }),
-      },
-      {
-        field: "stackUp",
-        label: t("operations.stack.up"),
-        variant: "secondary",
-        perform: () =>
-          runDaemon({
-            run: up.run,
-            field: "stackUp",
-            variables: {},
-            label: t("operations.stack.up"),
-          }),
-      },
-      {
-        field: "stackDown",
-        label: t("operations.stack.down"),
-        variant: "ghost",
-        perform: () =>
-          runDaemon({
-            run: down.run,
-            field: "stackDown",
-            variables: {},
-            label: t("operations.stack.down"),
-          }),
-      },
-      {
-        field: "stackDestroy",
-        label: t("operations.stack.destroy"),
-        variant: "ghost",
-        dangerous: true,
-        perform: () =>
-          runDaemon({
-            run: destroy.run,
-            field: "stackDestroy",
-            variables: { purge: false },
-            label: t("operations.stack.destroy"),
-          }),
-      },
+      { id: "stack-build", label: t("operations.stack.build"), placement: "toolbar", primary: true,
+        run: () => runDaemon({ run: build.run, field: "stackBuild", variables: {} }) },
+      { id: "stack-up", label: t("operations.stack.up"), placement: "toolbar",
+        run: () => runDaemon({ run: up.run, field: "stackUp", variables: {} }) },
+      { id: "stack-down", label: t("operations.stack.down"), placement: "menu",
+        run: () => runDaemon({ run: down.run, field: "stackDown", variables: {} }) },
+      { id: "stack-destroy", label: t("operations.stack.destroy"), placement: "menu", danger: true,
+        confirm: { title: t("operations.stack.destroy.confirm.title"), body: t("operations.stack.destroy.confirm.body"), danger: true },
+        run: () => runDaemon({ run: destroy.run, field: "stackDestroy", variables: { purge: false } }) },
     ],
     [build.run, destroy.run, down.run, runDaemon, t, up.run],
   );
 
-  const runStack = useMemo(
-    () => (action: StackAction) => {
-      void (async () => {
-        if (action.dangerous) {
-          const ok = await confirm({
-            title: t("operations.stack.destroy.confirm.title"),
-            body: t("operations.stack.destroy.confirm.body"),
-            confirm: action.label,
-            danger: true,
-          });
-          if (!ok) return;
-        }
-        await action.perform();
-      })();
-    },
-    [confirm, t],
-  );
-
-  return { runJob, runJobAndRestart, stackActions, runStack, busy, operation: jobRun.operation };
+  return { runJob, runJobAndRestart, stackActions, busy, operation: jobRun.operation };
 }

@@ -35,7 +35,7 @@ from rebac import (
 from rebac.models import active_relationship_model
 from rebac.roles import grant as grant_role
 
-from angee.base.identity import public_id_for
+from angee.identity import public_id_for
 from angee.messaging.testing.models import Handle, Message, Party, Person, Thread
 from angee.projects.testing.models import Project, Task
 from angee.tags import schema as tags_schema
@@ -137,6 +137,20 @@ def test_base_tag_is_always_shared_and_declares_no_policy_fields(composed_tables
     with system_context(reason="tags vocabulary setup"):
         tag = Tag.objects.create(name="Framework")
     _assert_authenticated_reads(tag)
+
+
+def test_attention_category_is_one_tag_owned_resource_flag(composed_tables: None) -> None:
+    """The console writes and reads the category bit the unified attention column selects."""
+
+    del composed_tables
+    admin = create_platform_admin("tags-attention-admin")
+    schema = addon_schema(tags_schema.schemas, "console")
+    data = result_data(execute_schema(schema, """
+      mutation { insert_tags_one(object: {name: "Urgent", attention: true}) { name attention } }
+    """, user=admin))
+    assert data["insert_tags_one"] == {"name": "Urgent", "attention": True}
+    rows = result_data(execute_schema(schema, "{ tags { name attention } }", user=admin))["tags"]
+    assert rows == [{"name": "Urgent", "attention": True}]
 
 
 def test_consumer_marker_does_not_control_authenticated_reads(composed_tables: None) -> None:

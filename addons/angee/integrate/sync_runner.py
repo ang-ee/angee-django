@@ -72,9 +72,10 @@ def _parse_timestamp(value: str | datetime | None) -> datetime:
     if isinstance(value, datetime):
         timestamp = value
     else:
-        timestamp = parse_datetime(value)
-        if timestamp is None:
+        parsed = parse_datetime(value)
+        if parsed is None:
             raise ValueError(f"Invalid bridge sync timestamp: {value}")
+        timestamp = parsed
     if timezone.is_naive(timestamp):
         timestamp = timezone.make_aware(timestamp, timezone.get_current_timezone())
     return timestamp

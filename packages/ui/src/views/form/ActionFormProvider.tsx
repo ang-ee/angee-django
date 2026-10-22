@@ -5,7 +5,10 @@ import type { FieldValidationForm, FieldValidationMethods } from "./use-field-va
 
 const FieldValidationContext = createContext<FieldValidationMethods["registerFieldValidation"] | null>(null);
 
-/** Native RHF state with the shared controlled-editor validation extension. */
+/** Native RHF state with the shared controlled-editor validation extension.
+ * @kind null
+ * @reason Provider infrastructure: ActionForm context.
+ */
 export function ActionFormProvider<TValues extends FieldValues, TContext = unknown, TOutput extends FieldValues = TValues>({
   children, registerFieldValidation, ...form
 }: FieldValidationForm<TValues, TContext, TOutput> & { children: ReactNode }): ReactElement {

@@ -14,7 +14,7 @@ from rebac.backends import backend
 class RoundQuestionsQueue(models.Model):
     """Route new questions without moving questions already asked."""
 
-    extends = "proposals.Round"
+    extends: ClassVar[str | None] = "proposals.Round"
     clarification_queue = models.ForeignKey(
         "work.Queue", null=True, blank=True, on_delete=models.PROTECT, related_name="+"
     )
@@ -64,7 +64,7 @@ class RoundQuestionsQueue(models.Model):
 class TaskTrackQueue(models.Model):
     """Keep unpublished track work in a responder's or round manager's queue."""
 
-    extends = "projects.Task"
+    extends: ClassVar[str | None] = "projects.Task"
 
     class Meta:
         abstract = True
@@ -95,9 +95,10 @@ class TaskTrackQueue(models.Model):
                     return
                 queue_model = apps.get_model("work", "Queue")
                 queue = queue_model._base_manager.select_related("owner").get(pk=placement["queue_id"])
-                if queue.owner_id is not None and queue.slug == queue_model.objects.personal_slug(queue.owner):
+                owner = queue.owner
+                if owner is not None and queue.slug == queue_model.objects.personal_slug(owner):
                     if queue.owner_id == proposal.responder_id or backend().check_access(
-                        subject=to_subject_ref(queue.owner), action="manage", resource=to_object_ref(proposal.round)
+                        subject=to_subject_ref(owner), action="manage", resource=to_object_ref(proposal.round)
                     ).allowed:
                         return
                 raise ValidationError(

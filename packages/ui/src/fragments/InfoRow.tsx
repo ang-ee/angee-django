@@ -1,11 +1,16 @@
 import * as React from "react";
 
+import { EMPTY_VALUE } from "../lib/empty-value";
+
 import { tv } from "../lib/variants";
 import {
   DefinitionPair,
   type DefinitionPairValue,
 } from "./DefinitionPair";
 
+/**
+ * @kind token
+ */
 export const infoRowVariants = tv({
   base: "px-4 py-2 text-13",
 });
@@ -21,12 +26,15 @@ export type InfoRowProps = Omit<
   value?: React.ReactNode;
 };
 
+/**
+ * @kind fragment
+ */
 export const InfoRow = React.forwardRef<HTMLDivElement, InfoRowProps>(
   function InfoRow(
     {
       action,
       className,
-      emptyValue = "-",
+      emptyValue = EMPTY_VALUE,
       label,
       value,
       ...props

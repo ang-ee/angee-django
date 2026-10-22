@@ -7,7 +7,7 @@ import { useUiT } from "../../../i18n";
 import { Glyph } from "../../../chrome/Glyph";
 import { cn } from "../../../lib/cn";
 import type { Tone } from "../../../lib/tones";
-import { CountBadge } from "../../../ui/badge";
+import { CountBadge } from "../../../ui/count-badge";
 import { Button } from "../../../ui/button";
 import { CollapsibleIcon, CollapsiblePanel, CollapsibleRoot, CollapsibleTrigger } from "../../../ui/collapsible";
 import { Skeleton, SkeletonStatus } from "../../../ui/skeleton";

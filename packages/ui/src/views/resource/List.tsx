@@ -73,6 +73,7 @@ function ListComponentImpl<TRow extends Row = Row>({
  * Render a reusable list declaration standalone, or hand the same element to
  * `ResourceList` for page-level composition. Element constants are the reuse unit;
  * wrapper components hide the marker from the parser.
+ * @kind surface
  */
 export const List = Object.assign(ListComponentImpl, {
   [PAGE_ELEMENT_SLOT]: "list" as const,

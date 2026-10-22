@@ -8,18 +8,18 @@ import pytest
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models
+from django.db.migrations.state import ModelState
 from django.db.migrations.writer import MigrationWriter
 from rebac import system_context
 
-from angee.base.mixins import (
+from angee.models import (
+    AngeeQuerySet,
     AppendOnlyBaseQuerySet,
     AppendOnlyModel,
     AppendOnlyQuerySet,
     AuditMixin,
-    audit_set_null,
     retained_set_null,
 )
-from angee.base.models import AngeeQuerySet
 from tests.conftest import create_user
 
 
@@ -60,10 +60,27 @@ def test_audit_foreign_keys_declare_serializable_materialized_nullification() ->
 
     for name in ("created_by", "updated_by"):
         on_delete = RetainedEvidence._meta.get_field(name).remote_field.on_delete
-        assert on_delete is retained_set_null is audit_set_null
+        assert on_delete is retained_set_null
         serialized, imports = MigrationWriter.serialize(on_delete)
-        assert serialized == "angee.base.mixins.retained_set_null"
-        assert imports == {"import angee.base.mixins"}
+        assert serialized == "angee.models.audit.retained_set_null"
+        assert imports == {"import angee.models.audit"}
+
+
+def test_historical_audit_imports_preserve_field_migration_state() -> None:
+    from angee.base.mixins import audit_set_null
+    from angee.models.audit import AuditMixin as NativeAuditMixin
+    from angee.models.audit import retained_set_null as native_delete
+    from angee.models.ownership import AuditMixin as HistoricalAuditMixin
+    from angee.models.ownership import retained_set_null as historical_delete
+
+    assert HistoricalAuditMixin is NativeAuditMixin
+    assert audit_set_null is historical_delete is native_delete is retained_set_null
+    state = ModelState.from_model(RetainedEvidence)
+    historical_state = state.clone()
+    for name in ("created_by", "updated_by"):
+        historical_state.fields[name].remote_field.on_delete = historical_delete
+        assert historical_state.fields[name].deconstruct() == state.fields[name].deconstruct()
+    assert historical_state == state
 
 
 def test_append_only_rejects_collection_mutation_and_collector_nullifies_audit_fks(

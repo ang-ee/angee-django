@@ -17,6 +17,7 @@ import type {
   ResourceToolbarFilterOption,
   ResourceToolbarGroupOption,
   ResourceToolbarChrome,
+  ResourceToolbarProps,
 } from "../../toolbars";
 import type {
   ListViewNavigationScope,
@@ -226,10 +227,9 @@ export interface ListViewProps<TRow extends Row = Row> {
   renderGroupLabel?: (group: GroupLabelContext) => ReactNode;
   /** Columns rendered by the list. */
   columns: readonly ColumnDescriptor<TRow>[];
-  /** Render flat ordered-list items instead of table rows. The collection retains
-   * filtering and paging; the item owns its links/actions. Grouping, other view
-   * kinds and row selection are unavailable in this presentation. */
-  renderItem?: (row: TRow) => ReactNode;
+  /** Pane pointers over the same paged/grouped collection. The renderer owns
+   * each row's link or button; the list owns PaneRows, labels and group pagers. */
+  renderPaneRow?: (row: TRow) => ReactNode;
   /** Extra resource fields selected in addition to the declared columns. */
   fields?: readonly string[];
   /** Base resource filter applied before user-owned view filters. */
@@ -284,6 +284,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   /** Controls rendered in the toolbar's leading slot, beside the filter — e.g. a
    * "Connect" button for a list whose rows come from a connect flow. */
   toolbarActions?: ReactNode;
+  /** Present resource controls in the shared pane band; callers supply only its lens and scope. */
+  pane?: ResourceToolbarProps["pane"];
   /** Domain actions, called only when selectable and something is selected.
    * The third argument describes the surface's query: an empty filter ({}) means
    * the whole collection; the server does not check selection membership against

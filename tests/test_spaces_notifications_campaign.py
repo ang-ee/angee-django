@@ -5,7 +5,7 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from rebac import PermissionDenied, actor_context, system_context
 
-from angee.base.checks import check_ownership
+from angee.checks import check_ownership
 from angee.messaging.models import NotificationPolicy
 from angee.messaging.testing.models import MessageSubtype, Party, Person, ThreadFollower
 from angee.spaces.testing.models import Membership

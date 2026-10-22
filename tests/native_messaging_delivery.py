@@ -22,6 +22,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection, transaction
+from django.db.models.deletion import ProtectedError
 from django.db.models.signals import post_save
 from django.test import TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -34,20 +35,22 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout, ReadTimeout
 from urllib3.exceptions import MaxRetryError, NameResolutionError, NewConnectionError, ProtocolError
 
-from angee.base.mixins import StaleRevisionError
+from angee.changesets import changeset_model
 from angee.graphql.actions import MAX_ACTION_SELECTION, ActionSelectionInput
 from angee.graphql.ids import PublicID
 from angee.graphql.schema import GraphQLSchemas
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.http import RedirectOriginError, ResponseTooLargeError
 from angee.integrate.signals import discovery_finished
-from angee.integrate.streams import StreamDefinition, StreamPage
+from angee.integrate.states import StreamDefinition
+from angee.integrate.streams import StreamPage
 from angee.jobs.enqueue import celery_app
 from angee.messaging import delivery
 from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, ParsedHandle, ParsedMessage, ParsedPart
 from angee.messaging.email import AnymailEmailChannelBackend
 from angee.messaging.events import message_ingested
 from angee.messaging.managers import DeliveryReconciliationBusy
+from angee.models import StaleRevisionError
 from angee.posts import mcp_tools
 from angee.posts.backends import RECONCILIATION_SKEW_MARGIN, FeedBackend, FeedChannelBackend, ParsedPost, RecordRefusal
 from angee.posts.ingest import land_posts
@@ -198,8 +201,8 @@ class DeliveryContracts(DeliveryFixtures):
             comment.thread.refresh_from_db()
             published_count = comment.thread.message_count
         with actor_context(self.agent):
-            reply = comment.reply_to_comment(body="A reply", actor=self.agent, creation_key="turn")
-            replay = comment.reply_to_comment(body="A reply", actor=self.agent, creation_key="turn")
+            reply = comment.reply_to_comment(body="A reply", actor=self.agent, idempotency_key="turn")
+            replay = comment.reply_to_comment(body="A reply", actor=self.agent, idempotency_key="turn")
             self.assertEqual(reply.pk, replay.pk)
             self.assertEqual(reply.status, "draft")
             self.assertIsNone(reply.scheduled_at)
@@ -226,7 +229,9 @@ class DeliveryContracts(DeliveryFixtures):
                 self.feed.reply_hold = hours
                 self.feed.save(update_fields=("reply_hold", "updated_at"))
             with actor_context(self.agent):
-                reply = comment.reply_to_comment(body=f"Reply {hours}", actor=self.agent, creation_key=f"turn-{hours}")
+                reply = comment.reply_to_comment(
+                    body=f"Reply {hours}", actor=self.agent, idempotency_key=f"turn-{hours}"
+                )
             self.assertEqual(reply.status, status)
             self.assertEqual(reply.scheduled_at is not None, hours > 0)
             with system_context(reason="next independent hold case"):
@@ -447,7 +452,9 @@ class DeliveryContracts(DeliveryFixtures):
                 records = [fixture.post("first"), fixture.post("")] if page == 0 else [fixture.post("second")]
                 return StreamPage(records=records, cursor={"page": page + 1}, exhausted=page > 0)
 
-        with system_context(reason="paged feed fixture"), patch.object(Feed, "backend", property(PagedFeed)):
+        with system_context(reason="paged feed fixture"), patch.object(
+            Feed.feed_backend_class.field, "resolve_class", return_value=PagedFeed,
+        ):
             self.assertEqual(self.feed.sync(), 2)
             stream = apps.get_model("integrate", "SyncStream").objects.get(integration_id=self.feed.pk, key="history")
             self.assertEqual(stream.cursor, {"page": 2})
@@ -469,7 +476,9 @@ class DeliveryContracts(DeliveryFixtures):
                      RecordRefusal("bad-second", "invalid_record")], {"page": 1},
                 )
 
-        with system_context(reason="refused feed records"), patch.object(Feed, "backend", property(RefusingFeed)):
+        with system_context(reason="refused feed records"), patch.object(
+            Feed.feed_backend_class.field, "resolve_class", return_value=RefusingFeed,
+        ):
             self.assertEqual(self.feed.sync(), 1)
             stream = apps.get_model("integrate", "SyncStream").objects.get(integration_id=self.feed.pk)
             self.assertEqual(stream.cursor, {"page": 1})
@@ -498,7 +507,7 @@ class DeliveryContracts(DeliveryFixtures):
                 return StreamPage([fixture.post(f"observed-{page}")], {"page": page + 1}, exhausted=False)
 
         with system_context(reason="bounded separate reobservation"), patch.object(
-            Feed, "backend", property(BoundedFeed),
+            Feed.feed_backend_class.field, "resolve_class", return_value=BoundedFeed,
         ):
             self.feed.config = {"reobserve_units_per_cycle": 2}
             self.feed.save(update_fields=("config", "updated_at"))
@@ -748,21 +757,22 @@ class DeliveryContracts(DeliveryFixtures):
                 self.assertEqual(row.status, expected)
                 self.assertEqual(row.acknowledged_by_id, self.operator.pk)
 
-    def test_discarded_reply_creation_key_does_not_reinsert(self):
+    def test_discarded_reply_idempotency_claim_does_not_reinsert(self):
         comment = self.comment()
         with actor_context(self.agent):
-            reply = comment.reply_to_comment(body="Discard me", actor=self.agent, creation_key="discarded-turn")
+            reply = comment.reply_to_comment(body="Discard me", actor=self.agent, idempotency_key="discarded-turn")
         with actor_context(self.operator):
             Message.objects.discard_held_drafts(self.selection(reply), actor=self.operator)
         with actor_context(self.agent):
             try:
-                replay = comment.reply_to_comment(body="Discard me", actor=self.agent, creation_key="discarded-turn")
+                replay = comment.reply_to_comment(body="Discard me", actor=self.agent, idempotency_key="discarded-turn")
             except ValidationError:
                 pass
             else:
                 self.assertEqual(replay.pk, reply.pk)
         with system_context(reason="discarded receipt result"):
-            self.assertEqual(Message.objects.filter(client_creation_key="discarded-turn").count(), 1)
+            claim = changeset_model()._base_manager.get(key="discarded-turn")
+            self.assertEqual(claim.created_row.pk, reply.pk)
 
     @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
     def test_email_explicit_refusals_and_lost_acknowledgements_settle_distinctly(self):
@@ -879,9 +889,9 @@ class DeliveryContracts(DeliveryFixtures):
 
         with system_context(reason="trusted caller with explicit reply actor"):
             first = Message.objects.compose_reply(comment, body="Reply", sender=self.feed.handle, actor=self.agent,
-                                                   creation_key="admitted", admit=admit)
+                                                   idempotency_key="admitted", admit=admit)
             replay = Message.objects.compose_reply(comment, body="Reply", sender=self.feed.handle, actor=self.agent,
-                                                    creation_key="admitted", admit=admit)
+                                                    idempotency_key="admitted", admit=admit)
         self.assertEqual(first.pk, replay.pk)
         self.assertEqual(seen, [comment.pk])
 
@@ -891,8 +901,8 @@ class DeliveryContracts(DeliveryFixtures):
             stranger = get_user_model().objects.create_user(username="unprivileged-replier")
             with self.assertRaises(PermissionDenied):
                 Message.objects.compose_reply(comment, body="Reply", sender=self.feed.handle, actor=stranger,
-                                              creation_key="denied")
-            self.assertFalse(Message.objects.filter(client_creation_key="denied").exists())
+                                              idempotency_key="denied")
+            self.assertFalse(changeset_model()._base_manager.filter(key="denied").exists())
 
     def test_failed_discovery_receiver_is_repaired_before_classifying_the_next_record(self):
         seen = []
@@ -987,7 +997,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         self.assertFalse(FeedBackend.reconciles_delivery())
         self.assertTrue(FakeFeedBackend.reconciles_delivery())
         with system_context(reason="class-only transport capability"), patch.object(
-            Feed, "resolve_impl", return_value=FakeFeedBackend,
+            Feed.feed_backend_class.field, "resolve_class", return_value=FakeFeedBackend,
         ), patch.object(FakeFeedBackend, "__init__", side_effect=AssertionError("Constructed a backend")):
             self.assertTrue(self.original_channel_capability(self.channel))
             self.assertEqual(self.original_channel_visibility_delay(self.channel), timedelta())
@@ -1334,11 +1344,11 @@ class FeedDeliveryContracts(DeliveryFixtures):
             second.save(update_fields=("config", "updated_at"))
             second_provider.consume_quota(1)
             quota.refresh_from_db()
-            self.assertEqual((quota.quota_used, quota.quota_limit), (6, 10000))
+            self.assertEqual(quota.quota_used, 6)
             with self.assertRaises(IntegrationError):
                 first_provider.consume_quota(1, delivery=True)  # This feed still checks its own limit of 5.
             quota.refresh_from_db()
-            self.assertEqual((quota.quota_used, quota.quota_limit), (6, 10000))
+            self.assertEqual(quota.quota_used, 6)
             second_provider.scope = "fake:project:independent"
             second_provider.consume_quota(3)
             self.assertEqual(apps.get_model("posts", "Quota").objects.count(), 2)
@@ -1366,7 +1376,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         self.assertEqual(provider.posts, 0)
         self.assertEqual(provider.lookups, [])
 
-    def test_deleting_a_quota_anchor_preserves_the_shared_scopes_usage(self):
+    def test_quota_authorization_anchor_is_required_and_protected(self):
         with system_context(reason="shared quota anchor lifecycle"):
             second = Feed.objects.create(vendor=self.feed.vendor, owner=self.operator, display_name="Remaining feed",
                                          external_id="remaining", backend_class="feed", feed_backend_class="manual")
@@ -1375,11 +1385,12 @@ class FeedDeliveryContracts(DeliveryFixtures):
             self.addCleanup(first_provider.close)
             self.addCleanup(second_provider.close)
             period = first_provider.consume_quota(3)
-            self.feed.delete()
+            with self.assertRaises(ProtectedError):
+                self.feed.delete()
             period.refresh_from_db()
-            self.assertIsNone(period.integration_id)
             same_period = second_provider.consume_quota(2)
             same_period.refresh_from_db()
+        self.assertEqual(period.integration_id, self.feed.pk)
         self.assertEqual(same_period.pk, period.pk)
         self.assertEqual(same_period.quota_used, 5)
 
@@ -1707,23 +1718,6 @@ class FeedDeliveryContracts(DeliveryFixtures):
                         queues=celery_app.amqp.queues, app=celery_app)
         route = router.route({"queue": "prefork"}, delivery.DELIVER_MESSAGE_TASK, kwargs={})
         self.assertEqual(route["queue"].name, "prefork")
-
-    def test_scoped_quota_cutover_retains_legacy_usage_as_separate_history(self):
-        with system_context(reason="documented upgrade-day quota overlap"):
-            self.feed.config = {"quota_limit": 5, "reply_reserve": 0}
-            self.feed.save(update_fields=("config", "updated_at"))
-            provider = FakeFeedBackend(self.feed)
-            self.addCleanup(provider.close)
-            period = provider.current_quota_period()
-            legacy = apps.get_model("posts", "Quota").objects.create(
-                integration=self.feed, scope=None, period_start=period.period_start,
-                period_end=period.period_end, quota_used=5, quota_limit=5,
-            )
-            provider.consume_quota(5, delivery=True)
-            legacy.refresh_from_db()
-            period.refresh_from_db()
-            self.assertEqual((legacy.quota_used, period.quota_used), (5, 5))
-            self.assertNotEqual(legacy.pk, period.pk)
 
     def test_lost_reconcile_claims_use_the_same_attempt_cap_as_settled_failures(self):
         row = self.queued_reply()

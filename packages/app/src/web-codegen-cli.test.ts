@@ -99,6 +99,8 @@ describe("angee-web-codegen", () => {
       'export const composedAddons = [addon0, { ...addon1, dependsOn: [addon0.id] }, '
       + '{ id: "deployment", ...{"shell":{"hosts":{"demo.localhost":"demo"}}}, dependsOn: [addon0.id, addon1.id] }] as const;',
     );
+    // Theme contributions are read from the addon packages, never the deployment layer.
+    expect(appModule).toContain("const contributedThemeDefinitions = [addon0, addon1].flatMap((addon) =>");
   });
 
   it("emits URL imports and a parallel schema metadata loader", async () => {

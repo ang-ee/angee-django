@@ -5,6 +5,8 @@
 import { graphql, type DocumentType } from "@angee/gql/console";
 
 export const STORAGE_CATALOGUE_LIMIT = 500;
+/** The record edge declared by attachment-capable resource metadata. */
+export const FILE_ATTACHMENT_MODEL = "storage.FileAttachment";
 
 export const StorageFileUploadBegin = graphql(`
   mutation StorageFileUploadBegin($input: FileUploadBeginInput!) {
@@ -33,17 +35,6 @@ export const StorageFileUploadFinalize = graphql(`
         filename
         upload_state
       }
-    }
-  }
-`);
-
-// Restoring a trashed file is the shared record verb; the Trash smart folder
-// reads the file resource's own trash flag.
-export const StorageRestoreFile = graphql(`
-  mutation StorageRestoreFile($id: ID!) {
-    restore_record(target_type: "storage/file", target_id: $id, confirm: true) {
-      ok
-      message
     }
   }
 `);
@@ -115,6 +106,7 @@ export const StorageFileById = graphql(`
   query StorageFileById($id: String!) {
     files_by_pk(id: $id) {
       id
+      permissions
       filename
       title
       size_bytes
@@ -144,9 +136,15 @@ export const StorageRecordFiles = graphql(`
       attachments {
         id
         label
-        file { id filename title }
+        file { id filename title size_bytes created_by_label }
       }
     }
+  }
+`);
+
+export const StorageFileAttachments = graphql(`
+  query StorageFileAttachments($file: ID!) {
+    file_attachments(file: $file) { id model_label record_id }
   }
 `);
 

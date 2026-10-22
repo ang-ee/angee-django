@@ -77,11 +77,10 @@ export function useSearchShortcuts(declaration?: ListSearchDeclaration, metadata
 export function validateSearchShortcutCatalog(
   children: readonly ComposedContainerChild<SearchShortcut>[],
   catalog: SearchCatalog,
-  { renderItem = false, query, reported }: { renderItem?: boolean; query?: ResourceQuery; reported?: Set<string> } = {},
+  { query, reported }: { query?: ResourceQuery; reported?: Set<string> } = {},
 ): readonly ComposedContainerChild<SearchShortcut>[] {
   return children.filter(({ id, content }) => {
     validateSearchShortcut(content, id);
-    if (content.kind === "group" && renderItem) throw new Error(`Search shortcut "${id}": grouping is unavailable with renderItem.`);
     const reason = query && searchShortcutQueryError(content, query);
     if (reason) return rejectSearchDeclaration("shortcut", id, reason, reported);
     const fail = (reason: string) => rejectSearchDeclaration("shortcut", id, reason, reported);

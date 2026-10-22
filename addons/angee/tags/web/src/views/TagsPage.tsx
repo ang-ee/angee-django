@@ -7,7 +7,7 @@ import { tagForm } from "./TagForm";
 const TAG_MODEL = "tags.Tag";
 
 /**
- * The tag vocabulary — a plain resource page for shared tags. Scope-specific
+ * The tag vocabulary — including its shared attention category — is a plain resource page. Scope-specific
  * addons may contribute their own facet/column/field declarations through `tags.tags#facets`, `#columns` and `#fields`.
  */
 export function TagsPage(): React.ReactElement {
@@ -20,6 +20,7 @@ export function TagsPage(): React.ReactElement {
         {containerContents(scopeFacetEntries)}
         <Column field="name" header={t("col.name")} />
         <Column field="color" header={t("col.color")} />
+        <Column field="attention" header={t("col.attention")} />
         {containerContents(scopeColumnEntries)}
         <Column field="updated_at" />
       </List>

@@ -13,18 +13,9 @@ describe("iam addon manifest", () => {
     expect(() => expectValidBaseAddon(iam)).not.toThrow();
   });
 
-  test("registers the public login callback route", () => {
-    const route = iam.routes?.find((item) => item.name === "iam.login.callback");
-    expect(route?.name).toBe("iam.login.callback");
-    expect(route?.path).toBe("/sso/callback");
-    expect(route?.layout).toBe("public");
-    expect(route?.component).toBeTypeOf("function");
-  });
-
   test("registers the console routes, with $id detail children for the ResourceLists", () => {
     const names = iam.routes?.map((route) => route.name) ?? [];
-    // The Users ResourceList contributes a list + a `$id` record route. (OIDC login is
-    // now a tab on integrate's OAuth client form, not a separate iam page.)
+    // The Users ResourceList contributes a list + a `$id` record route.
     for (const name of [
       "iam.overview",
       "iam.users",
@@ -101,15 +92,12 @@ describe("iam addon manifest", () => {
     expect(iam.containers?.["resource#utilities"]).toMatchObject({ "iam.share-list": { sequence: 20, content: expect.anything() } });
   });
 
-  test("contributes the login methods, the OIDC tab on the OAuth client form and the user's account verbs", () => {
+  test("contributes access controls and the user's account verbs", () => {
     // The Share panel's role and visibility containers, addressed per model by their contributors.
     expect(iam.containers?.["iam#access-roles"]).toEqual({ models: true });
     expect(iam.containers?.["iam#access-visibility"]).toEqual({ models: true });
     expect(iam.containers?.["form#chrome"]).toMatchObject({ "iam.share-record": { sequence: 20 } });
     expect(iam.containers?.["resource#utilities"]).toMatchObject({ "iam.share-list": { sequence: 20 } });
-    expect(iam.containers?.["auth.login#method"]).toMatchObject({ "iam.oauth-login": { content: expect.anything() } });
-    // The OIDC login tab the iam addon adds to integrate's OAuth client form.
-    expect(iam.containers?.["integrate.OAuthClient#sections"]).toMatchObject({ "iam.oidc-login": { content: expect.anything() } });
     // Account verbs are overflow-menu children on the user form, each reading the row's projection.
     const verbs = iam.containers?.["iam.User#actions-menu"] as Record<string, { requiredFields?: readonly string[] }>;
     expect(Object.keys(verbs)).toEqual(["iam.set-active", "iam.rename", "iam.issue-password", "iam.reset-password"]);

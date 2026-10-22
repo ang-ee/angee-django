@@ -6,6 +6,7 @@ const meta = {
   component: Avatar,
   parameters: {
     layout: "centered",
+    owner: [Avatar, AvatarStack],
   },
   argTypes: {
     size: {
@@ -65,3 +66,4 @@ export const Stack: Story = {
     </AvatarStack>
   ),
 };
+

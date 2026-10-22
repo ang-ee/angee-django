@@ -3,7 +3,9 @@ import type * as React from "react";
 import { useUiT } from "../../i18n";
 import { Button } from "../../ui/button";
 
-/** Tint for a control band containing unsaved edits. */
+/** Tint for a control band containing unsaved edits.
+ * @kind token
+ */
 export const dirtyControlBandClassName = "bg-brand-soft";
 
 export interface SaveDiscardActionsProps {
@@ -20,7 +22,9 @@ export interface SaveDiscardActionsProps {
   onSave: () => void;
 }
 
-/** Standard control-band actions; callers own draft state and persistence. */
+/** Standard control-band actions; callers own draft state and persistence.
+ * @kind fragment
+ */
 export function SaveDiscardActions({
   isDirty,
   pending = false,

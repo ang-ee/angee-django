@@ -27,9 +27,7 @@ import {
 } from "../runtime";
 import { Chatter, useChatterPresentation } from "./Chatter";
 import { CHATTER_CONTAINERS } from "./chatter-containers";
-import { ChatterProvider, useChatter, useChatterContent, type ChatterContent } from "./chatter-context";
-import { useRecordPeek } from "./record-peek";
-import { registerForm, type RegisteredFormProps } from "../views/form/registered-form";
+import { ChatterProvider, useChatterContent, type ChatterContent } from "./chatter-context";
 
 afterEach(() => cleanup());
 
@@ -47,8 +45,8 @@ function aside(
 ): ComposedContainers {
   const base = containersFromChildren(CHATTER_CONTAINERS, examples ? {
     "record#aside": {
-      "notes.comments": { sequence: 10, content: { label: "Comments", aliases: ["comments"], render: () => <span>Comments content</span> } },
-      "notes.history": { sequence: 20, content: { label: "History", aliases: ["history", "activity"], render: () => <span>History content</span> } },
+      "notes.comments": { sequence: 10, content: { label: "Comments", render: () => <span>Comments content</span> } },
+      "notes.history": { sequence: 20, content: { label: "History", render: () => <span>History content</span> } },
     },
   } : {});
   const added = containersFromChildren([], children);
@@ -67,10 +65,14 @@ const tab = (content: ChatterTabContent, sequence?: number): ContainerChild<Chat
 const onRoute = (...routes: string[]) => ({ apps: [], routes });
 
 describe("Chatter", () => {
-  test("the framework contributes no placeholder tabs", async () => {
-    renderChatter({ containers: aside({}, { examples: false }) });
+  test("a create route has no persisted record capabilities", async () => {
+    const useCount = vi.fn(() => 1);
+    renderChatter({ containers: aside({ "record#aside": {
+      tasks: tab({ label: "Tasks", useCount, render: () => <span>Tasks</span> }),
+    } }) }, { recordId: "new" });
     expect(await screen.findByText("Aside hidden")).toBeTruthy();
-    expect(screen.queryByRole("tab")).toBeNull();
+    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(useCount).not.toHaveBeenCalled();
   });
 
   test("a layer's only on the route narrows the tabs before they render or count", async () => {
@@ -120,7 +122,7 @@ describe("Chatter", () => {
   });
 
   test("an aside whose every tab a layer excepts is absent", async () => {
-    renderChatter({ containers: aside({}, { rules: [{ layer: "notes", except: ["notes.comments", "notes.history"] }] }) });
+    renderChatter({ containers: aside({}, { rules: [{ layer: "notes", except: ["activity", "notes.comments", "notes.history"] }] }) });
     expect(await screen.findByText("Aside hidden")).toBeTruthy();
     expect(screen.queryByRole("complementary")).toBeNull();
   });
@@ -150,41 +152,10 @@ describe("Chatter", () => {
     expect(screen.queryByRole("complementary")).toBeNull();
   });
 
-  test("a chatterTab link naming a tab's earlier id selects it through its aliases", async () => {
-    renderChatter({
-      containers: aside({ "record#aside": {
-        "messaging.history": tab({ label: "Messages", aliases: ["history"], render: () => <span>Message history</span> }, 15),
-      } }, { rules: [{ layer: "messaging", except: ["notes.history"] }] }),
-    }, { search: "?chatterTab=history" });
-    const selected = await screen.findByRole("tab", { name: "Messages" });
-    await waitFor(() => expect(selected.getAttribute("aria-selected")).toBe("true"));
-    expect(screen.getByText("Message history")).toBeTruthy();
-  });
-
-  test("a chatterTab link names a tab by its current id too", async () => {
+  test("a chatterTab link names a tab by its id", async () => {
     renderChatter({ containers: aside() }, { search: "?chatterTab=notes.history" });
     const selected = await screen.findByRole("tab", { name: "History" });
     await waitFor(() => expect(selected.getAttribute("aria-selected")).toBe("true"));
-  });
-
-  test("setActiveTab and the default tab resolve an earlier id through the aliases", async () => {
-    function OpenSources() {
-      const { setActiveTab } = useChatter();
-      return <button type="button" onClick={() => setActiveTab("sources")}>Open sources</button>;
-    }
-    const containers = aside({ "record#aside": {
-      "messaging.comments": tab({ label: "Comments", aliases: ["comments"], render: () => <span>Comment thread</span> }, 10),
-      "messaging.history": tab({ label: "History", aliases: ["history"], render: () => <span>History log</span> }, 20),
-      "messaging.sources": tab({ label: "Sources", aliases: ["sources"], render: () => <span>Source threads</span> }, 30),
-    } }, { examples: false });
-    // Neither is the first tab, so an unresolved id would fall back to Comments.
-    renderChatter({ containers }, { defaultTab: "history", children: <OpenSources /> });
-    const history = await screen.findByRole("tab", { name: "History" });
-    expect(history.getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByText("History log")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Open sources" }));
-    await waitFor(() => expect(screen.getByRole("tab", { name: "Sources" }).getAttribute("aria-selected")).toBe("true"));
-    expect(await screen.findByText("Source threads")).toBeTruthy();
   });
 
   test("only renders the agents tab when an addon contributes it", async () => {
@@ -232,6 +203,14 @@ describe("Chatter", () => {
     expect(commentsTab.textContent).not.toContain("2");
   });
 
+  test("a declared Related count overrides the framework's group aggregation", async () => {
+    renderChatter({ containers: aside({
+      "record#aside": { related: tab({ label: "Related", useCount: () => 9, render: () => <span>Related content</span> }) },
+      "related#groups": { files: tab({ label: "Files", useCount: () => 2, render: () => null }) },
+    }) });
+    expect(await screen.findByRole("tab", { name: /Related\s*9/ })).toBeTruthy();
+  });
+
   test("model tabs follow the record's canonical and concrete models, scoped before rendering", async () => {
     const hiddenCount = vi.fn(() => 9);
     const hiddenRender = vi.fn(() => <span>Wrong model</span>);
@@ -254,7 +233,10 @@ describe("Chatter", () => {
 
     const historyTab = await screen.findByRole("tab", { name: "History" });
     // Unsequenced siblings across the model addresses resolve in id order.
-    expect(screen.getAllByRole("tab").map((node) => node.textContent)).toEqual(["Perks", "History"]);
+    expect(screen.getAllByRole("tab")).toEqual([
+      screen.getByRole("tab", { name: "Perks" }),
+      screen.getByRole("tab", { name: "History" }),
+    ]);
     fireEvent.click(historyTab);
     expect(screen.getByText("History for rec_1")).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Wrong model" })).toBeNull();
@@ -262,31 +244,6 @@ describe("Chatter", () => {
     expect(hiddenCount).not.toHaveBeenCalled();
     expect(hiddenRender).not.toHaveBeenCalled();
     expect(blockedRender).not.toHaveBeenCalled();
-  });
-
-  test("lazily opens record peeks without discarding an unsaved workflow input", async () => {
-    const recordsMounted = vi.fn();
-    renderChatterContent(
-      <PublishedContent content={{
-        tabs: [
-          { id: "workflow", label: "Workflow", children: <label>Reason<input aria-label="Reason" defaultValue="" /></label> },
-          { id: "records", label: "Records", children: <MountProbe onMount={recordsMounted}>Document evidence</MountProbe> },
-        ],
-      }} />,
-      "workflow",
-    );
-
-    const input = await screen.findByRole("textbox", { name: "Reason" });
-    fireEvent.change(input, { target: { value: "keep this draft" } });
-    expect(recordsMounted).not.toHaveBeenCalled();
-    expect(screen.queryByText("Document evidence")).toBeNull();
-
-    fireEvent.click(screen.getByRole("tab", { name: "Records" }));
-    expect(await screen.findByText("Document evidence")).toBeTruthy();
-    expect(recordsMounted).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole("tab", { name: "Workflow" }));
-    expect((screen.getByRole("textbox", { name: "Reason" }) as HTMLInputElement).value).toBe("keep this draft");
-    expect(recordsMounted).toHaveBeenCalledOnce();
   });
 
   test("lets active panel content shrink to the chatter viewport", async () => {
@@ -304,130 +261,11 @@ describe("Chatter", () => {
     expect(panelContent?.className).toContain("w-full");
   });
 
-  test("removing a temporary record peek preserves the publisher's tabs and composer", async () => {
-    const base = {
-      tabs: [{ id: "workflow", label: "Workflow", children: "Decision form" }],
-      composer: <button type="button">Add comment</button>,
-    } satisfies ChatterContent;
-    const peek = {
-      tabs: [{ id: "records", label: "Records", children: "Document evidence" }],
-    } satisfies ChatterContent;
-    renderChatterContent(
-      <CompositionHarness base={base} peek={peek} />,
-      "workflow",
-    );
-
-    expect(await screen.findByRole("tab", { name: "Workflow" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Records" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Add comment" })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Close record peek" }));
-    await waitFor(() => expect(screen.queryByRole("tab", { name: "Records" })).toBeNull());
-    expect(screen.getByRole("tab", { name: "Workflow" })).toBeTruthy();
-    expect(screen.getByText("Decision form")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Add comment" })).toBeTruthy();
-  });
-
-  test("record peeks render the registered canonical form in read-only mode", async () => {
-    const seen = vi.fn();
-    const CanonicalForm = (props: RegisteredFormProps) => {
-      seen(props);
-      return <p>Canonical counterparty details</p>;
-    };
-    render(chatterContentView(<RecordPeekHarness />, "comments", {
-      forms: { "parties.Party": registerForm("parties.Party", CanonicalForm) },
-    }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Review note" }), {
-      target: { value: "Retain this review" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Inspect counterparty" }));
-    expect(await screen.findByText("Canonical counterparty details")).toBeTruthy();
-    expect(seen).toHaveBeenCalledWith(expect.objectContaining({
-      resource: "parties.Party", id: "pty_1", readOnly: true, hideRecordChrome: true,
-    }));
-    expect((screen.getByRole("textbox", { name: "Review note" }) as HTMLInputElement).value)
-      .toBe("Retain this review");
-  });
-
-  test("initial record evidence selects Records before explicit tab intent", async () => {
-    renderRecordPeekIntent();
-
-    fireEvent.click(screen.getByRole("button", { name: "Load initial evidence" }));
-    const records = await screen.findByRole("tab", { name: "Records" });
-    expect(records.getAttribute("aria-selected")).toBe("true");
-    expect(await screen.findByText("Evidence pty_1")).toBeTruthy();
-  });
-
-  test("late initial record evidence preserves explicit tab intent", async () => {
-    renderRecordPeekIntent();
-
-    fireEvent.click(screen.getByRole("tab", { name: "Workflow" }));
-    expect(screen.getByRole("tab", { name: "Workflow" }).getAttribute("aria-selected")).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: "Load initial evidence" }));
-    await screen.findByRole("tab", { name: "Records" });
-    expect(screen.getByRole("tab", { name: "Workflow" }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByText("Workflow history")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Open evidence" }));
-    expect(screen.getByRole("tab", { name: "Records" }).getAttribute("aria-selected")).toBe("true");
-    expect(await screen.findByText("Evidence pty_2")).toBeTruthy();
-  });
 });
-
-function RecordPeekHarness(): React.ReactElement {
-  const open = useRecordPeek();
-  return <>
-    <input aria-label="Review note" />
-    <button type="button" onClick={() => open({ model: "parties.Party", id: "pty_1" })}>
-      Inspect counterparty
-    </button>
-  </>;
-}
-
-function RecordPeekIntentHarness(): React.ReactElement {
-  const open = useRecordPeek();
-  return <>
-    <button type="button" onClick={() => open(
-      { model: "parties.Party", id: "pty_1" },
-      { tabActivation: "initial" },
-    )}>
-      Load initial evidence
-    </button>
-    <button type="button" onClick={() => open({ model: "parties.Party", id: "pty_2" })}>
-      Open evidence
-    </button>
-  </>;
-}
-
-function renderRecordPeekIntent(): void {
-  const CanonicalForm = ({ id }: RegisteredFormProps) => <p>Evidence {id}</p>;
-  render(chatterContentView(<>
-    <PublishedContent content={{ tabs: [
-      { id: "workflow", label: "Workflow", children: <p>Workflow history</p> },
-    ] }} />
-    <RecordPeekIntentHarness />
-  </>, "comments", {
-    forms: { "parties.Party": registerForm("parties.Party", CanonicalForm) },
-  }));
-}
 
 function PublishedContent({ content }: { content: ChatterContent }): null {
   useChatterContent(content);
   return null;
-}
-
-function CompositionHarness({ base, peek }: { base: ChatterContent; peek: ChatterContent }): React.ReactElement {
-  const [open, setOpen] = React.useState(true);
-  return <>
-    <PublishedContent content={base} />
-    {open ? <PublishedContent content={peek} /> : null}
-    <button type="button" onClick={() => setOpen(false)}>Close record peek</button>
-  </>;
-}
-
-function MountProbe({ onMount, children }: { onMount: () => void; children: React.ReactNode }): React.ReactElement {
-  React.useEffect(() => onMount(), [onMount]);
-  return <>{children}</>;
 }
 
 function useCommentsCount(
@@ -442,7 +280,7 @@ type TestRuntime = Partial<AppRuntime>;
 
 function renderChatter(
   runtime: TestRuntime,
-  { record = true, search = "", defaultTab = "agents", children }: { record?: boolean; search?: string; defaultTab?: string; children?: React.ReactNode } = {},
+  { record = true, recordId = "rec_1", search = "", defaultTab = "agents", children }: { record?: boolean; recordId?: string; search?: string; defaultTab?: string; children?: React.ReactNode } = {},
 ): void {
   function VisibilityProbe() { return <span>{useChatterPresentation().visible ? "Aside available" : "Aside hidden"}</span>; }
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -461,7 +299,7 @@ function renderChatter(
   });
   const router = createRouter({
     routeTree: rootRoute.addChildren([recordRoute]),
-    history: createMemoryHistory({ initialEntries: [`${record ? "/records/rec_1" : "/records"}${search}`] }),
+    history: createMemoryHistory({ initialEntries: [`${record ? `/records/${recordId}` : "/records"}${search}`] }),
   });
 
   render(<RouterProvider router={router} />);

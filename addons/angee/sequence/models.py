@@ -39,8 +39,8 @@ from django.db import models
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.fields import StateField
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel, role_anchor
+from angee.fields import StateField
+from angee.models import AngeeDataModel, AngeeManager, AngeeModel, role_anchor
 
 
 class PeriodReset(models.TextChoices):
@@ -51,7 +51,7 @@ class PeriodReset(models.TextChoices):
     MONTH = "month", "Monthly"
 
 
-class SequenceManager(AngeeManager):
+class SequenceManager[SequenceT: Sequence](AngeeManager[SequenceT]):
     """Draws and previews formatted numbers from a keyed sequence."""
 
     def next_value(self, key: str, *, on_date: date | None = None) -> str:
@@ -92,10 +92,12 @@ class SequenceManager(AngeeManager):
             current = self._counter_model().objects.peek(sequence, period)
             return sequence.format_number(current + 1, draw_date)
 
-    def _counter_model(self) -> type[models.Model]:
+    def _counter_model(self) -> type[SequenceCounter]:
         """Return the sibling counter model through the app registry."""
 
-        return apps.get_model(self.model._meta.app_label, "SequenceCounter")
+        model = apps.get_model(self.model._meta.app_label, "SequenceCounter")
+        assert issubclass(model, SequenceCounter)
+        return model
 
 
 class Sequence(AngeeDataModel):
@@ -156,7 +158,7 @@ class Sequence(AngeeDataModel):
         )
 
 
-class SequenceCounterManager(AngeeManager):
+class SequenceCounterManager[CounterT: SequenceCounter](AngeeManager[CounterT]):
     """Owns the locked counter row for one ``(sequence, period)`` pair.
 
     Not a GraphQL surface: counter rows are internal bookkeeping the caller never
@@ -235,5 +237,5 @@ class SequenceCounter(AngeeModel):
 
 SequenceRole = role_anchor("sequence/role")
 """The ``sequence/role`` anchor: its const ``admin`` arm resolves a platform admin
-as an effective sequence manager. See :func:`angee.base.models.role_anchor`.
+as an effective sequence manager. See :func:`angee.models.role_anchor`.
 """

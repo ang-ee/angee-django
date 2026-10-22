@@ -46,6 +46,9 @@ export interface GalleryViewProps<TRow extends Row = Row> {
   className?: string;
 }
 
+/**
+ * @kind surface
+ */
 export function GalleryView<TRow extends Row = Row>({
   rows = [],
   imageField,

@@ -1,12 +1,12 @@
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  Button,
   Filter,
   RelationFieldWidget,
-  Select,
+
   useResourceView,
   useRelationSelectedOption,
   useEnumOptions,
+  optionLabel,
   type FilterClauseField,
   type ResourceToolbarFilterOption,
   type ResourceViewFilter,
@@ -14,7 +14,6 @@ import {
 import { InboxAccounts } from "./documents";
 import { INBOX_SOURCE_MODELS } from "./state";
 import {
-  COVERAGE_FIELDS,
   COVERAGE_KINDS,
   DIRECT_MAIL_PRESET,
   InboxFilter,
@@ -22,59 +21,19 @@ import {
   type NavigatorLens,
   type ResultLens,
 } from "./contract";
-import { useNexusT } from "../i18n";
-
-/** Sort writes the same native collection state as the sortable column headers. */
-export function InboxOrder({ navigator = false }: { navigator?: boolean }) {
-  const t = useNexusT();
-  const view = useResourceView();
-  const options = navigator
-    ? [
-        { value: "latest", label: t("inbox.recent") },
-        { value: "label", label: t("inbox.name") },
-        { value: "count", label: t("inbox.count") },
-        { value: "first", label: t("inbox.first") },
-      ]
-    : [
-        { value: "latest", label: t("inbox.latest") },
-        { value: "oldest", label: t("inbox.oldest") },
-      ];
-  const sort = view.state.sorting?.[0];
-  return (
-    <Select
-      size="sm"
-      aria-label={t("inbox.order")}
-      className="w-36"
-      options={options}
-      value={
-        !navigator && sort?.desc === false ? "oldest" : (sort?.id ?? "latest")
-      }
-      onValueChange={(value) =>
-        view.setSorting([
-          {
-            id: value === "oldest" ? "latest" : value,
-            desc: value === "latest" || value === "count",
-          },
-        ])
-      }
-    />
-  );
-}
+import { connectionLabel, useNexusT } from "../i18n";
 
 /**
- * Single-select editor for the shared conversation-kind coverage. Each choice
- * replaces the `kind` field as a unit — Direct narrows to one-to-one threads,
- * "Direct & mail" keeps those plus email while still excluding group chats — so a
- * pick never unions with a stale selection. It edits the same coverage fact the
- * results toolbar owns, so both panes narrow together.
+ * The shared conversation-kind coverage as one choice. Each choice replaces the
+ * `kind` field as a unit — Direct narrows to one-to-one threads, "Direct & mail"
+ * keeps those plus email while still excluding group chats — so a pick never
+ * unions with a stale selection. It edits the same coverage fact the results
+ * toolbar owns, so both panes narrow together.
  */
-export function InboxCoverageKind({
-  coverage,
-  onCoverage,
-}: {
-  coverage: ResourceViewFilter;
-  onCoverage: (next: ResourceViewFilter) => void;
-}) {
+export function useCoverageKind(
+  coverage: ResourceViewFilter,
+  onCoverage: (next: ResourceViewFilter) => void,
+): { value: string; label: string; options: readonly { value: string; label: string }[]; setValue: (next: string) => void } {
   const t = useNexusT();
   let kinds: readonly string[] = [];
   try {
@@ -91,41 +50,32 @@ export function InboxCoverageKind({
         : only && (COVERAGE_KINDS as readonly string[]).includes(only)
           ? only
           : "custom";
-  return (
-    <Select
-      size="sm"
-      aria-label={t("inbox.kind")}
-      className="w-44"
-      options={[
-        { value: "any", label: t("inbox.anyKind") },
-        ...COVERAGE_KINDS.flatMap((kind) =>
-          kind === "direct"
-            ? [
-                { value: "direct", label: t("inbox.direct") },
-                { value: "direct-mail", label: t("inbox.directMail") },
-              ]
-            : [{ value: kind, label: t(`inbox.${kind}`) }],
-        ),
-        // A non-representable multi-kind coverage (only the results toolbar can
-        // build one) surfaces honestly instead of masquerading as "All".
-        ...(value === "custom"
-          ? [{ value: "custom", label: t("inbox.customKinds") }]
-          : []),
-      ]}
-      value={value}
-      onValueChange={(next) => {
-        if (next === "custom") return;
-        const base = Filter.from(coverage).withoutFields(["kind"]);
-        onCoverage(
-          next === "any"
-            ? base
-            : next === "direct-mail"
-              ? Filter.from(base).and(DIRECT_MAIL_PRESET)
-              : Filter.from(base).and({ kind: { exact: next } }),
-        );
-      }}
-    />
-  );
+  const options = [
+    { value: "any", label: t("inbox.anyKind") },
+    ...COVERAGE_KINDS.flatMap((kind) =>
+      kind === "direct"
+        ? [
+            { value: "direct", label: t("inbox.direct") },
+            { value: "direct-mail", label: t("inbox.directMail") },
+          ]
+        : [{ value: kind, label: t(`inbox.${kind}`) }],
+    ),
+    // A non-representable multi-kind coverage (only the results toolbar can
+    // build one) surfaces honestly instead of masquerading as "All".
+    ...(value === "custom" ? [{ value: "custom", label: t("inbox.customKinds") }] : []),
+  ];
+  const setValue = (next: string): void => {
+    if (next === "custom") return;
+    const base = Filter.from(coverage).withoutFields(["kind"]);
+    onCoverage(
+      next === "any"
+        ? base
+        : next === "direct-mail"
+          ? Filter.from(base).and(DIRECT_MAIL_PRESET)
+          : Filter.from(base).and({ kind: { exact: next } }),
+    );
+  };
+  return { value, label: options.find((option) => option.value === value)?.label ?? value, options, setValue };
 }
 
 export function useResultControls(lens: ResultLens) {
@@ -141,6 +91,7 @@ export function useResultControls(lens: ResultLens) {
     new InboxFilter(view.state.filter).one("handle"),
   );
   const roles = useEnumOptions("messaging.Part", "role");
+  const platforms = useEnumOptions("messaging.Message", "platform", { casing: "upper" });
   const sources = useAuthoredQuery(InboxAccounts, {}, { models: INBOX_SOURCE_MODELS });
   const coverage = t("inbox.coverage");
   const messages = t("inbox.messages");
@@ -150,8 +101,8 @@ export function useResultControls(lens: ResultLens) {
     ...(sources.data?.inbox_platforms ?? []).map((value) => ({
       id: `platform:${value}`,
       group: coverage,
-      label: value,
-      chipLabel: `${t("inbox.platform")}: ${value}`,
+      label: optionLabel(platforms, value),
+      chipLabel: `${t("inbox.platform")}: ${optionLabel(platforms, value)}`,
       filter: { platform: { exact: value } },
     })),
     ...(sources.data?.inbox_accounts ?? []).map((row) => ({
@@ -182,7 +133,7 @@ export function useResultControls(lens: ResultLens) {
     ...(sources.data?.inbox_relation_kinds ?? []).map((value) => ({
       id: `relations:${value}`,
       group: messages,
-      label: t(`inbox.relation.${value}`),
+      label: connectionLabel(t, "relation", value) ?? value,
       filter: { relations: { exact: value } },
     })),
     ...(lens === "text"
@@ -307,40 +258,4 @@ export function useNavigatorControls(lens: NavigatorLens) {
       ]
     : [];
   return { filterOptions, customFilterFields };
-}
-
-/** Clear controls operate on the native filter object and preserve the other collection facts. */
-export function InboxClearFilters({ finder = false }: { finder?: boolean }) {
-  const t = useNexusT();
-  const view = useResourceView();
-  const filter = Filter.from(view.state.filter);
-  if (!filter.hasEntries()) return null;
-  if (finder)
-    return (
-      <Button size="sm" variant="ghost" onClick={() => view.setFilter({})}>
-        {t("inbox.clearFinder")}
-      </Button>
-    );
-  return (
-    <>
-      {Filter.from(filter.onlyFields(COVERAGE_FIELDS)).hasEntries() ? (
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => view.setFilter(filter.withoutFields(COVERAGE_FIELDS))}
-        >
-          {t("inbox.clearCoverage")}
-        </Button>
-      ) : null}
-      {Filter.from(filter.withoutFields(COVERAGE_FIELDS)).hasEntries() ? (
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => view.setFilter(filter.onlyFields(COVERAGE_FIELDS))}
-        >
-          {t("inbox.clearMessages")}
-        </Button>
-      ) : null}
-    </>
-  );
 }

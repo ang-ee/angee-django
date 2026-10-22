@@ -27,13 +27,13 @@ from rebac.resources import model_resource_type
 from rebac.schema import parse_zed
 from strawberry import auto
 
-from angee.base.models import AngeeDataModel
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import declared_hasura_resource_fields, hasura_model_resource
-from angee.graphql.data.hasura import _declared_aliases
+from angee.graphql.data.hasura import _declared_aliases, aggregate_queryset
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
+from angee.models import AngeeDataModel
 from angee.testing.permissions import install_permission_schema
 from tests.conftest import (
     SchemaAddon,
@@ -89,6 +89,23 @@ class PlainGroupLabel(models.Model):
 
     class Meta:
         app_label = "scopedemo"
+
+
+def test_plain_django_aggregate_source_retains_native_grouping(transactional_db):
+    """Permission-naive resources use ordinary Django aggregates without a REBAC API."""
+
+    with model_tables((PlainGroupLabel,)):
+        PlainGroupLabel.objects.bulk_create([
+            PlainGroupLabel(display_name="Shared"),
+            PlainGroupLabel(display_name="Shared"),
+            PlainGroupLabel(display_name="Distinct"),
+        ])
+        source = PlainGroupLabel.objects.all()
+        grouped = aggregate_queryset(source).values("display_name").annotate(count=models.Count("pk"))
+        assert list(grouped.order_by("display_name")) == [
+            {"display_name": "Distinct", "count": 1},
+            {"display_name": "Shared", "count": 2},
+        ]
 
 
 class GroupParent(AngeeDataModel):
@@ -692,7 +709,10 @@ def test_declared_sort_paths_reject_to_many_and_unknown_fields(monkeypatch: pyte
 
 @pytest.mark.parametrize(
     "expression",
-    [models.F("middle__parents__kind"), models.F("target__absent"), models.expressions.RawSQL("1", ())],
+    [
+        models.F("middle__parents__kind"), models.F("target__absent"), models.expressions.RawSQL("1", ()),
+        models.OuterRef("kind"), models.OuterRef(models.OuterRef("kind")),
+    ],
 )
 def test_declared_sort_alias_rejects_unverifiable_expressions(
     monkeypatch: pytest.MonkeyPatch, expression: Any,

@@ -1,5 +1,6 @@
 export const enCatalogueMessages = {
   "catalogue.title": "Workflows",
+  "catalogue.eyebrow": "Workflow",
   "catalogue.empty": "No workflows in this view.",
   "catalogue.key": "Key",
   "catalogue.name": "Name",
@@ -11,6 +12,5 @@ export const enCatalogueMessages = {
   "catalogue.noVersions": "No visible versions.",
   "catalogue.created": "Created",
   "catalogue.publishedBy": "Published by",
-  "catalogue.contentHash": "Content hash",
   "catalogue.recentRuns": "Recent runs",
 };

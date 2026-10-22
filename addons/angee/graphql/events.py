@@ -3,21 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, cast
 from uuid import uuid4
 
 import strawberry
-from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from rebac import ObjectRef
 from rebac.resources import model_resource_id, model_resource_type
 from strawberry.scalars import JSON
 
-from angee.base.identity import public_id_for, public_id_of
-from angee.base.refs import RecordRef, concrete_child_models
-from angee.base.serialization import json_safe
+from angee.identity import public_id_of
+from angee.refs import RecordRef, record_view_refs
+from angee.serialization import json_safe
 
 ReadableFields = Iterable[str] | Callable[[], Iterable[str]]
 """Readable model fields, resolved lazily only when building a partial-update payload."""
@@ -33,20 +32,7 @@ class ChangeRelatedRecord:
     @classmethod
     def for_records(cls, *records: RecordRef) -> tuple[ChangeRelatedRecord, ...]:
         """Include existing inherited views of a canonical concern identity."""
-        result = list(dict.fromkeys(cls(record.model_label, record.public_id) for record in records))
-        grouped: dict[type[models.Model], set[Any]] = {}
-
-        def children(parent: type[models.Model], ids: set[Any]) -> None:
-            for child in concrete_child_models(parent):
-                grouped.setdefault(child, set()).update(ids)
-                children(child, ids)
-
-        for record in dict.fromkeys(records):
-            children(apps.get_model(record.model_label), {record.object_id})
-        for child, ids in grouped.items():
-            present = child._base_manager.filter(pk__in=ids).values_list("pk", flat=True)
-            result.extend(cls(child._meta.label, public_id_for(child, pk)) for pk in present)
-        return tuple(dict.fromkeys(result))
+        return tuple(cls(record.model_label, record.public_id) for record in record_view_refs(*records))
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +72,12 @@ class ChangePayload:
     during_ingestion: bool = False
     """Whether the change happened inside a sync ingestion context; not part of the wire message."""
 
+    instance: models.Model | None = field(default=None, compare=False, repr=False)
+    """Source row available during synchronous local delivery, including deletes; never serialized."""
+
+    broadcasts: bool = True
+    """Whether this occurrence reaches the channel layer; local observers still receive it."""
+
     @classmethod
     def from_instance(
         cls,
@@ -95,6 +87,7 @@ class ChangePayload:
         update_fields: Iterable[str] | None,
         readable_fields: ReadableFields = (),
         during_ingestion: bool = False,
+        broadcasts: bool = True,
     ) -> ChangePayload:
         """Return the channel payload for a saved or deleted model instance."""
 
@@ -106,8 +99,8 @@ class ChangePayload:
         resource_id = None
         if model_resource_type(type(instance)):
             resource_id = model_resource_id(instance)
-        read_resource = _change_read_resource(instance)
-        related_records = _change_related_records(instance)
+        read_resource = _change_read_resource(instance) if broadcasts else None
+        related_records = _change_related_records(instance) if broadcasts else ()
         return cls(
             model=instance._meta.label,
             id=public_id_of(instance),
@@ -120,6 +113,8 @@ class ChangePayload:
             read_resource_id=None if read_resource is None else read_resource.resource_id,
             related_records=related_records,
             during_ingestion=during_ingestion,
+            instance=instance,
+            broadcasts=broadcasts,
         )
 
     @classmethod
@@ -253,6 +248,7 @@ def _concrete_field(
 ) -> models.Field[Any, Any] | None:
     """Return a concrete field on this row addressed by ``name`` or its attname."""
 
+    field: models.Field[Any, Any] | models.ForeignObjectRel | None
     try:
         field = instance._meta.get_field(name)
     except FieldDoesNotExist:

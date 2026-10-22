@@ -1,1 +1,1 @@
-"""Workflow steps over the persisted ACP session owners."""
+"""Workflow steps over persisted ACP agent sessions."""

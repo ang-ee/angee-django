@@ -11,9 +11,10 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models
 from rebac.resources import model_resource_type
 
-from angee.base.identity import instance_from_public_id, public_id_for
-from angee.base.scoping import read_scoped_queryset
 from angee.decisions.contracts import DecisionRequest
+from angee.identity import instance_from_public_id, public_id_for
+from angee.models import row_lock_paths
+from angee.permissions import require_rebac_queryset
 from angee.workflows.runner import runner
 from angee.workflows.states import DONE_OUTCOME, NoteTone, RunRelation
 from angee.workflows.steps import Ask, Done, Fail, NextPage, Step, StepMode, Wait
@@ -96,9 +97,9 @@ class StepContext:
             self._require_mode(StepMode.DATABASE)
         if not model_resource_type(model):
             raise PermissionDenied(f"{model._meta.label} has no actor-scoped read contract.")
-        queryset = read_scoped_queryset(model, self.actor, action=permission)
+        queryset = require_rebac_queryset(model).with_actor(self.actor).with_action(permission)
         if lock:
-            queryset = queryset.lock_if_supported(no_key=True)
+            queryset = queryset.select_for_update(no_key=True, of=row_lock_paths(model))
         instance = instance_from_public_id(model, public_id, queryset=queryset)
         if instance is None:
             raise PermissionDenied("The requested record is absent or inaccessible.")
@@ -137,9 +138,9 @@ class StepContext:
         row = instance_from_public_id(
             model,
             decision_ref,
-            queryset=model.objects.with_actor(self.actor).filter(requesting_steps__run=self.run),
+            queryset=model.objects.with_actor(self.actor),
         )
-        if row is None:
+        if row is None or self.run not in row.requesting_records():
             raise PermissionDenied("The decision is absent or inaccessible in this run.")
         return row
 

@@ -14,6 +14,9 @@ import { createVariantContext } from "../lib/variant-context";
 import { tv, type VariantProps } from "../lib/variants";
 import { textRoleVariants } from "./text";
 
+/**
+ * @kind token
+ */
 export const accordionVariants = tv({
   slots: {
     root: "w-full min-w-0",
@@ -44,7 +47,7 @@ export const accordionVariants = tv({
         item: "contents",
         header: "contents",
         trigger:
-          "h-10 px-3 text-xs font-semibold text-fg-2 hover:bg-sheet-2",
+          "h-10 px-3 text-12 font-semibold text-fg-2 hover:bg-sheet-2",
         icon: "size-3 text-fg-subtle [&_.glyph]:size-3",
         panel: "contents",
       },
@@ -74,6 +77,9 @@ export type AccordionRootProps<Value = any> = Omit<
     className?: string;
   };
 
+/**
+ * @owner Accordion
+ */
 export const AccordionRoot = React.forwardRef<
   HTMLDivElement,
   AccordionRootProps
@@ -100,6 +106,9 @@ export type AccordionItemProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner Accordion
+ */
 export const AccordionItem = React.forwardRef<
   HTMLDivElement,
   AccordionItemProps
@@ -124,6 +133,9 @@ export type AccordionHeaderProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner Accordion
+ */
 export const AccordionHeader = React.forwardRef<
   HTMLHeadingElement,
   AccordionHeaderProps
@@ -148,6 +160,9 @@ export type AccordionTriggerProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner Accordion
+ */
 export const AccordionTrigger = React.forwardRef<
   HTMLElement,
   AccordionTriggerProps
@@ -169,6 +184,9 @@ export type AccordionIconProps = React.HTMLAttributes<HTMLSpanElement> &
     className?: string;
   };
 
+/**
+ * @owner Accordion
+ */
 export const AccordionIcon = React.forwardRef<
   HTMLSpanElement,
   AccordionIconProps
@@ -191,6 +209,9 @@ export type AccordionPanelProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner Accordion
+ */
 export const AccordionPanel = React.forwardRef<
   HTMLDivElement,
   AccordionPanelProps
@@ -207,6 +228,9 @@ export const AccordionPanel = React.forwardRef<
 });
 AccordionPanel.displayName = "AccordionPanel";
 
+/**
+ * @kind primitive
+ */
 export const Accordion = Object.assign(AccordionRoot, {
   Root: AccordionRoot,
   Item: AccordionItem,
