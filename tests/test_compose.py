@@ -15,7 +15,7 @@ from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError, SystemCheckError
-from django.db import OperationalError, models
+from django.db import OperationalError, migrations, models
 from rebac import schema_changes
 
 import angee.compose as compose_package
@@ -1303,6 +1303,18 @@ def test_provision_defers_checks_only_across_the_schema_identity_transition() ->
         < plan.index(["check", "--database", "default"])
     )
     assert plan.index(["check", "--database", "default"]) < plan.index(["resources", "load"])
+
+
+def test_provision_analyzes_the_existing_tables_of_apps_migrated_forward() -> None:
+    """Statistics follow forward schema changes; a backwards step or a missing table names nothing."""
+
+    plan = [
+        (migrations.Migration("0003_forward", "contenttypes"), False),
+        (migrations.Migration("0004_backward", "sessions"), True),
+    ]
+
+    assert Command._analyzed_tables(plan, ["django_content_type", "django_session"]) == ["django_content_type"]
+    assert Command._analyzed_tables(plan, ["django_session"]) == []
 
 
 @pytest.mark.django_db
