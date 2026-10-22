@@ -199,6 +199,20 @@ class Source(models.Model):
             f'[addon]\nname = "reset.{name}"\ndepends_on = [{dependencies}]\n',
         )
 
+    _write_module(addon_dir / "reset" / "external" / "__init__.py")
+    _write_module(addon_dir / "reset" / "external" / "migrations" / "__init__.py")
+    _write_module(
+        addon_dir / "reset" / "external" / "migrations" / "0001_initial.py",
+        """\
+from django.db import migrations
+
+
+class Migration(migrations.Migration):
+    dependencies = [("beta", "__first__")]
+    operations = []
+""",
+    )
+
     report = tmp_path / "reset-migrations.json"
     root = Path(__file__).resolve().parents[1]
     env = dict(os.environ)
@@ -214,6 +228,8 @@ class Source(models.Model):
             "--no-examples",
             "--app",
             "reset.alpha",
+            "--app",
+            "reset.external",
             "--action",
             "reset-migrations",
             "--output",
@@ -234,12 +250,15 @@ class Source(models.Model):
     assert "manage.py migrate --database default" in outcome["drift_error"]
     assert outcome["files"] == {"alpha": ["0001_initial.py"], "beta": ["0001_initial.py"]}
     assert outcome["old_rows"] == [
-        ["alpha", "0001_initial"],
+        ["alpha", "0001_previous"],
         ["alpha", "0002_history_probe"],
-        ["beta", "0001_initial"],
+        ["beta", "0001_previous"],
     ]
     assert outcome["new_rows"] == [["alpha", "0001_initial"], ["beta", "0001_initial"]]
     assert outcome["noncomposed_unchanged"] is True
+    assert outcome["external_dependency_applied"] is True
+    assert outcome["failure_rollback"] == {"generation": True, "recording": True}
+    assert outcome["replay_unchanged"] is True
     assert outcome["plan_empty"] is outcome["changes_empty"] is outcome["runtime_check"] is True
     assert outcome["declarations"] == 0
     assert ["beta", "0001_initial"] in outcome["alpha_dependencies"]

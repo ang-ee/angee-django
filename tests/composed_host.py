@@ -245,6 +245,7 @@ def reset_migration_history_report() -> dict[str, Any]:
     """Exercise a disposable composed history against an unchanged schema."""
 
     from io import StringIO
+    from unittest.mock import patch
 
     from django.apps import apps
     from django.core.management import call_command
@@ -260,6 +261,12 @@ def reset_migration_history_report() -> dict[str, Any]:
     runtime = Runtime.from_django()
     labels = tuple(sorted(runtime.labels))
     call_command("makemigrations", *labels, interactive=False, include_header=False, verbosity=0)
+    # A fresh initial need not have the same key as the stack's applied one.
+    for label in labels:
+        initial = runtime.runtime_dir / label / "migrations" / "0001_initial.py"
+        source = initial.read_text().replace("'0001_initial'", "'0001_previous'")
+        initial.rename(initial.with_name("0001_previous.py"))
+        initial.with_name("0001_previous.py").write_text(source)
 
     try:
         call_command("reset_migration_history", skip_checks=True, verbosity=0)
@@ -294,7 +301,41 @@ def reset_migration_history_report() -> dict[str, Any]:
     call_command("migrate", interactive=False, skip_checks=True, verbosity=0)
     recorder = MigrationRecorder(connection)
     old_rows = sorted(recorder.migration_qs.filter(app__in=labels).values_list("app", "name"))
-    noncomposed_before = sorted(recorder.migration_qs.exclude(app__in=labels).values_list("app", "name"))
+    noncomposed_before = list(recorder.migration_qs.exclude(app__in=labels).order_by("pk").values())
+
+    def migration_sources() -> dict[Path, bytes]:
+        return {
+            path: path.read_bytes()
+            for label in labels
+            for path in (runtime.runtime_dir / label / "migrations").glob("*.py")
+        }
+
+    original_sources = migration_sources()
+    original_records = list(recorder.migration_qs.order_by("pk").values())
+    failure_rollback = {}
+    for phase in ("generation", "recording"):
+        original = call_command if phase == "generation" else MigrationRecorder.record_unapplied
+
+        def fail_after_write(*args, **kwargs):
+            original(*args, **kwargs)
+            raise RuntimeError("injected reset failure")
+
+        target = "angee.compose.runtime.call_command" if phase == "generation" else (
+            "django.db.migrations.recorder.MigrationRecorder.record_unapplied"
+        )
+        with patch(target, autospec=True, side_effect=fail_after_write):
+            try:
+                runtime.reset_migration_history()
+            except RuntimeError as error:
+                if str(error) != "injected reset failure":
+                    raise
+            else:
+                raise AssertionError(f"reset did not reach the {phase} failure")
+        failure_rollback[phase] = (
+            migration_sources() == original_sources
+            and list(recorder.migration_qs.order_by("pk").values()) == original_records
+        )
+        MigrationExecutor(connection).loader.check_consistent_history(connection)
 
     output = StringIO()
     call_command(
@@ -305,7 +346,7 @@ def reset_migration_history_report() -> dict[str, Any]:
     )
 
     new_rows = sorted(recorder.migration_qs.filter(app__in=labels).values_list("app", "name"))
-    noncomposed_after = sorted(recorder.migration_qs.exclude(app__in=labels).values_list("app", "name"))
+    noncomposed_after = list(recorder.migration_qs.exclude(app__in=labels).order_by("pk").values())
     files = {
         label: sorted(
             path.name
@@ -315,6 +356,7 @@ def reset_migration_history_report() -> dict[str, Any]:
         for label in labels
     }
     executor = MigrationExecutor(connection)
+    executor.loader.check_consistent_history(connection)
     targets = tuple(node for label in labels for node in executor.loader.graph.leaf_nodes(label))
     changes = MigrationAutodetector(
         executor.loader.project_state(),
@@ -328,6 +370,13 @@ def reset_migration_history_report() -> dict[str, Any]:
     # check from the source checkout's unrelated project contract.
     runtime.project_dir = runtime.runtime_dir.parent
     runtime.check()
+    reset_sources = migration_sources()
+    reset_records = list(recorder.migration_qs.order_by("pk").values())
+    runtime.reset_migration_history()
+    replay_unchanged = (
+        migration_sources() == reset_sources
+        and list(recorder.migration_qs.order_by("pk").values()) == reset_records
+    )
     alpha = executor.loader.disk_migrations["alpha", "0001_initial"]
     return {
         "labels": labels,
@@ -336,6 +385,9 @@ def reset_migration_history_report() -> dict[str, Any]:
         "old_rows": old_rows,
         "new_rows": new_rows,
         "noncomposed_unchanged": noncomposed_before == noncomposed_after,
+        "external_dependency_applied": ("external", "0001_initial") in recorder.applied_migrations(),
+        "failure_rollback": failure_rollback,
+        "replay_unchanged": replay_unchanged,
         "files": files,
         "plan_empty": executor.migration_plan(targets) == [],
         "changes_empty": changes == {},
