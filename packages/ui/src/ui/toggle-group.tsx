@@ -20,6 +20,10 @@ export const toggleGroupVariants = tv({
   },
   variants: {
     variant: {
+      pills: {
+        root: "flex-wrap gap-1.5",
+        item: "rounded-full border border-border-subtle bg-sheet px-3 data-[pressed]:border-brand data-[pressed]:bg-brand data-[pressed]:text-on-brand",
+      },
       segmented: {
         root: "gap-0.5 rounded-6 border border-border-subtle bg-inset p-0.5",
         item: "rounded-6 border border-transparent data-[pressed]:bg-sheet data-[pressed]:shadow-xs",

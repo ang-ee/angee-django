@@ -7,9 +7,11 @@ frontend drives it through ``useList`` like any other resource.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+import pytest
+import strawberry
+from pydantic import BaseModel, computed_field
 
-from angee.graphql.data import hasura_pydantic_resource
+from angee.graphql.data import hasura_pydantic_resource, pydantic_node
 from angee.graphql.schema import GraphQLSchemas
 from tests.conftest import SchemaAddon
 
@@ -27,6 +29,62 @@ _ROWS = [
     PlatformAddon(id="storage", label="Storage", model_count=12),
     PlatformAddon(id="notes", label="Notes", model_count=3),
 ]
+
+
+class ComputedGroup(BaseModel):
+    label: str
+    count: int
+
+
+class ComputedEntry(BaseModel):
+    id: str
+    values: list[str]
+
+    @computed_field
+    @property
+    def detail(self) -> str:
+        return ", ".join(self.values)
+
+    @computed_field
+    @property
+    def groups(self) -> list[ComputedGroup]:
+        return [ComputedGroup(label=value, count=self.values.count(value)) for value in sorted(set(self.values))]
+
+
+def _computed_schema(include_computed: bool | None) -> strawberry.Schema:
+    pydantic_node(ComputedGroup, name="ComputedGroup")
+    options = {} if include_computed is None else {"include_computed": include_computed}
+    node = pydantic_node(ComputedEntry, name="ComputedEntry", **options)
+    row = ComputedEntry(id="entry", values=["b", "a", "b"])
+    query = strawberry.type(
+        type("ComputedQuery", (), {"row": strawberry.field(resolver=lambda: row, graphql_type=node)})
+    )
+    return GraphQLSchemas([SchemaAddon({"public": {"query": [query]}})]).build("public")
+
+
+@pytest.mark.parametrize("include_computed", [None, False])
+def test_pydantic_node_excludes_computed_fields_by_default(include_computed: bool | None) -> None:
+    schema = _computed_schema(include_computed)
+    assert "detail: String!" not in schema.as_str()
+    assert "groups: [ComputedGroup!]!" not in schema.as_str()
+    result = schema.execute_sync("{ row { id values } }")
+    assert result.errors is None, result.errors
+    assert result.data == {"row": {"id": "entry", "values": ["b", "a", "b"]}}
+
+
+def test_pydantic_node_includes_native_computed_scalars_and_nested_rows() -> None:
+    schema = _computed_schema(True)
+    assert "detail: String!" in schema.as_str()
+    assert "groups: [ComputedGroup!]!" in schema.as_str()
+    result = schema.execute_sync("{ row { id detail groups { label count } } }")
+    assert result.errors is None, result.errors
+    assert result.data == {
+        "row": {
+            "id": "entry",
+            "detail": "b, a, b",
+            "groups": [{"label": "a", "count": 1}, {"label": "b", "count": 2}],
+        }
+    }
 
 
 def _schema() -> object:

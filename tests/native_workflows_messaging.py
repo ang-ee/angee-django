@@ -377,14 +377,14 @@ class MessageTriggerTests(TransactionTestCase):
             )
         refined = Trigger.objects.enable(refined, actor=self.admin)
         locked = []
-        lock = AngeeQuerySet.lock_if_supported
+        lock = AngeeQuerySet.select_for_update
 
         def count_lock(rows, **kwargs):
             locked.append(rows.model)
             return lock(rows, **kwargs)
 
         with (
-            patch.object(AngeeQuerySet, "lock_if_supported", count_lock),
+            patch.object(AngeeQuerySet, "select_for_update", count_lock),
             patch.object(type(StepWatch.objects), "record_change", autospec=True) as observed,
         ):
             self.ingest()

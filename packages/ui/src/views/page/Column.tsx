@@ -16,6 +16,8 @@ export type ColumnAggregate =
 
 export interface ColumnProps<TRow extends object = Record<string, unknown>> {
   field: string;
+  /** Native table identity when multiple presentations select the same field. */
+  id?: string;
   /** Concrete GraphQL leaf paths selected for a computed object field. */
   selectionPaths?: readonly string[];
   header?: ReactNode;

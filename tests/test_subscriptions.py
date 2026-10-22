@@ -26,6 +26,7 @@ from angee.graphql.events import ChangeEvent, ChangePayload, ChangeRelatedRecord
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from tests.conftest import SchemaAddon
+from tests.scopedemo.models import ScopedDoc
 
 ANON = anonymous_actor()
 SubscriptionResolver = Callable[
@@ -346,15 +347,13 @@ def test_change_gate_omits_an_unreadable_related_parent(monkeypatch) -> None:
 
     gate = object.__new__(access.ChangeReadGate)
     gate.actor = ANON
-    empty_scope = object()
-    scoped_manager = SimpleNamespace(
-        with_actor=lambda actor: SimpleNamespace(with_action=lambda action: empty_scope),
-    )
-    parent_model = SimpleNamespace(objects=scoped_manager)
-    monkeypatch.setattr(access.apps, "get_model", lambda label: parent_model)
+    monkeypatch.setattr(access.apps, "get_model", lambda label: ScopedDoc)
+    scopes = []
 
     def unreadable(model, public_id, *, queryset):
-        assert queryset is empty_scope
+        assert model is ScopedDoc
+        assert queryset.model is ScopedDoc
+        scopes.append(queryset)
         return None
 
     monkeypatch.setattr(access, "instance_from_public_id", unreadable)
@@ -365,6 +364,7 @@ def test_change_gate_omits_an_unreadable_related_parent(monkeypatch) -> None:
         related_records=(ChangeRelatedRecord(model="tests.Parent", id="parent-1"),),
     )
     assert gate._filter_related_records(change).related_records == ()
+    assert len(scopes) == 1
 
 
 def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:

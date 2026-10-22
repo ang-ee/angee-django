@@ -178,7 +178,7 @@ def test_keep_local_before_first_baseline_preserves_conflict(replica: Any, monke
     )
     retained_link = RecordLink.objects.filter(pk=link.pk).values().get()
     adapter = Mock(spec=BridgeImpl, supports_identity_reads=True)
-    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
 
     with pytest.raises(ValidationError, match="Keeping local changes requires a completed writable baseline\\."):
         conflict.resolve_conflict(keep=ConflictKeep.LOCAL)

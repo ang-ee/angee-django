@@ -479,6 +479,14 @@ function LocalResourceViewProvider({
   const [state, updateState] = useState(() =>
     createResourceViewState(initialState),
   );
+  const scope = stableSerialize([resource, baseFilter]);
+  const [previousScope, setPreviousScope] = useState(scope);
+  if (previousScope !== scope) {
+    // An external collection change starts a new window, retaining the user's
+    // search, ordering and page size. Reconcile before children issue reads.
+    setPreviousScope(scope);
+    updateState({ ...state, pagination: { ...state.pagination, pageIndex: 0 } });
+  }
   const defaultState = useMemo(() => createResourceViewState({ ...initialState, view: state.view }), [initialState, state.view]);
   const { value, selectionOwner } = useResourceViewContextValue({
     updateState,

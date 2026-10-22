@@ -49,7 +49,7 @@ export const SelectableSummary: Story = { render: () => <Summary /> };
 
 function Summary() {
   const [selected, setSelected] = useState("all");
-  return <MetricStrip density="prominent" className="w-full max-w-7xl" metrics={([
+  return <MetricStrip density="spacious" className="w-full max-w-7xl grid-cols-2 lg:grid-cols-5" metrics={([
     { id: "all", label: "Open records", numericValue: 26, detail: "Received this month", tone: "neutral" },
     { id: "clear", label: "All checks passed", numericValue: 16, detail: "No outstanding findings", tone: "success" },
     { id: "risk", label: "Risks", numericValue: 5, detail: "Review the evidence", tone: "warning" },
@@ -57,6 +57,7 @@ function Summary() {
     { id: "unknown", label: "Unresolved", numericValue: 2, detail: "Waiting for information", tone: "muted" },
   ] as const).map((metric) => ({
     ...metric,
+    share: { value: metric.numericValue, total: 26, label: `${metric.label}: share of open records` },
     selected: selected === metric.id,
     onClick: () => setSelected(metric.id),
   }))} />;

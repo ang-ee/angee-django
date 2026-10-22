@@ -13,7 +13,8 @@ import { Input } from "../ui/input";
 import { NavLink } from "../ui/nav-link";
 import { ErrorBanner } from "../fragments/ErrorBanner";
 import { InlineEmpty } from "../fragments/InlineEmpty";
-import { PageHeader } from "../page/PageHeader";
+import { SurfaceHeader, type SurfaceHeaderProps } from "../fragments/SurfaceHeader";
+import { PageBody } from "../page/PageBody";
 import { Skeleton, SkeletonStatus, SkeletonText } from "../ui/skeleton";
 import type {
   DashboardDefinition,
@@ -47,6 +48,9 @@ export interface DashboardSurfaceProps {
   pageScope?: DashboardPageScope;
   className?: string;
   title?: string;
+  subtitle?: React.ReactNode;
+  headerDensity?: SurfaceHeaderProps["density"];
+  headingLevel?: SurfaceHeaderProps["headingLevel"];
   headerActions?: React.ReactNode;
   toolbar?: React.ReactNode;
 }
@@ -246,6 +250,9 @@ function DashboardEditor({
   pageScope,
   className,
   title,
+  subtitle,
+  headerDensity = "compact",
+  headingLevel = 2,
   headerActions,
   toolbar,
 }: DashboardSurfaceProps & {
@@ -284,9 +291,10 @@ function DashboardEditor({
 
   return (
     <section className={cn("flex min-h-0 flex-1 flex-col", className)}>
-      <PageHeader
-        density="compact"
-        headingLevel={2}
+      <SurfaceHeader
+        density={headerDensity}
+        headingLevel={headingLevel}
+        subtitle={subtitle}
         title={title ?? definition?.title ?? t("surface.defaultTitle")}
         actions={(
           <>
@@ -327,16 +335,18 @@ function DashboardEditor({
           </>
         )}
       />
-      {toolbar}
-      <ErrorBanner description={error?.message ?? null} />
-      <DashboardGrid
-        snapshot={draft}
-        registry={registry}
-        definition={definition}
-        editing={editing}
-        pageScope={pageScope}
-        onWidgetsChange={mutate}
-      />
+      <PageBody gutter="none" scroll="auto">
+        {toolbar}
+        <ErrorBanner description={error?.message ?? null} />
+        <DashboardGrid
+          snapshot={draft}
+          registry={registry}
+          definition={definition}
+          editing={editing}
+          pageScope={pageScope}
+          onWidgetsChange={mutate}
+        />
+      </PageBody>
     </section>
   );
 }
@@ -426,7 +436,7 @@ function DashboardLayout({ snapshot, registry, definition, editing, pageScope, o
     onWidgetsChange([...moved, ...retained]);
   };
   return (
-    <div ref={containerRef} className={cn("min-h-0 flex-1 overflow-auto p-4", editing && "min-w-[720px]")}>
+    <div ref={containerRef} className={cn("min-w-0 p-4", editing && "min-w-[720px]")}>
       {projected.length === 0 ? <InlineEmpty icon="dashboard" label={t("surface.empty")} /> : (
         <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
           <div className="grid min-h-0" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gridAutoRows: `${ROW_HEIGHT}px`, gap: GRID_GAP }}>
@@ -541,7 +551,7 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
           widget.data.shape !== "value" && "border-b border-border-subtle",
           !editing && widget.data.shape !== "none" && widget.data.shape !== "resourceView" && "pr-12")}>
           <div id={titleId} className={editing ? "sr-only" : "min-w-0 flex-1"}>
-            <SectionHeading
+            <SectionHeading presentation="title"
               label={!editing && fullViewHref ? <NavLink href={fullViewHref} className="hover:underline">{visibleTitle}</NavLink> : visibleTitle}
               count={count == null ? undefined : `· ${count}`}
               hint={typeof widget.options.hint === "string" ? `· ${widget.options.hint}` : undefined}
