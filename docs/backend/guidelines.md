@@ -924,6 +924,10 @@ and current contracts before applying a historical example to a new deployment.
   a planned transition to `posts/*`; verify their actual data and migration state
   before selecting the migration and `reconcile_permissions` steps. A fresh
   installation does not inherit an old deployment's repair procedure.
+- **A schema change leaves PostgreSQL planner statistics behind.** An added or
+  altered column has none until `ANALYZE`, and autovacuum analyzes on row churn,
+  not schema changes. `angee provision` analyzes the tables of every app it
+  migrates; follow a manual `migrate` with `ANALYZE` of the changed tables.
 - **Row updates followed by DDL on the same tables need immediate constraints.**
   PostgreSQL queues deferred foreign-key checks for rows a migration updates and
   refuses a later `ALTER TABLE` or index build in the same atomic migration.
