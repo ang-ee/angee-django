@@ -265,6 +265,20 @@ transition that `makemigrations` cannot express uses `[[migrations]]` only as a
 write → apply on every stack → delete in the next change vehicle, never as released
 history or a reason for a compatibility import.
 
+The reset preserves matching migration records, records missing fresh nodes
+through Django's recorder, and removes only obsolete composed records in one
+transaction. Applied external migrations keep their composed dependencies, and
+an exception restores the original migration sources and recorder state.
+
+If an already copied declaration needs a source correction, first use
+`manage.py reset_migration_history --database default` on its fully applied,
+model-clean stack. This guarded reset can load the immutable copied graph even
+when its source digest has changed; do not edit the copy or its footer. Then run
+`manage.py angee build` and `manage.py migrate` so the corrected declaration is
+materialized with its resolved dependencies and applied. A data-only declaration
+whose schema guard still holds can be emitted again after a reset; its body must
+therefore preserve safe replay until the declaration is retired.
+
 For a conversion followed by retirement, declare the fold first and guard the
 retirement against its completed schema. The composer attaches retirement to the
 fold's concrete leaf. Keep data verification in the copied migration body, since

@@ -23,7 +23,7 @@ from angee.compose.model_composition import ModelComposition
 from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.compose.rendering import render_models
 from angee.compose.web import WebRuntime
-from angee.fs import GENERATED_SENTINEL, GeneratedTree
+from angee.fs import GENERATED_SENTINEL, GeneratedTree, write_atomic
 from angee.project import find_project_dir
 
 _COMPOSER_WEB_SOURCES = {
@@ -179,13 +179,14 @@ class Runtime:
         *,
         database: str = DEFAULT_DB_ALIAS,
     ) -> tuple[tuple[str, ...], int, int]:
-        """Replace composed apps' fully applied, model-clean history with fresh initials."""
+        """Replace fully applied, model-clean composed history, restoring files on failure."""
 
         labels = tuple(sorted(self.labels))
         if not labels:
             return labels, 0, 0
         connection = connections[database]
         executor = MigrationExecutor(connection)
+        executor.loader.check_consistent_history(connection)
         targets = tuple(node for label in labels for node in executor.loader.graph.leaf_nodes(label))
         if executor.migration_plan(targets):
             raise RuntimeError(
@@ -215,8 +216,7 @@ class Runtime:
             for path in (self.runtime_dir / label / "migrations").glob("*.py")
             if path.name != "__init__.py"
         ))
-        for path in migration_files:
-            path.unlink()
+        original_sources = {path: path.read_bytes().decode("utf-8") for path in migration_files}
 
         migration_prefixes = tuple(f"{self.runtime_module}.{label}.migrations" for label in labels)
 
@@ -227,39 +227,55 @@ class Runtime:
                     for prefix in migration_prefixes
                 ):
                     sys.modules.pop(module_name)
+            for label in labels:
+                for bytecode in (self.runtime_dir / label / "migrations" / "__pycache__").glob("*.pyc"):
+                    bytecode.unlink()
             importlib.invalidate_caches()
 
-        forget_migration_modules()
-        call_command(
-            "makemigrations",
-            *labels,
-            interactive=False,
-            include_header=False,
-            verbosity=0,
-        )
-        forget_migration_modules()
+        try:
+            for path in migration_files:
+                path.unlink()
+            forget_migration_modules()
+            call_command(
+                "makemigrations",
+                *labels,
+                interactive=False,
+                include_header=False,
+                verbosity=0,
+            )
+            forget_migration_modules()
 
-        fresh_executor = MigrationExecutor(connection)
-        fresh_targets = tuple(
-            node
-            for label in labels
-            for node in fresh_executor.loader.graph.leaf_nodes(label)
-        )
-        recorder = MigrationRecorder(connection)
-        with transaction.atomic(using=database):
-            recorder.migration_qs.filter(app__in=labels).delete()
-            for app_label, migration_name in fresh_targets:
-                call_command(
-                    "migrate",
-                    app_label,
-                    migration_name,
-                    database=database,
-                    fake=True,
-                    interactive=False,
-                    skip_checks=True,
-                    verbosity=0,
-                )
-            recorded = recorder.migration_qs.filter(app__in=labels).count()
+            fresh_executor = MigrationExecutor(connection)
+            graph = fresh_executor.loader.graph
+            fresh_nodes = dict.fromkeys(
+                node
+                for label in labels
+                for target in graph.leaf_nodes(label)
+                for node in graph.forwards_plan(target)
+                if node[0] in labels
+            )
+            recorder = MigrationRecorder(connection)
+            with transaction.atomic(using=database):
+                applied = recorder.applied_migrations()
+                # Preserve shared keys: an applied external migration may depend
+                # on one of these initials throughout the history replacement.
+                for app_label, migration_name in fresh_nodes:
+                    if (app_label, migration_name) not in applied:
+                        recorder.record_applied(app_label, migration_name)
+                for app_label, migration_name in sorted(applied.keys() - fresh_nodes.keys()):
+                    if app_label in labels:
+                        recorder.record_unapplied(app_label, migration_name)
+                fresh_executor.loader.check_consistent_history(connection)
+                recorded = recorder.migration_qs.filter(app__in=labels).count()
+        except BaseException:
+            for label in labels:
+                for path in (self.runtime_dir / label / "migrations").glob("*.py"):
+                    if path.name != "__init__.py" and path not in original_sources:
+                        path.unlink()
+            for path, source in original_sources.items():
+                write_atomic(path, source)
+            forget_migration_modules()
+            raise
         return labels, len(migration_files), recorded
 
     @property
