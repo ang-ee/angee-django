@@ -20,6 +20,7 @@ def run_records(run: Any) -> list[RecordIdentity]:
 
     Each is an identity, deduped; notification delivery resolves merge redirects. The run
     itself is never among them, so a run never lists itself on its own page.
+    Timeline invalidation owns the audited system context for these relation reads.
     """
 
     seen: set[tuple[int, Any]] = set()
@@ -39,12 +40,12 @@ def run_records(run: Any) -> list[RecordIdentity]:
 
     if run.subject_content_type_id and run.subject_object_id:
         add(run.subject_content_type_id, run.subject_object_id)
-    evidence = apps.get_model("workflows", "StepRecord").system_queryset().filter(run_id=run.pk)
+    evidence = run.records.all()
     for content_type_id, object_id in evidence.order_by().values_list("content_type_id", "object_id").distinct():
         add(content_type_id, object_id)
     if run.parent_step_id:
         parent_run_id = (
-            apps.get_model("workflows", "StepRun").system_queryset()
+            apps.get_model("workflows", "StepRun").objects
             .filter(pk=run.parent_step_id).values_list("run_id", flat=True).first()
         )
         if parent_run_id:
@@ -89,7 +90,7 @@ class RunKind(TimelineKind):
     def targets(self, row: Any) -> Iterable[models.Model]:
         return (row,) if row._meta.label == RUN_MODEL else apps.get_model(
             "workflows", "WorkflowRun",
-        ).system_queryset().filter(pk=row.run_id)
+        ).objects.filter(pk=row.run_id)
 
     def records(self, run: Any) -> Iterable[RecordIdentity]:
         return run_records(run)
