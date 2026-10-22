@@ -92,6 +92,7 @@ class Child(models.Model):
 class Link(models.Model):
     runtime = True
     target = models.ForeignKey('typing_composition.Target', on_delete=models.CASCADE)
+    targets = models.ManyToManyField('typing_composition.Target', related_name='many_links')
     class Meta:
         abstract = True
 class Middle(models.Model):
@@ -163,11 +164,17 @@ def proof(target: Target, first: First, second: Second, child: Child, link: Link
     assert_type(first.chain(), str)
     assert_type(second.chain(), str)
     assert_type(child.title, str)
+    assert_type(child.target_ptr, ConcreteTarget)
+    assert_type(child.target_ptr_id, UUID)
+    child.target_ptr = target
     assert_type(child.first, int)
     parent: Target = child
     link.target = target
     link.target = child
     assert_type(link.target, ConcreteTarget)
+    link.targets.add(target, child)
+    assert_type(list(link.targets.all()), list[Target])
+    assert_type(link.targets.get().only_second(), str)
     assert_type(target.key, UUID)
     assert_type(link.target_id, UUID)
     Target.objects.filter(key=UUID(int=0))
@@ -198,6 +205,10 @@ from django.apps import apps
 assert_type(apps.get_model('typing_composition', 'Target'), type[ConcreteTarget])
 assert_type(apps.get_model('typing_composition.Target').objects.get().only_first(), int)
 
+def authored_factory(target: Target) -> None:
+    model: type[Target] = apps.get_model('typing_composition.Target')
+    assert_type(model.objects.bulk_create([target]), list[Target])
+
 def reverse(target: Target) -> None:
     assert_type(target.link_set.get().target.only_first(), int)
 """
@@ -209,6 +220,8 @@ def invalid(target: Target, first: First, child: Child, link: Link) -> None:
     target.first = {}
     first.second = {}
     link.target = link
+    child.target_ptr = link
+    link.targets.add(link)
     link.target_id = {}
     Target.objects.filter(unknown=1)
 from typing_composition.models import Ordinary
@@ -305,8 +318,8 @@ def test_composition_fields_identity_and_cache_follow_native_declarations(tmp_pa
     assert donor_positive.returncode == 0, donor_positive.stdout + donor_positive.stderr
     negative = check(invalid)
     assert negative.returncode == 1, negative.stdout + negative.stderr
-    assert negative.stdout.count(": error:") == 25, negative.stdout
-    for line in (4, 5, 6, 7, 8, 10, 13, 16, 17, 21, 22, 23, 24, 25, 26):
+    assert negative.stdout.count(": error:") == 27, negative.stdout
+    for line in (4, 5, 6, 7, 8, 9, 10, 12, 15, 18, 19, 23, 24, 25, 26, 27, 28):
         assert f"invalid.py:{line}: error:" in negative.stdout, negative.stdout
     for line, source in enumerate(_NEGATIVE.splitlines(), 1):
         if source.startswith("    target.") or source.startswith("    child.only_second"):

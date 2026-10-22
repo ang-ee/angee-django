@@ -202,7 +202,10 @@ class Ask(_Settlement):
     def admit(self, ctx: Any) -> Ask:
         manager = apps.get_model("decisions", "Decision").objects
         if ctx.step_run.decision_id is not None:
-            raise ValidationError("This step has already asked its decision.")
+            previous = ctx.step_run.decision
+            if previous.is_open:
+                raise ValidationError("This step still has an open decision.")
+            ctx.record(previous, operation="created")
         decision = manager.ask(self.request, actor=ctx.actor)
         for record in self.request.records:
             ctx.record(record)

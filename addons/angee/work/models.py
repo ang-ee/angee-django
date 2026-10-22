@@ -345,7 +345,7 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     """
 
     runtime = True
-    sqid_prefix = "stg_"
+    sqid_prefix = "wst_"
     container_field_name = "queue"
     category_field_name = "category"
     locked_rows_label = "Triage and duplicate stages"

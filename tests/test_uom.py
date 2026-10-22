@@ -161,18 +161,20 @@ def _literal_uom(unit: Any) -> UomExpressions:
     )
 
 
-def test_expression_conversion_uses_affine_half_up_owner(units: SimpleNamespace) -> None:
+@pytest.mark.parametrize("field_reference", [False, True])
+def test_expression_conversion_uses_affine_half_up_owner(units: SimpleNamespace, field_reference: bool) -> None:
     """ORM consumers get the same conversion and destination precision as scalar callers."""
 
     quantity_field = models.DecimalField(max_digits=26, decimal_places=10)
+    quantity = models.Value(Decimal("1234.5"), output_field=quantity_field)
     expression = Uom.convert_expression(
-        models.Value(Decimal("1234.5"), output_field=quantity_field),
+        models.F("input_quantity") if field_reference else quantity,
         UomExpressions.from_path(""),
         _literal_uom(units.kilogram),
         output_field=quantity_field,
     )
     with system_context(reason="uom expression conversion"):
-        converted = Uom.objects.filter(pk=units.gram.pk).annotate(
+        converted = Uom.objects.filter(pk=units.gram.pk).alias(input_quantity=quantity).annotate(
             converted=expression
         ).values_list("converted", flat=True).get()
     assert converted == Decimal("1.235")

@@ -76,9 +76,11 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
     valid = tmp_path / "valid.py"
     valid.write_text(
         "from typing import assert_type\n"
+        "from angee.models.statements import Statement\n"
         "from history_runtime.typing_history.models import "
         "Subject, SubjectStatement, HistoricalSubject, HistoricalSubjectStatement\n"
         "assert_type(SubjectStatement.objects.get().title, str | None)\n"
+        "assert_type(SubjectStatement.objects.get().rank, Statement.StatementRank)\n"
         "assert_type(SubjectStatement.objects.get().count, int | None)\n"
         "assert_type(SubjectStatement.objects.get().subject, Subject)\n"
         "assert_type(Subject().subjectstatement_set.get().count, int | None)\n"
@@ -93,7 +95,10 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "Subject().subjectstatement_set.missing_method()\n"
     )
     command = [sys.executable, "-m", "mypy", "--config-file", str(config)]
-    positive = subprocess.run([*command, str(valid)], cwd=root, env=env, capture_output=True, text=True, check=False)
+    positive = subprocess.run(
+        [*command, str(valid), str(runtime / 'typing_history' / 'models.py')],
+        cwd=root, env=env, capture_output=True, text=True, check=False,
+    )
     assert positive.returncode == 0, positive.stdout + positive.stderr
     negative = subprocess.run([*command, str(invalid)], cwd=root, env=env, capture_output=True, text=True, check=False)
     assert negative.returncode == 1, negative.stdout + negative.stderr

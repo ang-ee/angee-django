@@ -108,7 +108,7 @@ function GroupShortcut({ search }: { search: ResourceSearch }) {
   return <PopoverRoot><PopoverTrigger render={<Toolbar.Button />}>
     {t("resourceToolbar.groupBy")}{labels.length ? `: ${labels.join(" › ")}` : ""}<Glyph name="chevron-down" className="glyph" />
   </PopoverTrigger><PopoverPortal><PopoverPositioner sideOffset={4} align="start">
-    <PopoverContent aria-label={t("resourceToolbar.groupBy")} className="w-80 max-w-[calc(100vw-1rem)] p-3"><GroupStackPanel search={search} /></PopoverContent>
+    <PopoverContent aria-label={t("resourceToolbar.groupBy")} className="w-80 p-3"><GroupStackPanel search={search} /></PopoverContent>
   </PopoverPositioner></PopoverPortal></PopoverRoot>;
 }
 

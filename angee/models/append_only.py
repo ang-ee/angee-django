@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any, TypeVar
+from typing import Any, ClassVar, Self, TypeVar
 
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -134,7 +134,7 @@ class AppendOnlyModel(models.Model):
     own retention check; ordinary instance and collection writes stay closed.
     """
 
-    _angee_base = AppendOnlyBaseManager()
+    _angee_base: ClassVar[models.Manager[Self]] = AppendOnlyBaseManager()
 
     class Meta:
         abstract = True

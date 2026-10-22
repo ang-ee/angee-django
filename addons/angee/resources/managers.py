@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Self, overload
 
 from django.apps import apps
 from django.conf import settings
@@ -131,10 +131,11 @@ _ResourceManagerBase = AngeeUnscopedManager.from_queryset(ResourceQuerySet)
 class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
     """Orchestrate selected addon resources independently of ledger row filters."""
 
-    def get_queryset(self) -> ResourceQuerySet[LedgerT]:
-        """Retain the configured ledger queryset and concrete row type."""
+    @overload
+    def resolve[TargetT: models.Model](self, handle: str, *, model: type[TargetT]) -> TargetT: ...
 
-        return cast(ResourceQuerySet[LedgerT], super().get_queryset())
+    @overload
+    def resolve(self, handle: str, *, model: None = None) -> models.Model: ...
 
     def resolve(self, handle: str, *, model: type[models.Model] | None = None) -> models.Model:
         """Resolve a ledger handle under the current actor, optionally checking its type."""

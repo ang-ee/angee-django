@@ -19,14 +19,18 @@ from django.db.models import F
 from django.db.models.functions import Now
 from rebac import actor_context, system_context
 
+from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.decisions.testing.models import Decision
+from angee.identity import public_id_of
 from angee.jobs.enqueue import celery_app
 from angee.workflows import tasks as workflow_tasks
+from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.definition import Definition
 from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Retryable, RetryPolicy, StepMode
-from angee.workflows.testing.drivers import load_workflow
+from angee.workflows.testing.drivers import decide, load_workflow, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
 from tests.conftest import create_user, vault_for
 from tests.workflow_steps import Echo, document
@@ -107,6 +111,60 @@ def test_t1_duplicate_database_delivery_executes_one_body(execution, register_st
     assert not runner.execute(step_run.pk)
     assert StepAttempt.system_queryset().filter(step_run=step_run).count() == 1
     assert row(run).status == StepRunStatus.SUCCEEDED
+
+
+def test_concurrent_answer_continuations_admit_only_one_replacement_question(execution, register_step):
+    """A follow-up shares the DATABASE claim lock; duplicate deliveries cannot ask twice."""
+    actor, _sent = execution
+    subject = vault_for(actor)
+    entered, release = Event(), Event()
+
+    class Followup(DecisionStep[None, None, None]):
+        key = "concurrent_followup"
+
+        def ask(self, ctx):
+            prior = public_id_of(ctx.step_run.decision) if ctx.step_run.decision_id else None
+            if prior:
+                entered.set()
+                assert release.wait(10)
+            return ctx.ask(DecisionRequest(
+                kind="Concurrent follow-up", records=(subject,), assignees=(actor,),
+                proposal=DecisionProposal(alternatives=[
+                    {"key": "approve", "label": "Approve", "outcome": "done"},
+                ]),
+            ), state={"prior": prior})
+
+        def continue_with(self, ctx, decision, outcome):
+            if not ctx.state["prior"]:
+                return self.ask(ctx)
+            return ctx.done({"prior": ctx.decision(ctx.state["prior"]).verdict}, outcome=outcome)
+
+    register_step(Followup)
+    workflow = load_workflow({"nodes": {"review": {"step": Followup.key}}, "results": [{"from": "review"}]},
+                             actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
+    run_until(run)
+    step = row(run)
+    first = Decision.system_queryset().get(pk=step.decision_id)
+    decide(first, actor=actor, chosen=["approve"])
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_delivery = pool.submit(in_connection, runner.execute, step.pk)
+        assert entered.wait(10)
+        try:
+            second_delivery = pool.submit(in_connection, runner.execute, step.pk)
+            assert second_delivery.result(timeout=5) is False
+            assert Decision.system_queryset().count() == 1
+        finally:
+            release.set()
+        assert first_delivery.result(timeout=10) is True
+    second = Decision.system_queryset().get(pk=row(run).decision_id)
+    assert second.pk != first.pk and second.is_open
+    assert Decision.system_queryset().count() == 2
+    assert row(run).status == StepRunStatus.WAITING
+    assert run in first.requesting_records()
+    decide(second, actor=actor, chosen=["approve"])
+    run_until(run)
+    assert run.status == RunStatus.SUCCEEDED and run.output == {"prior": ["approve"]}
 
 
 def fanout(actor, key):

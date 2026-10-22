@@ -156,8 +156,7 @@ function SearchBoxContent({ search, box, toolbar, remote, inputValue, setInputVa
       </Combobox.Popup>
       <PopoverPortal><PopoverPositioner anchor={hostRef} sideOffset={6} align="start">
         <PopoverContent aria-label={t("search.panel")} initialFocus={collapsed ? inputRef : undefined}
-          className={cn("grid max-h-[min(36rem,calc(100dvh-5rem))] max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain",
-            roomy && !collapsed ? "w-[48rem] grid-cols-3" : "w-[min(22rem,calc(100vw-1rem))] grid-cols-1")}>
+          className={cn("grid", roomy && !collapsed ? "w-[48rem] grid-cols-3" : "w-[22rem] grid-cols-1")}>
           <SearchPanel search={search} stacked={!roomy || collapsed} lead={collapsed ? input : hidden ? <section
             aria-label={t("search.active")} className="flex flex-wrap gap-1 pb-1">
             {active.map((item) => <ActiveChip key={item.id} item={item} search={search} onRemove={() => search.clear(item.id)} />)}

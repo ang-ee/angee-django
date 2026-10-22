@@ -846,7 +846,7 @@ requires-dist = [
     { name = "django-simple-history", specifier = ">=3.13" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=13f0859a606a9f1ed7952c934e59b0f03a784ef8" },
+    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=bf5989e6247fdf9c2c240b961a71cddc174c4216" },
     { name = "hatch-angee", specifier = ">=0.2.4" },
     { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
@@ -899,17 +899,17 @@ addons = [
     { name = "strawberry-django-aggregates", git = "https://github.com/ang-ee/strawberry-django-aggregates.git?rev=0f374854d19b2709b6d77ae872090ab2a751f1dc" },
     { name = "strawberry-django-hasura", specifier = ">=0.14.0" },
     { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=273bf0456d914d4df535222c4cbae73dff46a376" },
-    { name = "strawberry-graphql-django", git = "https://github.com/ang-ee/strawberry-django.git?rev=5da69857d12c8a0fd09b78ee930741f3550c8bb0" },
+    { name = "strawberry-graphql-django", git = "https://github.com/ang-ee/strawberry-django.git?rev=091238ecd4ae07798ef12e9eb24281540da41ced" },
     { name = "tablib", specifier = ">=3" },
     { name = "urllib3", specifier = ">=2.2" },
     { name = "vobject", specifier = ">=0.9.9" },
 ]
 dev = [
     { name = "daphne", specifier = ">=4.0" },
-    { name = "django-stubs", extras = ["compatible-mypy"], git = "https://github.com/ang-ee/django-stubs.git?rev=c059382110d802744729d50de71f678aa3cf7533" },
+    { name = "django-stubs", extras = ["compatible-mypy"], git = "https://github.com/ang-ee/django-stubs.git?rev=c742042283a82c3248c68493c697f5f30e2fdc6a" },
     { name = "django-zed-rebac", extras = ["caveats"], specifier = "==0.27.3" },
     { name = "faker", specifier = ">=30.0" },
-    { name = "mypy", git = "https://github.com/ang-ee/mypy.git?rev=70993efa722fca8cd7471172a9bf07172efec38f" },
+    { name = "mypy", git = "https://github.com/ang-ee/mypy.git?rev=ac3de6e4c34b04728e768e07d4842f4309ff6c45" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-django", specifier = ">=4.8" },
@@ -1037,7 +1037,7 @@ wheels = [
 [[package]]
 name = "django-stubs"
 version = "6.0.9"
-source = { git = "https://github.com/ang-ee/django-stubs.git?rev=c059382110d802744729d50de71f678aa3cf7533#c059382110d802744729d50de71f678aa3cf7533" }
+source = { git = "https://github.com/ang-ee/django-stubs.git?rev=c742042283a82c3248c68493c697f5f30e2fdc6a#c742042283a82c3248c68493c697f5f30e2fdc6a" }
 dependencies = [
     { name = "django" },
     { name = "django-stubs-ext" },
@@ -1053,7 +1053,7 @@ compatible-mypy = [
 [[package]]
 name = "django-stubs-ext"
 version = "6.0.9"
-source = { git = "https://github.com/ang-ee/django-stubs.git?subdirectory=ext&rev=c059382110d802744729d50de71f678aa3cf7533#c059382110d802744729d50de71f678aa3cf7533" }
+source = { git = "https://github.com/ang-ee/django-stubs.git?subdirectory=ext&rev=c742042283a82c3248c68493c697f5f30e2fdc6a#c742042283a82c3248c68493c697f5f30e2fdc6a" }
 dependencies = [
     { name = "django" },
     { name = "typing-extensions" },
@@ -1085,7 +1085,7 @@ wheels = [
 [[package]]
 name = "django-zed-rebac"
 version = "0.27.3"
-source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=13f0859a606a9f1ed7952c934e59b0f03a784ef8#13f0859a606a9f1ed7952c934e59b0f03a784ef8" }
+source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=bf5989e6247fdf9c2c240b961a71cddc174c4216#bf5989e6247fdf9c2c240b961a71cddc174c4216" }
 dependencies = [
     { name = "django" },
 ]
@@ -1838,7 +1838,7 @@ wheels = [
 [[package]]
 name = "mypy"
 version = "2.1.0"
-source = { git = "https://github.com/ang-ee/mypy.git?rev=70993efa722fca8cd7471172a9bf07172efec38f#70993efa722fca8cd7471172a9bf07172efec38f" }
+source = { git = "https://github.com/ang-ee/mypy.git?rev=ac3de6e4c34b04728e768e07d4842f4309ff6c45#ac3de6e4c34b04728e768e07d4842f4309ff6c45" }
 dependencies = [
     { name = "ast-serialize" },
     { name = "librt", marker = "platform_python_implementation != 'PyPy'" },
@@ -2905,7 +2905,7 @@ dependencies = [
 [[package]]
 name = "strawberry-graphql-django"
 version = "0.89.2"
-source = { git = "https://github.com/ang-ee/strawberry-django.git?rev=5da69857d12c8a0fd09b78ee930741f3550c8bb0#5da69857d12c8a0fd09b78ee930741f3550c8bb0" }
+source = { git = "https://github.com/ang-ee/strawberry-django.git?rev=091238ecd4ae07798ef12e9eb24281540da41ced#091238ecd4ae07798ef12e9eb24281540da41ced" }
 dependencies = [
     { name = "asgiref" },
     { name = "django" },

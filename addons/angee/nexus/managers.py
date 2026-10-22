@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Self
 
 from django.apps import apps
 from django.db import models, transaction
@@ -548,11 +548,6 @@ _TieManagerBase = AngeeManager.from_queryset(TieQuerySet)
 
 class TieManager[TieT: Tie](_TieManagerBase[TieT]):
     """Own the deliberate-interaction derivation and canonical pair lookups."""
-
-    def get_queryset(self) -> TieQuerySet[TieT]:
-        """Preserve the configured queryset and tie row type."""
-
-        return cast(TieQuerySet[TieT], super().get_queryset())
 
     def for_parties(self, first: Any, second: Any) -> TieT | None:
         """Return the canonically ordered edge between two parties, when present."""

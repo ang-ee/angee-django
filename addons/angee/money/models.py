@@ -23,7 +23,7 @@ the converted amount at the point that owns the business policy.
 from __future__ import annotations
 
 from decimal import MAX_EMAX, MAX_PREC, MIN_EMIN, Context, Decimal
-from typing import Any, cast
+from typing import Any
 
 from django.apps import apps
 from django.conf import settings
@@ -202,11 +202,6 @@ _CurrencyRateManagerBase = AngeeManager.from_queryset(CurrencyRateQuerySet)
 
 class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
     """Resolves the effective exchange rate for a currency on a date."""
-
-    def get_queryset(self) -> CurrencyRateQuerySet[RateT]:
-        """Preserve the configured queryset and currency-rate row type."""
-
-        return cast(CurrencyRateQuerySet[RateT], super().get_queryset())
 
     def rate_for(
         self,

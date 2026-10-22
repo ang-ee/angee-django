@@ -240,6 +240,20 @@ def test_resume_or_create_channel_rejects_poll_only_backend_without_creating(pai
         assert not Channel.objects.exists()
 
 
+def test_pairing_rejects_a_channel_without_a_live_selector(
+    pairing_user: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Periodic-only child capabilities cannot enter live pairing through either owner."""
+
+    monkeypatch.setattr(Channel, "live_impl_field", None)
+    with pytest.raises(connect.PairingActionError, match="live channel"):
+        connect.resume_or_create_channel(pairing_user, name="Periodic", backend_class=FakePairingBackend.key)
+    with pytest.raises(ValueError, match="live channel backend"):
+        Channel.objects.unfinished_pairing(pairing_user, FakePairingBackend.key)
+    with system_context(reason="test.messaging.connect.no_live_selector"):
+        assert not Channel.objects.exists()
+
+
 @pytest.mark.usefixtures("cross_process_locks")
 def test_resume_channel_pairing_keeps_report_of_running_session(
     pairing_user: Any,

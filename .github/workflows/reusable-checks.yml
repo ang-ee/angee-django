@@ -389,6 +389,35 @@ jobs:
         env:
           CONSUMER_PATH: ${{ inputs.consumer-path }}
         run: uv run --with-requirements "$GITHUB_WORKSPACE/check-tools.txt" python -m ruff check "workspaces/src/$CONSUMER_PATH" --no-cache
+      - name: Typecheck the consumer with the framework policy and native typing host
+        if: ${{ inputs.consumer-path != '' }}
+        working-directory: stack
+        env:
+          ANGEE_PROJECT_DIR: ${{ github.workspace }}/stack
+          CONSUMER_PATH: ${{ inputs.consumer-path }}
+        run: |
+          uv run --with-requirements "$GITHUB_WORKSPACE/check-tools.txt" python - <<'PY'
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          slot = (Path("workspaces/src") / os.environ["CONSUMER_PATH"]).resolve()
+          framework = Path("workspaces/src/angee").resolve()
+          os.chdir(framework)
+          sys.path.insert(0, str(framework))
+          from tests import typing_settings
+
+          os.environ["MYPYPATH"] = os.pathsep.join(filter(None, (
+              *(str(path) for path in typing_settings.ANGEE_ADDON_DIRS),
+              str(typing_settings.ANGEE_RUNTIME_DIR.parent),
+              os.environ.get("MYPYPATH"),
+          )))
+          subprocess.run([
+              sys.executable, "-m", "mypy", "--config-file", str(framework / "pyproject.toml"),
+              str(slot / "addons"),
+          ], check=True)
+          PY
       - name: Size the PostgreSQL lock table for consumer test schemas
         if: ${{ inputs.consumer-path != '' }}
         run: |

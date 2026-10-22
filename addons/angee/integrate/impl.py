@@ -74,7 +74,11 @@ class BridgeImpl(IntegrationImpl):
     icon = "plug"
     oauth_client: ClassVar[str] = "{vendor}"
     sync_parallelism: ClassVar[int | None] = None
-    """Optional protocol cap; the bridge config and database may lower it."""
+    """Optional protocol cap; direct sync config and database may lower it.
+
+    Workflow IO uses the shared bridge lock for an exact-one cap. Other workflow
+    caps retain native map concurrency, without a separate protocol semaphore.
+    """
     supports_identity_reads: ClassVar[bool] = False
     """Declare identity reads; otherwise retries request a fresh baseline."""
 

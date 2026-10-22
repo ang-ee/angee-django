@@ -45,7 +45,7 @@ test("a linked mark opens its record and names its origin on hover", async () =>
           label: "Source",
           tone: "info" as const,
           origin: "Directory: Customer contacts",
-          target: { model: "parties.PartyStatement", id: "pst_9" },
+          target: { model: "parties.Party", id: "pty_9" },
         }],
       },
       {
@@ -65,10 +65,29 @@ test("a linked mark opens its record and names its origin on hover", async () =>
 
   render(<RecordFieldMarksProvider><Marks /></RecordFieldMarksProvider>);
   const link = await screen.findByRole("link", { name: "Source" });
-  expect(link.getAttribute("href")).toBe("/parties.PartyStatement/pst_9");
+  expect(link.getAttribute("href")).toBe("/parties.Party/pty_9");
   expect(screen.getByRole("button", { name: "Unconfirmed: Name" })).toBeTruthy();
   const trigger = link.parentElement!;
   fireEvent.mouseEnter(trigger);
   fireEvent.mouseMove(trigger);
   expect(await screen.findByText("Directory: Customer contacts")).toBeTruthy();
+});
+
+test("a reveal mark preserves its origin tooltip", async () => {
+  const onReveal = vi.fn();
+  function Marks() {
+    const publications = useMemo(() => [{ model: "notes.Note", id: "nte_7", marks: [{
+      field: "display_name", label: "Source", tone: "info" as const,
+      origin: "Imported directory", onReveal,
+    }] }], []);
+    useRecordFieldMarks(publications);
+    return <RecordFieldMarkControl field="display_name" label="Name" />;
+  }
+  render(<RecordFieldMarksProvider><Marks /></RecordFieldMarksProvider>);
+  const mark = await screen.findByRole("button", { name: "Source: Name" });
+  fireEvent.mouseEnter(mark.parentElement!);
+  fireEvent.mouseMove(mark.parentElement!);
+  expect(await screen.findByText("Imported directory")).toBeTruthy();
+  fireEvent.click(mark);
+  expect(onReveal).toHaveBeenCalledOnce();
 });

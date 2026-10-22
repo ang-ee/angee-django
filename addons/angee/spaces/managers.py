@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Self
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -27,11 +27,6 @@ _GroupManagerBase = AngeeManager.from_queryset(GroupQuerySet)
 class GroupManager[GroupT: Group](_GroupManagerBase[GroupT]):
     """Keep a stable import identity for shared group tree managers."""
 
-    def get_queryset(self) -> GroupQuerySet[GroupT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(GroupQuerySet[GroupT], super().get_queryset())
-
 
 class MembershipQuerySet[MembershipT: Membership](AngeeQuerySet[MembershipT]):
     """Canonical roster selections shared by admission and the team audience."""
@@ -47,11 +42,6 @@ _MembershipManagerBase = AngeeManager.from_queryset(MembershipQuerySet)
 
 class MembershipManager[MembershipT: Membership](_MembershipManagerBase[MembershipT]):
     """Own confirmed manual roster writes under the roster's role permissions."""
-
-    def get_queryset(self) -> MembershipQuerySet[MembershipT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(MembershipQuerySet[MembershipT], super().get_queryset())
 
     def check_role_create(self, *, group: Any, role: Any) -> SubjectRef:
         """Check the selected role through the same REBAC preflight as admission."""

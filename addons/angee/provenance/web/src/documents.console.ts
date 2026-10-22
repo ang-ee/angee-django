@@ -22,11 +22,12 @@ export const HistoryEntrySummaryFields = graphql(`
 
 /** One record's changesets, newest first, through the record's own read gate. */
 export const RecordHistoryDocument = graphql(`
-  query RecordHistory($model: String!, $id: ID!, $limit: Int!, $offset: Int!) {
-    history(model: $model, id: $id, limit: $limit, offset: $offset) {
+  query RecordHistory($model: String!, $id: ID!, $limit: Int!, $offset: Int!, $selected: ID) {
+    history(model: $model, id: $id, limit: $limit, offset: $offset, selected: $selected) {
       model
       id
       total
+      offset
       entries {
         ...HistoryEntrySummaryFields
         can_revert
@@ -52,8 +53,7 @@ export const FieldProvenanceDocument = graphql(`
       field
       authority
       origin
-      statement_model
-      statement_id
+      changeset_id
     }
   }
 `);

@@ -153,11 +153,6 @@ _VaultManagerBase = AngeeManager.from_queryset(VaultQuerySet)
 class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
     """Factories for actor-owned vault writes."""
 
-    def get_queryset(self) -> VaultQuerySet[VaultT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(VaultQuerySet[VaultT], super().get_queryset())
-
     def create_for(self, owner: Any, **fields: Any) -> VaultT:
         """Create a vault owned by ``owner`` after the REBAC create preflight.
 
@@ -329,7 +324,7 @@ class Vault(OwnerMixin, TrashMixin, AngeeDataModel, HistoryMixin):
         abstract = True
         ordering = ("name", "sqid")
         rebac_resource_type = "knowledge/vault"
-        constraints = (
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.UniqueConstraint(fields=("owner", "name"), name="uniq_knowledge_vault_owner_name"),
         )
 
@@ -372,11 +367,6 @@ _PageManagerBase = AngeeManager.from_queryset(PageQuerySet)
 
 class PageManager[PageT: Page](_PageManagerBase[PageT]):
     """Factories for actor-scoped page writes."""
-
-    def get_queryset(self) -> PageQuerySet[PageT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(PageQuerySet[PageT], super().get_queryset())
 
     def create_in(self, vault: Any, **fields: Any) -> PageT:
         """Create a page in ``vault`` after the REBAC create preflight.

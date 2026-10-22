@@ -43,7 +43,7 @@ dependencies = [
   "cryptography>=44",
   "django-simple-history>=3.13",
   "django-sqids>=0.1",
-  "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@13f0859a606a9f1ed7952c934e59b0f03a784ef8",
+  "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@bf5989e6247fdf9c2c240b961a71cddc174c4216",
   # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
   # override does not accept it yet; lift the cap when rebac supports 6.1.
   "django>=6.0,<6.1",
@@ -91,8 +91,8 @@ dev = [
   # Source-addon tests import django.contrib.postgres field types even when the
   # test database is SQLite; the former base wrapper selected the core extra.
   "psycopg[binary,pool]>=3.2",
-  "django-stubs[compatible-mypy] @ git+https://github.com/ang-ee/django-stubs.git@c059382110d802744729d50de71f678aa3cf7533",
-  "mypy @ git+https://github.com/ang-ee/mypy.git@70993efa722fca8cd7471172a9bf07172efec38f",
+  "django-stubs[compatible-mypy] @ git+https://github.com/ang-ee/django-stubs.git@c742042283a82c3248c68493c697f5f30e2fdc6a",
+  "mypy @ git+https://github.com/ang-ee/mypy.git@ac3de6e4c34b04728e768e07d4842f4309ff6c45",
   "pytest>=8.0",
   "pytest-django>=4.8",
   "pytest-randomly>=3.16",
@@ -144,7 +144,7 @@ addons = [
     "strawberry-django-aggregates @ git+https://github.com/ang-ee/strawberry-django-aggregates.git@0f374854d19b2709b6d77ae872090ab2a751f1dc",
     "strawberry-django-hasura>=0.14.0",
     "strawberry-graphql @ git+https://github.com/ang-ee/strawberry.git@273bf0456d914d4df535222c4cbae73dff46a376",
-    "strawberry-graphql-django @ git+https://github.com/ang-ee/strawberry-django.git@5da69857d12c8a0fd09b78ee930741f3550c8bb0",
+    "strawberry-graphql-django @ git+https://github.com/ang-ee/strawberry-django.git@091238ecd4ae07798ef12e9eb24281540da41ced",
     "tablib>=3",
     "urllib3>=2.2",
     "vobject>=0.9.9",
@@ -247,6 +247,15 @@ files = ["angee", "addons/angee"]
 ignore_missing_imports = true
 mypy_path = [".", "addons", ".mypy_cache"]
 warn_unused_ignores = true
+# Historical addon migrations are digest-pinned executable artifacts, like the
+# Ruff boundary above; integrity and execution tests validate their bodies.
+exclude = ["(^|/)runtime_migrations/"]
+
+[[tool.mypy.overrides]]
+module = ["*.runtime_migrations.*"]
+# Integrity tests still import typed Migration contracts. Preserve those types
+# and caller diagnostics without re-checking immutable historical source bodies.
+follow_imports = "silent"
 
 [tool.vulture]
 paths = ["angee", "addons/angee", "examples/addons", "tests"]

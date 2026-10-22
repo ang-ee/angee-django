@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 
 import pytest
@@ -24,7 +26,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ValidationError
-from django.db import IntegrityError, connection, models, transaction
+from django.db import IntegrityError, close_old_connections, connection, models, transaction
 from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import (
@@ -523,6 +525,109 @@ def test_explicit_ingest_rejects_same_channel_message_reassignment(channel: Any,
         # A record's creation is its first history line, not a message: only the ingest counts.
         assert thread.message_count == 1
         assert other.message_count == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_source_thread_correction_compares_locked_prior_and_keeps_native_counters(channel: Any) -> None:
+    with system_context(reason="test source thread correction"):
+        first, second, third = (
+            Thread.objects.create(channel=channel, platform="other", external_id=f"source-audience-{index}")
+            for index in range(3)
+        )
+        write_relationships([RelationshipTuple(to_object_ref(first), "reader", to_subject_ref(channel.owner))])
+        parsed = _parsed("source-audience-message", sent_at=datetime(2026, 1, 2, tzinfo=timezone.utc))
+        original = Message.objects.ingest([parsed], channel=channel, explicit_thread=first, historical=True)[0]
+        moved = Message.objects.ingest([parsed], channel=channel, explicit_thread=second, expected_thread=first,
+                                       historical=True)[0]
+        assert moved.pk == original.pk and moved.thread_id == second.pk
+        first.refresh_from_db()
+        second.refresh_from_db()
+        assert (first.message_count, second.message_count) == (0, 1)
+        assert parsed.sent_at is not None
+        later_parsed = replace(parsed, sent_at=parsed.sent_at + timedelta(days=1))
+        moved = Message.objects.ingest([later_parsed], channel=channel, explicit_thread=third, expected_thread=second,
+                                       historical=True)[0]
+        third.refresh_from_db()
+        assert (third.message_count, third.last_message_at) == (1, later_parsed.sent_at)
+        with pytest.raises(ValueError, match="changed after"):
+            Message.objects.ingest([parsed], channel=channel, explicit_thread=third, expected_thread=first,
+                                   historical=True)
+        moved.refresh_from_db()
+        assert moved.thread_id == third.pk
+        other_channel = make_integration("foreign-correction-source", model=Channel, backend_class="manual")
+        foreign = Thread.objects.create(channel=other_channel, platform="other", external_id="foreign-source-thread")
+        with pytest.raises(ValueError, match="different source channel"):
+            Message.objects.ingest([parsed], channel=channel, explicit_thread=foreign, expected_thread=third)
+        # The provider's historical import cannot move a locally authored envelope.
+        Message.objects.filter(pk=moved.pk).update(status=Message.MessageStatus.SENT)
+        with pytest.raises(ValueError, match="locally authored"):
+            Message.objects.ingest([parsed], channel=channel, explicit_thread=first, expected_thread=third)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_source_thread_correction_race_has_one_compare_and_set_winner(channel: Any) -> None:
+    if connection.vendor != "postgresql":
+        pytest.skip("Concurrent row-lock admission requires PostgreSQL.")
+    with system_context(reason="prepare source correction race"):
+        first, second, third = (
+            Thread.objects.create(channel=channel, platform="other", external_id=f"source-cas-race-{index}")
+            for index in range(3)
+        )
+        write_relationships([RelationshipTuple(to_object_ref(first), "reader", to_subject_ref(channel.owner))])
+        original = Message.objects.ingest([_parsed("source-cas-race")], channel=channel,
+                                           explicit_thread=first, historical=True)[0]
+    barrier = Barrier(2)
+
+    def move(target: Any) -> str:
+        close_old_connections()
+        try:
+            with system_context(reason="race source correction"):
+                barrier.wait(timeout=10)
+                try:
+                    Message.objects.correct_source_thread(
+                        original, channel=channel, expected_thread=first, thread=target,
+                    )
+                except ValueError as error:
+                    assert "changed after" in str(error)
+                    return "stale"
+                return "moved"
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(move, (second, third)))
+    assert sorted(results) == ["moved", "stale"]
+    with system_context(reason="inspect source correction race"):
+        first.refresh_from_db()
+        second.refresh_from_db()
+        third.refresh_from_db()
+        assert first.message_count == 0
+        assert second.message_count + third.message_count == 1
+        assert Message.objects.filter(external_id="source-cas-race", channel=channel).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("historical", (False, True))
+def test_source_thread_correction_same_content_preserves_event_policy(channel: Any, historical: bool) -> None:
+    with system_context(reason="source correction events"):
+        first, second = (
+            Thread.objects.create(channel=channel, platform="other", external_id=f"source-events-{index}")
+            for index in range(2)
+        )
+        parsed = _parsed("source-events")
+        original = Message.objects.ingest([parsed], channel=channel, explicit_thread=first, historical=True)[0]
+        received = []
+
+        def receive(sender: Any, instance: Any, **kwargs: Any) -> None:
+            received.append(instance.pk)
+
+        message_ingested.connect(receive, sender=Message)
+        try:
+            Message.objects.ingest([parsed], channel=channel, explicit_thread=second, expected_thread=first,
+                                   historical=historical)
+        finally:
+            message_ingested.disconnect(receive, sender=Message)
+        assert received == ([] if historical else [original.pk])
 
 
 @pytest.mark.django_db(transaction=True)

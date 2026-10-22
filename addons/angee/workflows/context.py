@@ -138,9 +138,9 @@ class StepContext:
         row = instance_from_public_id(
             model,
             decision_ref,
-            queryset=model.objects.with_actor(self.actor).filter(requesting_steps__run=self.run),
+            queryset=model.objects.with_actor(self.actor),
         )
-        if row is None:
+        if row is None or self.run not in row.requesting_records():
             raise PermissionDenied("The decision is absent or inaccessible in this run.")
         return row
 

@@ -28,11 +28,15 @@ code executes under the actor's permissions. It must keep external effects out
 of database steps. Consumer settlements validate their own values; the runner
 records retry, timeout and diagnostic facts on attempts.
 
-[`DecisionStep`](decision_steps.py) asks exactly one decision retained by
+[`DecisionStep`](decision_steps.py) retains the current question in
 `StepRun.decision`. `ctx.ask(request, state=...)` holds for its verdict and keeps
 continuation facts in the step's state. Override `ask(ctx)` to declare the
 question and `continue_with(ctx, decision, outcome)` only when typed output needs
-adapting. The built-in `ask_decision` resolves the symbolic `subject` key in
+adapting. A continuation may ask a replacement after an answer; the old question
+remains a native execution record of the asking step's `created` operation,
+accessible through `ctx.decision(id)` in that run. Reading another run's question
+as evidence does not make it this run's question. An open question cannot be
+replaced. The built-in `ask_decision` resolves the symbolic `subject` key in
 configured actions to the run's subject public identity.
 
 [`apply_proposals`](decision_steps.py) is the shared application path: as the run actor
@@ -41,7 +45,7 @@ public identities, and invokes methods the model declares in `decision_methods`.
 It returns the sole selected outcome, or `done` for several distinct outcomes.
 Application and continuation share the worker's body transaction;
 failure rolls back record actions and retains final answers for operator retry.
-No automatic replacement question is asked. Repeated delivery still requires
+Application failure does not automatically ask a replacement. Repeated delivery still requires
 idempotent declared methods. Selected alternatives apply in authored order;
 multiple alternatives cannot overlap the same record's field write.
 

@@ -325,11 +325,6 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
 
     use_in_migrations = True
 
-    def get_queryset(self) -> UserQuerySet[UserT]:
-        """Retain IAM's queryset vocabulary through Django's configured factory."""
-
-        return cast(UserQuerySet[UserT], super().get_queryset())
-
     @classmethod
     def normalize_email(cls, email: str | None) -> str:
         """Lowercase the whole address for every account kind, unlike Django.

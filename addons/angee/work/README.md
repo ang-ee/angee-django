@@ -52,3 +52,15 @@ Boards and Cycles hubs, under their paths and anchors, so they render in Work
 wherever composition places the queue record. [`QueueSettingsLink`](web/src/queue-settings-link.tsx)
 opens that record from their headers; a suite that lifts queues into Settings
 keeps their configuration there and their work here.
+
+## Stage identities
+
+Operational stages use the `wst_` public-ID prefix. Their integer primary keys,
+foreign keys, and history pointers remain unchanged. Earlier `stg_` Work stage
+URLs are intentionally unsupported after this upgrade.
+
+The declared `stage_public_identity` runtime migration re-encodes only retained
+`resources.Resource.target_id` references owned by `work.Stage`. It preserves the
+ledger row and xref, refuses malformed legacy IDs, and is safe to replay. Run the
+normal composed build and Django migration workflow before resource reloads.
+No identity aliases or external-link rewrites are installed.

@@ -45,6 +45,7 @@ from django.core.validators import RegexValidator
 from django.db import models, transaction
 from django.db.models.query_utils import DeferredAttribute
 from django.utils.encoding import force_bytes
+from django.utils.functional import Promise
 from django_choices_field import TextChoicesField
 from django_sqids import SqidsField
 from sqids import Sqids
@@ -291,6 +292,8 @@ class StateField[C: models.TextChoices | None](TextChoicesField[C]):
     GraphQL enum straight from ``choices_enum`` and the column ``max_length``
     is derived from it, so a state column never restates its choices. Declared
     natively, e.g. ``StateField(choices_enum=Note.Status, default=...)``.
+    Serialized ``choices`` reconstruct a dynamic ``TextChoices`` through the
+    upstream field, retaining nullability without claiming the original enum type.
     ``status_display`` declares its migration-inert ``pill``, ``dot``, or ``text`` presentation.
     """
 
@@ -307,6 +310,20 @@ class StateField[C: models.TextChoices | None](TextChoicesField[C]):
     @overload
     def __init__[E: models.TextChoices](
         self: StateField[E | None], *, choices_enum: type[E], null: Literal[True],
+        status_display: Literal["pill", "dot", "text"] | None = None, **kwargs: Any,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: StateField[models.TextChoices], *, choices: Sequence[tuple[str | None, str | Promise]],
+        choices_enum: None = None, null: Literal[False] = False,
+        status_display: Literal["pill", "dot", "text"] | None = None, **kwargs: Any,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: StateField[models.TextChoices | None], *, choices: Sequence[tuple[str | None, str | Promise]],
+        choices_enum: None = None, null: Literal[True],
         status_display: Literal["pill", "dot", "text"] | None = None, **kwargs: Any,
     ) -> None: ...
 

@@ -249,11 +249,6 @@ _DriveManagerBase = AngeeManager.from_queryset(DriveQuerySet)
 class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
     """Provision independent volumes on the configured default backend."""
 
-    def get_queryset(self) -> DriveQuerySet[DriveT]:
-        """Preserve the configured volume queryset and model row type."""
-
-        return cast(DriveQuerySet[DriveT], super().get_queryset())
-
     def create_on_default_backend(self, *, slug: str, name: str, owns_items: bool = False) -> DriveT:
         """Create an ownerless drive with its own key namespace.
 
@@ -407,11 +402,6 @@ _FolderManagerBase = AngeeManager.from_queryset(FolderQuerySet)
 
 class FolderManager[FolderT: Folder](_FolderManagerBase[FolderT]):
     """Manager owning gated folder creation."""
-
-    def get_queryset(self) -> FolderQuerySet[FolderT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(FolderQuerySet[FolderT], super().get_queryset())
 
     def create_in_drive(self, *, drive_id: str, name: str, parent_id: str = "", description: str = "") -> FolderT:
         """Create a real folder after checking ``write`` on its drive.
@@ -732,11 +722,6 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
     :meth:`draft` reserves the row; the byte intake and publish verbs live on
     the row (see the module docstring for the source model).
     """
-
-    def get_queryset(self) -> FileQuerySet[FileT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(FileQuerySet[FileT], super().get_queryset())
 
     def draft(
         self,

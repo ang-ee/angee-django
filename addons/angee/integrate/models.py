@@ -25,7 +25,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from itertools import batched
-from typing import Any, ClassVar, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx2
@@ -199,11 +199,6 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
     (issuer/JWKS/discovery + login policy) is owned by the ``iam_integrate_oidc``
     addon and seeded there, never from here.
     """
-
-    def get_queryset(self) -> OAuthClientQuerySet[OAuthClientT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(OAuthClientQuerySet[OAuthClientT], super().get_queryset())
 
     seed_fields = frozenset(
         {
@@ -616,11 +611,6 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
     Actor-less framework writes run under ``system_context``; update paths do not maintain ``updated_by``.
     """
 
-    def get_queryset(self) -> ExternalAccountQuerySet[ExternalAccountT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(ExternalAccountQuerySet[ExternalAccountT], super().get_queryset())
-
     caller_fields = frozenset(
         {
             "email",
@@ -841,11 +831,6 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
 
     Actor-less framework writes run under ``system_context``; update paths do not maintain ``updated_by``.
     """
-
-    def get_queryset(self) -> CredentialQuerySet[CredentialT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(CredentialQuerySet[CredentialT], super().get_queryset())
 
     caller_fields = frozenset(
         {
@@ -1617,11 +1602,6 @@ _IntegrationManagerBase = AngeeManager.from_queryset(IntegrationQuerySet)
 
 class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[IntegrationT]):
     """Keep a stable import identity for integration and bridge collection scopes."""
-
-    def get_queryset(self) -> IntegrationQuerySet[IntegrationT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(IntegrationQuerySet[IntegrationT], super().get_queryset())
 
 
 def _save_lifecycle(instance: Integration, source: Any, target: Any, **kwargs: Any) -> None:
@@ -2674,8 +2654,11 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
     requires_parent: ClassVar[str] = "integrate.Integration"
 
-    capability_impl: BridgeImpl
-    """The concrete integration supplies its selected bridge implementation."""
+    if TYPE_CHECKING:
+        @property
+        def capability_impl(self) -> BridgeImpl:
+            """The integration parent's read-only selected bridge implementation."""
+            ...
 
     class SyncStage(models.TextChoices):
         """Generic lifecycle stage for bridge sync jobs."""
@@ -4030,11 +4013,6 @@ _RecordLinkManagerBase = AngeeManager.from_queryset(RecordLinkQuerySet)
 
 class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLinkT]):
     """Own replica identity, applied bases and count-based absence policy."""
-
-    def get_queryset(self) -> RecordLinkQuerySet[RecordLinkT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(RecordLinkQuerySet[RecordLinkT], super().get_queryset())
 
     def observe(
         self,

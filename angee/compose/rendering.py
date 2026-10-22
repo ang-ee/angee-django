@@ -17,7 +17,7 @@ from angee.tiers import ResourceTier
 def render_models(composition: ModelComposition, label: str, *, runtime_module: str = "runtime") -> str:
     """Return the concrete model module for one source app label."""
 
-    imports: set[str] = set()
+    imports: set[str] = {"from typing import ClassVar"}
     bodies: list[str] = []
     for source in composition.ordered_models:
         if source not in composition.sources_by_label.get(label, ()):
@@ -40,7 +40,7 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
                     f"from {runtime_module}.{parent._meta.app_label}.models import {parent.__name__} as {parent_alias}"
                 )
                 base_names.append(parent_alias)
-        meta_name = f"_{name}Meta"
+        meta_name = f"{source_alias}.Meta"
         meta_lines = [
             "        abstract = False",
             f"        app_label = {label!r}",
@@ -72,7 +72,8 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
             )
         body_lines.extend(
             [
-                f"    angee_contributed_field_origins = {composition.contributed_field_origins(source)!r}",
+                "    angee_contributed_field_origins: ClassVar[tuple[tuple[str, str], ...]] = "
+                f"{composition.contributed_field_origins(source)!r}",
                 "",
             ]
         )
@@ -90,8 +91,6 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
         if grantable or "rebac_grantable" in source.__dict__ or parent is not None:
             body_lines.extend([f"    rebac_grantable = {grantable!r}", ""])
         lines = [
-            f"{meta_name} = getattr({source_alias}, 'Meta', object)",
-            "",
             f"class {name}({', '.join(base_names)}):",
             f'    """Concrete {name} model."""',
             "",

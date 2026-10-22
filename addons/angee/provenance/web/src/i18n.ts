@@ -2,8 +2,8 @@ import { createNamespaceT } from "@angee/ui";
 
 // English fallback strings for the provenance addon's own copy, under the
 // `provenance` namespace. Enum tokens (`history.activity.*`, `history.action.*`,
-// `history.statement.*`) are keyed by the lower-case wire token of the owner's
-// choices; field labels come from the resource metadata, not from here.
+// `history.statement.*`, `history.sourceKind.*`) label the authored history
+// projection; field labels come from the subject resource metadata.
 export const enProvenanceMessages: Record<string, string> = {
   "fieldProvenance.source": "Source",
   "fieldProvenance.correction": "Correction",
@@ -15,6 +15,15 @@ export const enProvenanceMessages: Record<string, string> = {
   "history.emptyTitle": "No history yet",
   "history.emptyDescription": "Changes to this record will appear here with who made them and why.",
   "history.system": "System",
+  "history.sourceKind.person": "Person",
+  "history.sourceKind.systemOfRecord": "System of record",
+  "history.sourceKind.directory": "Directory",
+  "history.sourceKind.network": "Network",
+  "history.sourceKind.import": "Import",
+  "history.sourceKind.seed": "Seed",
+  "history.sourceKind.document": "Document",
+  "history.sourceKind.extraction": "Extraction",
+  "history.sourceKind.rule": "Rule",
   "history.details": "Details",
   "history.changes_one": "{count} field changed",
   "history.changes_other": "{count} fields changed",

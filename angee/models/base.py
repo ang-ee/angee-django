@@ -65,7 +65,7 @@ class AngeeModel(
     objects: ClassVar[models.Manager[Self]] = AngeeManager()
     """Default REBAC manager with Angee queryset conveniences."""
 
-    _angee_base = AngeeUnscopedManager()
+    _angee_base: ClassVar[models.Manager[Self]] = AngeeUnscopedManager()
     """Unfiltered tracked writes for Django's relation and base-manager paths."""
 
     def retained(self) -> bool:

@@ -4,9 +4,11 @@ import * as React from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
-import { floatWidget, integerWidget } from "./number";
+import { setHumanDateLocale } from "../lib/human-locale";
+import { defaultWidgets } from "./index";
+import { floatWidget, integerWidget, percentWidget } from "./number";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); setHumanDateLocale("en"); });
 
 test("number list cells show an em dash for missing values while preserving zero", () => {
   const IntegerCell = integerWidget.cell!;
@@ -47,4 +49,26 @@ test("a cleared decimal stays editable and publishes blank form state", () => {
   expect(document.activeElement).toBe(input);
   fireEvent.change(input, { target: { value: "2.75" } });
   expect(screen.getByText("2.75")).toBeTruthy();
+});
+
+test.each([
+  ["en-US", "65.68738656987295825771324864", "65.69%"],
+  ["nl-NL", "65.68738656987295825771324864", "65,69%"],
+  ["en-US", 0, "0%"],
+  ["en-US", "-12.3456", "-12.35%"],
+  ["en-US", "100", "100%"],
+  ["en-US", "Infinity", "Infinity"],
+  ["en-US", -Infinity, "-Infinity"],
+] as const)("percent reads percentage points in %s without rewriting %s", (locale, value, expected) => {
+  setHumanDateLocale(locale);
+  const PercentRead = defaultWidgets.percent.read;
+  expect(defaultWidgets.percent).toBe(percentWidget);
+  const { container } = render(<PercentRead value={value} />);
+  expect(container.textContent).toBe(expected);
+});
+
+test.each([null, undefined, "", "NaN", NaN, "invalid"])("percent omits absent or invalid %s", (value) => {
+  const PercentRead = percentWidget.read;
+  const { container } = render(<PercentRead value={value} />);
+  expect(container.textContent).toBe("");
 });

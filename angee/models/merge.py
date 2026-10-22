@@ -214,7 +214,7 @@ class MergeableMixin(AngeeModel):
             raise ValidationError(f"Merge at most {MERGE_LIMIT} records at once.")
         with transaction.atomic(using=using), actor_context(actor):
             found = instances_from_public_ids(
-                model, records, queryset=model.objects.with_actor(actor).with_action("read").using(using),
+                model, records, queryset=model._default_manager.with_actor(actor).with_action("read").using(using),
             )
             gone = sorted(set(records) - set(found))
             merged_ids = sorted({row.pk for row in found.values()})

@@ -59,11 +59,20 @@ def project_history_models() -> bool:
         bodies: list[str] = []
         for name, model in sorted(classes.items()):
             bases: list[str] = []
+            inherited_fields: dict[str, models.Field] = {}
             for base in model.__bases__:
                 imports.add(f"import {base.__module__}")
                 bases.append(f"{base.__module__}.{base.__qualname__}")
+                if issubclass(base, models.Model):
+                    for field in base._meta.fields:
+                        inherited_fields.setdefault(field.name, field)
             lines = [f"class {name}({', '.join(bases)}):"]
             for field_name, field in sorted(ModelState.from_model(model).fields.items()):
+                inherited = inherited_fields.get(field_name)
+                if inherited is not None and inherited.deconstruct()[1:] == field.deconstruct()[1:]:
+                    # Native abstract inheritance already owns this exact field,
+                    # including enum identity lost by migration serialization.
+                    continue
                 expression, dependencies = MigrationWriter.serialize(field)
                 imports.update(dependencies)
                 lines.append(f"    {field_name} = {expression}")

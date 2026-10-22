@@ -65,11 +65,6 @@ _ChangesetManagerBase = AngeeManager.from_queryset(ChangesetQuerySet)
 class ChangesetManager[ChangesetT: Changeset](_ChangesetManagerBase[ChangesetT]):
     """Atomic idempotency claims on logical write boundaries."""
 
-    def get_queryset(self) -> ChangesetQuerySet[ChangesetT]:
-        """Preserve the configured queryset and changeset row type."""
-
-        return cast(ChangesetQuerySet[ChangesetT], super().get_queryset())
-
     def claim(self, scope: str, key: str, *, fingerprint: str) -> ChangesetT | None:
         """Claim ``(scope, key)`` on the fresh current boundary or return its completed match."""
 
@@ -227,6 +222,13 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
                 name="%(app_label)s_%(class)s_claim",
             ),
         )
+
+    def offset_in(self, queryset: models.QuerySet[Any]) -> int:
+        """Position in a scoped changeset sequence, using this owner's newest-first order."""
+
+        return queryset.filter(
+            models.Q(recorded_at__gt=self.recorded_at) | models.Q(recorded_at=self.recorded_at, pk__gt=self.pk)
+        ).count()
 
     @property
     def reason_display(self) -> str:

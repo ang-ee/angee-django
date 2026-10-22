@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, NoReturn, Self, cast
+from typing import Any, NoReturn, Self
 
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
@@ -471,11 +471,6 @@ _DashboardManagerBase = AngeeManager.from_queryset(DashboardQuerySet)
 class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT]):
     """Own target resolution and snapshot writes, including CAS and child diffs."""
 
-    def get_queryset(self) -> DashboardQuerySet[DashboardT]:
-        """Preserve the configured queryset and dashboard row type."""
-
-        return cast(DashboardQuerySet[DashboardT], super().get_queryset())
-
     def for_target(self, owner: Any, scope: str, scope_key: str | None) -> DashboardT | None:
         """Return the readable target, preferring the actor's authored snapshot."""
 
@@ -801,7 +796,7 @@ class Dashboard(
     @classmethod
     def after_resource_load(
         cls,
-        instances: Iterable[models.Model],
+        instances: Iterable[Self],
         *,
         tier: str,
         source: str,
@@ -810,8 +805,7 @@ class Dashboard(
 
         loaded = tuple(instances)
         for instance in loaded:
-            dashboard = cast("Dashboard", instance)
-            dashboard.validate_installed_snapshot()
+            instance.validate_installed_snapshot()
         super().after_resource_load(loaded, tier=tier, source=source)
 
 
@@ -870,7 +864,7 @@ class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, HistoryMixin,
     @classmethod
     def after_resource_load(
         cls,
-        instances: Iterable[models.Model],
+        instances: Iterable[Self],
         *,
         tier: str,
         source: str,
@@ -879,7 +873,7 @@ class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, HistoryMixin,
 
         loaded = tuple(instances)
         dashboard_model = cls.dashboard.field.related_model
-        dashboard_ids = sorted({cast("DashboardWidget", widget).dashboard_id for widget in loaded})
+        dashboard_ids = sorted({widget.dashboard_id for widget in loaded})
         for dashboard in dashboard_model.objects.filter(pk__in=dashboard_ids, is_baseline=True):
             dashboard.validate_installed_snapshot()
         super().after_resource_load(loaded, tier=tier, source=source)
