@@ -9,3 +9,8 @@ depends_on = ["angee.graphql", "angee.timeline"]
 name = "changeset_actor_ref"
 app_label = "provenance"
 module = "runtime_migrations.changeset_actor_ref"
+
+[[migrations]]
+name = "retire_idempotency_key"
+app_label = "provenance"
+module = "runtime_migrations.retire_idempotency_key"
