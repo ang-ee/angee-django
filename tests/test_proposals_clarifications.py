@@ -106,8 +106,8 @@ class ClarificationCase(TransactionTestCase):
         self.assertIsNone(task.owner_id)
 
     def test_queue_free_lifecycle(self):
-        task = self.ask(client_creation_key="question")
-        self.assertEqual(self.ask(client_creation_key="question").pk, task.pk)
+        task = self.ask(idempotency_key="question")
+        self.assertEqual(self.ask(idempotency_key="question").pk, task.pk)
         self.assert_queue_free(task)
         with actor_context(self.manager):
             passed = self.as_user(self.round, self.manager).pass_clarification(task, self.recipient)

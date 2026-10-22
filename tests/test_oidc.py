@@ -1544,11 +1544,11 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
     assert captured["email"] == "id-token@example.com"
     assert captured["claims"] == expected_claims
 
-    # First login establishes the user's own party: an owned handle + confirmed self-link.
+    # First login establishes the user's own party: a controlled handle + confirmed self-link.
     with system_context(reason="test verify login claim"):
         own_handle = PartiesHandle.objects.get(value="id-token@example.com")
         person = PartiesPerson.objects.for_user(link_user)
-        assert own_handle.owner_id == link_user.pk
+        assert own_handle.controller_id == link_user.pk
         assert own_handle.party_id == person.pk
 
     link_state, _link_record = oauth_state.issue(
@@ -1739,7 +1739,7 @@ def test_complete_link_binds_to_state_user_after_session_swap(
     account = result.account
 
     with system_context(reason="test oidc assertions"):
-        owner = ExternalAccount.objects.owner_for(account)
+        owner = ExternalAccount.objects.get(pk=account.pk).owner
         start_credential = Credential.objects.filter(user=start_user, external_account=account).exists()
         swapped_credential = Credential.objects.filter(user=swapped_user, external_account=account).exists()
     assert owner is not None

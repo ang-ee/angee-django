@@ -66,6 +66,10 @@ class Command(BaseCommand):
             help="Seconds to wait for the default database (default: 60).",
         )
         provision.add_argument("--post-build", action="store_true", help=SUPPRESS)
+        provision.add_argument(
+            "--after-if-installed", action="append", default=[], metavar="COMMAND",
+            help="Run an installed addon's management command after provisioning (repeatable).",
+        )
         provision.set_defaults(handler=self._handle_provision)
 
     def handle(self, *args: Any, **options: Any) -> None:
@@ -143,6 +147,9 @@ class Command(BaseCommand):
         if options["post_build"]:
             for step in steps[1:]:
                 self._run_step(step)
+            for command in options.get("after_if_installed", ()):
+                if command in get_commands():
+                    self._run_step([command])
             return
 
         self._wait_for_database(options["wait_db"])
@@ -151,6 +158,8 @@ class Command(BaseCommand):
         for option in ("demo", "force_rebac", "bootstrap_admin"):
             if options[option]:
                 child.append(f"--{option.replace('_', '-')}")
+        for command in options.get("after_if_installed", ()):
+            child.extend(("--after-if-installed", command))
         result = subprocess.run(child, check=False)
         if result.returncode != 0:
             raise CommandError(f"angee provision: post-build commands failed (exit {result.returncode})")

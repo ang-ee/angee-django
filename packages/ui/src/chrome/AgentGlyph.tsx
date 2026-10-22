@@ -5,6 +5,9 @@ export type AgentGlyphProps = SVGProps<SVGSVGElement> & {
   strokeWidth?: number | string;
 };
 
+/**
+ * @kind primitive
+ */
 export function AgentGlyph({
   size = 24,
   strokeWidth: _strokeWidth,

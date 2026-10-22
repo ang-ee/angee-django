@@ -7,9 +7,8 @@ from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
+from django.db.models import Field
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
-
-from angee.base.scoping import system_queryset
 
 
 class TopicTemplate(BaseModel):
@@ -61,7 +60,9 @@ class RoundTemplate(BaseModel):
         round_model = apps.get_model("proposals", "Round")
         candidate = round_model(**values)
         for name, value in values.items():
-            round_model._meta.get_field(name).clean(value, candidate)
+            field = round_model._meta.get_field(name)
+            assert isinstance(field, Field), "Round template values must name forward model fields."
+            field.clean(value, candidate)
         for name in ("opens_after", "clarifications_shared_until"):
             milestone_name = getattr(self, name)
             milestone = None
@@ -69,7 +70,7 @@ class RoundTemplate(BaseModel):
                 if project is None:
                     raise ValidationError({name: "A milestone requires a target project."})
                 matches = list(
-                    system_queryset(apps.get_model("projects", "Milestone")).filter(
+                    apps.get_model("projects", "Milestone").system_queryset().filter(
                         project=project,
                         name=milestone_name,
                     )[:2]

@@ -3,6 +3,7 @@ import { Filter, QueryParseError } from "@angee/metadata";
 import { Glyph } from "../../../chrome/Glyph";
 import { useUiT } from "../../../i18n";
 import { useDebouncedText } from "../../../lib/use-debounced-text";
+import { SearchInput } from "../../../ui/input";
 import { Toolbar } from "../../../ui/toolbar";
 import { Toggle } from "../../../ui/toggle";
 import { SelectRoot, SelectTrigger, SelectValue, SelectIcon, SelectPortal, SelectPositioner, SelectContent,
@@ -27,7 +28,7 @@ export function SearchControls({ search, shortcuts, box = true, narrow = false }
   const t = useUiT();
   const reported = React.useRef(new Set<string>()).current;
   const availableShortcuts = React.useMemo(() => validateSearchShortcutCatalog(shortcuts, search.catalog, {
-    query: search.catalog.query, renderItem: search.catalog.renderItem, reported,
+    query: search.catalog.query, reported,
   }), [shortcuts, search.catalog, reported]);
   const pinned = search.catalog.favorites.filter((favorite) => favorite.pinned);
   const mode = narrow ? "collapsed" : box;
@@ -59,11 +60,10 @@ function TextShortcut({ search, shortcut }: { search: ResourceSearch; shortcut: 
   const value = search.active.find((item) => item.kind === "text" && item.field === shortcut.field);
   const { draft, setDraft, commit } = useDebouncedText(value?.kind === "text" ? value.value : "", (next) => search.setText(next, shortcut.field));
   const label = shortcut.label ?? search.catalog.text.find((item) => item.field === shortcut.field)?.label;
-  return <label className="relative min-w-32 flex-1 basis-40">
-    <Glyph name="search" className="pointer-events-none absolute left-2 top-2 size-3.5 text-fg-muted" />
-    <Toolbar.Input type="search" aria-label={labelText(label) ?? shortcut.field} placeholder={labelText(label) ?? shortcut.field}
-      className="w-full pl-7" value={draft} onChange={(event) => { setDraft(event.currentTarget.value); commit(event.currentTarget.value); }} />
-  </label>;
+  return <SearchInput size="sm" className="min-w-32 flex-1 basis-40" aria-label={labelText(label) ?? shortcut.field}
+    placeholder={labelText(label) ?? shortcut.field} value={draft}
+    onChange={(event) => { setDraft(event.currentTarget.value); commit(event.currentTarget.value); }}
+    onClear={() => { setDraft(""); commit(""); commit.flush(); }} />;
 }
 
 function FacetShortcut({ search, shortcut }: { search: ResourceSearch; shortcut: Extract<SearchShortcut, { kind: "facet" }> }) {
@@ -108,7 +108,7 @@ function GroupShortcut({ search }: { search: ResourceSearch }) {
   return <PopoverRoot><PopoverTrigger render={<Toolbar.Button />}>
     {t("resourceToolbar.groupBy")}{labels.length ? `: ${labels.join(" › ")}` : ""}<Glyph name="chevron-down" className="glyph" />
   </PopoverTrigger><PopoverPortal><PopoverPositioner sideOffset={4} align="start">
-    <PopoverContent aria-label={t("resourceToolbar.groupBy")} className="w-80 max-w-[calc(100vw-1rem)] p-3"><GroupStackPanel search={search} /></PopoverContent>
+    <PopoverContent aria-label={t("resourceToolbar.groupBy")} className="w-80 p-3"><GroupStackPanel search={search} /></PopoverContent>
   </PopoverPositioner></PopoverPortal></PopoverRoot>;
 }
 

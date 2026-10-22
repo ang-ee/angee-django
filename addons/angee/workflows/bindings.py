@@ -8,7 +8,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictInt, StrictStr
 
-from angee.base.jsonschema import schema_at
+from angee.jsonschema import schema_at
 from angee.workflows.states import INPUT_SOURCE
 
 ABSENT = object()

@@ -12,6 +12,11 @@ depends_on = [
   "angee.spaces",
 ]
 
+[[migrations]]
+name = "stage_public_identity"
+app_label = "resources"
+module = "runtime_migrations.stage_public_identity"
+
 [resources]
 master = []
 demo = [
@@ -20,8 +25,3 @@ demo = [
   { path = "resources/demo/015_work.cycle.yaml", depends_on = "resources/demo/012_work.stage.yaml" },
   { path = "resources/demo/020_projects.task.yaml", depends_on = ["resources/demo/015_work.cycle.yaml", "projects:resources/demo/031_projects.task.yaml"] },
 ]
-
-[[migrations]]
-name = "task_removal"
-app_label = "work"
-module = "runtime_migrations.task_removal"

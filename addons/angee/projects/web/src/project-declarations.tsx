@@ -27,12 +27,17 @@ import {
   PROJECT_MODEL,
   TASK_MODEL,
 } from "./resources";
+import { recordStatus } from "./task-actions";
 import { TaskManagementTab } from "./task-declarations";
 
 export interface ProjectFormSelection {
   groups?: readonly ("planning" | "details")[];
   verbs?: readonly ("pause" | "resume" | "complete" | "drop")[];
   contextLine?: FormProps["contextLine"];
+  /** Compact read-only extras the host adds to the record header (a card in `RecordHeader.extra`). */
+  headerExtras?: FormProps["headerExtras"];
+  /** The eyebrow above the title: the record's kind and container. */
+  eyebrow?: FormProps["eyebrow"];
   returning?: FormProps["returning"];
   extraActions?: React.ReactNode;
 }
@@ -61,11 +66,11 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
   const standardActions = <>
     {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("pause") ? <Action
       id="pause" label={t("project.action.pause")} permission="write"
-      icon="archive" run={pauseProject} visibleWhen={(record) => projectStatus(record) === "open"} /> : null}
+      icon="archive" run={pauseProject} visibleWhen={(record) => recordStatus(record) === "open"} /> : null}
     {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("resume") ? <Action
       id="resume" label={t("project.action.resume")} permission="write"
       icon="activity" run={resumeProject}
-      visibleWhen={(record) => ["paused", "dropped"].includes(projectStatus(record))} /> : null}
+      visibleWhen={(record) => ["paused", "dropped"].includes(recordStatus(record))} /> : null}
     {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("complete") ? <Action
       id="complete" placement="toolbar" label={t("project.action.complete")} permission="write"
       icon="check" run={completeProject} visibleWhen={isActiveProject} /> : null}
@@ -78,6 +83,8 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
       resource={PROJECT_MODEL}
       returning={["permissions", "on_path", "status_changed_at", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(selection.returning ?? [])]}
       contextLine={selection.contextLine}
+      headerExtras={selection.headerExtras}
+      eyebrow={selection.eyebrow ?? t("project.eyebrow")}
     >
       <Field name="title" title />
       <Field name="revision" readOnly hidden />
@@ -105,12 +112,8 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
 }
 
 function isActiveProject(record: { status?: unknown }): boolean {
-  const status = projectStatus(record);
+  const status = recordStatus(record);
   return status === "open" || status === "paused";
-}
-
-function projectStatus(record: { status?: unknown }): string {
-  return String(record.status ?? "").trim().toLowerCase();
 }
 
 interface MilestoneRow extends StringIdRow {

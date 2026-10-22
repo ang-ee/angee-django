@@ -24,20 +24,14 @@ ERROR_OUTCOME = "error"
 CANCELED_OUTCOME = "canceled"
 """The outcome of a run canceled before terminal settlement."""
 
+INTERRUPTED_OUTCOME = "interrupted"
+"""The outcome of a run whose executing process stopped before settlement."""
+
 INPUT_SOURCE = "input"
 """The reserved binding source for admitted workflow input."""
 
 ITEM_SOURCE = "item"
 """The reserved binding source for a map body's current item."""
-
-
-class TerminalStates(models.TextChoices):
-    """Share terminal-state classification across execution lifecycles."""
-
-    @classmethod
-    def terminal_values(cls) -> tuple[str, ...]:
-        """Return the terminal values supported by this lifecycle."""
-        return (cls.SUCCEEDED, cls.FAILED, cls.CANCELED)
 
 
 class RunOrigin(models.TextChoices):
@@ -49,7 +43,7 @@ class RunOrigin(models.TextChoices):
     TRIGGER = "trigger", "Trigger"
 
 
-class RunStatus(TerminalStates):
+class RunStatus(models.TextChoices):
     """Lifecycle of one workflow run."""
 
     RUNNING = "running", "Running"
@@ -57,6 +51,11 @@ class RunStatus(TerminalStates):
     SUCCEEDED = "succeeded", "Succeeded"
     FAILED = "failed", "Failed"
     CANCELED = "canceled", "Canceled"
+    INTERRUPTED = "interrupted", "Interrupted"
+
+    @classmethod
+    def terminal_values(cls) -> tuple[str, ...]:
+        return tuple(str(member) for member in (cls.SUCCEEDED, cls.FAILED, cls.CANCELED, cls.INTERRUPTED))
 
 
 class RunRelation(models.TextChoices):
@@ -66,7 +65,7 @@ class RunRelation(models.TextChoices):
     CONTINUATION = "continuation", "Continuation"
 
 
-class StepRunStatus(TerminalStates):
+class StepRunStatus(models.TextChoices):
     """Lifecycle of one graph node's execution."""
 
     READY = "ready", "Ready"

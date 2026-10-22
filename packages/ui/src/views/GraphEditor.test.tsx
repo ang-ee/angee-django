@@ -89,6 +89,28 @@ describe("GraphEditor", () => {
     expect(canvas().nodeStyles.node).toEqual(expect.objectContaining({ width: 188, height: 100 }));
   });
 
+  test("node-level read-only keeps contributed nodes selectable but outside every mutation", () => {
+    const immutableNodes = [nodes[0]!, { ...nodes[1]!, readOnly: true }, nodes[2]!];
+    const { props } = setup({ nodes: immutableNodes });
+    expect(canvas().nodes.find((node) => node.id === "b")?.readOnly).toBe(true);
+    expect(canvas().isValidConnection?.({ source: "a", sourceHandle: "two", target: "b" })).toBe(false);
+    expect(canvas().isValidConnection?.({ source: "b", sourceHandle: "next", target: "c" })).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Select Beta" }));
+    for (const name of ["Delete Beta", "Connect Next from Beta", "Add from Next on Beta",
+      "Reconnect Alpha, First, to Beta", "Insert on Alpha, First, to Beta", "Delete link from Alpha, First, to Beta"]) {
+      expect(screen.getByRole("button", { name }).hasAttribute("disabled")).toBe(true);
+    }
+    act(() => canvas().onNodesSelect?.(canvas().nodes.slice(0, 2)));
+    fireEvent.click(screen.getByRole("button", { name: "Delete selection" }));
+    expect(props.onDelete).toHaveBeenCalledExactlyOnceWith(["a"]);
+    canvas().onNodesPositionChange?.({ a: { x: 70, y: 80 }, b: { x: 900, y: 900 } });
+    expect(props.onLayoutChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      a: { x: 70, y: 80 },
+      b: expect.not.objectContaining({ x: 900, y: 900 }),
+    }));
+  });
+
   test("suggested additions preserve all resolved positions for unpinned nodes", () => {
     const { props, view } = setup({ layout: {}, nodeStyles: {} });
     const initial = Object.fromEntries(canvas().nodes.map((node) => [node.id, node.position!]));

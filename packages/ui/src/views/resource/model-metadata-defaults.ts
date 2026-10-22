@@ -167,6 +167,8 @@ function resolveRelationTarget(
  * parent model field. Returns `null` when the resource exposes no list root (so
  * the picker has no way to fetch options). Mirrors {@link relationFieldInfo}, but
  * keyed on the resolved model metadata instead of a parent field.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function relationFieldInfoForResource(
   resource: string,

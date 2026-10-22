@@ -1,6 +1,17 @@
 """Extraction profile and acquisition bounds."""
 
-SETTINGS = {
+from typing import TypedDict
+
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "ANGEE_IMPL_REGISTRIES:append": list[str],
+        "ANGEE_EXTRACTION_PROFILE_CLASSES": dict[str, str],
+        "ANGEE_EXTRACTION_MAX_BYTES": int,
+    },
+)
+
+SETTINGS: _Settings = {
     "ANGEE_IMPL_REGISTRIES:append": ["angee.extraction.profiles.ExtractionProfile"],
     "ANGEE_EXTRACTION_PROFILE_CLASSES": {
         "none": "angee.extraction.profiles.UnconfiguredExtractionProfile",

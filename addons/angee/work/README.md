@@ -1,7 +1,7 @@
 # Work
 
 The [stage statusbar](web/src/stage-statusbar.tsx) reads each stage's model-owned
-`on_path` projection. Canceled, duplicate and concealing stages appear as one
+`on_path` projection. Canceled and duplicate stages appear as one
 side-state chip while the ordinary stages remain in queue order. The task's
 reopen verb stays in the form header action bar.
 
@@ -35,10 +35,8 @@ One outer transaction commits eligible rows; each refused row rolls back to a
 savepoint and returns its own result. A whole-call error rolls back every row.
 Retrying with an old revision reports a conflict, including an otherwise
 idempotent verb. Remove uses shared trash and keeps the workflow stage; it refuses
-promoted tasks. Trash owns the removal time, actor and reason. A stage configured
-to conceal invokes that same primitive when entered. Restore normally clears
-trash; for a workflow concealment it also returns to the last admissible stage
-or the queue default. Owners, inherited queue writers and administrators manage
+promoted tasks. Trash owns the removal time, actor and reason, and restore clears
+that state. Owners, inherited queue writers and administrators manage
 the removed task. `removed_tasks(queue, parent)` scopes native trash to the
 reader's restore permission; merge redirects stay in history instead of that list.
 
@@ -47,13 +45,22 @@ validates and projects the duplicate stage; each reference owner moves its rows.
 A task its `remove` blockers refuse (promoted, or in a reserved stage) refuses
 the fold through `merge_blockers` before anything moves.
 `merged_into` is the operational identity, while the duplicate stage and dropped
-reason remain lifecycle facts. The projects-owned frozen [`task_identity` upgrade](../projects/runtime_migrations/task_identity.py) converts old
-duplicate relation rows without deleting old task history. Work’s
-[`task_removal`](runtime_migrations/task_removal.py) then moves existing concealed
-tasks into shared trash, preserving their stage.
+reason remain lifecycle facts.
 
 A queue's triage, board and cycles pages are the record pages of the Triage,
 Boards and Cycles hubs, under their paths and anchors, so they render in Work
 wherever composition places the queue record. [`QueueSettingsLink`](web/src/queue-settings-link.tsx)
 opens that record from their headers; a suite that lifts queues into Settings
 keeps their configuration there and their work here.
+
+## Stage identities
+
+Operational stages use the `wst_` public-ID prefix. Their integer primary keys,
+foreign keys, and history pointers remain unchanged. Earlier `stg_` Work stage
+URLs are intentionally unsupported after this upgrade.
+
+The declared `stage_public_identity` runtime migration re-encodes only retained
+`resources.Resource.target_id` references owned by `work.Stage`. It preserves the
+ledger row and xref, refuses malformed legacy IDs, and is safe to replay. Run the
+normal composed build and Django migration workflow before resource reloads.
+No identity aliases or external-link rewrites are installed.

@@ -1,13 +1,19 @@
 import type { ComponentType, ReactNode } from "react";
-import type { DataResourceQuery } from "@angee/metadata";
+import type { DataResourceQuery, QueryFilter } from "@angee/metadata";
 import type { ResourceListSnapshot } from "../views/resource/resource-view-surface";
 import * as v from "valibot";
 
 import { JsonValueSchema, type JsonObject } from "../widgets/json-value";
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const DASHBOARD_SCHEMA_VERSION = 1 as const;
-export const DASHBOARD_COLUMNS = 12;
 
+/**
+ * @kind token
+ */
 export const DASHBOARD_LIMITS = {
   columns: { min: 1, max: 24 },
   widgets: 100,
@@ -22,12 +28,20 @@ export const DASHBOARD_LIMITS = {
 const PositiveInteger = v.pipe(v.number(), v.integer(), v.minValue(1));
 const NonNegativeInteger = v.pipe(v.number(), v.integer(), v.minValue(0));
 
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const DashboardTargetSchema = v.variant("scope", [
   v.strictObject({ scope: v.literal("addon"), key: v.pipe(v.string(), v.minLength(1)) }),
   v.strictObject({ scope: v.literal("resource"), key: v.pipe(v.string(), v.minLength(1)) }),
   v.strictObject({ scope: v.literal("personal"), id: v.pipe(v.string(), v.minLength(1)) }),
 ]);
 
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const DashboardRefreshSchema = v.variant("mode", [
   v.strictObject({ mode: v.literal("live") }),
   v.strictObject({
@@ -37,11 +51,19 @@ export const DashboardRefreshSchema = v.variant("mode", [
   v.strictObject({ mode: v.literal("manual") }),
 ]);
 
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const WidgetMeasureSchema = v.strictObject({
   op: v.picklist(["count", "sum", "avg", "min", "max"]),
   field: v.optional(v.pipe(v.string(), v.minLength(1))),
 });
 
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const WidgetSourceSchema = v.strictObject({
   resource: v.pipe(v.string(), v.minLength(1)),
   filter: v.optional(v.record(v.string(), JsonValueSchema)),
@@ -59,6 +81,10 @@ export const WidgetSourceSchema = v.strictObject({
   refresh: v.optional(DashboardRefreshSchema),
 });
 
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const WidgetDataSpecSchema = v.variant("shape", [
   v.strictObject({ shape: v.literal("value"), source: WidgetSourceSchema }),
   v.strictObject({ shape: v.literal("series"), source: WidgetSourceSchema }),
@@ -73,7 +99,10 @@ export const WidgetDataSpecSchema = v.variant("shape", [
   }),
 ]);
 
-/** Ordered row columns use the same dotted paths as the widget source fields. */
+/** Ordered row columns use the same dotted paths as the widget source fields.
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const WidgetColumnsSchema = v.pipe(
   v.array(v.strictObject({
     path: v.pipe(v.string(), v.minLength(1)),
@@ -98,7 +127,10 @@ export const WidgetColumnsSchema = v.pipe(
   }),
 );
 
-/** Decode optional row columns without revalidating the enclosing snapshot. */
+/** Decode optional row columns without revalidating the enclosing snapshot.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function widgetColumns(spec: { options: JsonObject }) {
   return v.safeParse(v.optional(WidgetColumnsSchema), spec.options.columns);
 }
@@ -106,7 +138,10 @@ export function widgetColumns(spec: { options: JsonObject }) {
 /** A readable scope row authorizes listing, independently of the widget's results. */
 /** Who sees a widget: a container the reader must read, named through the resource that declares
  *  the scope — e.g. `{ resource: "projects.Task", key: "queue__slug", value: "<slug>" }`, never the
- *  container's own model. */
+ *  container's own model.
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const WidgetVisibilitySchema = v.strictObject({
   resource: v.pipe(v.string(), v.minLength(1)),
   key: v.pipe(v.string(), v.minLength(1)),
@@ -114,6 +149,10 @@ export const WidgetVisibilitySchema = v.strictObject({
 });
 export type WidgetVisibility = v.InferOutput<typeof WidgetVisibilitySchema>;
 
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const WidgetSpecSchema = v.pipe(v.strictObject({
   schemaVersion: v.literal(DASHBOARD_SCHEMA_VERSION),
   id: v.pipe(v.string(), v.minLength(1)),
@@ -181,6 +220,10 @@ export const WidgetSpecSchema = v.pipe(v.strictObject({
   });
 }));
 
+/**
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
 export const DashboardSnapshotSchema = v.strictObject({
   schemaVersion: v.literal(DASHBOARD_SCHEMA_VERSION),
   columns: v.pipe(
@@ -192,8 +235,6 @@ export const DashboardSnapshotSchema = v.strictObject({
 });
 
 export type DashboardTarget = v.InferOutput<typeof DashboardTargetSchema>;
-export type DashboardRefresh = v.InferOutput<typeof DashboardRefreshSchema>;
-export type WidgetMeasure = v.InferOutput<typeof WidgetMeasureSchema>;
 export type WidgetSource = v.InferOutput<typeof WidgetSourceSchema>;
 export type WidgetDataSpec = v.InferOutput<typeof WidgetDataSpecSchema>;
 export type WidgetColumn = v.InferOutput<typeof WidgetColumnsSchema>[number];
@@ -223,8 +264,8 @@ export interface HostedResourceViewProps {
   /** Compact chrome: no view switcher, column chooser or selection. */
   presentation: "embedded";
   scope: "inherit";
-  /** The widget owns the heading and count; the hosted list keeps search and never pages. */
-  chrome: { heading: false; search: true; pager: false };
+  /** The widget owns the heading and count; `options.pager` can enable the list's native pager. */
+  chrome: { heading: false; search: true; pager: boolean };
 }
 
 export interface DashboardCapabilities {
@@ -285,8 +326,8 @@ export interface DashboardStoreBinding {
   reload: () => Promise<void>;
   save: (command: DashboardSaveCommand) => Promise<DashboardSaveResult>;
   reset: (target: DashboardTarget, persistedId: string, expectedRevision: number) => Promise<void>;
-  createPersonal: (input: { name: string; description?: string; clientCreationKey: string }) => Promise<DashboardSaveResult>;
-  duplicate: (target: DashboardTarget, input: { name: string; clientCreationKey: string; snapshot: DashboardSnapshot }) => Promise<DashboardSaveResult>;
+  createPersonal: (input: { name: string; description?: string; idempotencyKey: string }) => Promise<DashboardSaveResult>;
+  duplicate: (target: DashboardTarget, input: { name: string; idempotencyKey: string; snapshot: DashboardSnapshot }) => Promise<DashboardSaveResult>;
 }
 
 export interface DashboardCatalogueBinding {
@@ -294,7 +335,7 @@ export interface DashboardCatalogueBinding {
   loading: boolean;
   error: Error | null;
   refresh: () => void;
-  createPersonal: (input: { name: string; description?: string; clientCreationKey: string }) => Promise<DashboardSaveResult>;
+  createPersonal: (input: { name: string; description?: string; idempotencyKey: string }) => Promise<DashboardSaveResult>;
 }
 
 export interface DashboardStore {
@@ -322,6 +363,11 @@ export interface DashboardWidgetData {
   refetch: () => void;
 }
 
+export interface DashboardPageScope {
+  resource: string;
+  filter?: QueryFilter;
+}
+
 export interface DashboardWidgetRenderProps {
   spec: WidgetSpec;
   data: DashboardWidgetData;
@@ -329,6 +375,8 @@ export interface DashboardWidgetRenderProps {
   titleId?: string;
   onCountChange?: (count: number | null) => void;
   hostedView?: ComponentType<HostedResourceViewProps>;
+  /** Immutable page scope for a hosted resource view, matched by its declared resource. */
+  pageScope?: DashboardPageScope;
 }
 
 export interface DashboardWidgetKind {
@@ -350,12 +398,10 @@ export interface DashboardRegistry {
   store: DashboardStore | null;
 }
 
-export function dashboardTargetKey(target: DashboardTarget): string {
-  return target.scope === "personal"
-    ? `personal:${target.id}`
-    : `${target.scope}:${target.key}`;
-}
-
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function parseDashboardSnapshot(value: unknown): DashboardSnapshot {
   const result = v.safeParse(DashboardSnapshotSchema, value);
   if (!result.success) {
@@ -371,6 +417,10 @@ export function parseDashboardSnapshot(value: unknown): DashboardSnapshot {
   return result.output;
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function validateDashboardLayout(snapshot: DashboardSnapshot): void {
   const ids = new Set<string>();
   const active = snapshot.widgets.filter((widget) => !widget.isArchived);

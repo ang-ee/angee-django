@@ -47,6 +47,7 @@ const EMPTY_INPUTS: Readonly<Record<string, string>> = {};
  * Dynamic object keys and array indices are entered explicitly. Children are
  * built only for expanded nodes and ancestors of the controlled selection.
  * This enumerates declared shapes; the schema owner validates branch constraints.
+ * @kind surface
  */
 export function SchemaPathPicker({
   schema, value, onChange, label, disabled = false, className, resolveReference,

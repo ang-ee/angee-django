@@ -7,13 +7,14 @@ from typing import Any
 
 import pytest
 from django.apps import apps
+from django.db import models
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 
-from angee.base.changesets import changeset
-from angee.base.identity import public_id_of
-from angee.base.querysets import model_history
+from angee.changesets import changeset
+from angee.identity import public_id_of
+from angee.models import model_history
 from angee.provenance.schema import RecordHistory
 from angee.testing.permissions import install_permission_schema
 from tests.conftest import create_user
@@ -114,6 +115,57 @@ def test_deleted_line_keeps_its_native_field_read_gate(line_policy: None) -> Non
     assert deltas["name"] == ("Release", None)
     assert "description" not in deltas
     assert not entry.can_revert
+
+
+def test_core_history_owners_scope_changesets_and_admit_one_document(line_policy: None) -> None:
+    """HistoryMixin owns document membership; Changeset applies its declared replay gate."""
+
+    owner = create_user("history-owner")
+    reader = create_user("history-reader")
+    project, milestone = _plan(owner)
+    with actor_context(owner), changeset(fresh=True, change_reason="Rename delivery"):
+        milestone.name = "Launch"
+        milestone.save(update_fields=("name",))
+    edit = milestone.history.latest("history_id").changeset
+    with actor_context(owner), changeset(fresh=True, change_reason="Other plan"):
+        other = Project.objects.create(title="Other", owner=owner)
+    unrelated = other.history.latest("history_id").changeset
+
+    assert project.history_tables() == (Project,)
+    assert project.history_scope()[Milestone] == models.Q(project_id=project.pk)
+    with system_context(reason="test history membership"):
+        touching = type(edit).objects.touching(project)
+        assert touching.filter(pk=edit.pk).exists()
+        assert not touching.filter(pk=unrelated.pk).exists()
+    assert project.admits_revert(edit)
+    assert not project.admits_revert(unrelated)
+    assert edit.revertable(project, actor=owner)
+    assert not edit.revertable(project, actor=reader)
+
+
+def test_core_history_diff_and_redaction_use_native_field_policy(line_policy: None) -> None:
+    """ModelHistory owns retained deltas and field-level read redaction."""
+
+    owner = create_user("history-diff-owner")
+    reader = create_user("history-diff-reader")
+    stranger = create_user("history-diff-stranger")
+    project, milestone = _plan(owner)
+    write_relationships([RelationshipTuple(to_object_ref(project), "reader", to_subject_ref(reader))])
+    with actor_context(owner), changeset(fresh=True, change_reason="Rename milestone"):
+        milestone.name = "Launch"
+        milestone.save(update_fields=("name",))
+    version = milestone.history.latest("history_id")
+    history = model_history(Milestone)
+
+    assert history is not None
+    delta = history.diff(version, version)
+    assert [(change.field, change.old, change.new) for change in delta.changes if change.field == "name"] == [
+        ("name", "Release", "Launch"),
+    ]
+    assert history.redacted(version, owner) == frozenset()
+    assert "description" in history.redacted(version, reader)
+    assert "name" not in history.redacted(version, reader)
+    assert {"name", "description"} <= history.redacted(version, stranger)
 
 
 def test_existing_unreadable_line_never_borrows_an_old_snapshot_gate(line_policy: None) -> None:

@@ -116,8 +116,6 @@ function threadPayload(
       error_code: null,
       thread: { id: "thr_1", title: { text: "Room" }, message_count: messages.length, last_message_at: null },
       message_result_count: messages.length,
-      timeline_count: messages.length,
-      timeline: messages.map((message) => ({ ...message, __typename: "RecordMessageType" as const })),
       audience_label: "People with access to this record" as string | null,
       post_kinds: ["COMMENT", "NOTE"],
       messages,
@@ -428,7 +426,7 @@ describe("RecordThreadConversation", () => {
     expect(post?.vars.modelLabel).toBe("discuss/room");
     expect(post?.vars.recordId).toBe("rom_1");
     expect(post?.vars.body).toBe("Hello room");
-    expect(post?.vars.clientCreationKey).toEqual(expect.any(String));
+    expect(post?.vars.idempotencyKey).toEqual(expect.any(String));
   });
 
   test("defaults to Enter to submit and keeps Shift+Enter for a newline", () => {
@@ -565,7 +563,7 @@ describe("RecordThreadConversation", () => {
     await screen.findByRole("alert");
     const posts = mocks.mutateCalls.filter((call) => call.op === "MessagingPostRecordMessage");
     expect(posts).toHaveLength(2);
-    expect(posts[1]?.vars.clientCreationKey).toBe(first?.vars.clientCreationKey);
+    expect(posts[1]?.vars.idempotencyKey).toBe(first?.vars.idempotencyKey);
   });
 
   test("only a moderator's comment carries the remove control", () => {
@@ -654,9 +652,9 @@ describe("RecordThreadStream", () => {
     });
     render(<RecordThreadStream heading={{ label: "Conversation" }}
       source={{ kind: "record", modelLabel: "projects.Project", recordId: "project_1" }} />);
-    const skeleton = screen.getByRole("status");
-    expect(skeleton.textContent).toContain("Loading comments");
-    expect(skeleton.querySelectorAll('[aria-hidden="true"]')).toHaveLength(9);
+    // The shared loading panel, not a skeleton geometry chosen here.
+    const loading = screen.getByRole("status");
+    expect(loading.textContent).toContain("Loading comments");
     expect(screen.queryByRole("searchbox")).toBeNull();
   });
 
@@ -672,7 +670,7 @@ describe("RecordThreadStream", () => {
     expect(screen.getByText("What happens next?")).toBeTruthy();
     expect(screen.getByText("Please describe the next step.")).toBeTruthy();
     expect(mocks.useAuthoredQuery.mock.calls.filter(([doc]) => operationName(doc) === "MessagingRecordThread")).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Show conversation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Conversation" }));
     expect(mocks.useAuthoredQuery.mock.calls.filter(([doc]) => operationName(doc) === "MessagingRecordThread")).toHaveLength(1);
     expect(screen.getByText("Ping the room")).toBeTruthy();
     expect(screen.getByPlaceholderText("Add a reply")).toBeTruthy();

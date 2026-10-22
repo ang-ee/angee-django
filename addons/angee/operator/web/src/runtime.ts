@@ -56,16 +56,7 @@ export {
 } from "./data/provision";
 export type { TemplateMatch, WorkspaceStatusResult } from "./data/provision";
 
-export { runDaemonAction, useRunDaemonAction } from "./views/parts/run-action";
-export type { DaemonActionData, RunDaemonActionParams } from "./views/parts/run-action";
-
 export { useJobRunOperation } from "./data/job-run";
-
-export { StateTag } from "./views/parts/StateTag";
-export type { StateTagProps } from "./views/parts/StateTag";
-
-export { OperatorSection } from "./views/parts/OperatorSection";
-export type { OperatorSectionProps } from "./views/parts/OperatorSection";
 
 export { ServiceRow, ServicesPage } from "./views/sections/ServicesPage";
 export type { ServiceRowProps, ServicesPageProps } from "./views/sections/ServicesPage";

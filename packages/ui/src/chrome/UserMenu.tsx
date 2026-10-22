@@ -23,6 +23,10 @@ export interface UserMenuProps {
 }
 
 
+/**
+ * @kind region
+ * @region user-menu
+ */
 export function UserMenu({
   className,
   side = "bottom",

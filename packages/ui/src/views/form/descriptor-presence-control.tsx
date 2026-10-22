@@ -19,7 +19,7 @@ export function DescriptorPresenceControl({ field, value, readOnly, onChange, on
   const t = useUiT();
   const compactScalar = isCompactOptionalScalar(field);
   if (compactScalar && (value === undefined || value === null)) {
-    return <>{children}{!readOnly ? <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-fg-3">
+    return <>{children}{!readOnly ? <div className="mt-1 flex flex-wrap items-center gap-1 text-12 text-fg-subtle">
       <span>{value === null ? t("form.value.leftEmpty") : t("form.value.optional")}</span>
       {field.nullable && value !== null ? <Button type="button" size="sm" variant="ghost"
         onClick={() => { onChange(null); onCommit?.(); }}>{t("form.value.leaveEmpty")}</Button> : null}
@@ -29,7 +29,7 @@ export function DescriptorPresenceControl({ field, value, readOnly, onChange, on
   }
   if ((field.omittable || field.nullable) && value === undefined) {
     return <div className="flex items-center gap-2">
-      <span className="text-13 text-fg-3">{t("form.value.notSet")}</span>
+      <span className="text-13 text-fg-subtle">{t("form.value.notSet")}</span>
       {!readOnly ? <Button ref={controlRef} type="button" size="sm" variant="secondary"
         onClick={() => { onChange(presentValue(field, Boolean(field.hasDefault))); onCommit?.(); }}>
         {field.hasDefault ? t("form.value.useDefault") : t("form.value.set")}
@@ -40,7 +40,7 @@ export function DescriptorPresenceControl({ field, value, readOnly, onChange, on
   }
   if (field.nullable && value === null) {
     return <>
-      <span className="text-13 text-fg-3">{t("form.value.leftEmpty")}</span>
+      <span className="text-13 text-fg-subtle">{t("form.value.leftEmpty")}</span>
       {!readOnly ? <div className="mt-1 flex flex-wrap gap-1">
         <Button ref={controlRef} type="button" size="sm" variant="ghost"
           onClick={() => { onChange(presentValue(field, false)); onCommit?.(); }}>

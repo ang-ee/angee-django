@@ -2,7 +2,7 @@
 
 The addon stores attribution for logical writes. Addons composing history declare
 provenance as a dependency; the composer emits its concrete
-[`Changeset`](models.py). The [core boundary](../../../angee/base/changesets.py)
+[`Changeset`](models.py). The [core boundary](../../../angee/changesets.py)
 owns context and commit-aware persistence, without granting an authorization bypass.
 
 The [permission schema](permissions.zed) owns direct access. Other actor types
@@ -10,7 +10,7 @@ contribute additive permission fragments from their own addons. Attribution neve
 grants access to touched records; history reads follow those records' permissions.
 
 Storage follows Django's swappable-model convention, with the default owned by
-[base autoconfig](../../../angee/base/autoconfig.py). Consumer history-FK migrations
+[base autoconfig](../../../angee/autoconfig.py). Consumer history-FK migrations
 must depend on `migrations.swappable_dependency(settings.ANGEE_CHANGESET_MODEL)`.
 Django's `makemigrations` owns the initial schema; see the
 [runtime migration policy](../../../docs/composer.md#addon-owned-runtime-migrations).
@@ -22,8 +22,8 @@ Strict mode refuses a captured write without an open boundary
 
 | Entrypoint | Boundary | Owner |
 |---|---|---|
-| HTTP request | one per request, sync or async, failed on status ≥ 400 or a GraphQL `errors` result | [`ChangesetMiddleware`](../../../angee/base/middleware.py), [`AngeeGraphQLView`](../graphql/views.py) |
-| WebSocket connection (GraphQL subscriptions, agent ACP) | one per ASGI connection scope | [`ChangesetScopeMiddleware`](../../../angee/base/middleware.py) via [`angee.asgi`](../../../angee/asgi.py) |
+| HTTP request | one per request, sync or async, failed on status ≥ 400 or a GraphQL `errors` result | [`ChangesetMiddleware`](../../../angee/middleware.py), [`AngeeGraphQLView`](../graphql/views.py) |
+| WebSocket connection (GraphQL subscriptions, agent ACP) | one per ASGI connection scope | [`ChangesetScopeMiddleware`](../../../angee/middleware.py) via [`angee.asgi`](../../../angee/asgi.py) |
 | Celery task | one per task run, `task.<name>` | [`angee.jobs.celery.Task`](../../../angee/jobs/celery.py) |
 | Management command | one per command, `manage.<command>`; `serve`, `runserver` and `test` hand it to their requests, connections, tasks and tests | [`angee.compose.manage.main()`](../../../angee/compose/manage.py), called by every rendered `manage.py` |
 | Bridge live session | one per session run, in the task or the spawned child | [`run_bridge_session_job`](../integrate/session_runner.py) |
@@ -55,11 +55,14 @@ its normal outbox/precondition policy.
 
 [`schema.py`](schema.py) owns the read surface in the `console` schema. The
 `history(model, id, limit, offset)` query returns one record's changesets newest
-first (`RecordHistory { total, entries }`), resolved through the record's own
+first (`RecordHistoryType { total, entries: [HistoryEntryType!]! }`), resolved through the record's own
 `read` gate: a hidden or unknown record reads as `null`, and a model without
-native history or a REBAC resource type is refused. Each `HistoryEntry` carries
-the changeset's attribution (`actor` as the SubjectRef, `actor_model`/`actor_id`
-as the public reference, `source_kind`), `action`, `activity`, `change_reason`,
+native history or a REBAC resource type is refused. `HistoryAttribution` is the
+shared interface for detailed entries and the compact `HistorySummaryType` lines
+used by Activity; the web `HistoryEntrySummary` component renders that compact
+shape. Each `HistoryEntryType` carries the changeset's attribution (`actor` as
+the public SubjectRef, `actor_model`/`actor_id` as the same public reference,
+`source_kind`), `action`, `activity`, `change_reason`,
 times, `outcome`, the field deltas simple-history's `diff_against` computes
 between the record's versions in that changeset and the row before them (a first
 version diffs against an empty snapshot; references carry public ids), the
@@ -69,17 +72,17 @@ fields the actor cannot read on the record (`read__<field>`): statement tables
 mirror history tables, so the subject's redaction is the only rule. MTI parents'
 versions of the same row join the entry. A page holds at most 100 changesets.
 
-`revert_changeset(model, id, changeset)` is the `ActionResult` verb behind the
-History tab's Revert: `write` on the record admits it and `Changeset.revert()`
-restores. Resource metadata marks a model that keeps history with
-`history: true`, the fact [`web/`](web/) uses to show the tab.
+`revert_changeset(model, id, changeset)` is the `ActionResult` verb behind an
+Activity history entry's Revert: the record's `history_revert_permission` is the one
+admission rule and `Changeset.revert()` restores. Resource metadata marks a model that keeps history with
+`history: true`, the fact [`web/`](web/) uses to read entries.
 
-[`web/`](web/) contributes the History tab once, at `form#sections`, visible on
-every saved record whose resource keeps history, and exports
-`RecordHistoryTimeline` (the timeline with its read, paging and Revert; `compact`
-renders one line per changeset linking to the tab) and `useRecordHistory` for
+[`web/`](web/) contributes the `provenance.change` Timeline kind and the history drill-in, visible on every
+saved record whose resource keeps history, and exports `RecordHistoryTimeline`
+(the standalone timeline with its read, paging and Revert; `compact` renders one
+line per changeset linking to Activity) and `useRecordHistory` for
 pages that count or embed the same entries, such as integrate's link history
-drill-down and the notes example's activity chatter.
+drill-down and the notes example's Activity shortcut.
 
 `Changeset.document()` exports deterministic canonical JSON of a closed changeset
 for a trusted archive caller under a system boundary. It includes native history

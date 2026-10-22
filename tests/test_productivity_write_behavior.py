@@ -19,17 +19,23 @@ from rebac.schema import parse_zed
 from strawberry import auto
 
 import tests.test_messaging  # noqa: F401 -- register related models before native database setup
-from angee.base.fields import StateField
-from angee.base.merge import MergeableMixin
-from angee.base.mixins import AuditMixin, TrashMixin, TrashQuerySet
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
-from angee.base.querysets import MergeableQuerySet
-from angee.base.stages import Stage as OrderedStage
-from angee.base.stages import StagedModelMixin
+from angee.fields import StateField
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
+    AuditMixin,
+    MergeableMixin,
+    MergeableQuerySet,
+    StagedModelMixin,
+    TrashMixin,
+    TrashQuerySet,
+)
+from angee.models import Stage as OrderedStage
 from angee.projects.models import Task as AbstractTask
 from angee.projects.testing.models import Queue, Stage, Task
 from angee.testing.permissions import install_permission_schema
@@ -74,7 +80,7 @@ class RoutingPipelineStage(OrderedStage):
         app_label = "tests"
 
 
-class RoutingStageRecord(StagedModelMixin, models.Model):
+class RoutingStageRecord(StagedModelMixin[RoutingPipelineStage], models.Model):
     """A record whose stage and container IDs can both be deferred."""
 
     stage_container_field_name = "container"

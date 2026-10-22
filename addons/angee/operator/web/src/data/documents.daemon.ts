@@ -307,14 +307,6 @@ export const SERVICE_DESTROY_MUTATION = graphql(`
   }
 `);
 
-export const SERVICE_UP_MUTATION = graphql(`
-  mutation OperatorServiceUp($name: String!) {
-    serviceUp(name: $name) {
-      ...OperatorMutationResultFields
-    }
-  }
-`);
-
 // Service logs stream over the structured `/services/{name}/logs/stream`
 // WebSocket (see useServiceLogStream), not GraphQL — exact per-service framing.
 
@@ -487,12 +479,6 @@ export const JOB_RUN_PREVIEW_QUERY = graphql(`
 export const LATEST_JOB_RUN_QUERY = graphql(`
   query OperatorLatestJobRun {
     latestJobRun { ...OperatorJobRunOperationFields }
-  }
-`);
-
-export const JOB_RUN_OPERATION_QUERY = graphql(`
-  query OperatorJobRunOperation($id: ID!) {
-    jobRunOperation(id: $id) { ...OperatorJobRunOperationFields }
   }
 `);
 

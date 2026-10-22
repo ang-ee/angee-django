@@ -1,10 +1,13 @@
-import { holdsPermission } from "@angee/metadata";
+import { ResourceQuery, holdsPermission, useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
-import { useCallback, useMemo, type ReactElement } from "react";
+import { useCallback, useMemo, useState, type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import {
-  EmptyState, LoadingPanel, RemovedDisclosure, RemovedItem, ScopedExplorerPane, TRASH_PERMISSION, TreeView, WikilinkProvider, useChatterContent, useRouteHref, useRouteRecordId, type ChatterTab, type ScopedExplorerController, type WikilinkResolver } from "@angee/ui";
+  EmptyState, ErrorBanner, InlineTextAction, LoadingPanel, PaneToolbarMenu, RemovedDisclosure, RemovedItem, ScopedExplorerPane,
+  SearchInput, TRASH_PERMISSION, TreeView, WikilinkProvider, errorMessage, useBreadcrumbCollectionLink, useBreadcrumbLeafLabel,
+  useAppRuntime, useRouteHref, useRouteRecordId, type RecordNavigation, type ScopedExplorerController, type WikilinkResolver,
+} from "@angee/ui";
 
 import {
   KnowledgePage as KnowledgePageQuery,
@@ -13,29 +16,29 @@ import {
   KNOWLEDGE_LIST_LIMIT,
   PAGE_MODEL,
   PAGE_READ_MODELS,
-  type Backlink,
   type KnowledgePageRow,
 } from "../data/documents";
 import {
   KNOWLEDGE_PAGE_DND,
+  childPages,
   isSelfOrAncestor,
   pageById,
   pageDragPayload,
   pageIdByTitle,
+  pageOrder,
+  pagePath,
   pageTreeRows,
   removedPages,
   type KnowledgeTreeRow,
   type PageDragData,
 } from "../data/page-rows";
 import { usePageActions } from "../data/use-page-actions";
-import { KnowledgePageView } from "../KnowledgePageView";
-import { BacklinksPanel } from "./BacklinksPanel";
-import { NewPageControl, type NewPageKind } from "./NewPageControl";
+import { KnowledgePageView, type KnowledgePageFrame } from "../KnowledgePageView";
 import { useKnowledgeT } from "../i18n";
 
-// One safety-capped read each of vaults/pages; the browser scopes the set
-// client-side so the navigator and reader share one fetch.
-const EMPTY_BACKLINKS: readonly Backlink[] = [];
+// One safety-capped read each of vaults/pages; a mounted collection's predicate
+// is applied by the query owner before the navigator groups its pages by vault.
+type NewPageKind = "note" | "folder";
 
 type KnowledgeExplorerController = ScopedExplorerController<
   { id: string; name: string },
@@ -43,11 +46,11 @@ type KnowledgeExplorerController = ScopedExplorerController<
 >;
 
 /**
- * The knowledge wiki reader. The vault switcher + page-tree navigator publishes
- * into the shell's primary pane (`usePrimaryPane`) and a backlinks tab into the
- * shell's secondary chatter (`useChatterContent`); the page itself renders only
- * the open page's reader. Vaults/pages load once; the switcher and tree drive
- * client-side scoping, and selecting a page reads it.
+ * The knowledge wiki on the record-page shape. Navigator: the vault picker,
+ * a tree filter, one labeled "New" menu and the vault's overflow in the pane
+ * toolbar; a new page is typed where it will live, as a row in the tree.
+ * Subject: the open page framed by the command band and the record header.
+ * The page's backlinks and bindings are Related groups on its record.
  */
 export function KnowledgePage(): ReactElement {
   const t = useKnowledgeT();
@@ -56,16 +59,38 @@ export function KnowledgePage(): ReactElement {
     [],
   );
   const invalidateModels = useInvalidateAuthoredModels();
+  const { defaultResourceFilter } = useAppRuntime();
+  const metadata = useModelMetadata(PAGE_MODEL);
+  const routeFilter = defaultResourceFilter?.resource === PAGE_MODEL ? defaultResourceFilter.filter : undefined;
+  const scope = useMemo(() => {
+    if (!routeFilter) return { where: undefined, error: null };
+    try {
+      if (!metadata) throw new Error(t("vaults.unavailableTitle"));
+      return { where: ResourceQuery.from(metadata).toWhere(routeFilter), error: null };
+    } catch (error) {
+      return { where: undefined, error };
+    }
+  }, [metadata, routeFilter, t]);
   const vaultsQuery = useAuthoredQuery(KnowledgeVaults, variables, { models: ["knowledge.Vault"] });
-  const pagesQuery = useAuthoredQuery(KnowledgePages, variables, { models: [PAGE_MODEL] });
+  const pagesQuery = useAuthoredQuery(KnowledgePages, { ...variables, where: scope.where }, {
+    models: [PAGE_MODEL], enabled: scope.error === null,
+  });
 
-  const vaults = vaultsQuery.data?.vaults ?? [];
   const pages = pagesQuery.data?.pages ?? [];
+  // A mounted page collection keeps the same reader and only offers roots
+  // represented in that collection. The ordinary wiki retains empty vaults.
+  const vaults = useMemo(() => {
+    const all = vaultsQuery.data?.vaults ?? [];
+    if (!routeFilter) return all;
+    const ids = new Set(pages.map((page) => page.vault));
+    return all.filter((vault) => ids.has(vault.id));
+  }, [pages, routeFilter, vaultsQuery.data]);
 
   // The open page is route state: `/knowledge/$id` reads that page into the
   // content + aside; `/knowledge` is the empty reader.
   const navigate = useNavigate();
   const routeHref = useRouteHref();
+  const homeHref = routeHref("knowledge.home");
   const openPageId = useRouteRecordId() ?? null;
   const openPage = useCallback(
     (id: string) => {
@@ -74,8 +99,8 @@ export function KnowledgePage(): ReactElement {
     [navigate, routeHref],
   );
   const closePage = useCallback(() => {
-    void navigate({ to: routeHref("knowledge.home") });
-  }, [navigate, routeHref]);
+    void navigate({ to: homeHref });
+  }, [navigate, homeHref]);
 
   const detailVariables = useMemo(
     () => ({ id: openPageId ?? "" }),
@@ -85,21 +110,13 @@ export function KnowledgePage(): ReactElement {
     enabled: openPageId !== null,
     models: PAGE_READ_MODELS,
   });
-  const detail = detailQuery.data?.pages_by_pk ?? null;
   const pageNotFound = !detailQuery.isPending && detailQuery.data?.pages_by_pk === null;
-  const detailBacklinks = detail?.backlinks ?? EMPTY_BACKLINKS;
-  const backlinkSignature = useMemo(
-    () => backlinksSignature(detailBacklinks),
-    [detailBacklinks],
-  );
-  const stableBacklinks = useMemo(
-    () => detailBacklinks,
-    [backlinkSignature],
-  );
-
   const { busy: actionsBusy, createPage, trashPage, restorePage, movePage } =
     usePageActions();
   const activePage = pageById(pages, openPageId);
+  // The breadcrumb names the open page; the collection crumb returns to the wiki.
+  useBreadcrumbLeafLabel(activePage?.title ?? null);
+  useBreadcrumbCollectionLink(homeHref, openPageId ? homeHref : null);
   // Stable accessors: the explorer memoizes `rootOptions`/`treeRows` on these, and
   // the navigator published into the shell's primary pane keys on those memos.
   const getVaultId = useCallback((vault: { id: string }) => vault.id, []);
@@ -107,9 +124,27 @@ export function KnowledgePage(): ReactElement {
     (vault: { name: string }) => vault.name,
     [],
   );
+  // The tree filter keeps a matching page and its ancestors, so a hit stays reachable.
+  const [filter, setFilter] = useState("");
+  const [filtering, setFiltering] = useState(false);
   const getVaultTreeRows = useCallback(
-    (rootId: string) => pageTreeRows(pages, rootId),
-    [pages],
+    (rootId: string) => {
+      const rows = pageTreeRows(pages, rootId);
+      const wanted = filter.trim().toLowerCase();
+      if (!wanted) return rows;
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      const keep = new Set<string>();
+      for (const row of rows) {
+        if (!row.title.toLowerCase().includes(wanted)) continue;
+        let current: KnowledgeTreeRow | undefined = row;
+        while (current && !keep.has(current.id)) {
+          keep.add(current.id);
+          current = current.parent ? byId.get(current.parent) : undefined;
+        }
+      }
+      return rows.filter((row) => keep.has(row.id));
+    },
+    [filter, pages],
   );
   // Drop a page onto another to reparent it; the guard blocks dropping a page
   // onto itself or its own descendant (which would orphan the subtree).
@@ -132,90 +167,113 @@ export function KnowledgePage(): ReactElement {
       "aria-label": t("vault.label"),
       placeholder: t("vault.placeholder"),
       searchPlaceholder: t("vault.searchPlaceholder"),
-      create: { resource: "knowledge.Vault" },
+      create: routeFilter ? undefined : { resource: "knowledge.Vault" },
       onCreated: () => {
         invalidateModels(["knowledge.Vault"]);
         closePage();
       },
     }),
-    [closePage, invalidateModels, t],
+    [closePage, invalidateModels, routeFilter, t],
   );
+  // A new page is typed where it will live: under the open folder, beside the
+  // open page, or at the vault root. The row closes on submit and the page opens.
+  const [creating, setCreating] = useState<NewPageKind | null>(null);
+  const insertParent = activePage
+    ? activePage.kind === "folder" ? activePage.id : (activePage.parent ?? null)
+    : null;
   const renderTree = useCallback(
-    (controller: KnowledgeExplorerController) => (
-      <TreeView<KnowledgeTreeRow>
-        rows={controller.treeRows}
-        parent="parent"
-        label="title"
-        rowKey="id"
-        icon="icon"
-        selectedId={controller.selectedId}
-        onSelect={(row) => openPage(row.id)}
-        draggableRow={pageDragPayload}
-        dropAccept={KNOWLEDGE_PAGE_DND}
-        onNodeDrop={(nodeId, payload) =>
-          handlePageDrop(nodeId, payload.data as PageDragData)
-        }
-        className="min-h-0 flex-1 overflow-auto"
-      />
-    ),
-    [handlePageDrop, openPage],
-  );
-  const renderNavigatorFooter = useCallback(
     (controller: KnowledgeExplorerController) => {
-      const createInScope = async (
-        kind: NewPageKind,
-        title: string,
-      ): Promise<void> => {
-        if (!controller.rootId) return;
-        const parent = activePage?.kind === "folder" ? openPageId : null;
-        const id = await createPage({
-          vault: controller.rootId,
-          title,
-          kind,
-          parent,
-        });
+      const createInScope = async (title: string): Promise<void> => {
+        if (!controller.rootId || !creating) return;
+        const id = await createPage({ vault: controller.rootId, title, kind: creating, parent: insertParent });
+        setCreating(null);
         if (id) openPage(id);
       };
       return (
         <>
-          <RemovedPages
-            pages={removedPages(pages, controller.rootId ?? "")}
-            busy={actionsBusy}
-            onRestore={restorePage}
+          {filtering ? (
+            <SearchInput
+              autoFocus
+              size="sm"
+              aria-label={t("nav.search")}
+              placeholder={t("nav.searchPlaceholder")}
+              value={filter}
+              onChange={(event) => setFilter(event.currentTarget.value)}
+              onClear={() => { setFilter(""); setFiltering(false); }}
+              className="mx-1"
+            />
+          ) : null}
+          <TreeView<KnowledgeTreeRow>
+            rows={controller.treeRows}
+            parent="parent"
+            label="title"
+            rowKey="id"
+            icon="icon"
+            selectedId={controller.selectedId}
+            onSelect={(row) => openPage(row.id)}
+            draggableRow={pageDragPayload}
+            dropAccept={KNOWLEDGE_PAGE_DND}
+            onNodeDrop={(nodeId, payload) =>
+              handlePageDrop(nodeId, payload.data as PageDragData)
+            }
+            insertion={creating ? {
+              parentId: insertParent,
+              node: (
+                <InlineTextAction
+                  key={creating}
+                  open
+                  onOpenChange={(next) => { if (!next) setCreating(null); }}
+                  busy={actionsBusy}
+                  onSubmit={(title) => void createInScope(title)}
+                  inputLabel={t("newPage.titleLabel")}
+                  placeholder={creating === "folder" ? t("newPage.folderPlaceholder") : t("newPage.notePlaceholder")}
+                  submitLabel={t("newPage.create")}
+                  formClassName="w-full items-center gap-1"
+                  inputClassName="min-w-0 flex-1"
+                />
+              ),
+            } : null}
+            emptyContent={filter ? t("nav.noMatches") : undefined}
+            className="min-h-0 flex-1 overflow-auto"
           />
-          <NewPageControl busy={actionsBusy} onCreate={createInScope} />
         </>
       );
     },
-    [actionsBusy, activePage, createPage, openPage, openPageId, pages, restorePage],
+    [actionsBusy, createPage, creating, filter, filtering, handlePageDrop, insertParent, openPage, t],
+  );
+  const renderNavigatorFooter = useCallback(
+    (controller: KnowledgeExplorerController) => (
+      <RemovedPages
+        pages={removedPages(pages, controller.rootId ?? "")}
+        busy={actionsBusy}
+        onRestore={restorePage}
+      />
+    ),
+    [actionsBusy, pages, restorePage],
+  );
+  const explorerToolbar = useCallback(
+    (controller: KnowledgeExplorerController) => ({
+      search: true,
+      onSearch: () => setFiltering((open) => !open),
+      actions: [{
+        icon: "plus", label: t("newPage.menu"), text: true, disabled: actionsBusy || !controller.rootId,
+        items: [
+          { icon: "note", label: t("newPage.page"), onClick: () => setCreating("note") },
+          { icon: "folder", label: t("newPage.folder"), onClick: () => setCreating("folder") },
+        ],
+      }],
+      overflow: (
+        <PaneToolbarMenu items={[
+          { icon: "vault", label: t("vault.settings"), onClick: () => void navigate({ to: routeHref("knowledge.settings") }) },
+        ]} />
+      ),
+    }),
+    [actionsBusy, navigate, routeHref, t],
   );
 
-  // The backlinks rail rides along as an additive secondary (chatter) tab.
-  const backlinksTabs = useMemo<readonly ChatterTab[]>(
-    () =>
-      detail
-        ? [
-            {
-              id: "backlinks",
-              label: t("backlinks.heading"),
-              icon: "link",
-              children: (
-                <BacklinksPanel
-                  backlinks={stableBacklinks}
-                  onOpen={openPage}
-                />
-              ),
-            },
-          ]
-        : [],
-    [detail?.id, openPage, stableBacklinks, t],
-  );
-  const chatter = useMemo(
-    () => (backlinksTabs.length > 0 ? { tabs: backlinksTabs } : null),
-    [backlinksTabs],
-  );
-  useChatterContent(chatter);
-
+  if (scope.error || pagesQuery.error) {
+    return <ErrorBanner description={errorMessage(scope.error ?? pagesQuery.error, t("vaults.unavailableTitle"))} />;
+  }
   return (
     <ScopedExplorerPane<{ id: string; name: string }, KnowledgeTreeRow>
       roots={vaults}
@@ -228,8 +286,9 @@ export function KnowledgePage(): ReactElement {
       rootPicker={vaultRootPicker}
       onRootChange={closePage}
       renderTree={renderTree}
+      toolbar={explorerToolbar}
       renderNavigatorFooter={renderNavigatorFooter}
-      loading={vaultsQuery.isFetching && vaults.length === 0}
+      loading={(vaultsQuery.isFetching || pagesQuery.isFetching) && vaults.length === 0}
       loadingContent={<LoadingPanel message={t("loading")} />}
       emptyContent={
         <EmptyState
@@ -241,7 +300,7 @@ export function KnowledgePage(): ReactElement {
               : t("vaults.emptyTitle")
           }
           description={
-            vaultsQuery.error?.message ?? t("vaults.emptyDescription")
+            vaultsQuery.error ? errorMessage(vaultsQuery.error, t("vaults.unavailableTitle")) : t("vaults.emptyDescription")
           }
         />
       }
@@ -249,9 +308,12 @@ export function KnowledgePage(): ReactElement {
       {(controller) => (
         <KnowledgeExplorerContent
           controller={controller}
+          vaultName={vaults.find((vault) => vault.id === controller.rootId)?.name ?? ""}
           pages={pages}
+          activePage={activePage}
           openPageId={openPageId}
           onOpenPage={openPage}
+          onNewPage={() => setCreating("note")}
           pageNotFound={pageNotFound}
           {...(canTrashActivePage ? { onDeletePage: handleTrashPage } : {})}
         />
@@ -284,21 +346,28 @@ function RemovedPages({ pages, busy, onRestore }: {
 
 function KnowledgeExplorerContent({
   controller,
+  vaultName,
   pages,
+  activePage,
   openPageId,
   onOpenPage,
+  onNewPage,
   pageNotFound,
   onDeletePage,
 }: {
   controller: KnowledgeExplorerController;
+  vaultName: string;
   pages: readonly KnowledgePageRow[];
+  activePage: KnowledgePageRow | null;
   openPageId: string | null;
   onOpenPage: (id: string) => void;
+  onNewPage: () => void;
   pageNotFound: boolean;
   /** Present only when the reader may delete — and so trash — the open page. */
   onDeletePage?: () => Promise<void>;
 }): ReactElement {
   const t = useKnowledgeT();
+  const vaultId = controller.rootId ?? "";
   // A `[[wikilink]]` resolves to a page by title within the vault; clicking it
   // opens that page, or renders broken when nothing matches.
   const resolveWikilink = useCallback<WikilinkResolver>(
@@ -310,6 +379,28 @@ function KnowledgeExplorerContent({
     },
     [controller.rootId, onOpenPage, pages],
   );
+  // The pager walks the vault in tree order.
+  const order = useMemo(() => pageOrder(pages, vaultId), [pages, vaultId]);
+  const navigation = useMemo<RecordNavigation | null>(() => {
+    if (!openPageId) return null;
+    const index = order.indexOf(openPageId);
+    if (index < 0) return { total: order.length };
+    const prev = order[index - 1];
+    const next = order[index + 1];
+    return {
+      current: index + 1,
+      total: order.length,
+      ...(prev ? { onPrev: () => onOpenPage(prev) } : {}),
+      ...(next ? { onNext: () => onOpenPage(next) } : {}),
+    };
+  }, [onOpenPage, openPageId, order]);
+  const frame = useMemo<KnowledgePageFrame>(() => ({
+    crumbs: [t("page.eyebrow"), [vaultName, ...pagePath(pages, activePage)].filter(Boolean).join(" / ")].filter(Boolean).join(" · "),
+    navigation,
+    children: openPageId ? childPages(pages, vaultId, openPageId) : [],
+    onOpenPage,
+    onNewPageHere: onNewPage,
+  }), [activePage, navigation, onNewPage, onOpenPage, openPageId, pages, t, vaultId, vaultName]);
 
   return (
     <WikilinkProvider resolve={resolveWikilink}>
@@ -324,6 +415,7 @@ function KnowledgeExplorerContent({
         <KnowledgePageView
           pageId={openPageId}
           onDelete={onDeletePage}
+          frame={frame}
         />
       ) : (
         <EmptyState
@@ -335,12 +427,4 @@ function KnowledgeExplorerContent({
       )}
     </WikilinkProvider>
   );
-}
-
-function backlinksSignature(backlinks: readonly Backlink[]): string {
-  return backlinks
-    .map((backlink) =>
-      [backlink.page, backlink.title, backlink.display_text ?? ""].join("\u0000"),
-    )
-    .join("\u0001");
 }

@@ -30,7 +30,6 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
-from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import RedirectOriginError, ResponseTooLargeError, same_origin
 from angee.integrate.states import LinkStatus
@@ -45,6 +44,7 @@ from angee.parties.backends import (
     contact_from_projection,
     contact_projection,
 )
+from angee.serialization import canonical_json_sha256
 from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
 
 _NS = {

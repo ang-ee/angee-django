@@ -6,7 +6,6 @@ from threading import Event
 import pytest
 from django.db import connection
 
-from angee.base.scoping import system_queryset
 from angee.workflows import tasks
 from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import load_workflow
@@ -53,8 +52,8 @@ def test_cross_run_cancellation_releases_the_caller_before_locking_the_target(ex
     target = WorkflowRun.objects.start(target_workflow, actor=actor, input={"value": 12})
     caller_workflow = load_workflow(document("entry", step=CancelOther.key), key="caller", actor=actor)
     caller = WorkflowRun.objects.start(caller_workflow, actor=actor)
-    target_step = system_queryset(StepRun).get(run=target)
-    caller_step = system_queryset(StepRun).get(run=caller)
+    target_step = StepRun.system_queryset().get(run=target)
+    caller_step = StepRun.system_queryset().get(run=caller)
     sent.clear()
 
     with ThreadPoolExecutor(max_workers=3) as pool:
@@ -83,13 +82,13 @@ def test_cross_run_cancellation_releases_the_caller_before_locking_the_target(ex
     target.refresh_from_db()
     expected = {"cancel": "canceled", "target_finished": "succeeded", "caller_rollback": "running"}
     assert target.status == expected[case]
-    assert system_queryset(StepAttempt).get(step_run=target_step).result == "succeeded"
+    assert StepAttempt.system_queryset().get(step_run=target_step).result == "succeeded"
     if case == "target_finished":
         assert target.outcome == "done" and target.output == {"value": 12}
     else:
-        successor = system_queryset(StepRun).get(run=target, node_key="finish")
+        successor = StepRun.system_queryset().get(run=target, node_key="finish")
         assert successor.status == ("ready" if case == "caller_rollback" else "canceled")
-        assert not system_queryset(StepAttempt).filter(step_run=successor).exists()
+        assert not StepAttempt.system_queryset().filter(step_run=successor).exists()
     if delivered:
         terminal = (target.status, target.outcome, target.output, target.finished_at)
         tasks.cancel(**delivered[0])

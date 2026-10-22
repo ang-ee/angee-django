@@ -127,8 +127,8 @@ Concretely, today:
   Workspaces, secrets, ports, and gitops topology over CLI, REST, and GraphQL),
   the framework core (including composition from source models to `runtime/`),
   and the base addons: GraphQL via strawberry-django, relationship-based
-  authorization (REBAC), aggregates, tiered resources, changeset history with a
-  History tab and revert, and the React frontend (layouts, list/board/form views).
+  authorization (REBAC), aggregates, tiered resources, changeset history in
+  Activity with revert, and the React frontend (layouts, list/board/form views).
 - **Also landed.** Agents, integrations, knowledge, storage, communications,
   and MCP are available as addons. Knowledge's retrieval seam includes a skeleton
   `knowledge_graph_pgvector` plugin using lexical search; embeddings and Graph RAG
@@ -319,93 +319,6 @@ To put a Claude Code agent to work on the framework itself:
 Commits stay on the agent's workspace branch; publish with
 `angee ws source push`. From here you are modifying Angee itself — the
 workspace slots are the real framework repos.
-
-### Upgrading to angee 0.3.0: record tasks
-
-This applies to stacks on angee 0.2.0, which every framework tag through v0.1.36
-carries: their messaging activities become record tasks owned by `angee.projects`.
-angee 0.4.0 removes this section.
-The cutover, [`projects:record_tasks`](../../addons/angee/projects/runtime_migrations/record_tasks.py),
-documents what it converts, what it refuses and how long it holds its lock;
-[the projects README](../../addons/angee/projects/README.md) describes record tasks.
-
-- **Back up and plan a maintenance window.** The cutover is irreversible and
-  locks the task tables while it runs.
-- **Provision `angee.projects` first.** A stack that holds activities composes
-  and provisions `angee.projects` on its current release, then upgrades.
-  Otherwise `makemigrations` refuses to drop the populated activity tables and
-  writes nothing. A stack without activities needs nothing.
-- **Declare the record types that take tasks.** Each record type's owner unions
-  `subject_read` and `subject_write` for it into `projects/task`
-  in its `permissions.extends.zed`; `migrate` (`--fake` included) refuses the
-  cutover while activities sit on undeclared types and names them. A consumer
-  carrying the declaration needs angee 0.3.0 or a framework tag that includes
-  record tasks.
-- **Let provision sync the permission schema.** Until it is synced, the system
-  checks report `rebac.E009` for the retired `messaging/thread_activity` and
-  `messaging/activity_type`. `angee provision` (which an operator restart job
-  that reruns provision also runs) migrates without checks and syncs before it
-  checks, so it needs no manual step. A stack migrated by hand runs
-  `manage.py migrate --skip-checks`, then `manage.py rebac --skip-checks sync`.
-
-### Upgrading to angee 0.3.0: sync provenance and native history
-
-This applies to stacks on angee 0.2.0, which every framework tag through v0.1.36
-carries: django-reversion revisions, party handle carriers, the CardDAV columns
-on parties and the record-sync revision and discrepancy stores become
-statements, record links and native history. angee 0.4.0 removes this section.
-[The parties README](../../addons/angee/parties/README.md#upgrading-from-partyhandle-carriers)
-owns the chain's rules, and each declaration's docstring says what it keeps and
-what it drops.
-
-- **Back up first.** The retirements are irreversible, and every
-  django-reversion revision is dropped by ruling (MarkdownPage bodies, Project
-  titles and bodies).
-- **Read the preflight.** `parties:preflight_party_folds` runs before any
-  destructive declaration and names every row the folds would refuse. Fix those
-  rows on the old release and migrate again; nothing has been dropped.
-- **Upgrade consumer addons in the same step.** An addon that imports a retired
-  name fails at import, and a web fragment that imports one fails its
-  typecheck. The table names each owner now.
-- **An addon with its own fold joins the chain.** It declares its change
-  reasons in `ANGEE_PARTIES_STATEMENT_FOLDS` no later than the release that
-  ships the fold, and proves its declarations with
-  [`angee.parties.testing.upgrade`](../../addons/angee/parties/testing/upgrade.py).
-- **Clean up.** Run `manage.py remove_stale_contenttypes` afterwards to remove
-  the `reversion.*` content types and their permissions.
-
-| Retired | Owner now |
-|---|---|
-| `angee.base.mixins.RevisionMixin`, `revisioned_fields`, `angee.graphql.revisions.revisions`, the `<resource>_revisions` roots | Native history on the model; [provenance](../../addons/angee/provenance/README.md#history-surface) serves `history(model, id)` and `revert_changeset` |
-| `@angee/ui` `RevisionsTab` (a retired notice until 0.4.0), `useResourceRevisions`; `@angee/refine` `useAngeeRevisions` and its request helpers | provenance's History tab at `form#sections`; `RecordHistoryTimeline`, `HistoryPane` and `useRecordHistory` from `@angee/provenance` |
-| `parties.PartyHandle`, `PartyHandle.objects.link`, `LinkSource`, `ScoredLinkMixin` | Handle statements on the party: `Party.objects.assert_handle`, read through `Party.statements`; a source is its asserting principal's `SourceKind` (`angee.base.mixins`) |
-| `confirm_party_handle`, `dismiss_party_handle` | `confirm_party_statement`, `dismiss_party_statement` |
-| `parties.MergeVeto`, `veto_merge`, `duplicate_party_candidates` | Same-as statements on the party pair: `dismiss_same_as`, `same_as_pairs` |
-| `Party.merge_into`, `PartyManager.merge` | `survivor.merge(records=[...])` from `MergeableMixin` (`angee.base.merge`); `merge_parties` in GraphQL |
-| `Party.folder`, `source_uid`, `source_etag`, `raw_vcard`, `extensions` | The party's `integrate.RecordLink`, which owns external identity and wire payloads |
-| `source` on `Relationship`, `CircleMember` and spaces `Membership` | Statements on relationships; plain accept and reject decisions on memberships |
-| `integrate.RecordRevision` | The record link's native history |
-| `integrate.SyncDiscrepancy`, `DiscrepancyKind`, `DiscrepancyStatus`, `LinkStatus.DISCREPANT`, `resolve_sync_discrepancy`, `retry_sync_discrepancy`, `open_discrepancy_count` | `SyncFailure` on the link's state (`angee.integrate.states`), `LinkStatus.FAILED`, `resolve_sync_failure`, `retry_sync_failure`, `open_failure_count` |
-| `angee.base.evidence.DerivedFromRelation` (an import until 0.4.0) | `angee.base.refs.RetainedGenericRelation` |
-
-### Upgrading a stack rendered before the monorepo
-
-Stacks rendered while the framework lived in split repositories declare
-`angee-django`, `angee-react`, `angee-base`, and `angee-templates` (and
-optionally `angee-examples`) as separate sources. `angee stack update` cannot
-retire those keys — migrate the manifest surgically instead:
-
-```sh
-# dry-run first; --apply backs up angee.yaml and rewrites sources + answers
-uv run python scripts/migrate-stack-to-monorepo.py "$ANGEE_ROOT" --apply
-angee --root "$ANGEE_ROOT" stack update --template --overwrite
-# re-cut each workspaces/src workspace once its slots are clean and pushed:
-angee --root "$ANGEE_ROOT" ws destroy src && angee --root "$ANGEE_ROOT" dev
-```
-
-The script replaces exactly the donor sources with the single `angee` source
-and preserves every custom source; the workspace destroy guard refuses to drop
-unpushed work, so land anything in flight first.
 
 ### Optional Ollama inference
 

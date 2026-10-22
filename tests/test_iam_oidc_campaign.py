@@ -69,7 +69,7 @@ def test_oidc_login_establishes_person_only_for_explicitly_verified_email(compos
     assert not user.has_usable_password()
     account = ExternalAccount._base_manager.get(oauth_client=oauth_client, external_id="first-login")
     with system_context(reason="test.oidc.link-owner"):
-        assert ExternalAccount.objects.owner_for(account) == user
+        assert ExternalAccount.objects.get(pk=account.pk).owner_id == user.pk
     people = Person._base_manager.filter(user=user)
     assert people.count() == (1 if verified is True else 0)
     if verified is True:

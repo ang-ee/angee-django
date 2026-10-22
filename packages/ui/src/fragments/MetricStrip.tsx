@@ -1,16 +1,18 @@
 import * as React from "react";
+import { Meter } from "@base-ui/react/meter";
 import NumberFlow, { type Format, type NumberFlowProps } from "@number-flow/react";
 
 import { useInAppLink } from "../lib/in-app-link";
 import { cn } from "../lib/cn";
 import { formatNumber } from "../lib/format-number";
 import { getHumanLocale } from "../lib/human-locale";
-import { type Tone } from "../lib/tones";
+import { toneSolidBg, type Tone } from "../lib/tones";
 import { useMotionTokens } from "../lib/use-motion-tokens";
 import { tv, type VariantProps } from "../lib/variants";
-import { Tag } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import { Card } from "../ui/card";
 import { IconTile } from "../ui/icon-tile";
+import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import {
   DefinitionPair,
   definitionFromTuple,
@@ -21,6 +23,8 @@ export interface MetricTileValue {
   /** Opt into animated transitions for the typed numeric value. */
   animate?: boolean;
   detail?: React.ReactNode;
+  /** A real part-of-total measure, independent of any historical trend. */
+  share?: { value: number; total: number; label: string };
   /** Native Intl formatting options for the typed numeric value. */
   format?: Format;
   /** Stable identity for preserving a tile across label or value changes. */
@@ -40,23 +44,37 @@ export interface MetricTileValue {
   tone?: Tone;
   /** When set, the tile is a link to this href (rendered as an `<a>`). */
   href?: string;
+  /** Controlled selection, for a metric that scopes the surrounding view. */
+  selected?: boolean;
+  /** An action metric renders a native button; navigation metrics use `href`. */
+  onClick?: React.MouseEventHandler<HTMLElement>;
+  disabled?: boolean;
 }
 
+/**
+ * @kind token
+ */
 export const metricStripVariants = tv({
   slots: {
-    root: "grid gap-3 sm:grid-cols-2",
+    root: "grid grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))] gap-3",
     tile: "min-w-0 shadow-none",
     value: "",
+    meter: "mt-3 h-1 overflow-hidden rounded-full bg-inset",
+    indicator: "h-full rounded-full",
   },
   variants: {
     density: {
       compact: {
-        root: "xl:grid-cols-4",
+        root: "",
         tile: "px-3 py-2.5",
       },
+      spacious: {
+        root: "gap-3",
+        tile: "flex min-h-36 flex-col justify-between px-4 py-4 shadow-xs",
+      },
       prominent: {
-        root: "lg:grid-cols-4",
-        tile: "px-4 py-3",
+        root: "gap-4",
+        tile: "px-4 py-4",
       },
     },
     valueSize: {
@@ -88,15 +106,23 @@ export type MetricTileProps = Omit<
   };
 
 export type MetricStripProps = Omit<
-  React.HTMLAttributes<HTMLDListElement>,
+  React.HTMLAttributes<HTMLDivElement>,
   "className"
 > & {
   className?: string;
   density?: MetricDensity;
   items?: readonly DefinitionPairTuple[];
   metrics?: readonly MetricTileValue[];
+  /** Renders skeleton tiles while the metrics load. */
+  loading?: boolean;
+  /** How many skeleton tiles a loading strip shows (default 4). */
+  loadingCount?: number;
+  loadingMessage?: string;
 };
 
+/**
+ * @kind fragment
+ */
 export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
   function MetricTile(
     {
@@ -104,6 +130,7 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
       className,
       density = "compact",
       detail,
+      share,
       format,
       icon,
       label,
@@ -113,12 +140,20 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
       tone,
       href,
       onClick,
+      selected,
+      disabled,
       valueSize = "default",
       ...props
     },
     ref,
   ) {
-    const link = useInAppLink(href, { ...props, onClick });
+    const link = useInAppLink(href, {
+      ...props,
+      onClick: (event) => {
+        if (disabled) event.preventDefault();
+        else onClick?.(event);
+      },
+    });
     const styles = metricStripVariants({ density, valueSize });
     const resolvedValue = numericValue == null
       ? value
@@ -126,34 +161,51 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
         ? <AnimatedMetricTileNumber format={format} suffix={suffix} value={numericValue} />
         : <>{formatNumber(numericValue, format)}{suffix}</>;
     const body = (
-      <DefinitionPair
-        action={icon ? <IconTile icon={icon} size="md" /> : undefined}
-        density={density}
-        detail={detail}
-        label={
-          density === "prominent" ? (
-            <Tag tone={tone ?? "neutral"}>{label}</Tag>
-          ) : (
-            label
-          )
-        }
-        orientation="stacked"
-        value={
-          valueSize === "lg" ? (
-            <span className={styles.value()}>{resolvedValue}</span>
-          ) : (
-            resolvedValue
-          )
-        }
-      />
+      <>
+        <dl>
+          <DefinitionPair
+            action={icon ? <IconTile icon={icon} size="md" /> : undefined}
+            density={density}
+            detail={detail}
+            label={
+              density === "prominent" ? (
+                // The label sits as a grid item of the stacked pair: a pill must not stretch to the tile.
+                <Chip tone={tone ?? "neutral"} className="justify-self-start">{label}</Chip>
+              ) : (
+                label
+              )
+            }
+            orientation="stacked"
+            value={
+              valueSize === "lg" ? (
+                <span className={styles.value()}>{resolvedValue}</span>
+              ) : (
+                resolvedValue
+              )
+            }
+          />
+        </dl>
+        {share && Number.isFinite(share.value) && Number.isFinite(share.total) && share.total >= 0 && share.value >= 0 && share.value <= share.total ? (
+          <Meter.Root value={share.value} max={share.total || 1}
+            aria-label={share.label} aria-valuetext={`${formatNumber(share.value)} / ${formatNumber(share.total)}`}
+            locale={getHumanLocale()}>
+            <Meter.Track className={styles.meter()}>
+              <Meter.Indicator className={cn(styles.indicator(), toneSolidBg(tone ?? "brand"))} />
+            </Meter.Track>
+          </Meter.Root>
+        ) : null}
+      </>
     );
 
     if (href != null) {
       return (
-        <Card asChild className={styles.tile({ className })} density="sm" interactive>
+        <Card asChild className={styles.tile({ className })} density="sm" interactive selected={selected}>
           <a
             ref={ref as React.Ref<HTMLAnchorElement>}
-            href={href}
+            href={disabled ? undefined : href}
+            aria-current={selected ? "true" : undefined}
+            aria-disabled={disabled || undefined}
+            tabIndex={disabled ? -1 : undefined}
             {...props}
             {...link}
           >
@@ -163,9 +215,27 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
       );
     }
 
+    if (onClick) {
+      return (
+        <Card
+          ref={ref}
+          className={styles.tile({ className })}
+          density="sm"
+          interactive
+          selected={selected}
+          aria-pressed={selected}
+          disabled={disabled}
+          onClick={onClick}
+          {...props}
+        >
+          {body}
+        </Card>
+      );
+    }
+
     return (
-      <Card asChild className={styles.tile({ className })} density="sm">
-        <div ref={ref as React.Ref<HTMLDivElement>} onClick={onClick} {...props}>
+      <Card asChild className={styles.tile({ className })} density="sm" selected={selected}>
+        <div ref={ref as React.Ref<HTMLDivElement>} {...props}>
           {body}
         </div>
       </Card>
@@ -206,18 +276,35 @@ function AnimatedMetricTileNumber({
   );
 }
 
-export const MetricStrip = React.forwardRef<HTMLDListElement, MetricStripProps>(
-  function MetricStrip({ className, density = "compact", items, metrics, ...props }, ref) {
+/**
+ * @kind fragment
+ */
+export const MetricStrip = React.forwardRef<HTMLDivElement, MetricStripProps>(
+  function MetricStrip({ className, density = "compact", items, metrics, loading = false, loadingCount = 4, loadingMessage, ...props }, ref) {
     const styles = metricStripVariants({ density });
     const resolved: readonly MetricTileValue[] =
       metrics ?? items?.map((item) => definitionFromTuple(item)) ?? [];
 
+    if (loading) {
+      // A strip that announces itself is a status; one inside another skeleton status (a
+      // detail surface) is plain hidden geometry, so the page keeps one live region.
+      const tiles = Array.from({ length: loadingCount }, (_, index) => (
+        <Card key={index} data-slot="metric-skeleton" className={styles.tile()} density="sm">
+          <Skeleton shape="text" size="sm" className="w-16" />
+          <Skeleton shape="text" size="lg" className="mt-3 w-24" />
+        </Card>
+      ));
+      return loadingMessage
+        ? <SkeletonStatus label={loadingMessage} className={cn(styles.root(), className)}>{tiles}</SkeletonStatus>
+        : <div aria-hidden="true" className={cn(styles.root(), className)}>{tiles}</div>;
+    }
+
     return (
-      <dl ref={ref} className={cn(styles.root(), className)} {...props}>
+      <div ref={ref} className={cn(styles.root(), className)} {...props}>
         {resolved.map((metric, index) => (
           <MetricTile key={metricKey(metric, index)} density={density} {...metric} />
         ))}
-      </dl>
+      </div>
     );
   },
 );

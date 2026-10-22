@@ -18,7 +18,7 @@ from django.db.models.functions import Coalesce, Concat, NullIf, Trim
 from django.http import HttpRequest
 from rebac import system_context
 
-from angee.base.identity import instance_from_public_id, public_id_for
+from angee.identity import instance_from_public_id, public_id_for
 
 
 def user_label(user: Any) -> str:

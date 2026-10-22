@@ -5,7 +5,6 @@ from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, connection, transaction
 from rebac import to_subject_ref
 
-from angee.base.scoping import system_queryset
 from angee.jobs.enqueue import celery_app
 from angee.workflows import tasks
 from angee.workflows.managers import WorkflowRunManager
@@ -72,15 +71,15 @@ def test_cleanup_receiver_failure_rolls_back_only_its_writes_and_finishes_the_ru
     @isolated_run_cleanup
     def failing(sender, *, run, **kwargs):
         observed.append("failing")
-        system_queryset(WorkflowRun).filter(pk=run.pk).update(output={"discard": True})
+        WorkflowRun.system_queryset().filter(pk=run.pk).update(output={"discard": True})
         if failure is IntegrityError:
             # A real database error poisons this savepoint until the dispatcher rolls it back.
-            system_queryset(WorkflowRun).filter(pk=run.pk).update(version_id=None)
+            WorkflowRun.system_queryset().filter(pk=run.pk).update(version_id=None)
         raise failure("Cleanup interrupted")
 
     @isolated_run_cleanup
     def later(sender, *, run, **kwargs):
-        observed.append(system_queryset(WorkflowRun).get(pk=run.pk).status)
+        observed.append(WorkflowRun.system_queryset().get(pk=run.pk).status)
 
     run_stopping.connect(failing)
     run_stopping.connect(later)
@@ -126,7 +125,7 @@ def test_cancellation_waits_for_commit_and_duplicate_delivery_changes_nothing(ta
     tasks.cancel(**cancellations(sent)[0])
     target.refresh_from_db()
     assert target.status == "canceled"
-    assert system_queryset(StepRun).get(run=target).status == "canceled"
+    assert StepRun.system_queryset().get(run=target).status == "canceled"
     finished_at = target.finished_at
     tasks.cancel(**cancellations(sent)[0])
     target.refresh_from_db()
@@ -176,7 +175,7 @@ def test_context_cancellation_follows_the_body_transaction(target, execution, re
     register_step(CancelOther)
     workflow = load_workflow(document("entry", step=CancelOther.key), key="caller", actor=actor)
     caller = WorkflowRun.objects.start(workflow, actor=actor)
-    assert runner.execute(system_queryset(StepRun).get(run=caller).pk)
+    assert runner.execute(StepRun.system_queryset().get(run=caller).pk)
     caller.refresh_from_db()
     assert caller.status == ("failed" if body_rollback else "succeeded")
     assert len(cancellations(sent)) == (0 if body_rollback else 1)

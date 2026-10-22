@@ -91,7 +91,7 @@ export const ReadOnly: Story = {
   render: () => (
     <div className="h-screen bg-canvas p-6">
       <GraphView
-        className="h-full rounded-6 border border-border-subtle bg-sheet-1"
+        className="h-full rounded-6 border border-border-subtle bg-sheet"
         nodes={initialNodes}
         edges={initialEdges}
         nodeStyles={nodeStyles}
@@ -138,7 +138,7 @@ function EditableGraphFixture(): React.ReactElement {
 
   return (
     <div className="flex h-screen flex-col bg-canvas text-fg">
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border-subtle bg-sheet-1 px-4 text-13">
+      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border-subtle bg-sheet px-4 text-13">
         <span className="font-medium">Editable canvas</span>
         <span className="text-fg-muted">Selected: {selected}</span>
       </div>

@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import type { Row } from "@angee/metadata";
+import { createAngeeChangeLiveProvider } from "@angee/refine";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
@@ -13,6 +14,7 @@ import { defaultWidgets } from "../../widgets";
 import { FormView } from "./FormView";
 
 const resource = testDataResource("notes.Note", {
+  roots: { changes: "noteChanged" },
   fields: [{ name: "title", kind: "scalar", scalar: "String", readable: true,
     aggregatable: false, creatable: true, updatable: true, requiredOnCreate: false }],
   query: testResourceQuery({ fields: { id: testQueryField("id"), title: testQueryField("title") } }),
@@ -25,15 +27,24 @@ function fixture(getOne: () => Promise<{ data: Row | null }>) {
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   const renderTab = vi.fn(() => <span>Related records</span>);
   const recordExtras = vi.fn(() => <span>Record extras</span>);
-  render(<Provider dataProvider={{ getOne }} queryClient={client}>
+  const archive = vi.fn();
+  type Transport = Parameters<typeof createAngeeChangeLiveProvider>[0];
+  const sinks: Parameters<Transport["subscribe"]>[1][] = [];
+  const subscribe: Transport["subscribe"] = (_request, sink) => { sinks.push(sink); return () => undefined; };
+  const liveProvider = createAngeeChangeLiveProvider({ subscribe, on: () => () => undefined }, [resource], { queryClient: client });
+  render(<Provider dataProvider={{ getOne }} queryClient={client} liveProvider={liveProvider} options={{ liveMode: "auto" }}>
     <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <FormView resource="notes.Note" id="note-1" fields={[{ name: "title", label: "Title" }]}
-        actions={[{ id: "archive", label: "Archive", run: vi.fn() }]}
+        returning={["revision"]}
+        actions={[{ id: "archive", label: "Archive", placement: "toolbar", run: archive }]}
         recordTabs={[{ id: "related", label: "Related", render: renderTab }]}
         recordExtras={recordExtras} />
     </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
   </Provider>);
-  return { client, renderTab, recordExtras };
+  const change = () => sinks.forEach((sink) => sink.next({ data: { noteChanged: {
+    model: "notes.Note", id: "note-1", action: "update",
+  } } }));
+  return { client, renderTab, recordExtras, change, archive };
 }
 
 test("a missing record replaces loading with the shared empty state and never mounts record actions or panels", async () => {
@@ -82,4 +93,24 @@ test("a failed refresh preserves the cached record and dirty draft while offerin
   await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   expect(input.value).toBe("My draft");
   expect(getOne).toHaveBeenCalledTimes(3);
+});
+
+test("a live change replaces an in-flight old snapshot and record actions use the latest clean revision", async () => {
+  let finishOldRead!: (response: { data: Row }) => void;
+  const getOne = vi.fn<() => Promise<{ data: Row }>>()
+    .mockResolvedValueOnce({ data: { id: "note-1", title: "Loaded", revision: 1 } })
+    .mockImplementationOnce(() => new Promise((resolve) => { finishOldRead = resolve; }))
+    .mockResolvedValue({ data: { id: "note-1", title: "Loaded", revision: 2 } });
+  const f = fixture(getOne);
+  await screen.findByRole("textbox", { name: "Title" });
+  act(() => { void f.client.invalidateQueries(); });
+  await waitFor(() => expect(getOne).toHaveBeenCalledTimes(2));
+  await act(async () => { f.change(); });
+  await waitFor(() => expect(getOne).toHaveBeenCalledTimes(3));
+  await act(async () => { finishOldRead({ data: { id: "note-1", title: "Loaded", revision: 1 } }); });
+  fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+  await waitFor(() => expect(f.archive).toHaveBeenCalledWith(expect.objectContaining({
+    record: expect.objectContaining({ revision: 2 }),
+  })));
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
 });

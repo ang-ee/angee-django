@@ -12,7 +12,9 @@
     "@angee/decisions": "workspace:*",
     "@angee/metadata": "workspace:*",
     "@angee/refine": "workspace:*",
+    "@angee/timeline": "workspace:*",
     "@angee/ui": "workspace:*",
+    "lucide-react": "^1.21.0",
     "valibot": "^1.4.2"
   },
   "peerDependencies": { "@tanstack/react-router": "^1", "react": "^19", "react-dom": "^19" },

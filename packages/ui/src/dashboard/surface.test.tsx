@@ -8,7 +8,7 @@ import { BUILTIN_DASHBOARD_WIDGET_KINDS } from "./kinds";
 import { DashboardSurface, visibleDashboardSnapshot } from "./surface";
 import { AppRuntimeProvider } from "../runtime/runtime";
 import { createRouteHref } from "../runtime/route-href";
-import type { ReactElement, ReactNode } from "react";
+import type { ReactElement } from "react";
 
 const state = vi.hoisted(() => ({
   allowed: [false], loading: false, error: null as Error | null,
@@ -22,7 +22,6 @@ vi.mock("../runtime/runtime", async (importOriginal) => ({
   ...await importOriginal<typeof import("../runtime/runtime")>(),
   useDashboardRegistry: () => registry,
 }));
-vi.mock("../page/PageHeader", () => ({ PageHeader: ({ actions }: { actions?: ReactNode }) => <header><h1>Dashboard</h1>{actions}</header> }));
 vi.mock("../views/form/use-unsaved-changes-navigation-guard", () => ({
   useUnsavedChangesNavigationGuard: () => {},
 }));
@@ -161,6 +160,23 @@ test("a full-view action composes the outward link affordance", () => {
   expect(link.querySelector(".glyph")).toBeTruthy();
 });
 
+test("a hosted full-view link retains its preset and page scope", () => {
+  const linked: WidgetSpec = { ...widget, id: "inbox", visibility: undefined, kind: "resourceView",
+    data: { shape: "resourceView", preset: "tasks.inbox" }, options: { fullViewRoute: "tasks.list" } };
+  const filter = { company: { exact: "company-a" }, assessment: { exact: "risk" } };
+  render(<AppRuntimeProvider runtime={{
+    routeHref: createRouteHref([{ name: "tasks.list", path: "/tasks" }]),
+    resourceViews: { "tasks.inbox": { id: "tasks.inbox", label: "Inbox", resource: "projects.Task" } },
+  }}><DashboardSurface target={{ scope: "addon", key: "overview" }}
+    definition={{ ...definition, widgets: [linked] }} pageScope={{ resource: "projects.Task", filter }} />
+  </AppRuntimeProvider>);
+  const href = screen.getByRole("link", { name: "Open Incoming requests in full view" }).getAttribute("href")!;
+  const url = new URL(href, "https://example.test");
+  expect(url.pathname).toBe("/tasks");
+  expect(url.searchParams.get("preset")).toBe("tasks.inbox");
+  expect(JSON.parse(url.searchParams.get("filter")!)).toEqual(filter);
+});
+
 test("absent dashboards use the server edit answer and declaration can turn editing off", () => {
   renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }} />);
   expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
@@ -206,7 +222,7 @@ test("a statistic uses its loaded value in the heading and body", () => {
   renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }}
     definition={{ ...definition, widgets: [stat] }} />);
   const article = screen.getByRole("heading", { name: "Total" }).closest("article")!;
-  expect(article.querySelector("header")?.textContent).toContain("Total· 5");
+  expect(within(article).getByRole("heading", { name: "Total" }).parentElement?.textContent).toContain("Total· 5");
   expect(article.querySelector("dd")?.textContent).toBe("0");
   expect(article.querySelector("number-flow-react")).toBeNull();
 });
@@ -222,4 +238,30 @@ test("an undeclared fallback does not replace a personal saved layout", () => {
   }} />);
   expect(screen.getByRole("heading", { name: "Saved widget" })).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "Fallback widget" })).toBeNull();
+});
+
+
+test("dashboard pages compose the native display header with subtitle and actions", () => {
+  renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }}
+    headerDensity="comfortable" headingLevel={1} subtitle="Understand what needs attention."
+    headerActions={<a href="/new">Add records</a>} />);
+  expect(screen.getByRole("heading", { level: 1, name: "Overview" })).toBeTruthy();
+  expect(screen.getByText("Understand what needs attention.")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Add records" }).getAttribute("href")).toBe("/new");
+});
+
+
+test("summary and grid share the native page body scroller below the fixed header", () => {
+  renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }}
+    toolbar={<div data-testid="summary">Summary metrics</div>} />);
+  const body = screen.getByTestId("summary").parentElement!;
+  expect(body.className).toContain("overflow-auto");
+  expect(body.className).toContain("p-0");
+  expect(body.contains(screen.getByRole("heading", { name: "Overview" }))).toBe(false);
+  const widget = screen.getByRole("heading", { name: "Shared work" }).closest("article")!;
+  expect(body.contains(widget)).toBe(true);
+  const layout = widget.parentElement!.parentElement!;
+  expect(layout.className).toContain("p-4");
+  expect(layout.className).not.toContain("overflow-auto");
+  expect(layout.className).not.toContain("flex-1");
 });

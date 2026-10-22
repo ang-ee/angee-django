@@ -12,7 +12,6 @@ export const enNotesMessages: Record<string, string> = {
   "form.details": "Details",
   "form.owner": "Owner",
   "form.reminder": "Reminder",
-  "record.activity": "Activity",
   "record.star": "Star",
   "record.versions": "Versions",
   "status.synced": "Synced",
@@ -21,6 +20,7 @@ export const enNotesMessages: Record<string, string> = {
   "status.all": "All notes",
   "status.version_one": "{count} version",
   "status.version_other": "{count} versions",
+  "status.surface": "Notes console",
   "demo.forgotPassword": "Forgot your password?",
   "demo.logins": "Demo logins",
 };

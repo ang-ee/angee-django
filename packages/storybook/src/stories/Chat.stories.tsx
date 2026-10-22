@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, ChatBar, ChatBubble, ChatCommandEmpty, ChatCommandItem, ChatCommandList, ChatHeader, ChatHeaderAction, ChatTypingIndicator, ContextBlock, Glyph, MessageReasoningFrame, SessionRail, SessionRailItem, StatusDot, ToolFallback } from "@angee/ui";
+import { Button, ChatBar, ChatBubble, ChatCommandEmpty, ChatCommandItem, ChatCommandList, ChatHeader, ChatTypingIndicator, ContextBlock, Glyph, MessageReasoningFrame, SessionRail, SessionRailItem, StatusDot, ToolFallback } from "@angee/ui";
 
 import { StorySurface } from "./chrome-fixtures";
 
@@ -23,9 +23,9 @@ export const Header: Story = {
         statusTone="success"
         actions={
           <>
-            <ChatHeaderAction>⚙</ChatHeaderAction>
-            <ChatHeaderAction>Clear</ChatHeaderAction>
-            <ChatHeaderAction>Reconnect</ChatHeaderAction>
+            <Button size="sm" variant="ghost">⚙</Button>
+            <Button size="sm" variant="ghost">Clear</Button>
+            <Button size="sm" variant="ghost">Reconnect</Button>
           </>
         }
       />
@@ -56,6 +56,20 @@ export const Bar: Story = {
         }
       />
     </StorySurface>
+  ),
+};
+
+export const SessionsLoading: Story = {
+  render: () => (
+    // The rail owns its loading rows and its empty hint; the consumer passes `busy` and `empty`.
+    <div className="flex h-80 w-60 gap-4">
+      <div className="flex-1 overflow-hidden rounded-6 border border-border-subtle bg-sheet-2">
+        <SessionRail label="Rooms" busy empty="Start a room or a direct message." />
+      </div>
+      <div className="flex-1 overflow-hidden rounded-6 border border-border-subtle bg-sheet-2">
+        <SessionRail label="Rooms" empty="Start a room or a direct message." />
+      </div>
+    </div>
   ),
 };
 

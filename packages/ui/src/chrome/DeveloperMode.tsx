@@ -18,7 +18,9 @@ import { Tooltip } from "../ui/tooltip";
 import { Glyph } from "./Glyph";
 import type { ChromeMenuNode } from "./menu-tree";
 
-/** The user-menu switch for developer mode. */
+/** The user-menu switch for developer mode.
+ * @kind contribution
+ */
 export function DeveloperModeMenuItem(): ReactElement {
   const t = useUiT();
   const { enabled, setEnabled } = useDeveloperModeSwitch();
@@ -34,6 +36,7 @@ export function DeveloperModeMenuItem(): ReactElement {
 /**
  * The top-bar developer button, shown only in developer mode: hovering gives the
  * page's route and app, the selected app and home; clicking opens the composition.
+ * @kind contribution
  */
 export function DeveloperMenu(): ReactElement | null {
   const t = useUiT();
@@ -45,7 +48,7 @@ export function DeveloperMenu(): ReactElement | null {
       <Tooltip label={<DeveloperSummary />} side="bottom" align="end">
         <Button
           type="button"
-          variant="icon"
+          variant="ghost"
           size="iconSm"
           aria-label={t("developer.composition")}
           aria-haspopup="dialog"
@@ -99,7 +102,7 @@ function CompositionDialog({ onClose }: { onClose: () => void }): ReactElement {
               <Dialog.Close />
             </div>
           </Dialog.Header>
-          <Dialog.Body className="space-y-3 text-xs">
+          <Dialog.Body className="space-y-3 text-12">
             <DeveloperSummary />
             {composition ? <CompositionSections composition={composition} /> : <p>{t("developer.noComposition")}</p>}
           </Dialog.Body>
@@ -200,7 +203,9 @@ export function useDeveloperRail(): DeveloperRail {
   }, [composition, enabled, t, vocabulary]);
 }
 
-/** In developer mode, the technical name a field label or column header shows on hover. */
+/** In developer mode, the technical name a field label or column header shows on hover.
+ * @owner DeveloperMenu
+ */
 export function useDeveloperFieldTitle(): (field: string, context?: string) => string | undefined {
   const t = useUiT();
   const enabled = useDeveloperMode();

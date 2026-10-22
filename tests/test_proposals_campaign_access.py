@@ -11,7 +11,7 @@ from django.core.exceptions import ValidationError
 from rebac import ObjectRef, PermissionDenied, SubjectRef, actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.base.errors import RecordAccessSubjectRefused
+from angee.errors import RecordAccessSubjectRefused
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.messaging.testing.models import Person
@@ -329,16 +329,13 @@ def test_answer_insert_authorizes_the_seat_before_creating_an_already_narrowed_r
         topic = Topic.objects.create(round=round, key="approach", name="Approach")
     actor = c.person(seat)
     with actor_context(actor):
+        answer = Answer(proposal=proposal, topic=topic, body="Answer", visibility=visibility)
         if seat not in {"facilitator", "responder"}:
             with pytest.raises(PermissionDenied):
-                Answer.objects.check_create({"proposal": (proposal,)})
+                Answer.objects.insert(answer)
             assert not Answer._base_manager.filter(proposal=proposal).exists()
             return
-        Answer.objects.check_create({"proposal": (proposal,)})
-        # The existing manual factory convention preflights under the caller,
-        # then performs the authorized insert with the native system binding.
-        answer = Answer(proposal=proposal, topic=topic, body="Answer", visibility=visibility)
-        answer.sudo(reason="tests.proposals.campaign.authorized_answer").save()
+        answer = Answer.objects.insert(answer)
     assert Answer._base_manager.get(pk=answer.pk).visibility == visibility
     assert_read(answer, c.person("peer"), False)
     c.open(round)

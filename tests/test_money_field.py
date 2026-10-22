@@ -20,8 +20,7 @@ from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.state import ModelState, ProjectState
 from strawberry import auto
 
-import angee.base.fields as base_fields
-from angee.base.fields import SqidField
+import angee.fields as base_fields
 from angee.data.field_classification import (
     MONEY_CURRENCY_FIELD_METADATA_KEY,
     STATUS_DISPLAY_METADATA_KEY,
@@ -35,6 +34,7 @@ from angee.data.metadata import (
     DataResourceTypeNames,
     serialize_data_resources,
 )
+from angee.fields import SqidField
 from angee.graphql.data.metadata import _finalize_data_resource
 from angee.money.fields import MoneyField
 from tests.money_models import MoneyDocument, MoneyLine, MoneyStatement

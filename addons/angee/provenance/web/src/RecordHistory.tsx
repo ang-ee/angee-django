@@ -1,52 +1,39 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useAuthoredQuery } from "@angee/refine";
-import {
-  Badge,
-  Button,
-  Chip,
-  Code,
-  CodeBlock,
-  CollapsibleIcon,
-  CollapsiblePanel,
-  CollapsibleRoot,
-  CollapsibleTrigger,
-  ComparisonRows,
-  EmptyState,
-  ErrorBanner,
-  LoadingPanel,
-  MessageRow,
-  RecordActionBar,
-  RecordReference,
-  StepList,
-  optionToken,
-  titleCase,
-  useActionResultMutation,
-  useRecordChromeContext,
-  type ActionDescriptor,
-  type ComparisonRow,
-  type StepListItem,
-} from "@angee/ui";
-import { useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { useModelMetadata } from "@angee/metadata";
+import { Chip, Code, CodeBlock, ComparisonRows, EmptyState, ErrorBanner, LoadingPanel, PaneRow, PaneRows, PaneToolbar, RecordActionBar, RecordReference, ResourcePaneFooter, SectionEyebrow, StatusBadge, formatDateTime, formatJson, optionToken, useActionResultMutation, useChatter, useStatusTone, type ActionDescriptor, type ComparisonRow, type StatusIconTone } from "@angee/ui";
+import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 import {
   RecordHistoryDocument,
   type HistoryEntry,
   type HistoryStatement,
-  type HistorySummaryEntry,
   type RecordHistory,
 } from "./documents.console";
-import { entryTone, historyValue, statementVerb } from "./history-entries";
+import { historyValue, statementVerb } from "./history-entries";
 import { useProvenanceT, type ProvenanceT } from "./i18n";
 
-/** The History tab's id; `?recordTab=history` opens it on any record. */
-export const HISTORY_TAB_ID = "history";
 /** Changesets per page; the server caps a page at 100. */
 export const HISTORY_PAGE_SIZE = 25;
+/** Authored history enums use the addon's vocabulary, without a CRUD resource. */
+const SOURCE_KIND_LABELS: Record<HistoryStatement["source_kind"], (t: ProvenanceT) => string> = {
+  PERSON: (t) => t("history.sourceKind.person"),
+  SYSTEM_OF_RECORD: (t) => t("history.sourceKind.systemOfRecord"),
+  DIRECTORY: (t) => t("history.sourceKind.directory"),
+  NETWORK: (t) => t("history.sourceKind.network"),
+  IMPORT: (t) => t("history.sourceKind.import"),
+  SEED: (t) => t("history.sourceKind.seed"),
+  DOCUMENT: (t) => t("history.sourceKind.document"),
+  EXTRACTION: (t) => t("history.sourceKind.extraction"),
+  RULE: (t) => t("history.sourceKind.rule"),
+};
 
 export interface UseRecordHistoryOptions {
   enabled?: boolean;
   limit?: number;
   offset?: number;
+  /** Locate this changeset's page inside the record's own history. */
+  selected?: string;
   dataProviderName?: string;
 }
 
@@ -56,7 +43,7 @@ export function useRecordHistory(model: string, id: string | null | undefined, o
   const records = useMemo(() => (id ? [{ model, id }] : []), [id, model]);
   return useAuthoredQuery(
     RecordHistoryDocument,
-    { model, id: id ?? "", limit: options.limit ?? HISTORY_PAGE_SIZE, offset: options.offset ?? 0 },
+    { model, id: id ?? "", limit: options.limit ?? HISTORY_PAGE_SIZE, offset: options.offset ?? 0, selected: options.selected ?? null },
     {
       ...(options.dataProviderName !== undefined ? { dataProviderName: options.dataProviderName } : {}),
       enabled: active,
@@ -71,8 +58,10 @@ export interface RecordHistoryTimelineProps {
   model: string;
   id: string | null | undefined;
   dataProviderName?: string;
-  /** One line per changeset linking to the History tab: the chatter rendering. */
+  /** One line per changeset, no details. */
   compact?: boolean;
+  /** The changeset a Timeline line opened: shown with its details and scrolled into view. */
+  selected?: string;
 }
 
 /** The timeline with its read, paging and the Revert verb bound to one record. */
@@ -81,11 +70,15 @@ export function RecordHistoryTimeline({
   id,
   dataProviderName,
   compact = false,
+  selected,
 }: RecordHistoryTimelineProps): ReactElement {
   const t = useProvenanceT();
-  const [offset, setOffset] = useState(0);
+  const { activeTab, setActiveTab } = useChatter();
+  const [page, setPage] = useState<{ model: string; id: typeof id; selected: typeof selected; offset: number } | null>(null);
+  const manualPage = page?.model === model && page.id === id && page.selected === selected ? page : null;
   const query = useRecordHistory(model, id, {
-    offset,
+    offset: manualPage?.offset ?? 0,
+    selected: manualPage ? undefined : selected,
     ...(dataProviderName !== undefined ? { dataProviderName } : {}),
   });
   const [revert, revertState] = useActionResultMutation<ActionFieldName>("revert_changeset", {
@@ -98,7 +91,6 @@ export function RecordHistoryTimeline({
         icon="activity"
         title={t("history.noRecordTitle")}
         description={t("history.noRecordDescription")}
-        className="min-h-48 p-4"
       />
     );
   }
@@ -117,7 +109,6 @@ export function RecordHistoryTimeline({
         icon="activity"
         title={t("history.emptyTitle")}
         description={t("history.emptyDescription")}
-        className="min-h-48 p-4"
       />
     );
   }
@@ -125,24 +116,24 @@ export function RecordHistoryTimeline({
     <HistoryTimeline
       history={history}
       compact={compact}
+      selected={selected}
       fetching={query.isFetching}
-      offset={offset}
-      onPage={compact ? undefined : setOffset}
+      offset={history.offset}
+      onPage={compact ? undefined : (offset) => {
+        const clearSelection = activeTab === "provenance.history";
+        setPage({ model, id, selected: clearSelection ? undefined : selected, offset });
+        if (clearSelection) setActiveTab("provenance.history");
+      }}
       onRevert={compact ? undefined : (entry) => revert(id, { model, changeset: entry.id })}
       reverting={revertState.fetching}
     />
   );
 }
 
-/** The saved-record tab body: the open record's own history. */
-export function HistoryPane(): ReactElement {
-  const { resource, recordId, dataProviderName } = useRecordChromeContext();
-  return <RecordHistoryTimeline model={resource} id={recordId} dataProviderName={dataProviderName} />;
-}
-
 export interface HistoryTimelineProps {
   history: RecordHistory;
   compact?: boolean;
+  selected?: string;
   fetching?: boolean;
   offset?: number;
   onPage?: (offset: number) => void;
@@ -150,10 +141,11 @@ export interface HistoryTimelineProps {
   reverting?: boolean;
 }
 
-/** Presentation over one loaded page: the workflows step list renders changesets as it renders runs. */
+/** Presentation over one loaded page: one pane row per changeset, the opened one with its details below. */
 export function HistoryTimeline({
   history,
   compact = false,
+  selected,
   fetching = false,
   offset = 0,
   onPage,
@@ -161,83 +153,83 @@ export function HistoryTimeline({
   reverting = false,
 }: HistoryTimelineProps): ReactElement {
   const t = useProvenanceT();
-  const items = history.entries.map((entry): StepListItem => ({
-    id: entry.id,
-    state: "done",
-    tone: entryTone(entry),
-    title: <EntryTitle entry={entry} t={t} />,
-    ...(optionToken(entry.outcome) === "failure" ? { outcome: t("history.outcome.failure") } : {}),
-    timestamp: entry.recorded_at,
-    detail: compact
-      ? <RecordReference model={history.model} id={history.id} tab={HISTORY_TAB_ID} label={t("history.openTab")} />
-      : <EntrySummary entry={entry} t={t} />,
-    ...(compact ? {} : {
-      children: <EntryDetails entry={entry} record={history} onRevert={onRevert} reverting={reverting} t={t} />,
-    }),
-  }));
-  const pager = onPage && history.total > HISTORY_PAGE_SIZE ? (
-    <div className="flex items-center gap-2">
-      <Button size="sm" variant="ghost" disabled={offset === 0 || fetching}
-        onClick={() => onPage(Math.max(0, offset - HISTORY_PAGE_SIZE))}>
-        {t("history.newer")}
-      </Button>
-      <Button size="sm" variant="ghost" disabled={offset + HISTORY_PAGE_SIZE >= history.total || fetching}
-        onClick={() => onPage(offset + HISTORY_PAGE_SIZE)}>
-        {t("history.older")}
-      </Button>
-    </div>
-  ) : null;
+  const [openId, setOpenId] = useState<string | null>(selected ?? null);
+  useEffect(() => {
+    if (selected) setOpenId(selected);
+  }, [selected]);
+  const statusTone = useStatusTone();
   return (
-    <div className="grid min-w-0 gap-3">
-      <StepList items={items} />
-      {pager}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <PaneToolbar />
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
+        <PaneRows>
+          {history.entries.map((entry) => (
+            <HistoryRow
+              key={entry.id}
+              entry={entry}
+              record={history}
+              open={!compact && openId === entry.id}
+              focused={selected === entry.id}
+              onToggle={compact ? undefined : () => setOpenId((current) => current === entry.id ? null : entry.id)}
+              onRevert={onRevert}
+              reverting={reverting}
+              statusTone={statusTone}
+              t={t}
+            />
+          ))}
+        </PaneRows>
+      </div>
+      {/* Offset paging over the changesets: the pane footer, as under every pane list. */}
+      {onPage && history.total > HISTORY_PAGE_SIZE ? (
+        <ResourcePaneFooter pager={{ page: Math.floor(offset / HISTORY_PAGE_SIZE) + 1, pageSize: HISTORY_PAGE_SIZE, total: history.total }}
+          disabled={fetching} pagerTotalUnit={t("history.pagerUnit")} labelElement="span"
+          onPageChange={(page) => onPage((page - 1) * HISTORY_PAGE_SIZE)} />
+      ) : null}
     </div>
   );
 }
 
-/** Compact changeset line for an already paged Comments entry; no second read or pager. */
-export function HistoryEntrySummary({ entry, model, id }: {
-  entry: HistorySummaryEntry;
-  model: string;
-  id: string;
+function HistoryRow({ entry, record, open, focused, onToggle, onRevert, reverting, statusTone, t }: {
+  entry: HistoryEntry;
+  record: RecordHistory;
+  open: boolean;
+  focused: boolean;
+  onToggle?: () => void;
+  onRevert: HistoryTimelineProps["onRevert"];
+  reverting: boolean;
+  statusTone: ReturnType<typeof useStatusTone>;
+  t: ProvenanceT;
 }): ReactElement {
-  const t = useProvenanceT();
-  return (
-    <MessageRow
-      author={<EntryTitle entry={entry} t={t} />}
-      timestamp={entry.recorded_at}
-      meta={<RecordReference model={model} id={id} tab={HISTORY_TAB_ID} label={t("history.openTab")} />}
-    >
-      {entry.change_reason || null}
-    </MessageRow>
-  );
-}
-
-/** "<actor> <activity> · <action>": who wrote, how the write came about, what it did. */
-function EntryTitle({ entry, t }: { entry: HistorySummaryEntry; t: ProvenanceT }): ReactElement {
-  const actor = entry.actor_model && entry.actor_id
-    ? <RecordReference model={entry.actor_model} id={entry.actor_id} />
-    : <span>{entry.actor ?? t("history.system")}</span>;
-  return (
-    <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
-      {actor}
-      <span className="font-normal text-fg-muted">{activityLabel(t, entry.activity)}</span>
-      <Badge tone="neutral">{actionLabel(t, entry.action)}</Badge>
-      {entry.source_kind ? <Chip size="sm" tone="info">{titleCase(optionToken(entry.source_kind))}</Chip> : null}
-    </span>
-  );
-}
-
-function EntrySummary({ entry, t }: { entry: HistoryEntry; t: ProvenanceT }): ReactElement {
+  const ref = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (focused) ref.current?.scrollIntoView({ block: "center" });
+  }, [focused]);
   const counts = [
     entry.changes.length ? t("history.changes", { count: entry.changes.length }) : null,
     entry.statements.length ? t("history.statements", { count: entry.statements.length }) : null,
   ].filter((part): part is string => part !== null);
+  const failed = optionToken(entry.outcome) === "failure";
   return (
-    <div className="grid gap-0.5">
-      {entry.change_reason ? <p className="text-fg">{entry.change_reason}</p> : null}
-      {counts.length ? <p className="text-fg-muted">{counts.join(" · ")}</p> : null}
-    </div>
+    <li ref={ref}>
+      <PaneRow
+        icon={failed ? "triangle-alert" : "pencil"}
+        // The composed status vocabulary tones the activity; a failed outcome overrides it.
+        tone={rowTone(statusTone(failed ? "failure" : entry.activity))}
+        title={actionLabel(t, entry.action)}
+        detail={[counts.join(" · "), failed ? t("history.outcome.failure") : null].filter(Boolean).join(" · ") || undefined}
+        meta={<time dateTime={entry.recorded_at}>{formatDateTime(entry.recorded_at)}</time>}
+        sub={[entry.actor ?? t("history.system"), activityLabel(t, entry.activity), entry.source_kind ? SOURCE_KIND_LABELS[entry.source_kind](t) : null, entry.change_reason]
+          .filter(Boolean).join(" · ")}
+        verb={onToggle ? t("history.details") : undefined}
+        selected={open}
+        onOpen={onToggle}
+      />
+      {open ? (
+        <div className="ml-6 pb-2 pr-1">
+          <EntryDetails entry={entry} record={record} onRevert={onRevert} reverting={reverting} t={t} />
+        </div>
+      ) : null}
+    </li>
   );
 }
 
@@ -248,7 +240,7 @@ function HistoryValueCell({ value, t }: { value: unknown; t: ProvenanceT }): Rea
   return <span className="[overflow-wrap:anywhere]">{rendered.text}</span>;
 }
 
-/** Field deltas, statement versions, merge facts and the Revert verb, folded under one trigger. */
+/** Field deltas, statement versions, merge facts and the Revert verb, under the opened row. */
 function EntryDetails({ entry, record, onRevert, reverting, t }: {
   entry: HistoryEntry;
   record: RecordHistory;
@@ -262,11 +254,13 @@ function EntryDetails({ entry, record, onRevert, reverting, t }: {
       <span className="grid gap-0.5">
         {change.model !== record.model || change.id !== record.id
           ? <RecordReference model={change.model} id={change.id} /> : null}
-        <Code>{change.field}</Code>
+        <FieldName model={change.model} field={change.field} />
       </span>
     ),
-    before: <HistoryValueCell value={change.old} t={t} />,
-    after: <HistoryValueCell value={change.new} t={t} />,
+    cells: {
+      before: <HistoryValueCell value={change.old} t={t} />,
+      after: <HistoryValueCell value={change.new} t={t} />,
+    },
     changed: true,
   }));
   const revertable = onRevert !== undefined && entry.can_revert;
@@ -282,50 +276,80 @@ function EntryDetails({ entry, record, onRevert, reverting, t }: {
     },
   };
   return (
-    <CollapsibleRoot variant="flush">
-      <CollapsibleTrigger>
-        <CollapsibleIcon />
-        {t("history.details")}
-      </CollapsibleTrigger>
-      <CollapsiblePanel>
-        <div className="grid min-w-0 gap-3 pt-1">
-          {rows.length ? (
-            <ComparisonRows
-              rows={rows}
-              fieldLabel={t("history.field")}
-              beforeLabel={t("history.before")}
-              afterLabel={t("history.after")}
-            />
-          ) : null}
-          {entry.statements.length ? <StatementVersions statements={entry.statements} t={t} /> : null}
-          {entry.merge ? <MergeFacts merge={entry.merge} t={t} /> : null}
-          {revertable ? <RecordActionBar record={{ id: record.id }} actions={[revertAction]} blocked={reverting} /> : null}
-        </div>
-      </CollapsiblePanel>
-    </CollapsibleRoot>
+    <div className="grid min-w-0 gap-3 pt-1">
+      {rows.length ? (
+        <ComparisonRows
+          rows={rows}
+          fieldLabel={t("history.field")}
+          columns={[{ key: "before", label: t("history.before") }, { key: "after", label: t("history.after") }]}
+        />
+      ) : null}
+      {entry.statements.length ? <StatementVersions statements={entry.statements} record={record} t={t} /> : null}
+      {entry.merge ? <MergeFacts merge={entry.merge} t={t} /> : null}
+      {revertable ? <RecordActionBar record={{ id: record.id }} actions={[revertAction]} blocked={reverting} /> : null}
+    </div>
   );
 }
 
-function StatementVersions({ statements, t }: { statements: readonly HistoryStatement[]; t: ProvenanceT }): ReactElement {
+/** The pane row's glyph tone from a status tone: the feedback intents, else muted. */
+function rowTone(tone: ReturnType<ReturnType<typeof useStatusTone>>): StatusIconTone {
+  return tone === "info" || tone === "success" || tone === "warning" || tone === "danger" ? tone : "muted";
+}
+
+/** A field's authored label; the wire name only when the model's metadata is not loaded. */
+function FieldName({ model, field }: { model: string; field: string }): ReactElement {
+  const metadata = useModelMetadata(model);
+  const label = metadata?.fields[field]?.label;
+  return label ? <span className="font-medium text-fg">{label}</span> : <Code>{field}</Code>;
+}
+
+function StatementVersions({ statements, record, t }: {
+  statements: readonly HistoryStatement[];
+  record: RecordHistory;
+  t: ProvenanceT;
+}): ReactElement {
   return (
     <section className="grid gap-1" aria-label={t("history.statementsTitle")}>
-      <h4 className="text-13 font-semibold text-fg">{t("history.statementsTitle")}</h4>
-      <ul className="grid gap-1">
-        {statements.map((statement, index) => (
-          <li key={`${statement.id}:${index}`} className="flex min-w-0 flex-wrap items-center gap-1.5 text-13">
-            <Badge tone={statementVerb(statement) === "withdrawn" ? "warning" : "neutral"}>
-              {statementVerbLabel(t, statementVerb(statement))}
-            </Badge>
-            <span className="font-medium text-fg">{statement.aspect}</span>
-            <Chip size="sm" tone="info">{titleCase(optionToken(statement.source_kind))}</Chip>
-            <span className="text-fg-muted">{statement.asserted_by}</span>
-            <span className="text-fg-muted">{t("history.statement.confidence", { confidence: statement.confidence })}</span>
-            <Code truncate>{JSON.stringify(statement.values)}</Code>
-          </li>
-        ))}
-      </ul>
+      <SectionEyebrow>{t("history.statementsTitle")}</SectionEyebrow>
+      <PaneRows>
+        {statements.map((statement, index) => {
+          const verb = statementVerb(statement);
+          return (
+            <li key={`${statement.id}:${index}`}>
+              <PaneRow
+                icon="pencil"
+                tone={verb === "withdrawn" ? "warning" : "muted"}
+                title={<FieldName model={record.model} field={statement.aspect} />}
+                detail={statementVerbLabel(t, verb)}
+                meta={t("history.statement.confidence", { confidence: statement.confidence })}
+                sub={<>
+                  <StatusBadge value={statement.source_kind} display="text">{SOURCE_KIND_LABELS[statement.source_kind](t)}</StatusBadge>
+                  {" · "}
+                  {statement.source ? <StatementReference reference={statement.source} record={record} /> : statement.asserted_by}
+                  {" · "}
+                  <Code truncate>{formatJson(statement.values, { compact: true })}</Code>
+                  {statement.evidence.map((reference) => <span key={`${reference.model}:${reference.id}:${reference.pointer}`}> · <StatementReference reference={reference} record={record} /></span>)}
+                </>}
+              />
+            </li>
+          );
+        })}
+      </PaneRows>
     </section>
   );
+}
+
+function StatementReference({ reference, record }: {
+  reference: HistoryStatement["evidence"][number];
+  record: RecordHistory;
+}): ReactElement {
+  const sourceLink = reference.model.toLowerCase() === "integrate.recordlink";
+  return <span className="text-fg-muted"><RecordReference
+    model={sourceLink ? record.model : reference.model}
+    id={sourceLink ? record.id : reference.id}
+    label={reference.label}
+    search={sourceLink ? { chatterTab: "integrate.sources", source: reference.id } : undefined}
+  /></span>;
 }
 
 function MergeFacts({ merge, t }: { merge: NonNullable<HistoryEntry["merge"]>; t: ProvenanceT }): ReactElement {
@@ -337,7 +361,7 @@ function MergeFacts({ merge, t }: { merge: NonNullable<HistoryEntry["merge"]>; t
   );
   return (
     <section className="grid gap-1 text-13" aria-label={t("history.mergeTitle")}>
-      <h4 className="font-semibold text-fg">{t("history.mergeTitle")}</h4>
+      <SectionEyebrow>{t("history.mergeTitle")}</SectionEyebrow>
       <p className="flex flex-wrap items-center gap-1.5">
         <span className="text-fg-muted">{t("history.survivor")}</span>
         {chip(merge.survivor)}
@@ -361,7 +385,7 @@ function actionLabel(t: ProvenanceT, action: string | null | undefined): string 
     case "delete":
       return t("history.action.delete");
     default:
-      return optionToken(action);
+      return t("history.action.other");
   }
 }
 
@@ -387,7 +411,7 @@ function activityLabel(t: ProvenanceT, activity: string | null | undefined): str
     case "run":
       return t("history.activity.run");
     default:
-      return optionToken(activity);
+      return t("history.activity.other");
   }
 }
 
@@ -405,6 +429,6 @@ function statementVerbLabel(t: ProvenanceT, verb: string): string {
     case "deprecated":
       return t("history.statement.deprecated");
     default:
-      return verb;
+      return t("history.statement.other");
   }
 }

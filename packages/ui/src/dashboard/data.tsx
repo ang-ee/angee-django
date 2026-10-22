@@ -1,18 +1,12 @@
 import * as React from "react";
-import { DISABLED_RESOURCE, ResourceQuery, useModelMetadata } from "@angee/metadata";
+import { ResourceQuery, useModelMetadata } from "@angee/metadata";
 import { useAngeeAggregate, useAngeeGroupBy, type AggregateBucket, type AggregateMeasure } from "@angee/refine";
 import { useAggregateOperation, useGroupOperation } from "../views/resource/resource-operations";
 import { Filter, type ResourceViewFilter } from "../views/resource/resource-view-model";
 import { useResourceListQuery } from "../views/resource/surface/resource-list-query";
 import { useResourceRecordMatchFields } from "../runtime/runtime";
-import type { DashboardWidgetData, WidgetSpec, WidgetSource } from "./headless";
+import type { DashboardPageScope, DashboardWidgetData, WidgetSpec } from "./headless";
 
-export interface DashboardPageScope {
-  resource: string;
-  filter?: ResourceViewFilter;
-}
-
-const EMPTY_SOURCE: WidgetSource = { resource: DISABLED_RESOURCE };
 const COUNT_MEASURE: AggregateMeasure = { op: "count", field: null };
 const EMPTY_FIELDS: DashboardWidgetData["queryFields"] = {};
 
@@ -42,17 +36,20 @@ function useVisible(): boolean {
   return visible;
 }
 
+/** Read authored dashboard data through the same scoped, live query owner as stored widgets.
+ * @owner DashboardSurface
+ */
 export function useDashboardWidgetData(
-  spec: WidgetSpec,
+  spec: Pick<WidgetSpec, "kind" | "data" | "options">,
   pageScope?: DashboardPageScope,
 ): DashboardWidgetData {
-  const source = spec.data.shape === "none" || spec.data.shape === "resourceView" ? EMPTY_SOURCE : spec.data.source;
-  const metadata = useModelMetadata(source.resource);
+  const source = spec.data.shape === "none" || spec.data.shape === "resourceView" ? null : spec.data.source;
+  const metadata = useModelMetadata(source?.resource ?? "");
   const resource = metadata?.resource ?? null;
-  const recordMatchFields = useResourceRecordMatchFields(spec.data.shape === "rows" ? source.resource : "");
+  const recordMatchFields = useResourceRecordMatchFields(spec.data.shape === "rows" ? spec.data.source.resource : "");
   const visible = useVisible();
   const prepared = React.useMemo(() => {
-    if (!resource || spec.data.shape === "none" || spec.data.shape === "resourceView") {
+    if (!resource || !source) {
       return {
         error: null,
         query: null,
@@ -116,7 +113,7 @@ export function useDashboardWidgetData(
     }
   }, [pageScope?.filter, pageScope?.resource, resource, source, spec.data.shape, recordMatchFields]);
 
-  const refresh = spec.data.shape === "none" || spec.data.shape === "resourceView" ? { mode: "manual" as const } : source.refresh ?? { mode: "live" as const };
+  const refresh = source ? source.refresh ?? { mode: "live" as const } : { mode: "manual" as const };
   const enabled = visible && prepared.query !== null;
   const aggregateOperation = useAggregateOperation(resource);
   const groupOperation = useGroupOperation(resource);
@@ -130,9 +127,11 @@ export function useDashboardWidgetData(
     enabled: wantsValue,
   });
   const projection = prepared.groups?.[0]?.groupBy();
+  const groupOrder = spec.options.order === "group";
   const grouped = useAngeeGroupBy(wantsSeries ? groupOperation.target : null, {
     document: groupOperation.document,
     dimensions: projection?.dimensions ?? [],
+    orderBy: groupOrder ? projection?.orderBy : undefined,
     measures: prepared.measure ? [prepared.measure] : [],
     where: prepared.where,
     pageSize: 500,
@@ -148,7 +147,7 @@ export function useDashboardWidgetData(
       filter: prepared.filter,
       order,
       page: 1,
-      pageSize: Math.min(source.limit ?? 10, 100),
+      pageSize: Math.min(source?.limit ?? 10, 100),
     } : null,
     enabled: wantsRows,
   });
@@ -162,12 +161,12 @@ export function useDashboardWidgetData(
     try {
       const ranked = grouped.buckets
         .map((bucket) => ({
-          key: String(axis.bucketIdentity(bucket)),
+          key: axis.bucketId(bucket),
           label: String(axis.bucketLabel(bucket) ?? "—"),
           value: bucketValue(bucket, measure) ?? 0,
-        }))
-        .sort((left, right) => right.value - left.value || left.key.localeCompare(right.key));
-      const limit = Math.min(source.limit ?? 8, 20);
+        }));
+      if (!groupOrder) ranked.sort((left, right) => right.value - left.value || left.key.localeCompare(right.key));
+      const limit = groupOrder ? Math.min(source?.limit ?? 30, 100) : Math.min(source?.limit ?? 8, 20);
       const visible = ranked.slice(0, limit);
       if (spec.kind === "donut" && ranked.length > limit) {
         const other = ranked.slice(limit).reduce((sum, point) => sum + point.value, 0);
@@ -177,7 +176,7 @@ export function useDashboardWidgetData(
     } catch (cause) {
       return { series: [], error: errorValue(cause) };
     }
-  }, [grouped.buckets, grouped.totalCount, prepared.groups, prepared.measure, source.limit, spec.kind, wantsSeries]);
+  }, [grouped.buckets, grouped.totalCount, groupOrder, prepared.groups, prepared.measure, source?.limit, spec.kind, wantsSeries]);
 
   React.useEffect(() => {
     if (refresh.mode !== "interval" || !visible) return;

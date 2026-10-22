@@ -53,25 +53,21 @@ function IdentitySpike() {
             actual chips would break native focus and removal indexes. */}
         {active.length > 1 ? <Button variant="ghost" size="sm" aria-label={t("search.overflow", { count: active.length - 1 })}
           onClick={() => setExpanded((value) => !value)}>+{active.length - 1}</Button> : null}
-        <Combobox.Input aria-label={t("resourceToolbar.filterRecords")} className="min-w-28 flex-1 bg-transparent outline-none" />
+        <Combobox.Input aria-label={t("resourceToolbar.filterRecords")} className="min-w-28" />
       </Combobox.Chips>
       {expanded ? <output aria-label={t("search.panel")}>{active.map((item) => item.label).join(", ")}</output> : null}
-      <Combobox.Portal><Combobox.Positioner sideOffset={4} className="z-popover">
-        <Combobox.Popup className="rounded-8 border border-border-subtle bg-popover p-2 shadow-popover">
+      <Combobox.Popup>
           <Combobox.List>
             <Combobox.Group items={suggestions.slice(0, 2)}>
               <Combobox.GroupLabel>{t("search.textSuggestions")}</Combobox.GroupLabel>
-              <Combobox.Collection>{(item: SearchItem) => <Combobox.Item key={item.id} value={item}
-                className="rounded-6 p-2 data-[highlighted]:bg-inset">{item.label}</Combobox.Item>}</Combobox.Collection>
+              <Combobox.Collection>{(item: SearchItem) => <Combobox.Item key={item.id} value={item}>{item.label}</Combobox.Item>}</Combobox.Collection>
             </Combobox.Group>
             <Combobox.Group items={suggestions.slice(2)}>
               <Combobox.GroupLabel>{t("resourceToolbar.filters")}</Combobox.GroupLabel>
-              <Combobox.Collection>{(item: SearchItem) => <Combobox.Item key={item.id} value={item}
-                className="rounded-6 p-2 data-[highlighted]:bg-inset">{item.label}</Combobox.Item>}</Combobox.Collection>
+              <Combobox.Collection>{(item: SearchItem) => <Combobox.Item key={item.id} value={item}>{item.label}</Combobox.Item>}</Combobox.Collection>
             </Combobox.Group>
           </Combobox.List>
-        </Combobox.Popup>
-      </Combobox.Positioner></Combobox.Portal>
+      </Combobox.Popup>
     </Combobox.Root>
   </div>;
 }

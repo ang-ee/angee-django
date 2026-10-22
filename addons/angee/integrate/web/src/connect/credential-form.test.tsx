@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   fields: [] as Array<Record<string, unknown>>,
   revealCredential: vi.fn(async () => ({ reveal_credential: { secret: "test-secret" } })),
+  reveal: vi.fn(async () => undefined),
   useAuthoredMutation: vi.fn(),
   useRecordAction: vi.fn<(run: RecordActionRunner, options?: UseRecordActionOptions) => void>(),
 }));
@@ -33,6 +34,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   ) => ({ resource, Component }),
   useAuthoredResourceMutation: () => [vi.fn(), { fetching: false, error: null }],
   useRecordActionMutation: () => [vi.fn(), { fetching: false, error: null }],
+  useSecretReveal: () => mocks.reveal,
 }));
 
 vi.mock("../i18n", () => ({
@@ -92,28 +94,22 @@ describe("credentialCreateForm", () => {
     );
     const runner = mocks.useRecordAction.mock.calls[0]?.[0];
     if (!runner) throw new Error("Reveal action was not registered.");
-    const prompt = vi.fn<ActionContext["prompt"]>().mockResolvedValue(null);
     const refresh = vi.fn();
     await expect(runner("credential-1", {
       record: { id: "credential-1" },
       values: {},
       refresh,
       update: vi.fn<ActionContext["update"]>().mockResolvedValue(null),
-      prompt,
+      prompt: vi.fn<ActionContext["prompt"]>().mockResolvedValue(null),
     })).resolves.toBeUndefined();
 
     expect(mocks.revealCredential).toHaveBeenCalledWith({ id: "credential-1" });
-    expect(prompt).toHaveBeenCalledOnce();
-    expect(prompt).toHaveBeenCalledWith({
+    // The one-time reveal goes through the shared secret-reveal owner.
+    expect(mocks.reveal).toHaveBeenCalledOnce();
+    expect(mocks.reveal).toHaveBeenCalledWith({
       title: "credentials.reveal.title",
       body: "credentials.reveal.body",
-      fields: [{
-        name: "secret",
-        label: "credentials.reveal.secretLabel",
-        defaultValue: "test-secret",
-        readOnly: true,
-        copyable: true,
-      }],
+      secrets: [{ name: "secret", label: "credentials.reveal.secretLabel", value: "test-secret" }],
     });
     expect(refresh).not.toHaveBeenCalled();
   });

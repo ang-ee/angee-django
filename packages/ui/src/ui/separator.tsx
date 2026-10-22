@@ -6,8 +6,10 @@ import {
 
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
-import { sectionEyebrowVariants } from "./section-eyebrow";
 
+/**
+ * @kind token
+ */
 export const separatorVariants = tv({
   base: "shrink-0 bg-border",
   variants: {
@@ -29,11 +31,6 @@ export const separatorVariants = tv({
 
 type SeparatorRecipeProps = VariantProps<typeof separatorVariants>;
 
-export type SeparatorOrientation = NonNullable<
-  SeparatorRecipeProps["orientation"]
->;
-export type SeparatorTone = NonNullable<SeparatorRecipeProps["tone"]>;
-
 export type SeparatorProps = Omit<
   BaseSeparatorProps,
   "className" | "orientation"
@@ -42,6 +39,9 @@ export type SeparatorProps = Omit<
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const Separator = React.forwardRef<HTMLDivElement, SeparatorProps>(
   function Separator(
     {
@@ -65,61 +65,3 @@ export const Separator = React.forwardRef<HTMLDivElement, SeparatorProps>(
 
 Separator.displayName = "Separator";
 
-export type DividerProps = Omit<
-  React.HTMLAttributes<HTMLDivElement>,
-  "className" | "color"
-> &
-  Pick<SeparatorProps, "orientation" | "tone"> & {
-    label?: React.ReactNode;
-    className?: string;
-  };
-
-export function Divider({
-  label,
-  className,
-  orientation = "horizontal",
-  tone = "default",
-  ...props
-}: DividerProps): React.ReactElement {
-  if (label === undefined || label === null) {
-    return (
-      <Separator
-        className={className}
-        orientation={orientation}
-        tone={tone}
-        {...props}
-      />
-    );
-  }
-
-  return (
-    <div
-      role="separator"
-      aria-orientation={orientation}
-      className={cn(
-        sectionEyebrowVariants({
-          className: "flex items-center gap-3",
-          tracking: "wider",
-          weight: "regular",
-        }),
-        orientation === "vertical" && "h-full flex-col",
-        className,
-      )}
-      {...props}
-    >
-      <Separator
-        aria-hidden="true"
-        className="flex-1"
-        orientation={orientation}
-        tone={tone}
-      />
-      <span>{label}</span>
-      <Separator
-        aria-hidden="true"
-        className="flex-1"
-        orientation={orientation}
-        tone={tone}
-      />
-    </div>
-  );
-}

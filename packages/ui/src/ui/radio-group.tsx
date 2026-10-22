@@ -11,6 +11,9 @@ import {
 
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const radioGroupVariants = tv({
   slots: {
     root: "min-w-0",
@@ -21,7 +24,7 @@ export const radioGroupVariants = tv({
     indicator: "size-2 rounded-full bg-brand",
     text: "min-w-0 space-y-0.5",
     label: "block text-13 font-medium text-fg",
-    description: "block text-xs leading-5 text-fg-muted",
+    description: "block text-12 leading-5 text-fg-muted",
     media: "min-w-0",
   },
   variants: {
@@ -42,7 +45,7 @@ export const radioGroupVariants = tv({
       sm: {
         radio: "size-3.5",
         indicator: "size-1.5",
-        label: "text-xs",
+        label: "text-12",
         description: "text-2xs",
       },
       md: "",
@@ -62,11 +65,6 @@ export const radioGroupVariants = tv({
 });
 
 export type RadioGroupRecipeProps = VariantProps<typeof radioGroupVariants>;
-export type RadioGroupVariant = NonNullable<RadioGroupRecipeProps["variant"]>;
-export type RadioGroupSize = NonNullable<RadioGroupRecipeProps["size"]>;
-export type RadioGroupOrientation = NonNullable<
-  RadioGroupRecipeProps["orientation"]
->;
 
 export type RadioGroupRootProps = Omit<
   BaseRadioGroupRootProps,
@@ -76,6 +74,9 @@ export type RadioGroupRootProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner RadioGroup
+ */
 export const RadioGroupRoot = React.forwardRef<
   HTMLDivElement,
   RadioGroupRootProps
@@ -111,6 +112,9 @@ export type RadioGroupRadioProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner RadioGroup
+ */
 export const RadioGroupRadio = React.forwardRef<
   HTMLSpanElement,
   RadioGroupRadioProps
@@ -137,6 +141,9 @@ export type RadioGroupIndicatorProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner RadioGroup
+ */
 export const RadioGroupIndicator = React.forwardRef<
   HTMLSpanElement,
   RadioGroupIndicatorProps
@@ -168,6 +175,9 @@ export type RadioGroupItemProps = Omit<
     value: BaseRadioRootProps["value"];
   };
 
+/**
+ * @owner RadioGroup
+ */
 export const RadioGroupItem = React.forwardRef<
   HTMLLabelElement,
   RadioGroupItemProps
@@ -233,6 +243,9 @@ export const RadioGroupItem = React.forwardRef<
 });
 RadioGroupItem.displayName = "RadioGroupItem";
 
+/**
+ * @kind primitive
+ */
 export const RadioGroup = Object.assign(RadioGroupRoot, {
   Root: RadioGroupRoot,
   Radio: RadioGroupRadio,

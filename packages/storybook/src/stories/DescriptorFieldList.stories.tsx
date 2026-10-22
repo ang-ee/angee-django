@@ -28,7 +28,7 @@ function DescriptorFieldListDemo(): React.ReactElement {
         <Button type="submit">Save</Button>
         <Button type="button" variant="secondary" onClick={() => form.setError("title", { message: "Choose a different title." })}>Show error</Button>
       </div>
-      {submitted ? <pre className="rounded-6 bg-inset p-3 text-xs">{JSON.stringify(submitted, null, 2)}</pre> : null}
+      {submitted ? <pre className="rounded-6 bg-inset p-3 text-12">{JSON.stringify(submitted, null, 2)}</pre> : null}
     </form>
   </FormProvider></RuntimeRegistryFixture>;
 }

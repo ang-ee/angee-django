@@ -34,9 +34,6 @@ from rebac.schema import Definition, Permission, Relation, Schema, render_allowe
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.base.identity import instance_from_public_id, public_subject_ref
-from angee.base.models import AngeeModel
-from angee.base.scoping import lock_if_supported
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permission_expression
@@ -47,9 +44,9 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.sharing import authorized_record_access
 from angee.graphql.subscriptions import changes
 from angee.graphql.view_as import ViewAs
-from angee.graphql.writes import write_queryset
 from angee.iam.identity import user_display_label, user_label
 from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT, UserAccountAction
+from angee.iam.models import Group as GroupModel
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import is_platform_admin, require_platform_admin, session_user
 from angee.iam.permissions import request_from_info as _request
@@ -94,6 +91,8 @@ from angee.iam.roles import (
     revoke_role as _revoke_role_owner,
 )
 from angee.iam.roles import subject_permitted as _subject_permitted_owner
+from angee.identity import instance_from_public_id, public_subject_ref
+from angee.models import AngeeModel
 
 User = cast(type[Any], get_user_model())
 Group = cast(type[Any], apps.get_model("iam", "Group"))
@@ -128,7 +127,7 @@ def _preference_object(user: Any) -> JSON:
 def _display_label(user: Any, info: strawberry.Info) -> str:
     """Return IAM's label for ``user``, the same one every record carries, whatever the viewer reads."""
 
-    if "username" in getattr(user, "_rebac_redacted_fields", ()):
+    if "username" in user.redacted_fields():
         return user.get_full_name() or user_display_label(user.pk, request=_request(info)) or ""
     return user_label(user)
 
@@ -149,9 +148,9 @@ class UserType(AngeeNode):
     last_login: auto
     revision: int = strawberry_django.field(field_name="account_revision")
 
-    @strawberry_django.field(annotate={
-        f"_iam_{action}": partial(_account_action_allowed, action) for action in UserAccountAction.values
-    })
+    @strawberry_django.field(
+        annotate={f"_iam_{action}": partial(_account_action_allowed, action) for action in UserAccountAction.values}
+    )
     def account_actions(self) -> list[UserAccountAction]:
         """Account verbs the viewer may run on this row, from the verbs' own owner."""
 
@@ -618,7 +617,7 @@ def _user_queryset(info: strawberry.Info) -> QuerySet[Any]:
     return cast(QuerySet[Any], User.objects.colleagues(session_user(info)))
 
 
-def _group_queryset(info: strawberry.Info) -> QuerySet[Any]:
+def _group_queryset(info: strawberry.Info) -> RebacQuerySet[GroupModel]:
     """Return member-visible groups through the native REBAC query owner."""
 
     return RebacQuerySet(model=Group).with_actor(session_user(info)).with_action("read")
@@ -651,21 +650,26 @@ class IAMUserWriteBackend:
         return User.objects.create_person(**data)
 
     def update(
-        self, info: strawberry.Info, pk: str, data: dict[str, Any], *, expected_revision: int | None = None,
+        self,
+        info: strawberry.Info,
+        pk: str,
+        data: dict[str, Any],
+        *,
+        expected_revision: int | None = None,
     ) -> Any:
         """Patch one user through its ``write`` and field gates, hashing ``password`` when supplied."""
 
         payload = dict(data)
         password = payload.pop("password", None)
         with transaction.atomic():
-            user = _user_for_resource_id(pk, lock_if_supported(write_queryset(User)))
+            user = _user_for_resource_id(pk, User.objects.for_write().lock_if_supported())
             user.update_account(payload, password=password, expected_revision=expected_revision)
             return user
 
     def delete(self, info: strawberry.Info, pk: str) -> Any | None:
         """Delete one user by public id through its ``delete`` permission and return the deleted row."""
 
-        preview = delete_by_public_id(User, str(pk), confirm=True, queryset=write_queryset(User))
+        preview = delete_by_public_id(User, str(pk), confirm=True, queryset=User.objects.for_write())
         preview.require_no_blockers()
         return preview.deleted_instance
 
@@ -685,14 +689,17 @@ class IAMGroupWriteBackend:
             return group
 
     def update(
-        self, info: strawberry.Info, pk: str, data: dict[str, Any],
+        self,
+        info: strawberry.Info,
+        pk: str,
+        data: dict[str, Any],
     ) -> Any:
         """Patch one IAM group."""
 
         require_platform_admin(info)
 
         with transaction.atomic():
-            group = _group_for_resource_id(pk, write_queryset(Group))
+            group = _group_for_resource_id(pk, Group.objects.for_write())
             for field, value in data.items():
                 setattr(group, field, value)
             group.full_clean()
@@ -704,7 +711,7 @@ class IAMGroupWriteBackend:
 
         require_platform_admin(info)
 
-        preview = delete_by_public_id(Group, str(pk), confirm=True, queryset=write_queryset(Group))
+        preview = delete_by_public_id(Group, str(pk), confirm=True, queryset=Group.objects.for_write())
         preview.require_no_blockers()
         return preview.deleted_instance
 
@@ -748,8 +755,16 @@ _GRANT_RESOURCE = hasura_pydantic_resource(
     name="iam_grants",
     model_label="iam.Grant",
     filterable=[
-        "id", "subject", "subject_id", "subject_type", "subject_relation",
-        "subject_label", "role", "role_name", "namespace", "caveat_name",
+        "id",
+        "subject",
+        "subject_id",
+        "subject_type",
+        "subject_relation",
+        "subject_label",
+        "role",
+        "role_name",
+        "namespace",
+        "caveat_name",
     ],
     sortable=["subject_label", "subject_type", "role", "role_name", "namespace", "caveat_name"],
     rows=_grant_rows_for,
@@ -872,7 +887,9 @@ class IAMConsoleQuery:
 
     @strawberry.field
     def iam_assignment_subject_labels(
-        self, info: strawberry.Info, subjects: list[str],
+        self,
+        info: strawberry.Info,
+        subjects: list[str],
     ) -> list[IAMAssignmentSubjectLabel]:
         """Resolve selected identities without the options list's pagination or active filter."""
         return [
@@ -882,7 +899,10 @@ class IAMConsoleQuery:
 
     @strawberry.field
     def record_readers(
-        self, info: strawberry.Info, target_type: str, target_id: PublicID,
+        self,
+        info: strawberry.Info,
+        target_type: str,
+        target_id: PublicID,
     ) -> list[RecordReaderType]:
         """List named effective person readers through the REBAC reverse index.
 
@@ -896,12 +916,21 @@ class IAMConsoleQuery:
         model = model_for_resource_type(target_type)
         if model is None or not issubclass(model, AngeeModel):
             raise ValueError("Unknown record target type.")
-        target = (authorized_record_access(info, model, target_id)[0]
-                  if model.get_rebac_grantable()
-                  else authorized_permission_target(info, model, target_id, "read"))
-        refs = tuple(islice(rebac_backend().lookup_subjects(
-            resource=to_object_ref(target), action="read", subject_type="auth/user",
-        ), 100))
+        target = (
+            authorized_record_access(info, model, target_id)[0]
+            if model.get_rebac_grantable()
+            else authorized_permission_target(info, model, target_id, "read")
+        )
+        refs = tuple(
+            islice(
+                rebac_backend().lookup_subjects(
+                    resource=to_object_ref(target),
+                    action="read",
+                    subject_type="auth/user",
+                ),
+                100,
+            )
+        )
         resolved = resolve_subjects(refs)
         viewer = to_subject_ref(session_user(info))
         following = set()
@@ -915,7 +944,8 @@ class IAMConsoleQuery:
                 you=ref == viewer,
                 following=ref in following,
             )
-            for ref in refs if ref in resolved and getattr(resolved[ref], "kind", None) == "person"
+            for ref in refs
+            if ref in resolved and getattr(resolved[ref], "kind", None) == "person"
         ]
 
     @strawberry.field
@@ -1051,7 +1081,11 @@ class IAMUserAccountMutation:
 
     @strawberry.mutation
     def reset_user_password(
-        self, info: strawberry.Info, id: PublicID, confirmed: bool, expected_revision: int,
+        self,
+        info: strawberry.Info,
+        id: PublicID,
+        confirmed: bool,
+        expected_revision: int,
     ) -> IssuedUserPassword:
         """Replace a usable password and return the new credential and sign-in username once."""
 
@@ -1062,7 +1096,12 @@ class IAMUserAccountMutation:
     @strawberry.mutation
     @action_guard("Changing account access failed.")
     def set_user_active(
-        self, info: strawberry.Info, id: PublicID, active: bool, confirmed: bool, expected_revision: int,
+        self,
+        info: strawberry.Info,
+        id: PublicID,
+        active: bool,
+        confirmed: bool,
+        expected_revision: int,
     ) -> ActionResult:
         """Deactivate or reactivate one person account."""
 
@@ -1085,7 +1124,10 @@ class IAMUserAccountMutation:
 
         user = authorized_permission_target(info, User, id, str(UserAccountAction.RENAME))
         user.rename(
-            first_name=first_name, last_name=last_name, confirmed=confirmed, expected_revision=expected_revision,
+            first_name=first_name,
+            last_name=last_name,
+            confirmed=confirmed,
+            expected_revision=expected_revision,
         )
         return ActionResult(ok=True, message="Account renamed.")
 
@@ -1098,7 +1140,7 @@ class IAMUserDeletePreviewMutation:
     def delete_user(self, info: strawberry.Info, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Preview or confirm deletion of one user by public id through its ``delete`` permission."""
 
-        return delete_by_public_id(User, str(id), confirm=confirm, queryset=write_queryset(User))
+        return delete_by_public_id(User, str(id), confirm=confirm, queryset=User.objects.for_write())
 
 
 attach_delete_preview_metadata(

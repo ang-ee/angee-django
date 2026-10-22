@@ -1,11 +1,32 @@
 """Registry and periodic recovery settings contributed by workflows."""
 
-SETTINGS = {
+from typing import TypedDict
+
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "ANGEE_IMPL_REGISTRIES:append": list[str],
+        "ANGEE_MERGE_GUARDS:append": list[str],
+        "ANGEE_TIMELINE_KINDS:append": list[str],
+        "ANGEE_RESOURCE_ENTRY_KIND_CLASSES:append": dict[str, str],
+        "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES": dict[str, str],
+        "CELERY_BEAT_SCHEDULE:append": dict[str, dict[str, object]],
+        "ANGEE_WORKFLOW_STEP_CLASSES": dict[str, str],
+        "ANGEE_WORKFLOW_MAP_CONCURRENCY": int,
+        "ANGEE_WORKFLOW_MAX_DISPATCHES": int,
+        "ANGEE_WORKFLOW_RETENTION_DAYS": int,
+    },
+)
+
+SETTINGS: _Settings = {
     "ANGEE_IMPL_REGISTRIES:append": [
-        "angee.workflows.steps.Step", "angee.workflows.triggers.TriggerSource", "angee.workflows.watches.RecordWatch",
+        "angee.workflows.steps.Step", "angee.workflows.triggers.TriggerSource",
     ],
     "ANGEE_MERGE_GUARDS:append": ["angee.workflows.managers.unfinished_run_merge_guard"],
-    "ANGEE_WORKFLOW_WATCH_CLASSES": {},
+    "ANGEE_TIMELINE_KINDS:append": ["angee.workflows.timeline.timeline_kinds"],
+    "ANGEE_RESOURCE_ENTRY_KIND_CLASSES:append": {
+        "workflows.workflowextension": "angee.workflows.resources.WorkflowExtensionResourceKind",
+    },
     "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES": {
         "record_changed": "angee.workflows.triggers.RecordChanged",
     },

@@ -14,7 +14,7 @@ import { SectionHeading } from "../form/SectionHeading";
 import { useUiT } from "../../i18n";
 import {
   ListLoadingFooter,
-  SelectionBar,
+  ListSelectionBar,
 } from "./resource-view-list-body";
 import type { ListChrome, ResourceCollectionPresentation } from "./resource-view-types";
 
@@ -95,7 +95,7 @@ export function ResourceListFrame({
           {headingVerbs && toolbar.onCreate ? <ResourceCreateButton label={toolbar.createLabel} onCreate={toolbar.onCreate} /> : null}
         </div>
       ) : null}
-      {compact ? (
+      {toolbar.pane ? <ResourceToolbar {...toolbar} /> : compact ? (
         showInlineToolbar ? <ResourceToolbar {...inlineToolbar} /> : null
       ) : (
         /* Embedded: the band pads like a table cell, so the box starts where the first header's text does. */
@@ -125,12 +125,12 @@ export function ResourceListFrame({
         )}
       >
         {summary ? (
-          <p className="border-b border-border-subtle px-3 py-2 text-2xs text-fg-muted">
+          <p className={cn("border-b border-border-subtle px-3 py-2 text-fg-muted", toolbar.pane ? "text-12" : "text-2xs")}>
             {summary}
           </p>
         ) : null}
         {selection && selection.count > 0 ? (
-          <SelectionBar
+          <ListSelectionBar
             count={selection.count}
             onClear={selection.onClear}
             onDelete={selection.onDelete}

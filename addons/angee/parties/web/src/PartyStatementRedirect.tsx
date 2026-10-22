@@ -4,7 +4,6 @@ import {
   EmptyState,
   ErrorBanner,
   LoadingPanel,
-  errorMessage,
   recordTargetSearch,
   useRouteHref,
   useRouteParam,
@@ -41,7 +40,7 @@ export function PartyStatementRedirect(): React.ReactElement {
   }, [association, navigate, routeHref]);
 
   if (query.error) {
-    return <ErrorBanner description={errorMessage(query.error, t("partyRedirect.unavailable"))} />;
+    return <ErrorBanner description={t("partyRedirect.unavailable")} />;
   }
   if (id && query.isFetching) return <LoadingPanel message={t("partyRedirect.loading")} />;
   return <EmptyState icon="handle" title={t("partyRedirect.unavailable")} />;

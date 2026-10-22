@@ -22,9 +22,8 @@ from django.utils import timezone
 from rebac import actor_context, generic_target, system_context
 from rebac.actors import is_sudo
 
-from angee.base.changesets import changeset
-from angee.base.errors import exception_text
-from angee.base.scoping import read_scoped_queryset, system_queryset
+from angee.changesets import changeset
+from angee.errors import exception_text
 from angee.graphql.publishing import publish_change
 from angee.jobs.timeouts import task_time_budget
 from angee.workflows.managers import RETRYABLE_SQLSTATES, _database_timeout, _record_failure, _sqlstate
@@ -111,7 +110,8 @@ class Runner:
         """
         step_runs = run.step_runs
         with system_context(reason="workflows.advance"):
-            if run.is_terminal and settlement is None:
+            terminal = run.is_terminal
+            if terminal and settlement is None:
                 return
             output: Any
             try:
@@ -131,7 +131,7 @@ class Runner:
                                 step_runs.filter(pk=step_run.pk).update(notes=[*step_run.notes, *notes])
                 # A preserved IO sibling may settle after failure. Its evidence
                 # changes, but the terminal run and graph plan stay untouched.
-                if not run.is_terminal:
+                if not terminal:
                     with transaction.atomic():
                         # The reverse manager needs its connecting FK to populate
                         # Django's known-related-object cache without one query per row.
@@ -146,13 +146,16 @@ class Runner:
                                 rows, map_concurrency=settings.ANGEE_WORKFLOW_MAP_CONCURRENCY,
                             )
                             wake = [node.node_key for node in planned if node.existing]
-                            step_runs.filter(node_key__in=wake).to_ready()
-                            step_runs.bulk_create([
+                            if wake:
+                                step_runs.filter(node_key__in=wake).to_ready()
+                            new_steps = [
                                 step_runs.model(
                                     run=run, node_key=node.node_key, map_index=node.map_index,
                                     status=node.status, rank=node.rank,
                                 ) for node in planned if not node.existing
-                            ])
+                            ]
+                            if new_steps:
+                                step_runs.bulk_create(new_steps)
                             statuses = set(step_runs.values_list("status", flat=True))
                             if statuses & {StepRunStatus.READY, StepRunStatus.RUNNING}:
                                 status, outcome, output = RunStatus.RUNNING, "", {}
@@ -196,26 +199,28 @@ class Runner:
                         )
                         if recorded_on_attempt or timed_out and closed:
                             run_error = ""
-                if not run.is_terminal:
+                if not terminal:
                     with _record_failure("run state"):
                         self.run_model.objects._write_state(
                             run, status=RunStatus.FAILED, outcome=ERROR_OUTCOME, output={}, error=run_error,
                         )
-            with _record_failure("run change publication"):
-                run.refresh_from_db()
-                publish_change(run, action="update", update_fields=None)
+            if terminal:
+                # Preserved IO evidence changed without a run state transition.
+                with _record_failure("run change publication"):
+                    run.refresh_from_db()
+                    publish_change(run, action="update", update_fields=None)
 
     def execute(self, step_run_id: int) -> bool:
         """Claim once; DATABASE bodies share the claim transaction, IO bodies do not."""
         from angee.workflows.context import StepContext
 
-        run_id = system_queryset(self.step_model).filter(
+        run_id = self.step_model.system_queryset().filter(
             pk=step_run_id, status=StepRunStatus.READY,
         ).values_list("run_id", flat=True).first()
         if run_id is None:
             return False
         try:
-            with self.run_model.objects.hold(run_id, skip_locked=True) as run:
+            with self.run_model.objects.select_related("version", "run_as").hold(run_id, skip_locked=True) as run:
                 if run is None:
                     return False
                 with system_context(reason="workflows.execute.claim"):
@@ -356,7 +361,7 @@ class Runner:
 
     def record(self, step_run: Any, record: Any, *, label: str, operation: str, actor: Any) -> Any:
         """Stage an actor-readable canonical reference while the attempt is live."""
-        readable = read_scoped_queryset(type(record), actor)
+        readable = type(record).objects.with_actor(actor)
         if not readable.filter(pk=record.pk).exists():
             raise PermissionDenied("Read access to the step record is required.")
         target = generic_target(record)

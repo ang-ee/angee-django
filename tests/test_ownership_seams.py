@@ -14,7 +14,7 @@ from rebac import SubjectRef, actor_context, system_context
 from rebac.errors import PermissionDenied
 from rebac.models import PermissionAuditEvent
 
-from angee.base.checks import check_ownership
+from angee.checks import check_ownership
 from tests.conftest import Vault, create_user
 from tests.core_persistence import OWNERSHIP_SCHEMA, OwnedRow, OwnershipContainer, ownership_tables  # noqa: F401
 from tests.core_seam_models import (

@@ -12,7 +12,7 @@ from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
-from angee.base.identity import public_id_of
+from angee.identity import public_id_of
 from angee.messaging.testing.models import Channel, Handle, Message, Party, Person
 from tests.conftest import File, execute_schema, make_integration, result_data
 from tests.test_nexus import _schema

@@ -1,7 +1,10 @@
 import type { I18nResources } from "@angee/refine";
 import { createInstance, type i18n } from "i18next";
 
-/** Configure native translation for the app runtime and provider-less bindings. */
+/** Configure native translation for the app runtime and provider-less bindings.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function createAngeeI18nInstance(
   resources: I18nResources,
   locale = "en",

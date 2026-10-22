@@ -20,7 +20,6 @@ from strawberry import auto
 from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 
-from angee.base.scoping import read_scoped_queryset
 from angee.graphql import capabilities
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
 from angee.graphql.data import (
@@ -43,6 +42,7 @@ from angee.iam.schema import UserType
 from angee.parties.schema import PartyType
 from angee.projects.inputs import MilestoneTemplate
 from angee.projects.models import ProjectSetupState
+from angee.projects.models import Task as TaskModel
 from angee.storage.schema import FolderType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
@@ -124,10 +124,10 @@ _TASK_EXTENSION_FORBIDDEN_INSERT_FIELDS = set(
 )
 _TASK_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Task)
 
-DroppedReason = Task._meta.get_field("dropped_reason").choices_enum
-strawberry.enum(cast(Any, DroppedReason))
-TaskVisibility = Task._meta.get_field("visibility").choices_enum
-strawberry.enum(cast(Any, TaskVisibility))
+DroppedReason = TaskModel.TaskDroppedReason
+strawberry.enum(DroppedReason)
+TaskVisibility = TaskModel.TaskVisibility
+strawberry.enum(TaskVisibility)
 
 
 @pydantic_input(model=MilestoneTemplate, all_fields=True)
@@ -310,24 +310,42 @@ _TASK_ACTION_ANNOTATIONS = {
 
 
 
-def _subject_label(info: strawberry.Info, reference: Any) -> str:
-    """Return the subject's display label through the reader's own scope, once per record and request.
+def _subject_label(reference: Any) -> str:
+    """Return one subject's display label through the reader's own scope.
 
     A subject the reader cannot read keeps its public id as its label.
     """
 
-    request = getattr(info.context, "request", None)
-    cache = getattr(request, "_projects_subject_labels", None) if request is not None else None
-    if cache is None:
-        cache = {}
-        if request is not None:
-            request._projects_subject_labels = cache
-    key = (reference.model_label, reference.object_id)
-    if key not in cache:
-        model = apps.get_model(reference.model_label)
-        row = read_scoped_queryset(model, current_actor()).filter(pk=reference.object_id).first()
-        cache[key] = str(row) if row is not None else ""
-    return cache[key]
+    actor = current_actor()
+    if actor is None:
+        return ""
+    model = apps.get_model(reference.model_label)
+    row = model.objects.with_actor(actor).filter(pk=reference.object_id).first()
+    return str(row) if row is not None else ""
+
+
+def _prime_subject_labels(tasks: list[Any]) -> None:
+    """Batch task subject labels once per content type onto their pointer owners."""
+
+    references = [(task, task.record_ref) for task in tasks]
+    by_model: dict[str, set[Any]] = {}
+    for _task, reference in references:
+        if reference.public_id:
+            by_model.setdefault(reference.model_label, set()).add(reference.object_id)
+    labels: dict[tuple[str, Any], str] = {}
+    actor = current_actor()
+    if actor is None:
+        for task, _reference in references:
+            task._projects_subject_label = ""
+        return
+    for model_label, object_ids in by_model.items():
+        model = apps.get_model(model_label)
+        labels.update(
+            ((model_label, row.pk), str(row))
+            for row in model.objects.with_actor(actor).filter(pk__in=object_ids)
+        )
+    for task, reference in references:
+        task._projects_subject_label = labels.get((reference.model_label, reference.object_id), "")
 
 def _task_annotations(row: Any, info: strawberry.Info, annotations: dict[str, Any]) -> dict[str, Any]:
     """The row's verb annotations: optimized on reads, read once for a mutation payload."""
@@ -355,7 +373,11 @@ class TaskProjectionMixin:
         reference = cast(Any, self).record_ref
         if not reference.public_id:
             return None
-        return RecordPointerType.from_reference(reference, label=_subject_label(info, reference))
+        label = cast(Any, self).__dict__.get("_projects_subject_label")
+        return RecordPointerType.from_reference(
+            reference,
+            label=label if label is not None else _subject_label(reference),
+        )
 
     @strawberry_django.field(only=Task.visibility_audience_fields())
     def audience_label(self) -> str:
@@ -364,7 +386,7 @@ class TaskProjectionMixin:
         return cast(Any, self).visibility_audience_label()
 
     @strawberry_django.field(annotate=_VISIBILITY_ANNOTATIONS)
-    def allowed_visibility(self, info: strawberry.Info) -> list[TaskVisibility]:  # type: ignore[valid-type]
+    def allowed_visibility(self, info: strawberry.Info) -> list[TaskVisibility]:
         """Choices returned by the same owner that validates visibility writes."""
         allowed = _task_annotations(self, info, _VISIBILITY_ANNOTATIONS)
         return [
@@ -378,7 +400,7 @@ class TaskProjectionMixin:
         allowed = _task_annotations(self, info, _TASK_ACTION_ANNOTATIONS)
         return [action for action in Task.hand_actions() if allowed.get(f"_task_action_{action}")]
 
-    @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.objects.priority_rank_expression()})
+    @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.priority_rank_expression()})
     def priority_rank(self) -> int:
         """Return the priority's position in its declared order."""
 
@@ -593,8 +615,10 @@ def _record_tasks(info: strawberry.Info, model_label: str, record_id: strawberry
     model = Task.declared_target_model(model_label)
     record = instance_for_id(model, str(record_id), queryset=model._default_manager.all())
     if record is None:
-        return Task.objects.none()
-    return optimize(Task.objects.for_record(record, include_done=include_done), info)
+        return []
+    tasks = list(optimize(Task.objects.for_record(record, include_done=include_done), info))
+    _prime_subject_labels(tasks)
+    return tasks
 
 
 @strawberry.type
@@ -659,14 +683,14 @@ class ProjectTaskActionMutation:
     @strawberry.mutation
     @action_guard("Project setup failed.")
     def setup_project(
-        self, info: strawberry.Info, id: PublicID, configuration: ProjectSetupInput, client_creation_key: str,
+        self, info: strawberry.Info, id: PublicID, configuration: ProjectSetupInput, idempotency_key: str,
         expected_revision: int | None = None,
     ) -> ActionResult:
         """Complete the composed project setup under its owning transaction."""
 
         task = authorized_action_target(info, Task, id, "write")
         project = Project.objects.setup_from_task(
-            task, configuration=input_values(info, configuration), client_creation_key=client_creation_key,
+            task, configuration=input_values(info, configuration), idempotency_key=idempotency_key,
             expected_revision=expected_revision,
         )
         return ActionResult(ok=True, message="Project set up.", id=project.sqid)
@@ -724,7 +748,7 @@ class ProjectTaskActionMutation:
         self,
         info: strawberry.Info,
         id: PublicID,
-        reason: DroppedReason,  # type: ignore[valid-type]
+        reason: DroppedReason,
     ) -> ActionResult:
         """Drop one writable task for a closed reason."""
 
@@ -758,7 +782,7 @@ class ProjectTaskActionMutation:
         self,
         info: strawberry.Info,
         id: PublicID,
-        visibility: TaskVisibility,  # type: ignore[valid-type]
+        visibility: TaskVisibility,
         expected_revision: int | None = None,
     ) -> ActionResult:
         """Change a task audience through its narrowing or widening permission."""
@@ -956,17 +980,6 @@ def _project_resource(node_type: type) -> Any:
             "folder",
             *_PROJECT_EXTENSION_UPDATE_FIELDS,
         ],
-        field_id_decode={
-            "lead": public_pk_decoder(User),
-            "owner": public_pk_decoder(User),
-            "current_milestone": public_pk_decoder(Milestone),
-            "folder": public_pk_decoder(Folder),
-            "converted_from": public_pk_decoder(Task),
-            **{
-                name: public_pk_decoder(Project._meta.get_field(name).related_model)
-                for name in _PROJECT_EXTENSION_PUBLIC_ID_FIELDS
-            },
-        },
         write_backend=AngeeHasuraWriteBackend(
             Project,
             public_id_fields=("lead", "folder", *_PROJECT_EXTENSION_PUBLIC_ID_FIELDS),
@@ -1024,14 +1037,6 @@ _MILESTONE_RESOURCE = hasura_model_resource(
         "sort_order",
         *_MILESTONE_EXTENSION_UPDATE_FIELDS,
     ],
-    field_id_decode={
-        "project": public_pk_decoder(Project),
-        "reached_by": public_pk_decoder(User),
-        **{
-            name: public_pk_decoder(Milestone._meta.get_field(name).related_model)
-            for name in _MILESTONE_EXTENSION_PUBLIC_ID_FIELDS
-        },
-    },
     write_backend=AngeeHasuraWriteBackend(
         Milestone,
         public_id_fields=("project", *_MILESTONE_EXTENSION_PUBLIC_ID_FIELDS),
@@ -1087,7 +1092,7 @@ def _task_resource(node_type: type) -> Any:
             *_TASK_EXTENSION_ORDER_FIELDS,
         ],
         sortable_aliases={
-            "priority_rank": SortAlias("_priority_rank", lambda _info, queryset: queryset.priority_rank_expression()),
+            "priority_rank": SortAlias("_priority_rank", lambda _info, _queryset: Task.priority_rank_expression()),
         },
         aggregatable=[
             "id",
@@ -1147,18 +1152,6 @@ def _task_resource(node_type: type) -> Any:
             "sub_sort_order",
             *_TASK_EXTENSION_UPDATE_FIELDS,
         ],
-        field_id_decode={
-            "owner": public_pk_decoder(User),
-            "project": public_pk_decoder(Project),
-            "milestone": public_pk_decoder(Milestone),
-            "parent": public_pk_decoder(Task),
-            "assignee": public_pk_decoder(User),
-            "delegate": public_pk_decoder(User),
-            **{
-                name: public_pk_decoder(Task._meta.get_field(name).related_model)
-                for name in _TASK_EXTENSION_PUBLIC_ID_FIELDS
-            },
-        },
         write_backend=AngeeHasuraWriteBackend(
             Task,
             public_id_fields=(

@@ -27,7 +27,7 @@ import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { useValueStable } from "../lib/use-value-stable";
 import { type Tone } from "../lib/tones";
-import { Badge } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import { Code } from "../ui/code";
 import { textRoleVariants } from "../ui/text";
 
@@ -46,6 +46,8 @@ export interface GraphViewNode<
   selected?: boolean;
   /** Emphasize this node's border and background independently of selection. */
   highlighted?: boolean;
+  /** Keep this node visible and selectable while disabling graph mutations. */
+  readOnly?: boolean;
   position?: GraphViewPosition;
   /** Named output handles; omitted preserves the default unnamed output. */
   ports?: readonly GraphViewPort[];
@@ -91,7 +93,9 @@ export interface GraphViewNodeStyle {
   type?: "default" | "input" | "output";
 }
 
-/** Project theme colors and node chrome into the GraphView style contract. */
+/** Project theme colors and node chrome into the GraphView style contract.
+ * @kind token
+ */
 export function graphNodeStyle(
   borderColor: string,
   badgeTone: GraphViewNodeStyle["badgeTone"],
@@ -232,6 +236,9 @@ function nodeColor(node: Node): string {
   return node.style?.borderColor ?? "var(--border-strong)";
 }
 
+/**
+ * @kind surface
+ */
 export function GraphView<
   TNodeKind extends string = string,
   TEdgeKind extends string = string,
@@ -638,6 +645,8 @@ function toReactFlowNode<
     id: node.id,
     domAttributes: { "data-graph-node-id": node.id } as RenderNode<TKind, TMeta>["domAttributes"],
     selected,
+    draggable: node.readOnly ? false : undefined,
+    connectable: node.readOnly ? false : undefined,
     ariaLabel: node.ariaLabel,
     type: "angee",
     position: { x: 0, y: 0 },
@@ -718,11 +727,11 @@ function GraphNodeLabel<TKind extends string>({
         <span className="min-w-0 flex-1 truncate text-13 font-semibold text-fg">
           {node.title}
         </span>
-        {kindLabel !== node.title ? <Badge className="max-w-[50%]" density="compact" tone={style.badgeTone ?? "neutral"}>
+        {kindLabel !== node.title ? <Chip className="max-w-[50%]" tone={style.badgeTone ?? "neutral"}>
           <span className="min-w-0 truncate">{kindLabel}</span>
-        </Badge> : null}
+        </Chip> : null}
       </div>
-      {status ? <Badge className="absolute -top-3 right-2" tone={status.tone ?? "neutral"} density="compact">{status.label}</Badge> : null}
+      {status ? <Chip className="absolute -top-3 right-2" tone={status.tone ?? "neutral"}>{status.label}</Chip> : null}
       {node.code ? (
         <Code truncate tone="muted">
           {node.code}
@@ -775,6 +784,7 @@ function sameNodeContent(left: GraphViewNode, right: GraphViewNode): boolean {
   return left.kind === right.kind && left.kindLabel === right.kindLabel
     && left.title === right.title && left.code === right.code && left.detail === right.detail
     && left.ariaLabel === right.ariaLabel && left.highlighted === right.highlighted
+    && left.readOnly === right.readOnly
     && left.meta === right.meta && (left.ports === right.ports || (left.ports?.length === right.ports?.length
       && Boolean(left.ports?.every((port, index) => port.id === right.ports?.[index]?.id && port.label === right.ports?.[index]?.label))))
     && left.selected === right.selected && left.position?.x === right.position?.x && left.position?.y === right.position?.y;

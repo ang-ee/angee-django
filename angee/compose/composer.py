@@ -11,7 +11,6 @@ from django.core.exceptions import ImproperlyConfigured
 
 from angee.compose.appgraph import AppGraph
 from angee.compose.autoconfig import AutoConfig
-from angee.compose.history import HistoricalRuntimeConfig, historical_labels
 from angee.paths import resolve_path
 
 
@@ -29,6 +28,12 @@ class Composer:
         installed_apps = self.namespace.get("INSTALLED_APPS")
         if installed_apps is None:
             raise ImproperlyConfigured("settings must define INSTALLED_APPS")
+        # Direct Composer consumers (notably disposable composed hosts) add
+        # addon roots after the foundation package has already been imported.
+        # Refresh the shared ``angee`` package portions before resolving apps.
+        from angee.compose.project import prepend_import_paths
+
+        prepend_import_paths(self.namespace.get("ANGEE_ADDON_DIRS", ()))
         root_apps = self._app_entries(installed_apps)
         declared_apps = None if project_apps is None else self._app_entries(project_apps)
 
@@ -38,12 +43,6 @@ class Composer:
         runtime_dir = resolve_path(runtime_setting)
 
         app_configs = AppGraph().resolve(root_apps, declared_roots=declared_apps)
-        installed_labels = {config.label for config in app_configs}
-        history = [
-            HistoricalRuntimeConfig(runtime_dir, self.namespace.get("ANGEE_RUNTIME_MODULE", "runtime"), label)
-            for label in historical_labels(runtime_dir)
-            if label not in installed_labels
-        ]
         self.namespace["INSTALLED_APPS"] = list(app_configs)
         self._set_composer_setting("ROOT_URLCONF", "angee.urls")
         self._set_composer_setting("ASGI_APPLICATION", "angee.asgi.application")
@@ -54,7 +53,6 @@ class Composer:
         sys.path.insert(0, runtime_parent)
 
         AutoConfig.apply_installed(self.namespace)
-        self.namespace["INSTALLED_APPS"].extend(history)
 
     @staticmethod
     def _app_entries(value: object) -> tuple[str | AppConfig, ...]:

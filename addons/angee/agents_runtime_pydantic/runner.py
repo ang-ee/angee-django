@@ -18,12 +18,12 @@ from pydantic_ai.usage import UsageLimits
 from pydantic_core import to_jsonable_python
 from rebac import SubjectRef, actor_context
 
+from angee.actors import user_subject_type
 from angee.agents.context import render_view_context
 from angee.agents.models import normalize_inference_usage
 from angee.agents.runners import SessionRunner, SessionUpdateSink, TurnOutcome
 from angee.agents_runtime_pydantic.acp import approval_requests, updates_for_event
 from angee.agents_runtime_pydantic.toolsets import toolsets_for_session
-from angee.base.actors import user_subject_type
 
 _BINARY_CONTENT_OMITTED = "[Binary tool content omitted from persisted history; use a bounded file handle.]"
 """Replay-safe placeholder until the storage-handle follow-on lands."""

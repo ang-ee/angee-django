@@ -80,4 +80,16 @@ describe("DetailSurface", () => {
     expect(screen.getByRole("heading", { name: "Related models" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "notes.Note" })).toBeTruthy();
   });
+
+  test("renders the record's command band above the surface with the eyebrow on the header", () => {
+    render(
+      <DetailSurface title="Worker" crumbs="Service" density="compact" band={{ verbs: <button type="button">Restart</button> }}>
+        <span>Body</span>
+      </DetailSurface>,
+    );
+    expect(screen.getByRole("toolbar")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy();
+    expect(screen.getByText("Service")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Worker" })).toBeTruthy();
+  });
 });

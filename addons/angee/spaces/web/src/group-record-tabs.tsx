@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Skeleton, SkeletonStatus, type RecordPanelContext, type RecordTabDescriptor } from "@angee/ui";
+import { LazyBoundary, SkeletonStatus, SkeletonText, type RecordPanelContext, type RecordTabDescriptor } from "@angee/ui";
 
 import { useSpacesT } from "./i18n";
 
@@ -9,9 +9,9 @@ const GroupRosterTab = React.lazy(() => import("./SpacesPage").then((module) => 
 const GroupThreadsTab = React.lazy(() => import("./SpacesPage").then((module) => ({ default: module.GroupThreadsTab })));
 
 function Deferred({ label, children }: { label: string; children: React.ReactNode }): React.ReactElement {
-  return <React.Suspense fallback={<SkeletonStatus label={label} className="grid gap-3 py-4"><Skeleton className="h-8 w-1/2" /><Skeleton className="h-24" /></SkeletonStatus>}>
+  return <LazyBoundary pending={<SkeletonStatus label={label} className="py-4"><SkeletonText lines={3} size="lg" /></SkeletonStatus>}>
     {children}
-  </React.Suspense>;
+  </LazyBoundary>;
 }
 
 /** The group record's tabs (roster, threads), for the page and for a host that shows a group on its own. */

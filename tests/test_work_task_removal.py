@@ -119,19 +119,6 @@ class TaskRemovalTests(WorkCase):
         task.refresh_from_db()
         self.assertEqual(task.stage_id, self.stages["Doing"].pk)
 
-    def test_workflow_concealment_restore_falls_back_when_earlier_stage_is_reserved(self):
-        task = self.task("Doing")
-        with actor_context(self.owner):
-            task = self.as_user(task)
-            task.stage = self.stages["Removed"]
-            task.save(update_fields=("stage",))
-        with system_context(reason="tests.work.removal.retire_stage"):
-            self.Stage._base_manager.filter(pk=self.stages["Doing"].pk).update(rule_owned=True)
-        self.assertTrue(self.restore(task)["ok"])
-        task.refresh_from_db()
-        self.assertFalse(task.is_trashed)
-        self.assertEqual(task.stage_id, self.stages["Ready"].pk)
-
     def test_removed_task_takes_its_whole_conversation_from_a_non_manager(self):
         task = self.task()
         self.share(task, self.reader)

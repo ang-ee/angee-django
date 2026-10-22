@@ -6,7 +6,7 @@ from decimal import ROUND_DOWN, ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
 
 import pytest
 
-from angee.base.numeric import quantize, round_to_increment
+from angee.numeric import quantize, round_to_increment
 
 
 def test_quantize_half_up_rounds_half_away_from_zero() -> None:

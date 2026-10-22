@@ -5,6 +5,8 @@ import * as React from "react";
  *
  * ResizeObserver owns container measurements; callers own only the threshold
  * where their composition changes.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function useContainerQuery<TElement extends Element = HTMLDivElement>(
   minWidth: number,

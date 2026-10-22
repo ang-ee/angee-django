@@ -39,6 +39,10 @@ def _force_process_reload(filename: Any) -> NoReturn:
 class Command(RunserverCommand):
     """Run the composed ASGI app with uvicorn; the base ``run()`` owns reloading."""
 
+    # Django's handle() resolves these before dispatching run()/inner_run().
+    addr: str
+    port: str
+
     def inner_run(self, *args: Any, **options: Any) -> None:
         """Serve ``ASGI_APPLICATION`` with uvicorn (no uvicorn-side reload).
 

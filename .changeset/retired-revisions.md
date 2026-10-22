@@ -11,13 +11,11 @@ form whose resource declares `history: true`; that package exports
 `RecordHistoryTimeline`, `HistoryPane` and `useRecordHistory` for pages that embed
 the same entries.
 
-- `@angee/ui`: `RevisionsTab` reads nothing and renders a notice that revisions
-  are retired. It and `RevisionsTabProps` stay exported until angee 0.4.0, which
-  removes them; remove the tab that renders it. Removed now:
+- `@angee/ui`: removed `RevisionsTab` and `RevisionsTabProps`; remove any tab
+  that rendered it. Also removed:
   `useResourceRevisions` with its option and result types, the
   `@angee/ui/data/revisions` entry point, `useRevisionOperation`, and the
-  `revisions.*` messages other than the notice's `revisions.unavailable` and
-  `revisions.retired`. `TabProps.visibleWhen` and
+  all `revisions.*` messages. `TabProps.visibleWhen` and
   `RecordTabDescriptor.visibleWhen` receive the form's data resource as a second
   argument.
 - `@angee/refine`: removed `useAngeeRevisions`, `UseAngeeRevisionsResult`,

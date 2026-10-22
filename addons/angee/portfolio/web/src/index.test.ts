@@ -53,6 +53,9 @@ describe("portfolio addon manifest", () => {
     expect(children.map(([id]) => id)).toEqual([
       "portfolio.project-fields",
       "portfolio.project-updates",
+      "portfolio.product-releases",
+      "portfolio.product-projects",
+      "portfolio.initiative-projects",
       "portfolio.initiative-updates",
       "portfolio.task-release",
     ]);

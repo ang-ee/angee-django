@@ -1,34 +1,25 @@
-import { NavLink, Page, PageBody, PageHeader, useRouteHref, useRouteParam } from "@angee/ui";
+import { CommandBand, Page, PageBody, RecordHeader, useBreadcrumbLeafLabel, useRouteHref, useRouteParam } from "@angee/ui";
 import * as React from "react";
 import { useRoundComparisonData } from "../comparison-data";
 import { RoundComparisonBody } from "../comparison-body";
 import { useProposalsT } from "../i18n";
 import { RoundCloseControls } from "../round-actions";
 
-/** Headline proposal tabulation route; visibility is exactly the server result. */
+/** The round's comparison as a record page: the close verbs on the band, the round in the
+ * header, the tabulation as the body. Visibility is exactly the server result. */
 export function RoundComparisonPage(): React.ReactElement {
   const id = useRouteParam("id") ?? "";
   const t = useProposalsT();
   const routeHref = useRouteHref();
   const data = useRoundComparisonData(id);
-  const roundName = String(data.round?.name ?? id);
+  const roundName = typeof data.round?.name === "string" ? data.round.name : undefined;
+  useBreadcrumbLeafLabel(roundName ? t("comparison.title", { round: roundName }) : undefined);
 
   return (
     <Page>
-      <PageHeader
-        title={t("comparison.title", { round: roundName })}
-        description={t("comparison.description")}
-        crumbs={
-          <NavLink href={routeHref("proposals.rounds.record", { id })} variant="inline">
-            {t("comparison.back")}
-          </NavLink>
-        }
-        actions={
-          data.round ? (
-            <RoundCloseControls roundId={id} round={data.round} />
-          ) : null
-        }
-      />
+      <CommandBand verbs={data.round ? <RoundCloseControls roundId={id} round={data.round} /> : null} />
+      <RecordHeader density="compact" headingLevel={1} crumbs={t("comparison.eyebrow")}
+        title={roundName ?? t("comparison.loading")} description={t("comparison.description")} />
       <PageBody gutter="none">
         <RoundComparisonBody data={data} proposalHref={(proposalId) =>
           routeHref("proposals.proposals.record", { id: proposalId })} />

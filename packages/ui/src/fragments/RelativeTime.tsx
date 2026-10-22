@@ -10,6 +10,9 @@ export interface RelativeTimeProps
   fallback?: React.ReactNode;
 }
 
+/**
+ * @kind fragment
+ */
 export function RelativeTime({
   addSuffix = true,
   className,

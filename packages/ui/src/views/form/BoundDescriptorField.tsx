@@ -35,7 +35,9 @@ export interface BoundFormValueProps {
   children: (props: BoundFormValueRenderProps) => React.ReactElement;
 }
 
-/** Bind a domain-owned controlled editor to one value in FormView's RHF tree. */
+/** Bind a domain-owned controlled editor to one value in FormView's RHF tree.
+ * @kind surface
+ */
 export function BoundFormValue({ form: surface, name, children }: BoundFormValueProps): React.ReactElement {
   // Controller does not re-render a parent field when only one of its dotted
   // descendants changes. Subscribe explicitly so raw/object editors always
@@ -60,13 +62,17 @@ export function BoundFormValue({ form: surface, name, children }: BoundFormValue
   />;
 }
 
-/** Subscribe a custom record panel to FormView's single RHF value tree. */
+/** Subscribe a custom record panel to FormView's single RHF value tree.
+ * @owner FormView
+ */
 export function useFormViewValues<T = FormValues>(form: FormViewSaveSurface, path?: string): T {
   const watched = useWatch({ control: form.form.control, name: path as string });
   return watched as T;
 }
 
-/** Bind one descriptor to a nested path in FormView's existing RHF tree. */
+/** Bind one descriptor to a nested path in FormView's existing RHF tree.
+ * @kind surface
+ */
 export function BoundDescriptorField({
   form: surface,
   field,

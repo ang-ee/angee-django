@@ -34,7 +34,7 @@ describe("Tree iconTone", () => {
 describe("treeVariants", () => {
   test("composes the active and drop-target highlight states", () => {
     const active = treeVariants({ active: true });
-    expect(active).toContain("bg-brand-soft");
+    expect(active).toContain("selected");
     expect(active).toContain("font-medium");
     const drop = treeVariants({ dropTarget: true });
     expect(drop).toContain("ring-brand");

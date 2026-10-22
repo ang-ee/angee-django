@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from django.core.exceptions import ValidationError
 
-from angee.base.jsonschema import (
+from angee.jsonschema import (
     LocalSchemaReferences,
     check_schema,
     embed_schema,

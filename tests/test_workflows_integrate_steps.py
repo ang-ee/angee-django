@@ -1,41 +1,54 @@
 """Bridge paging and split coverage use real workflow and integration owners."""
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import timedelta
+from threading import Event
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
+from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.auth import get_user_model
-from django.db import connection
+from django.db import close_old_connections, connection, connections
 from django.db.models.functions import Now
 from django.utils import timezone
 from pydantic import ValidationError
 from rebac import system_context
 from rebac.actors import to_subject_ref
 
-from angee.base.mixins import SourceKind
-from angee.base.scoping import system_queryset
 from angee.decisions.testing.models import Decision
 from angee.integrate.impl import BridgeImpl
+from angee.integrate.locks import bridge_is_locked
 from angee.integrate.net import AddressResolutionError
-from angee.integrate.states import ConflictKeep, StreamDirection, StreamKind, StreamPhase, SyncFailureKind
+from angee.integrate.states import (
+    ConflictKeep,
+    StreamDefinition,
+    StreamDirection,
+    StreamKind,
+    StreamPhase,
+    SyncFailureKind,
+)
 from angee.integrate.streams import (
     ApplyResult,
     CursorInvalid,
     RecordChange,
-    StreamDefinition,
     StreamPage,
     advance_stream,
     open_stream,
 )
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Party
+from angee.models import SourceKind
 from angee.workflows.runner import runner
+from angee.workflows.steps import Retryable, Wait
 from angee.workflows.testing.drivers import decide, load_workflow, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
 from angee.workflows_integrate import steps
 from angee.workflows_integrate.steps import ConflictReview, CoverageInput, Rescan, StreamStage
 from angee.workflows_integrate.testing.models import SyncCycleTestBridge
 from tests.conftest import make_integration
+from tests.integrate_fixtures import ConnectionBridge
 from tests.stream_adapters import applied_history, failure_state
 
 
@@ -49,7 +62,7 @@ def cycle(execution, register_step, monkeypatch):
     administrator, _ = execution
     bridge = make_integration("workflow-stream", model=SyncCycleTestBridge)
     extracted, applied, rescanned, declared = [], [], [], []
-    local_hashes = {}
+    local_keys = set()
     transport = SimpleNamespace(
         identity_reads=True,
         partitions=("",),
@@ -83,9 +96,8 @@ def cycle(execution, register_step, monkeypatch):
                 external_key=key,
                 source_payload={"offset": offset},
                 source_hash=f"source-{offset}",
-                local_hash=local_hashes.get(key, ""),
                 mapped_payload={"offset": offset},
-                projection={"offset": offset} if key in local_hashes else None,
+                projection={"offset": offset} if key in local_keys else None,
             )
 
         def extract(self, stream, page_bound, *, deadline=None):
@@ -112,14 +124,15 @@ def cycle(execution, register_step, monkeypatch):
         def apply_record(self, stream, record):
             assert connection.in_atomic_block
             applied.append(record.external_key)
-            local_hashes[record.external_key] = record.source_hash
+            local_keys.add(record.external_key)
             return ApplyResult(mapped_payload=record.mapped_payload)
 
-    monkeypatch.setattr(SyncCycleTestBridge, "backend", property(Adapter), raising=False)
+    monkeypatch.setattr(SyncCycleTestBridge, "capability_impl", property(Adapter))
     for step in (StreamStage, Rescan, ConflictReview):
         register_step(step)
 
-    def start(step, value, *, config=None, mapped=False):
+    def start(step, value, *, config=None, mapped=False, subject=None):
+        subject = bridge if subject is None else subject
         node = {"step": "map", "body": {"step": step.key}} if mapped else {"step": step.key}
         if config is not None:
             node["config"] = config
@@ -127,10 +140,10 @@ def cycle(execution, register_step, monkeypatch):
             {"nodes": {"entry": node}, "results": [{"from": "entry"}]},
             key=bridge.sync_workflow_key,
             actor=administrator,
-            subject_model=bridge._meta.label,
+            subject_model=subject._meta.label,
         )
-        workflow.grant_record_access("starter", bridge.owner)
-        return WorkflowRun.objects.start(workflow, actor=bridge.owner, subject=bridge, input=value)
+        workflow.grant_record_access("starter", subject.owner)
+        return WorkflowRun.objects.start(workflow, actor=subject.owner, subject=subject, input=value)
 
     return SimpleNamespace(
         bridge=bridge,
@@ -145,7 +158,7 @@ def cycle(execution, register_step, monkeypatch):
 
 
 def step_row(run):
-    return system_queryset(StepRun).get(run=run)
+    return StepRun.system_queryset().get(run=run)
 
 
 def wake(run):
@@ -183,6 +196,108 @@ def test_stream_pages_commit_cursors_and_sum_only_finalized_counts(cycle):
     assert applied_history().count() == 2
     cycle.bridge.refresh_from_db()
     assert cycle.bridge.last_sync_items == 2
+
+
+@pytest.mark.parametrize("failure", [None, RuntimeError, WorkerLost, SoftTimeLimitExceeded])
+def test_serialized_bridge_io_releases_its_lock_after_every_exit(cycle, monkeypatch, failure):
+    monkeypatch.setattr(type(cycle.adapter), "sync_parallelism", 1)
+    closed = Mock()
+    monkeypatch.setattr(type(cycle.adapter), "close", closed)
+    ctx = SimpleNamespace(heartbeat=Mock(), begin_effect=Mock())
+
+    def operation():
+        with steps.bridge_io(ctx, cycle.bridge) as adapter:
+            assert isinstance(adapter, BridgeImpl)
+            assert bridge_is_locked(cycle.bridge)
+            if failure is not None:
+                raise failure()
+
+    if failure is None:
+        operation()
+    else:
+        with pytest.raises(Retryable if failure is RuntimeError else failure):
+            operation()
+    assert not bridge_is_locked(cycle.bridge)
+    closed.assert_called_once()
+    ctx.heartbeat.assert_called_once()
+    ctx.begin_effect.assert_called_once()
+
+
+def test_busy_bridge_wait_preserves_checkpoint_without_beginning_an_effect(cycle, monkeypatch):
+    monkeypatch.setattr(type(cycle.adapter), "sync_parallelism", 1)
+    closed = Mock()
+    monkeypatch.setattr(type(cycle.adapter), "close", closed)
+
+    @contextmanager
+    def occupied(_bridge):
+        yield False
+
+    monkeypatch.setattr(steps, "bridge_advisory_lock", occupied)
+    checkpoint = {"cycle_items": 7, "progress": "retained"}
+    ctx = SimpleNamespace(now=timezone.now(), state=checkpoint, heartbeat=Mock(), begin_effect=Mock(),
+                          wait=lambda **values: Wait(**values))
+    with steps.bridge_io(ctx, cycle.bridge) as result:
+        assert isinstance(result, Wait)
+        assert result.state is checkpoint
+        assert result.until == ctx.now + timedelta(seconds=1)
+    ctx.heartbeat.assert_not_called()
+    ctx.begin_effect.assert_not_called()
+    closed.assert_called_once()
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Separate PostgreSQL advisory-lock sessions required.")
+def test_two_partition_runs_wait_without_retry_or_effect_while_bridge_io_is_owned(cycle, monkeypatch):
+    """The execution lock covers independent runs, beyond a single map planner."""
+    bridge = make_integration("serialized-workflow", model=ConnectionBridge)
+    adapter_type = type(cycle.adapter)
+    monkeypatch.setattr(adapter_type, "sync_parallelism", 1)
+    monkeypatch.setattr(ConnectionBridge, "capability_impl", property(adapter_type))
+    cycle.transport.partitions = ("left", "right")
+    entered, release = Event(), Event()
+    extract = adapter_type.extract
+
+    def paused_extract(self, stream, page_bound, *, deadline=None):
+        if stream.partition == "left":
+            entered.set()
+            assert release.wait(10)
+        return extract(self, stream, page_bound, deadline=deadline)
+
+    monkeypatch.setattr(adapter_type, "extract", paused_extract)
+    left, right = [cycle.start(StreamStage, {"key": "records", "partition": partition}, subject=bridge)
+                   for partition in cycle.transport.partitions]
+    checkpoint = {"retained": "unchanged"}
+    with system_context(reason="test serialized bridge checkpoint"):
+        StepRun.objects.filter(run=right).update(state=checkpoint)
+
+    def execute(step_pk):
+        close_old_connections()
+        try:
+            return runner.execute(step_pk)
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(execute, step_row(left).pk)
+        assert entered.wait(10)
+        try:
+            assert pool.submit(execute, step_row(right).pk).result(timeout=10)
+            waiting = step_row(right)
+            assert (waiting.status, waiting.waiting_kind, waiting.retries, waiting.page_index) == (
+                "waiting", "time", 0, 0,
+            )
+            assert waiting.state == checkpoint
+            attempt = StepAttempt.system_queryset().get(step_run=waiting)
+            assert attempt.effect_started_at is None and attempt.error == ""
+            assert not cycle.extracted
+        finally:
+            release.set()
+        assert first.result(timeout=10)
+    assert not bridge_is_locked(bridge)
+    wake(right)
+    run_until(right)
+    left.refresh_from_db()
+    assert left.status == right.status == "succeeded"
+    assert [item[0] for item in cycle.extracted] == ["left", "right"]
 
 
 def test_a_drain_opens_an_existing_stream_against_its_current_declaration(cycle):
@@ -251,7 +366,7 @@ def test_lost_lease_resumes_after_the_committed_cursor(cycle, monkeypatch):
     # Settlement counts acknowledge outputs; the first page committed independently.
     assert run.output["counts"]["cycle_items"] == 1
     assert list(
-        system_queryset(StepAttempt).filter(step_run=row).order_by("number").values_list("result", flat=True)
+        StepAttempt.system_queryset().filter(step_run=row).order_by("number").values_list("result", flat=True)
     ) == ["timed_out", "succeeded"]
 
 
@@ -417,7 +532,7 @@ def test_conflicts_share_one_multiple_decision_and_retry_with_its_answer(cycle):
     run = cycle.start(ConflictReview, {"streams": [{"key": "records"}]})
     run_until(run)
     row = step_row(run)
-    decision = system_queryset(Decision).get(pk=row.decision_id)
+    decision = Decision.system_queryset().get(pk=row.decision_id)
     assert decision.records.with_actor(cycle.bridge.owner).count() == 2 and row.waiting_kind == "decision"
     decide(decision, actor=cycle.bridge.owner, chosen=[record.link.public_id for record in conflicts])
     run_until(run)
@@ -428,7 +543,7 @@ def test_conflicts_share_one_multiple_decision_and_retry_with_its_answer(cycle):
     StepRun.objects.retry_step(row, actor=cycle.bridge.owner)
     run_until(run)
     assert run.status == "succeeded" and run.output["failure_ids"] == []
-    assert system_queryset(Decision).count() == 1
+    assert Decision.system_queryset().count() == 1
 
 
 def test_unresolved_conflict_fails_without_asking_another_question(cycle):
@@ -437,10 +552,10 @@ def test_unresolved_conflict_fails_without_asking_another_question(cycle):
     conflict(cycle, stream, 0)
     run = cycle.start(ConflictReview, {"streams": [{"key": "records"}]})
     run_until(run)
-    decision = system_queryset(Decision).get(pk=step_row(run).decision_id)
+    decision = Decision.system_queryset().get(pk=step_row(run).decision_id)
     decide(decision, actor=cycle.bridge.owner, chosen=[decision.proposal["alternatives"][0]["key"]])
     run_until(run)
-    assert run.status == "failed" and system_queryset(Decision).count() == 1
+    assert run.status == "failed" and Decision.system_queryset().count() == 1
     assert len(SyncStream.objects.with_actor(cycle.bridge.owner).get(pk=stream.pk).sync_failures(open_only=True)) == 1
 
 
@@ -457,7 +572,7 @@ def test_sync_cycles_refuse_a_stream_that_writes_back(cycle, step):
 
     assert run.status == "failed"
     assert not cycle.extracted and not cycle.rescanned
-    failure = system_queryset(StepAttempt).filter(step_run=step_row(run)).latest("number")
+    failure = StepAttempt.system_queryset().filter(step_run=step_row(run)).latest("number")
     assert "Workflow sync cycles pull only" in failure.error
 
 
@@ -489,7 +604,7 @@ def test_sync_steps_stop_stalled_pages_and_repeated_baseline_resets(cycle, step,
     assert len(cycle.extracted) == 2
     row = step_row(run)
     assert row.attempt == 2 and row.page_index == 1
-    failure = system_queryset(StepAttempt).get(step_run=row, number=2)
+    failure = StepAttempt.system_queryset().get(step_run=row, number=2)
     assert ("fresh baseline" if fault == "reset" else "repeated a page") in failure.error
     assert "cursor" not in row.state
     cycle.bridge.refresh_from_db()
@@ -507,7 +622,6 @@ def test_same_cursor_with_changed_replica_hashes_makes_progress(cycle, step):
                     "record",
                     {},
                     "second",
-                    local_hash="first",
                     mapped_payload={"value": "second"},
                     projection={"value": "first"},
                 ),

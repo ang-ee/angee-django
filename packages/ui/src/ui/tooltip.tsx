@@ -13,6 +13,9 @@ import type {
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const tooltipVariants = tv({
   slots: {
     content:
@@ -35,9 +38,6 @@ export const tooltipVariants = tv({
 });
 
 type TooltipRecipeProps = VariantProps<typeof tooltipVariants>;
-
-export type TooltipSize = NonNullable<TooltipRecipeProps["size"]>;
-export type TooltipSide = NonNullable<BaseTooltipPositionerProps["side"]>;
 export type TooltipRootProps<Payload = unknown> =
   BaseTooltipRootProps<Payload>;
 export type TooltipTriggerProps<Payload = unknown> =
@@ -54,11 +54,27 @@ export type TooltipArrowProps = BaseTooltipArrowProps & {
   className?: string;
 };
 
+/**
+ * @owner Tooltip
+ */
 export const TooltipRoot = BaseTooltip.Root;
+/**
+ * @owner Tooltip
+ */
 export const TooltipTrigger = BaseTooltip.Trigger;
+/**
+ * @owner Tooltip
+ */
 export const TooltipPortal = BaseTooltip.Portal;
+/**
+ * @kind null
+ * @reason Provider infrastructure: Tooltip context.
+ */
 export const TooltipProvider = BaseTooltip.Provider;
 
+/**
+ * @owner Tooltip
+ */
 export const TooltipPositioner = React.forwardRef<
   HTMLDivElement,
   TooltipPositionerProps
@@ -78,6 +94,9 @@ export type TooltipContentProps = BaseTooltipPopupProps &
     className?: string;
   };
 
+/**
+ * @owner Tooltip
+ */
 export const TooltipContent = React.forwardRef<
   HTMLDivElement,
   TooltipContentProps
@@ -93,8 +112,9 @@ export const TooltipContent = React.forwardRef<
 });
 TooltipContent.displayName = "TooltipContent";
 
-export const TooltipPopup = TooltipContent;
-
+/**
+ * @owner Tooltip
+ */
 export const TooltipArrow = React.forwardRef<
   HTMLDivElement,
   TooltipArrowProps
@@ -123,6 +143,9 @@ export type TooltipProps = Omit<TooltipRootProps, "children"> &
     positionerClassName?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const Tooltip = function Tooltip({
   children,
   closeDelay,

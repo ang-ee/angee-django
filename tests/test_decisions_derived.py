@@ -11,7 +11,6 @@ from rebac import (
     write_relationships,
 )
 
-from angee.base.scoping import system_queryset
 from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision, DecisionRecord
@@ -117,11 +116,11 @@ def test_source_deletion_keeps_the_decision_and_its_retained_record(concerned_qu
             Record.objects.filter(pk=record_pk).delete()
         else:
             record.with_actor(admin).delete()
-    assert not system_queryset(Record).filter(pk=record_pk).exists()
-    retained = system_queryset(DecisionRecord).get(pk=link.pk)
+    assert not Record.system_queryset().filter(pk=record_pk).exists()
+    retained = DecisionRecord.system_queryset().get(pk=link.pk)
     assert (retained.decision_id, retained.content_type_id, retained.object_id) == (
         question.pk, link.content_type_id, record_pk,
     )
     assert retained.record is None
-    assert system_queryset(Decision).get(pk=question.pk).is_open
+    assert Decision.system_queryset().get(pk=question.pk).is_open
     assert not Decision.objects.with_actor(writer).filter(pk=question.pk).exists()

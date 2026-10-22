@@ -15,6 +15,7 @@
 import type { ResourceViewPreset } from "@angee/ui/views/resource-view-model";
 export type { ResourceViewPreset } from "@angee/ui/views/resource-view-model";
 import type { I18nResources } from "@angee/refine";
+import type { QueryFilter } from "@angee/metadata";
 // The contribution contracts moved down into the binding (`@angee/ui` owns the
 // runtime registry that consumes them); composition here builds manifests
 // against them. Re-exported here so addon manifests import one composition seam.
@@ -87,6 +88,8 @@ export interface AddonRoute {
   recordModel?: string;
   /** Named shipped view selected by this collection route. */
   defaultResourceView?: string;
+  /** Initial editable filter for this collection route. */
+  defaultFilter?: QueryFilter;
   /** This collection's record route owns records whose field equals the value, or one of the values. */
   recordMatch?: RecordMatch;
 }
@@ -225,7 +228,9 @@ export interface ComposeAddonsOptions {
   canonicalModelLabel: (spelling: string) => string;
 }
 
-/** Brand an object as an addon manifest, giving one greppable declaration site. */
+/** Brand an object as an addon manifest, giving one greppable declaration site.
+ * @kind contribution
+ */
 export function defineAddon(manifest: Omit<AddonManifest, "menus"> & { menus?: readonly MenuItem[] }):
   Omit<AddonManifest, "menus"> & { menus?: readonly MenuItem[] };
 export function defineAddon(manifest: Omit<AddonManifest, "menus"> & { menus: MenuDeclarations }):
@@ -284,6 +289,8 @@ function assertUnclaimed(
 /**
  * Fold addon manifests into one runtime. Registry facts must be unique; ordered
  * contribution lists are merged by key and sorted by sequence.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function composeAddons(
   addons: readonly AddonManifest[],
@@ -510,4 +517,3 @@ function isRuntimeFormRegistration(value: unknown): value is RuntimeFormRegistra
     value && typeof value === "object" && "resource" in value && "Component" in value,
   );
 }
-

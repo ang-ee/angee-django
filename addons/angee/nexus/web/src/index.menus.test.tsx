@@ -4,6 +4,7 @@ import { captureChrome, TEST_SCHEMAS } from "@angee/app/testing";
 import { testDataResource } from "@angee/metadata/testing";
 import messaging from "@angee/messaging";
 import parties from "@angee/parties";
+import timeline from "@angee/timeline";
 import { MenuTree } from "@angee/ui/chrome/menu-tree";
 import { describe, expect, test } from "vitest";
 
@@ -24,7 +25,7 @@ const upstream = [
   defineBaseAddon({ id: "posts", menus: [{ id: "posts", label: "Posts", route: "posts.feeds" }],
     routes: [{ name: "posts.feeds", path: "/posts/feeds", layout: "console" }] }),
 ];
-const addons = [...upstream, { ...nexus, dependsOn: upstream.map(({ id }) => id) }];
+const addons = [timeline, ...upstream, { ...nexus, dependsOn: ["timeline", ...upstream.map(({ id }) => id)] }];
 const ownChildren = ["nexus.inbox", "nexus.graph", "nexus.ties", "nexus.cadences"];
 const included = ["messaging", "parties", "spaces", "posts"];
 const composed = composeAddons(addons, { canonicalModelLabel: (label) => label });
@@ -81,9 +82,9 @@ describe("Nexus menu aggregation", () => {
   });
 
   test.each([undefined, "nexus"])("composes the live rail, selected app's top bar and Settings (?app=%s)", async (app) => {
-    // Compose the real Messaging and Parties declarations; the leaf contracts
+    // Compose the real Timeline, Messaging and Parties declarations; the leaf contracts
     // above stand in for Spaces and Posts without importing undeclared web deps.
-    const owners = [parties, { ...messaging, dependsOn: ["parties"] }, ...upstream.slice(2)];
+    const owners = [timeline, parties, { ...messaging, dependsOn: ["parties", "timeline"] }, ...upstream.slice(2)];
     const liveAddons = [...owners, { ...nexus, dependsOn: owners.map(({ id }) => id) }];
     const models = [...new Set(liveAddons.flatMap((addon) => (addon.routes ?? []).flatMap((route) =>
       route.resource ? [route.resource] : [])))];

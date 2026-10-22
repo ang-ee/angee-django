@@ -4,9 +4,13 @@ import { cn } from "../lib/cn";
 import { useRender, type UseRenderRenderProp } from "../lib/slot";
 import { tv, type VariantProps } from "../lib/variants";
 import { textRoleVariants } from "./text";
+import { interactiveSurface } from "./widget-control";
 
+/**
+ * @kind token
+ */
 export const cardVariants = tv({
-  base: "rounded-6 border bg-sheet text-fg shadow-xs transition-colors",
+  base: "rounded-8 border bg-sheet text-fg shadow-xs transition-colors",
   variants: {
     variant: {
       default: "border-border-subtle",
@@ -20,8 +24,12 @@ export const cardVariants = tv({
       lg: "text-sm",
     },
     interactive: {
-      true:
-        "w-full cursor-pointer text-left outline-none hover:border-border-strong hover:shadow-sm focus-visible:focus-ring",
+      true: cn(interactiveSurface({ focus: "visible", disabled: "pseudo" }),
+        "w-full cursor-pointer text-left hover:border-border-strong hover:shadow-sm"),
+      false: "",
+    },
+    selected: {
+      true: "selected border-brand hover:selected hover:border-brand",
       false: "",
     },
   },
@@ -29,9 +37,13 @@ export const cardVariants = tv({
     variant: "default",
     density: "md",
     interactive: false,
+    selected: false,
   },
 });
 
+/**
+ * @kind token
+ */
 export const cardHeaderVariants = tv({
   base: "flex flex-col gap-1.5",
   variants: {
@@ -46,6 +58,9 @@ export const cardHeaderVariants = tv({
   },
 });
 
+/**
+ * @kind token
+ */
 export const cardTitleVariants = tv({
   base: "text-sm font-semibold leading-tight text-fg",
   variants: {
@@ -60,6 +75,9 @@ export const cardTitleVariants = tv({
   },
 });
 
+/**
+ * @kind token
+ */
 export const cardDescriptionVariants = tv({
   base: cn(textRoleVariants({ role: "meta" }), "leading-snug"),
   variants: {
@@ -74,6 +92,9 @@ export const cardDescriptionVariants = tv({
   },
 });
 
+/**
+ * @kind token
+ */
 export const cardContentVariants = tv({
   base: "text-fg",
   variants: {
@@ -88,6 +109,9 @@ export const cardContentVariants = tv({
   },
 });
 
+/**
+ * @kind token
+ */
 export const cardFooterVariants = tv({
   base: "flex items-center gap-2",
   variants: {
@@ -106,10 +130,10 @@ type CardRecipeProps = VariantProps<typeof cardVariants>;
 type CardState = {
   interactive: boolean;
   placeholder: boolean;
+  selected: boolean;
 };
 
 export type CardDensity = NonNullable<CardRecipeProps["density"]>;
-export type CardVariant = NonNullable<CardRecipeProps["variant"]>;
 
 export type CardProps = Omit<
   React.ButtonHTMLAttributes<HTMLButtonElement>,
@@ -122,17 +146,18 @@ export type CardProps = Omit<
     render?: UseRenderRenderProp<CardState>;
   };
 
+/**
+ * @kind token
+ */
 export const CARD_BASE = cardVariants({
   density: "md",
   interactive: false,
   variant: "default",
 });
-export const CARD_INTERACTIVE_BASE = cardVariants({
-  density: "md",
-  interactive: true,
-  variant: "default",
-});
 
+/**
+ * @kind primitive
+ */
 export const Card = React.forwardRef<HTMLElement, CardProps>(function Card(
   {
     asChild = false,
@@ -142,6 +167,7 @@ export const Card = React.forwardRef<HTMLElement, CardProps>(function Card(
     interactive = false,
     placeholder = false,
     render,
+    selected = false,
     type,
     variant = "default",
     ...props
@@ -158,6 +184,7 @@ export const Card = React.forwardRef<HTMLElement, CardProps>(function Card(
       cardVariants({
         density,
         interactive,
+        selected,
         variant: resolvedVariant,
       }),
       className,
@@ -175,6 +202,7 @@ export const Card = React.forwardRef<HTMLElement, CardProps>(function Card(
     render: asChild ? child : render,
     state: {
       interactive,
+      selected,
       placeholder: resolvedVariant === "placeholder",
     },
     props: renderProps,
@@ -192,6 +220,9 @@ type CardPartProps<TElement extends HTMLElement> = Omit<
 };
 
 export type CardHeaderProps = CardPartProps<HTMLDivElement>;
+/**
+ * @owner Card
+ */
 export const CardHeader = React.forwardRef<HTMLDivElement, CardHeaderProps>(
   function CardHeader({ className, density = "md", ...props }, ref) {
     return (
@@ -206,6 +237,9 @@ export const CardHeader = React.forwardRef<HTMLDivElement, CardHeaderProps>(
 CardHeader.displayName = "CardHeader";
 
 export type CardTitleProps = CardPartProps<HTMLHeadingElement>;
+/**
+ * @owner Card
+ */
 export const CardTitle = React.forwardRef<HTMLHeadingElement, CardTitleProps>(
   function CardTitle({ className, density = "md", ...props }, ref) {
     return (
@@ -220,6 +254,9 @@ export const CardTitle = React.forwardRef<HTMLHeadingElement, CardTitleProps>(
 CardTitle.displayName = "CardTitle";
 
 export type CardDescriptionProps = CardPartProps<HTMLParagraphElement>;
+/**
+ * @owner Card
+ */
 export const CardDescription = React.forwardRef<
   HTMLParagraphElement,
   CardDescriptionProps
@@ -235,6 +272,9 @@ export const CardDescription = React.forwardRef<
 CardDescription.displayName = "CardDescription";
 
 export type CardContentProps = CardPartProps<HTMLDivElement>;
+/**
+ * @owner Card
+ */
 export const CardContent = React.forwardRef<HTMLDivElement, CardContentProps>(
   function CardContent({ className, density = "md", ...props }, ref) {
     return (
@@ -249,6 +289,9 @@ export const CardContent = React.forwardRef<HTMLDivElement, CardContentProps>(
 CardContent.displayName = "CardContent";
 
 export type CardFooterProps = CardPartProps<HTMLDivElement>;
+/**
+ * @owner Card
+ */
 export const CardFooter = React.forwardRef<HTMLDivElement, CardFooterProps>(
   function CardFooter({ className, density = "md", ...props }, ref) {
     return (

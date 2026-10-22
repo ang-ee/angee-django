@@ -30,14 +30,15 @@ from strawberry.types import get_object_definition
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
-from angee.base.refs import canonical_link_path
-from angee.base.scoping import read_scoped_queryset
 from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
+from angee.refs import canonical_link_path
+from angee.tags.models import Tag as TagModel
 
 Tag = apps.get_model("tags", "Tag")
 TagAssignment = apps.get_model("tags", "TagAssignment")
+
 
 @strawberry_django.type(Tag)
 class TagType(AngeeNode):
@@ -45,6 +46,7 @@ class TagType(AngeeNode):
 
     name: auto
     color: auto
+    attention: auto
     is_archived: auto
     created_at: auto
     updated_at: auto
@@ -86,8 +88,15 @@ def _tag_edges_prefetch(info: strawberry.Info) -> models.Prefetch:
 
     actor = current_actor()
     field = cast(StrawberryDjangoField, info._field)
-    tags = optimize(run_type_get_queryset(read_scoped_queryset(Tag, actor), field.django_type, info), info)
-    edges = read_scoped_queryset(TagAssignment, actor).by_tag().prefetch_related(
+    tags: models.QuerySet[TagModel] = (
+        Tag._base_manager.none() if actor is None else Tag.objects.with_actor(actor).with_action("read")
+    )
+    tags = optimize(run_type_get_queryset(tags, field.django_type, info), info)
+    edges = (
+        TagAssignment._base_manager.none()
+        if actor is None
+        else TagAssignment.objects.with_actor(actor).with_action("read").by_tag()
+    ).prefetch_related(
         models.Prefetch("tag", queryset=tags),
     )
     links = canonical_link_path(field.origin_django_type.model) if field.origin_django_type else ()
@@ -152,37 +161,44 @@ def tags_input_extensions(resource: Any) -> list[type]:
         if surface is None or not accepted:
             continue
         name = get_object_definition(surface, strict=True).name
-        donors.append(strawberry.input(name=name, extend=True)(type(f"{name}_tags", (TagsInput,), {
-            "__doc__": f"The ``tags`` a ``{name}`` write saves with its row.",
-        })))
+        donors.append(
+            strawberry.input(name=name, extend=True)(
+                type(
+                    f"{name}_tags",
+                    (TagsInput,),
+                    {
+                        "__doc__": f"The ``tags`` a ``{name}`` write saves with its row.",
+                    },
+                )
+            )
+        )
     return donors
 
 
 _TAG_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(Tag, "hasura_readable_fields")
 _TAG_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(Tag, "hasura_insertable_fields")
 _TAG_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Tag, "hasura_updatable_fields")
-_TAG_EXTENSION_WRITE_FIELDS = tuple(
-    dict.fromkeys((*_TAG_EXTENSION_INSERT_FIELDS, *_TAG_EXTENSION_UPDATE_FIELDS))
-)
+_TAG_EXTENSION_WRITE_FIELDS = tuple(dict.fromkeys((*_TAG_EXTENSION_INSERT_FIELDS, *_TAG_EXTENSION_UPDATE_FIELDS)))
 _TAG_EXTENSION_PUBLIC_ID_FIELDS = tuple(
-    name
-    for name in _TAG_EXTENSION_WRITE_FIELDS
-    if Tag._meta.get_field(name).is_relation
+    name for name in _TAG_EXTENSION_WRITE_FIELDS if Tag._meta.get_field(name).is_relation
 )
 
 _TAG_FILTERABLE_FIELDS = (
     "id",
     "name",
+    "attention",
     "is_archived",
     *_TAG_EXTENSION_READ_FIELDS,
 )
 _TAG_GROUPABLE_FIELDS = (
+    "attention",
     "is_archived",
     *_TAG_EXTENSION_READ_FIELDS,
 )
 _TAG_BASE_WRITABLE_FIELDS = (
     "name",
     "color",
+    "attention",
     "is_archived",
 )
 

@@ -20,15 +20,21 @@ from rebac import PermissionDenied, RelationshipTuple, actor_context, system_con
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
-from angee.base import merge as merge_module
-from angee.base.changesets import changeset
-from angee.base.identity import public_id_of
-from angee.base.merge import EdgeReference, ForeignKeyReference, fold_records, references
-from angee.base.mixins import MergeContractMixin, SourceKind
-from angee.base.refs import MergePolicy, RecordRefMixin
+from angee.changesets import changeset
 from angee.graphql import records
+from angee.identity import public_id_of
 from angee.messaging.testing.models import Directory, Participant, Party, Reaction
+from angee.models import (
+    EdgeReference,
+    ForeignKeyReference,
+    MergeContractMixin,
+    SourceKind,
+    fold_records,
+    references,
+)
+from angee.models import merge as merge_module
 from angee.projects.testing.models import Link, Project, Queue, Task
+from angee.refs import MergePolicy, RecordRefMixin
 from angee.resources.testing.models import Resource
 from angee.spaces.testing.models import Group
 from angee.tags import schema as tags_schema
@@ -41,6 +47,16 @@ from tests.scopedemo.models import ProjectionDoc
 from tests.workflow_steps import document
 
 pytestmark = pytest.mark.usefixtures("composed_permissions")
+
+
+@pytest.fixture(autouse=True)
+def clear_reference_cache() -> Any:
+    """Keep class-policy monkeypatches isolated from the installed-reference cache."""
+
+    references.cache_clear()
+    yield
+    references.cache_clear()
+
 
 _MERGE = """mutation Merge($type: String!, $id: ID!, $records: [ID!]!) {
   merge_records(target_type: $type, target_id: $id, records: $records, confirm: true) {
@@ -221,7 +237,7 @@ def test_a_survivor_referring_to_a_merged_record_refuses_before_anything_moves()
         child = ProjectionDoc.objects.create(title="child", parent=merged)
     retired: list[Any] = []
     with pytest.raises(ValidationError, match="refers to"):
-        fold_records(survivor, [merged], carry=lambda: None, retire=retired.append)
+        fold_records(survivor, [merged], carry=lambda: None, retire=retired.append, blockers=())
     assert retired == []
     with system_context(reason="merge test read"):
         assert set(ProjectionDoc._base_manager.filter(parent=merged).values_list("pk", flat=True)) == {

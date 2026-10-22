@@ -1,10 +1,6 @@
 import * as React from "react";
 import { holdsPermission, type Row } from "@angee/metadata";
-import {
-  ActionFormDialog, Avatar, Button, Chip, EmptyState, ErrorBanner, MessageRow, RecordActionBar,
-  SectionHeading, Tag, actionOutcomeSubmitResult, avatarInitials, useActionForm, useRuntimeViewAs,
-  type RecordActionDescriptor, type ResourceListProps,
-} from "@angee/ui";
+import { ActionFormDialog, Avatar, Button, Card, CardContent, Chip, Collapsible, EmptyState, ErrorBanner, MessageRow, RecordActionBar, SectionHeading, actionOutcomeSubmitResult, avatarInitials, useActionForm, useRuntimeViewAs, type RecordActionDescriptor, type ResourceListProps } from "@angee/ui";
 
 import { RecordThreadConversation, type RecordThreadConversationProps } from "./RecordThreadConversation";
 import { useMessagingT } from "./i18n";
@@ -82,13 +78,11 @@ export function RecordThreadStream({ heading, source, submitKey }: RecordThreadS
       hint={heading.hint} audience={heading.audience} />
     {source.kind === "record" ? <RecordThreadConversation modelLabel={source.modelLabel}
       recordId={source.recordId} submitKey={submitKey} stream={source.conversation ?? {}} /> : <>
-      {source.items.length > 0 ? <div className="rounded-8 border border-border-subtle bg-sheet p-4">
-        <div className="space-y-6">
-          {source.items.map((item) => <ChildStreamItem key={item.id} item={item}
-            modelLabel={source.modelLabel} submitKey={source.submitKey ?? submitKey} />)}
-        </div>
-      </div> : <EmptyState icon="comments" title={source.empty?.title ?? t("stream.empty")}
-        description={source.empty?.description ?? t("stream.emptyHint")} className="min-h-32 p-4" />}
+      {source.items.length > 0 ? <Card><CardContent className="space-y-6">
+        {source.items.map((item) => <ChildStreamItem key={item.id} item={item}
+          modelLabel={source.modelLabel} submitKey={source.submitKey ?? submitKey} />)}
+      </CardContent></Card> : <EmptyState icon="comments" title={source.empty?.title ?? t("stream.empty")}
+        description={source.empty?.description ?? t("stream.emptyHint")} />}
       {canCreate && create ? inlineCreate && composer
         ? <InlineCreateComposer key={create.id} action={create} composer={composer}
             submitKey={source.submitKey ?? submitKey} onCreated={source.onCreated} />
@@ -103,7 +97,6 @@ function ChildStreamItem({ item, modelLabel, submitKey }: {
   submitKey?: RecordThreadConversationProps["submitKey"];
 }): React.ReactElement {
   const t = useMessagingT();
-  const [expanded, setExpanded] = React.useState(false);
   const author = item.isSelf ? t("message.you") : item.authorLabel || t("message.author");
   const audience = item.audienceLabel || t("composer.audience");
   return <div className="space-y-3">
@@ -111,26 +104,28 @@ function ChildStreamItem({ item, modelLabel, submitKey }: {
       <MessageRow avatar={<Avatar size="sm" initials={avatarInitials(author)} alt={author} />}
         author={author} timestamp={item.createdAt} channel={<>
           <Chip tone="neutral" size="md">{audience}</Chip>
-          {item.kindLabel ? <Tag tone="info" density="micro">{item.kindLabel}</Tag> : null}
+          {item.kindLabel ? <Chip tone="info">{item.kindLabel}</Chip> : null}
         </>}>
         <div className="font-medium">{item.title}</div>
         {item.body ? <div>{item.body}</div> : null}
       </MessageRow>
     </ul>
-    {item.thread !== false ? <>
+    {item.thread !== false ? <Collapsible.Root>
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="ghost" size="sm" aria-expanded={expanded}
-          onClick={() => setExpanded((open) => !open)}>
-          {t(expanded ? "stream.hideThread" : "stream.showThread")}
-        </Button>
+        <Collapsible.Trigger render={<Button type="button" variant="ghost" size="sm" />}>
+          <Collapsible.Icon />
+          {t("stream.showThread")}
+        </Collapsible.Trigger>
         {item.actions?.length ? <RecordActionBar record={item.record ?? null} actions={item.actions}
           reload={item.onActed} /> : null}
       </div>
-      {expanded ? <RecordThreadConversation modelLabel={modelLabel} recordId={item.id}
-        submitKey={submitKey} stream={{ audience: item.audienceLabel ?? undefined,
-          prompt: item.prompt, submitLabel: item.submitLabel, readerLine: item.readerLine,
-          verbs: item.verbs, messageTypes: ["comment"] }} /> : null}
-    </> : null}
+      <Collapsible.Panel>
+        <RecordThreadConversation modelLabel={modelLabel} recordId={item.id}
+          submitKey={submitKey} stream={{ audience: item.audienceLabel ?? undefined,
+            prompt: item.prompt, submitLabel: item.submitLabel, readerLine: item.readerLine,
+            verbs: item.verbs, messageTypes: ["comment"] }} />
+      </Collapsible.Panel>
+    </Collapsible.Root> : null}
   </div>;
 }
 
@@ -178,8 +173,5 @@ function InlineCreateComposer({ action, composer, submitKey = "enter", onCreated
     submitKey={submitKey} prompt={composer.prompt} submitLabel={action.label}
     readerLine={composer.readerLine ?? (composer.audience ? undefined : t("composer.audience"))}
     audience={composer.audience}
-    after={<>
-      {form.fieldErrors[composer.bodyArg]?.map((message) => <p key={message} className="text-xs text-danger-text">{message}</p>)}
-      <ErrorBanner description={form.formError} />
-    </>} />;
+    after={<ErrorBanner description={[...(form.fieldErrors[composer.bodyArg] ?? []), form.formError].filter(Boolean).join(" ") || null} />} />;
 }

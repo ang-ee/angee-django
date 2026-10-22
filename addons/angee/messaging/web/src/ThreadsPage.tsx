@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Action, Column, ResourceList, Facet, Field, Form, Group, List, rowValueAtPath, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
+import { Action, Column, Facet, Field, Form, Group, List, PaneToolbarHost, ResourceList, rowValueAtPath, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
 
 import { ThreadTranscript } from "./ThreadTranscript";
 import { useMessagingT } from "./i18n";
@@ -19,7 +19,8 @@ function threadRecordTabs(
       // conversation (newest at the bottom, scrolled to the latest turn on open). A
       // mail-like aside placement would compose the same view with `order="history"`.
       label: t("threads.tabConversation"),
-      render: (context) => <ThreadTranscript threadId={context.recordId} order="conversation" />,
+      // The transcript's controls publish into this tab's own pane toolbar row.
+      render: (context) => <PaneToolbarHost><ThreadTranscript threadId={context.recordId} order="conversation" /></PaneToolbarHost>,
     },
   ];
 }
@@ -41,13 +42,15 @@ export function ThreadsPage(): React.ReactElement {
           header={t("threads.title")}
           render={(row) => threadTitle(row, t("threads.noTitle"))}
         />
-        <Column field="channel.kind" header={t("threads.channelType")} />
+        <Column field="channel" header={t("threads.channel")} />
         <Column field="modality" />
         <Column field="message_count" header={t("threads.messageCount")} />
         <Column field="last_message_at" />
         <Column field="tags" hiddenByDefault />
       </List>
-      <Form resource={MODEL} title={({ record }) => threadTitle(record, t("threads.noTitle"))}>
+      {/* The subject is the title fragment's text, so the record read selects it for the header. */}
+      <Form resource={MODEL} eyebrow={t("threads.eyebrow")} returning={["title.text"]}
+        title={({ record }) => threadTitle(record, t("threads.noTitle"))}>
         {/* The title is a pointer at a shared content-addressed fragment, derived
             by the ingest (normalized subject / record label) — not directly editable. */}
         <Group label={t("threads.groupAbout")} columns={2}>

@@ -75,6 +75,9 @@ function usePublishedController(
   React.useEffect(() => () => publish?.(null), [publish]);
 }
 
+/**
+ * @kind page
+ */
 export function Workbench({
   primary,
   children,

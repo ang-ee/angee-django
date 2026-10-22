@@ -7,7 +7,9 @@ import { Button } from "../ui/button";
 import { ErrorBanner } from "../fragments/ErrorBanner";
 import { RelationField } from "../widgets/RelationField";
 
-/** Compose into `shell#notices` after the app supplies preview identity. */
+/** Compose into `shell#notices` after the app supplies preview identity.
+ * @kind fragment
+ */
 export function ViewAsBanner() {
   const preview = useRuntimeViewAs();
   const t = useUiT();
@@ -31,7 +33,9 @@ export function ViewAsBanner() {
   </>;
 }
 
-/** Optional record scope intersects the identity owner's authorized people. */
+/** Optional record scope intersects the identity owner's authorized people.
+ * @kind contribution
+ */
 export function ViewAsPicker({ userIds, label }: { userIds?: readonly string[]; label?: string } = {}) {
   const preview = useRuntimeViewAs();
   const t = useUiT();

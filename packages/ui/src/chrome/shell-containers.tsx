@@ -6,6 +6,7 @@ import { ViewAsBanner, ViewAsPicker } from "./ViewAs";
  * The console shell's containers: notices, user-menu items and the docked
  * drawers per edge. The framework's own children (the view-as notice and
  * picker, the developer-mode switch) are every addon's to adjust.
+ * @kind contribution
  */
 export const SHELL_CONTAINERS: readonly CoreContainer[] = [
   // The top bar's app menus and the breadcrumb strip under it (G-20); a layer hides one per route.

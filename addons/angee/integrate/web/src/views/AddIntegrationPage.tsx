@@ -2,11 +2,16 @@ import { useAuthoredQuery } from "@angee/refine";
 import { rowPublicId } from "@angee/metadata";
 import {
   Button,
-  EmptyState,
   ErrorBanner,
   errorMessage,
   Glyph,
+  InlineEmpty,
   LoadingPanel,
+  Page,
+  PageBody,
+  PageHeader,
+  PaneRow,
+  PaneRows,
   RegisteredFormView,
   useResourceRecordHrefLookup,
   useResourceRoute,
@@ -40,34 +45,47 @@ export function AddIntegrationPage(): React.ReactElement {
     const base = routeHref("integrate.add");
     void navigate({ href: resource ? `${base}?capability=${encodeURIComponent(resource)}` : base });
   };
+  const back = (
+    <Button variant="link" size="sm" onClick={() => selectCapability()}>
+      <Glyph decorative name="chevron-left" />
+      {t("integrations.add.back")}
+    </Button>
+  );
 
+  // The chooser: one pane row per capability the viewer may add.
   if (!selected) {
     return (
-      <EmptyState
-        fill
-        icon="connect"
-        title={t("integrations.add.title")}
-        description={t("integrations.add.description")}
-        actions={capabilities.length > 0 ? capabilities.map((capability) => (
-          <Button key={capability.resource} onClick={() => selectCapability(capability.resource)}>
-            {capability.icon ? <Glyph decorative name={capability.icon} /> : null}
-            {capability.label}
-          </Button>
-        )) : <span>{t("integrations.add.none")}</span>}
-      />
+      <Page>
+        <PageHeader title={t("integrations.add.title")} description={t("integrations.add.description")} />
+        <PageBody>
+          {capabilities.length > 0 ? (
+            <PaneRows>
+              {capabilities.map((capability) => (
+                <li key={capability.resource}>
+                  <PaneRow
+                    icon={capability.icon ?? "connect"}
+                    title={capability.label}
+                    verb={t("integrations.add.choose")}
+                    onOpen={() => selectCapability(capability.resource)}
+                  />
+                </li>
+              ))}
+            </PaneRows>
+          ) : <InlineEmpty icon="connect" label={t("integrations.add.none")} />}
+        </PageBody>
+      </Page>
     );
   }
 
+  // A connect-mode capability continues on its own collection page.
   if (selected.create_mode === "CONNECT") {
     return (
-      <EmptyState
-        fill
-        icon={selected.icon ?? "connect"}
-        title={selected.label}
-        description={t("integrations.add.connectDescription")}
-        actions={(
-          <>
-            <Button onClick={() => selectCapability()}>{t("integrations.add.back")}</Button>
+      <Page>
+        <PageHeader
+          eyebrow={back}
+          title={selected.label}
+          description={t("integrations.add.connectDescription")}
+          actions={(
             <Button
               variant="primary"
               disabled={!connectRoute}
@@ -75,9 +93,9 @@ export function AddIntegrationPage(): React.ReactElement {
             >
               {t("integrations.add.continue")}
             </Button>
-          </>
-        )}
-      />
+          )}
+        />
+      </Page>
     );
   }
 
@@ -85,7 +103,7 @@ export function AddIntegrationPage(): React.ReactElement {
     <RegisteredFormView
       resource={selected.resource}
       id={null}
-      toolbarStart={<Button onClick={() => selectCapability()}>{t("integrations.add.back")}</Button>}
+      toolbarStart={back}
       onSaved={(row) => {
         const id = rowPublicId(row);
         const href = id == null ? undefined : recordHref(selected.resource, id);

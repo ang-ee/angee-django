@@ -1,14 +1,12 @@
 import { type ReactElement } from "react";
 
-import { Badge, Chip, ListView, ContainerOutlet, useStatusTone, textRoleVariants, useRouteHref, useContainer, type CardActionContext, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
+import { Chip, ListView, ContainerOutlet, StatusBadge, useRouteHref, useContainer, type CardActionContext, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
 import { addonEnumLabel, usePlatformT } from "../i18n";
 import {
   AddonCard,
   AddonCardActions,
   ADDON_MODEL,
-  SOURCE_TONES,
-  STATE_TONES,
   type AddonResourceRow,
 } from "./AddonCard";
 
@@ -16,45 +14,30 @@ import {
 // alongside column fields through the shared resource query.
 const CARD_FIELDS = ["label", "description", "keywords", "forced", "pending"] as const;
 
-function columns(t: (key: string) => string, statusTone: ReturnType<typeof useStatusTone>): readonly ListColumn<AddonResourceRow>[] {
+function columns(t: (key: string) => string): readonly ListColumn<AddonResourceRow>[] {
   return [
-    {
-      field: "name",
-      header: t("col.addon"),
-      render: (row) => (
-        <span className="flex min-w-0 flex-col">
-          <span className="truncate font-medium text-fg">{row.label}</span>
-          <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.id}</span>
-        </span>
-      ),
-    },
+    // The label with its id beneath: the shared two-line cell.
+    { field: "label", header: t("col.addon"), subline: "name" },
     {
       field: "category",
       header: t("col.category"),
-      render: (row) =>
-        row.category ? <Chip tone="muted" size="sm">{row.category}</Chip> : <span className="text-fg-muted">—</span>,
+      render: (row) => row.category ? <Chip tone="muted" size="sm">{row.category}</Chip> : null,
     },
     {
       field: "kind",
       header: t("col.kind"),
       // Route every enum cell through i18n so list and card read the same labels.
-      render: (row) => (
-        <Badge tone={row.kind === "CONSUMER" ? "brand" : "neutral"}>{addonEnumLabel(t, "kind", row.kind)}</Badge>
-      ),
+      render: (row) => <Chip tone="neutral">{addonEnumLabel(t, "kind", row.kind)}</Chip>,
     },
     {
       field: "source",
       header: t("col.source"),
-      render: (row) => (
-        <Badge tone={statusTone(row.source, SOURCE_TONES, { unknownTone: "neutral" })}>
-          {addonEnumLabel(t, "source", row.source)}
-        </Badge>
-      ),
+      render: (row) => <StatusBadge value={row.source}>{addonEnumLabel(t, "source", row.source)}</StatusBadge>,
     },
     {
       field: "state",
       header: t("col.state"),
-      render: (row) => <Badge tone={statusTone(row.state, STATE_TONES)}>{addonEnumLabel(t, "state", row.state)}</Badge>,
+      render: (row) => <StatusBadge value={row.state}>{addonEnumLabel(t, "state", row.state)}</StatusBadge>,
     },
     { field: "model_count", header: t("col.models") },
     { field: "field_count", header: t("col.fields") },
@@ -79,14 +62,13 @@ function groupOptions(t: (key: string) => string): readonly ResourceToolbarGroup
  * Install/Disable actions; the toolbar grows and rescans the VCS marketplace.
  */
 export function AddonsPage(): ReactElement {
-  const statusTone = useStatusTone();
   const t = usePlatformT();
   const routeHref = useRouteHref();
   const toolbarEntries = useContainer("platform.addons#toolbar");
   return (
     <ListView<AddonResourceRow>
       resource={ADDON_MODEL}
-      columns={columns(t, statusTone)}
+      columns={columns(t)}
       fields={CARD_FIELDS}
       textFilterField="name"
       order={{ name: "ASC" }}

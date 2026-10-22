@@ -1,8 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, Glyph, Input, Label, PublicLayout } from "@angee/ui";
+import { Button, FieldLabel, FieldRoot, Glyph, Input, PublicLayout } from "@angee/ui";
 
 const meta = {
-  title: "Layout/PublicLayout",
+  title: "Layouts/PublicLayout",
   component: PublicLayout,
   parameters: {
     layout: "fullscreen",
@@ -40,14 +40,14 @@ export const SignIn: Story = {
         footer="Angee framework preview"
       >
         <form className="grid gap-4">
-          <div>
-            <Label htmlFor="email">Email</Label>
+          <FieldRoot>
+            <FieldLabel htmlFor="email">Email</FieldLabel>
             <Input id="email" value="ada@example.com" readOnly />
-          </div>
-          <div>
-            <Label htmlFor="password">Password</Label>
+          </FieldRoot>
+          <FieldRoot>
+            <FieldLabel htmlFor="password">Password</FieldLabel>
             <Input id="password" type="password" value="password" readOnly />
-          </div>
+          </FieldRoot>
           <Button type="button" variant="primary" className="w-full">
             Sign in
           </Button>

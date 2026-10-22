@@ -3,6 +3,9 @@ import * as React from "react";
 import { barVariants } from "../layouts/bar";
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const pageFooterVariants = tv({
   // The bar recipe owns the footer's chrome shell; only the per-density padding
   // and the sticky knob below stay footer-specific.
@@ -36,6 +39,10 @@ export type PageFooterProps = React.HTMLAttributes<HTMLElement> &
     className?: string;
   };
 
+/**
+ * @kind region
+ * @region page-footer
+ */
 export const PageFooter = React.forwardRef<HTMLElement, PageFooterProps>(
   function PageFooter(
     { className, density = "comfortable", sticky = false, ...props },

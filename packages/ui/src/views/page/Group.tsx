@@ -1,11 +1,14 @@
 import type { ReactNode } from "react";
 
+import type { LabelKey } from "../../lib/labels";
+
 import type { ActionDescriptor } from "./Action";
 import type { FieldDescriptor } from "./Field";
 import { PAGE_ELEMENT_SLOT } from "./types";
 
 export interface GroupProps {
-  label?: ReactNode;
+  /** The section title: rendered content, or an addon message key the form resolves. */
+  label?: ReactNode | LabelKey;
   /** One sentence beside the label saying what the group holds or where it comes from. */
   hint?: ReactNode;
   /** Who reads this group, shown at the heading's right. */
@@ -56,6 +59,9 @@ function GroupMarker(_props: GroupProps): null {
   return null;
 }
 
+/**
+ * @kind contribution
+ */
 export const Group = Object.assign(GroupMarker, {
   [PAGE_ELEMENT_SLOT]: "group" as const,
 });

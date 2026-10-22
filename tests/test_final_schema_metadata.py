@@ -52,7 +52,7 @@ def test_final_schema_references_intersect_roots_types_and_capabilities() -> Non
           resource_query: ResourceQuery
         }
         type Mutation {
-          create_resource(object: ResourceFilter!, client_creation_key: String, reason: String): ResourceNode!
+          create_resource(object: ResourceFilter!, idempotency_key: String, reason: String): ResourceNode!
           preview_resource_delete(id: ID!): Boolean!
         }
         type Subscription { resource_changes: ResourceNode! }
@@ -141,7 +141,7 @@ def test_mutation_argument_metadata_uses_final_exposed_root_arguments() -> None:
         input ResourceInput { name: String }
         type Query { ready: Boolean! }
         type Mutation {
-          create_resource(object: ResourceInput!, client_creation_key: String): ResourceNode!
+          create_resource(object: ResourceInput!, idempotency_key: String): ResourceNode!
           update_resource(pk_columns: ID!, _set: ResourceInput!, expected_revision: Int): ResourceNode!
           save_resource(pk: ID!, patch: ResourceInput, lines: [ResourceInput!], expected_revision: Int): ResourceNode!
         }
@@ -156,10 +156,10 @@ def test_mutation_argument_metadata_uses_final_exposed_root_arguments() -> None:
         ),
         type_names=DataResourceTypeNames(node="ResourceNode"),
         capabilities=("create", "update", "save"),
-        create_argument_names=("client_creation_key", "removed_argument"),
+        create_argument_names=("idempotency_key", "removed_argument"),
         update_argument_names=("expected_revision",),
         save_argument_names=("expected_revision",),
     )
 
-    assert metadata.create_arguments == (DataMutationArgument("client_creation_key", "String"),)
+    assert metadata.create_arguments == (DataMutationArgument("idempotency_key", "String"),)
     assert metadata.update_arguments == metadata.save_arguments == (DataMutationArgument("expected_revision", "Int"),)

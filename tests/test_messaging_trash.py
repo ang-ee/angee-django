@@ -264,4 +264,7 @@ def _run(mutation: str, case: Any, user: Any, *, message: Any, **variables: Any)
 def _unread(case: Any) -> int:
     """Return the subscribed peer's unread count on the record thread."""
 
-    return ThreadFollower.objects.unread_count_for_record(case.record, user=case.peer)
+    count = ThreadFollower.objects.unread_count_for_record(case.record, user=case.peer)
+    messages = type(case.record).thread_messages_expression(case.record.pk)
+    assert messages.unread_for(case.peer).count() == count
+    return count

@@ -9,8 +9,7 @@ from django.test import TransactionTestCase
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.roles import grant as grant_role
 
-from angee.base.identity import public_id_of
-from angee.base.scoping import system_queryset
+from angee.identity import public_id_of
 from angee.jobs.enqueue import celery_app
 from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
 
@@ -60,13 +59,13 @@ class PartyWorkflowTests(TransactionTestCase):
 
     def decisions(self, run):
         """Select retained answers through the execution relationship."""
-        return list(system_queryset(Decision).filter(requesting_steps__run=run).order_by("pk"))
+        return list(Decision.system_queryset().filter(requesting_steps__run=run).order_by("pk"))
 
     def answer(self, run, key="name"):
         """Exercise the real frozen form, decision transition and workflow wakeup."""
         self.assertTrue(
             self.decisions(run),
-            list(system_queryset(StepAttempt).filter(step_run__run=run).values_list("stacktrace", flat=True)),
+            list(StepAttempt.system_queryset().filter(step_run__run=run).values_list("stacktrace", flat=True)),
         )
         result = decide(self.decisions(run)[0], actor=self.reviewer, chosen=key if isinstance(key, list) else [key])
         self.assertFalse(result.is_open)
@@ -88,7 +87,7 @@ class PartyWorkflowTests(TransactionTestCase):
                 "handle": {"statement_id": public_id_of(link), "evidence": "Confirmed by directory owner"},
             },
         )
-        traces = system_queryset(StepAttempt).filter(step_run__run=run).values_list("stacktrace", flat=True)
+        traces = StepAttempt.system_queryset().filter(step_run__run=run).values_list("stacktrace", flat=True)
         self.assertTrue(self.decisions(run), list(traces))
         decision = self.decisions(run)[0]
         self.assertEqual(decision.kind, "review-party-identity")
@@ -99,14 +98,14 @@ class PartyWorkflowTests(TransactionTestCase):
                 self.assertNotIn("record", actions)
                 self.assertTrue(all(operation == {} for operation in actions["fields"].values()))
         self.answer(run, ["name", "address", "handle"])
-        party = system_queryset(Party).get(pk=party.pk)
+        party = Party.system_queryset().get(pk=party.pk)
         self.assertEqual(
             (run.status, run.outcome, party.display_name),
             ("succeeded", "applied", "Reviewed name"),
-            list(system_queryset(StepAttempt).filter(step_run__run=run).values_list("stacktrace", flat=True)),
+            list(StepAttempt.system_queryset().filter(step_run__run=run).values_list("stacktrace", flat=True)),
         )
         self.assertEqual(party.updated_by_id, self.admin.pk)
-        address = system_queryset(Address).get(party=party)
+        address = Address.system_queryset().get(party=party)
         self.assertEqual(
             (address.street, address.label, address.created_by_id), ("17 Sample Lane", "Primary", self.admin.pk)
         )
@@ -134,7 +133,7 @@ class PartyWorkflowTests(TransactionTestCase):
             party.save(update_fields=["display_name"])
         self.answer(run, "keep")
         self.assertEqual(run.outcome, "unchanged")
-        self.assertEqual(system_queryset(Party).get(pk=party.pk).display_name, "Changed during review")
+        self.assertEqual(Party.system_queryset().get(pk=party.pk).display_name, "Changed during review")
 
     def test_apply_checks_the_identity_hash_frozen_when_asked(self):
         party = self.party()
@@ -144,8 +143,8 @@ class PartyWorkflowTests(TransactionTestCase):
             party.save(update_fields=["display_name"])
         self.answer(run, "name")
         self.assertEqual(run.status, "failed")
-        self.assertEqual(system_queryset(Party).get(pk=party.pk).display_name, "Changed during review")
-        self.assertIn("identity changed", system_queryset(StepAttempt).filter(step_run__run=run).last().error)
+        self.assertEqual(Party.system_queryset().get(pk=party.pk).display_name, "Changed during review")
+        self.assertIn("identity changed", StepAttempt.system_queryset().filter(step_run__run=run).last().error)
 
     def test_reject_and_escalate_without_identity_write(self):
         party = self.party()
@@ -154,7 +153,7 @@ class PartyWorkflowTests(TransactionTestCase):
                 run = self.run_identity(party)
                 self.answer(run, action)
                 self.assertEqual(run.outcome, outcome)
-                self.assertEqual(system_queryset(Party).get(pk=party.pk).display_name, party.display_name)
+                self.assertEqual(Party.system_queryset().get(pk=party.pk).display_name, party.display_name)
 
     def test_non_admin_self_service_uses_existing_standing_access(self):
         party = self.party()
@@ -175,8 +174,8 @@ class PartyWorkflowTests(TransactionTestCase):
         run = self.run_identity(party, actor=self.other)
         self.answer(run)
         self.assertEqual(run.status, "failed")
-        self.assertEqual(system_queryset(Party).get(pk=party.pk).display_name, party.display_name)
-        self.assertIn("PermissionDenied", system_queryset(StepAttempt).filter(step_run__run=run).last().stacktrace)
+        self.assertEqual(Party.system_queryset().get(pk=party.pk).display_name, party.display_name)
+        self.assertIn("PermissionDenied", StepAttempt.system_queryset().filter(step_run__run=run).last().stacktrace)
 
     def test_unreadable_current_evidence_is_not_disclosed_to_assignee(self):
         party = self.party()
@@ -218,7 +217,7 @@ class PartyWorkflowTests(TransactionTestCase):
         run_until(run)
         decisions = self.decisions(run)
         self.assertEqual(len(decisions), 4)
-        map_step = system_queryset(StepRun).get(run=run, node_key="review_pairs")
+        map_step = StepRun.system_queryset().get(run=run, node_key="review_pairs")
         self.assertEqual(
             list(map_step.map_rows().with_actor(self.admin).order_by("map_index").values_list("map_index", flat=True)),
             [0, 1, 2, 3],
@@ -236,8 +235,8 @@ class PartyWorkflowTests(TransactionTestCase):
             [item["outcome"] for item in run.output],
             ["merge_left", "kept_separate", "skipped", "merge_right"],
         )
-        self.assertEqual(system_queryset(Party).get(pk=pairs[0][1].pk).merged_into_id, pairs[0][0].pk)
-        self.assertEqual(system_queryset(Party).get(pk=pairs[3][0].pk).merged_into_id, pairs[3][1].pk)
+        self.assertEqual(Party.system_queryset().get(pk=pairs[0][1].pk).merged_into_id, pairs[0][0].pk)
+        self.assertEqual(Party.system_queryset().get(pk=pairs[3][0].pk).merged_into_id, pairs[3][1].pk)
         self.assertTrue(
             pairs[1][0]
             .same_as.for_pair(*pairs[1])
@@ -269,7 +268,7 @@ class PartyWorkflowTests(TransactionTestCase):
         run_until(run)
         self.assertEqual((run.status, run.outcome), ("failed", "error"))
         self.assertFalse(self.decisions(run))
-        attempt = system_queryset(StepAttempt).filter(step_run__run=run, result="failed").get()
+        attempt = StepAttempt.system_queryset().filter(step_run__run=run, result="failed").get()
         self.assertIn("declared permission", attempt.error)
         self.assertEqual(Party.objects.with_actor(self.reviewer).same_as_pairs(), [])
 
@@ -285,7 +284,7 @@ class PartyWorkflowTests(TransactionTestCase):
                     survivor.with_actor(self.reviewer).merge(records=[right.public_id])
                 decide(decision, actor=self.reviewer, chosen=["merge_left"])
                 run_until(run)
-                self.assertEqual(system_queryset(Party).get(pk=right.pk).merged_into_id, survivor.pk)
+                self.assertEqual(Party.system_queryset().get(pk=right.pk).merged_into_id, survivor.pk)
                 if same_target:
                     self.assertEqual((run.status, run.output[0]["output"]["result"]), ("succeeded", "already_merged"))
                 else:

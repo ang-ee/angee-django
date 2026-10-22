@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any, overload
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
@@ -12,15 +12,18 @@ from django.db import models
 from import_export import fields, widgets
 from rebac import GenericTarget, generic_target
 
-from angee.base.fields import ModelLabelField
-from angee.base.refs import RecordRefMixin
-from angee.base.serialization import canonical_json
+from angee.fields import ModelLabelField
+from angee.refs import RecordRefMixin
+from angee.serialization import canonical_json
+
+if TYPE_CHECKING:
+    from angee.resources.models import Resource
 
 
 class XrefWidgetMixin:
     """Carry the resource ledger model bound by ``AngeeResource``."""
 
-    ledger_model: type[models.Model] | None = None
+    ledger_model: type[Resource] | None = None
     """Concrete resource ledger model used to resolve xrefs."""
 
     addon_aliases: Mapping[str, str] | None = None
@@ -95,6 +98,8 @@ class RecordRefField(fields.Field):
         values = (target.content_type.pk, target.object_id) if target is not None else None
         for index, name in enumerate(field_names):
             field = instance._meta.get_field(name)
+            if not isinstance(field, models.Field):
+                raise ValueError(f"Record reference backing column {name!r} must be a concrete field.")
             value = values[index] if values is not None else (None if field.null else field.get_default())
             try:
                 # Field.clean owns to_python and null/default validation before assignment.
@@ -197,9 +202,27 @@ class _NativeJSONWidget(widgets.JSONWidget):
         return canonical_json(value)
 
 
+@overload
+def resolve_xref[TargetT: models.Model](
+    value: str,
+    ledger_model: type[Resource] | None,
+    addon_aliases: Mapping[str, str] | None,
+    *, model: type[TargetT],
+) -> TargetT: ...
+
+
+@overload
 def resolve_xref(
     value: str,
-    ledger_model: type[models.Model] | None,
+    ledger_model: type[Resource] | None,
+    addon_aliases: Mapping[str, str] | None,
+    *, model: None = None,
+) -> models.Model: ...
+
+
+def resolve_xref(
+    value: str,
+    ledger_model: type[Resource] | None,
     addon_aliases: Mapping[str, str] | None,
     *, model: type[models.Model] | None = None,
 ) -> models.Model:
@@ -231,17 +254,27 @@ def resolve_xref(
     return target
 
 
-def resolve_ledger_xref(handle: str) -> models.Model | None:
+@overload
+def resolve_ledger_xref[TargetT: models.Model](handle: str, *, model: type[TargetT]) -> TargetT | None: ...
+
+
+@overload
+def resolve_ledger_xref(handle: str, *, model: None = None) -> models.Model | None: ...
+
+
+def resolve_ledger_xref(handle: str, *, model: type[models.Model] | None = None) -> models.Model | None:
     """Resolve a ``<addon>.<xref>`` handle through the composed resource ledger.
 
     Delegates aliasing and resolution to ``Resource.objects.resolve``. Returns
     ``None`` for an unresolved or ambiguous handle, so optional resource hooks
-    can skip missing targets. Alias collisions remain configuration errors.
+    can skip missing targets. A supplied model uses the same target validation;
+    a wrong-model reference also returns ``None``. Alias collisions remain
+    configuration errors.
     """
 
     ledger_model = apps.get_model("resources", "Resource")
     try:
-        return ledger_model.objects.resolve(handle)
+        return ledger_model.objects.resolve(handle, model=model)
     except ValueError:
         return None
 

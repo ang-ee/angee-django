@@ -13,7 +13,7 @@ from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured, SuspiciousFileOperation
 from django.utils._os import safe_join
 
-from angee.base.impl import ImplBase, impl_registry
+from angee.impl import ImplBase, impl_registry
 
 if TYPE_CHECKING:
     from angee.resources.entries import ResourceEntry

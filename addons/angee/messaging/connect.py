@@ -65,7 +65,10 @@ def resume_or_create_channel(user: Any, *, name: str, backend_class: str) -> Any
     """
 
     channel_model = apps.get_model("messaging", "Channel")
-    impl_class = channel_model.resolve_impl_class(channel_model.live_impl_field, backend_class)
+    field = channel_model.live_implementation_field()
+    if field is None:
+        raise PairingActionError("This action requires a live channel.")
+    impl_class = field.resolve_class(backend_class)
     if not issubclass(impl_class, LiveBridgeImpl):
         raise PairingActionError("This action requires a live channel.")
     actor = current_actor() or user

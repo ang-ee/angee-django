@@ -2,9 +2,9 @@
 
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import {
-  DISABLED_RESOURCE,
   ModelMetadataProvider,
   ResourceQuery,
+  refineResourceName,
   schemaFieldMetadataFromDataResources,
   type SchemaFieldMetadata,
   type Row,
@@ -291,7 +291,7 @@ describe("ListView board laneSource", () => {
       "New",
     ]);
     expect(lastUseListOption()).toMatchObject({
-      resource: DISABLED_RESOURCE,
+      resource: refineResourceName(null),
       queryOptions: { enabled: false },
     });
   });

@@ -17,6 +17,10 @@ export interface AngeeI18nRuntime {
   provider: I18nProvider;
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function createAngeeI18nRuntime(
   resources: I18nResources,
   options: AngeeI18nProviderOptions = {},
@@ -69,6 +73,8 @@ function messageVars(options: unknown): MessageVars {
  * Validate scoped overrides against the composed owners, then resolve by
  * specificity: the scopes of every app on the page's trail, outermost first,
  * then route scopes, nearer routes later and, per route, inner apps later.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function composeAppVocabulary(
   base: I18nResources,

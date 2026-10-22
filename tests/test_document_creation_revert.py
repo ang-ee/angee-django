@@ -5,10 +5,14 @@ from __future__ import annotations
 import pytest
 from django.apps import apps
 from django.core.exceptions import ValidationError
+from django.test import override_settings
 from rebac import actor_context
 
-from angee.base.changesets import changeset
-from tests.conftest import create_user
+from angee.changesets import changeset
+from angee.identity import public_id_of
+from angee.timeline import schema as timeline_schema
+from tests.conftest import addon_schema, create_user, execute_schema
+from tests.test_timeline import QUERY, read_timeline
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
 
@@ -16,6 +20,7 @@ Project = apps.get_model("projects", "Project")
 Milestone = apps.get_model("projects", "Milestone")
 
 
+@override_settings(ANGEE_TIMELINE_KINDS=["angee.provenance.timeline.timeline_kinds"])
 def test_revert_document_creation_removes_children_before_the_parent_and_keeps_history() -> None:
     owner = create_user("document-creation-owner")
     with actor_context(owner), changeset(fresh=True, change_reason="Create project plan"):
@@ -24,6 +29,9 @@ def test_revert_document_creation_removes_children_before_the_parent_and_keeps_h
     project_id, milestone_id = project.pk, milestone.pk
     creation = project.history.get(history_type="+").changeset
     assert milestone.history.get(history_type="+").changeset_id == creation.pk
+    for record in (project, milestone):
+        entries = read_timeline(record, owner)["timeline"]["entries"]
+        assert any(entry["target_id"] == public_id_of(creation) for entry in entries)
 
     with actor_context(owner):
         reverted = creation.with_actor(owner).revert()
@@ -31,6 +39,16 @@ def test_revert_document_creation_removes_children_before_the_parent_and_keeps_h
     assert reverted.activity == "revert"
     assert not Milestone._base_manager.filter(pk=milestone_id).exists()
     assert not Project._base_manager.filter(pk=project_id).exists()
+    schema = addon_schema(timeline_schema.schemas, "console")
+    for record in (project, milestone):
+        result = execute_schema(
+            schema, QUERY, {"model": record._meta.label, "id": public_id_of(record)}, user=owner,
+        )
+        assert result.data is None and result.errors
+        assert all(
+            isinstance(error.original_error, ValidationError) and error.original_error.code == "not_found"
+            for error in result.errors
+        )
     assert Project.history.filter(id=project_id, history_type="+", changeset=creation).exists()
     assert Project.history.filter(id=project_id, history_type="-", changeset=reverted).exists()
     versions = Milestone.history.filter(id=milestone_id, project_id=project_id)

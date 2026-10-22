@@ -1,33 +1,37 @@
 // Authorization schema for the posts addon.
 // @rebac_package: posts
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 5
+// @rebac_schema_revision: 6
 
-// Feed access, including operator-edited reply holds, derives from its channel.
-// Quota access derives from the integration FK. System-created quota rows need
-// no created_by owner. Platform admins
-// reach every row through const-backed angee/role:admin membership.
+// Feed access, including operator-edited reply holds, derives from its channel,
+// and quota access from its integration FK, so system-created quota rows need no
+// creator. Follows and metrics are not transferable grant roots: their `creator`
+// relation reads the created_by attribution. Platform admins reach every row
+// through const-backed angee/role:admin membership.
 
 definition posts/feed {
     relation channel: messaging/channel // rebac:field=channel_ptr
+    // The integration grandparent owns the feed's transferable ownership.
+    relation integration: integrate/integration // rebac:field=channel_ptr__integration_ptr
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
     permission read   = channel->read + admin->member
     permission write  = channel->write + admin->member
     permission delete = channel->write + admin->member
+    permission write__owner = integration->transfer
 }
 
 definition posts/feed_follow {
-    relation owner: auth/user // rebac:field=created_by
+    relation creator: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
-    permission write  = owner + editor + admin->member
-    permission delete = owner + admin->member
+    permission read   = creator + editor + reader + admin->member
+    permission write  = creator + editor + admin->member
+    permission delete = creator + admin->member
 }
 
 // PostMetrics is a one-to-one projection off a messaging/message (the rolled-up
@@ -37,13 +41,13 @@ definition posts/feed_follow {
 // engagement just because it did not own the feed sync that wrote the row.
 definition posts/post_metrics {
     relation message: messaging/message // rebac:field=message
-    relation owner: auth/user // rebac:field=created_by
+    relation creator: auth/user // rebac:field=created_by
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = message->read + owner + admin->member
-    permission write  = owner + admin->member
-    permission delete = owner + admin->member
+    permission read   = message->read + creator + admin->member
+    permission write  = creator + admin->member
+    permission delete = creator + admin->member
 }
 
 definition posts/quota {

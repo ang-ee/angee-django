@@ -332,7 +332,7 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
     def test_surrendered_graphql_replay_returns_only_the_original_id_and_conflicts_on_changed_body(self) -> None:
         document = """mutation($round: ID!, $body: String!) {
           ask_proposal_round(round: $round, title: "Private question", body: $body,
-            audience: MANAGERS, client_creation_key: "surrender-replay") { ok id code }
+            audience: MANAGERS, idempotency_key: "surrender-replay") { ok id code }
         }"""
         variables = {"round": str(self.round.sqid), "body": "Original"}
         first = self.data(self.execute(document, variables, self.asker))["ask_proposal_round"]

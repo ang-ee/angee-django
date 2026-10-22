@@ -11,12 +11,11 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldError, ImproperlyConfigured, ValidationError
 from django.db import connection, models
-from django.db.migrations.state import ModelState, ProjectState
 from django.db.models import F, Value
 from django.db.models.functions import Concat
-from django.test.utils import isolate_apps
+from django.test.utils import isolate_apps, override_settings
 
-from angee.base.fields import (
+from angee.fields import (
     DiagnosticTextField,
     EncryptedField,
     FractionalRankExhausted,
@@ -26,7 +25,7 @@ from angee.base.fields import (
     StateField,
     _derive_fernet,
 )
-from angee.base.mixins import SqidMixin
+from angee.models import SqidMixin
 from tests.tables import model_tables
 
 
@@ -59,7 +58,9 @@ def test_diagnostic_and_model_label_fields_normalize_instance_and_queryset_write
 
 
 @pytest.mark.django_db(transaction=True)
-def test_encrypted_field_round_trips_plaintext() -> None:
+@pytest.mark.parametrize("secret_key", ["field-encryption-key", b"field-encryption-key"])
+@isolate_apps()
+def test_encrypted_field_round_trips_plaintext(secret_key: str | bytes) -> None:
     """Plaintext assigned in Python decrypts when the row is reloaded."""
 
     class FieldRoundTrip(models.Model):
@@ -72,7 +73,7 @@ def test_encrypted_field_round_trips_plaintext() -> None:
 
             app_label = "auth"
 
-    with model_tables((FieldRoundTrip,)):
+    with override_settings(SECRET_KEY=secret_key), model_tables((FieldRoundTrip,)):
         instance = FieldRoundTrip.objects.create(secret="open sesame")
 
         reloaded = FieldRoundTrip.objects.get(pk=instance.pk)
@@ -175,7 +176,7 @@ def test_encrypted_field_caches_bound_fernet(monkeypatch: pytest.MonkeyPatch) ->
         calls.append(label)
         return _derive_fernet(label)
 
-    monkeypatch.setattr("angee.base.fields._derive_fernet", derive)
+    monkeypatch.setattr("angee.fields._derive_fernet", derive)
 
     first = field._fernet()
     second = field._fernet()
@@ -495,31 +496,6 @@ def test_state_field_check_requires_null_for_concrete_optional_states(
         assert errors[0].obj is field
         assert "migrate stored empty strings to NULL" in errors[0].hint
         assert any(error.id == "angee.E019" for error in CheckedState.check())
-
-
-@pytest.mark.django_db(transaction=True)
-def test_historical_state_field_supports_blank_string_rows() -> None:
-    """Retained migration states can still reconstruct and read legacy rows."""
-
-    state = ProjectState()
-    state.add_model(
-        ModelState(
-            "auth",
-            "FieldBlankState",
-            fields=[
-                ("id", models.AutoField(primary_key=True)),
-                ("state", StateField(choices=[("enabled", "Enabled")], default="", blank=True)),
-            ],
-        )
-    )
-    FieldBlankState = state.apps.get_model("auth", "FieldBlankState")
-
-    with model_tables((FieldBlankState,)):
-        blank = FieldBlankState.objects.create()
-        enabled = FieldBlankState.objects.create(state="enabled")
-
-        assert FieldBlankState.objects.get(pk=blank.pk).state == ""
-        assert FieldBlankState.objects.get(pk=enabled.pk).state == "enabled"
 
 
 @pytest.mark.django_db(transaction=True)

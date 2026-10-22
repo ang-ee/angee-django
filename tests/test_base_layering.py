@@ -9,10 +9,20 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-BASE_SPEC = importlib.util.find_spec("angee.base")
+BASE_SPEC = importlib.util.find_spec("angee")
 assert BASE_SPEC is not None and BASE_SPEC.origin is not None
-ANGEE = Path(BASE_SPEC.origin).resolve().parents[1]
-BASE = ANGEE / "base"
+ANGEE = Path(BASE_SPEC.origin).resolve().parent
+MODEL_TOOLKIT = (
+    *(ANGEE / name for name in (
+        "actors.py", "apps.py", "autoconfig.py", "changesets.py", "checks.py",
+        "errors.py", "evidence.py", "fields.py", "identity.py", "impl.py",
+        "indexes.py", "jsonschema.py", "lineage.py", "middleware.py", "numeric.py",
+        "pagination.py", "permissions.py", "refs.py", "serialization.py", "signals.py",
+        "tiers.py", "validation.py",
+    )),
+    ANGEE / "management",
+    ANGEE / "models",
+)
 GRAPHQL = ROOT / "addons" / "angee" / "graphql"
 COMPOSE = ANGEE / "compose"
 RESOURCES = ROOT / "addons" / "angee" / "resources"  # resources is a base addon
@@ -66,7 +76,7 @@ def _module_name(path: Path) -> str:
 def _tree_imports(root: Path) -> set[str]:
     """Return the union of imports across a package subtree."""
 
-    paths = tuple(root.rglob("*.py"))
+    paths = (root,) if root.is_file() else tuple(root.rglob("*.py"))
     assert paths, f"no Python sources found under {root}"
     names: set[str] = set()
     for path in paths:
@@ -78,21 +88,21 @@ def _tree_imports(root: Path) -> set[str]:
     ("source_path", "source", "expected"),
     [
         (
-            "angee/base/models.py",
-            "from . import historical_relationships",
-            {"angee.base", "angee.base.historical_relationships"},
+            "angee/models/base.py",
+            "from . import merge",
+            {"angee.models", "angee.models.merge"},
         ),
         (
             "addons/angee/example/models.py",
-            "from ..base import historical_relationships as history",
-            {"angee.base", "angee.base.historical_relationships"},
+            "from angee import models as base_models",
+            {"angee", "angee.models"},
         ),
         (
             "addons/angee/example/__init__.py",
-            "from ..base.historical_relationships import ensure_historical_relationships",
+            "from angee.models import retained_set_null",
             {
-                "angee.base.historical_relationships",
-                "angee.base.historical_relationships.ensure_historical_relationships",
+                "angee.models",
+                "angee.models.retained_set_null",
             },
         ),
     ],
@@ -106,10 +116,10 @@ def test_relative_imports_resolve_against_the_source_import_root(
     assert _module_imports(ROOT / source_path) == expected
 
 
-def test_base_is_the_model_layer_below_all_siblings() -> None:
-    """base (the model toolkit) imports no sibling subsystem or addon."""
+def test_root_model_toolkit_is_below_all_subsystems() -> None:
+    """The root model toolkit imports no sibling subsystem or addon."""
 
-    imports = _tree_imports(BASE)
+    imports = set().union(*(_tree_imports(path) for path in MODEL_TOOLKIT))
     forbidden = ("angee.compose", "angee.graphql", *_ADDON_PACKAGES)
     assert not any(name.startswith(prefix) for name in imports for prefix in forbidden)
 
@@ -154,10 +164,18 @@ def test_production_sources_do_not_import_test_support() -> None:
     assert not violations
 
 
-def test_no_shared_addon_config_base_module() -> None:
-    """Addons use plain Django AppConfig attributes, not an Angee subclass."""
+def test_addons_do_not_use_a_shared_app_config_subclass() -> None:
+    """Addons use plain Django AppConfig attributes, not the foundation config."""
 
-    assert not (ANGEE / "apps.py").exists()
+    violations = {
+        str(path.relative_to(ROOT)): sorted(
+            name for name in _module_imports(path) if name.startswith("angee.apps")
+        )
+        for addon_root in ADDON_ROOTS
+        for path in sorted(addon_root.rglob("apps.py"))
+        if any(name.startswith("angee.apps") for name in _module_imports(path))
+    }
+    assert not violations
 
 
 def test_resources_does_not_import_compose() -> None:

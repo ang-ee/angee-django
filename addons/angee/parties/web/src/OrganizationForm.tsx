@@ -50,7 +50,7 @@ export function OrganizationForm({ resource: _resource, recordTabs, ...props }: 
   const fields = useOrganizationFields();
   const contactActions = usePartyContactActions();
   return (
-    <Form {...props} resource={MODEL} recordTabs={recordTabs ?? organizationTabs(t)}>
+    <Form {...props} resource={MODEL} eyebrow={t("organization.eyebrow")} recordTabs={recordTabs ?? organizationTabs(t)}>
       {fields}
       <Field name="tags" />
       {contactActions}

@@ -1,8 +1,8 @@
 import { defineBaseAddon } from "@angee/app";
 
-import { formatMoney, moneyWidget } from "./widgets/money";
+import { formatMoney, moneyWidget, type FormatMoneyOptions } from "./widgets/money";
 
-export { formatMoney, moneyWidget };
+export { formatMoney, moneyWidget, type FormatMoneyOptions };
 
 const MONEY_ID = "money";
 

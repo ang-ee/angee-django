@@ -10,13 +10,7 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.base.evidence import DerivedFrom, FactAuthority
-from angee.base.fields import StateField
-from angee.base.impl import ImplClassField
-from angee.base.mixins import AppendOnlyModel, AuditMixin
-from angee.base.models import AngeeDataModel, AngeeModel
-from angee.base.refs import record_ref_for
-from angee.base.serialization import canonical_json
+from angee.evidence import FactAuthority
 from angee.extraction.contracts import (
     CorrectionRef,
     DocumentPart,
@@ -42,6 +36,11 @@ from angee.extraction.pointers import (
     set_json_pointer,
 )
 from angee.extraction.profiles import ExtractionProfile
+from angee.fields import StateField
+from angee.impl import ImplClassField
+from angee.models import AngeeDataModel, AngeeModel, AppendOnlyModel, AuditMixin, DerivedFrom
+from angee.refs import record_ref_for
+from angee.serialization import canonical_json
 
 
 class RetainedEvidence(AppendOnlyModel):
@@ -546,9 +545,12 @@ class ExtractionSource(DerivedFrom):
     @property
     def reference(self) -> SourceRef:
         """Return the exact file or message-part identity retained here."""
+        source = self.file if self.file_id is not None else self.message_part
+        if source is None:
+            raise ValidationError("An extraction source requires a file or message part.")
         return SourceRef(
             ExtractionSourceKind.FILE if self.file_id is not None else ExtractionSourceKind.MESSAGE_PART,
-            str((self.file if self.file_id is not None else self.message_part).sqid),
+            str(source.sqid),
             self.content_hash,
         )
 

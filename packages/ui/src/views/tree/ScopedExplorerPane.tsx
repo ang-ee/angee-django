@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { EmptyState } from "../../fragments/EmptyState";
 import { useUiT } from "../../i18n";
+import { PaneToolbar, PaneToolbarHost, type PaneToolbarProps } from "../../layouts/PaneToolbar";
 import { PrimaryPanePublisher } from "../../layouts/primary-pane-context";
 import { Skeleton, SkeletonStatus, SkeletonText } from "../../ui/skeleton";
 import {
@@ -37,7 +38,12 @@ export interface ScopedExplorerPaneProps<
   /** Render the owned content even when the caller has no visible roots. */
   renderContentWithoutRoots?: boolean;
   navigatorLabel: string;
+  /** The toolbar's selector: the root (drive, vault) picker, created inline where allowed. */
   rootPicker: ScopedExplorerRootPicker;
+  /** The rest of the toolbar row: the pane's scope, search, create verbs and overflow. */
+  toolbar?: (
+    controller: ScopedExplorerController<TRoot, TTreeRow>,
+  ) => Omit<PaneToolbarProps, "selector" | "className">;
   onRootChange?: (
     rootId: string,
     controller: ScopedExplorerController<TRoot, TTreeRow>,
@@ -54,10 +60,13 @@ export interface ScopedExplorerPaneProps<
 }
 
 /**
- * Shared explorer page shell: root picker + scoped tree are published into the
- * console primary pane, while loading/empty root states own the main surface.
- * Addons keep the facts that are genuinely theirs: tree row projection, drop
- * policy, route transitions, and domain actions.
+ * Shared explorer page shell: the pane toolbar (root picker as its selector, the
+ * addon's verbs beside it) over the scoped tree, published into the console
+ * primary pane, while loading/empty root states own the main surface. Addons
+ * keep the facts that are genuinely theirs: tree row projection, drop policy,
+ * route transitions, and domain actions.
+ * @kind region
+ * @region explorer-pane
  */
 export function ScopedExplorerPane<
   TRoot,
@@ -69,6 +78,7 @@ export function ScopedExplorerPane<
   renderContentWithoutRoots = false,
   navigatorLabel,
   rootPicker,
+  toolbar,
   onRootChange,
   renderTree,
   renderNavigatorFooter,
@@ -81,30 +91,39 @@ export function ScopedExplorerPane<
   const hasRoots = rootOptions.length > 0;
   const navigator = React.useMemo(
     () => (
-      <div
+      <PaneToolbarHost
         role="navigation"
         aria-label={navigatorLabel}
-        className="flex h-full min-h-0 flex-col gap-2 p-2"
       >
-        <RelationPicker
-          aria-label={rootPicker["aria-label"]}
-          value={rootId}
-          options={rootOptions}
-          placeholder={rootPicker.placeholder}
-          searchPlaceholder={rootPicker.searchPlaceholder}
-          create={rootPicker.create}
-          onChange={(value) => {
-            setRootId(value);
-            onRootChange?.(value, controller);
-          }}
-          onCreated={(id) => {
-            setRootId(id);
-            rootPicker.onCreated?.(id);
-          }}
+        <PaneToolbar
+          {...toolbar?.(controller)}
+          selector={
+            <div className="min-w-0 max-w-56 flex-1">
+              <RelationPicker
+                presentation="cell"
+                aria-label={rootPicker["aria-label"]}
+                value={rootId}
+                options={rootOptions}
+                placeholder={rootPicker.placeholder}
+                searchPlaceholder={rootPicker.searchPlaceholder}
+                create={rootPicker.create}
+                onChange={(value) => {
+                  setRootId(value);
+                  onRootChange?.(value, controller);
+                }}
+                onCreated={(id) => {
+                  setRootId(id);
+                  rootPicker.onCreated?.(id);
+                }}
+              />
+            </div>
+          }
         />
-        {renderTree(controller)}
-        {renderNavigatorFooter?.(controller)}
-      </div>
+        <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
+          {renderTree(controller)}
+          {renderNavigatorFooter?.(controller)}
+        </div>
+      </PaneToolbarHost>
     ),
     [
       controller,
@@ -116,6 +135,7 @@ export function ScopedExplorerPane<
       rootOptions,
       rootPicker,
       setRootId,
+      toolbar,
     ],
   );
   const loadingLabel = t("loading.default");

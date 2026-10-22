@@ -6,7 +6,6 @@ import pytest
 from django.db.models.functions import Now
 from pydantic import BaseModel
 
-from angee.base.scoping import system_queryset
 from angee.workflows.awaits import AwaitRunInput
 from angee.workflows.managers import WorkflowRunQuerySet
 from angee.workflows.runner import runner
@@ -84,7 +83,7 @@ def test_await_run_wakes_once_and_forwards_the_child_output(child_graph):
     parent, _ = build()
     run_until(parent)
     child = admitted[0]
-    waiter = system_queryset(StepRun).get(run=parent, node_key="await")
+    waiter = StepRun.system_queryset().get(run=parent, node_key="await")
     assert waiter.status == "waiting" and waiter.waiting_kind == "run" and waiter.awaited_run_id == child.pk
     assert child.origin == RunOrigin.WORKFLOW and child.parent_step.run_id == parent.pk
     sent.clear()
@@ -97,7 +96,7 @@ def test_await_run_wakes_once_and_forwards_the_child_output(child_graph):
     run_until(parent)
     waiter.refresh_from_db()
     assert parent.status == "succeeded" and waiter.output == {"value": 7} and waiter.outcome == "done"
-    assert system_queryset(StepAttempt).filter(step_run=waiter).count() == 2
+    assert StepAttempt.system_queryset().filter(step_run=waiter).count() == 2
     assert not parent.can_cancel(actor)
 
 
@@ -123,7 +122,7 @@ def test_parent_finishing_without_await_cancels_only_owned_child(child_graph, re
     _, _, admitted, build = child_graph
     parent, _ = build(relation=relation, await_child=False)
     run_until(parent)
-    child = system_queryset(WorkflowRun).get(pk=admitted[0].pk)
+    child = WorkflowRun.system_queryset().get(pk=admitted[0].pk)
     assert parent.status == "succeeded"
     assert child.status == ("canceled" if relation == "owned" else "running")
 
@@ -151,7 +150,7 @@ def test_child_reexecution_replays_pinned_request_after_republish(child_graph, r
     assert len(admitted) == 2 and admitted[1].pk == first.pk
     assert admitted[1].version_id == first.version_id
     assert first.request_key == (request_key or f"child:{first.parent_step.sqid}:{first.parent_step.page_index}")
-    assert system_queryset(WorkflowRun).filter(parent_step__run=parent).count() == 1
+    assert WorkflowRun.system_queryset().filter(parent_step__run=parent).count() == 1
 
 
 def test_derived_child_key_changes_with_parent_page(child_graph):
@@ -177,7 +176,7 @@ def test_child_cleanup_failure_cannot_roll_back_parent_terminal_state(child_grap
 
     monkeypatch.setattr(WorkflowRunQuerySet, "hold_owned", unavailable)
     run_until(parent)
-    assert system_queryset(WorkflowRun).get(pk=parent.pk).status == "succeeded"
+    assert WorkflowRun.system_queryset().get(pk=parent.pk).status == "succeeded"
     assert "Child cancellation unavailable" in caplog.text
 
 
@@ -193,10 +192,10 @@ def test_child_admission_enforces_start_and_subject_read(child_graph, missing):
     )
     run_until(parent)
     assert parent.status == "failed" and not admitted
-    attempt = system_queryset(StepAttempt).get(step_run__run=parent)
+    attempt = StepAttempt.system_queryset().get(step_run__run=parent)
     assert attempt.result == "failed"
     assert ("referenced record" if missing == "subject_read" else "'start'") in attempt.error
-    assert not system_queryset(WorkflowRun).filter(parent_step__run=parent).exists()
+    assert not WorkflowRun.system_queryset().filter(parent_step__run=parent).exists()
 
 
 @pytest.mark.parametrize("child_step, outcome", [("reject", "error"), ("echo", "canceled")])
@@ -211,13 +210,13 @@ def test_await_forwards_empty_failure_and_cancellation_outcomes(child_graph, chi
         run_until(child)
     assert runner.tick()["runs"] == 1
     run_until(parent)
-    waiter = system_queryset(StepRun).get(run=parent, node_key="await")
+    waiter = StepRun.system_queryset().get(run=parent, node_key="await")
     assert parent.status == "succeeded" and waiter.outcome == outcome and waiter.output == {}
 
 
 def age_runs(*runs):
     """Move finished rows beyond retention without manufacturing execution state."""
-    system_queryset(WorkflowRun).filter(pk__in=[run.pk for run in runs]).update(
+    WorkflowRun.system_queryset().filter(pk__in=[run.pk for run in runs]).update(
         finished_at=Now() - timedelta(days=91),
     )
 
@@ -232,16 +231,16 @@ def test_expired_io_attempt_cannot_admit_a_child_before_reaping(execution, regis
         mode = StepMode.IO
 
         def run(self, ctx):
-            system_queryset(StepRun).filter(pk=ctx.step_run.pk).update(deadline_at=Now() - timedelta(seconds=1))
+            StepRun.system_queryset().filter(pk=ctx.step_run.pk).update(deadline_at=Now() - timedelta(seconds=1))
             ctx.start_run(child_workflow)
             return ctx.done({})
 
     register_step(LateChild)
     workflow = load_workflow({"nodes": {"entry": {"step": LateChild.key}}}, actor=actor)
     parent = WorkflowRun.objects.start(workflow, actor=actor)
-    row = system_queryset(StepRun).get(run=parent)
+    row = StepRun.system_queryset().get(run=parent)
     assert runner.execute(row.pk) is False
-    assert not system_queryset(WorkflowRun).filter(parent_step__run=parent).exists()
+    assert not WorkflowRun.system_queryset().filter(parent_step__run=parent).exists()
     assert runner.tick()["reaped"] == 1
 
 
@@ -256,11 +255,11 @@ def test_observing_an_already_failed_child_keeps_its_open_siblings(child_graph):
     run_until(parent, node="await")
     child = admitted[0]
     run_until(child)
-    pending = system_queryset(StepRun).get(run=child, node_key="z_pending")
+    pending = StepRun.system_queryset().get(run=child, node_key="z_pending")
     assert child.status == "failed" and pending.status == "ready"
     run_until(parent)
     pending.refresh_from_db()
-    waiter = system_queryset(StepRun).get(run=parent, node_key="await")
+    waiter = StepRun.system_queryset().get(run=parent, node_key="await")
     assert parent.status == "succeeded" and pending.status == "ready"
     assert waiter.awaited_run_id == child.pk and waiter.outcome == "error"
     assert parent.can_cancel(actor)

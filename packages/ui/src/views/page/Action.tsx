@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { Row } from "@angee/metadata";
-import type { ActionOutcome } from "@angee/refine";
+import type { ActionOutcome, ListQueryFieldArgument } from "@angee/refine";
 import type { CrudFilter } from "@refinedev/core";
 import type { Resolver } from "react-hook-form";
 
@@ -108,6 +108,12 @@ export interface ActionRelationArg extends ActionArgBase {
   resource: string;
   /** Server-side filters narrowing the relation rows offered by the picker. */
   filters?: readonly CrudFilter[];
+  /** Related-row field rendered as secondary picker-option text. */
+  optionDescriptionField?: string;
+  /** Related-row enum/status field rendered as a shared-tone picker badge. */
+  optionStatusField?: string;
+  /** Context values required by a computed status field, such as the active company. */
+  optionStatusArguments?: readonly ListQueryFieldArgument[];
   /**
    * Inline create forwarded to the picker (`RelationPicker.create`): a no-match
    * typed query offers "Create …", `actionLabel` also exposes the form as a
@@ -190,6 +196,8 @@ export interface ActionProps extends ActionBinding {
   disabledReason?: ReactNode | ((record: Row) => ReactNode);
   /** A destructive verb: danger-toned, and confirmed before it runs on click (standard copy unless `confirm` names it). */
   danger?: boolean;
+  /** The verb on the collected form's submit button when it differs from the trigger's label ("Run report"). */
+  submitLabel?: ReactNode;
   /** Promote a frequent record verb out of the default Actions menu. */
   placement?: "menu" | "toolbar";
   /** The page's one primary verb: rendered as the primary button when it is on the toolbar and visible. */
@@ -211,6 +219,9 @@ function ActionMarker(_props: ActionProps): null {
   return null;
 }
 
+/**
+ * @kind contribution
+ */
 export const Action = Object.assign(ActionMarker, {
   [PAGE_ELEMENT_SLOT]: "action" as const,
 });

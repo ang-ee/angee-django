@@ -1075,7 +1075,7 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
             mutation PostRecordMessage($model: String!, $id: ID!, $body: String!) {
               post_record_message(
                 input: {model_label: $model, record_id: $id, body: $body}
-                client_creation_key: "comment-request"
+                idempotency_key: "comment-request"
               ) {
                 error_code
                 follower_count
@@ -1156,7 +1156,7 @@ def test_record_chatter_post_note(composed_tables: None) -> None:
             mutation PostRecordNote($model: String!, $id: ID!, $body: String!) {
               post_record_message(
                 input: {model_label: $model, record_id: $id, body: $body, kind: NOTE}
-                client_creation_key: "note-request"
+                idempotency_key: "note-request"
               ) {
                 error
                 error_code
@@ -2186,47 +2186,6 @@ def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) 
         follower = messaging_models.ThreadFollower._base_manager.get(thread=thread, party__person__user=watcher)
         latest = messaging_models.Message._base_manager.filter(thread=thread).order_by("-pk").first()
         assert follower.last_read_message_id == latest.pk
-
-
-def test_record_thread_unread_count_is_record_read_scoped(composed_tables: None) -> None:
-    """The count-only chatter badge resolver uses the same parent-record read gate."""
-
-    reader = User.objects.create_user(username="msg-count-reader", email="msg-count-reader@example.com")
-    outsider = User.objects.create_user(username="msg-count-outsider", email="msg-count-outsider@example.com")
-    with system_context(reason="test.messaging.record_unread_count.seed"):
-        doc = messaging_models.ChatterDoc.objects.create(title="Gated count", status="open")
-        _grant(doc, "reader", reader)
-        doc.message_subscribe(user=reader)
-        doc.message_post("Unread for the reader.")
-    schema = _schema()
-    query = """
-        query RecordThreadUnreadCount($model: String!, $id: ID!) {
-          record_thread_unread_count(model_label: $model, record_id: $id)
-        }
-    """
-    variables = {"model": "chatterdemo.ChatterDoc", "id": doc.sqid}
-
-    visible = _data(
-        execute_schema(
-            schema,
-            query,
-            variables,
-            request=_request(reader),
-        )
-    )["record_thread_unread_count"]
-    hidden = _data(
-        execute_schema(
-            schema,
-            query,
-            variables,
-            request=_request(outsider),
-        )
-    )["record_thread_unread_count"]
-    anonymous = _data(execute_schema(schema, query, variables))["record_thread_unread_count"]
-
-    assert visible == 1
-    assert hidden == 0
-    assert anonymous == 0
 
 
 def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
@@ -3400,8 +3359,11 @@ def test_channel_teardown_mutes_per_row_change_broadcasts(composed_tables: None)
     def _spy(sender: Any, payload: Any, **kwargs: Any) -> None:
         captured.append(payload)
 
-    connect_publishers(messaging_models.Message)
-    connect_publishers(messaging_models.Thread)
+    already_wired = {
+        model: disconnect_publishers(model) for model in (messaging_models.Message, messaging_models.Thread)
+    }
+    for model in already_wired:
+        connect_publishers(model)
     change_published.connect(_spy, dispatch_uid="test-channel-mute-spy", weak=False)
     try:
         # Positive control: an unmuted delete DOES broadcast, proving the wiring is live.
@@ -3415,8 +3377,10 @@ def test_channel_teardown_mutes_per_row_change_broadcasts(composed_tables: None)
         assert captured == []
     finally:
         change_published.disconnect(dispatch_uid="test-channel-mute-spy")
-        disconnect_publishers(messaging_models.Message)
-        disconnect_publishers(messaging_models.Thread)
+        for model, was_wired in already_wired.items():
+            disconnect_publishers(model)
+            if was_wired:
+                connect_publishers(model)
 
     assert not messaging_models.Message._base_manager.filter(pk=keep.pk).exists()
     assert not messaging_models.Thread._base_manager.filter(pk=thread.pk).exists()

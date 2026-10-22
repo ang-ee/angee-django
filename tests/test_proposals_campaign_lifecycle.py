@@ -12,8 +12,8 @@ from rebac import PermissionDenied, actor_context, current_actor, sudo, system_c
 from rebac.models import PermissionAuditEvent, active_relationship_model
 from strawberry import Schema
 
-from angee.base.mixins import CreationKeyConflict, StaleRevisionError
 from angee.graphql.deletion import DeletePreview
+from angee.models import CreationKeyConflict, StaleRevisionError
 from angee.projects.testing.models import Milestone, Project, ProjectBinding, Task
 from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion
 from tests.conftest import Drive
@@ -483,15 +483,15 @@ def test_question_replay_is_asker_scoped_and_surrender_does_not_duplicate_conten
     round = c.round()
     c.admit(round, "responder")
     c.admit(round, "peer")
-    first = c.ask(round, audience="managers", client_creation_key="same-key")
-    replay = c.ask(round, audience="managers", client_creation_key="same-key")
-    other = c.ask(round, seat="peer", audience="managers", client_creation_key="same-key")
+    first = c.ask(round, audience="managers", idempotency_key="same-key")
+    replay = c.ask(round, audience="managers", idempotency_key="same-key")
+    other = c.ask(round, seat="peer", audience="managers", idempotency_key="same-key")
     assert first.pk == replay.pk != other.pk
     assert Task._base_manager.filter(clarification_round=round).count() == 2
     assert not as_actor(first, c.person("responder")).has_access("read")
     with actor_context(c.person("responder")), pytest.raises(CreationKeyConflict) as error:
         as_actor(round, c.person("responder")).ask(
-            "Question", "Changed body", audience="managers", client_creation_key="same-key"
+            "Question", "Changed body", audience="managers", idempotency_key="same-key"
         )
     assert error.value.code == "CREATION_KEY_CONFLICT"
     assert first.created_by_id is None and first.updated_by_id is None and first.owner_id is None

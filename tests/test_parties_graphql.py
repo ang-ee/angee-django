@@ -10,8 +10,8 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
-from angee.base.identity import public_subject_ref
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.identity import public_subject_ref
 from angee.messaging.testing import models as messaging_models
 from tests.conftest import (
     SchemaAddon,
@@ -518,7 +518,7 @@ def test_a_confirmed_handle_reads_as_the_persons_statement_beside_its_producer(c
 def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables: None) -> None:
     """``asserted_by`` names a principal only when the reader may read it; evidence keeps its own gates."""
 
-    from angee.base.mixins import SourceKind
+    from angee.models import SourceKind
     from tests.conftest import make_integration
 
     admin = _platform_admin("statement-visibility-admin")
@@ -547,13 +547,15 @@ def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables:
             asserted_by=str(to_subject_ref(reader)),
             source_kind=SourceKind.PERSON,
             evidence=[
-                {"model": "parties.Party", "id": party.public_id},
+                {"model": "parties.Party", "id": party.public_id, "pointer": "/display_name"},
                 {"model": "parties.Party", "id": private.public_id},
             ],
         )
 
     query = """
-        query Statements { party_statements(order_by: [{created_at: asc}]) { id asserted_by evidence { model id } } }
+        query Statements {
+          party_statements(order_by: [{created_at: asc}]) { id asserted_by evidence { model id pointer } }
+        }
     """
     as_reader = _data(execute_schema(_schema("public"), query, user=reader))["party_statements"]
     assert as_reader == [
@@ -561,15 +563,49 @@ def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables:
         {
             "id": own.sqid,
             "asserted_by": str(public_subject_ref(to_subject_ref(reader))),
-            "evidence": [{"model": "parties.Party", "id": party.public_id}],
+            "evidence": [{"model": "parties.Party", "id": party.public_id, "pointer": "/display_name"}],
         },
     ]
     as_admin = _data(execute_schema(_schema("public"), query, user=admin))["party_statements"]
     assert as_admin[0]["asserted_by"] == str(public_subject_ref(to_subject_ref(directory)))
     assert as_admin[1]["evidence"] == [
-        {"model": "parties.Party", "id": party.public_id},
-        {"model": "parties.Party", "id": private.public_id},
+        {"model": "parties.Party", "id": party.public_id, "pointer": "/display_name"},
+        {"model": "parties.Party", "id": private.public_id, "pointer": ""},
     ]
+
+
+@pytest.mark.parametrize("row_count", [2, 8])
+def test_statement_reference_reads_have_a_page_query_budget(
+    composed_tables: None,
+    django_assert_num_queries: Any,
+    row_count: int,
+) -> None:
+    """Evidence and asserting principals add a fixed query count, not one per statement."""
+
+    del composed_tables
+    admin = _platform_admin(f"statement-query-budget-{row_count}")
+    with system_context(reason="test.parties.statement_query_budget.seed"):
+        for index in range(row_count):
+            party = messaging_models.Party.objects.create(display_name=f"Party {index}", created_by=admin)
+            handle = Handle.objects.create(
+                platform="email",
+                value=f"statement-query-{row_count}-{index}@example.test",
+                created_by=admin,
+            )
+            messaging_models.Party.objects.assert_handle(
+                party,
+                handle,
+                asserted_by=admin,
+                evidence=[party],
+            )
+    schema = _schema("public")
+    query = "query Statements { party_statements { asserted_by evidence { model id } } }"
+    # The same count for 2 and 8 rows is the invariant: the page's evidence and asserting
+    # principals are admitted in batches, and each actor-scoped batch carries rebac's own
+    # platform-admin probe; nothing scales with the statement count.
+    with django_assert_num_queries(15):
+        rows = _data(execute_schema(schema, query, user=admin))["party_statements"]
+    assert len(rows) == row_count
 
 
 def test_party_statements_group_only_by_axes_the_party_reader_may_read() -> None:

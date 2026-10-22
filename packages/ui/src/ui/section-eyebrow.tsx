@@ -3,12 +3,15 @@ import * as React from "react";
 import { toneText } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const sectionEyebrowVariants = tv({
   base: "m-0 uppercase",
   variants: {
     size: {
       xs: "text-2xs",
-      sm: "text-xs",
+      sm: "text-12",
     },
     tone: {
       muted: "text-fg-muted",
@@ -53,22 +56,6 @@ export type SectionEyebrowRecipeProps = VariantProps<
   typeof sectionEyebrowVariants
 >;
 
-export type SectionEyebrowSize = NonNullable<
-  SectionEyebrowRecipeProps["size"]
->;
-export type SectionEyebrowTone = NonNullable<
-  SectionEyebrowRecipeProps["tone"]
->;
-export type SectionEyebrowWeight = NonNullable<
-  SectionEyebrowRecipeProps["weight"]
->;
-export type SectionEyebrowTracking = NonNullable<
-  SectionEyebrowRecipeProps["tracking"]
->;
-export type SectionEyebrowSpacing = NonNullable<
-  SectionEyebrowRecipeProps["spacing"]
->;
-
 export type SectionEyebrowElement = "dt" | "h2" | "h3" | "h4" | "h5" | "h6" | "label" | "p" | "span";
 
 export type SectionEyebrowProps = Omit<
@@ -81,6 +68,9 @@ export type SectionEyebrowProps = Omit<
     htmlFor?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const SectionEyebrow = React.forwardRef<HTMLElement, SectionEyebrowProps>(
   function SectionEyebrow(
     {

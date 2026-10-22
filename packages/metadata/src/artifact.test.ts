@@ -141,7 +141,7 @@ describe("generated resource wire contract", () => {
         relationModelLabel: null, widget: null,
       }],
       futureResourceFact: { enabled: true },
-      createArguments: [{ name: "client_creation_key", type: "String" }],
+      createArguments: [{ name: "idempotency_key", type: "String" }],
       updateArguments: [{ name: "expected_revision", type: "Int" }],
       saveArguments: [{ name: "expected_revision", type: "Int" }],
     });
@@ -175,7 +175,7 @@ describe("generated resource wire contract", () => {
     { query: { identity: { field: 42 } } },
     { aggregateMeasures: [{ op: 42 }] },
     { createArguments: [42] },
-    { createArguments: ["client_creation_key"] },
+    { createArguments: ["idempotency_key"] },
     { updateArguments: [{ name: "expected_revision" }] },
     { saveArguments: [{ name: "expected_revision", type: 42 }] },
     { updateArguments: {} },

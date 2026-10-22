@@ -134,6 +134,9 @@ function useQueuedDialog<TOptions, TResult>(): QueuedDialog<TOptions, TResult> {
 const ConfirmContext = createContext<ConfirmContextValue | null>(null);
 const PromptContext = createContext<PromptContextValue | null>(null);
 
+/**
+ * @kind surface
+ */
 export function ModalsHost({
   children,
 }: {
@@ -173,6 +176,9 @@ export function ModalsHost({
   );
 }
 
+/**
+ * @owner ModalsHost
+ */
 export function useConfirm(): (options: ConfirmOptions) => Promise<boolean> {
   const context = useContext(ConfirmContext);
   if (!context) {
@@ -181,6 +187,9 @@ export function useConfirm(): (options: ConfirmOptions) => Promise<boolean> {
   return context.confirm;
 }
 
+/**
+ * @owner ModalsHost
+ */
 export function usePrompt(): (
   options: PromptOptions,
 ) => Promise<Record<string, string> | null> {
@@ -385,7 +394,7 @@ function PromptCopyButton({ value, label }: { value: string; label?: ReactNode }
         <Glyph name={state === "copied" ? "check" : "copy"} />
         {label ?? t("modal.copy")}
       </Button>
-      <span role="status" className="text-xs text-fg-muted">{state === "copied" ? t("modal.copied") : null}</span>
+      <span role="status" className="text-12 text-fg-muted">{state === "copied" ? t("modal.copied") : null}</span>
       <ErrorBanner description={state === "failed" ? t("modal.copyFailed") : null} />
     </div>
   );

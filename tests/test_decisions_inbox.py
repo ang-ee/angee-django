@@ -69,6 +69,46 @@ def test_public_mutation_records_only_chosen_keys_and_audit(inbox):
     assert row["is_open"] is False and row["verdict"] == ["accept"] and row["answered_at"]
 
 
+def test_record_answer_history_returns_only_answered_decisions_for_the_readable_record(inbox):
+    requester, reviewer, _, subject, answered = inbox
+    Decision.objects.decide(answered, actor=reviewer, chosen=["accept"])
+    open_question = Decision.objects.ask(
+        DecisionRequest(
+            kind="second_review",
+            records=(subject,),
+            assignees=(reviewer,),
+            requester=requester,
+            proposal=DecisionProposal(alternatives=[
+                {"key": "keep", "label": "Keep", "outcome": "accepted"},
+                {"key": "change", "label": "Change", "outcome": "rejected"},
+            ]),
+        ),
+        actor=requester,
+    )
+    schema = addon_schema(decision_schema.schemas, "console")
+
+    data = result_data(execute_schema(
+        schema,
+        """query($model: String!, $id: ID!) {
+          record_decision_answers(model: $model, id: $id) {
+            id is_open verdict_label concerns_label answered_by { id display_name }
+          }
+        }""",
+        {"model": subject._meta.label, "id": subject.sqid},
+        user=reviewer,
+    ))
+
+    assert data == {"record_decision_answers": [{
+        "id": answered.sqid,
+        "is_open": False,
+        "verdict_label": "Accept",
+        # The concerned record's own label, for tables that cannot follow the records relation.
+        "concerns_label": str(subject),
+        "answered_by": {"id": reviewer.sqid, "display_name": reviewer.username},
+    }]}
+    assert open_question.is_open
+
+
 def test_native_can_act_and_open_filters(inbox):
     _, reviewer, _, _, decision = inbox
     schema = addon_schema(decision_schema.schemas, "console")

@@ -64,6 +64,7 @@ describe("page element markers", () => {
       <>
         <Column<TestRow>
           field="title"
+          id="title-summary"
           selectionPaths={["title.value", "title.label"]}
           header="Title"
           widget="text"
@@ -88,6 +89,7 @@ describe("page element markers", () => {
     expect(columns).toHaveLength(2);
     expect(columns[0]).toMatchObject({
       field: "title",
+      id: "title-summary",
       selectionPaths: ["title.value", "title.label"],
       header: "Title",
       widget: "text",
@@ -289,7 +291,7 @@ describe("page element markers", () => {
           <Column field="title" />
         </>,
       ),
-    ).toThrow("Duplicate page column field: title");
+    ).toThrow("Duplicate page column identity: title");
 
     expect(() =>
       parsePageFields(
@@ -342,4 +344,12 @@ describe("field descriptor resolution", () => {
     expect(isRelationIdField({ name: "a", widget: "select" })).toBe(false);
     expect(isRelationIdField({ name: "a" })).toBe(false);
   });
+});
+
+
+test("native column identities permit distinct presentations of one selected field", () => {
+  const columns = parsePageColumns(<><Column id="first" field="results" /><Column id="second" field="results" /></>);
+  expect(columns.map((column) => column.id)).toEqual(["first", "second"]);
+  expect(() => parsePageColumns(<><Column id="same" field="one" /><Column id="same" field="two" /></>))
+    .toThrow("Duplicate page column identity: same");
 });

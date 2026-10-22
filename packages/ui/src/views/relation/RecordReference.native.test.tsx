@@ -8,14 +8,16 @@ import { afterEach, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, createRouteHref } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import { InAppLinkProvider, routerNavigator } from "../../lib/in-app-link";
-import { RecordReference } from "./RecordReference";
+import { RecordReference, RecordReferenceRow } from "./RecordReference";
 
 const resource = testDataResource("notes.Note", {
   recordRepresentation: "title",
   query: testResourceQuery({ fields: { id: testQueryField("id"), title: testQueryField("title") } }),
 });
 const { Provider, clearClients } = createUiTestProviders({
-  apiUrl: "test://record-reference", resources: [resource],
+  apiUrl: "test://record-reference", resources: [resource, testDataResource("example.Unrouted", {
+    recordRepresentation: "name", query: testResourceQuery({ fields: { id: testQueryField("id"), name: testQueryField("name") } }),
+  })],
   queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
 });
 afterEach(() => { cleanup(); clearClients(); });
@@ -73,4 +75,29 @@ test("uses a supplied label without a record read and follows the exact tab and 
   await waitFor(() => expect(router.state.location.href).toBe("/notes/note-1?recordTab=source&query=passage"));
   expect(getOne).not.toHaveBeenCalled();
   expect(screen.queryByRole("button")).toBeNull();
+});
+
+test("reference rows batch one bounded label read per model and preserve interleaved order", async () => {
+  const getOne = vi.fn();
+  const getList = vi.fn(async ({ resource }: { resource: string }) => ({
+    data: resource === "notes" ? [{ id: "note-1", title: "First note" }, { id: "note-2", title: "Second note" }]
+      : [{ id: "other-1", name: "Unrouted record" }], total: resource === "notes" ? 2 : 1,
+  }));
+  const references = [
+    { model: "notes.Note", id: "note-2" }, { model: "example.Unrouted", id: "other-1" },
+    { model: "notes.Note", id: "note-1" }, { model: "notes.Note", id: "note-2" },
+  ];
+  render(<Provider dataProvider={{ getList, getOne }}><AppRuntimeProvider runtime={runtime}>
+    <ul>{references.map((record, index) => <li key={index}><RecordReferenceRow {...record} references={references} /></li>)}</ul>
+  </AppRuntimeProvider></Provider>);
+  await screen.findByText("Unrouted record");
+  await screen.findByRole("link", { name: "First note" });
+  expect(getList).toHaveBeenCalledTimes(2);
+  expect(getOne).not.toHaveBeenCalled();
+  expect(getList).toHaveBeenCalledWith(expect.objectContaining({
+    resource: "notes", filters: [{ field: "id", operator: "in", value: ["note-1", "note-2"] }],
+    pagination: expect.objectContaining({ pageSize: 2 }), meta: expect.objectContaining({ fields: ["id", "title"] }),
+  }));
+  expect(screen.getByText("Unrouted record").closest("a, button")).toBeNull();
+  expect(screen.getAllByRole("listitem").map((row) => row.textContent)).toEqual(["Second note", "Unrouted record", "First note", "Second note"]);
 });

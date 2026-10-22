@@ -13,21 +13,20 @@ from functools import wraps
 from typing import ParamSpec, TypeVar, cast
 
 import strawberry
-from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import models, transaction
 from rebac import PermissionDenied, RebacMixin, system_context
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_camel_case
 
-from angee.base.errors import DomainError
-from angee.base.scoping import read_scoped_queryset
-from angee.base.transitions import TransitionNotAllowed
+from angee.errors import DomainError
 from angee.graphql.ids import PublicID, instance_for_id, public_id_value
 from angee.graphql.writes import instance_for_write
+from angee.models import TransitionNotAllowed
+from angee.permissions import require_rebac_queryset
 from graphql import GraphQLError
 
 _ActionTarget = TypeVar("_ActionTarget", bound=models.Model)
-_RebacActionTarget = TypeVar("_RebacActionTarget", bound=RebacMixin)
 _P = ParamSpec("_P")
 
 logger = logging.getLogger(__name__)
@@ -240,10 +239,10 @@ def action_guard(
 
 def authorized_action_target(
     info: strawberry.Info,
-    model: type[_RebacActionTarget],
+    model: type[_ActionTarget],
     id: PublicID,
     permission: str,
-) -> _RebacActionTarget:
+) -> _ActionTarget:
     """Return the actor-authorized row a domain action targets.
 
     The one owner of the action preflight ceremony (session gate → actor-scoped
@@ -276,12 +275,12 @@ def authorized_action_target(
 
 def authorized_permission_target(
     info: strawberry.Info,
-    model: type[_RebacActionTarget],
+    model: type[_ActionTarget],
     id: PublicID,
     permission: str,
     *,
-    narrow: Callable[[models.QuerySet[_RebacActionTarget]], models.QuerySet[_RebacActionTarget]] | None = None,
-) -> _RebacActionTarget:
+    narrow: Callable[[models.QuerySet[_ActionTarget]], models.QuerySet[_ActionTarget]] | None = None,
+) -> _ActionTarget:
     """Resolve a target through the exact requested permission scope.
 
     ``narrow`` lets the verb's owner keep rows another verb owns out of the
@@ -291,7 +290,7 @@ def authorized_permission_target(
     user = getattr(info.context.request, "user", None)
     if user is None or not getattr(user, "is_authenticated", False):
         raise PermissionDenied("Authentication required.")
-    scoped = read_scoped_queryset(model, user, action=permission)
+    scoped: models.QuerySet[_ActionTarget] = require_rebac_queryset(model).with_actor(user).with_action(permission)
     if narrow is not None:
         scoped = narrow(scoped)
     instance = instance_for_id(model, id, queryset=scoped)
@@ -299,22 +298,24 @@ def authorized_permission_target(
 
 
 def _require_action_permission(
-    instance: _RebacActionTarget | None,
-    model: type[_RebacActionTarget],
+    instance: _ActionTarget | None,
+    model: type[_ActionTarget],
     id: PublicID,
     permission: str,
-) -> _RebacActionTarget:
+) -> _ActionTarget:
     """Preserve the shared not-found and row-permission result contract."""
 
     if instance is None:
         raise ActionTargetUnavailable({NON_FIELD_ERRORS: [
             f"{model._meta.object_name} {public_id_value(id)!r} was not found.",
         ]})
+    if not isinstance(instance, RebacMixin):
+        raise ImproperlyConfigured(f"{model._meta.label} requires RebacMixin for an authorized action.")
     if not instance.has_access(permission):
         raise ActionTargetUnavailable({NON_FIELD_ERRORS: [
             f"You are not allowed to modify this {model._meta.verbose_name}.",
         ]})
-    return cast(_RebacActionTarget, instance)
+    return instance
 
 
 def resolve_action_target(

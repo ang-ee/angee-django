@@ -55,8 +55,14 @@ export interface ResourcePageRoutesOptions {
   recordMatch?: AddonRoute["recordMatch"];
   /** Named shipped view to seed this collection and its record navigation. */
   defaultResourceView?: string;
+  /** Initial editable filter for this collection and its record navigation. */
+  defaultFilter?: AddonRoute["defaultFilter"];
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function resourcePageRoutes(
   name: string,
   path: string,
@@ -77,6 +83,7 @@ export function resourcePageRoutes(
       ...(options.recordMatch ? { recordMatch: options.recordMatch } : {}),
       ...(options.menu ? { menu: options.menu } : {}),
       ...(options.defaultResourceView ? { defaultResourceView: options.defaultResourceView } : {}),
+      ...(options.defaultFilter !== undefined ? { defaultFilter: options.defaultFilter } : {}),
     },
     {
       name: options.detailName ?? `${name}.record`,
@@ -98,7 +105,10 @@ export interface DashboardPageRouteOptions {
   menu?: string;
 }
 
-/** Declare a routed dashboard while retaining its registry-owned definition. */
+/** Declare a routed dashboard while retaining its registry-owned definition.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function dashboardPageRoute(options: DashboardPageRouteOptions): BaseAddonRoute {
   return {
     name: options.name,
@@ -145,6 +155,7 @@ export interface BaseLayoutProvider extends Omit<LayoutProviderContribution, "co
  * components) and returns it unchanged, so addons `defineBaseAddon({...})`
  * instead of annotating `const x: BaseAddon = {...}`. The authored `menus` form
  * (declaration list or dict) keeps its type for readers of the manifest.
+ * @kind contribution
  */
 export function defineBaseAddon(addon: Omit<BaseAddon, "menus"> & { menus?: readonly MenuDeclarationItem[] }):
   Omit<BaseAddon, "menus"> & { menus?: readonly MenuDeclarationItem[] };

@@ -1,14 +1,13 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { type Row } from "@angee/metadata";
 import {
-  ActionFormDialog,
-  ActionTrigger,
-  useConfirm,
+  RecordVerb,
   useRecordChromeActionMutation,
   useRecordChromeActionOutcome,
   useRecordChromeContext,
   type ActionArg,
   type ActionConfirm,
+  type ActionDescriptor,
   type ButtonVariant,
   type RecordChromeContext,
 } from "@angee/ui";
@@ -16,7 +15,7 @@ import * as React from "react";
 
 /**
  * The record-chrome context a predicate runs against, narrowed to the loaded
- * record the button gates on. Derived from the owning context so a new chrome
+ * record the verb gates on. Derived from the owning context so a new chrome
  * fact reaches predicates without a second declaration drifting from it.
  */
 export type ConditionalMutationButtonContext = Omit<
@@ -31,10 +30,9 @@ interface ConditionalMutationButtonBase<TField extends ActionFieldName> {
   glyph?: string;
   /**
    * Typed arguments the verb collects before it fires (re-enter a password,
-   * pick a target). Declared, the click opens the shared `ActionFormDialog`,
-   * which sends the collected values beside the record id and binds the
-   * outcome's in-band `validationErrors` to its inputs; omitted, the verb
-   * fires on the id alone.
+   * pick a target). Declared, the verb opens the shared action form, which sends
+   * the collected values beside the record id and binds the outcome's in-band
+   * `validationErrors` to its inputs; omitted, the verb fires on the id alone.
    */
   args?: readonly ActionArg[];
 }
@@ -54,19 +52,11 @@ export type ConditionalMutationButtonProps<
   );
 
 /**
- * A record-chrome button that conditionally runs one generated single-id
- * ActionResult mutation, optionally behind a confirm and/or a typed-args form.
- *
- * Domain addons own the predicate, the mutation choice, the confirm copy, and
- * the arg declaration; `useRecordChromeActionMutation` owns the dispatch,
- * feedback, and invalidation of an id-only verb, and `ActionFormDialog` (over
- * `useRecordChromeActionOutcome`) owns collecting args and settling their outcome.
- * This is the *contributed* counterpart of a form's declared `<Action>`, which
- * `RecordActionBar` renders: `FormView` parses section-slot content statically,
- * so a contributed `<Action>`'s `run` could never be bound to a mutation hook.
- * Fold this into `RecordActionBar` once an action registry can dispatch a
- * declared action by name — the seam `integrate/schema.py` already anticipates —
- * and delete it.
+ * A contributed record verb that conditionally runs one generated single-id
+ * ActionResult mutation. The addon owns the predicate, the mutation choice, the
+ * confirm copy and the arg declaration; the descriptor it builds goes through
+ * `RecordVerb` into `RecordActionBar`, which owns the confirm, the args form,
+ * the pending state and the outcome feedback like every other record verb.
  */
 export function ConditionalMutationButton<
   TField extends ActionFieldName = ActionFieldName,
@@ -79,7 +69,6 @@ export function ConditionalMutationButton<
   variant = "secondary",
   when,
 }: ConditionalMutationButtonProps<TField>): React.ReactElement | null {
-  const askConfirm = useConfirm();
   const {
     canonicalResource,
     dataProviderName,
@@ -88,28 +77,8 @@ export function ConditionalMutationButton<
     record,
     formReadOnly,
   } = useRecordChromeContext();
-  const [mutate, mutation] = useRecordChromeActionMutation<TField>(field);
+  const [mutate] = useRecordChromeActionMutation<TField>(field);
   const [mutateOutcome] = useRecordChromeActionOutcome<TField>(field);
-  const [formOpen, setFormOpen] = React.useState(false);
-  // Derived during render: the only consumer is this component's own `onClick`,
-  // which is a fresh arrow each render regardless, so a memo would buy nothing —
-  // and `confirm` arrives as an object literal, so it could never hit anyway.
-  const run = async (): Promise<void> => {
-    if (confirm) {
-      const confirmed = await askConfirm({
-        title: confirm.title,
-        ...(confirm.body !== undefined ? { body: confirm.body } : {}),
-        ...(confirm.danger !== undefined ? { danger: confirm.danger } : {}),
-        confirm: label,
-      });
-      if (!confirmed) return;
-    }
-    if (args) {
-      setFormOpen(true);
-      return;
-    }
-    await mutate(recordId);
-  };
 
   if (
     record === null ||
@@ -118,31 +87,17 @@ export function ConditionalMutationButton<
     return null;
   }
 
-  return (
-    <>
-      <ActionTrigger
-        variant={variant}
-        loading={mutation.fetching}
-        glyph={glyph}
-        onClick={() => {
-          void run();
-        }}
-      >
-        {label}
-      </ActionTrigger>
-      {args ? (
-        <ActionFormDialog
-          action={{
-            id: field,
-            label,
-            args,
-            submit: (values) => mutateOutcome(recordId, values),
-          }}
-          context={{ record, selectedIds: [recordId] }}
-          open={formOpen}
-          onOpenChange={setFormOpen}
-        />
-      ) : null}
-    </>
-  );
+  const action: ActionDescriptor = {
+    id: field,
+    label,
+    icon: glyph,
+    placement: "toolbar",
+    danger: variant === "danger",
+    primary: variant === "primary",
+    ...(confirm ? { confirm } : {}),
+    ...(args
+      ? { args, submit: (values) => mutateOutcome(recordId, values) }
+      : { run: async () => { await mutate(recordId); } }),
+  };
+  return <RecordVerb action={action} />;
 }

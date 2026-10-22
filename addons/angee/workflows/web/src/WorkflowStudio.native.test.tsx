@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { StudioStory } from "./WorkflowStudio.stories";
 import type { GraphEditorProps } from "@angee/ui";
@@ -52,7 +52,7 @@ test("generated inspector edits, undo, save, and publication use the native owne
   fireEvent.click(screen.getByRole("button", { name: "Redo" }));
   await waitFor(() => expect((key as HTMLInputElement).value).toBe("renamed"));
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Save draft" }).hasAttribute("disabled")).toBe(true));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save draft" }).matches("[disabled], [aria-disabled='true']")).toBe(true));
   const save = requests.mock.calls.map(([request]) => request).find((request) => request.query.includes("save_workflow_draft"));
   expect(save.variables).toMatchObject({ revision: 1, nodeKeys: { entry: "renamed" }, layout: { entry: [80, 60] }, draft: {
     nodes: { entry: { config: { target: "nte_7", threshold: 1 } } }, results: [{ from: "entry" }],
@@ -82,6 +82,7 @@ test("discard reloads the server draft and clears the conflict", async () => {
   fireEvent.change(key, { target: { value: "mine" } });
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
   fireEvent.click(await screen.findByRole("button", { name: "Discard mine and load latest" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard mine and load latest" }));
   await waitFor(() => expect(screen.queryByRole("button", { name: "Overwrite with mine" })).toBeNull());
   fireEvent.click(await screen.findByTestId("rf__node-entry"));
   expect((await screen.findByRole("textbox", { name: "Key" }) as HTMLInputElement).value).toBe("entry");
@@ -93,9 +94,10 @@ test("a failed latest read preserves edits and keeps conflict recovery available
   fireEvent.change(key, { target: { value: "mine" } });
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
   fireEvent.click(await screen.findByRole("button", { name: "Discard mine and load latest" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard mine and load latest" }));
   expect(await screen.findByText("Request failed.", {}, { timeout: 10000 })).toBeTruthy();
   expect((screen.getByRole("textbox", { name: "Key" }) as HTMLInputElement).value).toBe("mine");
-  expect(screen.getByRole("button", { name: "Overwrite with mine" }).hasAttribute("disabled")).toBe(false);
+  expect(screen.getByRole("button", { name: "Overwrite with mine" }).matches("[disabled], [aria-disabled='true']")).toBe(false);
   fireEvent.change(key, { target: { value: "still_mine" } });
   expect(screen.getByText("Request failed.")).toBeTruthy();
 }, 15000);
@@ -165,7 +167,7 @@ test("an empty persisted layout displays automatic horizontal positions without 
   const requests = vi.fn();
   render(<StudioStory linked emptyLayout onRequest={requests} />);
   await selectEntry();
-  expect(screen.getByRole("button", { name: "Save draft" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Save draft" }).matches("[disabled], [aria-disabled='true']")).toBe(true);
   expect(screen.getByTestId("rf__node-entry").style.transform).not.toBe(screen.getByTestId("rf__node-second").style.transform);
   fireEvent.change(screen.getByRole("textbox", { name: "Label" }), { target: { value: "Edited" } });
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
@@ -232,9 +234,31 @@ test("monitor-only Studio displays the draft and inspector without editing contr
   render(<StudioStory readOnly />);
   fireEvent.click(await screen.findByTestId("rf__node-entry"));
   expect(await screen.findByText("Selected record")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Add step" }).hasAttribute("disabled")).toBe(true);
-  expect(screen.getByRole("button", { name: "Publish" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Add step" }).matches("[disabled], [aria-disabled='true']")).toBe(true);
+  expect(screen.getByRole("button", { name: "Publish" }).matches("[disabled], [aria-disabled='true']")).toBe(true);
   expect(screen.queryByRole("textbox", { name: "Key" })).toBeNull();
+});
+
+test("Studio projects extension points and immutable contributed nodes with their source addon", async () => {
+  const requests = vi.fn();
+  render(<StudioStory extended onRequest={requests} />);
+  expect(await screen.findByText("Extension points: after_entry")).toBeTruthy();
+  const contributed = await screen.findByTestId("rf__node-contributed_review");
+  expect(graph.props?.nodes.find((node) => node.id === "contributed_review")).toMatchObject({
+    readOnly: true, detail: "Contributed by tests.extcontrib",
+  });
+  fireEvent.click(contributed);
+  expect(screen.getAllByText("Contributed by tests.extcontrib").length).toBeGreaterThan(0);
+  expect(screen.getByText("after_entry")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Delete Contributed review (contributed_review)" }).matches("[disabled], [aria-disabled='true']")).toBe(true);
+
+  fireEvent.click(screen.getByTestId("rf__node-entry"));
+  fireEvent.change(await screen.findByRole("textbox", { name: "Label" }), { target: { value: "Edited entry" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+  await waitFor(() => expect(requests.mock.calls.some(([request]) => request.query.includes("save_workflow_draft"))).toBe(true));
+  const save = requests.mock.calls.map(([request]) => request).find((request) => request.query.includes("save_workflow_draft"));
+  expect(save.variables.draft.nodes.contributed_review).toBeUndefined();
+  expect(save.variables.layout.contributed_review).toBeUndefined();
 });
 
 test("typing config keeps graph outcomes and editing available until the history group commits", async () => {
@@ -253,8 +277,8 @@ test("typing config keeps graph outcomes and editing available until the history
   expect(requests.mock.calls.filter(([request]) => request.query.includes("workflow_step_outcomes"))).toHaveLength(count);
   fireEvent.blur(threshold);
   await waitFor(() => expect(requests.mock.calls.filter(([request]) => request.query.includes("workflow_step_outcomes"))).toHaveLength(count + 1));
-  expect(screen.getByRole("button", { name: "Add from Done on Entry (entry)" }).hasAttribute("disabled")).toBe(false);
-  expect(screen.getByRole("button", { name: "Delete Entry (entry)" }).hasAttribute("disabled")).toBe(false);
+  expect(screen.getByRole("button", { name: "Add from Done on Entry (entry)" }).matches("[disabled], [aria-disabled='true']")).toBe(false);
+  expect(screen.getByRole("button", { name: "Delete Entry (entry)" }).matches("[disabled], [aria-disabled='true']")).toBe(false);
   release?.();
 });
 
@@ -351,7 +375,7 @@ test("config issues are reapplied after history resets the form", async () => {
   fireEvent.change(threshold, { target: { value: "2" } });
   fireEvent.blur(threshold);
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Publish" }).hasAttribute("disabled")).toBe(false));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Publish" }).matches("[disabled], [aria-disabled='true']")).toBe(false));
   fireEvent.focus(threshold);
   fireEvent.change(threshold, { target: { value: "3" } });
   fireEvent.blur(threshold);

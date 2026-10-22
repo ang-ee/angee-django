@@ -14,6 +14,17 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/ui")>()),
   useDashboardRegistry: () => ({ store: mocks.store }),
   useResourceViewUtilityContext: () => ({ resource: "example.Item", filter: {} }),
+  // The shared settle toasts the outcome; here a failure lands in the document.
+  useActionResultRun: () => async (fire: () => Promise<{ ok: boolean; message?: string } | null | undefined>) => {
+    try {
+      return (await fire()) ?? undefined;
+    } catch (error) {
+      const note = document.createElement("p");
+      note.textContent = error instanceof Error ? error.message : String(error);
+      document.body.append(note);
+      return undefined;
+    }
+  },
 }));
 
 import { CaptureDashboardAction } from "./CaptureDashboardAction";

@@ -60,6 +60,7 @@ type ArgValues = Record<string, unknown>;
  * On an `ok=false` outcome it binds the in-band `validationErrors` to their args
  * and stays open; it closes only on `ok=true`, toasting the success `message`.
  * A thrown (non-domain / GraphQL) failure surfaces in the form-level banner.
+ * @kind surface
  */
 export function ActionFormDialog(props: ActionFormDialogProps): React.ReactElement | null {
   return props.open ? <ActionFormDialogOpening {...props} /> : null;
@@ -135,7 +136,7 @@ function ActionArgsDialog({
       submitting={submitting}
       disabled={saveConflict}
       danger={action.danger}
-      label={action.label}
+      label={action.submitLabel ?? action.label}
       onSubmit={inline ? run : undefined}
     />
   );
@@ -279,7 +280,7 @@ function ActionArgRow({
         <FieldDescription>{arg.description}</FieldDescription>
       ) : null}
       {messages && messages.length > 0 ? (
-        <p className="mt-1 text-xs leading-5 text-danger-text">
+        <p className="mt-1 text-12 leading-5 text-danger-text">
           {messages.join(", ")}
         </p>
       ) : null}
@@ -362,6 +363,9 @@ function ActionRelationControl({
     <RelationFieldWidget
       relation={relation}
       filters={arg.filters}
+      optionDescriptionField={arg.optionDescriptionField}
+      optionStatusField={arg.optionStatusField}
+      optionStatusArguments={arg.optionStatusArguments}
       create={arg.create ?? null}
       value={relationValueId(value)}
       readOnly={readOnly}

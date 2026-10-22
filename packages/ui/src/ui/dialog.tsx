@@ -17,6 +17,9 @@ import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { textRoleVariants } from "./text";
 
+/**
+ * @kind token
+ */
 export const dialogVariants = tv({
   slots: {
     backdrop:
@@ -66,14 +69,26 @@ export type DialogTriggerProps<Payload = unknown> =
   BaseDialogTriggerProps<Payload>;
 export type DialogPortalProps = BaseDialogPortalProps;
 
+/**
+ * @owner Dialog
+ */
 export const DialogRoot = BaseDialog.Root;
+/**
+ * @owner Dialog
+ */
 export const DialogTrigger = BaseDialog.Trigger;
+/**
+ * @owner Dialog
+ */
 export const DialogPortal = BaseDialog.Portal;
 
 export type DialogBackdropProps = BaseDialogBackdropProps & {
   className?: string;
 };
 
+/**
+ * @owner Dialog
+ */
 export const DialogBackdrop = React.forwardRef<
   HTMLDivElement,
   DialogBackdropProps
@@ -97,10 +112,16 @@ export type DialogContentProps = BaseDialogPopupProps &
 /** Where a dialog returns focus when it closes; Base UI's `finalFocus`. */
 export type DialogReturnFocus = BaseDialogPopupProps["finalFocus"];
 
-/** A surface may supply return focus for its immediate dialog, across portals. */
+/** A surface may supply return focus for its immediate dialog, across portals.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const DialogReturnFocusContext: React.Context<DialogReturnFocus> =
   React.createContext<DialogReturnFocus>(undefined);
 
+/**
+ * @owner Dialog
+ */
 export const DialogContent = React.forwardRef<
   HTMLDivElement,
   DialogContentProps
@@ -131,6 +152,9 @@ export type DialogHeaderProps = React.HTMLAttributes<HTMLDivElement> & {
   className?: string;
 };
 
+/**
+ * @owner Dialog
+ */
 export const DialogHeader = React.forwardRef<
   HTMLDivElement,
   DialogHeaderProps
@@ -144,6 +168,9 @@ export type DialogBodyProps = React.HTMLAttributes<HTMLDivElement> & {
   className?: string;
 };
 
+/**
+ * @owner Dialog
+ */
 export const DialogBody = React.forwardRef<HTMLDivElement, DialogBodyProps>(
   function DialogBody({ className, ...props }, ref) {
     const styles = dialogVariants();
@@ -156,6 +183,9 @@ export type DialogFooterProps = React.HTMLAttributes<HTMLDivElement> & {
   className?: string;
 };
 
+/**
+ * @owner Dialog
+ */
 export const DialogFooter = React.forwardRef<
   HTMLDivElement,
   DialogFooterProps
@@ -169,6 +199,9 @@ export type DialogTitleProps = BaseDialogTitleProps & {
   className?: string;
 };
 
+/**
+ * @owner Dialog
+ */
 export const DialogTitle = React.forwardRef<
   HTMLParagraphElement,
   DialogTitleProps
@@ -188,6 +221,9 @@ export type DialogDescriptionProps = BaseDialogDescriptionProps & {
   className?: string;
 };
 
+/**
+ * @owner Dialog
+ */
 export const DialogDescription = React.forwardRef<
   HTMLParagraphElement,
   DialogDescriptionProps
@@ -207,6 +243,9 @@ export type DialogCloseProps = BaseDialogCloseProps & {
   className?: string;
 };
 
+/**
+ * @owner Dialog
+ */
 export const DialogClose = React.forwardRef<
   HTMLButtonElement,
   DialogCloseProps
@@ -227,6 +266,9 @@ export const DialogClose = React.forwardRef<
 });
 DialogClose.displayName = "DialogClose";
 
+/**
+ * @kind primitive
+ */
 export const Dialog = {
   Root: DialogRoot,
   Trigger: DialogTrigger,

@@ -11,6 +11,10 @@ export const DEFAULT_GRAPH_LAYOUT: Required<GraphViewLayout> = {
   marginy: 24,
 };
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function layoutGraph({
   nodes,
   edges,
@@ -65,7 +69,10 @@ export function layoutGraph({
 }
 
 
-/** Search alternating lanes, then use the nearest exterior lane when all are occupied. */
+/** Search alternating lanes, then use the nearest exterior lane when all are occupied.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function findFreeGraphPosition(
   size: { width: number; height: number },
   preferred: GraphViewPosition,
@@ -91,7 +98,10 @@ export function findFreeGraphPosition(
   return axis === "horizontal" ? { x: value, y: preferred.y } : { x: preferred.x, y: value };
 }
 
-/** Place a new node beside an anchor without moving existing nodes. */
+/** Place a new node beside an anchor without moving existing nodes.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function placeGraphNodeBeside(
   anchor: Rect,
   size: { width: number; height: number },

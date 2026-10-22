@@ -1,18 +1,16 @@
 """Additional intake scenarios on the shared emitted-host fixtures."""
 
-from io import StringIO
 from unittest.mock import patch
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import connection
 from django.test import TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 
-from angee.base.errors import RecordAccessSubjectRefused
-from angee.base.identity import public_id_of
+from angee.errors import RecordAccessSubjectRefused
+from angee.identity import public_id_of
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessCase, grant_rows
 
@@ -176,20 +174,6 @@ class IntakeCampaign(IntakeAccessCase):
         with actor_context(self.reader), self.assertRaises(PermissionDenied):
             first.task.with_actor(self.reader).message_post("Unusable comment arm")
 
-    def test_reconciliation_dry_run_and_apply_clear_only_untouched_unconfirmed_party(self):
-        eligible = self.legacy_need()
-        confirmed = self.legacy_need(confirmed=True)
-        edited = self.legacy_need(touched=True)
-        output = StringIO()
-        call_command("intake_reconcile_parties", stdout=output)
-        eligible.refresh_from_db()
-        self.assertIsNotNone(eligible.party_id)
-        call_command("intake_reconcile_parties", "--apply", stdout=StringIO())
-        for row in (eligible, confirmed, edited):
-            row.refresh_from_db()
-            self.assertEqual(row.party_id is None, row.pk == eligible.pk)
-
-
 class IntakeDenormalizedCampaign(IntakeCampaign):
     storage = "denormalized"
 
@@ -325,7 +309,10 @@ class CaptureCampaign(TransactionTestCase):
         handle = apps.get_model("parties", "Handle")._base_manager.get(platform="email", value=email)
         link = apps.get_model("parties", "Party").statements.get(handle=handle, subject_id=needs[0].party_id)
         self.assertEqual((link.confidence, link.is_confirmed, handle.party_id), (0.4, False, None))
-        self.assertEqual(link.evidence, [{"model": need._meta.label, "id": public_id_of(need)} for need in needs])
+        self.assertEqual(
+            link.evidence,
+            [{"model": need._meta.label, "id": public_id_of(need), "pointer": ""} for need in needs],
+        )
         self.assertEqual([grant_rows(store) for store in stores], before)
 
     def test_email_capture_requires_confirmed_sender_link_and_replays_once(self):

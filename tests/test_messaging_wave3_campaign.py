@@ -95,18 +95,18 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
 
 
 @pytest.mark.parametrize("attachment_role", ("chatter", "source"))
-@pytest.mark.parametrize("actor_role", ("reader", "writer", "owner", "outsider", "other_reader", "anonymous"))
+@pytest.mark.parametrize("actor_role", ("reader", "writer", "manager", "outsider", "other_reader", "anonymous"))
 def test_record_arm_is_read_only_and_role_filtered(campaign_access, campaign_user, attachment_role, actor_role):
     actor = AnonymousUser() if actor_role == "anonymous" else campaign_user(actor_role)
     with system_context(reason="tests.t3.thread_matrix"):
         record = ChatterDoc.objects.create(title="Record A")
         other = ChatterDoc.objects.create(title="Record B")
         attachment = ThreadAttachment.objects.ensure_for_record(record, role=attachment_role)
-    if actor_role in ("reader", "writer", "owner"):
+    if actor_role in ("reader", "writer", "manager"):
         grant(record, actor_role, actor)
     elif actor_role == "other_reader":
         grant(other, "reader", actor)
-    expected = attachment_role == "chatter" and actor_role in ("reader", "writer", "owner")
+    expected = attachment_role == "chatter" and actor_role in ("reader", "writer", "manager")
     thread = attachment.thread
     for permission in ("read", "write", "delete", "share", "transfer"):
         allowed = expected and permission == "read"

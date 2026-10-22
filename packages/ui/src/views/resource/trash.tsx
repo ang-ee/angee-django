@@ -26,13 +26,22 @@ import { useAuthoredResourceMutation } from "./authored-resource-mutation";
 import { RestoreRecord, TrashRecord } from "./documents";
 import { defineRowAction, type RowActionDeclaration } from "./RowActions";
 
-/** The record permission that offers trash and restore — the shared verbs' authority. */
+/** The record permission that offers trash and restore — the shared verbs' authority.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const TRASH_PERMISSION = "delete";
 
-/** Mirrors the backend's `TRASH_REASON_MAX_LENGTH`. */
+/** Mirrors the backend's `TRASH_REASON_MAX_LENGTH`.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const TRASH_REASON_MAX_LENGTH = 1000;
 
-/** The removed-record stamps the backend's `TrashedRefMixin` projects. */
+/** The removed-record stamps the backend's `TrashedRefMixin` projects.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const TRASH_STAMP_FIELDS = ["trashed_at", "trash_reason", "trashed_by_label"] as const;
 
 /** Ask to move one record to the trash; resolves the optional reason, or `null` when kept. */
@@ -43,6 +52,7 @@ export type TrashPrompt = (name?: string) => Promise<{ reason: string } | null>;
  * cancel label that names the record when the caller knows its name. Domain
  * verbs with their own transport (record chatter) compose it before their
  * mutation; resource records use {@link useTrashRecord}.
+ * @owner ModalsHost
  */
 export function useTrashPrompt(): TrashPrompt {
   const prompt = usePrompt();
@@ -80,6 +90,7 @@ export interface UseTrashRecordResult {
  * Run the shared `trash_record` / `restore_record` verbs for one trashable
  * resource, settling their outcome through the shared toast owner and
  * refreshing the resource's caches. The server checks `delete` on the record.
+ * @owner DeletePreviewDialog
  */
 export function useTrashRecord(resource: DataResourceMetadata | null | undefined): UseTrashRecordResult {
   const askTrash = useTrashPrompt();
@@ -131,6 +142,7 @@ export interface TrashActionOptions<TRow extends Row = Row> {
  * Record-form verbs for a trashable resource: Trash on an untrashed record,
  * Restore on a trashed one, each offered only when the record projects the
  * `delete` permission. The form must read the trash flag (a hidden field).
+ * @owner RecordActionBar
  */
 export function useTrashActions(
   resource: DataResourceMetadata | null | undefined,
@@ -170,7 +182,9 @@ export function useTrashActions(
   }, [available, flag, name, restore, t, trash]);
 }
 
-/** List-row verbs matching {@link useTrashActions}, for `ListView` `rowActions`. */
+/** List-row verbs matching {@link useTrashActions}, for `ListView` `rowActions`.
+ * @owner Action
+ */
 export function useTrashRowActions<TRow extends Row>(
   resource: DataResourceMetadata | null | undefined,
   options: TrashActionOptions<TRow> = {},
@@ -222,7 +236,9 @@ export interface RemovedDisclosureProps {
   children: React.ReactNode;
 }
 
-/** The collapsed "Removed (n)" section shared by every removed-records list. */
+/** The collapsed "Removed (n)" section shared by every removed-records list.
+ * @kind fragment
+ */
 export function RemovedDisclosure({
   count,
   defaultOpen = false,
@@ -254,7 +270,9 @@ export interface RemovedItemProps {
   children?: React.ReactNode;
 }
 
-/** One removed record: its name, who removed it and why, and Restore when allowed. */
+/** One removed record: its name, who removed it and why, and Restore when allowed.
+ * @kind fragment
+ */
 export function RemovedItem({
   label,
   trashedByLabel,
@@ -270,10 +288,10 @@ export function RemovedItem({
         <span className="truncate text-13 font-medium text-fg">{label}</span>
         {children}
         {trashedByLabel ? (
-          <span className="text-xs text-fg-muted">{t("trash.removedBy", { name: trashedByLabel })}</span>
+          <span className="text-12 text-fg-muted">{t("trash.removedBy", { name: trashedByLabel })}</span>
         ) : null}
         {trashReason ? (
-          <span className="text-xs text-fg-muted">{t("trash.removedReason", { reason: trashReason })}</span>
+          <span className="text-12 text-fg-muted">{t("trash.removedReason", { reason: trashReason })}</span>
         ) : null}
       </div>
       {onRestore ? (
@@ -285,10 +303,72 @@ export function RemovedItem({
   );
 }
 
-export interface RemovedRecordsProps<TRow extends Row = Row> {
-  resource: DataResourceMetadata | null | undefined;
+export interface RemovedListProps<TRow extends Row = Row> {
+  /** The removed rows, from the shared trash read or a domain read (a queue's removed tasks). */
+  rows: readonly TRow[];
+  /** The removed count when the read pages; defaults to the rows given. */
+  total?: number;
+  /** The read's failure. */
+  error?: unknown;
   /** The record's display name. */
   label: (row: TRow) => string;
+  /** Where a row keeps who removed it and why; default: the shared trash stamps. */
+  stamps?: (row: TRow) => { trashedByLabel?: string | null; trashReason?: string | null };
+  /** Whether a row offers Restore; default: the reader holds the trash permission on it. */
+  canRestore?: (row: TRow) => boolean;
+  /** The restore verb: the shared `restore_record`, or a domain's own. */
+  restore?: (row: TRow) => void | Promise<unknown>;
+  /** Marks every Restore busy while a restore runs. */
+  busy?: boolean;
+  className?: string;
+}
+
+/**
+ * "Removed (n)" over rows already read: the disclosure, each row's name, who removed
+ * it and why, and Restore when the reader may. `RemovedRecords` composes it over the
+ * shared trash read and verbs; a domain with its own removed read and restore verb
+ * composes it directly.
+ * @kind surface
+ */
+export function RemovedList<TRow extends Row = Row>({
+  rows,
+  total,
+  error,
+  label,
+  stamps,
+  canRestore,
+  restore,
+  busy = false,
+  className,
+}: RemovedListProps<TRow>): React.ReactElement | null {
+  const t = useUiT();
+  if (error) return <ErrorBanner description={t("trash.loadFailed")} />;
+  return (
+    <RemovedDisclosure count={total ?? rows.length} className={className}>
+      {rows.map((row) => {
+        const id = rowPublicId(row);
+        const stamp = stamps?.(row) ?? {
+          trashedByLabel: typeof row.trashed_by_label === "string" ? row.trashed_by_label : null,
+          trashReason: typeof row.trash_reason === "string" ? row.trash_reason : null,
+        };
+        const restorable = restore && (canRestore ? canRestore(row) : Boolean(id) && holdsPermission(row, TRASH_PERMISSION));
+        return (
+          <RemovedItem
+            key={id ?? label(row)}
+            label={label(row)}
+            trashedByLabel={stamp.trashedByLabel}
+            trashReason={stamp.trashReason}
+            busy={busy}
+            {...(restorable ? { onRestore: () => void restore(row) } : {})}
+          />
+        );
+      })}
+    </RemovedDisclosure>
+  );
+}
+
+export interface RemovedRecordsProps<TRow extends Row = Row> extends Pick<RemovedListProps<TRow>, "label" | "className"> {
+  resource: DataResourceMetadata | null | undefined;
   /** Fields the label reads, beside the identity, permissions and trash stamps. */
   fields?: readonly string[];
   /** Narrow removed records to the surface's scope, e.g. one container. */
@@ -296,7 +376,6 @@ export interface RemovedRecordsProps<TRow extends Row = Row> {
   /** Keep only rows the surface lists as removed, e.g. the roots of a removed subtree. */
   select?: (rows: readonly TRow[]) => readonly TRow[];
   pageSize?: number;
-  className?: string;
 }
 
 type RemovedRecordRow = BaseRecord & Row;
@@ -305,6 +384,7 @@ type RemovedRecordRow = BaseRecord & Row;
  * "Removed (n)" for any trashable resource: the trashed rows the reader may
  * still read (Zed withholds them from everyone else), each with Restore when
  * the row projects `delete`. Renders nothing for an untrashable resource.
+ * @kind surface
  */
 export function RemovedRecords<TRow extends Row = Row>({
   resource,
@@ -315,7 +395,6 @@ export function RemovedRecords<TRow extends Row = Row>({
   pageSize = 50,
   className,
 }: RemovedRecordsProps<TRow>): React.ReactElement | null {
-  const t = useUiT();
   const flag = trashFlagField(resource);
   const { restore, busy } = useTrashRecord(resource);
   const selection = React.useMemo(
@@ -333,22 +412,15 @@ export function RemovedRecords<TRow extends Row = Row>({
   const loaded = (list.result.data ?? []) as unknown as readonly TRow[];
   const rows = select ? select(loaded) : loaded;
   if (!flag) return null;
-  if (list.query.error) return <ErrorBanner description={t("trash.loadFailed")} />;
   return (
-    <RemovedDisclosure count={select ? rows.length : list.result.total ?? rows.length} className={className}>
-      {rows.map((row) => {
-        const id = rowPublicId(row);
-        return (
-          <RemovedItem
-            key={id ?? label(row)}
-            label={label(row)}
-            trashedByLabel={typeof row.trashed_by_label === "string" ? row.trashed_by_label : null}
-            trashReason={typeof row.trash_reason === "string" ? row.trash_reason : null}
-            busy={busy}
-            {...(id && holdsPermission(row, TRASH_PERMISSION) ? { onRestore: () => void restore(id) } : {})}
-          />
-        );
-      })}
-    </RemovedDisclosure>
+    <RemovedList
+      rows={rows}
+      total={select ? rows.length : list.result.total ?? rows.length}
+      error={list.query.error}
+      label={label}
+      busy={busy}
+      restore={(row) => { const id = rowPublicId(row); if (id) void restore(id); }}
+      className={className}
+    />
   );
 }

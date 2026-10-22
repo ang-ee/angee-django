@@ -43,6 +43,8 @@ export type MutationDialogParseValues<TValues> = (
  * input is reachable user validation. `datetime` is the action-argument wire
  * boundary: it preserves the picked local wall time and adds that instant's
  * local UTC offset, so Django never receives a naive datetime.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export const mutationDialogValueCodecs = {
   string(value: unknown): string | null {
@@ -141,6 +143,7 @@ export interface MutationDialogProps<
  * copied dialog ceremony: reset-on-close, value state, required gating,
  * submit busy/error state, and rendering descriptor fields through the shared
  * widget registry.
+ * @kind surface
  */
 export function MutationDialog<
   TValues extends Record<string, unknown>,

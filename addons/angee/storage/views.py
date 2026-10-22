@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
+from typing import Literal
+
 from django.apps import apps
 from django.http import FileResponse, HttpRequest, JsonResponse
 from django.http.response import HttpResponseBase
-from django.utils.cache import get_conditional_response, patch_cache_control, patch_vary_headers, quote_etag
+from django.utils.cache import get_conditional_response, patch_cache_control, patch_vary_headers
 from django.utils.csp import CSP, build_policy
+from django.utils.http import quote_etag
 from django.views.decorators.csp import csp_override
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -22,7 +26,11 @@ from angee.storage.uploads import (
     renders_inline,
 )
 
-DOWNLOAD_CSP = {"default-src": [CSP.NONE], "style-src": [CSP.UNSAFE_INLINE], "sandbox": True}
+DOWNLOAD_CSP: dict[str, Collection[str] | str | Literal[True]] = {
+    "default-src": [CSP.NONE],
+    "style-src": [CSP.UNSAFE_INLINE],
+    "sandbox": True,
+}
 """The policy on a download: opened directly, served bytes load nothing and run nothing.
 
 ``sandbox`` gives the document an opaque origin; the inline style a browser's own
@@ -65,8 +73,9 @@ def upload(request: HttpRequest) -> JsonResponse:
     return JsonResponse({"id": str(row.sqid)})
 
 
+# Django handles True as a bare directive; django-stubs omits that supported value.
 @require_http_methods(["GET"])
-@csp_override(DOWNLOAD_CSP)
+@csp_override(DOWNLOAD_CSP)  # type: ignore[arg-type]
 def download(request: HttpRequest, filename: str) -> HttpResponseBase:
     """Stream one READY file's bytes for a signed proxy download token.
 
@@ -93,7 +102,8 @@ def download(request: HttpRequest, filename: str) -> HttpResponseBase:
     except exceptions.UploadError as error:
         return JsonResponse({"error": str(error), "code": error.code}, status=error.status_code)
     etag = quote_etag(row.content_hash)
-    content_type = row.mime_type.mime_type if row.mime_type_id else FALLBACK_MIME
+    mime_type = row.mime_type
+    content_type = mime_type.mime_type if mime_type is not None else FALLBACK_MIME
     if conditional := get_conditional_response(request, etag=etag):
         return _download_cache_response(conditional, etag, content_type)
     stream = row.open_stream()

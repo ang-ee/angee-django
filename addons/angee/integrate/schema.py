@@ -25,13 +25,13 @@ from django.db.models import Count, Prefetch
 from django.utils import timezone
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
-from rebac import MissingActorError, PermissionDenied, system_context
+from rebac import PermissionDenied, check_new, system_context, to_subject_ref
+from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
-from angee.base.errors import exception_text
-from angee.base.identity import public_id_of
+from angee.errors import exception_text
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
@@ -52,7 +52,7 @@ from angee.graphql.impl import ImplChoice, can_read_impl_choices
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.graphql.writes import instance_for_write, write_queryset
+from angee.graphql.writes import instance_for_write
 from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
@@ -60,9 +60,11 @@ from angee.iam.permissions import is_platform_admin
 from angee.iam.permissions import request_from_info as _request
 from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
+from angee.identity import public_id_of
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
+from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, PROVIDER_UNAVAILABLE, OAuthFlowError
@@ -131,9 +133,15 @@ class ConsoleIntegrationCapabilitiesQuery:
             mode = model.integration_create_mode
             if mode is None:
                 continue
-            try:
-                model.objects.check_create()
-            except MissingActorError, PermissionDenied:
+            resource_type = model_resource_type(model)
+            if (
+                resource_type is None
+                or not check_new(
+                    subject=to_subject_ref(_session_user(info)),
+                    action="create",
+                    resource_type=resource_type,
+                ).allowed
+            ):
                 continue
             capabilities.append(
                 IntegrationCapability(
@@ -732,8 +740,8 @@ def apply_integration_patch_fields(
     Lifecycle is guarded by ``Integration.set_lifecycle()``, which eagerly saves
     through the transition hook. It is therefore deliberately omitted from the
     returned set so child update callers do not re-emit the state write.
-    Credential attachment and lifecycle transitions save eagerly, before unsaved
-    patch values are set.
+    Credential attachment, lifecycle transitions and ``transfer_ownership`` save
+    eagerly, before unsaved patch values are set; a null owner clears it.
     """
 
     provided: set[str] = set()
@@ -747,15 +755,14 @@ def apply_integration_patch_fields(
     if data.lifecycle is not strawberry.UNSET and (data.lifecycle is not None or not ignore_null_lifecycle):
         lifecycle = IntegrationLifecycle.from_value(data.lifecycle)
         target.set_lifecycle(lifecycle)
+    if data.owner is not strawberry.UNSET:
+        target.transfer_ownership(None if data.owner is None else _user_from_public_id(data.owner))
     if hasattr(data, "display_name") and data.display_name is not strawberry.UNSET:
         target.display_name = data.display_name or ""
         provided.add("display_name")
     if data.vendor is not strawberry.UNSET:
         target.vendor = resolve_action_target(Vendor, data.vendor, reason=f"{reason}.vendor")
         provided.add("vendor")
-    if data.owner is not strawberry.UNSET:
-        target.owner = _user_from_public_id(data.owner)
-        provided.add("owner")
     if data.account is not strawberry.UNSET:
         target.account = (
             None
@@ -1003,8 +1010,9 @@ class ConnectionMutation:
         info: strawberry.Info,
         external_account_sqid: str,
     ) -> UnlinkAccountResult:
-        """Remove this session user's credential link to an external account.
+        """Remove this session user's credential link to an external account and release it.
 
+        The verb authorizes the release: only the session user's own ownership is cleared.
         ``Credential.check_disconnect()`` validates the model invariant before
         deletion. The login addon's model contribution vetoes removing a user's
         last sign-in account by raising a coded :class:`ValidationError`, surfaced here
@@ -1021,10 +1029,10 @@ class ConnectionMutation:
                 )
             if credential is None:
                 return UnlinkAccountResult(ok=False)
-            external_account = credential.external_account
+            assert credential.external_account_id is not None
             with system_context(reason="integrate.graphql.disconnect_account"), transaction.atomic():
                 Credential.objects.prepare_disconnect(credential)
-                ExternalAccount.objects.revoke_owner(external_account, user)
+                ExternalAccount.objects.filter(pk=credential.external_account_id).release(user)
                 deleted, _details = Credential.objects.filter(pk=credential.pk).with_action("delete").delete()
             return UnlinkAccountResult(ok=deleted > 0)
         except ValidationError as error:
@@ -1054,22 +1062,15 @@ class IntegrateExternalAccountMutation:
 
     @strawberry.mutation(name="delete_external_account", permission_classes=_ADMIN_PERMISSION_CLASSES)
     def delete_external_account(self, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Revoke the owner grant, then delete the account (owner is a REBAC tuple)."""
+        """Delete the account; its ownership is a column and leaves with the row."""
 
-        def revoke(account: Any) -> None:
-            owner = ExternalAccount.objects.owner_for(account)
-            if owner is not None:
-                ExternalAccount.objects.revoke_owner(account, owner)
-
-        with transaction.atomic():
-            return delete_by_public_id(
-                ExternalAccount,
-                str(id),
-                reason="integrate.graphql.external_account.delete",
-                confirm=confirm,
-                before_delete=revoke,
-                queryset=write_queryset(ExternalAccount),
-            )
+        return delete_by_public_id(
+            ExternalAccount,
+            str(id),
+            reason="integrate.graphql.external_account.delete",
+            confirm=confirm,
+            queryset=ExternalAccount.objects.for_write(),
+        )
 
 
 @strawberry.type
@@ -1144,7 +1145,7 @@ class IntegrateCredentialMutation:
                 reason="integrate.graphql.credential.delete",
                 confirm=confirm,
                 before_delete=prepare_delete,
-                queryset=write_queryset(Credential),
+                queryset=Credential.objects.for_write(),
             )
 
 
@@ -1448,7 +1449,7 @@ class WebhookSubscriptionType(AngeeNode):
     OAuthClient's revealed ``client_secret``, a webhook secret is never read back.
     """
 
-    owner: UserType
+    owner: UserType | None
     integration_filter: IntegrationType | None
     target_url: auto
     event_kinds: JSON
@@ -1565,6 +1566,13 @@ class RecordLinkType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry_django.field(only=["stream_id", "external_key"], select_related=["stream__integration"])
+    def source_url(self) -> str | None:
+        """Return the selected connector's provider URL for this remote identity."""
+
+        integration = cast(Any, self).stream.integration.concrete_capability()
+        return cast(str | None, integration.source_url(self))
+
     @strawberry_django.field(only=["stream_id", "inbound", "outbox_last_error"], select_related=["stream"])
     def failures(self, open_only: bool = True) -> list[SyncFailureType]:
         return [cast(Any, SyncFailureType).from_pydantic(row) for row in cast(Any, self).failures(open_only=open_only)]
@@ -1646,13 +1654,15 @@ _RECORD_LINK_RESOURCE = hasura_model_resource(
         "remote_version",
         "last_seen_at",
     ],
-    sortable=["external_key", "last_seen_at", "status", "origin", "remote_version"],
+    sortable=["external_key", "last_seen_at", "status", "origin", "remote_version", "updated_at"],
     aggregatable=["id"],
     groupable=["status", "origin"],
     insert=False,
     update=False,
     delete=False,
     field_id_decode={"stream": public_pk_decoder(SyncStream)},
+    record_ref_filters=("model_label", "record_id"),
+    record_ref_requires_read=True,
 )
 strawberry.enum(cast(Any, ConflictKeep))
 
@@ -1664,12 +1674,13 @@ def _authorized_failure(
     slot: int | None,
 ) -> SyncFailure:
     """Authorize typed owners; the model interprets the selected retained slot."""
-    owner = authorized_action_target(info, SyncStream, stream, "write")
+    epoch = authorized_action_target(info, SyncStream, stream, "write")
+    owner: SyncStateMixin = epoch
     if link is not None:
-        epoch = owner
-        owner = authorized_action_target(info, RecordLink, link, "write")
-        if owner.stream_id != epoch.pk:
+        linked = authorized_action_target(info, RecordLink, link, "write")
+        if linked.stream_id != epoch.pk:
             raise ValidationError("The failure link does not belong to the selected stream.")
+        owner = linked
     for failure in owner.failures():
         if failure.slot == slot:
             return failure
@@ -1765,7 +1776,7 @@ class IntegrationWriteBackend(AngeeHasuraWriteBackend):
                     else require_instance_for_id(
                         Credential,
                         credential_id,
-                        queryset=write_queryset(Credential),
+                        queryset=Credential.objects.for_write(),
                     )
                 )
                 instance.attach_credential(credential)
@@ -1795,18 +1806,17 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
         "lifecycle",
         "runtime_status",
     ],
-    updatable=["vendor", "credential", "account", "owner"],
+    updatable=["vendor", "credential", "account"],
     insert=False,
     field_id_decode={
         "vendor": public_pk_decoder(Vendor),
-        "owner": public_pk_decoder(User),
         "credential": public_pk_decoder(Credential),
         "account": public_pk_decoder(ExternalAccount),
     },
     get_queryset=partial(IntegrationType.get_queryset, Integration.objects),
     write_backend=IntegrationWriteBackend(
         Integration,
-        public_id_fields=("vendor", "owner", "credential", "account"),
+        public_id_fields=("vendor", "credential", "account"),
     ),
 )
 _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(
@@ -1832,7 +1842,7 @@ _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(
     ],
     aggregatable=["id", "consecutive_failures"],
     groupable=["enabled", "last_delivery_status"],
-    insertable=["owner", "target_url", "secret", "event_kinds", "impl_app_filter", "integration_filter", "enabled"],
+    insertable=["target_url", "secret", "event_kinds", "impl_app_filter", "integration_filter", "enabled"],
     updatable=["target_url", "secret", "event_kinds", "impl_app_filter", "integration_filter", "enabled"],
     field_id_decode={
         "owner": public_pk_decoder(User),
@@ -1840,7 +1850,7 @@ _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(
     },
     write_backend=AngeeHasuraWriteBackend(
         WebhookSubscription,
-        public_id_fields=("owner", "integration_filter"),
+        public_id_fields=("integration_filter",),
     ),
 )
 

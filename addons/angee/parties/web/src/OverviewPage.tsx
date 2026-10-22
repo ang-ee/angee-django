@@ -28,7 +28,7 @@ export function OverviewPage(): React.ReactElement {
   const sameAsCount = data?.same_as_pairs.length;
 
   return (
-    <DashboardView className="p-1">
+    <DashboardView>
       <Metric
         label={t("overview.metric.contacts")}
         value={data?.contacts.aggregate?.count}
@@ -58,7 +58,7 @@ export function OverviewPage(): React.ReactElement {
         format="count"
         loading={overview.isFetching}
         icon="user-check"
-        tone="info"
+        tone="warning"
       />
       <Metric
         label={t("overview.metric.sameAs")}
@@ -67,7 +67,7 @@ export function OverviewPage(): React.ReactElement {
         loading={overview.isFetching}
         max={SAME_AS_COUNT_LIMIT}
         icon="users"
-        tone="danger"
+        tone="warning"
         detail={sameAsCount !== undefined && sameAsCount > SAME_AS_COUNT_LIMIT ? t("overview.metric.sameAsCapped") : undefined}
       />
 

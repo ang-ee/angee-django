@@ -140,9 +140,9 @@ class AnymailEmailChannelBackend(ChannelBackend):
         recipients = self._recipients(message, participants)
         subject = next(
             (
-                part.fragment.text
+                fragment.text
                 for part in parts
-                if part.role == part_model.PartRole.TITLE and part.fragment_id is not None
+                if part.role == part_model.PartRole.TITLE and (fragment := part.fragment) is not None
             ),
             "",
         )
@@ -165,12 +165,15 @@ class AnymailEmailChannelBackend(ChannelBackend):
         for part in parts:
             if part.file_id is None:
                 continue
-            with part.file.open_stream() as stream:
+            file = part.file
+            if file is None:
+                raise IntegrationError("An email attachment is unavailable.")
+            with file.open_stream() as stream:
                 content = stream.read()
             email.attach(
-                part.name or part.file.filename,
+                part.name or file.filename,
                 content,
-                str(part.file.mime_type or part.type or "application/octet-stream"),
+                str(file.mime_type or part.type or "application/octet-stream"),
             )
         return email
 

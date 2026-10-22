@@ -36,7 +36,7 @@ vi.mock("@refinedev/core", async (importOriginal) => ({
 }));
 
 import { RestoreRecord, TrashRecord } from "./documents";
-import { RemovedRecords, useTrashRecord, useTrashRowActions } from "./trash";
+import { RemovedList, RemovedRecords, useTrashRecord, useTrashRowActions } from "./trash";
 
 const flag: DataResourceFieldMetadata = {
   name: "is_trashed",
@@ -77,6 +77,22 @@ describe("shared trash verbs", () => {
     await waitFor(() => expect(mocks.mutate).toHaveBeenCalledWith(RestoreRecord, {
       target_type: "knowledge/page", target_id: "pg_1",
     }));
+  });
+
+  test("a domain read's removed rows restore through the domain's own verb", async () => {
+    const restore = vi.fn(async () => undefined);
+    render(<RemovedList
+      rows={[{ id: "tsk_1", title: "Ship it", removed_by_label: "Ada", removal_reason: "Duplicate" }]}
+      label={(row) => String(row.title)}
+      stamps={(row) => ({ trashedByLabel: String(row.removed_by_label), trashReason: String(row.removal_reason) })}
+      canRestore={() => true}
+      restore={restore}
+    />);
+    fireEvent.click(screen.getByRole("button", { name: "Removed (1)" }));
+    expect(screen.getByText("Reason: Duplicate")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    await waitFor(() => expect(restore).toHaveBeenCalledWith(expect.objectContaining({ id: "tsk_1" })));
+    expect(mocks.mutate).not.toHaveBeenCalled();
   });
 
   test("an untrashable resource renders no removed list", () => {

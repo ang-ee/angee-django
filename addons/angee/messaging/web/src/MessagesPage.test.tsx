@@ -158,11 +158,11 @@ describe("MessagesPage", () => {
     }
   });
 
-  test("ThreadsPage selects the schema-owned channel kind without a vendor relation", () => {
+  test("ThreadsPage shows the channel by its own label without a vendor relation", () => {
     render(<ThreadsPage />);
     expect(pageMocks.resourceProps?.resource).toBe("messaging.Thread");
-    const channelColumn = pageMocks.columns.find((column) => column.header === "threads.channelType");
-    expect(channelColumn?.field).toBe("channel.kind");
+    const channelColumn = pageMocks.columns.find((column) => column.header === "threads.channel");
+    expect(channelColumn?.field).toBe("channel");
     expect(pageMocks.columns.some((column) => column.field.startsWith("channel.vendor"))).toBe(false);
   });
 
@@ -170,7 +170,7 @@ describe("MessagesPage", () => {
     render(<messageForm.Component resource="messaging.Message" id="msg-1" readOnly />);
 
     expect(pageMocks.fields).toEqual(expect.arrayContaining([
-      "title", "status", "platform", "direction", "external_id",
+      "title", "status", "platform", "direction",
     ]));
     // The reader shows the sender and the date, so the envelope does not repeat them.
     expect(pageMocks.fields).not.toContain("sender");

@@ -6,7 +6,6 @@ from threading import Event
 import pytest
 from django.db import connection
 
-from angee.base.scoping import system_queryset
 from angee.workflows.awaits import AwaitRun
 from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import run_until
@@ -29,7 +28,7 @@ def test_child_finishes_between_await_read_and_wait_commit(child_graph, monkeypa
     parent, _ = build()
     run_until(parent, node="await")
     child = admitted[0]
-    waiter = system_queryset(StepRun).get(run=parent, node_key="await")
+    waiter = StepRun.system_queryset().get(run=parent, node_key="await")
     observed, release = Event(), Event()
     body = AwaitRun.run
 
@@ -57,7 +56,7 @@ def test_child_finishes_between_await_read_and_wait_commit(child_graph, monkeypa
     assert [payload["kwargs"]["step_run_id"] for name, payload in sent if name == "workflows.execute"] == [waiter.pk]
     run_until(parent)
     assert parent.status == "succeeded"
-    assert system_queryset(StepAttempt).filter(step_run=waiter).count() == 2
+    assert StepAttempt.system_queryset().filter(step_run=waiter).count() == 2
 
 
 def test_parent_cancel_waits_for_child_final_settlement_without_overwriting_it(child_graph, monkeypatch):
@@ -66,7 +65,7 @@ def test_parent_cancel_waits_for_child_final_settlement_without_overwriting_it(c
     parent, _ = build()
     run_until(parent)
     child = admitted[0]
-    child_step = system_queryset(StepRun).get(run=child)
+    child_step = StepRun.system_queryset().get(run=child)
     entered, release = Event(), Event()
     body = Echo.run
 
@@ -90,8 +89,8 @@ def test_parent_cancel_waits_for_child_final_settlement_without_overwriting_it(c
     child.refresh_from_db()
     assert parent.status == "canceled" and child.status == "succeeded"
     assert child.output == {"value": 7} and result.canceled and result.children == 0
-    assert system_queryset(StepRun).get(run=parent, node_key="await").status == "canceled"
-    assert system_queryset(StepAttempt).get(step_run=child_step).result == "succeeded"
+    assert StepRun.system_queryset().get(run=parent, node_key="await").status == "canceled"
+    assert StepAttempt.system_queryset().get(step_run=child_step).result == "succeeded"
     assert runner.wake_runs(child.pk) == 0
 
 
@@ -125,13 +124,13 @@ def test_prune_skips_locked_terminal_continuation_until_child_is_pruned(child_gr
             release.set()
         holder.result(timeout=10)
 
-    system_queryset(WorkflowRun).filter(pk=parent.pk).update(prune_after=None, prune_reason="")
+    WorkflowRun.system_queryset().filter(pk=parent.pk).update(prune_after=None, prune_reason="")
     assert WorkflowRun.objects.prune() == 0  # The retained continuation still protects its cause.
     child.refresh_from_db()
     assert child.parent_step_id is not None and child.output == {"value": 7}
     age_runs(child)
     assert WorkflowRun.objects.prune() == 1
-    assert not system_queryset(WorkflowRun).filter(pk=child.pk).exists()
-    system_queryset(WorkflowRun).filter(pk=parent.pk).update(prune_after=None, prune_reason="")
+    assert not WorkflowRun.system_queryset().filter(pk=child.pk).exists()
+    WorkflowRun.system_queryset().filter(pk=parent.pk).update(prune_after=None, prune_reason="")
     assert WorkflowRun.objects.prune() == 1
-    assert not system_queryset(WorkflowRun).filter(pk=parent.pk).exists()
+    assert not WorkflowRun.system_queryset().filter(pk=parent.pk).exists()

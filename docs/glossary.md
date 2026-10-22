@@ -131,7 +131,7 @@ also accepts non-user REBAC subjects.
 converts it to the FK's Python type and returns no user for other subject types.
 
 **Changeset** — attribution for one logical write, owned by
-[`changeset()`](../angee/base/changesets.py) and stored by the
+[`changeset()`](../angee/changesets.py) and stored by the
 [provenance addon](../addons/angee/provenance/models.py).
 
 **Action / activity** — action uses FHIR AuditEvent's C/U/D verbs; activity
@@ -148,7 +148,7 @@ distinct history events.
 `statements = StatementRecords(aspects=…)` gets a typed `<Model>Statement` table
 beside its history table, read through the subject like history rows and
 written only by `statements.set()` and the status verbs
-([owner](../angee/base/mixins.py)).
+([owner](../angee/models/statements.py)).
 
 **Aspect** — a declared field group of a canonical model, optionally with a
 typed member (a Handle, a counterparty), carrying its survivorship strategy and
@@ -156,8 +156,7 @@ source precedence. The aspect is the unit of resolution; a value field belongs
 to exactly one aspect, and consumer donors contribute aspects additively.
 
 **Survivorship** — how an aspect's asserted normal-rank statements resolve onto
-the operational row: `SOURCE_PRIORITY`, `MOST_RECENT(date_field)`,
-`MOST_COMPLETE`, `HIGHEST_TRUST` (MDM names). Preferred person statements always
+the operational row through `SOURCE_PRIORITY`. Preferred person statements always
 precede it; the winner is marked **applied** and its values materialise on the
 row. A re-derivation, never a migration, when a knob flips.
 
@@ -360,7 +359,7 @@ read, created, changed, deleted or called. Admission inputs use the same relatio
 with no step. Readers see record identities through their current read scope.
 
 **Derived-from evidence** — a frozen fact or source link admitted through
-`angee.base.evidence`'s standing-read check. Decisions, run inputs and
+`angee.evidence`'s standing-read check. Decisions, run inputs and
 extraction retain their own edges to this shared source identity.
 
 ## Decisions
@@ -394,7 +393,7 @@ documents, facts and revisions against an explicit file or message target.
 that participates in identity, communication, and relationship facts.
 
 **Handle** — a normalized contact point such as an email address or account.
-The Handle's owner records the **control** fact (who may act through it), while
+The Handle's controller records the **control** fact (who may act through it), while
 **PartyStatement** records the **identity** fact (`aspect="handle"`, typed Handle
 member); neither fact implies the other. A **suggestion** is an asserted
 normal statement below 0.5 confidence: it awaits review and never decides which

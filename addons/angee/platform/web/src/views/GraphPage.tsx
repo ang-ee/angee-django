@@ -23,27 +23,21 @@ export function GraphPage(): ReactElement {
   const { nodes, edges, error } = usePlatformModelGraph({ model: modelScope });
 
   if (error) {
-    return (
-      <div className="px-3 py-6">
-        <ErrorBanner description={error.message} />
-      </div>
-    );
+    return <ErrorBanner className="m-3" description={error.message} />;
   }
 
   return (
-    <div className="console-route-viewport bg-sheet">
-      <GraphView
-        nodes={nodes}
-        edges={edges}
-        nodeStyles={NODE_STYLES}
-        layout={{ rankdir: "LR" }}
-        className="console-route-canvas"
-        onNodeClick={(node: GraphViewNode<"model">) =>
-          navigate({
-            to: routeHref("platform.models.record", { id: node.id }),
-          })
-        }
-      />
-    </div>
+    <GraphView
+      nodes={nodes}
+      edges={edges}
+      nodeStyles={NODE_STYLES}
+      layout={{ rankdir: "LR" }}
+      className="h-full bg-sheet"
+      onNodeClick={(node: GraphViewNode<"model">) =>
+        navigate({
+          to: routeHref("platform.models.record", { id: node.id }),
+        })
+      }
+    />
   );
 }

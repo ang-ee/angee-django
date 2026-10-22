@@ -4,6 +4,9 @@ import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { textRoleVariants } from "./text";
 
+/**
+ * @kind token
+ */
 export const tableVariants = tv({
   slots: {
     table: "w-full border-collapse text-13",
@@ -12,7 +15,7 @@ export const tableVariants = tv({
     footer: "border-t border-border bg-sheet font-medium",
     row: "border-b border-border-subtle transition-colors",
     head:
-      "h-10 border-b border-border bg-sheet px-3 py-0 text-left align-middle text-xs font-semibold leading-5 text-fg-muted whitespace-nowrap",
+      "h-10 border-b border-border bg-sheet px-3 py-0 text-left align-middle text-12 font-semibold leading-5 text-fg-muted whitespace-nowrap",
     cell: "h-10 px-3 align-middle",
     caption: cn(textRoleVariants({ role: "meta" }), "mt-4"),
   },
@@ -22,7 +25,7 @@ export const tableVariants = tv({
       false: "",
     },
     selected: {
-      true: { row: "bg-brand-soft hover:bg-brand-soft" },
+      true: { row: "selected hover:selected" },
       false: "",
     },
     sticky: {
@@ -54,6 +57,9 @@ export type TableProps = React.TableHTMLAttributes<HTMLTableElement> & {
   className?: string;
 } & Pick<TableRecipeProps, "density">;
 
+/**
+ * @kind primitive
+ */
 export const Table = React.forwardRef<HTMLTableElement, TableProps>(
   function Table({ className, density = "comfortable", ...props }, ref) {
     const styles = tableVariants({ density });
@@ -75,6 +81,9 @@ export type TableHeaderProps =
     className?: string;
   };
 
+/**
+ * @owner Table
+ */
 export const TableHeader = React.forwardRef<
   HTMLTableSectionElement,
   TableHeaderProps
@@ -88,6 +97,9 @@ export type TableBodyProps = React.HTMLAttributes<HTMLTableSectionElement> & {
   className?: string;
 };
 
+/**
+ * @owner Table
+ */
 export const TableBody = React.forwardRef<
   HTMLTableSectionElement,
   TableBodyProps
@@ -102,6 +114,9 @@ export type TableFooterProps =
     className?: string;
   };
 
+/**
+ * @owner Table
+ */
 export const TableFooter = React.forwardRef<
   HTMLTableSectionElement,
   TableFooterProps
@@ -116,6 +131,9 @@ export type TableRowProps = React.HTMLAttributes<HTMLTableRowElement> &
     className?: string;
   };
 
+/**
+ * @owner Table
+ */
 export const TableRow = React.forwardRef<HTMLTableRowElement, TableRowProps>(
   function TableRow(
     { className, interactive = false, selected = false, ...props },
@@ -132,6 +150,9 @@ export type TableHeadProps = React.ThHTMLAttributes<HTMLTableCellElement> &
     className?: string;
   };
 
+/**
+ * @owner Table
+ */
 export const TableHead = React.forwardRef<
   HTMLTableCellElement,
   TableHeadProps
@@ -146,6 +167,9 @@ export type TableCellProps = React.TdHTMLAttributes<HTMLTableCellElement> & {
   className?: string;
 };
 
+/**
+ * @owner Table
+ */
 export const TableCell = React.forwardRef<
   HTMLTableCellElement,
   TableCellProps
@@ -161,6 +185,9 @@ export type TableCaptionProps =
     className?: string;
   };
 
+/**
+ * @owner Table
+ */
 export const TableCaption = React.forwardRef<
   HTMLTableCaptionElement,
   TableCaptionProps

@@ -1,7 +1,6 @@
 import * as React from "react";
 import {
-  Button,
-  Glyph,
+  ActionTrigger,
   ListView,
   MutationDialog,
   defineRowAction,
@@ -42,7 +41,6 @@ function CircleMembershipList({
   anchorId: string;
 }): React.ReactElement {
   const t = usePartiesT();
-  const [addOpen, setAddOpen] = React.useState(false);
   const [add, addState] = useAuthoredResourceMutation(AddCircleMember, {
     invalidateModels: CIRCLE_MEMBER_INVALIDATES,
   });
@@ -118,21 +116,11 @@ function CircleMembershipList({
         columns={columns}
         rowActions={rowActions}
         toolbarActions={
-          <Button type="button" variant="primary" size="sm" onClick={() => setAddOpen(true)}>
-            <Glyph decorative name="plus" />
-            {anchor === "person"
-              ? t("circle.membership.addCircle")
-              : t("circle.membership.addPerson")}
-          </Button>
-        }
-        emptyContent={
-          anchor === "person" ? t("person.empty.circles") : t("circle.empty.members")
-        }
-      />
-      <MutationDialog
-        open={addOpen}
-        onOpenChange={setAddOpen}
-        title={
+          <MutationDialog
+            trigger={<ActionTrigger variant="primary" glyph="plus" disabled={busy}>
+              {anchor === "person" ? t("circle.membership.addCircle") : t("circle.membership.addPerson")}
+            </ActionTrigger>}
+            title={
           anchor === "person"
             ? t("circle.membership.addCircle")
             : t("circle.membership.addPerson")
@@ -142,13 +130,18 @@ function CircleMembershipList({
         submittingLabel={t("circle.membership.adding")}
         errorFallback={t("circle.membership.addError")}
         parseValues={parseMembershipValues}
-        onSubmit={async (values) => ({
-          status: "ok",
-          data: await add({
-            circle: anchor === "circle" ? anchorId : values.selection,
-            party: anchor === "person" ? anchorId : values.selection,
-          }),
-        })}
+            onSubmit={async (values) => ({
+              status: "ok",
+              data: await add({
+                circle: anchor === "circle" ? anchorId : values.selection,
+                party: anchor === "person" ? anchorId : values.selection,
+              }),
+            })}
+          />
+        }
+        emptyContent={
+          anchor === "person" ? t("person.empty.circles") : t("circle.empty.members")
+        }
       />
     </>
   );

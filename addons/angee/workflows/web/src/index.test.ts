@@ -5,16 +5,17 @@ import { MenuTree, resolveMenuRouteTargets } from "@angee/ui/chrome/menu-tree";
 import { createRouteHref } from "@angee/ui/runtime";
 import { expect, test } from "vitest";
 import decisions from "@angee/decisions";
+import timeline from "@angee/timeline";
 import { decisionResourceFixture } from "@angee/decisions/testing";
 import addon from "./index";
 import { runResourceFixture, workflowResourceFixture } from "./testing";
 import { triggerEventResourceFixture, triggerResourceFixture } from "./trigger-testing";
 
-// Workflows includes decisions' menu and joins its origin container; the composed runtime supplies the dependency.
-const decisionsMenu = { ...decisions };
+// Workflows includes decisions' menu and joins its origin container; decisions contributes a timeline kind.
+const decisionsMenu = { ...decisions, dependsOn: ["timeline"] };
 
 test("flattens Decisions into Workflows' top bar while the rail keeps one app", () => {
-  const { menuComposition } = composeAddons([decisionsMenu, { ...addon, dependsOn: ["decisions"] }], { canonicalModelLabel: (model) => model });
+  const { menuComposition } = composeAddons([timeline, decisionsMenu, { ...addon, dependsOn: ["decisions"] }], { canonicalModelLabel: (model) => model });
   expect(menuComposition.diagnostics).toEqual([]);
   const tree = MenuTree.from(resolveMenuRouteTargets(menuComposition.navigation, createRouteHref([...(decisions.routes ?? []), ...(addon.routes ?? [])])));
   expect(tree.roots.map((node) => node.id)).toEqual(["workflows"]);
@@ -29,12 +30,17 @@ test("registers read-only workflow and run pages with additive record and decisi
   expectValidBaseAddon(addon);
   expect(addon.routes?.map((route) => route.name)).toContain("workflows.runs.record");
   expect(Object.keys(addon.containers?.["decisions#origin"] ?? {})).toEqual(["workflows.run"]);
-  expect(Object.keys(addon.containers?.["record#aside"] ?? {})).toEqual(["workflows.runs"]);
+  expect(Object.keys(addon.containers?.["timeline#kinds"] ?? {})).toEqual(["workflows.run"]);
+  expect(addon.containers?.["record#aside"]).toMatchObject({ "workflows.run": { content: { strip: false, target: { model: "workflows.WorkflowRun" } } } });
   expect(Object.keys(addon.containers?.["form#actions-menu"] ?? {})).toEqual(["workflows.run-workflow"]);
+  // Related: a run lists its records and decisions, a decision its run, every other record its runs.
+  expect(Object.keys(addon.containers?.["related#groups"] ?? {})).toEqual(["workflows.runs"]);
+  expect(Object.keys(addon.containers?.["workflows.WorkflowRun#groups"] ?? {})).toEqual(["workflows.records", "workflows.decisions"]);
+  expect(Object.keys(addon.containers?.["decisions.Decision#groups"] ?? {})).toEqual(["workflows.run"]);
 });
 
 test("trigger record breadcrumbs inherit the declared Triggers collection label", async () => {
-  const chrome = await chromeSnapshotForRoute({ addons: [decisionsMenu, { ...addon, dependsOn: ["decisions"] }], path: "/workflows/triggers/wft_review", schemas: {
+  const chrome = await chromeSnapshotForRoute({ addons: [timeline, decisionsMenu, { ...addon, dependsOn: ["decisions"] }], path: "/workflows/triggers/wft_review", schemas: {
     ...TEST_SCHEMAS,
     console: { ...TEST_SCHEMAS.console, metadata: { angee: { resources: [
       decisionResourceFixture, workflowResourceFixture, runResourceFixture, triggerResourceFixture, triggerEventResourceFixture,

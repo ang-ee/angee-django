@@ -1,14 +1,13 @@
 import {
   Column,
   List,
-  useResourceRecordHref,
   useRuntimeAuth,
 } from "@angee/ui";
 import * as React from "react";
 
 import { useProjectsT } from "../i18n";
 import { TASK_MODEL } from "../resources";
-import { useTaskRowActions, type TaskActionRow } from "../task-actions";
+import { useTaskRowActions, useTaskRowHref, type TaskActionRow } from "../task-actions";
 
 /**
  * The personal projection: the actor's open tasks are the page's one list, owning
@@ -18,7 +17,7 @@ import { useTaskRowActions, type TaskActionRow } from "../task-actions";
 export function MyWorkPage(): React.ReactElement {
   const t = useProjectsT();
   const userId = useRuntimeAuth().user?.id;
-  const recordHref = useResourceRecordHref(TASK_MODEL);
+  const rowHref = useTaskRowHref();
   const taskActions = useTaskRowActions<TaskActionRow>();
   const taskFilter = React.useMemo(
     () => userId
@@ -33,7 +32,7 @@ export function MyWorkPage(): React.ReactElement {
       baseFilter={taskFilter}
       order={{ due_date: "ASC", sort_order: "ASC" }}
       rowActions={taskActions}
-      rowHref={recordHref ? (row) => recordHref(row.id, row) ?? "" : undefined}
+      rowHref={rowHref}
       emptyContent={t("myWork.empty.tasks")}
     >
       <Column field="title" />

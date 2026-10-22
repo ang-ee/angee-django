@@ -168,7 +168,7 @@ function beginGesture<TData>(config: BeginGestureConfig<TData>) {
   /**
    * The cursor-following overlays are appended to document.body so no ancestor
    * transform or overflow can clip them - which also cuts them off from the
-   * gantt root, and the root is what OWNS the type scale (its `text-xs` is
+   * gantt root, and the root is what OWNS the type scale (its `text-12` is
    * what every resting label inherits). Without this the clone's label jumps
    * to the document default and reads visibly bigger than the bar it left.
    * Copying the ROOT's resolved metrics - rather than hardcoding a size -

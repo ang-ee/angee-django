@@ -24,6 +24,8 @@ const WikilinkContext = createContext<WikilinkResolver | null>(null);
  * the markdown widget so a host that only needs the provider (e.g. a knowledge
  * page wrapping its content) does not pull react-markdown/CodeMirror into its
  * chunk.
+ * @kind null
+ * @reason Provider infrastructure: Wikilink context.
  */
 export function WikilinkProvider({
   resolve,
@@ -39,6 +41,9 @@ export function WikilinkProvider({
   );
 }
 
+/**
+ * @owner WikilinkProvider
+ */
 export function useWikilinkResolver(): WikilinkResolver | null {
   return useContext(WikilinkContext);
 }

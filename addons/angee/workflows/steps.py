@@ -15,12 +15,12 @@ from django.db.models.functions import Now
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, PydanticInvalidForJsonSchema
 
-from angee.base.impl import ImplBase, resolve_impl_class
-from angee.base.jsonschema import check_schema, validate, validator
-from angee.base.serialization import strip_null_bytes
-from angee.base.validation import get_type_adapter
 from angee.decisions.contracts import DecisionRequest
+from angee.impl import ImplBase, resolve_impl_class
 from angee.jobs.timeouts import TASK_SETTLEMENT_RESERVE_SECONDS, task_time_budget
+from angee.jsonschema import check_schema, validate, validator
+from angee.serialization import strip_null_bytes
+from angee.validation import get_type_adapter
 from angee.workflows.states import (
     DONE_OUTCOME,
     ERROR_OUTCOME,
@@ -202,7 +202,10 @@ class Ask(_Settlement):
     def admit(self, ctx: Any) -> Ask:
         manager = apps.get_model("decisions", "Decision").objects
         if ctx.step_run.decision_id is not None:
-            raise ValidationError("This step has already asked its decision.")
+            previous = ctx.step_run.decision
+            if previous.is_open:
+                raise ValidationError("This step still has an open decision.")
+            ctx.record(previous, operation="created")
         decision = manager.ask(self.request, actor=ctx.actor)
         for record in self.request.records:
             ctx.record(record)

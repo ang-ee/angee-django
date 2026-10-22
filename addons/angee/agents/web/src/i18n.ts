@@ -7,6 +7,8 @@ import { createNamespaceT } from "@angee/ui";
 
 export const enAgentsMessages: Record<string, string> = {
   // AgentsPage — bespoke form-section labels and record tabs.
+  "agent.eyebrow": "Agent",
+  "agent.eyebrowTemplate": "Agent template",
   "agent.modelTemplates": "Model & operator templates",
   "agent.provisioningInputs": "Provisioning inputs",
   "agent.tabService": "Service",
@@ -42,6 +44,7 @@ export const enAgentsMessages: Record<string, string> = {
   "chat.running": "Running",
   "chat.model": "Model",
   "chat.viewLabel": "View",
+  "chat.viewOf": "{kind} · {type}",
   "chat.mcpServers": "MCP servers",
   "chat.context": "System context",
   "chat.status.idle": "Idle",

@@ -22,7 +22,7 @@ const menus: readonly BaseMenuItem[] = [{
     { id: "integrate_vcs.sources", label: "Sources", icon: "source", route: "integrate_vcs.sources" },
     { id: "integrate_vcs.templates", label: "Templates", icon: "integrate-template", route: "integrate_vcs.templates" },
     { id: "integrate_vcs.repositories", label: "Repositories", icon: "repository", route: "integrate_vcs.repositories" },
-    { id: "integrate_vcs.vcs", label: "VCS Bridges", icon: "vcs", route: "integrate_vcs.vcs" },
+    { id: "integrate_vcs.vcs", label: "VCS bridges", icon: "vcs", route: "integrate_vcs.vcs" },
   ],
 }];
 

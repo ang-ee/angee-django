@@ -32,8 +32,7 @@ describe("ConsoleLayout breadcrumb strip", () => {
     const header = await screen.findByRole("banner", { name: "Workspace top bar" });
     expect(within(header).getByRole("navigation", { name: "Desk menu" })).toBeTruthy();
     expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull();
-    expect(screen.getByRole("main").closest(".console-grid")?.getAttribute("style"))
-      .toContain("--breadcrumbbar-current-h: 0px");
+    expect(document.querySelector("[data-console-breadcrumbs]")).toBeNull();
   });
 
   test("nested navigation places the trail directly below TopBar and keeps app navigation in TopBar", async () => {
@@ -47,12 +46,11 @@ describe("ConsoleLayout breadcrumb strip", () => {
     expect(strip.nextElementSibling?.classList.contains("area-control")).toBe(true);
   });
 
-  test("hiding the chrome.breadcrumbs region hides the strip and releases its reserved route height", async () => {
+  test("hiding the chrome.breadcrumbs region removes the strip", async () => {
     renderConsole(false);
     await screen.findByRole("banner", { name: "Workspace top bar" });
     expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull();
-    expect(screen.getByRole("main").closest(".console-grid")?.getAttribute("style"))
-      .toContain("--breadcrumbbar-current-h: 0px");
+    expect(document.querySelector("[data-console-breadcrumbs]")).toBeNull();
     expect(screen.getByRole("navigation", { name: "Desk menu" })).toBeTruthy();
   });
 

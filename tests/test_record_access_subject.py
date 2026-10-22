@@ -9,7 +9,7 @@ from rebac.backends import reset_backend
 from rebac.errors import PermissionDenied
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
-from angee.base.errors import DomainError, RecordAccessSubjectRefused
+from angee.errors import DomainError, RecordAccessSubjectRefused
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow, ownership_tables  # noqa: F401
 from tests.core_seam_models import SubjectGuardedRow, subject_tables  # noqa: F401
@@ -81,7 +81,7 @@ def test_refused_grant_writes_no_relationship_or_row(grant_case, relation, entry
         if entrypoint == "public":
             row.grant_record_access(relation, subject)
         else:
-            row._grant_declared_record_access(SubjectGuardedRow, relation, subject)
+            row._grant_declared_record_access(SubjectGuardedRow.record_access_permission, relation, subject)
     assert not _non_audit_writes(queries)
     assert not active_relationship_model().objects.exists()
     assert list(OwnedRow.history.filter(id=row.id).values()) == history_before
@@ -130,7 +130,7 @@ def test_revoke_does_not_ask_subject_validation_even_if_holder_is_now_refused(gr
         if entrypoint == "public":
             row.revoke_record_access("reader", recipient)
         else:
-            row._revoke_declared_record_access(SubjectGuardedRow, "reader", recipient)
+            row._revoke_declared_record_access(SubjectGuardedRow.record_access_permission, "reader", recipient)
     assert not active_relationship_model().objects.exists()
     assert not row.with_actor(recipient).has_access("read")
 
@@ -246,3 +246,42 @@ def test_removing_ownership_never_asks_subject_validation(operation, monkeypatch
     with system_context(reason="test.subject.inspect"):
         row.refresh_from_db()
     assert (row.owner_id, row.created_by_id) == (None, owner.pk)
+
+
+def test_system_revoke_requires_an_explicit_boundary_and_remains_idempotent(grant_case, monkeypatch):
+    row, owner, recipient = grant_case
+    row.with_actor(owner).grant_record_access("reader", recipient)
+    with pytest.raises(PermissionDenied, match="explicit system scope"):
+        row.system_revoke_record_access("reader", recipient)
+    assert active_relationship_model().objects.count() == 1
+    with system_context(reason="record_access.test"):
+        with pytest.raises(ValueError, match="does not declare"):
+            row.system_revoke_record_access("undeclared", recipient)
+    assert active_relationship_model().objects.count() == 1
+
+    def refuse_subject(*args, **kwargs):
+        pytest.fail("Revocation must not validate the departing holder.")
+
+    monkeypatch.setattr(SubjectGuardedRow, "validate_record_access_subject", refuse_subject)
+    with system_context(reason="record_access.test"):
+        row.system_revoke_record_access("reader", recipient)
+        row.system_revoke_record_access("reader", recipient)
+    assert not active_relationship_model().objects.exists()
+
+
+def test_system_revoke_rolls_back_when_a_lifecycle_owner_fails(grant_case):
+    from angee.signals import record_access_revoked
+
+    row, owner, recipient = grant_case
+    row.with_actor(owner).grant_record_access("reader", recipient)
+
+    def fail_receiver(sender, **kwargs):
+        raise RuntimeError("Lifecycle refused")
+
+    record_access_revoked.connect(fail_receiver, sender=SubjectGuardedRow, weak=False)
+    try:
+        with pytest.raises(RuntimeError, match="Lifecycle refused"), system_context(reason="record_access.test"):
+            row.system_revoke_record_access("reader", recipient)
+    finally:
+        record_access_revoked.disconnect(fail_receiver, sender=SubjectGuardedRow)
+    assert active_relationship_model().objects.count() == 1

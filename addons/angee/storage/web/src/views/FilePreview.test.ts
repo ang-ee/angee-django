@@ -1,19 +1,11 @@
 import { describe, expect, test } from "vitest";
 
-import { filePreviewPageFromSearch, filePreviewReference } from "./FilePreview";
+import { FILE_PREVIEW_PAGE_PARAM, filePreviewPageFromSearch } from "./FilePreview";
 
-describe("file preview references", () => {
-  test("round-trips a one-based page only for the exact File", () => {
-    const reference = filePreviewReference("fil_source", 2);
-
-    expect(reference).toEqual({
-      model: "storage.File",
-      id: "fil_source",
-      tab: "preview",
-      page: 2,
-      search: { previewPage: "fil_source:2" },
-    });
-    expect(filePreviewPageFromSearch(reference.search ?? {}, "fil_source")).toBe(2);
-    expect(filePreviewPageFromSearch(reference.search ?? {}, "fil_other")).toBeNull();
+describe("file preview page", () => {
+  test("binds a one-based page to the exact File it was requested for", () => {
+    const search = { [FILE_PREVIEW_PAGE_PARAM]: "fil_source:2" };
+    expect(filePreviewPageFromSearch(search, "fil_source")).toBe(2);
+    expect(filePreviewPageFromSearch(search, "fil_other")).toBeNull();
   });
 });

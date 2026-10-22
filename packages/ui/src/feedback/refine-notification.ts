@@ -15,6 +15,10 @@ const REFINE_NOTIFICATION_TONE: Readonly<
   progress: "info",
 };
 
+/**
+ * @kind null
+ * @reason Provider infrastructure: adapts Toast to Refine notifications.
+ */
 export function useRefineNotificationProvider(): NotificationProvider {
   const toast = useToast();
   const t = useUiT();

@@ -1,6 +1,6 @@
 import * as React from "react";
-import { HISTORY_TAB_ID, RecordHistoryTimeline, useRecordHistory } from "@angee/provenance";
-import { ResourceList, Form, List, Column, Field, Group, RECORD_TAB_SEARCH_KEY, REFINE_CREATE_ID, Statusline, StatusSegment, StatuslineSpacer, updateRouteSearch, useChatterContent, useRouteHref, type ChatterTab, type RecordSmartButtonDescriptor, type ResourceViewDefaultGroups } from "@angee/ui";
+import { useRecordHistory } from "@angee/provenance";
+import { CHATTER_TAB_SEARCH_KEY, ResourceList, Form, List, Column, Field, Group, REFINE_CREATE_ID, Statusline, StatusSegment, StatuslineSpacer, updateRouteSearch, useRouteHref, type RecordSmartButtonDescriptor, type ResourceViewDefaultGroups } from "@angee/ui";
 import { useNavigate, useParams } from "@tanstack/react-router";
 
 import { useNotesT, type NotesT } from "./i18n";
@@ -79,26 +79,11 @@ export function NotePage(): React.ReactElement {
   const recordId = creating ? null : routeId;
   const activeRecordId =
     !creating && typeof recordId === "string" ? recordId : null;
-  // The note's changesets: provenance owns the read, the History tab and Revert;
-  // this page shows the same entries compactly in the chatter and counts them
-  // on the Versions button, which opens the tab.
+  // Provenance owns the read; Activity owns rendering changesets and Revert.
+  // This page reads only the aggregate needed by its Versions shortcut.
   const history = useRecordHistory(MODEL, activeRecordId, { enabled: activeRecordId !== null });
   const versionCount = history.data?.history?.total ?? 0;
   const navigate = useNavigate();
-  const tabs = React.useMemo(
-    () => [
-      {
-        id: "activity",
-        label: t("record.activity"),
-        icon: "activity",
-        count: versionCount,
-        children: <RecordHistoryTimeline model={MODEL} id={activeRecordId} compact />,
-      },
-    ] satisfies readonly ChatterTab[],
-    [activeRecordId, t, versionCount],
-  );
-  const chatter = React.useMemo(() => (activeRecordId ? { tabs } : null), [activeRecordId, tabs]);
-  useChatterContent(chatter);
   const recordSmartButtons = React.useMemo(
     () =>
       [
@@ -108,7 +93,7 @@ export function NotePage(): React.ReactElement {
           count: versionCount,
           label: t("record.versions"),
           onClick: () => {
-            void navigate({ to: ".", search: updateRouteSearch({ [RECORD_TAB_SEARCH_KEY]: HISTORY_TAB_ID }) });
+            void navigate({ to: ".", search: updateRouteSearch({ [CHATTER_TAB_SEARCH_KEY]: "timeline.rail" }) });
           },
         },
       ] satisfies readonly RecordSmartButtonDescriptor[],
@@ -143,8 +128,7 @@ export function NotePage(): React.ReactElement {
           </StatusSegment>
         ) : null}
         <StatuslineSpacer />
-        <StatusSegment>notes.Note</StatusSegment>
-        <StatusSegment icon="grid">console</StatusSegment>
+        <StatusSegment icon="grid">{t("status.surface")}</StatusSegment>
       </Statusline>
     </div>
   );

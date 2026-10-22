@@ -1,0 +1,8 @@
+rows:
+  - extends: extensible
+    at: after_entry
+    sequence: 20
+    nodes:
+      contributed_review:
+        step: install_probe
+        label: Contributed review

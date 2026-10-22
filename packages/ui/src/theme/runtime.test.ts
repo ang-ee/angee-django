@@ -9,7 +9,9 @@ import {
 
 const EXPOSED_TOKENS = [
   "--fw-regular", "--fw-medium", "--fw-semibold", "--fw-bold",
-  "--fs-15", "--lh-15", "--fs-18", "--lh-18", "--fs-22", "--lh-22",
+  "--fs-11", "--lh-11", "--fs-12", "--lh-12", "--fs-13", "--lh-13", "--fs-14", "--lh-14",
+  "--fs-15", "--lh-15", "--fs-16", "--lh-16", "--fs-18", "--lh-18", "--fs-22", "--lh-22",
+  "--fs-28", "--lh-28", "--fs-34", "--lh-34",
   "--chart-1", "--chart-2", "--chart-3", "--chart-4", "--chart-5", "--chart-6", "--chart-7", "--chart-8",
   "--chart-other", "--chart-surface",
   "--dur-fast", "--dur-base", "--dur-slow", "--ease",

@@ -70,7 +70,6 @@ export type PlatformExplorerData = NonNullable<
 export type PlatformAddonData = PlatformExplorerData["addons"][number];
 export type PlatformModelData = PlatformExplorerData["models"][number];
 export type PlatformEdgeData = PlatformExplorerData["edges"][number];
-export type PlatformFieldData = PlatformModelData["fields"][number];
 
 /** Full inspection is requested only after opening one registered implementation. */
 export const PlatformImplementation = graphql(`

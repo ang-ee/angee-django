@@ -23,6 +23,9 @@ export interface DialogFormProps {
   trigger?: React.ReactElement;
 }
 
+/**
+ * @kind fragment
+ */
 export function DialogForm({
   open,
   onOpenChange,

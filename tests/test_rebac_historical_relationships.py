@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, migrations, models
-from django.db.migrations.executor import MigrationExecutor
+from django.db.migrations.loader import MigrationLoader
 from django.test import TransactionTestCase, override_settings
 from rebac import ObjectRef, RelationshipTuple, SubjectRef
 
@@ -21,7 +21,10 @@ from angee.base.historical_relationships import (
 
 
 def _historical_state():
-    return MigrationExecutor(connection).loader.project_state([("rebac", "0003_schema_relation_backing")])
+    """Read released declarations independently of the test-table setup mode."""
+
+    with override_settings(MIGRATION_MODULES={}):
+        return MigrationLoader(None).project_state([("rebac", "0003_schema_relation_backing")])
 
 
 def _tuple(resource_id: str, *, caveat_name: str = "", expires_at=None):

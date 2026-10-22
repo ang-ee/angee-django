@@ -16,7 +16,9 @@ import type {
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 
-/** Global layer for the fixed Base UI positioner that owns portal stacking. */
+/** Global layer for the fixed Base UI positioner that owns portal stacking.
+ * @kind token
+ */
 export const PORTALED_CONTROL_LAYER = "z-popover";
 
 // A positioning anchor described by a rect instead of a DOM node. Matches the
@@ -27,21 +29,22 @@ type VirtualElement = {
   contextElement?: Element;
 };
 
+/**
+ * @kind token
+ */
 export const popoverVariants = tv({
   slots: {
     // Fade + subtle scale on enter/exit; Tailwind 4 emits `scale` for scale-95.
     content:
       "overflow-hidden rounded-8 border border-border-subtle bg-popover shadow-popover outline-none motion-safe:transition-[opacity,scale] data-[starting-style]:opacity-0 data-[starting-style]:scale-95 data-[ending-style]:opacity-0 data-[ending-style]:scale-95",
     list: "max-h-64 overflow-y-auto p-1",
-    input:
-      "h-7 w-full border-0 bg-transparent px-2 text-13 text-fg outline-none placeholder:text-fg-muted",
     item:
       "flex h-7 cursor-pointer select-none items-center gap-2 rounded-6 px-2 text-13 text-fg outline-none data-[highlighted]:bg-inset data-[selected]:text-brand-soft-text",
     modal:
       "z-modal overflow-hidden rounded-12 border border-border-subtle bg-sheet shadow-lg outline-none",
     modalBackdrop: "fixed inset-0 z-modal-backdrop bg-overlay",
     title: "px-3 py-2 text-13 font-semibold text-fg",
-    description: "px-3 pb-2 text-xs text-fg-muted",
+    description: "px-3 pb-2 text-12 text-fg-muted",
   },
   variants: {
     surface: {
@@ -54,16 +57,20 @@ export const popoverVariants = tv({
   },
 });
 
+/**
+ * @kind token
+ */
 export const POPUP_BASE = popoverVariants().content();
-export const POPUP_INPUT = popoverVariants().input();
+/**
+ * @kind token
+ */
 export const POPUP_ITEM = popoverVariants().item();
+/**
+ * @kind token
+ */
 export const POPUP_LIST = popoverVariants().list();
-export const MODAL_BASE = popoverVariants().modal();
-export const MODAL_BACKDROP = popoverVariants().modalBackdrop();
 
 type PopoverRecipeProps = VariantProps<typeof popoverVariants>;
-
-export type PopoverSurface = NonNullable<PopoverRecipeProps["surface"]>;
 export type PopoverRootProps<Payload = unknown> =
   BasePopoverRootProps<Payload>;
 export type PopoverTriggerProps<Payload = unknown> =
@@ -78,15 +85,30 @@ export type PopoverPositionerProps = Omit<
 export type PopoverArrowProps = BasePopoverArrowProps;
 export type PopoverBackdropProps = BasePopoverBackdropProps;
 export type PopoverCloseProps = BasePopoverCloseProps;
-export type PopoverViewportProps = React.ComponentPropsWithoutRef<
-  typeof BasePopover.Viewport
->;
 
+/**
+ * @owner Popover
+ */
 export const PopoverRoot = BasePopover.Root;
+/**
+ * @owner Popover
+ */
 export const PopoverPortal = BasePopover.Portal;
+/**
+ * @owner Popover
+ */
 export const PopoverArrow = BasePopover.Arrow;
+/**
+ * @owner Popover
+ */
 export const PopoverBackdrop = BasePopover.Backdrop;
+/**
+ * @owner Popover
+ */
 export const PopoverClose = BasePopover.Close;
+/**
+ * @owner Popover
+ */
 export const PopoverViewport = BasePopover.Viewport;
 
 // Thin re-export. Base UI's controlled `open`/`onOpenChange` owns the open/close
@@ -94,8 +116,14 @@ export const PopoverViewport = BasePopover.Viewport;
 // defer (swallow the trusted press, re-dispatch via `setTimeout`) is gone — heavy
 // view-state work is de-prioritized at its owner (a React transition in the resource-view
 // store), not by re-timing the trigger.
+/**
+ * @owner Popover
+ */
 export const PopoverTrigger = BasePopover.Trigger;
 
+/**
+ * @owner Popover
+ */
 export const PopoverPositioner = React.forwardRef<
   HTMLDivElement,
   PopoverPositionerProps
@@ -131,6 +159,9 @@ function popoverVirtualRect({
   return DOMRect.fromRect({ x, y, width, height });
 }
 
+/**
+ * @owner Popover
+ */
 export function createPopoverVirtualAnchor(
   rect: PopoverVirtualAnchorRect,
 ): VirtualElement {
@@ -148,6 +179,9 @@ export function createPopoverVirtualAnchor(
   return anchor;
 }
 
+/**
+ * @owner Popover
+ */
 export function usePopoverVirtualAnchor(
   rect: PopoverVirtualAnchorRect,
 ): VirtualElement {
@@ -158,6 +192,9 @@ export function usePopoverVirtualAnchor(
   );
 }
 
+/**
+ * @owner Popover
+ */
 export const PopoverVirtualAnchor = React.forwardRef<
   HTMLDivElement,
   PopoverVirtualAnchorProps
@@ -181,6 +218,9 @@ export type PopoverContentProps = BasePopoverPopupProps &
     className?: string;
   };
 
+/**
+ * @owner Popover
+ */
 export const PopoverContent = React.forwardRef<
   HTMLDivElement,
   PopoverContentProps
@@ -189,19 +229,28 @@ export const PopoverContent = React.forwardRef<
   return (
     <BasePopover.Popup
       ref={ref}
-      className={styles.content({ className })}
+      className={styles.content({ className: cn(
+        "max-h-[var(--available-height)] max-w-[var(--available-width)] overflow-y-auto overscroll-contain",
+        className,
+      ) })}
       {...props}
     />
   );
 });
 PopoverContent.displayName = "PopoverContent";
 
+/**
+ * @owner Popover
+ */
 export const PopoverPopup = PopoverContent;
 
 export type PopoverTitleProps = BasePopoverTitleProps & {
   className?: string;
 };
 
+/**
+ * @owner Popover
+ */
 export const PopoverTitle = React.forwardRef<
   HTMLParagraphElement,
   PopoverTitleProps
@@ -221,6 +270,9 @@ export type PopoverDescriptionProps = BasePopoverDescriptionProps & {
   className?: string;
 };
 
+/**
+ * @owner Popover
+ */
 export const PopoverDescription = React.forwardRef<
   HTMLParagraphElement,
   PopoverDescriptionProps
@@ -240,6 +292,9 @@ export type PopoverListProps = React.HTMLAttributes<HTMLDivElement> & {
   className?: string;
 };
 
+/**
+ * @owner Popover
+ */
 export const PopoverList = React.forwardRef<HTMLDivElement, PopoverListProps>(
   function PopoverList({ className, ...props }, ref) {
     const styles = popoverVariants();
@@ -248,26 +303,13 @@ export const PopoverList = React.forwardRef<HTMLDivElement, PopoverListProps>(
 );
 PopoverList.displayName = "PopoverList";
 
-export type PopoverInputProps = Omit<
-  React.InputHTMLAttributes<HTMLInputElement>,
-  "className" | "color"
-> & {
-  className?: string;
-};
-
-export const PopoverInput = React.forwardRef<
-  HTMLInputElement,
-  PopoverInputProps
->(function PopoverInput({ className, ...props }, ref) {
-  const styles = popoverVariants();
-  return <input ref={ref} className={styles.input({ className })} {...props} />;
-});
-PopoverInput.displayName = "PopoverInput";
-
 export type PopoverItemProps = React.HTMLAttributes<HTMLDivElement> & {
   className?: string;
 };
 
+/**
+ * @owner Popover
+ */
 export const PopoverItem = React.forwardRef<HTMLDivElement, PopoverItemProps>(
   function PopoverItem({ className, ...props }, ref) {
     const styles = popoverVariants();
@@ -276,6 +318,9 @@ export const PopoverItem = React.forwardRef<HTMLDivElement, PopoverItemProps>(
 );
 PopoverItem.displayName = "PopoverItem";
 
+/**
+ * @kind primitive
+ */
 export const Popover = {
   Root: PopoverRoot,
   Trigger: PopoverTrigger,
@@ -285,7 +330,6 @@ export const Popover = {
   Content: PopoverContent,
   Popup: PopoverPopup,
   List: PopoverList,
-  Input: PopoverInput,
   Item: PopoverItem,
   Arrow: PopoverArrow,
   Backdrop: PopoverBackdrop,

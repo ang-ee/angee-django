@@ -1037,7 +1037,7 @@ def _run_probe_command(tmp_path: Path, manage_source: str) -> subprocess.Complet
         history = apps.get_model("notes", "Note").history.get()
         assert history.changeset_id == context.pk
         assert history.history_change_reason == context.change_reason == "manage.captureprobe"
-        assert context.actor == ""
+        assert context.actor_ref == ""
         assert context.activity == "system"
         assert context.state == "closed"
         assert context.outcome == "success"
@@ -1982,9 +1982,13 @@ def test_production_provision_loads_no_demo_data() -> None:
     """Production serving runs with DEBUG off, where demo data is refused; development loads it."""
 
     production = _render_dev_stack(_runtime_mode="docker", serve_mode="production")["jobs"]["provision"]
-    assert production["command"][-1].endswith("python manage.py angee provision --force-rebac")
+    assert production["command"][-1].endswith(
+        "python manage.py angee provision --force-rebac",
+    )
     development = _render_dev_stack(_runtime_mode="docker")["jobs"]["provision"]
-    assert development["command"][-1].endswith("python manage.py angee provision --demo --force-rebac")
+    assert development["command"][-1].endswith(
+        "python manage.py angee provision --demo --force-rebac",
+    )
 
 
 def test_localhost_production_frontend_needs_no_edge_lookup() -> None:
@@ -2019,7 +2023,7 @@ def test_every_stack_leases_its_process_compose_control_port() -> None:
 def test_secret_key_is_mode_invariant() -> None:
     """Both modes declare the secret-key secret and run Django on it.
 
-    Encrypted-at-rest fields (angee.base EncryptedField) derive their Fernet key
+    Encrypted-at-rest fields (angee EncryptedField) derive their Fernet key
     from SECRET_KEY, so re-rendering a stack from process to docker (or back)
     must never rotate the effective key: both modes declare the same generated
     `secret-key` (the env-file backend reuses the existing .env value) and pin

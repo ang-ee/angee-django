@@ -2,9 +2,9 @@ import * as React from "react";
 import {
   ActionMenu,
   ActionTrigger,
-  ErrorBanner,
   firstDashboardSlot,
   parseDashboardSnapshot,
+  useActionResultRun,
   useDashboardRegistry,
   useResourceViewUtilityContext,
   type DashboardSummary,
@@ -28,7 +28,7 @@ function CaptureDashboardMenu({ store }: { store: DashboardStore }): React.React
   );
   if (targets.length === 0) return null;
   return (
-    <ActionMenu label={null} aria-label={t("capture.add")} glyph="layout-dashboard" variant="icon" size="iconMd">
+    <ActionMenu label={null} aria-label={t("capture.add")} glyph="layout-dashboard" variant="ghost" size="iconMd">
       {targets.map((dashboard) => (
         <CaptureDestination key={dashboard.id} store={store} dashboard={dashboard} />
       ))}
@@ -43,13 +43,14 @@ function CaptureDestination({ store, dashboard }: {
   const t = useDashboardsT();
   const context = useResourceViewUtilityContext();
   const binding = store.useDashboard(dashboard.target);
+  // The shared settle toasts the save's outcome; the menu item only shows its pending state.
+  const settle = useActionResultRun({ noResultTitle: t("common.actionFailed") });
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<Error | null>(null);
   const add = async () => {
-    if (binding.state.status !== "ready") return;
+    const state = binding.state;
+    if (state.status !== "ready") return;
     setPending(true);
-    setError(null);
-    const snapshot = binding.state.snapshot;
+    const snapshot = state.snapshot;
     const kind: DashboardWidgetKind["id"] = "stat";
     const size = { w: 3, h: 2 };
     const id = globalThis.crypto?.randomUUID?.() ?? `widget-${Date.now()}`;
@@ -58,7 +59,7 @@ function CaptureDestination({ store, dashboard }: {
       id,
       kind,
       kindVersion: 1,
-      title: `${context.resource} total`,
+      title: t("capture.widgetTitle", { resource: context.resource }),
       data: {
         shape: "value",
         source: {
@@ -73,27 +74,25 @@ function CaptureDestination({ store, dashboard }: {
       isArchived: false,
     };
     try {
-      await binding.save({
-        target: dashboard.target,
-        persistedId: binding.state.persistedId,
-        expectedRevision: binding.state.revision,
-        name: binding.state.name,
-        description: binding.state.description,
-        snapshot: parseDashboardSnapshot({ ...snapshot, widgets: [...snapshot.widgets, widget] }),
+      await settle(async () => {
+        await binding.save({
+          target: dashboard.target,
+          persistedId: state.persistedId,
+          expectedRevision: state.revision,
+          name: state.name,
+          description: state.description,
+          snapshot: parseDashboardSnapshot({ ...snapshot, widgets: [...snapshot.widgets, widget] }),
+        });
+        return { ok: true, message: t("capture.added", { dashboard: dashboard.title }) };
       });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause : new Error(String(cause)));
     } finally {
       setPending(false);
     }
   };
   return (
-    <>
-      <ActionTrigger glyph="dashboard" loading={pending}
-        disabled={binding.state.status !== "ready"} onClick={() => void add()}>
-        {pending ? t("capture.adding") : dashboard.title}
-      </ActionTrigger>
-      <ErrorBanner description={error?.message ?? null} className="my-1" />
-    </>
+    <ActionTrigger glyph="dashboard" loading={pending}
+      disabled={binding.state.status !== "ready"} onClick={() => void add()}>
+      {pending ? t("capture.adding") : dashboard.title}
+    </ActionTrigger>
   );
 }
