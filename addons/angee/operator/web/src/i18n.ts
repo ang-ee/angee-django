@@ -32,22 +32,28 @@ export const enOperatorMessages: Record<string, string> = {
   "logs.connecting": "Connecting",
   "logs.error": "Disconnected",
   "logs.empty": "Waiting for log output…",
+  "logs.unavailable": "The operator daemon is unavailable.",
+  "logs.closed": "The log stream closed (code {code}).",
 
   // Logs drawer (console-shell drawer adopter).
   "logs.target.label": "Log source",
-  "logs.target.placeholder": "Select a service or workspace…",
+  "logs.target.placeholder": "Select a service…",
   "logs.target.empty.title": "No log source selected",
-  "logs.target.empty.description":
-    "Pick a service or workspace to stream its logs.",
+  "logs.target.empty.description": "Pick a service to stream its logs.",
 
   // Transport / connection states.
   "transport.unknownError": "Unknown operator error.",
 
   // Overview.
-  "overview.loading": "Loading overview",
+  "overview.loading": "Loading overview…",
+  "overview.error": "The overview could not be loaded",
   "overview.stack.title": "Stack",
+  "overview.stack.name": "Name",
+  "overview.stack.root": "Root",
   "overview.stack.empty": "No stack status.",
   "overview.health.title": "Health",
+  "overview.health.status": "Status",
+  "overview.health.service": "Service",
   "overview.health.empty": "No health report.",
   "overview.health.readinessUnavailable": "{service}: readiness unavailable",
   "overview.health.serviceState": "{service}: {state}",
@@ -55,12 +61,15 @@ export const enOperatorMessages: Record<string, string> = {
   "overview.restartUnavailable": "This stack has no application restart job configured.",
 
   // Services.
-  "services.loading": "Loading services",
+  "services.record": "Service",
+  "services.loading": "Loading services…",
   "services.empty": "No services.",
   "services.column.name": "Name",
   "services.column.runtime": "Runtime",
   "services.column.status": "Status",
   "services.column.health": "Health",
+  "services.status.exit": "exit {code}",
+  "services.status.restarts": "restarts: {count}",
   "services.start": "Start",
   "services.restart": "Restart",
   "services.stop": "Stop",
@@ -75,7 +84,8 @@ export const enOperatorMessages: Record<string, string> = {
   "services.detail.logs": "Logs",
 
   // Workspaces.
-  "workspaces.loading": "Loading workspaces",
+  "workspaces.record": "Workspace",
+  "workspaces.loading": "Loading workspaces…",
   "workspaces.empty": "No workspaces.",
   "workspaces.column.name": "Name",
   "workspaces.column.template": "Template",
@@ -110,7 +120,6 @@ export const enOperatorMessages: Record<string, string> = {
   "workspaces.detail.overview": "Overview",
   "workspaces.detail.expiresAt": "Expires",
   "workspaces.detail.mcp": "Playwright MCP",
-  "workspaces.detail.logs": "Logs",
   "workspaceSources.title": "Sources",
   "workspaceSources.empty": "No sources.",
   "workspaceSources.column.slot": "Slot",
@@ -118,20 +127,17 @@ export const enOperatorMessages: Record<string, string> = {
   "workspaceSources.column.branch": "Branch",
   "workspaceSources.column.drift": "Drift",
   "workspaceSources.column.path": "Path",
-  "workspaceSources.dirty": "dirty",
-  "workspaceSources.clean": "clean",
 
   // Sources.
-  "sources.loading": "Loading sources",
+  "sources.record": "Source",
+  "sources.loading": "Loading sources…",
   "sources.empty": "No sources.",
   "sources.column.name": "Name",
   "sources.column.kind": "Kind",
   "sources.column.status": "Status",
   "sources.column.branch": "Branch",
   "sources.column.aheadBehind": "Ahead/Behind",
-  "sources.column.dirty": "Dirty",
-  "sources.dirty": "dirty",
-  "sources.clean": "clean",
+  "sources.column.dirty": "Working tree",
   "sources.fetch": "Fetch",
   "sources.pull": "Pull",
   "sources.push": "Push",
@@ -158,8 +164,6 @@ export const enOperatorMessages: Record<string, string> = {
   "gitops.column.branch": "Branch",
   "gitops.column.aheadBehind": "Ahead/Behind",
   "gitops.column.pushed": "Pushed",
-  "gitops.pushed.yes": "yes",
-  "gitops.pushed.no": "no",
 
   // Operations.
   "operations.empty": "No jobs.",
@@ -194,13 +198,9 @@ export const enOperatorMessages: Record<string, string> = {
   "secrets.column.hasValue": "Has value",
   "secrets.column.required": "Required",
   "secrets.column.envVar": "Env var",
-  "secrets.yes": "yes",
-  "secrets.no": "no",
-  "secrets.value.set": "set",
-  "secrets.value.empty": "empty",
-  "secrets.protected": "Protected",
-  "secrets.protected.hint":
-    "Control-plane secret (required or generated) — cannot be deleted from the console.",
+  "secrets.required": "Required",
+  "secrets.generated": "Generated",
+  "secrets.protectedHint": "A required or generated secret cannot be deleted.",
   "secrets.delete": "Delete",
   "secrets.delete.confirm.title": "Delete secret?",
   "secrets.delete.confirm.body":
@@ -212,7 +212,7 @@ export const enOperatorMessages: Record<string, string> = {
   "secrets.form.valuePlaceholder": "value",
   "secrets.form.submit": "Set",
   "secrets.set.label": "Set secret",
-  "secrets.delete.label": "Delete secret",
+  "secrets.set.failed": "The secret could not be set.",
 };
 
 // A translator bound to the `operator` namespace: resolves against the host

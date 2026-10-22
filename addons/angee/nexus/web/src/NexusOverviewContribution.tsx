@@ -1,12 +1,12 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  DashboardView,
   InlineEmpty,
   Metric,
   MiniCard,
   RailPanel,
-  RelativeTime,
+  formatDate,
+  formatNumber,
 } from "@angee/ui";
 
 import { NexusOverview } from "./documents";
@@ -14,7 +14,8 @@ import { useNexusT } from "./i18n";
 
 const PEEK_LIMIT = 6;
 
-/** Nexus-owned relationship health contributed into the Parties overview seam. */
+/** Nexus-owned relationship health contributed into the Parties overview seam: metrics and
+ *  rail panels only; the overview owns the grid they sit in. */
 export function NexusOverviewContribution(): React.ReactElement {
   const t = useNexusT();
   const query = useAuthoredQuery(
@@ -26,7 +27,7 @@ export function NexusOverviewContribution(): React.ReactElement {
   const fading = overview?.fading_ties ?? [];
   const due = overview?.due_cadences ?? [];
   return (
-    <DashboardView>
+    <>
       <Metric
         label={t("overview.fading.metric")}
         value={overview?.fading_count}
@@ -51,12 +52,8 @@ export function NexusOverviewContribution(): React.ReactElement {
                 <MiniCard
                   key={tie.id}
                   title={`${tie.party_a.display_name} ↔ ${tie.party_b.display_name}`}
-                  meta={
-                    tie.last_interaction_at
-                      ? <RelativeTime value={tie.last_interaction_at} />
-                      : undefined
-                  }
-                  primaryTag={{ label: tie.gravity.toFixed(2), tone: "warning" }}
+                  meta={tie.last_interaction_at ? formatDate(tie.last_interaction_at) : undefined}
+                  primaryTag={{ label: `${t("ties.gravity")} ${formatNumber(tie.gravity, { maximumFractionDigits: 2 })}`, tone: "warning" }}
                 />
               ))}
             </div>
@@ -71,7 +68,7 @@ export function NexusOverviewContribution(): React.ReactElement {
                 <MiniCard
                   key={cadence.id}
                   title={cadence.party.display_name}
-                  meta={cadence.touch_due_at ? <RelativeTime value={cadence.touch_due_at} /> : undefined}
+                  meta={cadence.touch_due_at ? formatDate(cadence.touch_due_at) : undefined}
                   primaryTag={{
                     label: t("graph.cadenceDays", { count: cadence.cadence_days }),
                     tone: "warning",
@@ -84,6 +81,6 @@ export function NexusOverviewContribution(): React.ReactElement {
           )}
         </RailPanel>
       </div>
-    </DashboardView>
+    </>
   );
 }

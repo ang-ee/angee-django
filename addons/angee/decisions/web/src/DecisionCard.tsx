@@ -3,7 +3,7 @@ import * as v from "valibot";
 import { holdsPermission, useSchemaFieldMetadata, modelMetadataForLabel } from "@angee/metadata";
 import {
   Button, Card, Checkbox, ErrorBanner, FieldDescriptorControl, JsonValueSchema, MetaGrid, RadioGroup, RecordReference,
-  RelativeTime, StatusIcon, cn, radioGroupVariants,
+  RelativeTime, StatusIcon, cn, radioGroupVariants, textRoleVariants,
   actionFormSubmitResult, formSubmitError, titleCase, useAuthoredResourceMutation, useRevealedRecordField,
 } from "@angee/ui";
 import { DecisionContext, DecisionContextSchema, FactValue } from "./DecisionContext";
@@ -17,13 +17,15 @@ export interface DecisionCardProps {
   selfId?: string;
   highlighted?: boolean;
   compact?: boolean;
+  /** The decision's own page: an answered question shows its alternatives, the chosen one marked, and its context. */
+  detail?: boolean;
   inStep?: { records: readonly string[] };
   onEditField?: (field: string) => void;
   actions?: ReactNode;
 }
 
 /** One card in the inbox, a record timeline and a record selection. */
-export function DecisionCard({ decision, selfId, highlighted, compact, inStep, onEditField, actions }: DecisionCardProps): ReactElement {
+export function DecisionCard({ decision, selfId, highlighted, compact, detail = false, inStep, onEditField, actions }: DecisionCardProps): ReactElement {
   const t = useDecisionsT();
   const ref = useRef<HTMLElement>(null);
   const closedRef = useRef<HTMLParagraphElement>(null);
@@ -79,7 +81,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
         .then((data) => actionFormSubmitResult(data, "decide")).catch(formSubmitError);
       if (result.status === "ok") setChoice({ revision: decision.revision, keys: chosen, values, accepted: true });
       else setError(result.status === "conflict" ? t("decision.conflict")
-        : [...result.issues.formErrors, ...Object.values(result.issues.fieldErrors).flat()].join(" "));
+        : [...new Set([...result.issues.formErrors, ...Object.values(result.issues.fieldErrors).flat()])].join(" "));
     } finally { setBusy(false); }
   };
   const recordLink = (id: string) => {
@@ -99,7 +101,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
   if (!open) {
     const withdrawn = verdict.success && verdict.output.length === 0;
     const supplied = v.safeParse(VerdictValuesSchema, decision.verdict_values);
-    return <p ref={closedRef} tabIndex={-1} className="text-xs text-fg-muted">{decision.kind_label}{" · "}
+    const summary = <p ref={closedRef} tabIndex={-1} className={textRoleVariants({ role: "caption" })}>{decision.kind_label}{" · "}
       {!withdrawn && decision.answered_by ? <><span>{decision.answered_by.display_name}</span>{" · "}</> : null}<span>{withdrawn
       ? t("decision.withdrawn", { name: decision.answered_by?.display_name ?? t("decision.operator") })
       : supplied.success && verdict.success && proposal.success ? <>{t("decision.chose", { labels: "" })}{alternatives.filter((alternative) => verdict.output.includes(alternative.key)).map((alternative, index) =>
@@ -107,6 +109,42 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
           .filter(([field, operation]) => operation.choose && Object.hasOwn(supplied.output[id] ?? {}, field))
           .map(([field]) => <span key={`${id}:${field}`}>: {fieldValue(id, field, supplied.output[id]![field]!, action.model)}</span>))}</span>)}</>
       : t("decision.chose", { labels: decision.verdict_label })}</span></p>;
+    if (!detail) return summary;
+    // The decision's page: the question's origin, reason, every alternative with the chosen
+    // ones marked and their retained values, then the records and facts it was decided on.
+    const chosenKeys = verdict.success ? verdict.output : [];
+    return <DecisionProvider value={{ decision }}><section aria-label={decision.kind_label} data-decision={decision.id} className="grid min-w-0 gap-3">
+      {summary}
+      {!inStep ? <div className={textRoleVariants({ role: "caption" })}><DecisionOriginOutlet />
+        {decision.requester ? <>{" · "}{t("decision.requestedBy", { name: decision.requester.display_name })}</> : null}</div> : null}
+      <DecisionContext context={decision.context} reasonOnly />
+      {proposal.success ? <ul aria-label={t("decision.decided")} className="grid gap-1.5">
+        {alternatives.map((alternative) => {
+          const picked = chosenKeys.includes(alternative.key);
+          return <li key={alternative.key} className={cn("flex items-start gap-2 rounded-6 border px-2.5 py-2", picked ? "border-brand bg-brand-tint" : "border-border-subtle text-fg-muted")}>
+            <StatusIcon tone={picked ? "success" : "muted"} icon={picked ? "circle-check" : "minus"} size="sm" className="mt-0.5" />
+            <span className="min-w-0 flex-1"><span className={picked ? "font-medium" : undefined}>{alternative.label}</span>
+              {picked ? <span className="mt-1 grid gap-1.5">{Object.entries(alternative.actions).map(([id, actions]) =>
+                <span key={id} className="grid gap-1">
+                  {id !== selfId ? recordLink(id) : null}
+                  <MetaGrid rows={Object.entries(actions.fields).map(([field, operation]) => ({
+                    id: field,
+                    label: fieldLabel(id, field, actions.model),
+                    value: operation.choose
+                      ? fieldValue(id, field, supplied.success ? supplied.output[id]?.[field] ?? null : null, actions.model)
+                      : operation.set === undefined ? t("decision.currentValue") : fieldValue(id, field, operation.set, actions.model),
+                  }))} />
+                </span>)}</span> : null}
+            </span>
+          </li>;
+        })}
+      </ul> : <ErrorBanner description={t("decision.invalidProposal")} />}
+      <div className="border-t border-border-subtle pt-2">
+        <div className="flex min-w-0 flex-wrap gap-1">{decision.records.map((record) => record.record_id && record.record_id !== selfId
+          ? <span key={record.id}>{recordLink(record.record_id)}</span> : null)}</div>
+        <DecisionContext context={decision.context} representedRecords={decision.records.flatMap((record) => record.record_id ? [record.record_id] : [])} />
+      </div>
+    </section></DecisionProvider>;
   }
   const changes = (alternative: v.InferOutput<typeof ProposalSchema>["alternatives"][number]) =>
     <span className="mt-1 grid gap-1.5">{Object.entries(alternative.actions).map(([id, actions]) =>
@@ -130,8 +168,8 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
   return <DecisionProvider value={{ decision }}><Card asChild className={cn("min-w-0 p-3 shadow-none", highlighted && "border-brand ring-2 ring-brand/30")}>
     <section ref={ref} aria-label={decision.kind_label} data-decision={decision.id}>
       <div className="flex min-w-0 items-start gap-2"><StatusIcon tone="warning" size="sm" icon="help" className="mt-0.5" />
-        <div className="min-w-0 flex-1"><h2 className="text-13 font-semibold leading-5 text-fg [overflow-wrap:anywhere]">{decision.kind_label}</h2>
-          {!inStep ? <div className="mt-0.5 text-xs text-fg-muted"><DecisionOriginOutlet />
+        <div className="min-w-0 flex-1"><h2 className={cn(textRoleVariants({ role: "value" }), "font-semibold [overflow-wrap:anywhere]")}>{decision.kind_label}</h2>
+          {!inStep ? <div className={cn(textRoleVariants({ role: "caption" }), "mt-0.5")}><DecisionOriginOutlet />
             {decision.requester ? t("decision.requestedBy", { name: decision.requester.display_name }) : null}{" · "}<RelativeTime value={decision.created_at} /></div> : null}
         </div>
       </div>
@@ -154,12 +192,12 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
           </RadioGroup>}</div>
       </> : <ErrorBanner description={t("decision.invalidProposal")} />}
       {error ? <ErrorBanner description={error} /> : null}
-      <div className="mt-2 flex flex-wrap gap-1.5">
+      <div className="mt-2 flex flex-wrap gap-2">
         {canAnswer && proposal.success ? <Button size="sm" variant="primary" disabled={locked || !complete} onClick={() => void submit()}>{t("decision.submit")}</Button> : null}
         {onEditField && editField ? <Button size="sm" variant="ghost" onClick={() => onEditField(editField)}>{t("decision.editOnForm")}</Button> : null}
         {actions}
       </div>
-      {decision.assignees.length ? <p className="mt-2 text-xs text-fg-muted">{t("decision.mayAnswer", { names: decision.assignees.map(({ display_name }) => display_name).join(", ") })}</p> : null}
+      {decision.assignees.length ? <p className={cn(textRoleVariants({ role: "caption" }), "mt-2")}>{t("decision.mayAnswer", { names: decision.assignees.map(({ display_name }) => display_name).join(", ") })}</p> : null}
       {!compact ? <div className="mt-3 border-t border-border-subtle pt-2">
         <div className="flex min-w-0 flex-wrap gap-1">{decision.records.map((record) => record.record_id && record.record_id !== selfId && !inStep?.records.includes(record.record_id)
           ? <span key={record.id}>{recordLink(record.record_id)}</span> : null)}</div>

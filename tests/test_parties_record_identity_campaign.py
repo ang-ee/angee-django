@@ -64,11 +64,14 @@ def test_record_follower_sql_is_bounded_and_unfollow_revokes_parent_and_child(re
             assert list(query.values_list("pk", flat=True)) == [person.pk]
         # Fetching guards all projected columns in one schema operation; reads
         # of the filled result cache skip the guard. There are two revision reads,
-        # actor sets, 13 arrows, and one application row SELECT.
-        assert len(queries) == 17, queries.captured_queries
+        # actor sets, 23 arrows (a filed task reaches each of its declared subject
+        # types' direct holders, its removal authority's project write and its subject
+        # task's owner), and one application row SELECT.
+        assert len(queries) == 27, queries.captured_queries
+        # The application row SELECT, and the arrow source of a record task about a party.
         assert sum(
             query["sql"].startswith(f'SELECT "{model._meta.db_table}".') for query in queries.captured_queries
-        ) == 1
+        ) == (2 if model is Party else 1)
     before = relationship_snapshot()
     with system_context(reason="tests.t3.unfollow"):
         record.message_unsubscribe(party=person)

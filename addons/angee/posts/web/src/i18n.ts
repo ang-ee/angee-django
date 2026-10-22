@@ -1,6 +1,8 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enPostsMessages: Record<string, string> = {
+  "feed.replyHold": "Reply hold (hours)",
+  "feed.replyHoldHelp": "Leave blank for approval before sending; zero sends immediately.",
   "feed.name": "Feed",
   "feed.backend": "Backend",
   "feed.handle": "Handle",
@@ -28,8 +30,6 @@ export const enPostsMessages: Record<string, string> = {
   "post.author": "Unknown author",
   "post.emptyBody": "No post body.",
   "post.reactions": "Post reactions",
-  "post.reactionCount": "{reaction} reaction, {count}",
-  "post.reactionTitle": "{reaction} by {names}",
 };
 
 export const usePostsT = createNamespaceT("posts", enPostsMessages);

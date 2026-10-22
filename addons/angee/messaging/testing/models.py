@@ -7,7 +7,6 @@ creates the test database, without depending on a test module's import order.
 
 from angee.intake.models import ChannelIntake
 from angee.integrate.testing.integration import Integration
-from angee.messaging.models import ActivityType as AbstractActivityType
 from angee.messaging.models import Channel as AbstractChannel
 from angee.messaging.models import Fragment as AbstractFragment
 from angee.messaging.models import Message as AbstractMessage
@@ -18,11 +17,9 @@ from angee.messaging.models import Part as AbstractPart
 from angee.messaging.models import Participant as AbstractParticipant
 from angee.messaging.models import Reaction as AbstractReaction
 from angee.messaging.models import Thread as AbstractThread
-from angee.messaging.models import ThreadActivity as AbstractThreadActivity
 from angee.messaging.models import ThreadAttachment as AbstractThreadAttachment
 from angee.messaging.models import ThreadFollower as AbstractThreadFollower
 from angee.messaging.models import ThreadNotification as AbstractThreadNotification
-from angee.messaging.models import TrackingValue as AbstractTrackingValue
 from angee.messaging_integrate_imap.models import ImapChannelSampling
 from angee.parties.models import Address as AbstractAddress
 from angee.parties.models import Circle as AbstractCircle
@@ -30,10 +27,8 @@ from angee.parties.models import CircleMember as AbstractCircleMember
 from angee.parties.models import Directory as AbstractDirectory
 from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
-from angee.parties.models import MergeVeto as AbstractMergeVeto
 from angee.parties.models import Organization as AbstractOrganization
 from angee.parties.models import Party as AbstractParty
-from angee.parties.models import PartyHandle as AbstractPartyHandle
 from angee.parties.models import Person as AbstractPerson
 from angee.parties.models import Relationship as AbstractRelationship
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
@@ -107,16 +102,6 @@ class Handle(AbstractHandle):
         rebac_resource_type = "parties/handle"
 
 
-class PartyHandle(AbstractPartyHandle):
-    """Concrete identity link registered before source-model test table setup."""
-
-    class Meta(AbstractPartyHandle.Meta):
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_party_handle"
-        rebac_resource_type = "parties/party_handle"
-
-
 class Fragment(AbstractFragment):
     """Concrete content-addressed fragment used by messaging tests.
 
@@ -157,16 +142,6 @@ class Thread(ThreadProjects, ThreadSpace, ThreadPublic, AbstractThread):
         app_label = "messaging"
         db_table = "test_messaging_thread"
         rebac_resource_type = "messaging/thread"
-
-
-class ActivityType(AbstractActivityType):
-    """Concrete activity catalog for source-addon compositions."""
-
-    class Meta(AbstractActivityType.Meta):
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_activity_type"
-        rebac_resource_type = "messaging/activity_type"
 
 
 class MessageSubtype(AbstractMessageSubtype):
@@ -245,38 +220,10 @@ class ThreadNotification(AbstractThreadNotification):
         rebac_resource_type = "messaging/thread_notification"
 
 
-class TrackingValue(AbstractTrackingValue):
-    """Concrete tracking value shared by the bare test runtime."""
-
-    class Meta(AbstractTrackingValue.Meta):
-        """Django model options for the canonical test tracking value."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_tracking_value"
-        rebac_resource_type = "messaging/tracking_value"
-
-
-class ThreadActivity(AbstractThreadActivity):
-    """Concrete record-thread activity used by messaging tests."""
-
-    class Meta(AbstractThreadActivity.Meta):
-        """Django model options for the canonical test thread activity."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_thread_activity"
-        rebac_resource_type = "messaging/thread_activity"
-
-
-_OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
-_AddressMeta = getattr(AbstractAddress, "Meta", object)
-
-
 class Organization(AbstractOrganization, Party):
     """Concrete organization matching the composer inheritance shape."""
 
-    class Meta(_OrganizationMeta):
+    class Meta(AbstractOrganization.Meta):
         """Django model options for the canonical test organization."""
 
         abstract = False
@@ -285,31 +232,16 @@ class Organization(AbstractOrganization, Party):
         rebac_resource_type = "parties/organization"
 
 
-
-class MergeVeto(AbstractMergeVeto):
-    """Concrete keep-separate pair used by parties-schema imports across the suite."""
-
-    class Meta(AbstractMergeVeto.Meta):
-        """Django model options for the canonical test merge veto."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_merge_veto"
-        rebac_resource_type = "parties/merge_veto"
-
-
-
 class Address(AbstractAddress):
     """Concrete party address used by contact-ingest tests."""
 
-    class Meta(_AddressMeta):
+    class Meta(AbstractAddress.Meta):
         """Django model options for the canonical test address."""
 
         abstract = False
         app_label = "parties"
         db_table = "test_parties_address"
         rebac_resource_type = "parties/address"
-
 
 
 class Circle(AbstractCircle):
@@ -324,7 +256,6 @@ class Circle(AbstractCircle):
         rebac_resource_type = "parties/circle"
 
 
-
 class CircleMember(AbstractCircleMember):
     """Concrete circle membership used by parties-schema imports across the suite."""
 
@@ -335,7 +266,6 @@ class CircleMember(AbstractCircleMember):
         app_label = "parties"
         db_table = "test_parties_circle_member"
         rebac_resource_type = "parties/circle_member"
-
 
 
 class RelationshipKind(AbstractRelationshipKind):
@@ -350,7 +280,6 @@ class RelationshipKind(AbstractRelationshipKind):
         rebac_resource_type = "parties/relationship_kind"
 
 
-
 class Relationship(AbstractRelationship):
     """Concrete relationship edge used by parties-schema imports across the suite."""
 
@@ -361,7 +290,6 @@ class Relationship(AbstractRelationship):
         app_label = "parties"
         db_table = "test_parties_relationship"
         rebac_resource_type = "parties/relationship"
-
 
 
 class Reaction(AbstractReaction):
@@ -376,7 +304,6 @@ class Reaction(AbstractReaction):
         rebac_resource_type = "messaging/reaction"
 
 
-
 class MessageStar(AbstractMessageStar):
     """Concrete message star used by messaging tests."""
 
@@ -389,7 +316,6 @@ class MessageStar(AbstractMessageStar):
         rebac_resource_type = "messaging/message_star"
 
 
-
 class MessageEdge(AbstractMessageEdge):
     """Concrete cross-message edge used by messaging tests."""
 
@@ -400,7 +326,6 @@ class MessageEdge(AbstractMessageEdge):
         app_label = "messaging"
         db_table = "test_messaging_message_edge"
         rebac_resource_type = "messaging/message_edge"
-
 
 
 class Participant(AbstractParticipant):

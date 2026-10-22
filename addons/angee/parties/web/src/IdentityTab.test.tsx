@@ -19,8 +19,8 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   useResourceRecordHrefLookup: () => () => undefined,
 }));
 
-vi.mock("./party-handle-row-actions", () => ({
-  usePartyHandleRowActions: () => actions,
+vi.mock("./party-statement-row-actions", () => ({
+  usePartyStatementRowActions: () => actions,
 }));
 
 const context = (formReadOnly: boolean) => ({

@@ -1,10 +1,11 @@
 // Authorization schema for dashboard snapshots and their widgets.
 // @rebac_package: dashboards
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 5
+// @rebac_schema_revision: 6
 
 definition dashboards/dashboard {
-    relation shared: dashboards/dashboard // rebac:const={"target_id":"shared","filters":{"owner_id__isnull":true}}
+    relation trashed: dashboards/dashboard // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
+    relation shared: dashboards/dashboard // rebac:const={"target_id":"shared","filters":{"is_baseline":true}}
     relation owner:  auth/user // rebac:field=owner
     relation viewer: auth/user | auth/group#member
     relation editor: auth/user | auth/group#member
@@ -12,16 +13,20 @@ definition dashboards/dashboard {
 
     // The shared sentinel needs no target row because this permission is authenticated.
     // Arrow-only through shared: never check directly or use as an action/field gate;
-    // doing so bypasses the owner filter. Check read on the dashboard instead.
+    // doing so bypasses the baseline filter. Check read on the dashboard instead.
     permission shared_reader = authenticated
-    permission create  = authenticated
-    permission read    = shared->shared_reader + owner + viewer + editor + admin->member
+    permission create  = authenticated - shared->shared_reader
+    permission conceal = authenticated
+    permission withheld = trashed->conceal
+    permission read_granted = shared->shared_reader + owner + viewer + editor
+    permission read    = (read_granted - withheld) + delete
     permission write   = owner + editor + admin->member
     permission reset   = owner
     permission share   = owner + admin->member
-    permission archive = owner + admin->member
     permission delete  = owner + admin->member
-    permission write__owner = share
+    permission transfer = (owner + admin->member) - shared->shared_reader
+    permission write__owner = transfer
+    permission write__is_baseline = nil
 }
 definition dashboards/widget {
     relation dashboard: dashboards/dashboard // rebac:field=dashboard

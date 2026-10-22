@@ -5,6 +5,9 @@ import { cn } from "../lib/cn";
 import { tv } from "../lib/variants";
 import { textRoleVariants } from "../ui/text";
 
+/**
+ * @kind token
+ */
 export const inlineEmptyVariants = tv({
   slots: {
     root: cn(
@@ -25,6 +28,9 @@ export type InlineEmptyProps = Omit<
   label: React.ReactNode;
 };
 
+/**
+ * @kind fragment
+ */
 export const InlineEmpty = React.forwardRef<HTMLDivElement, InlineEmptyProps>(
   function InlineEmpty({ className, icon, label, ...props }, ref) {
     const styles = inlineEmptyVariants();

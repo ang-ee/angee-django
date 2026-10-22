@@ -1,26 +1,29 @@
-import { senderDisplayName } from "@angee/parties";
+import { senderAvatarUrl, senderDisplayName } from "@angee/parties";
 import * as React from "react";
 import {
+  Avatar,
   Button,
-  ChatBubble,
+  Chip,
+  ScopeChip,
   EmptyState,
+  ErrorBanner,
   Glyph,
-  Input,
   LoadingPanel,
   MessageDaySeparator,
   MessagePartsView,
+  MessageRow,
+  PaneToolbar,
   ReactionBar,
-  RelativeTime,
-  SectionEyebrow,
-  cn,
-  reactionsFromGroups,
-  textRoleVariants,
-  type ChatBubbleRole,
+  avatarInitials,
+  formatDayLabel,
+  useReactionGroups,
+  useResolvedWidget,
+  type MessagePart,
 } from "@angee/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { useMessagingT } from "./i18n";
-import { messagingReactionCopy } from "./reaction-copy";
+import { MessageSourceCopies } from "./MessageSourceCopies";
 import type { ThreadTranscriptRow } from "./documents";
 import { messageFeedRows } from "./message-feed";
 import { useThreadMessageFeed } from "./thread-message-feed";
@@ -54,16 +57,20 @@ export interface ThreadTranscriptProps {
     children: React.ReactElement,
   ) => React.ReactElement;
   renderMessageActions?: (message: ThreadTranscriptRow) => React.ReactNode;
+  /** Open an attachment in the host's preview. Without it, a chip opens the file
+   *  URL itself (see `MessagePartsView`). */
+  onPreviewFile?: (message: ThreadTranscriptRow, part: MessagePart) => void;
 }
 
 /**
  * The channel conversation transcript on a `messaging.Thread` detail: the thread's
- * messages as a role-aligned `ChatBubble` transcript — inbound counterparts lead
- * left, our outbound turns trail right, and internal notes get a distinct centered
- * treatment. Unlike the bounded record-chatter `MessageFeed`, a channel thread is
- * unbounded, so the list is virtualized with `@tanstack/react-virtual` (the locked
- * long-list owner) and the read grows a newest-first window on demand. The `order`
- * prop lets the placement decide the reading direction (see {@link TranscriptOrder}).
+ * messages as one left-aligned `MessageRow` feed — the direction (inbound, outbound,
+ * internal note) is a chip on the row, never a left/right split. Unlike the bounded
+ * record-chatter `MessageFeed`, a channel thread is unbounded, so the list is
+ * virtualized with `@tanstack/react-virtual` (the locked long-list owner) and the
+ * read grows a newest-first window on demand. Its controls — source copies, jump to
+ * date — publish into the pane toolbar of whichever pane hosts it; the `order` prop
+ * lets the placement decide the reading direction (see {@link TranscriptOrder}).
  */
 export function ThreadTranscript({
   threadId,
@@ -73,41 +80,64 @@ export function ThreadTranscript({
   renderMessageActions,
   renderWindow,
   timezone,
+  onPreviewFile,
 }: ThreadTranscriptProps): React.ReactElement {
-  // Remount per thread so scroll anchors and virtualizer measurements reset.
+  const [allCopies, setAllCopies] = React.useState(false);
+  const t = useMessagingT();
+  const jumpDate = anchor.startsWith("date:") ? anchor.slice(5).split("@")[0] : "";
+  // Jump to date is the one date field; it stores a day, the anchor carries the zone.
+  const DateEdit = useResolvedWidget("date")?.edit;
+  const jumpField = React.useMemo(() => ({ name: "jump", label: t("transcript.jumpDate") }), [t]);
   return (
-    <TranscriptBody
-      key={`${threadId}:${anchor}`}
-      threadId={threadId}
-      order={order}
-      anchor={anchor}
-      onAnchorChange={onAnchorChange}
-      renderMessageActions={renderMessageActions}
-      renderWindow={renderWindow}
-      timezone={timezone}
-    />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <PaneToolbar
+        scope={onAnchorChange ? (
+          <>
+            {DateEdit ? (
+              <DateEdit
+                value={jumpDate || null} field={jumpField}
+                onChange={(next) => onAnchorChange(typeof next === "string" && next ? `date:${next}${timezone ? `@${timezone}` : ""}` : "")}
+              />
+            ) : null}
+            {anchor ? <ScopeChip active label={t("transcript.latest")} onClick={() => onAnchorChange("")} /> : null}
+          </>
+        ) : undefined}
+        actions={[{ icon: "copy", label: t(allCopies ? "copies.collapse" : "copies.showAll"), pressed: allCopies, onClick: () => setAllCopies(!allCopies) }]}
+      />
+      {/* Remount per thread, anchor and copy mode: each is a different row set, so the
+          virtualizer's measurements and the scroll anchor start over. */}
+      <TranscriptBody
+        key={`${threadId}:${anchor}:${allCopies}`}
+        threadId={threadId}
+        allCopies={allCopies}
+        order={order}
+        anchor={anchor}
+        onAnchorChange={onAnchorChange}
+        renderMessageActions={renderMessageActions}
+        renderWindow={renderWindow}
+        timezone={timezone}
+        onPreviewFile={onPreviewFile}
+      />
+    </div>
   );
 }
 
 function TranscriptBody({
   threadId,
+  allCopies,
   order = "conversation",
   anchor = "",
-  onAnchorChange,
   renderMessageActions,
   renderWindow,
   timezone,
-}: ThreadTranscriptProps): React.ReactElement {
+  onPreviewFile,
+}: ThreadTranscriptProps & { allCopies: boolean }): React.ReactElement {
   const t = useMessagingT();
-  const transcript = useThreadMessageFeed(threadId, anchor);
+  const transcript = useThreadMessageFeed(threadId, anchor, allCopies);
   // Render oldest-to-newest so the latest turn sits at the bottom.
   const messages = React.useMemo(
     () => messageFeedRows(transcript.data).reverse(),
     [transcript.data],
-  );
-  const dayFormat = React.useMemo(
-    () => new Intl.DateTimeFormat(undefined, { timeZone: timezone }),
-    [timezone],
   );
   const hasOlder = transcript.hasNextPage;
   const conversation = order === "conversation";
@@ -175,30 +205,15 @@ function TranscriptBody({
     void transcript.fetchNextPage({ cancelRefetch: false });
   }
   const olderButton = hasOlder ? (
-    <Button
-      type="button"
-      variant="secondary"
-      size="sm"
-      disabled={transcript.isFetching || transcript.isFetchingNextPage}
-      onClick={loadOlder}
-    >
-      <Glyph name="chevron-up" />
-      {t("transcript.loadOlder")}
-    </Button>
+    <LoadMore direction="older" label={t("transcript.loadOlder")}
+      disabled={transcript.isFetching || transcript.isFetchingNextPage} onClick={loadOlder} />
   ) : null;
 
   if (transcript.isFetching && messages.length === 0) {
     return <LoadingPanel message={t("transcript.loading")} />;
   }
   if (transcript.error) {
-    return (
-      <EmptyState
-        icon="comments"
-        title={t("transcript.error")}
-        description={t("transcript.emptyHint")}
-        className="min-h-48 p-4"
-      />
-    );
+    return <ErrorBanner title={t("transcript.error")} description={t("transcript.emptyHint")} />;
   }
   if (messages.length === 0) {
     return (
@@ -206,7 +221,6 @@ function TranscriptBody({
         icon="comments"
         title={t("transcript.emptyTitle")}
         description={t("transcript.emptyHint")}
-        className="min-h-48 p-4"
         actions={olderButton}
       />
     );
@@ -214,31 +228,7 @@ function TranscriptBody({
 
   const virtualItems = virtualizer.getVirtualItems();
   const content = (
-    <div className="flex h-full min-h-0 flex-col rounded-6 border border-border-subtle bg-sheet">
-      {onAnchorChange ? (
-        <div className="flex items-center gap-2 border-b border-border-subtle p-2">
-          <label className="flex items-center gap-2 text-13">
-            {t("transcript.jumpDate")}
-            <Input
-              type="date"
-              size="sm"
-              value={
-                anchor.startsWith("date:") ? anchor.slice(5).split("@")[0] : ""
-              }
-              onChange={(event) =>
-                onAnchorChange(
-                  event.target.value
-                    ? `date:${event.target.value}${timezone ? `@${timezone}` : ""}`
-                    : "",
-                )
-              }
-            />
-          </label>
-          <Button size="sm" variant="ghost" onClick={() => onAnchorChange("")}>
-            {t("transcript.latest")}
-          </Button>
-        </div>
-      ) : null}
+    <div className="flex h-full min-h-0 flex-col">
       {/* The "Load older" control sits OUTSIDE the scroll element so its height never
           offsets the virtualized list's coordinate space (the scrollMargin bug). */}
       {hasOlder ? (
@@ -260,13 +250,10 @@ function TranscriptBody({
             const message = messages[item.index];
             if (message === undefined) return null;
             const previous = messages[item.index - 1];
-            const day = dayFormat.format(
-              new Date(message.sent_at ?? message.created_at),
-            );
+            const sentAt = message.sent_at ?? message.created_at;
+            const day = formatDayLabel(sentAt, { timeZone: timezone });
             const previousDay = previous
-              ? dayFormat.format(
-                  new Date(previous.sent_at ?? previous.created_at),
-                )
+              ? formatDayLabel(previous.sent_at ?? previous.created_at, { timeZone: timezone })
               : null;
             return (
               <li
@@ -279,14 +266,19 @@ function TranscriptBody({
                 }}
               >
                 {day !== previousDay ? (
-                  <MessageDaySeparator as="div">{day}</MessageDaySeparator>
+                  <MessageDaySeparator as="div" date={sentAt} timeZone={timezone} />
                 ) : null}
-                <TranscriptMessage message={message} t={t} />
-                {renderMessageActions ? (
-                  <div className="mt-2 flex justify-end">
-                    {renderMessageActions(message)}
-                  </div>
-                ) : null}
+                <ul>
+                  <TranscriptMessage
+                    message={message}
+                    t={t}
+                    timezone={timezone}
+                    onPreviewFile={onPreviewFile}
+                    actions={renderMessageActions?.(message)}
+                    copies={<MessageSourceCopies messageId={message.id} channelName={message.channel?.display_name}
+                      renderActions={renderMessageActions} />}
+                  />
+                </ul>
               </li>
             );
           })}
@@ -294,17 +286,8 @@ function TranscriptBody({
       </div>
       {transcript.hasPreviousPage ? (
         <div className="flex justify-center border-t border-border-subtle p-2">
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={transcript.isFetching}
-            onClick={() =>
-              void transcript.fetchPreviousPage({ cancelRefetch: false })
-            }
-          >
-            {t("transcript.loadNewer")}
-            <Glyph name="chevron-down" />
-          </Button>
+          <LoadMore direction="newer" label={t("transcript.loadNewer")} disabled={transcript.isFetching}
+            onClick={() => void transcript.fetchPreviousPage({ cancelRefetch: false })} />
         </div>
       ) : null}
     </div>
@@ -319,79 +302,60 @@ function TranscriptBody({
     : content;
 }
 
+/** The keyset "load more" control, one shape in both directions. */
+function LoadMore({ direction, label, disabled, onClick }: {
+  direction: "older" | "newer";
+  label: string;
+  disabled: boolean;
+  onClick: () => void;
+}): React.ReactElement {
+  return (
+    <Button type="button" variant="secondary" size="sm" disabled={disabled} onClick={onClick}>
+      <Glyph name={direction === "older" ? "chevron-up" : "chevron-down"} />
+      {label}
+    </Button>
+  );
+}
+
 interface TranscriptMessageProps {
   message: ThreadTranscriptRow;
   t: MessagingT;
+  timezone?: string;
+  onPreviewFile?: ThreadTranscriptProps["onPreviewFile"];
+  actions?: React.ReactNode;
+  copies?: React.ReactNode;
 }
 
-/** One transcript turn: an internal note as a distinct centered card, otherwise a
- *  role-aligned `ChatBubble` (outbound trails right, inbound leads left) with the
- *  sender/time header, body, attachment chips, and read-only reaction pills. */
-function TranscriptMessage({
-  message,
-  t,
-}: TranscriptMessageProps): React.ReactElement {
+/** One transcript turn as the shared feed row: sender, direction chip, the absolute
+ *  time, body, read-only reaction pills, and the host's verbs on hover. */
+function TranscriptMessage({ message, t, timezone, onPreviewFile, actions, copies }: TranscriptMessageProps): React.ReactElement {
   // Read the SDL's UPPERCASE `Direction` enum verbatim — one enum-casing convention
   // across the messaging web surface (see `message_type` reads in RecordChatterPane).
   const direction = message.direction;
   const author = senderDisplayName(message.sender, t("message.author"));
   const timestamp = message.sent_at ?? message.created_at;
-  const reactions = reactionsFromGroups(
-    message.reaction_groups,
-    messagingReactionCopy(t),
-  );
-
-  const body = (
-    <>
+  const reactions = useReactionGroups(message.reaction_groups);
+  const channel = direction === "INTERNAL"
+    ? <Chip tone="warning">{t("transcript.noteLabel")}</Chip>
+    : direction === "OUTBOUND"
+      ? <Chip tone="info">{t("message.directionOutbound")}</Chip>
+      : <Chip tone="neutral">{t("message.directionInbound")}</Chip>;
+  return (
+    <MessageRow
+      avatar={<Avatar size="sm" src={senderAvatarUrl(message.sender)} initials={avatarInitials(author)} alt={author} />}
+      author={author}
+      channel={channel}
+      timestamp={timestamp}
+      timeZone={timezone}
+      reactions={reactions.length > 0 ? <ReactionBar reactions={reactions} label={t("message.reactions")} /> : undefined}
+      actions={actions || copies ? <div className="mt-1 flex flex-wrap items-center gap-2">{copies}{actions}</div> : undefined}
+    >
       <MessagePartsView
         parts={message.parts}
+        onPreviewFile={
+          onPreviewFile ? (part) => onPreviewFile(message, part) : undefined
+        }
       />
-      {reactions.length > 0 ? (
-        <div className="mt-2">
-          <ReactionBar reactions={reactions} label={t("message.reactions")} />
-        </div>
-      ) : null}
-    </>
-  );
-
-  // Internal notes are not sent to the counterpart, so they get a distinct
-  // full-width note treatment instead of a left/right conversation bubble.
-  if (direction === "INTERNAL") {
-    return (
-      <div className="rounded-6 border border-dashed border-border-subtle bg-surface-inset px-3 py-2 text-13 text-fg">
-        <div className="mb-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <SectionEyebrow as="span" tone="warning">
-            {t("transcript.noteLabel")}
-          </SectionEyebrow>
-          <span className="text-13 font-medium text-fg">{author}</span>
-          {timestamp ? (
-            <RelativeTime
-              value={timestamp}
-              className={textRoleVariants({ role: "caption" })}
-            />
-          ) : null}
-        </div>
-        {body}
-      </div>
-    );
-  }
-
-  const role: ChatBubbleRole = direction === "OUTBOUND" ? "user" : "assistant";
-  const mine = role === "user";
-  return (
-    <div className={cn("flex flex-col", mine ? "items-end" : "items-start")}>
-      <div className="flex items-baseline gap-2 px-1 pb-1">
-        <span className="text-2xs font-medium text-fg">{author}</span>
-        {timestamp ? (
-          <RelativeTime
-            value={timestamp}
-            className={textRoleVariants({ role: "caption" })}
-          />
-        ) : null}
-      </div>
-      <ChatBubble role={role} className="w-full">
-        {body}
-      </ChatBubble>
-    </div>
+    </MessageRow>
   );
 }

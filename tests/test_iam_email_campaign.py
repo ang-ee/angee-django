@@ -1,14 +1,10 @@
-"""The Python email key, legacy inventory, and stored-column uniqueness."""
-
-from io import StringIO
+"""The Python email key and stored-column uniqueness."""
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
-from rebac.models import PermissionAuditEvent
 
 from angee.iam.models import AccountExists, AmbiguousAccountEmail
 from tests.iam_campaign import iam_admin as iam_admin
@@ -124,41 +120,3 @@ def test_unique_constraint_excludes_services_and_empty_person_emails(db):
     for username in ("empty-a", "empty-b"):
         User.objects.create_user(username, " \t\n")
     assert User._base_manager.count() == 5
-
-
-def test_collision_inventory_reads_only_keys_and_command_is_read_only(db, django_assert_num_queries):
-    first = User.objects.create_user("legacy-active", "first@example.com")
-    second = User.objects.create_user("legacy-inactive", "second@example.com", is_active=False, is_staff=True)
-    User._base_manager.filter(pk=first.pk).update(email="\u2003Ä@EXAMPLE.COM\u00a0")
-    User._base_manager.filter(pk=second.pk).update(email="ä@example.com")
-    User.objects.create_user("service", "ä@example.com", kind="service")
-    User.objects.create_user("empty")
-    before = list(User._base_manager.order_by("pk").values())
-    audits = PermissionAuditEvent.objects.count()
-    with CaptureQueriesContext(connection) as captured:
-        collisions = User.objects.person_email_collisions()
-    assert collisions == {"ä@example.com": sorted([first.pk, second.pk])}
-    assert len(captured) == 1
-    columns = captured[0]["sql"].split(" FROM ")[0]
-    assert '"email"' in columns and '"id"' in columns
-    assert '"username"' not in columns and '"password"' not in columns
-    stdout = StringIO()
-    with django_assert_num_queries(2):
-        call_command("iam_email_collisions", stdout=stdout)
-    lines = stdout.getvalue().splitlines()
-    assert len(lines) == 3
-    assert f"ä@example.com\tid={first.pk}\tusername=legacy-active\tactive=True\tstaff=False" in lines
-    assert f"ä@example.com\tid={second.pk}\tusername=legacy-inactive\tactive=False\tstaff=True" in lines
-    assert lines[-1] == "2 person accounts with email collisions."
-    assert list(User._base_manager.order_by("pk").values()) == before
-    assert PermissionAuditEvent.objects.count() == audits
-
-
-def test_collision_command_with_no_collisions_does_not_write_an_audit_row(db, django_assert_num_queries):
-    User.objects.create_user("unique", "unique@example.com")
-    audits = PermissionAuditEvent.objects.count()
-    stdout = StringIO()
-    with django_assert_num_queries(1):
-        call_command("iam_email_collisions", stdout=stdout)
-    assert stdout.getvalue() == "0 person accounts with email collisions.\n"
-    assert PermissionAuditEvent.objects.count() == audits

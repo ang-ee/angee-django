@@ -1,3 +1,7 @@
+/**
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function titleCase(value: string): string {
   return value
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")

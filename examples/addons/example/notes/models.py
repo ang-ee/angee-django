@@ -5,27 +5,26 @@ from __future__ import annotations
 from typing import Any
 
 from django.conf import settings
+from django.contrib.contenttypes.fields import GenericRelation
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from rebac import ObjectRef
 
-from angee.base.fields import StateField
-from angee.base.mixins import (
+from angee.fields import StateField
+from angee.messaging.models import ThreadedModelMixin
+from angee.models import (
+    AngeeDataModel,
     AuditMixin,
     HistoryMixin,
     OwnerMixin,
-    RevisionMixin,
 )
-from angee.base.models import AngeeDataModel
-from angee.messaging.models import ThreadedModelMixin
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 
 
-class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel, HistoryMixin, RevisionMixin):
+class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel, HistoryMixin):
     """A short note used to exercise backend composition.
 
-    Metadata changes are audited through ``history``; the ``body`` field is
-    versioned through ``revisions`` so edits can be rolled back.
+    Metadata and body changes are recorded through native ``history``.
     """
 
     runtime = True
@@ -38,7 +37,6 @@ class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, Angee
             ObjectRef("angee/role", "admin"),
         ),)
 
-    revisioned_fields = ("body",)
     rebac_grantable = {"reader": "share", "editor": "share"}
 
     sqid_prefix = "nte_"
@@ -61,6 +59,7 @@ class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, Angee
     reviewer = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
     )
+    file_attachments = GenericRelation("storage.FileAttachment", related_query_name="note")
 
     class Meta:
         """Django model options."""

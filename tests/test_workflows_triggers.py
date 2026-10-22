@@ -14,13 +14,13 @@ from rebac.actors import is_sudo
 from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationship
 
-from angee.base.impl import impl_choices_enum
-from angee.base.scoping import system_queryset
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.impl import impl_choices_enum
 from angee.knowledge import schema as knowledge_schema
+from angee.models import row_lock_paths
 from angee.workflows import schema as workflow_schema
 from angee.workflows import triggers
 from angee.workflows.steps import Step
@@ -69,6 +69,20 @@ def capture(record):
     triggers.RecordChanged.dispatch(type(record), record)
 
 
+@pytest.mark.parametrize("failure", [ValueError, ValidationError])
+def test_trigger_capture_logs_unexpected_ledger_errors(trigger_setup, monkeypatch, caplog, failure):
+    actor, _workflow, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+
+    def fail_write(*args, **kwargs):
+        raise failure("Trigger ledger interrupted")
+
+    monkeypatch.setattr(triggers.TriggerEventQuerySet, "update_or_create", fail_write)
+    capture(record)
+    assert not TriggerEvent.system_queryset().filter(trigger=trigger).exists()
+    assert "Workflow trigger capture failed" in caplog.text and "Trigger ledger interrupted" in caplog.text
+
+
 def restrict_source_grant_to_record(monkeypatch, record):
     """Let the record owner, but not an unrelated workflow editor, delegate it."""
     def targets(cls, trigger):
@@ -91,21 +105,21 @@ def test_record_changed_system_check_requires_grant_targets(monkeypatch):
 
 
 def test_record_changed_requires_the_mixin_for_watch_eligibility():
-    with pytest.raises(ValidationError, match="no registered workflow event source"):
-        triggers.RecordChanged.check_watch_model(MtiParent)
+    with pytest.raises(ValidationError, match="no registered workflow observation"):
+        triggers.TriggerSource.check_model(MtiParent)
 
 
 def test_disabled_triggers_write_nothing_and_native_save_skips_raw(trigger_setup):
     actor, _, record, trigger = trigger_setup
     capture(record)
-    assert not system_queryset(TriggerEvent).exists()
+    assert not TriggerEvent.system_queryset().exists()
     Trigger.objects.enable(trigger, actor=actor)
     with trigger_source(Vault, connect=True):
         post_save.send(sender=Vault, instance=record, raw=True, created=False)
-        assert not system_queryset(TriggerEvent).exists()
+        assert not TriggerEvent.system_queryset().exists()
         with actor_context(actor):
             record.save()
-        assert system_queryset(TriggerEvent).count() == 1
+        assert TriggerEvent.system_queryset().count() == 1
 
 
 def test_enable_cannot_persist_an_actorless_system_trigger(trigger_setup):
@@ -186,7 +200,7 @@ def test_revoked_required_grant_disables_admission_with_a_reason(trigger_setup):
     assert not trigger.granted_relationships(actor=actor)
     capture(record)
     assert Trigger.objects.drain() == 0
-    assert not system_queryset(WorkflowRun).exists()
+    assert not WorkflowRun.system_queryset().exists()
     assert workflow.user_id is not None
 
 
@@ -210,7 +224,7 @@ def test_current_state_rejection_rearms_and_admission_survives_prune(trigger_set
         record.name = "Later"
         record.save()
     assert Trigger.objects.drain() == 0
-    event = system_queryset(TriggerEvent).get()
+    event = TriggerEvent.system_queryset().get()
     assert event.evaluated_at and not event.admitted_at and "no longer matches" in event.rejection
     with actor_context(actor):
         record.name = "Ready"
@@ -222,17 +236,17 @@ def test_current_state_rejection_rearms_and_admission_survives_prune(trigger_set
     run = event.started_run
     assert run.request_key == f"trigger:{trigger.sqid}:{record.sqid}"
     assert run.trigger_event_id == event.pk
-    assert [row.record_public_id for row in system_queryset(StepRecord).filter(run=run)] == [record.sqid]
+    assert [row.record_public_id for row in StepRecord.system_queryset().filter(run=run)] == [record.sqid]
     run_until(run)
-    system_queryset(WorkflowRun).filter(pk=run.pk).update(finished_at=Now() - timedelta(days=91))
+    WorkflowRun.system_queryset().filter(pk=run.pk).update(finished_at=Now() - timedelta(days=91))
     assert WorkflowRun.objects.prune() == 1
     event.refresh_from_db()
-    assert event.admitted_at and not system_queryset(WorkflowRun).filter(trigger_event=event).exists()
+    assert event.admitted_at and not WorkflowRun.system_queryset().filter(trigger_event=event).exists()
     with actor_context(actor):
         assert delete_by_public_id(Trigger, trigger.sqid).has_blockers
     capture(record)
     assert Trigger.objects.drain() == 0
-    assert not system_queryset(WorkflowRun).exists()
+    assert not WorkflowRun.system_queryset().exists()
 
 
 def test_admitted_event_blocks_trigger_purge_preview(trigger_setup):
@@ -241,12 +255,12 @@ def test_admitted_event_blocks_trigger_purge_preview(trigger_setup):
     Trigger.objects.enable(trigger, actor=actor)
     capture(record)
     assert Trigger.objects.drain() == 1
-    event = system_queryset(TriggerEvent).get(trigger=trigger)
+    event = TriggerEvent.system_queryset().get(trigger=trigger)
     with actor_context(actor):
         preview = delete_by_public_id(Trigger, trigger.sqid)
     assert preview.has_blockers
     assert any(blocked.label == str(TriggerEvent._meta.verbose_name_plural) for blocked in preview.blocked)
-    assert system_queryset(Trigger).filter(pk=trigger.pk).exists()
+    assert Trigger.system_queryset().filter(pk=trigger.pk).exists()
     assert event.started_run.trigger_event_id == event.pk
 
 
@@ -257,12 +271,12 @@ def test_enabler_losing_record_read_does_not_change_principal_admission(trigger_
     record = vault_for(editor, name="Ready")
     Trigger.objects.enable(trigger, actor=editor)
     capture(record)
-    system_queryset(Vault).filter(pk=record.pk).update(owner=create_user("replacement-owner"))
+    Vault.system_queryset().filter(pk=record.pk).update(owner=create_user("replacement-owner"))
     with system_context(reason="test.workflow principal admission"):
         assert Trigger.objects.drain() == 1
-    event = system_queryset(TriggerEvent).get(record_object_id=record.pk)
+    event = TriggerEvent.system_queryset().get(record_object_id=record.pk)
     assert event.admitted_at and not event.rejection
-    assert system_queryset(WorkflowRun).get().run_as_id == workflow.user_id
+    assert WorkflowRun.system_queryset().get().run_as_id == workflow.user_id
 
 
 def test_condition_cannot_observe_records_hidden_from_the_principal(trigger_setup, monkeypatch):
@@ -279,11 +293,11 @@ def test_condition_cannot_observe_records_hidden_from_the_principal(trigger_setu
     capture(visible)
     with system_context(reason="test principal scoped condition"):
         assert Trigger.objects.drain() == 1
-    denied = system_queryset(TriggerEvent).get(record_object_id=hidden.pk)
-    admitted = system_queryset(TriggerEvent).get(record_object_id=visible.pk)
+    denied = TriggerEvent.system_queryset().get(record_object_id=hidden.pk)
+    admitted = TriggerEvent.system_queryset().get(record_object_id=visible.pk)
     assert denied.evaluated_at and denied.admitted_at is None and "inaccessible" in denied.rejection
     assert admitted.admitted_at and admitted.rejection == ""
-    assert system_queryset(WorkflowRun).get().run_as_id == workflow.user_id
+    assert WorkflowRun.system_queryset().get().run_as_id == workflow.user_id
 
 
 def test_editor_publication_cannot_use_principal_grants(trigger_setup, monkeypatch):
@@ -298,14 +312,14 @@ def test_editor_publication_cannot_use_principal_grants(trigger_setup, monkeypat
 
     assert Trigger.objects.drain() == 0
     trigger.refresh_from_db()
-    event = system_queryset(TriggerEvent).get(trigger=trigger)
+    event = TriggerEvent.system_queryset().get(trigger=trigger)
     assert not trigger.enabled
     assert "Version 2" in trigger.disabled_reason
     assert "trigger-publisher" in trigger.disabled_reason
     assert "member" in trigger.disabled_reason
     assert "vault_viewer" not in trigger.disabled_reason
     assert event.rejection == trigger.disabled_reason
-    assert not system_queryset(WorkflowRun).exists()
+    assert not WorkflowRun.system_queryset().exists()
 
 
 def test_admin_publication_keeps_principal_admission(trigger_setup):
@@ -313,7 +327,7 @@ def test_admin_publication_keeps_principal_admission(trigger_setup):
     Trigger.objects.enable(trigger, actor=admin)
     capture(record)
     assert Trigger.objects.drain() == 1
-    assert system_queryset(WorkflowRun).get().version.published_by_id == admin.pk
+    assert WorkflowRun.system_queryset().get().version.published_by_id == admin.pk
 
 
 def test_system_installed_publication_keeps_principal_admission(trigger_setup):
@@ -325,7 +339,7 @@ def test_system_installed_publication_keeps_principal_admission(trigger_setup):
     Trigger.objects.enable(trigger, actor=admin)
     capture(record)
     assert Trigger.objects.drain() == 1
-    assert system_queryset(WorkflowRun).get().version_id == installed.published_id
+    assert WorkflowRun.system_queryset().get().version_id == installed.published_id
 
 
 def test_publisher_losing_delegation_stops_later_admission(trigger_setup):
@@ -341,7 +355,7 @@ def test_publisher_losing_delegation_stops_later_admission(trigger_setup):
     assert Trigger.objects.drain() == 0
     trigger.refresh_from_db()
     assert not trigger.enabled and "revoked-publisher" in trigger.disabled_reason
-    assert not system_queryset(WorkflowRun).exists()
+    assert not WorkflowRun.system_queryset().exists()
 
 
 def test_missing_stored_grant_provenance_requires_reenable(trigger_setup):
@@ -349,7 +363,7 @@ def test_missing_stored_grant_provenance_requires_reenable(trigger_setup):
     trigger = Trigger.objects.enable(trigger, actor=admin)
     stored = [{key: value for key, value in target.items() if not key.startswith("grant_")}
               for target in trigger.granted_targets]
-    system_queryset(Trigger).filter(pk=trigger.pk).update(granted_targets=stored)
+    Trigger.system_queryset().filter(pk=trigger.pk).update(granted_targets=stored)
     capture(record)
 
     assert Trigger.objects.drain() == 0
@@ -382,12 +396,12 @@ def test_child_start_refuses_version_published_without_principal_delegation(trig
     child.with_actor(admin).grant_record_access("starter", workflow.user)
     capture(record)
     assert Trigger.objects.drain() == 1
-    parent = system_queryset(WorkflowRun).get(trigger_event__trigger=trigger)
+    parent = WorkflowRun.system_queryset().get(trigger_event__trigger=trigger)
     run_until(parent)
     assert parent.status == "failed"
-    attempt = system_queryset(StepAttempt).get(step_run__run=parent)
+    attempt = StepAttempt.system_queryset().get(step_run__run=parent)
     assert "child-publisher" in attempt.error and "member" in attempt.error
-    assert not system_queryset(WorkflowRun).filter(parent_step__run=parent).exists()
+    assert not WorkflowRun.system_queryset().filter(parent_step__run=parent).exists()
 
 
 def test_deleted_record_is_rejected_instead_of_remaining_pending(trigger_setup):
@@ -397,7 +411,7 @@ def test_deleted_record_is_rejected_instead_of_remaining_pending(trigger_setup):
     with actor_context(actor):
         record.delete()
     assert Trigger.objects.drain() == 0
-    event = system_queryset(TriggerEvent).get()
+    event = TriggerEvent.system_queryset().get()
     assert event.evaluated_at and event.rejection and event.admitted_at is None
 
 
@@ -408,9 +422,9 @@ def test_drain_bound_counts_candidates_including_rejections(trigger_setup, monke
     for index in range(5):
         capture(vault_for(actor, name=f"Pending {index}"))
     assert Trigger.objects.drain() == 0
-    assert system_queryset(TriggerEvent).filter(evaluated_at__isnull=False).count() == 3
+    assert TriggerEvent.system_queryset().filter(evaluated_at__isnull=False).count() == 3
     assert Trigger.objects.drain() == 0
-    assert system_queryset(TriggerEvent).filter(evaluated_at__isnull=False).count() == 5
+    assert TriggerEvent.system_queryset().filter(evaluated_at__isnull=False).count() == 5
 
 
 @pytest.mark.parametrize("condition", [
@@ -433,7 +447,7 @@ def test_condition_depth_is_bounded_and_stale_configuration_disables(trigger_set
     trigger.refresh_from_db()
     Trigger.objects.enable(trigger, actor=actor)
     capture(record)
-    system_queryset(Trigger).filter(pk=trigger.pk).update(condition={"removed_field": {"_eq": "x"}})
+    Trigger.system_queryset().filter(pk=trigger.pk).update(condition={"removed_field": {"_eq": "x"}})
     assert Trigger.objects.drain() == 0
     trigger.refresh_from_db()
     assert not trigger.enabled and "removed_field" in trigger.disabled_reason
@@ -448,7 +462,7 @@ def test_invalid_public_id_condition_matches_no_records(trigger_setup):
     capture(record)
     assert Trigger.objects.drain() == 0
     trigger.refresh_from_db()
-    event = system_queryset(TriggerEvent).get()
+    event = TriggerEvent.system_queryset().get()
     assert trigger.enabled and not trigger.disabled_reason
     assert "no longer matches the condition" in event.rejection
     assert event.evaluated_at and not event.admitted_at
@@ -468,7 +482,7 @@ def test_unimportable_source_disables_and_keeps_the_row_readable(trigger_setup, 
     }
     assert Trigger.objects.drain() == 0
     trigger.refresh_from_db()
-    event = system_queryset(TriggerEvent).get()
+    event = TriggerEvent.system_queryset().get()
     assert not trigger.enabled and "cannot be loaded" in trigger.disabled_reason
     assert event.rejection == trigger.disabled_reason and event.evaluated_at and not event.admitted_at
     data = result_data(execute_schema(schema, """query($id: String!) {
@@ -510,7 +524,7 @@ def test_watch_capture_failure_preserves_the_native_save(trigger_setup, monkeypa
             record.name = "Retained despite capture failure"
             record.save()
             assert Vault.objects.filter(pk=record.pk, name=record.name).exists()
-    assert not system_queryset(TriggerEvent).exists()
+    assert not TriggerEvent.system_queryset().exists()
     assert "Workflow source capture failed" in caplog.text
 
 
@@ -605,7 +619,7 @@ def register_other_changed(settings, monkeypatch):
 def test_refined_source_shares_the_one_capture_of_its_bases_event(
     execution, trigger_setup, register_step, settings, monkeypatch,
 ):
-    """One native save locks the record and captures its watch once while feeding both keys."""
+    """One native save feeds both source keys and captures its watch once."""
     actor, workflow, record, trigger = trigger_setup
     _, sent = execution
     register_other_changed(settings, monkeypatch)
@@ -617,27 +631,32 @@ def test_refined_source_shares_the_one_capture_of_its_bases_event(
     with actor_context(actor):
         record.name = "Waiting"  # The watcher parks until the record is ready again.
         record.save(update_fields=("name",))
-    run, _step = start_watcher(Watch, record, actor)
-    run_until(run)
-    assert system_queryset(StepWatch).count() == 1
     locked = []
-    lock = triggers.lock_if_supported
+    lock = models.QuerySet.select_for_update
 
     def count_lock(rows, **kwargs):
-        locked.append(rows.model)
+        locked.append((rows.model, kwargs))
         return lock(rows, **kwargs)
 
-    monkeypatch.setattr(triggers, "lock_if_supported", count_lock)
+    monkeypatch.setattr(models.QuerySet, "select_for_update", count_lock)
+    run, _step = start_watcher(Watch, record, actor)
+    run_until(run)
+    assert StepWatch.system_queryset().count() == 1
+    expected_lock = {"no_key": True, "of": row_lock_paths(Vault)}
+    # Reading the predicate and installing its watch each lock the target's tables.
+    assert [kwargs for model, kwargs in locked if model is Vault] == [expected_lock, expected_lock]
+    locked.clear()
     sent.clear()
     with trigger_source(Vault, connect=True), actor_context(actor):
         record.name = "Ready"
         record.save(update_fields=("name",))
-    monkeypatch.setattr(triggers, "lock_if_supported", lock)
-    assert locked == [Vault]
+    monkeypatch.setattr(models.QuerySet, "select_for_update", lock)
+    # Admission and watch capture each enforce their own lock contract.
+    assert [kwargs for model, kwargs in locked if model is Vault] == [expected_lock, expected_lock]
     assert len(record_deliveries(sent)) == 1
-    assert set(system_queryset(TriggerEvent).values_list("trigger_id", flat=True)) == {trigger.pk, refined.pk}
+    assert set(TriggerEvent.system_queryset().values_list("trigger_id", flat=True)) == {trigger.pk, refined.pk}
     assert Trigger.objects.drain() == 2
-    assert not system_queryset(TriggerEvent).filter(admitted_at=None).exists()
+    assert not TriggerEvent.system_queryset().filter(admitted_at=None).exists()
 
 
 def test_registry_connects_a_refined_source_through_its_base_only(settings, monkeypatch):
@@ -680,9 +699,9 @@ def test_bulk_creation_cannot_borrow_another_users_trigger_authority(trigger_set
     )
     with pytest.raises(ValidationError, match="save"):
         Trigger.objects.with_actor(editor).bulk_create([forged])
-    assert list(system_queryset(Trigger).values_list("pk", flat=True)) == [trigger.pk]
+    assert list(Trigger.system_queryset().values_list("pk", flat=True)) == [trigger.pk]
     installed = Trigger(workflow=workflow, source="record_changed", model_label="knowledge.vault")
-    assert system_queryset(Trigger).bulk_create([installed]) == [installed]
+    assert Trigger.system_queryset().bulk_create([installed]) == [installed]
     assert not installed.enabled
 
 
@@ -723,11 +742,11 @@ def test_enabler_deactivation_does_not_disable_principal_admission(trigger_setup
     workflow.with_actor(admin).grant_record_access("editor", actor)
     Trigger.objects.enable(trigger, actor=actor)
     capture(record)
-    system_queryset(type(actor)).filter(pk=actor.pk).update(is_active=False)
+    type(actor).system_queryset().filter(pk=actor.pk).update(is_active=False)
     assert Trigger.objects.drain() == 1
     trigger.refresh_from_db()
     assert trigger.enabled
-    assert system_queryset(WorkflowRun).get().run_as_id == workflow.user_id
+    assert WorkflowRun.system_queryset().get().run_as_id == workflow.user_id
 
 
 def test_domain_hooks_own_input_and_rejections_without_disabling(trigger_setup, monkeypatch):
@@ -749,13 +768,13 @@ def test_domain_hooks_own_input_and_rejections_without_disabling(trigger_setup, 
     assert Trigger.objects.drain() == 0
     record.refresh_from_db()
     assert record.name == "Ready" and seen == [workflow.user_id]
-    assert system_queryset(Trigger).get(pk=trigger.pk).enabled
-    assert "Domain admission declined" in system_queryset(TriggerEvent).get().rejection
+    assert Trigger.system_queryset().get(pk=trigger.pk).enabled
+    assert "Domain admission declined" in TriggerEvent.system_queryset().get().rejection
     monkeypatch.setattr(Trigger, "check_admission", lambda self, record, *, actor: None)
     monkeypatch.setattr(Trigger, "trigger_input", lambda self, record: {"value": record.pk})
     capture(record)
     assert Trigger.objects.drain() == 1
-    assert system_queryset(WorkflowRun).get().input == {"value": record.pk}
+    assert WorkflowRun.system_queryset().get().input == {"value": record.pk}
 
 
 def test_transient_trigger_error_remains_pending_for_later_drain(trigger_setup, monkeypatch):
@@ -775,7 +794,7 @@ def test_transient_trigger_error_remains_pending_for_later_drain(trigger_setup, 
     monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
     monkeypatch.setattr(Trigger, "trigger_input", transient)
     assert Trigger.objects.drain() == 0
-    event = system_queryset(TriggerEvent).get()
+    event = TriggerEvent.system_queryset().get()
     assert event.evaluated_at is None and event.rejection == ""
     assert Trigger.objects.drain() == 1
 
@@ -804,7 +823,7 @@ def test_unexpected_trigger_configuration_error_isolates_candidate(trigger_setup
     capture(second)
     assert Trigger.objects.drain() >= 1
     assert "unexpected configuration bug" in caplog.text
-    assert system_queryset(TriggerEvent).filter(trigger=trigger, evaluated_at__isnull=True).exists()
+    assert TriggerEvent.system_queryset().filter(trigger=trigger, evaluated_at__isnull=True).exists()
 
 
 def test_domain_rejection_is_sanitized(trigger_setup, monkeypatch):
@@ -818,7 +837,7 @@ def test_domain_rejection_is_sanitized(trigger_setup, monkeypatch):
     monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
     monkeypatch.setattr(Trigger, "check_admission", reject)
     assert Trigger.objects.drain() == 0
-    event = system_queryset(TriggerEvent).get()
+    event = TriggerEvent.system_queryset().get()
     assert "Rejected" in event.rejection and "\x00" not in event.rejection
 
 

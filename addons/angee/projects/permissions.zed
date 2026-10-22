@@ -1,7 +1,7 @@
 // Authorization schema for bounded projects and their work.
 // @rebac_package: projects
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 12
+// @rebac_schema_revision: 14
 
 definition projects/project {
     relation owner:  auth/user // rebac:field=owner
@@ -30,6 +30,18 @@ definition projects/milestone {
     permission delete = project->write + admin->member
 }
 
+// A record task (one whose subject directly names a record) answers to its
+// record alone: the record's readers read it, the record's writers write, share,
+// complete and delete it, and its own grants count only on a task about no
+// record (`unbound`). A record type takes tasks once its owner declares
+// `subject_read` and `subject_write` for it on projects/task. A task
+// takes record tasks too: they inherit `read_as_subject` and `write_as_subject`,
+// its direct holders, which never run through its own subject, so task access
+// never recurses. Contributors whose readers should see a task's record tasks
+// extend them (work lends its queue). Project readers are not lent: that arrow
+// takes generic target unions past SQLite's expression depth. A withheld task
+// withholds its record tasks from every verb (`subject_withheld`),
+// subtracted beside the subject arm rather than inside it for the same reason.
 definition projects/task {
     relation project: projects/project // rebac:field=project
     relation parent: projects/task // rebac:field=parent
@@ -40,30 +52,65 @@ definition projects/task {
     relation reader: auth/user | auth/group#member
     relation editor: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
+    // Const-backed on the row's own subject: the relation exists only on a task
+    // about no record, so `unbound->free` holds exactly there.
+    relation unbound: projects/task // rebac:const={"target_id":"unbound","filters":{"subject_object_id__isnull":true}}
 
-    permission create = authenticated
+    // The sentinel's target, held by everyone: it gates nothing alone. Arrow-only
+    // through `unbound`: never check `free` directly.
+    permission free = authenticated
+    permission subject_read = nil
+    permission subject_write = nil
+    permission subject_withheld = nil
+    permission subject_keeper = nil
+    permission create = (((unbound->free) + subject_write) - subject_withheld) + admin->member
     permission read_granted = inherited_project->read + owner + assignee + reader + editor
+    relation trashed: projects/task // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
+    permission conceal = authenticated
     permission withheld = nil
-    permission read = (read_granted - withheld) + admin->member
+    // A trashed task is concealed from everyone but its direct removal authority
+    // (project writers, its owner) and administrators, its managers, who keep every
+    // verb (as on knowledge pages). The authority is a positive
+    // arm beside the exclusion: no exclusion holds another, which rebac's named
+    // grant scan cannot compile, and none crosses the subject arrow.
+    permission concealed = trashed->conceal
+    permission concealed_keeper = delete_granted & concealed
+    // What a task lends the record tasks about it while it is trashed: the plain
+    // fact, and its owner, who keeps reading them.
+    permission withheld_as_subject = concealed
+    permission keeper_as_subject = owner
+    permission read = (((read_granted & unbound->free) + subject_read) - withheld - concealed - subject_withheld) + concealed_keeper + subject_keeper + admin->member
+    permission read_as_subject = owner + assignee + reader + editor + admin->member
     permission read_promoted_phase = promoted_project->read + admin->member
     permission write_granted = inherited_project->write + owner + assignee + editor
     permission write_withheld = nil
-    permission write = (write_granted - withheld - write_withheld) + admin->member
+    permission write = (((write_granted & unbound->free) + subject_write) - withheld - concealed - write_withheld - subject_withheld) + concealed_keeper + admin->member
+    permission write_as_subject = owner + assignee + editor + admin->member
     permission share_granted = inherited_project->share + owner + editor
-    permission share = (share_granted - withheld) + admin->member
+    permission share = (((share_granted & unbound->free) + subject_write) - withheld - concealed - subject_withheld) + concealed_keeper + admin->member
     permission narrow = write
-    permission widen = project->share + owner + admin->member
+    permission widen = ((((project->share + owner) & unbound->free) + subject_write) - subject_withheld) + admin->member
     permission delete_granted = inherited_project->write + owner
-    permission delete = (delete_granted - withheld) + admin->member
-    permission transfer = owner + admin->member
+    permission delete = ((((delete_granted & unbound->free) + subject_write) - subject_withheld) - withheld - concealed) + concealed_keeper + admin->member
+    permission transfer = (((owner & unbound->free) + subject_write) - subject_withheld) + admin->member
     permission write__owner = transfer
     permission comment_granted = write_granted
     permission comment_withheld = nil
-    permission comment = (comment_granted - withheld - comment_withheld) + admin->member
+    permission comment = (((comment_granted & unbound->free) + subject_write) - withheld - concealed - comment_withheld - subject_withheld) + concealed_keeper + admin->member
     permission write__assignee = share
     // Who brings a withheld task back. Contributors that withhold tasks name their
     // managers here; administrators always may.
-    permission restore = admin->member
+    permission restore = delete
+}
+
+// The resource-declared kinds of record task; everyone reads the catalog.
+definition projects/activity_type {
+    relation admin: angee/role // rebac:const=admin
+
+    permission read = authenticated
+    permission create = admin->member
+    permission write = admin->member
+    permission delete = admin->member
 }
 
 definition projects/task_relation {

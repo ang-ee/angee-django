@@ -7,6 +7,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.db.models import QuerySet
 from strawberry import auto
 
 from angee.graphql.actions import authorized_action_target, authorized_permission_target
@@ -22,6 +23,7 @@ from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.schema import UserType
 from angee.messaging.models import NotificationPolicy
+from angee.messaging.models import Thread as ThreadModel
 from angee.messaging.schema import FragmentType
 from angee.parties.schema import PartyType
 
@@ -66,7 +68,6 @@ class SpaceMembershipType(AngeeNode):
     group: SpaceGroupType | None = actor_scoped_to_one("group")
     role: auto
     confidence: auto
-    source: auto
     is_confirmed: auto
     is_dismissed: auto
     notification_policy: auto
@@ -172,7 +173,7 @@ class SpacesMembershipMutation:
         return cast(SpaceMembershipType, membership)
 
 
-def _space_threads(info: strawberry.Info) -> object:
+def _space_threads(info: strawberry.Info) -> QuerySet[ThreadModel]:
     """Return actor-scoped threads that are explicitly bound to at least one group."""
 
     del info
@@ -203,7 +204,6 @@ _MEMBERSHIP_RESOURCE = hasura_model_resource(
         "group",
         "party",
         "role",
-        "source",
         "is_confirmed",
         "is_dismissed",
         "created_at",
@@ -211,7 +211,7 @@ _MEMBERSHIP_RESOURCE = hasura_model_resource(
     ],
     sortable=["group", "party", "role", "confidence", "created_at", "updated_at"],
     aggregatable=["id", "confidence"],
-    groupable=["group", "party", "role", "source"],
+    groupable=["group", "party", "role"],
     insertable=["group", "party", "role"],
     updatable=["role"],
     field_id_decode={

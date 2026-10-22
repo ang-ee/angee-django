@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any, Self, overload
 
-import reversion
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -14,9 +14,15 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
-from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet
+from angee.changesets import changeset, current_changeset
+from angee.fields import ModelLabelField
+from angee.identity import SqidPublicIdentity, public_id_of
+from angee.impl import resolve_impl_class
+from angee.jsonschema import relation_positions
+from angee.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet, SqidMixin
 from angee.resources.entries import (
     GRANT_KIND,
+    ROW_KIND,
     EntryGraph,
     EntryKey,
     GrantGroup,
@@ -25,18 +31,23 @@ from angee.resources.entries import (
     ResourceGroup,
     ValidationResult,
     resource_manifest_for,
+    retired_models_for,
 )
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import materialize_grant_groups
+from angee.resources.kinds import ResourceEntryKind, ResourceKindDeclarations
 from angee.resources.loader import (
     DryRunRollback,
     build_resource,
 )
 from angee.resources.mixins import ResourceLoadMixin
-from angee.resources.widgets import resolve_xref, split_xref
+from angee.resources.widgets import is_xref, resolve_xref, split_xref
+
+if TYPE_CHECKING:
+    from angee.resources.models import Resource
 
 
-class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
+class ResourceQuerySet[LedgerT: Resource](AngeeUnscopedQuerySet[LedgerT]):
     """Reusable filtered reads over resource-ledger rows."""
 
     def counts_by_addon(self) -> dict[str, int]:
@@ -48,15 +59,129 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
                 for row in self.values("source_addon").annotate(count=models.Count("id"))
             }
 
-    def ledger_page(self, *, limit: int) -> list[Any]:
+    def ledger_page(self, *, limit: int) -> list[LedgerT]:
         """Return up to ``limit`` ledger rows in the queryset's declared order."""
 
         with system_context(reason="resources.ledger_page"):
             return list(self.all()[:limit])
 
+    def seeding(self, record: models.Model) -> Self:
+        """Return the ledger rows whose target is ``record``, by its model label and public id."""
 
-class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # type: ignore[misc]
+        return self.filter(target_model=record._meta.label, target_id=public_id_of(record))
+
+    def seeded_target_keys(self, model_label: str, *, source_addons: Iterable[str]) -> set[Any]:
+        """Return the primary keys of ``model_label`` rows ``source_addons``' resource files seeded.
+
+        The model's code may already be gone, so a ledger's public id decodes without
+        it: a sqid id through :class:`SqidPublicIdentity` under its own prefix, kept
+        only when it re-encodes to itself; any other id is the row's primary key as
+        text (:func:`public_id_of`). Callers convert keys to the model's key type.
+        """
+
+        sqid = SqidMixin._meta.get_field("sqid")
+        public_ids = list(
+            self.filter(target_model__iexact=model_label, source_addon__in=list(source_addons))
+            .exclude(target_id="")
+            .values_list("target_id", flat=True)
+        )
+        keys: set[Any] = set()
+        for public_id in public_ids:
+            prefix, separator, _encoded = public_id.partition("_")
+            if separator:
+                identity = SqidPublicIdentity(prefix=f"{prefix}_", min_length=sqid.min_length, alphabet=sqid.alphabet)
+                value = identity.public_id_to_pk(public_id)
+                if value is not None and identity.public_id_from_pk(value) == public_id:
+                    keys.add(value)
+                    continue
+            keys.add(public_id)
+        return keys
+
+    def retired_seed_keys(self, model_label: str) -> set[Any]:
+        """Return the keys of ``model_label`` rows seeded by the installed addons that retire the model.
+
+        Those addons name it under ``retired_models`` in their addon.toml
+        ``[resources]`` (:func:`retired_models_for`); with none, no row is seeded.
+        """
+
+        label = model_label.lower()
+        owners = [
+            config.name for config in apps.get_app_configs()
+            if label in {retired.lower() for retired in retired_models_for(config)}
+        ]
+        return self.seeded_target_keys(model_label, source_addons=owners) if owners else set()
+
+
+def seeded_record_merge_guard(record: models.Model) -> str | None:
+    """Refuse merging away a record a resource ledger loaded (an ``ANGEE_MERGE_GUARDS`` entry).
+
+    The next load would find no row for its xref and create the record again.
+    """
+
+    with system_context(reason="resources.seeded_record_merge_guard"):
+        ledger = apps.get_model("resources", "Resource").objects.seeding(record).first()
+    if ledger is None:
+        return None
+    return f"{record} is loaded from {ledger.source_addon} resources, which would recreate it; keep it instead."
+
+
+_ResourceManagerBase = AngeeUnscopedManager.from_queryset(ResourceQuerySet)
+
+
+class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
     """Orchestrate selected addon resources independently of ledger row filters."""
+
+    @overload
+    def resolve[TargetT: models.Model](self, handle: str, *, model: type[TargetT]) -> TargetT: ...
+
+    @overload
+    def resolve(self, handle: str, *, model: None = None) -> models.Model: ...
+
+    def resolve(self, handle: str, *, model: type[models.Model] | None = None) -> models.Model:
+        """Resolve a ledger handle under the current actor, optionally checking its type."""
+
+        return resolve_xref(handle, self.model, self._addon_aliases(apps.get_app_configs()), model=model)
+
+    def resolve_config_references(self, value: Any, *, schema: dict[str, Any]) -> Any:
+        """Resolve dotted xrefs only at schema-declared relation positions.
+
+        Public ids and ordinary strings remain literal. The ledger resolution
+        owner enforces target types, as it does for resource imports.
+        """
+
+        resolved = copy.deepcopy(value)
+        for path, relation, item in relation_positions(schema, value):
+            public_id = self.resolve_config_reference(item, relation=relation)
+            if not path:
+                resolved = public_id
+                continue
+            parent = resolved
+            for part in path[:-1]:
+                parent = parent[part]
+            parent[path[-1]] = public_id
+        return resolved
+
+    def resolve_config_reference(self, value: str, *, relation: dict[str, Any]) -> str:
+        """Resolve one declared relation's xref, preserving literal public ids."""
+
+        if not is_xref(value):
+            return value
+        target = self.resolve(value, model=ModelLabelField.get_model(relation["resource"]))
+        return str(public_id_of(target))
+
+    def bind_instance(
+        self, *, addon: Any, xref: str, instance: models.Model, source: str, replace: bool = False,
+    ) -> None:
+        """Use the import ledger for owner-created installation identities."""
+
+        if instance.pk is None:
+            raise ResourceLoadError("Installation identities require a saved target.")
+        with transaction.atomic():
+            resource = build_resource(
+                type(instance), ResourceEntry(addon=addon, tier=self.model.Tier.INSTALL, source_value=source),
+                ledger_model=self.model, addon_aliases=self._addon_aliases(apps.get_app_configs()),
+            )
+            resource.bind_instance(xref, instance, replace=replace)
 
     def validate_addons(
         self,
@@ -67,19 +192,23 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         """Validate selected addon resource files without saving rows."""
 
         selected_addons = tuple(addons)
-        entries, row_groups, grant_groups = self._groups_for(selected_addons, tiers=tiers)
+        entries, row_groups, grant_groups, kind_declarations = self._groups_for(
+            selected_addons, tiers=tiers,
+        )
         self._check_xref_collisions(row_groups)
         self._import_groups(
             entries,
             row_groups,
             grant_groups,
+            kind_declarations,
             dry_run=True,
             addon_aliases=self._addon_aliases(selected_addons),
         )
         return ValidationResult(
-            checked_files=len({group.entry.key for group in row_groups} | {group.entry.key for group in grant_groups}),
+            checked_files=len(entries),
             checked_rows=(
                 sum(len(group.dataset) for group in row_groups) + sum(len(group.rows) for group in grant_groups)
+                + sum(len(rows) for rows in kind_declarations.values())
             ),
         )
 
@@ -97,18 +226,26 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         self._check_load_tiers(active_tiers, allow_non_dev=allow_non_dev)
 
         selected_addons = tuple(addons)
-        entries, row_groups, grant_groups = self._groups_for(selected_addons, tiers=active_tiers)
+        entries, row_groups, grant_groups, kind_declarations = self._groups_for(
+            selected_addons, tiers=active_tiers,
+        )
         self._check_xref_collisions(row_groups)
         return self._import_groups(
             entries,
             row_groups,
             grant_groups,
+            kind_declarations,
             dry_run=dry_run,
             addon_aliases=self._addon_aliases(selected_addons),
         )
 
     def load_xref[M: AngeeModel](
-        self, handle: str, *, model: type[M], actor: Any = None, allow_non_dev: bool = False,
+        self,
+        handle: str,
+        *,
+        model: type[M],
+        actor: Any = None,
+        allow_non_dev: bool = False,
     ) -> M:
         """Import one declared ``addon.name.xref`` through its model's resource.
 
@@ -125,7 +262,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         groups = tuple(
             group
             for entry in self._declared_entries_for((addon,), tiers=None)
-            if entry.kind != GRANT_KIND
+            if entry.kind == ROW_KIND
             for group in entry.read_groups()
         )
         self._check_xref_collisions(groups)
@@ -139,7 +276,10 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                     )
                 self._check_load_tiers((group.entry.tier,), allow_non_dev=allow_non_dev)
                 selected = ResourceGroup(
-                    group.entry, group.model_label, group.dataset.subset(rows=[index]), [group.source_rows[index]],
+                    group.entry,
+                    group.model_label,
+                    group.dataset.subset(rows=[index]),
+                    [group.source_rows[index]],
                 )
                 with transaction.atomic():
                     resource = build_resource(model, group.entry, ledger_model=self.model, addon_aliases=aliases)
@@ -147,9 +287,17 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                         resolved, _ = resource.resolve_existing(((selected.dataset, resource),))
                     resolution = resolved.get((resource, xref))
                     if resolution is not None and resolution.instance is not None:
+                        if not isinstance(resolution.instance, model):
+                            raise ResourceLoadError(f"Resource {handle!r} did not produce {model._meta.label}.")
                         actor = resolution.instance.require_access("write", actor)
                     self._import_groups(
-                        (group.entry,), (selected,), (), dry_run=False, addon_aliases=aliases, actor=actor,
+                        (group.entry,),
+                        (selected,),
+                        (),
+                        None,
+                        dry_run=False,
+                        addon_aliases=aliases,
+                        actor=actor,
                     )
                     with system_context(reason="resources.load_xref resolve imported target"):
                         instance = resolve_xref(handle, self.model, aliases)
@@ -170,6 +318,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         entries: tuple[ResourceEntry, ...],
         row_groups: tuple[ResourceGroup, ...],
         grant_groups: tuple[GrantGroup, ...],
+        kind_declarations: ResourceKindDeclarations | None = None,
         *,
         dry_run: bool,
         addon_aliases: Mapping[str, str],
@@ -187,7 +336,11 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
             (
                 group,
                 build_resource(
-                    group.model, group.entry, ledger_model=self.model, addon_aliases=addon_aliases,
+                    group.model,
+                    group.entry,
+                    ledger_model=self.model,
+                    addon_aliases=addon_aliases,
+                    kind_declarations=kind_declarations,
                 ),
             )
             for group in row_groups
@@ -199,7 +352,12 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         load_result = LoadResult(created=0, updated=0, skipped=0)
         try:
             reason = "resources.validate" if dry_run else "resources.load"
-            with system_context(reason=reason), transaction.atomic(), reversion.create_revision():
+            with (
+                system_context(reason=reason),
+                changeset(fresh=True, activity="seed"),
+                transaction.atomic(),
+            ):
+                current_changeset(record=True)
                 resource_classes = {
                     group.model.resource_class
                     for group, _ in loaded_groups
@@ -220,6 +378,8 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                             skipped=load_result.skipped + skipped,
                         )
                         continue
+                    if entry.kind != ROW_KIND:
+                        continue
                     for group, resource in rows_by_entry[entry.key]:
                         try:
                             result = resource.import_data(
@@ -239,6 +399,12 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                         load_result = load_result.with_result(result)
                 if not dry_run:
                     self._run_post_load_hooks(loaded_groups)
+                for kind, declarations in (kind_declarations or {}).items():
+                    resolve_impl_class(ResourceEntryKind, kind).after_load(
+                        declarations,
+                        loaded_groups=loaded_groups,
+                        dry_run=dry_run,
+                    )
                 if dry_run:
                     raise DryRunRollback()
         except DryRunRollback:
@@ -291,7 +457,9 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                 entry.display,
                 len(entry.read_grant_rows())
                 if entry.kind == GRANT_KIND
-                else sum(len(group.dataset) for group in entry.read_groups()),
+                else sum(len(group.dataset) for group in entry.read_groups())
+                if entry.kind == ROW_KIND
+                else len(resolve_impl_class(ResourceEntryKind, entry.kind).read(entry)),
             )
             for entry in self._entries_for(addons, tiers=tiers)
         )
@@ -301,18 +469,28 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         addons: Iterable[Any],
         *,
         tiers: Iterable[object] | None,
-    ) -> tuple[tuple[ResourceEntry, ...], tuple[ResourceGroup, ...], tuple[GrantGroup, ...]]:
-        """Return selected entries and their model-row/grant groups, including empty entries."""
+    ) -> tuple[
+        tuple[ResourceEntry, ...],
+        tuple[ResourceGroup, ...],
+        tuple[GrantGroup, ...],
+        ResourceKindDeclarations,
+    ]:
+        """Return selected entries with parsed native and owner-defined groups."""
 
         groups: list[ResourceGroup] = []
         grant_groups: list[GrantGroup] = []
+        declarations: dict[str, list[Any]] = defaultdict(list)
         entries = self._entries_for(addons, tiers=tiers)
         for entry in entries:
             if entry.kind == GRANT_KIND:
                 grant_groups.append(GrantGroup(entry=entry, rows=entry.read_grant_rows()))
-            else:
+            elif entry.kind == ROW_KIND:
                 groups.extend(entry.read_groups())
-        return entries, tuple(groups), tuple(grant_groups)
+            else:
+                declarations[entry.kind].extend(resolve_impl_class(ResourceEntryKind, entry.kind).read(entry))
+        return entries, tuple(groups), tuple(grant_groups), {
+            kind: tuple(rows) for kind, rows in declarations.items()
+        }
 
     def _entries_for(
         self,

@@ -17,7 +17,6 @@ import {
 } from "@angee/ui/dashboard/headless";
 
 import {
-  ArchiveDashboardDocument,
   CreatePersonalDashboardDocument,
   DashboardDocument,
   DashboardSummariesDocument,
@@ -47,7 +46,6 @@ type FullPayload = NonNullable<
   | DocumentType<typeof CreatePersonalDashboardDocument>["create_personal_dashboard"]
   | DocumentType<typeof SaveDashboardDocument>["save_dashboard"]
   | DocumentType<typeof DuplicateDashboardDocument>["duplicate_dashboard"]
-  | DocumentType<typeof ArchiveDashboardDocument>["set_personal_dashboard_archived"]
 >;
 type ErrorPayload = Pick<FullPayload, "status" | "current_revision" | "message">;
 
@@ -55,7 +53,7 @@ function capabilities(payload: FullPayload): DashboardCapabilities {
   return {
     canEdit: Boolean(payload.can_edit),
     canReset: Boolean(payload.can_reset),
-    canArchive: Boolean(payload.can_archive),
+    canTrash: Boolean(payload.can_trash),
   };
 }
 
@@ -88,7 +86,7 @@ function loadState(
   fetching: boolean,
   error: Error | null,
 ): DashboardLoadState {
-  const rights = payload ? capabilities(payload) : { canEdit: false, canReset: false, canArchive: false };
+  const rights = payload ? capabilities(payload) : { canEdit: false, canReset: false, canTrash: false };
   if (error) return { status: "error", error, capabilities: rights };
   if (!payload) return fetching ? { status: "loading", capabilities: rights } : { status: "unavailable", capabilities: rights };
   if (payload.status === "absent") return { status: "absent", capabilities: rights };
@@ -118,11 +116,11 @@ function useCreatePersonal() {
   const [create] = useAuthoredMutation(CreatePersonalDashboardDocument, {
     invalidateModels: DASHBOARD_MODELS,
   });
-  return React.useCallback(async (input: { name: string; description?: string; clientCreationKey: string }) => {
+  return React.useCallback(async (input: { name: string; description?: string; idempotencyKey: string }) => {
     const result = await create({
       name: input.name,
       description: input.description ?? "",
-      clientCreationKey: input.clientCreationKey,
+      idempotencyKey: input.idempotencyKey,
     });
     return saveResult(result?.create_personal_dashboard);
   }, [create]);
@@ -135,7 +133,6 @@ function useDashboard(target: DashboardTarget) {
   const [saveMutation] = useAuthoredMutation(SaveDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
   const [resetMutation] = useAuthoredMutation(ResetDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
   const [duplicateMutation] = useAuthoredMutation(DuplicateDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
-  const [archiveMutation] = useAuthoredMutation(ArchiveDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
   const createPersonal = useCreatePersonal();
 
   return {
@@ -159,20 +156,15 @@ function useDashboard(target: DashboardTarget) {
       if (error) throw error;
     }, [resetMutation]),
     createPersonal,
-    duplicate: React.useCallback(async (duplicateTarget: DashboardTarget, input: { name: string; clientCreationKey: string; snapshot: DashboardSnapshot }) => {
+    duplicate: React.useCallback(async (duplicateTarget: DashboardTarget, input: { name: string; idempotencyKey: string; snapshot: DashboardSnapshot }) => {
       const result = await duplicateMutation({
         target: targetInput(duplicateTarget),
         name: input.name,
-        clientCreationKey: input.clientCreationKey,
+        idempotencyKey: input.idempotencyKey,
         snapshot: dashboardSnapshotInput(input.snapshot),
       });
       return saveResult(result?.duplicate_dashboard);
     }, [duplicateMutation]),
-    archive: React.useCallback(async (id: string, expectedRevision: number, archived: boolean) => {
-      const result = await archiveMutation({ id, expectedRevision, archived });
-      return saveResult(result?.set_personal_dashboard_archived);
-    }, [archiveMutation]),
-
   };
 }
 
@@ -250,11 +242,11 @@ function useCatalogue(): DashboardCatalogueBinding {
       presets: row.presets,
       revision: row.revision,
       customized: row.scope !== "PERSONAL",
-      available: !row.is_archived,
+      available: !row.is_trashed,
       capabilities: {
         canEdit: row.can_edit,
         canReset: row.scope !== "PERSONAL" && row.can_edit,
-        canArchive: row.can_archive,
+        canTrash: row.can_trash,
       },
     })), [rows]);
   return {

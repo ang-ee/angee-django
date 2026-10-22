@@ -14,9 +14,9 @@ from rebac.checks import check_field_backed_relations
 from rebac.errors import PermissionDenied
 from rebac.models import active_relationship_model
 
-from angee.base.errors import RecordAccessSubjectRefused
-from angee.base.identity import public_subject_ref
+from angee.errors import RecordAccessSubjectRefused
 from angee.graphql.relations import actor_scoped_public_id, actor_scoped_to_one
+from angee.identity import public_subject_ref
 from angee.storage import exceptions, views
 from angee.storage import schema as storage_schema
 from angee.storage.models import FileAttachmentManager, FileVisibility
@@ -58,11 +58,14 @@ def test_record_files_query_requires_record_and_file_read_and_uploads_need_the_a
     schema = addon_schema(storage_schema.schemas, schema_name)
     query = """query ($model: String!, $id: ID!) {
       record_files(model_label: $model, record_id: $id) {
-        can_upload attachments { id file { id filename } }
+        can_upload attachments { __typename id file { id filename } }
       }
     }"""
     variables = {"model": "storage.Drive", "id": str(drive.sqid)}
-    listed = [{"id": str(attachment.sqid), "file": {"id": str(file.sqid), "filename": "attached.txt"}}]
+    listed = [{
+        "__typename": "FileAttachmentType", "id": str(attachment.sqid),
+        "file": {"id": str(file.sqid), "filename": "attached.txt"},
+    }]
     # Drives accept attachments here but declare no record-file arm: the edges
     # list, and record-scoped uploads are not offered even to the writer.
     assert not FileAttachment.objects.has_record_arm(generic_target(drive))
@@ -78,6 +81,39 @@ def test_record_files_query_requires_record_and_file_read_and_uploads_need_the_a
     assert result_data(execute_schema(schema, query, variables, user=stranger))["record_files"] == {
         "can_upload": False, "attachments": [],
     }
+
+
+@pytest.mark.parametrize("schema_name", ["public", "console"])
+def test_file_attachments_redact_unreadable_records_and_recheck_revocation(
+    drive: Any, schema_name: str,
+) -> None:
+    reader, stranger = create_user("attachment-reader"), create_user("attachment-stranger")
+    with system_context(reason="test.storage.reverse_attachments.seed"):
+        file = File.objects.create(
+            drive=drive, filename="attached.txt", content_hash="e" * 64,
+            visibility=FileVisibility.RECORD, owner=drive.alice, upload_state="ready",
+        )
+        edge = FileAttachment.objects.attach(file, drive)
+        file.grant_record_access("viewer", reader)
+    schema = addon_schema(storage_schema.schemas, schema_name)
+    query = """query ($file: ID!) {
+      file_attachments(file: $file) { id model_label record_id }
+    }"""
+    variables = {"file": str(file.sqid)}
+
+    def read(user: Any) -> list[dict[str, Any]]:
+        return result_data(execute_schema(schema, query, variables, user=user))["file_attachments"]
+
+    assert read(stranger) == []
+    assert read(reader) == [{"id": str(edge.sqid), "model_label": None, "record_id": None}]
+    with actor_context(drive.alice):
+        drive.with_actor(drive.alice).grant_record_access("viewer", reader)
+    assert read(reader) == [{
+        "id": str(edge.sqid), "model_label": "storage.Drive", "record_id": str(drive.sqid),
+    }]
+    with actor_context(drive.alice):
+        file.with_actor(drive.alice).revoke_record_access("viewer", reader)
+    assert read(reader) == []
 
 
 @pytest.mark.parametrize("schema_name", ["public", "console"])

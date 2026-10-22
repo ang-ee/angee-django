@@ -14,6 +14,7 @@ from math import isfinite
 from typing import Any, ClassVar, cast
 
 from asgiref.sync import async_to_sync
+from django.utils.module_loading import import_string
 from httpx import NetworkError, Timeout, TimeoutException
 from pydantic_ai.direct import model_request
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedModelBehavior
@@ -21,8 +22,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
 
-from angee.base.impl import ImplBase
-from angee.integrate.connect import enabled_oauth_client_from_hint
+from angee.impl import ImplBase
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,8 +87,12 @@ class InferenceBackend(ImplBase):
     # contract because every backend consumer must make the same typed decision.
     requires_credential: ClassVar[bool] = True
     default_base_url: ClassVar[str] = ""
-    transient_error_types: ClassVar[tuple[type[BaseException], ...]] = ()
-    """Vendor SDK transport failures in addition to the shared network types."""
+    transient_error_paths: ClassVar[tuple[str, ...]] = ()
+    """Dotted vendor SDK transport failures in addition to the shared network types.
+
+    Paths, like ``client_class_path``, so cataloguing a backend loads no vendor
+    SDK; they resolve when a failure is classified, after the SDK has run.
+    """
     defaults = {
         "name": "Manual",
         "status": "draft",
@@ -112,31 +116,20 @@ class InferenceBackend(ImplBase):
             return error.status_code == 429 or 500 <= error.status_code < 600
         cause = error.__cause__ if isinstance(error, ModelAPIError) else error
         return isinstance(
-            cause, (TimeoutError, ConnectionError, TimeoutException, NetworkError, *self.transient_error_types)
+            cause, (TimeoutError, ConnectionError, TimeoutException, NetworkError, *self.transient_error_types())
         )
 
     def request_error_types(self) -> tuple[type[BaseException], ...]:
         """Expose the typed API and transport failures callers may classify."""
         return (
             ModelAPIError, UnexpectedModelBehavior, TimeoutError, ConnectionError, TimeoutException, NetworkError,
-            *self.transient_error_types,
+            *self.transient_error_types(),
         )
 
-    def connect_oauth_client(self, owner_label: str) -> Any:
-        """Return the enabled OAuth client this backend connects its provider through.
+    def transient_error_types(self) -> tuple[type[BaseException], ...]:
+        """Resolve the vendor transport failures this backend declares by path."""
 
-        The backend's ``oauth_client`` hint is the only source; an empty hint is not
-        connectable. The bound provider's vendor slug feeds the ``{vendor}`` template.
-        """
-
-        vendor = self.provider.vendor
-        vendor_slug = str(getattr(vendor, "slug", "") or "")
-        return enabled_oauth_client_from_hint(
-            self.oauth_client,
-            owner_label=owner_label,
-            reason="agents.graphql.connect_inference_provider.oauth_client",
-            vendor_slug=vendor_slug,
-        )
+        return tuple(import_string(path) for path in self.transient_error_paths)
 
     def list_models(self) -> Sequence[InferenceModelSpec]:
         """Return the provider's advertised models for catalogue upsert."""

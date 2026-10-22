@@ -21,6 +21,10 @@ function overlaps(left: DashboardRect, right: DashboardRect): boolean {
     && right.y < left.y + left.h;
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function dashboardRectFits(
   rect: DashboardRect,
   placed: readonly DashboardRect[],
@@ -32,6 +36,10 @@ export function dashboardRectFits(
     && !placed.some((other) => other.id !== rect.id && overlaps(rect, other));
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function firstDashboardSlot(
   rects: readonly DashboardRect[],
   size: { w: number; h: number },
@@ -50,7 +58,10 @@ export function firstDashboardSlot(
   return { x: 0, y: bottom };
 }
 
-/** Canonical persisted packing: stable first-fit with no active-layout holes. */
+/** Canonical persisted packing: stable first-fit with no active-layout holes.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function packDashboardLayout<T extends DashboardRect>(
   rects: readonly T[],
   columns: number,
@@ -67,6 +78,10 @@ export function packDashboardLayout<T extends DashboardRect>(
   return rects.map((rect) => ({ ...rect, ...(packed.get(rect.id) ?? rect) }));
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function moveDashboardRect<T extends DashboardRect>(
   rects: readonly T[],
   id: string,
@@ -92,6 +107,10 @@ export function moveDashboardRect<T extends DashboardRect>(
   );
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function resizeDashboardRect<T extends DashboardRect>(
   rects: readonly T[],
   id: string,
@@ -110,7 +129,10 @@ export function resizeDashboardRect<T extends DashboardRect>(
   );
 }
 
-/** Read-only responsive projection; it never becomes persistence input. */
+/** Read-only responsive projection; it never becomes persistence input.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function projectDashboardLayout(
   widgets: readonly WidgetSpec[],
   columns: number,

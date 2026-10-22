@@ -11,8 +11,12 @@
 // @theme bridge in styles/index.css); the tailwind-merge groups that let `cn()`
 // de-dupe these classes live in lib/tailwind-merge-config.ts.
 
+/**
+ * @kind token
+ */
 export const TONES = [
   "neutral",
+  "muted",
   "brand",
   "accent",
   "info",
@@ -25,7 +29,9 @@ export const TONES = [
 
 export type Tone = (typeof TONES)[number];
 
-/** The feedback intents that carry a status glyph (a curated subset of the tones). */
+/** The feedback intents that carry a status glyph (a curated subset of the tones).
+ * @kind token
+ */
 export const FEEDBACK_INTENTS = [
   "info",
   "success",
@@ -37,12 +43,18 @@ export const FEEDBACK_INTENTS = [
 export type FeedbackIntent = (typeof FEEDBACK_INTENTS)[number];
 
 /** Whether `value` is one of the known tones — the membership guard at the boundary
- *  where an untyped value (Refine meta, JSON) must be narrowed to a `Tone`. */
+ *  where an untyped value (Refine meta, JSON) must be narrowed to a `Tone`.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isTone(value: unknown): value is Tone {
   return TONES.includes(value as Tone);
 }
 
-/** Whether `value` is a feedback tone that carries a status glyph. */
+/** Whether `value` is a feedback tone that carries a status glyph.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isFeedbackIntent(value: unknown): value is FeedbackIntent {
   return (FEEDBACK_INTENTS as readonly unknown[]).includes(value);
 }
@@ -71,6 +83,9 @@ export function isMenuTone(value: unknown): value is MenuTone {
   return (MENU_TONES as readonly unknown[]).includes(value);
 }
 
+/**
+ * @kind token
+ */
 export const FILLS = ["solid", "soft", "surface", "outline", "ghost"] as const;
 
 export type Fill = (typeof FILLS)[number];
@@ -80,6 +95,7 @@ export type Fill = (typeof FILLS)[number];
 // slider indicators) both read it via `toneSolidBg`, so they can't drift.
 const SOLID_BG: Record<Tone, string> = {
   neutral: "bg-neutral",
+  muted: "bg-fg-muted",
   brand: "bg-brand",
   accent: "bg-accent",
   info: "bg-info",
@@ -100,12 +116,12 @@ export function toneSolidBg(tone: Tone): string {
 
 /** Solid-fill token for SVG and inline CSS consumers of the semantic palette. */
 export function toneColorVar(tone: Tone): string {
-  return `var(--${tone})`;
+  return tone === "muted" ? "var(--text-muted)" : `var(--${tone})`;
 }
 
 /** Foreground token paired with a tone's solid fill. */
 export function toneOnColorVar(tone: Tone): string {
-  return tone === "neutral" ? "var(--color-fg-inverse)" : `var(--color-on-${tone})`;
+  return tone === "neutral" || tone === "muted" ? "var(--color-fg-inverse)" : `var(--color-on-${tone})`;
 }
 
 // The tone-colored text utility per tone — the one place each on-surface
@@ -113,9 +129,10 @@ export function toneOnColorVar(tone: Tone): string {
 // interpolate this (mirroring how the solid column reads `SOLID_BG`), so a tone's
 // text color lives once. The brand-family palettes (brand/accent/purple/pink)
 // use the `-soft-text` token; the feedback palettes use plain `text-<tone>-text`;
-// neutral is the body foreground, not a colored token.
+// neutral is the body foreground and muted the quiet foreground, not colored tokens.
 const TONE_TEXT: Record<Tone, string> = {
   neutral: "text-fg-2",
+  muted: "text-fg-muted",
   brand: "text-brand-soft-text",
   accent: "text-accent-soft-text",
   info: "text-info-text",
@@ -141,6 +158,7 @@ export function toneText(tone: Tone): string {
 // colours the icon itself; neutral is the body foreground, not a colored token.
 const GLYPH_TONE: Record<Tone, string> = {
   neutral: "[&_.glyph]:text-fg-2!",
+  muted: "[&_.glyph]:text-fg-muted!",
   brand: "[&_.glyph]:text-brand-soft-text!",
   accent: "[&_.glyph]:text-accent-soft-text!",
   info: "[&_.glyph]:text-info-text!",
@@ -158,7 +176,9 @@ export function toneGlyph(tone: Tone): string {
   return GLYPH_TONE[tone];
 }
 
-/** (tone × fill) → Tailwind classes. The single source for both axes. */
+/** (tone × fill) → Tailwind classes. The single source for both axes.
+ * @kind token
+ */
 export const toneFill: Record<Tone, Record<Fill, string>> = {
   neutral: {
     solid: `${SOLID_BG.neutral} text-fg-inverse border-neutral`,
@@ -166,6 +186,15 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
     surface: `bg-sheet ${TONE_TEXT.neutral} border-border`,
     outline: `bg-transparent ${TONE_TEXT.neutral} border-border`,
     ghost: `bg-transparent ${TONE_TEXT.neutral} border-transparent`,
+  },
+  // The quiet tone: inert, not-yet and secondary states (planned steps, idle
+  // rows, muted chips). Its fills stay on the neutral surfaces with muted ink.
+  muted: {
+    solid: `${SOLID_BG.muted} text-fg-inverse border-fg-muted`,
+    soft: `bg-inset ${TONE_TEXT.muted} border-transparent`,
+    surface: `bg-sheet ${TONE_TEXT.muted} border-border-subtle`,
+    outline: `bg-transparent ${TONE_TEXT.muted} border-border-subtle`,
+    ghost: `bg-transparent ${TONE_TEXT.muted} border-transparent`,
   },
   brand: {
     solid: `${SOLID_BG.brand} text-on-brand border-brand`,
@@ -225,7 +254,9 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
   },
 };
 
-/** The (tone × fill) class string. The one accessor every recipe routes through. */
+/** The (tone × fill) class string. The one accessor every recipe routes through.
+ * @kind token
+ */
 export function toneClass(tone: Tone, fill: Fill = "soft"): string {
   return toneFill[tone][fill];
 }
@@ -234,6 +265,7 @@ export function toneClass(tone: Tone, fill: Fill = "soft"): string {
  * The canonical icon-registry glyph name for each feedback intent. One owner for
  * "which glyph means this intent", shared by Alert, StatusIcon, and Toast so they
  * cannot drift (they previously disagreed: info was "help" vs "info").
+ * @kind token
  */
 export const INTENT_GLYPHS: Record<FeedbackIntent, string> = {
   info: "info",
@@ -257,6 +289,8 @@ export type ToneValueBuckets = Partial<Record<Tone, readonly string[]>>;
  * lowercase), else `brand`, and `neutral` for an empty value. A pure mechanism —
  * `buckets` carries the product vocabulary, so the framework holds no domain
  * status names.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function stateToneFromValue(
   value: string | undefined,

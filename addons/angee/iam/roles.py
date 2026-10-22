@@ -30,6 +30,7 @@ from rebac import backend as rebac_backend
 from rebac.memberships import grant as grant_membership
 from rebac.memberships import revoke as revoke_membership
 from rebac.models import active_relationship_model
+from rebac.models.relationship import RelationshipQuerySet, RelationshipRegistryQuerySet
 from rebac.resources import model_for_resource_type, model_resource_type
 from rebac.roles import ROLE_INCLUDES_RELATION, ROLE_RELATION
 from rebac.schema import (
@@ -42,9 +43,8 @@ from rebac.schema import (
     relation_is_writable,
 )
 
-from angee.base.identity import canonical_subject_ref, public_id_for, public_subject_ref
-from angee.base.scoping import read_scoped_queryset
 from angee.iam.identity import user_label
+from angee.identity import canonical_subject_ref, public_id_for, public_subject_ref
 
 IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6
 IAM_OVERVIEW_MAX_PEEK_LIMIT = 100
@@ -72,7 +72,9 @@ def protected_account_holders() -> frozenset[str] | None:
 
     holders: set[str] = set()
     for subject in rebac_backend().lookup_subjects(
-        resource=PROTECTED_ACCOUNTS, action="member", subject_type=cast(str, model_resource_type(get_user_model())),
+        resource=PROTECTED_ACCOUNTS,
+        action="member",
+        subject_type=cast(str, model_resource_type(get_user_model())),
     ):
         if subject.subject_id == "*":
             return None
@@ -83,11 +85,15 @@ def protected_account_holders() -> frozenset[str] | None:
 def subject_has_role(subject: SubjectRef | None, role: ObjectRef) -> bool:
     """Return whether the subject is an effective member of the role."""
 
-    return subject is not None and bool(rebac_backend().check_access(
-        subject=subject,
-        action="effective_member",
-        resource=role,
-    ).allowed)
+    return subject is not None and bool(
+        rebac_backend()
+        .check_access(
+            subject=subject,
+            action="effective_member",
+            resource=role,
+        )
+        .allowed
+    )
 
 
 def subject_permitted(subject: SubjectRef | None, refs: Iterable[str]) -> list[str]:
@@ -110,7 +116,8 @@ def subject_permitted(subject: SubjectRef | None, refs: Iterable[str]) -> list[s
         if current_evaluator() is None:
             stack.enter_context(evaluator_scope())
         return [
-            ref for ref, (resource_type, permission) in targets.items()
+            ref
+            for ref, (resource_type, permission) in targets.items()
             if check_new(subject=subject, action=permission, resource_type=resource_type).allowed
         ]
 
@@ -121,7 +128,7 @@ def _permission_target(ref: str) -> tuple[str, str]:
     label, _, permission = ref.partition("#")
     try:
         resource_type = model_resource_type(apps.get_model(label))
-    except (LookupError, ValueError):
+    except LookupError, ValueError:
         resource_type = None
     if resource_type is None:
         raise ValueError(f'Unknown model in "{ref}": expected "<app_label.ModelName>#<permission>" on a REBAC model.')
@@ -161,8 +168,7 @@ class IAMRoleRow(BaseModel):
                 namespace=role_namespace(key[0]),
                 label=role_label(key[1]),
                 declared=ref in declared_refs,
-                grantable=ref in declared_refs
-                and relation_is_writable(schema, resource=ref, relation=ROLE_RELATION),
+                grantable=ref in declared_refs and relation_is_writable(schema, resource=ref, relation=ROLE_RELATION),
             )
         return sorted(roles.values(), key=lambda role: (role.namespace, role.role_id))
 
@@ -466,7 +472,7 @@ def assignment_subject_labels(subjects: Iterable[str], *, actor: Any) -> dict[st
         if model is None:
             continue
         ids = {ref.subject_id for ref in references.values() if ref.subject_type == subject_type}
-        for row in read_scoped_queryset(model, actor).filter(pk__in=ids):
+        for row in model.objects.with_actor(actor).with_action("read").filter(pk__in=ids):
             labels[to_subject_ref(row)] = user_label(row) if subject_type == "auth/user" else str(row)
     return {value: labels[ref] for value, ref in references.items() if ref in labels}
 
@@ -488,6 +494,7 @@ def grant_role(
             caveat_context=caveat_context,
         )
 
+
 def revoke_role(*, subject: str, role: str, caveat_name: str = "") -> bool:
     """Revoke an exact role tuple while allowing stale subject and role ids."""
 
@@ -499,6 +506,7 @@ def revoke_role(*, subject: str, role: str, caveat_name: str = "") -> bool:
                 caveat_name=caveat_name,
             )
         )
+
 
 def relationship_rows(limit: int | None = PERMISSION_HUB_LIST_CAP) -> QuerySet[Any]:
     """Return active relationship rows in stable order."""
@@ -516,10 +524,7 @@ def permission_hub_roles(limit: int | None = PERMISSION_HUB_LIST_CAP) -> list[IA
     schema = rebac_backend().schema()
     declared = declared_role_refs(schema)
     refs = set(declared)
-    refs.update(
-        ObjectRef(str(row.resource_type), str(row.resource_id))
-        for row in permission_hub_role_rows(limit=None)
-    )
+    refs.update(ObjectRef(str(row.resource_type), str(row.resource_id)) for row in permission_hub_role_rows(limit=None))
     rows = IAMRoleRow.from_refs(refs, schema=schema, declared_refs=declared)
     return rows if limit is None else rows[:limit]
 
@@ -553,7 +558,9 @@ def permission_hub_grants(
     return IAMGrantRow.from_relationships(permission_hub_grant_rows(limit=limit))
 
 
-def permission_hub_grant_rows(limit: int | None = PERMISSION_HUB_LIST_CAP) -> QuerySet[Any]:
+def permission_hub_grant_rows(
+    limit: int | None = PERMISSION_HUB_LIST_CAP,
+) -> RelationshipQuerySet | RelationshipRegistryQuerySet:
     """Return supported direct role-grant rows in stable order."""
 
     manager = active_relationship_model().objects
@@ -573,7 +580,7 @@ def permission_hub_grant_rows(limit: int | None = PERMISSION_HUB_LIST_CAP) -> Qu
     rows = rows.order_by_resource()
     if limit is not None:
         rows = rows[:limit]
-    return cast(QuerySet[Any], rows)
+    return rows
 
 
 def group_member_rows(
@@ -584,11 +591,15 @@ def group_member_rows(
     """Return direct membership tuples for ``group``."""
 
     group_ref = to_object_ref(group)
-    rows = active_relationship_model().objects.filter(
-        resource_type=group_ref.resource_type,
-        resource_id=group_ref.resource_id,
-        relation=ROLE_RELATION,
-    ).order_by_subject()
+    rows = (
+        active_relationship_model()
+        .objects.filter(
+            resource_type=group_ref.resource_type,
+            resource_id=group_ref.resource_id,
+            relation=ROLE_RELATION,
+        )
+        .order_by_subject()
+    )
     if limit is not None:
         rows = rows[:limit]
     return cast(QuerySet[Any], rows)
@@ -599,8 +610,7 @@ def group_members(group: Any) -> list[IAMGroupMemberRow]:
 
     rows = list(group_member_rows(group))
     subjects = [
-        SubjectRef.of(str(row.subject_type), str(row.subject_id), str(row.optional_subject_relation))
-        for row in rows
+        SubjectRef.of(str(row.subject_type), str(row.subject_id), str(row.optional_subject_relation)) for row in rows
     ]
     labels = {subject: str(instance) for subject, instance in resolve_subjects(subjects).items()}
     members: list[IAMGroupMemberRow] = []
@@ -631,11 +641,13 @@ def group_bindings(group: Any) -> list[IAMGroupBindingRow]:
 
     subject = to_subject_ref(group)
     rows = list(
-        active_relationship_model().objects.filter(
+        active_relationship_model()
+        .objects.filter(
             subject_type=subject.subject_type,
             subject_id=subject.subject_id,
             optional_subject_relation=subject.optional_relation,
-        ).order_by_resource()[:PERMISSION_HUB_LIST_CAP]
+        )
+        .order_by_resource()[:PERMISSION_HUB_LIST_CAP]
     )
     targets = _binding_targets(rows)
     result: list[IAMGroupBindingRow] = []
@@ -704,11 +716,13 @@ def _principal_binding_evidence(subject: SubjectRef) -> list[_BindingEvidence]:
     if subject.subject_type != "auth/user" or subject.optional_relation:
         return evidence
 
-    group_ids = sorted({
-        str(row.resource_id)
-        for row in direct_rows
-        if str(row.resource_type) == "auth/group" and str(row.relation) == ROLE_RELATION
-    })
+    group_ids = sorted(
+        {
+            str(row.resource_id)
+            for row in direct_rows
+            if str(row.resource_type) == "auth/group" and str(row.relation) == ROLE_RELATION
+        }
+    )
     if not group_ids:
         return evidence
     remaining = PERMISSION_HUB_LIST_CAP - len(direct_rows)
@@ -743,10 +757,12 @@ def _principal_roles(
     effective = set(role_evidence)
     implied_by: dict[ObjectRef, ObjectRef] = {}
     hierarchy = list(
-        active_relationship_model().objects.filter(
+        active_relationship_model()
+        .objects.filter(
             resource_type__in=schema_role_resource_types(),
             relation=ROLE_INCLUDES_RELATION,
-        ).order_by_resource()
+        )
+        .order_by_resource()
     )
     while True:
         added = False
@@ -777,10 +793,7 @@ def _principal_roles(
         for items in role_evidence.values()
         for item in items
     ]
-    labels = {
-        ref: str(instance)
-        for ref, instance in resolve_subjects(evidence_sources).items()
-    }
+    labels = {ref: str(instance) for ref, instance in resolve_subjects(evidence_sources).items()}
     result: list[IAMPrincipalRoleRow] = []
     for role in sorted(effective, key=str):
         candidates = sorted(role_evidence.get(role, []), key=lambda item: not item.direct)
@@ -808,7 +821,9 @@ def _principal_roles(
                     labels.get(source_ref)
                     or (role_label(source_ref.subject_id) if is_role_type(source_ref.subject_type) else None)
                     or str(public_source)
-                ) if source_ref is not None else "Inherited",
+                )
+                if source_ref is not None
+                else "Inherited",
                 direct=bool(candidates and candidates[0].direct),
             )
         )
@@ -1050,7 +1065,7 @@ def privileged_role_refs() -> set[str]:
     return refs
 
 
-def _privileged_grant_rows(grant_rows: QuerySet[Any]) -> QuerySet[Any]:
+def _privileged_grant_rows(grant_rows: RelationshipQuerySet | RelationshipRegistryQuerySet) -> QuerySet[Any]:
     """Return grant rows whose role is privileged by the installed schema.
 
     Matching goes through the queryset's own ``for_resource`` (both

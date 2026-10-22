@@ -153,7 +153,7 @@ def guard_anonymous_ingress(
 
 def _bounded_body(request: HttpRequest, max_body_bytes: int) -> bytes:
     raw_length = request.META.get("CONTENT_LENGTH")
-    if raw_length not in (None, ""):
+    if raw_length is not None and raw_length != "":
         try:
             content_length = int(raw_length)
         except (TypeError, ValueError) as error:

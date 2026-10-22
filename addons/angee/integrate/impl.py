@@ -9,19 +9,19 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
-from angee.base.impl import ImplBase
-from angee.integrate.connect import enabled_oauth_client_from_hint
+from angee.impl import ImplBase
 from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
+from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.live import PairingProjection, SessionLoggedOut
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey
 
 if TYPE_CHECKING:
+    from angee.integrate.states import StreamDefinition
     from angee.integrate.streams import (
         ApplyResult,
         LocalChange,
         RecordChange,
-        StreamDefinition,
         StreamPage,
         WriteBackResult,
     )
@@ -38,29 +38,28 @@ class IntegrationImpl(ImplBase):
     label = "Integration"
     icon = ""
     oauth_client: ClassVar[str] = ""
+    requires_connection_discovery: ClassVar[bool] = False
+    """Opt into the asynchronous discover/apply connection lifecycle."""
 
     def __init__(self, integration: Any) -> None:
         """Bind this implementation to its owning integration row."""
 
         self.integration = integration
 
-    def connect_oauth_client(self, owner_label: str) -> Any:
-        """Return the enabled OAuth client this integration connects through.
+    def discover_connection(self, credential: Any) -> ConnectionDiscovery:
+        """Read the provider outside transactions; return facts without writing rows."""
 
-        Falls back to the bound integration's vendor slug when the implementation
-        declares no ``oauth_client`` hint; the vendor slug also feeds the
-        ``{vendor}`` template.
+        return ConnectionDiscovery()
+
+    def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
+        """Apply domain facts through ``self.integration`` using database work only.
+
+        Integrate calls this on a freshly locked row after validating its task's
+        credential and generation. The adapter never writes credential material.
         """
 
-        vendor = self.integration.vendor
-        vendor_slug = str(getattr(vendor, "slug", "") or "")
-        hint = str(self.oauth_client or "")
-        return enabled_oauth_client_from_hint(
-            hint or vendor_slug,
-            owner_label=owner_label,
-            reason="integrate.graphql.connect_integration.oauth_client",
-            vendor_slug=vendor_slug,
-        )
+        if discovery.data:
+            raise AdapterContractError("The adapter must implement apply_discovery for its returned facts.")
 
 
 class BridgeImpl(IntegrationImpl):
@@ -73,13 +72,29 @@ class BridgeImpl(IntegrationImpl):
     category = "bridge"
     label = "Bridge"
     icon = "plug"
+    oauth_client: ClassVar[str] = "{vendor}"
     sync_parallelism: ClassVar[int | None] = None
-    """Optional protocol cap; the bridge config and database may lower it."""
+    """Optional protocol cap; direct sync config and database may lower it.
+
+    Workflow IO uses the shared bridge lock for an exact-one cap. Other workflow
+    caps retain native map concurrency, without a separate protocol semaphore.
+    """
     supports_identity_reads: ClassVar[bool] = False
     """Declare identity reads; otherwise retries request a fresh baseline."""
 
+    def source_url(self, link: Any) -> str | None:
+        """Return the provider URL for ``link``, or none when it has no web view."""
+
+        del link
+        return None
+
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
-        """Declare each independently ordered partition exactly once."""
+        """Declare each independently ordered partition exactly once.
+
+        The generic sync declares once per cycle. A workflow cycle declares once per
+        drained partition (``workflows_integrate.StreamStage``), so an adapter synced
+        through one declares from local state, without transport.
+        """
         raise AdapterContractError("Stream adapters must declare their partitions.")
 
     def seed_config(self, legacy_cursor: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -114,6 +129,8 @@ class BridgeImpl(IntegrationImpl):
     def apply_record(self, stream: Any, record: Any) -> ApplyResult:
         """Apply one record using database work only; return its applied evidence.
 
+        Local and remote mapped projections must be JSON-native and comparable.
+        The driver normalizes them with the canonical JSON serializer.
         The driver owns primary link promotion. Record-local refusals raise
         SemanticError, ValidationError or DataError; infrastructure failures propagate.
         """
@@ -151,7 +168,13 @@ class BridgeImpl(IntegrationImpl):
         """Withdraw native projection visibility when absence changes link status."""
 
     def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
-        """Finish domain batch relationships before the page cursor commits."""
+        """Finish domain batch relationships before the page cursor commits.
+
+        Runs once per page inside the page transaction, after the driver has decided
+        every record of the page; each applied record's link is already promoted.
+        ``outcomes`` are the applied records' results in page order. The cursor has
+        not advanced yet, so a raise here rolls the whole page back.
+        """
 
     def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterable[LocalChange]:
         """Project only selected local identities, or all candidates when keys is None."""

@@ -21,11 +21,16 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 vi.mock("@angee/ui", () => ({
   Button: ({ children, onClick, disabled }: { children: React.ReactNode; onClick?: () => void; disabled?: boolean }) => <button disabled={disabled} onClick={onClick}>{children}</button>,
-  EmptyState: ({ title, actions }: { title: React.ReactNode; actions: React.ReactNode }) => <section><h1>{title}</h1>{actions}</section>,
   ErrorBanner: () => null,
   errorMessage: () => "error",
   Glyph: () => null,
+  InlineEmpty: ({ label }: { label: React.ReactNode }) => <p>{label}</p>,
   LoadingPanel: () => null,
+  Page: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PageBody: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PageHeader: ({ title, eyebrow, actions }: { title: React.ReactNode; eyebrow?: React.ReactNode; actions?: React.ReactNode }) => <section>{eyebrow}<h1>{title}</h1>{actions}</section>,
+  PaneRow: ({ title, onOpen }: { title: React.ReactNode; onOpen?: () => void }) => <button onClick={onOpen}>{title}</button>,
+  PaneRows: ({ children }: { children: React.ReactNode }) => <ul>{children}</ul>,
   RegisteredFormView: ({ resource }: { resource: string }) => <div data-testid="registered-form">{resource}</div>,
   useResourceRecordHrefLookup: () => () => undefined,
   useResourceRoute: (resource: string) => resource === "messaging.Channel" ? "/messages/channels" : undefined,

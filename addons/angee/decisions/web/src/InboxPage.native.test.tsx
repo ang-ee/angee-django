@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test } from "vitest";
 import { Inbox, Open, Multiple, ReadOnly, Closed, Conflict, InvalidAttempt } from "./InboxPage.stories";
 
@@ -8,9 +8,12 @@ afterEach(cleanup);
 
 test("the inbox card links concerned records and lists proposed field and record actions", async () => {
   render(Open.render());
-  expect((await screen.findAllByRole("link", { name: /Review notes/ })).map((link) => link.getAttribute("href"))).toContain("/notes/nte_7");
-  expect(screen.getByText("Display Name")).toBeTruthy();
-  expect(screen.getByText("Proposed name")).toBeTruthy();
+  // Two reads, two waits: the card renders once the decision loads, and its concerned
+  // record's label is a read of its own. One wait for both outran a loaded CI runner.
+  const card = await screen.findByRole("region", { name: "Review" });
+  expect((await within(card).findAllByRole("link", { name: /Review notes/ })).map((link) => link.getAttribute("href"))).toContain("/notes/nte_7");
+  expect(within(card).getByText("Display Name")).toBeTruthy();
+  expect(within(card).getByText("Proposed name")).toBeTruthy();
   expect(screen.queryByText("archive")).toBeNull();
   expect(await screen.findByRole("radio", { name: /Accept and archive/ })).toBeTruthy();
 });

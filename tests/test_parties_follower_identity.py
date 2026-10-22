@@ -34,7 +34,7 @@ from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter
 
 from angee.graphql.data import hasura_model_resource
-from angee.messaging.testing.models import Folder, Handle, Organization, Party, Person, Thread, ThreadFollower
+from angee.messaging.testing.models import Handle, Organization, Party, Person, Thread, ThreadFollower
 from angee.nexus.testing.models import Cadence, Tie
 from angee.spaces.testing.models import Group, Membership
 from tests.conftest import execute_schema, result_data
@@ -47,8 +47,6 @@ PARTY_PRIVATE: dict[str, Any] = {
     "notes": "Private notes",
     "first_met_note": "Private introduction",
     "handle_count": 7,
-    "raw_vcard": "BEGIN:VCARD\nNOTE:Private carrier\nEND:VCARD",
-    "extensions": {"X-PRIVATE": "Private extension"},
 }
 PERSON_PRIVATE: dict[str, Any] = {
     **PARTY_PRIVATE,
@@ -202,9 +200,12 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
             assert resource_type is not None
             for action in ("read", "read_private") if model != Tie else ("read",):
                 scoped = model.objects.with_actor(f.reader).with_action(action).scoped()
-                # Read prepares 13 arrow sources; Tie prepares one Party source.
-                # Private reads need only the final row SELECT.
-                expected_queries = 2 if model == Tie else 14 if action == "read" else 1
+                # Each fresh scope reads the schema revision and expands the actor's
+                # memberships (2). Read then prepares 23 arrow sources (a filed task
+                # reaches each of its declared subject types' direct holders, its
+                # removal authority's project write and its subject task's owner);
+                # Tie prepares one Party source. Private reads need only the final row SELECT.
+                expected_queries = 4 if model == Tie else 26 if action == "read" else 3
                 counts = []
                 for size in (2, 50):
                     ids = [row.pk for row in rows[:size]] if model != Tie else [tie.pk]
@@ -215,14 +216,21 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
                         f"{sql}\n-- parameters: {parameters!r}\n",
                         encoding="utf-8",
                     )
-                    with CaptureQueriesContext(connection) as captured:
+                    # A fresh scope per measurement: one scope keeps the rows it decided,
+                    # so a repeated statement would skip its arrow sources.
+                    with evaluator_scope(), CaptureQueriesContext(connection) as captured:
                         result = set(query)
                     counts.append(len(captured))
                     assert len(captured) == expected_queries, captured.captured_queries
-                    assert sum(
-                        query["sql"].startswith(f'SELECT "{model._meta.db_table}".')
-                        for query in captured.captured_queries
-                    ) == 1
+                    # The application row SELECT, and, for a party read, the arrow source of a
+                    # record task about a party.
+                    assert (
+                        sum(
+                            query["sql"].startswith(f'SELECT "{model._meta.db_table}".')
+                            for query in captured.captured_queries
+                        )
+                        == (2 if model is Party and action == "read" else 1)
+                    )
                     assert result == (set(ids) if action == "read" and model != Tie else set())
                 assert counts[0] == counts[1]
         for model in (Party, Person):
@@ -256,7 +264,7 @@ def test_parties_and_people_roots_redact_private_fields_but_preserve_owner_value
     f = followers
     query = f"""query Identity($id: String!) {{
       parties(where: {{id: {{_eq: $id}}}}) {{
-        {PARTY_SELECTION} created_by updated_by created_by_label updated_by_label
+        {PARTY_SELECTION} redacted_fields created_by updated_by created_by_label updated_by_label
       }}
       people(where: {{id: {{_eq: $id}}}}) {{ {PERSON_SELECTION} }}
     }}"""
@@ -281,9 +289,13 @@ def test_parties_and_people_roots_redact_private_fields_but_preserve_owner_value
         assert data["parties"][0]["updated_by"] is not None
         assert data["parties"][0]["created_by_label"] == f.owner.username
         assert data["parties"][0]["updated_by_label"] == f.owner.username
+        if actor == f.reader:
+            assert set(PARTY_PRIVATE) <= set(data["parties"][0]["redacted_fields"])
+        else:
+            assert data["parties"][0]["redacted_fields"] == []
 
 
-def test_hidden_folder_and_introducer_are_null_without_losing_people_or_parties(
+def test_hidden_introducer_is_null_without_losing_people_or_parties(
     followers: SimpleNamespace,
     identity_graphql: Any,
 ) -> None:
@@ -291,21 +303,17 @@ def test_hidden_folder_and_introducer_are_null_without_losing_people_or_parties(
 
     f = followers
     with system_context(reason="tests.follower_identity.relations"):
-        hidden_folder = Folder.objects.create(name="Hidden", created_by=f.owner)
-        visible_folder = Folder.objects.create(name="Visible", created_by=f.owner)
-        for person, folder, introducer in (
-            (f.person, hidden_folder, f.unfollowed),
-            (f.accountless, visible_folder, f.party),
+        for person, introducer in (
+            (f.person, f.unfollowed),
+            (f.accountless, f.party),
         ):
-            person.folder = folder
             person.introduced_by = introducer
-            person.save(update_fields=["folder", "introduced_by"])
-        _grant(visible_folder, f.reader)
+            person.save(update_fields=["introduced_by"])
     data = result_data(
         execute_schema(
             identity_graphql,
             """{
-      people { id folder { id name } introduced_by { id } }
+      people { id introduced_by { id } }
       parties { id introduced_by { id } }
     }""",
             user=f.reader,
@@ -313,10 +321,9 @@ def test_hidden_folder_and_introducer_are_null_without_losing_people_or_parties(
     )
     people = {row["id"]: row for row in data["people"]}
     assert people == {
-        f.person.sqid: {"id": f.person.sqid, "folder": None, "introduced_by": None},
+        f.person.sqid: {"id": f.person.sqid, "introduced_by": None},
         f.accountless.sqid: {
             "id": f.accountless.sqid,
-            "folder": {"id": visible_folder.sqid, "name": "Visible"},
             "introduced_by": {"id": f.party.sqid},
         },
     }
@@ -598,8 +605,8 @@ def test_record_followers_project_explicit_account_and_accountless_identities_on
     f = followers
     with system_context(reason="tests.follower_identity.record"):
         ticket = ThreadedTicket.objects.create(title="Followed record")
-        thread = ticket.message_thread(create=False)
-        assert thread is not None
+        # An elevated insert posts no creation message, so the record's thread starts here.
+        thread = ticket.message_thread()
         _grant(thread, f.reader)
         ticket.message_subscribe(party=f.person)
         ticket.message_subscribe(party=f.accountless)

@@ -1,21 +1,23 @@
 import * as React from "react";
 import { useAuthoredMutation } from "@angee/refine";
-import { senderDisplayName } from "@angee/parties";
+import { senderAvatarUrl, senderDisplayName } from "@angee/parties";
 import {
-  Alert,
   Avatar,
   Button,
+  ErrorBanner,
   Glyph,
   MessagePartsView,
   PreviewPane,
-  RelativeTime,
   avatarInitials,
   cn,
+  formatDateTime,
   type MessagePart,
 } from "@angee/ui";
 
 import { SetMessageStarredDocument, type MessageReaderData } from "./documents";
 import { useMessagingT } from "./i18n";
+import { MessageSourceCopies } from "./MessageSourceCopies";
+import { StarButton } from "./StarButton";
 
 // The envelope roles listed under the sender, in header order.
 const RECIPIENT_ROLES = ["TO", "CC", "BCC"] as const;
@@ -25,6 +27,8 @@ export interface MessageReaderProps {
   message: MessageReaderData;
   /** The attachment shown beside the body. The host owns where this lives: route or local state. */
   previewPartId?: string | null;
+  /** An attachment chip asks the host to preview a part; Close passes null. A host that
+   *  previews elsewhere handles the part there and passes no `previewPartId`. */
   onPreviewPartChange: (partId: string | null) => void;
   /** Reveal and scroll to one part of the body. */
   activePartId?: string | null;
@@ -60,13 +64,14 @@ export function MessageReader({
   return (
     <div className={cn("grid min-w-0 gap-6", previewUrl && "lg:grid-cols-2")}>
       <article aria-label={message.title || t("message.label")} className="min-w-0 space-y-5">
-        <header className="flex items-start gap-3">
-          <Avatar initials={avatarInitials(sender)} />
-          <div className="min-w-0 flex-1 space-y-0.5">
+        <MessageSourceCopies messageId={message.id} channelName={message.channel?.display_name} />
+        <header className="flex flex-wrap items-start gap-3">
+          <Avatar src={senderAvatarUrl(message.sender)} initials={avatarInitials(sender)} />
+          <div className="min-w-40 flex-1 space-y-0.5">
             <div className="flex min-w-0 items-baseline gap-2">
               <span className="truncate text-13 font-semibold">{sender}</span>
               {address && address !== sender ? (
-                <span className="truncate text-2xs text-fg-muted">{address}</span>
+                <span className="truncate text-12 text-fg-muted">{address}</span>
               ) : null}
             </div>
             {RECIPIENT_ROLES.map((role) => {
@@ -75,34 +80,33 @@ export function MessageReader({
                 .map((participant) => senderDisplayName(participant.handle))
                 .filter(Boolean);
               return names.length ? (
-                <div key={role} className="truncate text-2xs text-fg-muted">
+                <div key={role} className="truncate text-12 text-fg-muted">
                   {recipientLabels[role]} {names.join(", ")}
                 </div>
               ) : null;
             })}
           </div>
-          <RelativeTime
-            className="whitespace-nowrap pt-0.5 text-2xs text-fg-muted"
-            value={message.sent_at ?? message.created_at}
-          />
-          <Button
-            size="iconSm"
-            variant={message.starred ? "secondary" : "ghost"}
-            aria-label={t(message.starred ? "message.unstar" : "message.star")}
-            aria-pressed={message.starred}
-            disabled={starState.fetching}
-            onClick={() => {
-              setStarError(undefined);
-              void setStarred({ id: message.id, starred: !message.starred }).catch((error: unknown) =>
-                setStarError(error instanceof Error ? error.message : String(error)),
-              );
-            }}
-          >
-            <Glyph name="star" />
-          </Button>
-          {actions}
+          {/* The date, star and host actions wrap below the sender as one group rather
+              than overlap it when the column is narrow. */}
+          <div className="ml-auto flex shrink-0 items-start gap-3">
+            {/* The read date is a fact of the record: absolute, like every facts line. */}
+            <time className="whitespace-nowrap pt-0.5 text-12 text-fg-muted" dateTime={message.sent_at ?? message.created_at}>
+              {formatDateTime(message.sent_at ?? message.created_at)}
+            </time>
+            <StarButton
+              starred={Boolean(message.starred)}
+              disabled={starState.fetching}
+              onToggle={() => {
+                setStarError(undefined);
+                void setStarred({ id: message.id, starred: !message.starred }).catch((error: unknown) =>
+                  setStarError(error instanceof Error ? error.message : String(error)),
+                );
+              }}
+            />
+            {actions}
+          </div>
         </header>
-        {starError ? <Alert tone="danger">{starError}</Alert> : null}
+        <ErrorBanner description={starError ?? null} />
         <MessagePartsView
           parts={message.parts}
           activePartId={activePartId ?? previewPartId}

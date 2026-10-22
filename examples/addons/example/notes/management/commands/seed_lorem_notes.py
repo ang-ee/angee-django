@@ -4,7 +4,7 @@ e2e drives a running stack, so volume data is seeded server-side, not through th
 browser. Three model facts shape the implementation:
 
 * ``created_at`` / ``updated_at`` are ``auto_now_add`` / ``auto_now``
-  (``angee.base.mixins``), so they cannot be set on insert — they are backfilled
+  (``angee.models``), so they cannot be set on insert — they are backfilled
   with a second ``bulk_update``.
 * Ownership is field-backed by ``owner`` and admin reach is const-backed
   via ``angee/role:admin`` in ``permissions.zed``, so a note carries no per-row

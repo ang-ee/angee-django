@@ -1,8 +1,7 @@
-"""History, revisions, and delete-preview on the composed notes addon."""
+"""History and delete-preview on the composed notes addon."""
 
 from __future__ import annotations
 
-import reversion
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
@@ -17,7 +16,7 @@ User = get_user_model()
 
 
 class NotesVersioningTests(TransactionTestCase):
-    """Audit history, body revisions, and cascade-previewing deletes."""
+    """Audit history and cascade-previewing deletes."""
 
     def setUp(self) -> None:
         call_command("rebac", "sync", verbosity=0)
@@ -32,21 +31,6 @@ class NotesVersioningTests(TransactionTestCase):
             self.note.save()
         self.assertEqual(self.note.history.count(), 2)
         self.assertEqual(self.note.history.first().title, "Final")
-
-    def test_body_revisions_version_and_revert(self) -> None:
-        with system_context(reason="test"):
-            with reversion.create_revision():
-                self.note.body = "v1"
-                self.note.save()
-            with reversion.create_revision():
-                self.note.body = "v2"
-                self.note.save()
-
-            self.assertEqual(self.note.revisions.count(), 2)
-            self.note.revert_to(self.note.revisions.last())
-            self.note.refresh_from_db()
-
-        self.assertEqual(self.note.body, "v1")
 
     def test_delete_returns_a_cascade_preview(self) -> None:
         query = (

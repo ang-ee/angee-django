@@ -16,6 +16,8 @@ function syncDocumentTitle(document: Document, titles: DocumentTitles): void {
 
 /** Keep the browser title in sync with the same leaf the console displays.
  * The last mounted publisher wins until it unmounts; updates keep mount order.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function DocumentTitle(): null {
   const brand = useRuntimeBrand();

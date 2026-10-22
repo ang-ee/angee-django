@@ -11,7 +11,6 @@ from rebac.resources import model_resource_type
 
 from angee.decisions.signals import decision_answered
 from angee.iam.service_users import deactivate_service_user
-from angee.workflows.states import RunStatus
 
 
 def wake_decision(sender: Any, *, decision: Any, **kwargs: Any) -> None:
@@ -40,10 +39,7 @@ def stop_deleted_record_runs(sender: Any, *, instance: Any, **kwargs: Any) -> No
         return
     model = apps.get_model("workflows", "WorkflowRun")
     with system_context(reason="workflows.deleted_record"):
-        runs = model.objects.exclude(status__in=RunStatus.terminal_values()).about(
-            instance, operations=("created", "changed"), ancestors=False,
-        )
-        for run in runs.select_related("run_as"):
+        for run in model.objects.working_on(instance).select_related("run_as"):
             model.objects.cancel_on_commit(run, run.run_as)
 
 
@@ -54,13 +50,13 @@ def connect_record_deletion(sender: Any, **kwargs: Any) -> None:
 
 
 class WorkflowsConfig(AppConfig):
-    """Register workflow source models without the retired engine hooks."""
+    """Connect workflow admission, observation and record lifecycle hooks."""
 
     default = True
     name = "angee.workflows"
 
     def ready(self) -> None:
-        """Subscribe the waiter owner to the decisions lifecycle."""
+        """Connect native sources alongside decision and deletion hooks."""
         from angee.workflows.subjects import check_run_subject_models
         from angee.workflows.triggers import TriggerSource, check_record_changed_models
 

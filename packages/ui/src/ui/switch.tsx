@@ -9,6 +9,9 @@ import { tv, type VariantProps } from "../lib/variants";
 import { textRoleVariants } from "./text";
 import { widgetControlPresentationProps, type WidgetControlSurfaceProps } from "./widget-control";
 
+/**
+ * @kind token
+ */
 export const switchVariants = tv({
   slots: {
     root: "relative inline-flex shrink-0 cursor-pointer items-center rounded-full bg-border-strong outline-none transition-colors focus-visible:focus-ring data-[checked]:bg-brand data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60",
@@ -38,13 +41,14 @@ export const switchVariants = tv({
 
 type SwitchRecipeProps = VariantProps<typeof switchVariants>;
 
-export type SwitchSize = NonNullable<SwitchRecipeProps["size"]>;
-
 export type SwitchRootProps = Omit<BaseSwitchRootProps, "className"> &
   SwitchRecipeProps & Pick<WidgetControlSurfaceProps, "presentation"> & {
     className?: string;
   };
 
+/**
+ * @owner Switch
+ */
 export const SwitchRoot = React.forwardRef<HTMLElement, SwitchRootProps>(
   function SwitchRoot({ className, size = "sm", presentation, ...props }, ref) {
     const styles = switchVariants({ size, ...widgetControlPresentationProps(presentation) });
@@ -64,6 +68,9 @@ export type SwitchThumbProps = Omit<BaseSwitchThumbProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Switch
+ */
 export const SwitchThumb = React.forwardRef<
   HTMLSpanElement,
   SwitchThumbProps
@@ -83,6 +90,9 @@ export type SwitchProps = Omit<SwitchRootProps, "children"> & {
   thumbClassName?: string;
 };
 
+/**
+ * @kind primitive
+ */
 export const Switch = React.forwardRef<HTMLElement, SwitchProps>(
   function Switch({ size = "sm", presentation, thumbClassName, ...props }, ref) {
     size = widgetControlPresentationProps(presentation).size ?? size;
@@ -102,6 +112,9 @@ export type SwitchRowProps = Omit<SwitchProps, "className"> & {
   switchClassName?: string;
 };
 
+/**
+ * @owner Switch
+ */
 export const SwitchRow = React.forwardRef<HTMLElement, SwitchRowProps>(
   function SwitchRow(
     { label, description, className, switchClassName, ...props },

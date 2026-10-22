@@ -13,7 +13,7 @@ Reference resolution composes the two owners, never re-deriving either:
   is written with a slash-form type token (``<ns>/type:<id>[#relation]``, e.g.
   ``angee/role:admin``, ``products/role:products_manager#member``,
   ``auth/user:*``). Subject literals cross a transport boundary, so model-backed
-  public ids are normalized through :func:`angee.base.identity.canonical_subject_ref`;
+  public ids are normalized through :func:`angee.identity.canonical_subject_ref`;
 * a **row xref** — anything else (the loader's ``<addon>.<xref>`` form, e.g.
   ``iam.alice``) — resolves through the resource ledger
   (:func:`angee.resources.widgets.resolve_xref`) to the loaded row, whose own
@@ -30,6 +30,7 @@ Reference resolution composes the two owners, never re-deriving either:
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING
 
 from django.db import models
 from rebac import (
@@ -44,17 +45,20 @@ from rebac import (
 from rebac.models import active_relationship_model
 from rebac.schema.walker import find_relation, subject_allowed_by_relation
 
-from angee.base.identity import canonical_subject_ref
-from angee.base.refs import ancestor_object_refs
+from angee.identity import canonical_subject_ref
+from angee.refs import ancestor_object_refs
 from angee.resources.entries import GrantGroup, GrantRow
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.widgets import resolve_xref
+
+if TYPE_CHECKING:
+    from angee.resources.models import Resource
 
 
 def materialize_grant_groups(
     groups: Iterable[GrantGroup],
     *,
-    ledger_model: type[models.Model],
+    ledger_model: type[Resource],
     addon_aliases: Mapping[str, str],
 ) -> tuple[int, int]:
     """Write every group's grant tuples idempotently; return ``(created, skipped)``.
@@ -91,7 +95,7 @@ def materialize_grant_groups(
 
 def _grant_tuples(
     row: GrantRow,
-    ledger_model: type[models.Model],
+    ledger_model: type[Resource],
     addon_aliases: Mapping[str, str],
 ) -> list[RelationshipTuple]:
     """Return the explicit grant and compatible grants on its MTI ancestors.
@@ -120,14 +124,14 @@ def _grant_tuples(
 
 def _resolve_resource_refs(
     row: GrantRow,
-    ledger_model: type[models.Model],
+    ledger_model: type[Resource],
     addon_aliases: Mapping[str, str],
 ) -> list[ObjectRef]:
     """Resolve the grant resource to every REBAC identity it carries.
 
     A literal ref names exactly one identity. A row xref resolves through the
     ledger to the loaded row and expands to each REBAC identity the row IS-A — the
-    MTI enumeration owned by :func:`angee.base.refs.ancestor_object_refs`.
+    MTI enumeration owned by :func:`angee.refs.ancestor_object_refs`.
     The caller filters implicit ancestor grants against the native schema.
     """
 
@@ -140,7 +144,7 @@ def _resolve_resource_refs(
 
 def _resolve_subject(
     row: GrantRow,
-    ledger_model: type[models.Model],
+    ledger_model: type[Resource],
     addon_aliases: Mapping[str, str],
 ) -> SubjectRef:
     """Resolve the grant subject to a subject reference."""
@@ -156,7 +160,7 @@ def _resolve_subject(
 def _resolve_row(
     row: GrantRow,
     value: str,
-    ledger_model: type[models.Model],
+    ledger_model: type[Resource],
     addon_aliases: Mapping[str, str],
 ) -> models.Model:
     """Resolve one row xref through the ledger, or raise with the grant location."""

@@ -12,7 +12,7 @@ from typing import Any, Protocol, TypeAlias
 
 import tablib
 import yaml
-from django.apps import AppConfig, apps
+from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.fields import NOT_PROVIDED
@@ -20,10 +20,12 @@ from django.db.models.utils import make_model_tuple
 from import_export.results import Result, RowResult
 
 from angee.addons import addon_manifest
-from angee.base.impl import resolve_impl_class
-from angee.base.tiers import ResourceTier
+from angee.fields import ModelLabelField
+from angee.impl import impl_registry, resolve_impl_class
 from angee.resources import sources
 from angee.resources.exceptions import ResourceLoadError
+from angee.resources.kinds import ResourceEntryKind
+from angee.tiers import ResourceTier
 
 
 class _ResourceAddon(Protocol):
@@ -46,15 +48,9 @@ def resolve_model(label: str) -> type[models.Model]:
     """Return the model class named by an ``app_label.ModelName`` label."""
 
     try:
-        app_label, model_name = make_model_tuple(label)
+        return ModelLabelField.get_model(label)
     except ValueError as error:
-        raise ImproperlyConfigured(f"Invalid model label {label!r}") from error
-    if not app_label or not model_name:
-        raise ImproperlyConfigured(f"Invalid model label {label!r}")
-    try:
-        return apps.get_model(app_label, model_name)
-    except LookupError as error:
-        raise ImproperlyConfigured(f"Unknown model {label!r}") from error
+        raise ImproperlyConfigured(str(error)) from error
 
 
 ResourceDeclaration: TypeAlias = Mapping[str, Any]
@@ -75,8 +71,8 @@ ROW_KIND = "rows"
 GRANT_KIND = "grants"
 """Entry kind whose rows the loader materializes into REBAC relationship tuples."""
 
-ENTRY_KINDS = frozenset({ROW_KIND, GRANT_KIND})
-"""Every resource entry kind the loader knows how to materialize."""
+BUILTIN_ENTRY_KINDS = frozenset({ROW_KIND, GRANT_KIND})
+"""Entry kinds materialized directly by the resources addon."""
 
 GRANT_ROW_KEYS = ("resource", "relation", "subject")
 """The three fields one declarative grant row must carry, in tuple direction."""
@@ -94,6 +90,10 @@ STRUCTURED_FORMATS = frozenset({"json", "yaml"})
 """Text formats that can carry ``_meta`` and ``rows`` envelopes."""
 
 
+RETIRED_MODELS_KEY = "retired_models"
+"""The ``[resources]`` key naming removed models whose seeded rows retire with them; not a tier."""
+
+
 def resource_manifest_for(app_config: AppConfig) -> dict[str, tuple[dict[str, Any], ...]]:
     """Return normalized resource declarations keyed by tier for one addon."""
 
@@ -101,9 +101,28 @@ def resource_manifest_for(app_config: AppConfig) -> dict[str, tuple[dict[str, An
     resources = contract.resources if contract is not None else {}
     manifest: dict[str, tuple[dict[str, Any], ...]] = {tier: () for tier in ResourceTier.values}
     for raw_tier, declarations in resources.items():
+        if raw_tier == RETIRED_MODELS_KEY:
+            continue
         tier = ResourceTier.from_value(raw_tier)
         manifest[tier] = _resource_entries(app_config, declarations)
     return manifest
+
+
+def retired_models_for(app_config: AppConfig) -> tuple[str, ...]:
+    """Return the removed model labels whose rows ``app_config``'s resource files seeded.
+
+    An addon that removes such a model names it under ``retired_models`` in its
+    addon.toml ``[resources]``; the composer's drop guard then lets those rows,
+    and only those, go with the model's table.
+    """
+
+    contract = addon_manifest(app_config)
+    labels = contract.resources.get(RETIRED_MODELS_KEY, []) if contract is not None else []
+    if not isinstance(labels, list) or not all(isinstance(label, str) and label for label in labels):
+        raise ImproperlyConfigured(
+            f"{app_config.name}: addon.toml [resources] {RETIRED_MODELS_KEY} must be an array of model labels"
+        )
+    return tuple(labels)
 
 
 def _resource_entries(
@@ -188,11 +207,12 @@ def _normalize_depends_on(value: object) -> tuple[str, ...]:
 
 
 def _entry_kind(value: object) -> str:
-    """Return a validated resource entry kind (``rows`` or ``grants``)."""
+    """Return a native or composed resource entry kind."""
 
     kind = str(value)
-    if kind not in ENTRY_KINDS:
-        expected = ", ".join(sorted(ENTRY_KINDS))
+    known = BUILTIN_ENTRY_KINDS | impl_registry(ResourceEntryKind.registry_setting).keys()
+    if kind not in known:
+        expected = ", ".join(sorted(known))
         raise ImproperlyConfigured(f"Unknown resource entry kind {kind!r}; expected one of {expected}")
     return kind
 
@@ -217,7 +237,7 @@ class ResourceEntry:
     """Optional fallback model label for every row in the file."""
 
     kind: str = ROW_KIND
-    """Materialization kind: ``rows`` (model rows) or ``grants`` (REBAC tuples)."""
+    """Native ``rows``/``grants`` materialization or a registered owner-defined kind."""
 
     encoding: str = "utf-8"
     """Text encoding used when reading the materialized file."""
@@ -374,6 +394,14 @@ class ResourceEntry:
             GrantRow.from_record(self, record, index=index)
             for index, record in enumerate(self._record_mappings(records), start=1)
         )
+
+    def read_declarations(self) -> tuple[Mapping[str, Any], ...]:
+        """Return mapping rows for an owner-defined non-model resource kind."""
+
+        records, file_model = self._read_records()
+        if self.model or file_model:
+            raise ResourceLoadError(f"{self.display}: a {self.kind} entry declares no model")
+        return tuple(dict(record) for record in self._record_mappings(records))
 
     def infer_model_label(self) -> str:
         """Infer ``app.Model`` from a ``[NNN_]app.model.ext`` filename."""

@@ -1,7 +1,9 @@
+import * as React from "react";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { AtSign, Building2, CircleDot, Contact, HeartHandshake, LayoutDashboard, UserCheck, Users } from "lucide-react";
 import { enPartiesMessages } from "./i18n";
+import { ConnectCardDavAction } from "./ConnectCardDavAction";
 import { directoryForm } from "./DirectoryForm";
 import { organizationForm } from "./OrganizationForm";
 import { personForm } from "./PersonForm";
@@ -39,11 +41,11 @@ const parties = defineBaseAddon({
     ),
     ...resourcePageRoutes("parties.handles", "/parties/handles", lazyRouteComponent(() => import("./HandlesPage"), "HandlesPage"), "parties.Handle"),
     ...resourcePageRoutes(
-      "parties.handle-links",
-      "/parties/handle-links",
+      "parties.statements",
+      "/parties/statements",
       lazyRouteComponent(() => import("./ReviewPage"), "ReviewPage"),
-      "parties.PartyHandle",
-      { detailComponent: lazyRouteComponent(() => import("./PartyHandleRedirect"), "PartyHandleRedirect") },
+      "parties.PartyStatement",
+      { detailComponent: lazyRouteComponent(() => import("./PartyStatementRedirect"), "PartyStatementRedirect") },
     ),
     {
       name: "parties.review",
@@ -92,10 +94,20 @@ const parties = defineBaseAddon({
     "parties.Person": personForm,
   },
   widgets: { partyPicker: partyPickerWidget },
-  // Relationship-aware addons add Overview items; contact-consuming addons add Person and Organization form fields.
-  containers: { "parties.overview#items": {}, "parties.person#fields": {}, "parties.organization#fields": {} },
+  // Identity-claim states outside the framework vocabulary.
+  statusTones: { suggested: "warning", dismissed: "neutral" },
+  // Relationship-aware addons add Overview items; contact-consuming addons add Person and Organization form fields;
+  // directory backends add their connect verb to the directories toolbar.
+  containers: {
+    "parties.overview#items": {},
+    "parties.person#fields": {},
+    "parties.organization#fields": {},
+    "parties.directories#toolbar": {
+      "parties.connect-carddav": { sequence: 10, content: React.createElement(ConnectCardDavAction) },
+    },
+  },
 });
-export { senderDisplayName, type SenderIdentity } from "./identity";
+export { senderAvatarUrl, senderDisplayName, type SenderIdentity } from "./identity";
 export { addressFields, PartyAddresses } from "./PartyAddresses";
 export { useOrganizationFields } from "./OrganizationForm";
 export {

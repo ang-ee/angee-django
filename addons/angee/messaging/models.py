@@ -15,18 +15,17 @@ mention) live on :class:`MessageEdge`. A subject is not a column: it is a sparse
 is a fragment FK — so only messages that *have* a title pay for one, and a re-quoted
 subject exists once. Ingestion idempotency rests on expression unique constraints
 over ``MD5(external_id)`` — channel-scoped for messages (one row per provider event
-per source), platform-scoped for threads (cross-account mail merges into one
-conversation); the digest is an index implementation detail, never a model field.
+per source), and channel-scoped for source threads. Cross-account display identity
+uses reversible same_as evidence; the digest remains an index implementation detail.
 The write path lives on the managers.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
-from enum import StrEnum
+from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -37,15 +36,19 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.core import checks
-from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, ValidationError
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models, transaction
-from django.db.models.functions import MD5, Coalesce
+from django.db.backends.base.base import BaseDatabaseWrapper
+from django.db.models.fields.json import DataContains
+from django.db.models.functions import MD5, Coalesce, JSONArray
+from django.db.models.sql.compiler import SQLCompiler
 from django.utils import timezone
 from django.utils.text import capfirst
 from rebac import (
     CheckItem,
     PermissionDenied,
+    RebacMixin,
     SubjectRef,
     actor_context,
     current_actor,
@@ -57,35 +60,47 @@ from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.resources import model_resource_type
 
-from angee.base.actors import actor_user_id
-from angee.base.fields import StateField
-from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin, TrashMixin
-from angee.base.models import AngeeDataModel
-from angee.base.refs import RecordRefMixin, generic_pointer_model
-from angee.base.scoping import read_scoped_queryset, system_queryset
-from angee.base.serialization import strip_null_bytes
+from angee.actors import actor_user_id
+from angee.errors import DomainError
+from angee.fields import StateField
+from angee.identity import instance_from_public_id
+from angee.impl import ImplClassField
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.messaging.backends import ChannelBackend
+from angee.messaging.delivery import queue_message_delivery
 from angee.messaging.managers import (
     ChannelManager,
     FragmentManager,
     MessageEdgeManager,
     MessageManager,
+    MessageQuerySet,
     MessageStarManager,
     PartManager,
     ReactionManager,
-    ThreadActivityManager,
     ThreadAttachmentManager,
     ThreadFollowerManager,
+    ThreadFollowerQuerySet,
     ThreadManager,
     ThreadNotificationManager,
 )
-from angee.messaging.resources import MessageResource, ThreadActivityResource
-from angee.messaging.tracking import FieldTracker, TrackingChange
+from angee.messaging.resources import MessageResource
+from angee.messaging.source_copies import SourceCopyMixin
 from angee.messaging.webforms import WebformSpec, default_webform_schema
+from angee.models import (
+    AngeeDataModel,
+    AngeeModel,
+    AuditMixin,
+    HistoryMixin,
+    ModelHistory,
+    OptimisticLockMixin,
+    OwnerMixin,
+    SourceKind,
+    TrashMixin,
+)
 from angee.parties.models import Handle
+from angee.refs import MergePolicy, RecordRef, RecordRefMixin, RetainedGenericRelation, generic_pointer_model
 from angee.resources.mixins import ResourceLoadMixin
+from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
 
 
@@ -93,7 +108,7 @@ def _actor_user_id(instance: models.Model) -> Any | None:
     """Return attribution for the record-bound actor, falling back to ambient.
 
     Posting uses the same precedence for replay identity unless the caller supplies
-    ``creation_actor`` explicitly. That override does not change attribution or access.
+    ``idempotency_actor`` explicitly. That override does not change attribution or access.
     """
 
     actor_getter = getattr(instance, "actor", None)
@@ -118,12 +133,28 @@ def _user_subject_ref(*, user: Any = None, user_id: Any = None) -> SubjectRef:
     return to_subject_ref(get_user_model()._base_manager.get(pk=user_id))
 
 
-class NotificationPolicy(models.TextChoices, StrEnum):
+class NotificationPolicy(models.TextChoices):
     """How a follower or derived audience member wants record updates."""
 
     INBOX = "inbox", "Inbox"
     EMAIL = "email", "Email"
     MUTED = "muted", "Muted"
+
+
+class _SelectedSubtype(models.Lookup):
+    """Membership in a follower's JSON list through native database JSON operators."""
+
+    def as_sql(self, compiler: SQLCompiler, connection: BaseDatabaseWrapper) -> tuple[str, Sequence[Any]]:
+        return compiler.compile(DataContains(self.lhs, JSONArray(self.rhs)))
+
+    def as_sqlite(self, compiler: SQLCompiler, connection: BaseDatabaseWrapper) -> tuple[str, list[Any]]:
+        selected, selected_params = compiler.compile(self.lhs)
+        subtype, subtype_params = compiler.compile(self.rhs)
+        return (
+            f"EXISTS (SELECT 1 FROM json_each({selected}) AS selected_subtype "
+            f"WHERE selected_subtype.type = 'text' AND selected_subtype.value = {subtype})",
+            [*selected_params, *subtype_params],
+        )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -141,6 +172,14 @@ class NotificationPreference:
         if self.subtype_keys:
             return models.Q(subtype__key__in=self.subtype_keys)
         return models.Q(subtype__isnull=True) | models.Q(subtype__default=True, subtype__internal=False)
+
+    @classmethod
+    def subscribed_row_q(cls, *, notification_policy: str, subtype_keys: str) -> models.Q:
+        """Project stored preferences onto a message query without loading each follow."""
+
+        defaults = models.Q(**{subtype_keys: []}) & cls().subscribed_subtype_q()
+        selected = models.Q(_SelectedSubtype(models.F(subtype_keys), models.F("subtype__key")))
+        return ~models.Q(**{notification_policy: NotificationPolicy.MUTED}) & (defaults | selected)
 
     def is_subscribed_to(self, subtype: Any) -> bool:
         """Apply the same preference to one message subtype."""
@@ -173,6 +212,39 @@ class ThreadAudienceMixin(models.Model):
         raise NotImplementedError
 
 
+class ChatterRecordRefused(DomainError, ValueError):
+    """A record label that names no model, or a model that keeps no chatter.
+
+    Also a ``ValueError``, so the chatter commands' in-band envelopes project it
+    beside their other input refusals; any other caller's schema projects its code.
+    """
+
+    code = "BAD_RECORD"
+
+
+def chatter_record(model_label: str, public_id: str) -> models.Model | None:
+    """Return the record ``public_id`` names, read under the actor, when ``model_label`` keeps chatter.
+
+    An unknown label or a model without chatter raises :class:`ChatterRecordRefused`;
+    a missing or unreadable record is ``None``.
+    """
+
+    try:
+        model = apps.get_model(model_label)
+    except (LookupError, ValueError) as error:
+        raise ChatterRecordRefused() from error
+    if not issubclass(model, ThreadedModelMixin):
+        raise ChatterRecordRefused()
+    try:
+        record = instance_from_public_id(model, str(public_id), queryset=model._default_manager.all())
+        if record is None:
+            return None
+        attachment = record.message_thread_attachment(create=False)
+        return attachment.target if attachment is not None else record
+    except ImproperlyConfigured as error:
+        raise ValueError(str(error)) from error
+
+
 class ThreadedModelMixin(models.Model):
     """Add Odoo-style chatter thread behavior to a model row.
 
@@ -181,29 +253,19 @@ class ThreadedModelMixin(models.Model):
     message write path.
 
     **Placement across MTI.** The chatter edge keys on the record's canonical target —
-    its topmost REBAC-typed MTI ancestor (:func:`angee.base.refs.generic_pointer_target`)
-    — while the reverse :attr:`thread_attachments` GenericRelation and the ``pre_delete``
-    teardown filter at the model that composes this mixin. Compose the mixin on that same
+    its topmost REBAC-typed MTI ancestor (:func:`angee.refs.generic_pointer_target`)
+    — while target-delete policy discovers edges through that same type. Compose the mixin on that same
     topmost REBAC-typed ancestor (``parties.Party``, not ``parties.Person``), so the write
-    content type and the collect content type match; ``ensure_for_record`` fails fast on a
+    content type and the teardown content type match; ``ensure_for_record`` fails fast on a
     child-composed / ancestor-uncomposed split (the placement invariant in
-    :mod:`angee.base.refs`).
+    :mod:`angee.refs`).
     """
 
     thread_attachment_role: ClassVar[str] = "chatter"
     """The attachment role used for the model's primary chatter thread."""
 
-    @transaction.atomic
-    def revoke_record_access(self, relation: str, subject: models.Model | SubjectRef) -> None:
-        """End person follows whose read disappears with this direct grant."""
-
-        cast(Any, super()).revoke_record_access(relation, subject)
-        apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_record(
-            self, role=self.thread_attachment_role,
-        )
-
     @classmethod
-    def thread_messages_expression(cls, record_id: Any) -> models.QuerySet:
+    def thread_messages_expression(cls, record_id: Any) -> MessageQuerySet[Message]:
         """Return messages of the record's primary thread for a SQL subquery.
 
         This is a structural, unscoped expression. The calling projection owns
@@ -215,10 +277,25 @@ class ThreadedModelMixin(models.Model):
             app_label=owner._meta.app_label,
             model=owner._meta.model_name,
         ).values("pk")[:1]
-        return system_queryset(apps.get_model("messaging", "Message")).filter(
-            thread__attachments__content_type_id=models.Subquery(content_type),
-            thread__attachments__object_id=record_id,
-            thread__attachments__role=cls.thread_attachment_role,
+        message_model = apps.get_model("messaging", "Message")
+        thread_model = apps.get_model("messaging", "Thread")
+        record_ref = record_id if hasattr(record_id, "resolve_expression") else models.Value(record_id)
+        rows = message_model.objects.system_context(reason="messaging.record.messages").alias(_record_id=record_ref)
+        survivor = thread_model(
+            pk=Coalesce(models.OuterRef("thread__merged_into_id"), models.OuterRef("thread_id")),
+        )
+        # The thread rows are structural plumbing for an already-authorized
+        # record projection.  The message queryset below is the content-bearing
+        # elevated read; auditing this attachment subquery as a second content
+        # read adds a duplicate bypass event every time the expression runs.
+        attached = thread_model._base_manager.redirect_group(survivor).filter(
+            attachments__content_type_id=models.Subquery(content_type),
+            attachments__object_id=models.OuterRef("_record_id"),
+            attachments__role=cls.thread_attachment_role,
+        )
+        return rows.alias(_record_attached=models.Exists(attached)).filter(
+            thread_id__isnull=False,
+            _record_attached=True,
         )
 
     thread_post_access: ClassVar[str] = "write"
@@ -244,28 +321,13 @@ class ThreadedModelMixin(models.Model):
     thread_create_autofollow_author: ClassVar[bool] = True
     """Whether creating a threaded row subscribes the creating actor."""
 
-    thread_create_log: ClassVar[bool] = True
-    """Whether creating a threaded row logs a creation message."""
-
-    thread_creation_subtype_key: ClassVar[str] = "record_created"
-    """Subtype key used for automatic record creation messages."""
-
-    thread_activity_access: ClassVar[str] = "write"
-    """Record permission required to schedule or update chatter activities."""
-
-    thread_tracking_fields: ClassVar[tuple[str, ...]] = ()
-    """Model field names automatically tracked into the chatter on save."""
-
-    thread_tracking_subtype_key: ClassVar[str] = "record_updated"
-    """Subtype key used for automatic field tracking messages."""
-
     thread_team_field: ClassVar[str | None] = None
     """Foreign key whose team implements :class:`ThreadAudienceMixin`."""
 
     thread_suggested_recipient_fields: ClassVar[tuple[str, ...]] = ()
     """User FK fields suggested as chatter recipients, like Odoo's ``user_id``."""
 
-    thread_attachments = GenericRelation(
+    thread_attachments = RetainedGenericRelation(
         "messaging.ThreadAttachment",
         content_type_field="content_type",
         object_id_field="object_id",
@@ -273,14 +335,9 @@ class ThreadedModelMixin(models.Model):
     )
     """Reverse edge to this row's chatter attachments.
 
-    The polymorphic ``ThreadAttachment`` binds through a ``GenericForeignKey``, which
-    Django's delete collector cannot follow on its own; declaring the reverse
-    ``GenericRelation`` makes any delete of this row (instance or bulk queryset)
-    collect its attachments, so no attachment is left keyed to a reused primary key.
-    Full thread-graph teardown (the private ``Thread`` and its messages, which the
-    attachment's FK cannot cascade *up* to) runs on both delete paths through the
-    ``pre_delete`` receiver messaging wires onto every threaded model
-    (``angee.messaging.signals``), inside the delete collector's own transaction.
+    This retained reverse relation supplies queries without Django collecting the
+    edge itself. ``RecordRefMixin.on_target_delete`` deletes the edge for instance
+    and queryset deletion alike.
 
     Record owners contribute read access in their ``permissions.extends.zed``:
     declare a relation on ``messaging/thread`` backed by
@@ -297,19 +354,13 @@ class ThreadedModelMixin(models.Model):
         abstract = True
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist this row and log configured field changes in its chatter."""
+        """Persist the record and subscribe its creator; HistoryMixin owns field changes."""
 
         creating = self._state.adding or self.pk is None
-        tracker = self._field_tracker()
-        tracking_before = tracker.snapshot(kwargs.get("update_fields"))
         super().save(*args, **kwargs)
-        with self._own_write_scope():
-            if creating:
+        if creating:
+            with self._own_write_scope():
                 self._message_after_create()
-                return
-            changes = tracker.changes(tracking_before)
-            if changes:
-                self.message_track(changes, subtype_key=self.thread_tracking_subtype_key)
 
     def _own_write_scope(self) -> AbstractContextManager[None]:
         """Make this row's write scope ambient for the chatter its save writes.
@@ -320,6 +371,8 @@ class ThreadedModelMixin(models.Model):
         would; an elevated insert writes them as system bookkeeping.
         """
 
+        if not isinstance(self, RebacMixin):
+            return nullcontext()
         actor, unscoped = self.effective_actor()
         if unscoped and not is_sudo():
             return system_context(reason="messaging.record_write")
@@ -340,18 +393,19 @@ class ThreadedModelMixin(models.Model):
         maintenance path only.
         """
 
-        if not self.has_access("delete"):
+        if isinstance(self, RebacMixin) and not self.has_access("delete"):
             raise PermissionDenied(f"Denied: cannot delete {self._meta.label}")
+        alias = type(self)._base_manager.db_manager(hints={"instance": self}).db
         with system_context(reason="messaging.threaded_record.delete"):
-            return super().delete(using=using, keep_parents=keep_parents)
+            return super().delete(using=alias, keep_parents=keep_parents)
 
-    def message_thread(self, *, create: bool = True) -> models.Model | None:
+    def message_thread(self, *, create: bool = True) -> Thread | None:
         """Return this row's chatter thread, optionally creating it."""
 
         attachment = self.message_thread_attachment(create=create)
         return attachment.thread if attachment is not None else None
 
-    def message_thread_attachment(self, *, create: bool = True) -> models.Model | None:
+    def message_thread_attachment(self, *, create: bool = True) -> ThreadAttachment | None:
         """Return this row's chatter thread attachment, optionally creating it."""
 
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
@@ -372,16 +426,16 @@ class ThreadedModelMixin(models.Model):
         autofollow_recipients: bool = False,
         message_type: Message.MessageKind | None = None,
         subtype_key: str = "comment",
-        parent: models.Model | None = None,
-        client_creation_key: str | None = None,
-        creation_actor: SubjectRef | None = None,
-    ) -> models.Model:
+        parent: Message | None = None,
+        idempotency_key: str | None = None,
+        idempotency_actor: SubjectRef | None = None,
+    ) -> Message:
         """Post an internal comment on this row's chatter thread.
 
         ``message_type`` defaults to :attr:`Message.MessageKind.COMMENT` (resolved by
         the message write path), keeping the enum the single source of truth. A chatter
         comment carries no title of its own — the thread's title fragment is the label.
-        ``creation_actor`` supplies replay identity for a keyed system job; otherwise
+        ``idempotency_actor`` supplies replay identity for a keyed system job; otherwise
         the record-bound actor takes precedence over the ambient actor.
         """
 
@@ -393,10 +447,9 @@ class ThreadedModelMixin(models.Model):
             message_type=message_type,
             subtype_key=subtype_key,
             parent=parent,
-            tracking_values=(),
             autofollow_author=self.thread_autofollow_author,
-            client_creation_key=client_creation_key,
-            creation_actor=creation_actor,
+            idempotency_key=idempotency_key,
+            idempotency_actor=idempotency_actor,
         )
 
     def message_log(
@@ -405,17 +458,15 @@ class ThreadedModelMixin(models.Model):
         *,
         subtype_key: str = "note",
         message_type: Message.MessageKind | None = None,
-        tracking_values: tuple[TrackingChange | dict[str, Any], ...] = (),
         attachments: tuple[models.Model, ...] = (),
-        parent: models.Model | None = None,
-        client_creation_key: str | None = None,
-        creation_actor: SubjectRef | None = None,
-    ) -> models.Model:
+        parent: Message | None = None,
+        idempotency_key: str | None = None,
+        idempotency_actor: SubjectRef | None = None,
+    ) -> Message:
         """Log a structured system note on this row's chatter thread.
 
-        Defaults to the :attr:`Message.MessageKind.NOTIFICATION` kind; callers logging
-        a tracked change (``message_track``) pass ``AUTO_COMMENT``.
-        ``creation_actor`` sets replay identity with the same precedence as
+        Defaults to the :attr:`Message.MessageKind.NOTIFICATION` kind.
+        ``idempotency_actor`` sets replay identity with the same precedence as
         :meth:`message_post`, including named non-user subjects for system jobs.
         """
 
@@ -426,40 +477,14 @@ class ThreadedModelMixin(models.Model):
             message_type=message_type or message_model.MessageKind.NOTIFICATION,
             subtype_key=subtype_key,
             parent=parent,
-            tracking_values=tracking_values,
             recipient_user_ids=(),
             autofollow_recipients=False,
             autofollow_author=False,
-            client_creation_key=client_creation_key,
-            creation_actor=creation_actor,
+            idempotency_key=idempotency_key,
+            idempotency_actor=idempotency_actor,
         )
 
-    def message_track(
-        self,
-        changes: tuple[TrackingChange | dict[str, Any], ...],
-        *,
-        body: str = "",
-        subtype_key: str = "record_updated",
-    ) -> models.Model:
-        """Log Odoo-style field tracking values in this row's chatter thread.
-
-        Field tracking is an automatic system write: the log belongs to the record,
-        not to the actor whose save triggered it, so it goes through
-        :meth:`_message_system_post` — the system-write owner that never consults
-        :meth:`can_post`. An actor authorized to change a tracked field but not to
-        post comments must still get its change logged instead of having the whole
-        save rolled back by a post-access denial.
-        """
-
-        message_model = apps.get_model("messaging", "Message")
-        return self._message_system_post(
-            body=body,
-            subtype_key=subtype_key,
-            message_type=message_model.MessageKind.AUTO_COMMENT,
-            tracking_values=changes,
-        )
-
-    def _require_thread_message(self, message: models.Model) -> models.Model:
+    def _require_thread_message(self, message: Message) -> ThreadAttachment:
         """Require that a message belongs to this record's chatter thread, outside the trash.
 
         A trashed message reads as absent here: only the moderation verbs
@@ -467,7 +492,8 @@ class ThreadedModelMixin(models.Model):
         """
 
         attachment = self.message_thread_attachment(create=False)
-        if attachment is None or message.thread_id != attachment.thread_id or message.is_trashed:
+        if (attachment is None or message.is_trashed
+                or not attachment.thread.member_threads().filter(pk=message.thread_id).exists()):
             raise ValueError("Message does not belong to this record thread.")
         return attachment
 
@@ -477,7 +503,7 @@ class ThreadedModelMixin(models.Model):
         if not self.can_moderate():
             raise PermissionDenied(f"{verb} comments on {self._meta.label} requires moderator access to the record.")
 
-    def message_update_content(self, message: models.Model, *, body: str) -> models.Model:
+    def message_update_content(self, message: Message, *, body: str) -> Message:
         """Update an authored comment or moderate one as a record writer."""
 
         self._require_thread_message(message)
@@ -487,7 +513,7 @@ class ThreadedModelMixin(models.Model):
             message, body=body, edited_by_id=_actor_user_id(self)
         )
 
-    def message_unlink(self, message: models.Model) -> models.Model:
+    def message_unlink(self, message: Message) -> Message:
         """Delete an authored comment or moderate one as a record writer."""
 
         attachment = self._require_thread_message(message)
@@ -495,7 +521,7 @@ class ThreadedModelMixin(models.Model):
             raise ValueError(error)
         return apps.get_model("messaging", "Message").objects.unlink_from_thread(message, thread=attachment.thread)
 
-    def message_trash(self, message: models.Model, *, reason: str = "") -> models.Model:
+    def message_trash(self, message: Message, *, reason: str = "") -> Message:
         """Move a comment to the trash as a record moderator, recording an optional reason.
 
         Moderation is the record's write authority (:meth:`can_moderate`); an
@@ -509,7 +535,7 @@ class ThreadedModelMixin(models.Model):
             message, thread=attachment.thread, reason=reason,
         )
 
-    def message_restore(self, message: models.Model) -> models.Model:
+    def message_restore(self, message: Message) -> Message:
         """Take a trashed comment out of the trash as a record moderator."""
 
         self._require_moderation("Restoring")
@@ -524,7 +550,7 @@ class ThreadedModelMixin(models.Model):
         self._require_moderation("Listing removed")
         return apps.get_model("messaging", "Message").objects.for_record(self, role=role, limit=limit, trashed=True)
 
-    def record_message(self, message_id: str, *, role: str = "chatter", trashed: bool = False) -> models.Model:
+    def record_message(self, message_id: str, *, role: str = "chatter", trashed: bool = False) -> Message:
         """Return one message of this record's thread; a trashed one only for moderators."""
 
         if trashed:
@@ -538,12 +564,12 @@ class ThreadedModelMixin(models.Model):
 
     def message_reaction(
         self,
-        message: models.Model,
+        message: Message,
         *,
         reaction: str,
         action: str = "toggle",
         user: Any,
-    ) -> models.Model:
+    ) -> Message:
         """Add, remove, or toggle ``user``'s reaction on a chatter message."""
 
         if not self.can_post():
@@ -554,14 +580,14 @@ class ThreadedModelMixin(models.Model):
         message_model = apps.get_model("messaging", "Message")
         return message_model.objects.set_reaction(message, reaction=reaction, action=action, user=user)
 
-    def message_starred(self, message: models.Model, *, user: Any) -> bool:
+    def message_starred(self, message: Message, *, user: Any) -> bool:
         """Return whether ``user`` has starred ``message`` in this row's chatter."""
 
         self._require_thread_message(message)
         star_model = apps.get_model("messaging", "MessageStar")
         return bool(star_model.objects.is_starred(message, user=user))
 
-    def message_set_starred(self, message: models.Model, *, user: Any, starred: bool | None = None) -> bool:
+    def message_set_starred(self, message: Message, *, user: Any, starred: bool | None = None) -> bool:
         """Set or toggle ``user``'s star on a message in this row's chatter."""
 
         if not self._message_read_allowed():
@@ -582,7 +608,7 @@ class ThreadedModelMixin(models.Model):
         star_model = apps.get_model("messaging", "MessageStar")
         return int(star_model.objects.unstar_all(user=user))
 
-    def message_set_done(self, message: models.Model, *, user: Any) -> int:
+    def message_set_done(self, message: Message, *, user: Any) -> int:
         """Advance ``user``'s read receipt to ``message`` (mark read up to it).
 
         Read state is positional (a follower's ``last_read_message`` receipt), so
@@ -605,58 +631,57 @@ class ThreadedModelMixin(models.Model):
         attachments: tuple[models.Model, ...],
         message_type: Message.MessageKind | None,
         subtype_key: str,
-        parent: models.Model | None,
-        tracking_values: tuple[TrackingChange | dict[str, Any], ...],
+        parent: Message | None,
         recipient_user_ids: tuple[Any, ...],
         autofollow_recipients: bool,
         autofollow_author: bool,
-        client_creation_key: str | None = None,
-        creation_actor: SubjectRef | None = None,
-    ) -> models.Model:
+        idempotency_key: str | None = None,
+        idempotency_actor: SubjectRef | None = None,
+    ) -> Message:
         """Post one user-authored chatter message after enforcing this row's post policy.
 
         User posts ride the actor's :attr:`thread_post_access`; the message itself is
-        written by the shared system-write owner (:meth:`_message_system_post`), so the
+        written by the shared system-write owner (:meth:`message_system_post`), so the
         post gate lives in exactly one place and the automatic-log path can reuse that
         write without it.
         """
 
-        if not self.can_post():
-            raise PermissionDenied(f"Posting on {self._meta.label} requires {self.thread_post_access!r} access.")
-        return self._message_system_post(
+        attachment = self.message_thread_attachment(create=False)
+        target = attachment.require_threaded_target() if attachment is not None else self
+        if not target.can_post():
+            raise PermissionDenied(f"Posting on {target._meta.label} requires {target.thread_post_access!r} access.")
+        return self.message_system_post(
             body=body,
             attachments=attachments,
             message_type=message_type,
             subtype_key=subtype_key,
             parent=parent,
-            tracking_values=tracking_values,
             recipient_user_ids=recipient_user_ids,
             autofollow_author=autofollow_author,
             autofollow_recipients=autofollow_recipients,
-            client_creation_key=client_creation_key,
-            creation_actor=creation_actor,
+            idempotency_key=idempotency_key,
+            idempotency_actor=idempotency_actor,
         )
 
     @transaction.atomic
-    def _message_system_post(
+    def message_system_post(
         self,
         *,
         body: str = "",
         attachments: tuple[models.Model, ...] = (),
         message_type: Message.MessageKind | None,
         subtype_key: str,
-        parent: models.Model | None = None,
-        tracking_values: tuple[TrackingChange | dict[str, Any], ...] = (),
+        parent: Message | None = None,
         recipient_user_ids: tuple[Any, ...] = (),
         autofollow_author: bool = False,
         autofollow_recipients: bool = False,
-        client_creation_key: str | None = None,
-        creation_actor: SubjectRef | None = None,
-    ) -> models.Model:
+        idempotency_key: str | None = None,
+        idempotency_actor: SubjectRef | None = None,
+    ) -> Message:
         """Write one automatic system message on this row's chatter thread.
 
         The single owner of the chatter *system* write — record-creation notes and
-        field-tracking auto-comments. These are written by the framework on the
+        retained system notes. These are written by the framework on the
         record's behalf, not authored by the acting user, so this path never consults
         :meth:`can_post` / :attr:`thread_post_access`: an actor authorized to change a
         tracked field but not to post comments must still get the change logged rather
@@ -664,13 +689,14 @@ class ThreadedModelMixin(models.Model):
         through :meth:`_message_post`, which adds the post gate and autofollow policy.
         """
 
-        scope_actor = creation_actor or self.actor() or current_actor()
+        bound_actor = self.actor() if isinstance(self, RebacMixin) else None
+        scope_actor = idempotency_actor or bound_actor or current_actor()
         attachment = self.message_thread_attachment(create=True)
         if attachment is None:
             raise ValueError("Cannot post a message without a thread.")
         message_model = apps.get_model("messaging", "Message")
         # The framework writes on the record's behalf, so the whole pipeline
-        # (message, parts, tracking rows, fanout, receipt advance) runs under
+        # (message, parts, fanout, receipt advance) runs under
         # system_context: a user actor passed the record gate already, and a
         # non-user actor species (an agent authoring through its service user)
         # must not be denied on messaging-private bookkeeping rows.
@@ -683,50 +709,48 @@ class ThreadedModelMixin(models.Model):
                 message_type=message_type,
                 subtype_key=subtype_key,
                 parent=parent,
-                tracking_values=tracking_values,
                 recipient_user_ids=recipient_user_ids,
                 autofollow_author=autofollow_author,
                 autofollow_recipients=autofollow_recipients,
-                client_creation_key=client_creation_key,
-                creation_actor=scope_actor,
+                idempotency_key=idempotency_key,
+                idempotency_actor=scope_actor,
             )
 
     def _system_post_pipeline(
         self,
-        message_model: type[models.Model],
-        attachment: models.Model,
+        message_model: type[Message],
+        attachment: ThreadAttachment,
         *,
         body: str,
         attachments: tuple[models.Model, ...],
         message_type: Message.MessageKind | None,
         subtype_key: str,
-        parent: models.Model | None,
-        tracking_values: tuple[TrackingChange | dict[str, Any], ...],
+        parent: Message | None,
         recipient_user_ids: tuple[Any, ...],
         autofollow_author: bool,
         autofollow_recipients: bool,
-        client_creation_key: str | None,
-        creation_actor: SubjectRef | None,
-    ) -> models.Model:
+        idempotency_key: str | None,
+        idempotency_actor: SubjectRef | None,
+    ) -> Message:
         """Run the elevated system-post write; split out for readability only."""
 
+        record = attachment.require_threaded_target()
         return message_model.objects.post_to_thread(
             attachment.thread,
             body=body,
             created_by_id=_actor_user_id(self),
             attachment=attachment,
-            record=self,
+            record=record,
             attachments=attachments,
             message_type=message_type,
             subtype_key=subtype_key,
-            subtype_model_label=self._meta.label,
+            subtype_model_label=record._meta.label,
             parent=parent,
-            tracking_values=tracking_values,
             recipient_user_ids=recipient_user_ids,
             autofollow_author=autofollow_author,
             autofollow_recipients=autofollow_recipients,
-            client_creation_key=client_creation_key,
-            creation_actor=creation_actor,
+            idempotency_key=idempotency_key,
+            idempotency_actor=idempotency_actor,
         )
 
     def message_subscribe(
@@ -736,7 +760,7 @@ class ThreadedModelMixin(models.Model):
         user: models.Model | None = None,
         notification_policy: str | None = None,
         subtype_keys: tuple[str, ...] | None = None,
-    ) -> models.Model:
+    ) -> ThreadFollower:
         """Follow this record as a party, or resolve the acting user's person.
 
         Repeated follows preserve preferences unless explicitly changed. The
@@ -777,7 +801,7 @@ class ThreadedModelMixin(models.Model):
             )
         )
 
-    def message_followers(self) -> models.QuerySet:
+    def message_followers(self) -> ThreadFollowerQuerySet[ThreadFollower]:
         """Return this row's chatter followers."""
 
         follower_model = apps.get_model("messaging", "ThreadFollower")
@@ -827,6 +851,8 @@ class ThreadedModelMixin(models.Model):
 
         for name in self.thread_suggested_recipient_fields:
             field = self._meta.get_field(name)
+            if not isinstance(field, models.Field):
+                raise ImproperlyConfigured(f"{self._meta.label}.{name} must be a forward recipient field.")
             add(
                 getattr(self, field.name),
                 reason=capfirst(str(field.verbose_name or field.name)),
@@ -861,84 +887,15 @@ class ThreadedModelMixin(models.Model):
         user_model = get_user_model()
         active = user_model._base_manager.filter(pk__in=[item["user"].pk for item in suggestions], is_active=True)
         viewer = user if user is not None else current_actor()
-        readable = read_scoped_queryset(user_model, viewer).in_bulk(list(active.values_list("pk", flat=True)))
+        readable_rows = (
+            user_model.objects.none()
+            if viewer is None
+            else user_model.objects.with_actor(viewer).with_action("read")
+        )
+        readable = readable_rows.in_bulk(list(active.values_list("pk", flat=True)))
         return tuple(
             {**item, "user": readable[item["user"].pk]} for item in suggestions if item["user"].pk in readable
         )
-
-    def activity_schedule(
-        self,
-        *,
-        user: models.Model | None = None,
-        summary: str,
-        note: str = "",
-        due_date: object | None = None,
-        activity_type: str = "todo",
-        metadata: dict[str, object] | None = None,
-    ) -> models.Model:
-        """Schedule an activity using an installed catalog key.
-
-        The default ``todo`` key comes from messaging's master resources; custom
-        keys must also be loaded before scheduling. Missing keys fail validation.
-        """
-
-        if not self._message_activity_allowed():
-            raise PermissionDenied(
-                f"Scheduling activities on {self._meta.label} requires {self.thread_activity_access!r} access."
-            )
-        activity_model = apps.get_model("messaging", "ThreadActivity")
-        return activity_model.objects.schedule(
-            self,
-            user=user,
-            role=self.thread_attachment_role,
-            summary=summary,
-            note=note,
-            due_date=due_date,
-            activity_type=activity_type,
-            metadata=metadata,
-        )
-
-    def activity_ids(self, *, include_done: bool = True) -> models.QuerySet:
-        """Return this row's scheduled chatter activities."""
-
-        activity_model = apps.get_model("messaging", "ThreadActivity")
-        return activity_model.objects.for_record(
-            self,
-            role=self.thread_attachment_role,
-            include_done=include_done,
-        )
-
-    def activity_log(self, activity_type: str, occurred_on: date, note: str) -> models.Model:
-        """Record a completed exchange, without also posting a completion message."""
-
-        if not self._message_activity_allowed():
-            raise PermissionDenied(
-                f"Logging activities on {self._meta.label} requires {self.thread_activity_access!r} access."
-            )
-        return apps.get_model("messaging", "ThreadActivity").objects.log(
-            self, activity_type=activity_type, occurred_on=occurred_on, note=note,
-            role=self.thread_attachment_role,
-        )
-
-    def activity_feedback(self, activity: models.Model, *, feedback: str = "") -> models.Model:
-        """Mark an activity done and log the feedback in the chatter thread."""
-
-        if not self._message_activity_allowed():
-            raise PermissionDenied(
-                f"Completing activities on {self._meta.label} requires {self.thread_activity_access!r} access."
-            )
-        activity_model = apps.get_model("messaging", "ThreadActivity")
-        return activity_model.objects.complete(activity, feedback=feedback)
-
-    def activity_unlink(self, activity: models.Model) -> models.Model:
-        """Cancel a scheduled activity without logging a completion message."""
-
-        if not self._message_activity_allowed():
-            raise PermissionDenied(
-                f"Canceling activities on {self._meta.label} requires {self.thread_activity_access!r} access."
-            )
-        activity_model = apps.get_model("messaging", "ThreadActivity")
-        return activity_model.objects.cancel(activity)
 
     def message_thread_title(self) -> str:
         """Return the default title text for this row's chatter thread.
@@ -949,13 +906,8 @@ class ThreadedModelMixin(models.Model):
 
         return str(self)
 
-    def message_creation_message(self) -> str:
-        """Return the automatic chatter body logged when this row is created."""
-
-        return f"{capfirst(str(self._meta.verbose_name))} created"
-
     def _message_after_create(self) -> None:
-        """Run Odoo-style chatter side effects after this row is first saved."""
+        """Subscribe the creator; the creation itself is the record's first history line."""
 
         created_by_id = _actor_user_id(self)
         follower_model = apps.get_model("messaging", "ThreadFollower")
@@ -970,21 +922,6 @@ class ThreadedModelMixin(models.Model):
                         user=account,
                         role=self.thread_attachment_role,
                     )
-        message_model = apps.get_model("messaging", "Message")
-        if self.thread_create_log:
-            self._message_system_post(
-                body=self.message_creation_message(),
-                message_type=message_model.MessageKind.NOTIFICATION,
-                subtype_key=self.thread_creation_subtype_key,
-            )
-        create_changes = self._field_tracker().create_changes() if created_by_id is not None else ()
-        if create_changes:
-            self._message_system_post(
-                body="",
-                message_type=message_model.MessageKind.AUTO_COMMENT,
-                subtype_key=self.thread_tracking_subtype_key,
-                tracking_values=tuple(create_changes),
-            )
 
     def can_post(self, user: Any = None) -> bool:
         """Return whether the actor may post or react through the declared permission."""
@@ -1016,14 +953,6 @@ class ThreadedModelMixin(models.Model):
         if not callable(has_access):
             return True
         return bool(has_access(self.thread_read_access))
-
-    def _message_activity_allowed(self) -> bool:
-        """Return whether the ambient actor can schedule/update activities."""
-
-        has_access = getattr(self, "has_access", None)
-        if not callable(has_access):
-            return True
-        return bool(has_access(self.thread_activity_access))
 
     def thread_reader_allowed(self, user: Any) -> bool:
         """Check one recipient through the same explicit-account audience gate."""
@@ -1096,14 +1025,6 @@ class ThreadedModelMixin(models.Model):
 
         return ()
 
-    def _field_tracker(self) -> FieldTracker:
-        """Return the field-change tracker bound to this row's tracked fields.
-
-        The generic snapshot/diff/render mechanism lives on :class:`FieldTracker`
-        (``messaging.tracking``); the mixin only composes it and keeps the chatter verbs.
-        """
-
-        return FieldTracker(self, self.thread_tracking_fields)
 
 
 class Channel(Bridge):
@@ -1120,10 +1041,10 @@ class Channel(Bridge):
     """
 
     runtime = True
-    rebac_grantable = {"reader": "write"}
-    extends = "integrate.Integration"
-    integration_create_mode = IntegrationCreateMode.CONNECT
-    live_impl_field = "backend_class"
+    rebac_grantable = {"reader": "write", "replier": "write"}
+    extends: ClassVar[str | None] = "integrate.Integration"
+    integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
+    live_impl_field: ClassVar[str | None] = "backend_class"
 
     backend_class = ImplClassField(ChannelBackend,
         default="manual",
@@ -1145,6 +1066,28 @@ class Channel(Bridge):
 
         backend_class = cast("type[ChannelBackend]", self.resolve_impl("backend_class"))
         return backend_class(self)
+
+    @property
+    def source_kind(self) -> SourceKind | None:
+        """The selected protocol declares whether this channel asserts statements, and as what."""
+
+        return cast("type[ChannelBackend]", self.resolve_impl("backend_class")).source_kind
+
+    def can_reconcile_delivery(self) -> bool:
+        """Read the concrete capability's backend declaration without opening it."""
+
+        capability = self.concrete_capability()
+        if capability._meta.concrete_model is not self._meta.concrete_model:
+            return bool(capability.can_reconcile_delivery())
+        return cast("type[ChannelBackend]", self.resolve_impl("backend_class")).reconciles_delivery()
+
+    def delivery_visibility_delay(self) -> timedelta:
+        """Read the selected transport's propagation margin without opening it."""
+
+        capability = self.concrete_capability()
+        if capability._meta.concrete_model is not self._meta.concrete_model:
+            return cast(timedelta, capability.delivery_visibility_delay())
+        return cast("type[ChannelBackend]", self.resolve_impl("backend_class")).delivery_visibility_delay
 
     def validate_webform_answers(self, answers: dict[str, Any]) -> None:
         """Validate domain meaning after the public form's scalar validation.
@@ -1168,7 +1111,13 @@ class Channel(Bridge):
         return only retaining rows, whose names the preview scopes to its viewer.
         Native FK protection remains the authoritative delete check.
         """
-        return []
+        blockers = []
+        for label in ("Thread", "Message"):
+            pairs = apps.get_model("messaging", label).same_as.model
+            blockers.extend(pairs._base_manager.filter(
+                models.Q(left__channel_id=self.pk) | models.Q(right__channel_id=self.pk),
+            ).order_by("pk"))
+        return blockers
 
     def start_live(self) -> None:
         """Mark this channel live-desired, then dispatch the backend's live ingest.
@@ -1212,9 +1161,9 @@ class Channel(Bridge):
 class ChannelWebform(models.Model):
     """Same-row public-form configuration and message mapping for ``messaging.Channel``."""
 
-    extends = "messaging.Channel"
+    extends: ClassVar[str | None] = "messaging.Channel"
 
-    hasura_readable_fields = (
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = (
         "slug",
         "is_published",
         "form_schema_version",
@@ -1222,11 +1171,11 @@ class ChannelWebform(models.Model):
         "max_body_bytes",
         "max_field_bytes",
     )
-    hasura_filterable_fields = ("slug", "is_published", "form_schema_version")
-    hasura_sortable_fields = hasura_filterable_fields
-    hasura_aggregatable_fields: tuple[str, ...] = ()
-    hasura_groupable_fields = ("is_published", "form_schema_version")
-    hasura_updatable_fields = hasura_readable_fields
+    hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("slug", "is_published", "form_schema_version")
+    hasura_sortable_fields: ClassVar[tuple[str, ...]] = hasura_filterable_fields
+    hasura_aggregatable_fields: ClassVar[tuple[str, ...]] = ()
+    hasura_groupable_fields: ClassVar[tuple[str, ...]] = ("is_published", "form_schema_version")
+    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
 
     slug = models.SlugField(max_length=80, blank=True, default="")
     is_published = models.BooleanField(default=False)
@@ -1337,7 +1286,57 @@ class ChannelWebform(models.Model):
         )
 
 
-class Thread(TaggedModel, OwnerMixin, AngeeDataModel):
+
+class ChatterHistory(ModelHistory):
+    """History of a thread and its edge; a record's own chatter reverts under the record's write.
+
+    Record chatter is bookkeeping the record's verbs write as system rows, so a
+    revert of the record's changeset (its creation, a merge) is authorized by the
+    record's writers. A source conversation keeps the thread's own rule.
+    """
+
+    def authorize_revert(self, first: Any, last: Any, previous: Any, actor: Any) -> None:
+        record = self.chatter_record(previous or last)
+        if record is None:
+            super().authorize_revert(first, last, previous, actor)
+            return
+        if not isinstance(record, AngeeModel):
+            raise ImproperlyConfigured("Reverting record chatter requires an Angee model host.")
+        record.require_access("write", actor=actor)
+
+    def revert_row(self, first: Any, last: Any, previous: Any) -> list[Any]:
+        """Never remove a living record's chatter: the record's deletion tears it down."""
+
+        removal = previous is None or previous.history_type == "-"
+        if removal and self.chatter_record(previous or last) is not None:
+            return []
+        return super().revert_row(first, last, previous)
+
+    @staticmethod
+    def chatter_record(snapshot: Any) -> models.Model | None:
+        """Return the stored record whose chatter this version belongs to, or ``None``."""
+
+        using = snapshot._state.db
+        attachment_model = apps.get_model("messaging", "ThreadAttachment")
+        chatter = attachment_model.AttachmentRole.CHATTER
+        if isinstance(snapshot.instance, attachment_model):
+            if snapshot.role != chatter:
+                return None
+            content_type_id, object_id = snapshot.content_type_id, snapshot.object_id
+        else:
+            edge = attachment_model._base_manager.using(using).filter(
+                thread_id=snapshot.id, role=chatter,
+            ).values_list("content_type_id", "object_id").first()
+            if edge is None:
+                return None
+            content_type_id, object_id = edge
+        model = ContentType.objects.db_manager(using).get_for_id(content_type_id).model_class()
+        if model is None:
+            return None
+        return model._base_manager.using(using).filter(pk=object_id).first()
+
+
+class Thread(SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel):
     """An aggregation of related messages — an email conversation or a social post.
 
     Two orthogonal axes, both base-owned: ``modality`` (the *shape* — email thread /
@@ -1345,7 +1344,8 @@ class Thread(TaggedModel, OwnerMixin, AngeeDataModel):
     thread's post link (``subject_url``) has no producer in this base slice, so the
     ``posts`` addon owns that column and folds it onto this same row through the
     same-row ``extends`` seam. ``message_count``/``last_message_at`` are
-    denormalised and maintained with ``F()`` deltas by the ingest write path.
+    denormalised: inserts use ``F()`` deltas; loss, restoration and delivery
+    settlement recount surviving rows under the thread lock.
 
     ``title`` is a pointer at the content-addressed :class:`Fragment` holding the
     thread's normalised subject — a denormalisation that duplicates nothing (the row
@@ -1355,13 +1355,43 @@ class Thread(TaggedModel, OwnerMixin, AngeeDataModel):
     which would skew the planner's common-value statistics (Zulip works around the
     same skew with an unprintable DM topic sentinel).
 
-    Identity is the platform-scoped ``MD5(external_id)`` expression constraint: the
+    Identity is channel-scoped ``MD5(external_id)``: the
     synthetic keys (``subj:<normalized>``, ``msg:<id>``, ``record:<label>:<pk>:<role>``)
     may exceed btree's entry limit (a 7,970-char Apple Mail subject is real), so the
     index carries a fixed digest while the exact value stays in the unbounded column.
-    Threads stay platform-scoped (messages are channel-scoped) so the same
-    conversation reached through two accounts merges into one thread.
+    Every source account retains its own thread. A thread folds as a retained
+    redirect (``merged_into``) with its messages and read cursors in place: a
+    record merge folds the retired record's chatter into the survivor's, and
+    ``same_as`` evidence folds one channel's copy of a conversation into another's.
     """
+
+    history = ChatterHistory(inherit=True, excluded_fields=("message_count", "last_message_at"))
+
+    def member_threads(self) -> models.QuerySet:
+        """Physical chatter containers under the current, flattened survivor."""
+
+        survivor = self.canonical()
+        return type(self)._base_manager.using(survivor._state.db).redirect_group(survivor)
+
+    def chatter_record_ref(self) -> RecordRef | None:
+        """The canonical chatter host, without loading messages or the document body."""
+        attachment = (
+            apps.get_model("messaging", "ThreadAttachment")
+            ._base_manager.filter(
+                thread_id=self.canonical().pk,
+                role="chatter",
+            )
+            .first()
+        )
+        if attachment is None:
+            return None
+        model = attachment.content_type.model_class()
+        return attachment.record_ref if model is not None and issubclass(model, ThreadedModelMixin) else None
+
+    def chatter_totals(self) -> dict[str, Any]:
+        """Current record summary over retained physical message containers."""
+
+        return self.member_threads().aggregate(count=models.Sum("message_count"), latest=models.Max("last_message_at"))
 
     runtime = True
     rebac_grantable = {"reader": "share"}
@@ -1427,10 +1457,14 @@ class Thread(TaggedModel, OwnerMixin, AngeeDataModel):
             # The digest, not the unbounded value, is what the btree carries; the
             # planner proves `external_id = '<value>'` implies the partial predicate.
             models.UniqueConstraint(
-                models.F("platform"),
-                MD5("external_id"),
-                condition=~models.Q(external_id=""),
-                name="uq_thread_platform_external_id",
+                models.F("channel"), models.F("platform"), MD5("external_id"),
+                condition=models.Q(channel__isnull=False) & ~models.Q(external_id=""),
+                name="uq_thread_channel_external_id",
+            ),
+            models.UniqueConstraint(
+                models.F("platform"), MD5("external_id"),
+                condition=models.Q(channel__isnull=True) & ~models.Q(external_id=""),
+                name="uq_thread_local_external_id",
             ),
             models.CheckConstraint(
                 condition=models.Q(channel__isnull=True) | models.Q(owner__isnull=True),
@@ -1441,7 +1475,8 @@ class Thread(TaggedModel, OwnerMixin, AngeeDataModel):
     def __str__(self) -> str:
         """Return the thread title for Django displays."""
 
-        title = self.title.text if self.title_id else ""
+        fragment = self.title
+        title = fragment.text if fragment is not None else ""
         return title or f"thread:{self.public_id}"
 
     def save(self, *args: Any, **kwargs: Any) -> None:
@@ -1466,7 +1501,7 @@ class Thread(TaggedModel, OwnerMixin, AngeeDataModel):
 
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
         return attachment_model._base_manager.filter(
-            thread_id=self.pk,
+            thread_id__in=self.member_threads().values("pk"),
             role=attachment_model.AttachmentRole.CHATTER,
         ).exists()
 
@@ -1487,7 +1522,7 @@ class Thread(TaggedModel, OwnerMixin, AngeeDataModel):
         """Grant a user direct ``reader`` access through the declared share surface."""
 
         self._grant_declared_record_access(
-            Thread,
+            Thread.record_access_permission,
             "reader",
             _user_subject_ref(user=user, user_id=user_id),
         )
@@ -1496,15 +1531,19 @@ class Thread(TaggedModel, OwnerMixin, AngeeDataModel):
         """Revoke a user's direct ``reader`` access to this thread (mirror of :meth:`grant_reader`)."""
 
         self._revoke_declared_record_access(
-            Thread,
+            Thread.record_access_permission,
             "reader",
             _user_subject_ref(user=user, user_id=user_id),
         )
 
 
-class ThreadAttachment(AuditMixin, RecordRefMixin, AngeeDataModel):
+class ThreadAttachment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     """Polymorphic edge attaching one chatter thread to one model row."""
 
+    history = ChatterHistory(inherit=True)
+    merge_policy = MergePolicy.MOVE
+    on_target_delete = models.CASCADE
+    merge_identity = (("thread", "content_type", "object_id", "role"),)
     runtime = True
 
     class AttachmentRole(models.TextChoices):
@@ -1512,6 +1551,18 @@ class ThreadAttachment(AuditMixin, RecordRefMixin, AngeeDataModel):
 
         CHATTER = "chatter", "Chatter"
         SOURCE = "source", "Source"
+
+    @classmethod
+    def record_edge_roles(cls, target: type[models.Model]) -> tuple[str, ...]:
+        """Only a threaded model keeps chatter; any declared target retains source conversations."""
+
+        return (str(cls.AttachmentRole.CHATTER),) if issubclass(target, ThreadedModelMixin) else ()
+
+    @classmethod
+    def teardown_for_target(cls, target: models.Model) -> None:
+        """Run messaging's retained-state cleanup for a deleted attachment target."""
+
+        cls.objects.db_manager(hints={"instance": target}).teardown_for_target(target)
 
     sqid_prefix = "tha_"
     thread = models.ForeignKey(
@@ -1553,16 +1604,73 @@ class ThreadAttachment(AuditMixin, RecordRefMixin, AngeeDataModel):
 
         return self.label or f"{self.content_type}:{self.object_id}"
 
+    def require_threaded_target(self) -> ThreadedModelMixin:
+        """Return the surviving chatter host required by posting and follow operations."""
+
+        target = self.target
+        if not isinstance(target, ThreadedModelMixin):
+            raise ValueError("Chatter requires a surviving threaded record.")
+        return target
+
+    @classmethod
+    def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> Any:
+        """Redirect chatter containers; source edges use the native reference mover."""
+
+        chatter = rows.filter(role=cls.AttachmentRole.CHATTER)
+        if not chatter.exists():
+            return NotImplemented
+        target = cls.objects.db_manager(rows.db).ensure_for_record(survivor, title=str(survivor))
+        for edge in chatter.select_related("thread").order_by("pk"):
+            thread = edge.thread.canonical()
+            if thread.pk != target.thread_id:
+                target.thread.fold([thread])
+        related = rows.exclude(role=cls.AttachmentRole.CHATTER)
+        if related.exists():
+            reference.move(related, survivor=survivor)
+        return None
+
+    POINTER_COLUMNS: ClassVar[tuple[str, ...]] = ("label", "content_type_id", "object_id")
+    """The columns a record pointer reads from an edge: its label and its record's identity."""
+
+    @classmethod
+    def pointer_annotations(cls, path: str) -> dict[str, models.F]:
+        """Annotate the record pointer of the edge a row reaches at ``path``, through the join.
+
+        The edge row itself is never loaded; :meth:`pointer_from_row` rebuilds the
+        pointer from these columns. The caller owns whether the row's readers may
+        see the edge's record.
+        """
+
+        return {f"_{path}_pointer_{column}": models.F(f"{path}__{column}") for column in cls.POINTER_COLUMNS}
+
+    @classmethod
+    def pointer_from_row(cls, row: models.Model, path: str) -> ThreadAttachment | None:
+        """Return the unsaved edge ``row`` reaches at ``path``, carrying only its record pointer.
+
+        It reads :meth:`pointer_annotations` when the row carries them, else the
+        edge by its id under system context (a structural read of the same columns).
+        """
+
+        edge_id = getattr(row, f"{path}_id")
+        if edge_id is None:
+            return None
+        prefix = f"_{path}_pointer_"
+        if all(hasattr(row, f"{prefix}{column}") for column in cls.POINTER_COLUMNS):
+            return cls(**{column: getattr(row, f"{prefix}{column}") for column in cls.POINTER_COLUMNS})
+        with system_context(reason="messaging.thread_attachment.pointer"):
+            return cls._base_manager.only(*cls.POINTER_COLUMNS).get(pk=edge_id)
+
 
 class FileSourceThreads(models.Model):
     """Messaging-owned reverse edges from a Storage File to source conversations."""
 
-    extends = "storage.File"
+    extends: ClassVar[str | None] = "storage.File"
     source_thread_attachments = GenericRelation(
         "messaging.ThreadAttachment",
         content_type_field="content_type",
         object_id_field="object_id",
     )
+    """Reverse relation collecting the File's retained source-conversation edges."""
 
     class Meta:
         abstract = True
@@ -1651,116 +1759,6 @@ class ThreadFollower(AuditMixin, AngeeDataModel):
         )
 
 
-class ActivityType(AuditMixin, AngeeDataModel):
-    """Resource-declared exchange types; activity rows retain the stable key."""
-
-    runtime = True
-    sqid_prefix = "act_"
-    key = models.SlugField(max_length=64, unique=True)
-    name = models.CharField(max_length=160)
-    glyph = models.CharField(max_length=128, blank=True, default="")
-
-    class Meta:
-        abstract = True
-        ordering = ("name", "key")
-        rebac_resource_type = "messaging/activity_type"
-
-    def __str__(self) -> str:
-        return self.name
-
-
-class ThreadActivity(ResourceLoadMixin, AuditMixin, AngeeDataModel):
-    """A scheduled activity attached to a model chatter thread."""
-
-    runtime = True
-    resource_class = ThreadActivityResource
-
-    class ActivityStatus(models.TextChoices):
-        """Stored lifecycle for an activity."""
-
-        TODO = "todo", "Todo"
-        DONE = "done", "Done"
-        CANCELED = "canceled", "Canceled"
-
-    sqid_prefix = "tac_"
-    thread = models.ForeignKey(
-        "messaging.Thread",
-        on_delete=models.CASCADE,
-        related_name="activities",
-    )
-    attachment = models.ForeignKey(
-        "messaging.ThreadAttachment",
-        on_delete=models.CASCADE,
-        related_name="activities",
-    )
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="+",
-    )
-    activity_type = models.ForeignKey(
-        "messaging.ActivityType", to_field="key", db_column="activity_type",
-        on_delete=models.PROTECT, default="todo", related_name="activities",
-    )
-    summary = models.CharField(max_length=256)
-    note = models.TextField(blank=True, default="")
-    due_date = models.DateField(null=True, blank=True, db_index=True)
-    completed_at = models.DateTimeField(null=True, blank=True)
-    feedback = models.TextField(blank=True, default="")
-    status = StateField(choices_enum=ActivityStatus, default=ActivityStatus.TODO, db_index=True)
-    metadata = models.JSONField(blank=True, default=dict)
-
-    objects = ThreadActivityManager()
-
-    class Meta:
-        """Django model options for thread activities."""
-
-        abstract = True
-        ordering = ("status", "due_date", "sqid")
-        verbose_name_plural = "thread activities"
-        rebac_resource_type = "messaging/thread_activity"
-        indexes = (
-            models.Index(fields=("thread", "status", "due_date")),
-            models.Index(fields=("attachment", "status", "due_date")),
-            models.Index(fields=("user", "status", "due_date")),
-        )
-
-    def clean(self) -> None:
-        """Accept only activity keys declared by the installed catalog."""
-
-        super().clean()
-        catalog = apps.get_model("messaging", "ActivityType")
-        if not catalog.system_queryset().filter(key=self.activity_type_id).exists():
-            raise ValidationError({"activity_type": "Declare this activity type in the catalog first."})
-
-    @property
-    def activity_state(self) -> str:
-        """Return the Odoo-style activity state for presentation."""
-
-        if self.status == self.ActivityStatus.DONE:
-            return "done"
-        if self.status == self.ActivityStatus.CANCELED:
-            return "canceled"
-        if self.due_date is None:
-            return "planned"
-        today = timezone.localdate()
-        if self.due_date < today:
-            return "overdue"
-        if self.due_date == today:
-            return "today"
-        return "planned"
-
-    def completion_message(self) -> str:
-        """Return the chatter body posted when this activity is completed."""
-
-        return f"Activity done: {self.summary}"
-
-    def __str__(self) -> str:
-        """Return a readable activity label."""
-
-        return self.summary
-
-
 class MessageSubtype(AuditMixin, AngeeDataModel):
     """A typed chatter event category, mirroring Odoo's message subtypes.
 
@@ -1781,6 +1779,8 @@ class MessageSubtype(AuditMixin, AngeeDataModel):
         ("note", "Note", "Internal note"),
         ("record_created", "Record created", "Record created"),
         ("record_updated", "Record updated", "Record updated"),
+        # Named debt: the key names a done record task (projects' completion post).
+        # Renaming it means migrating stored subtypes and follower choices.
         ("activity_done", "Activity done", "Activity done"),
     )
 
@@ -1868,14 +1868,19 @@ class WebformSubmission:
     unverified_submitter_email: str | None
 
 
-class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, AuditMixin, AngeeDataModel):
+class Message(
+    SourceCopyMixin, ResourceLoadMixin, TaggedModel, TrashMixin,
+    OptimisticLockMixin, AuditMixin, AngeeDataModel,
+):
     """One message — the unit of a thread. The root post is itself a Message.
 
     Dedup key is ``(channel, external_id)`` — one row per provider event per
     source, carried by the ``MD5(external_id)`` expression constraint so an
     unbounded provider id never overflows a btree entry. The same event reached
-    through two channels is two messages (related through :class:`MessageEdge` /
-    a shared thread), matching the "message identity ≠ content identity" rule.
+    through two channels is two messages, matching the "message identity ≠
+    content identity" rule; ``same_as`` evidence folds the newer copy into the
+    older as a retained redirect (:class:`SourceCopyMixin`), and readers collapse
+    them through ``canonical()``.
     ``parent`` is the single-parent reply pointer (In-Reply-To); richer
     cross-message relations live on :class:`MessageEdge`. The body — including a
     sparse ``TITLE`` part for the subject and ``HEADER`` parts for retained
@@ -1887,18 +1892,17 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
     text survives as immutable content-addressed fragments — no per-save history
     table doubling the hot write path.
 
-    Moderation is trash (:class:`~angee.base.mixins.TrashMixin`): a trashed
+    Moderation is trash (:class:`~angee.models.TrashMixin`): a trashed
     message is withheld from every reader but channel managers and admins, and
     record chatter leaves it out of every read but its moderators' removed list.
     """
 
+    _inbox_attachment: ThreadAttachment | None = None
+    """Authorized notification context set by the notification read owner."""
+
     runtime = True
     resource_class = MessageResource
     rebac_grantable = {"reader": "write"}
-    creation_key_scope = "creation_actor"
-    creation_actor = models.CharField(max_length=512, null=True, blank=True, editable=False)
-    """REBAC actor identity for keyed posts, independent of nullable user attribution."""
-
     class Direction(models.TextChoices):
         """Whether a message came in, went out, or is internal."""
 
@@ -1915,6 +1919,14 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
         SYNCED = "synced", "Synced"
         EDITED = "edited", "Edited"
         FAILED = "failed", "Failed"
+        UNCERTAIN = "uncertain", "Uncertain"
+
+    ACTIVE_OUTBOUND_STATUSES = (MessageStatus.DRAFT, MessageStatus.QUEUED, MessageStatus.SENT, MessageStatus.UNCERTAIN)
+    """Prepared, accepted or unresolved outbound messages that still answer their parent."""
+    PUBLISHED_STATUSES = (MessageStatus.SYNCED, MessageStatus.EDITED, MessageStatus.SENT)
+    """Provider-visible messages, whether ingested or sent locally."""
+    POSSIBLY_PUBLIC_STATUSES = (MessageStatus.SENT, MessageStatus.UNCERTAIN)
+    """Outbound states that may be provider-visible even after local trash."""
 
     class MessageKind(models.TextChoices):
         """Odoo-style functional kind of a message.
@@ -1922,15 +1934,13 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
         Every value has a live producer: ``COMMENT`` is a chatter note *or* a
         public post (disambiguated structurally — ``direction``/thread shape, see
         :meth:`Message.content_edit_error`), ``EMAIL``/``CHAT`` are set by the
-        ingest producers, ``NOTIFICATION``/``AUTO_COMMENT`` by the chatter log and
-        field tracking. Add a value only together with its producer.
+        ingest producers, ``NOTIFICATION`` by the retained system log. Add a value only together with its producer.
         """
 
         COMMENT = "comment", "Comment"
         EMAIL = "email", "Email"
         CHAT = "chat", "Chat"
         NOTIFICATION = "notification", "Notification"
-        AUTO_COMMENT = "auto_comment", "Auto comment"
 
     sqid_prefix = "msg_"
     thread = models.ForeignKey(
@@ -1979,10 +1989,138 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
     preview = models.CharField(max_length=512, blank=True, default="")
     sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
     received_at = models.DateTimeField(null=True, blank=True)
+    scheduled_at = models.DateTimeField(null=True, blank=True)
+    """Draft release, queued retry, or idle UNCERTAIN recovery horizon."""
+    delivery_lease_until = models.DateTimeField(null=True, blank=True)
+    """Pending dispatch or live claim deadline; unleased queues stay inert."""
+    delivery_claim = models.UUIDField(null=True, blank=True, editable=False)
+    """Committed effect marker and settlement fence for the current provider attempt."""
+    delivery_started_at = models.DateTimeField(null=True, blank=True, editable=False)
+    """Current send horizon, retained after possible acceptance for tolerant lookup."""
+    delivery_possibly_accepted = models.BooleanField(default=False, editable=False)
+    """Only uncertain settlement or an expired effect claim sets this marker."""
+    delivery_operator_only = models.BooleanField(default=False, editable=False)
+    """Automatic reconciliation is unavailable or has exhausted its retry budget."""
+    delivery_reconcile_attempts = models.PositiveSmallIntegerField(default=0, editable=False)
+    acknowledged_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+",
+    )
+    """Operator who explicitly acknowledged or retried this delivery."""
     edit_history = models.JSONField(blank=True, default=list)
     metadata = models.JSONField(blank=True, default=dict)
 
     objects = MessageManager()
+
+    @classmethod
+    def protected_local_keys(cls) -> frozenset[str]:
+        """Trusted provenance and delivery facts contributed through autoconfig."""
+
+        return frozenset(settings.ANGEE_MESSAGING_PROTECTED_LOCAL_KEYS)
+
+    @staticmethod
+    def held_draft_fields() -> dict[str, Any]:
+        """The shared held predicate, including approval-only unscheduled drafts."""
+
+        return {"direction": "outbound", "status": "draft", "is_trashed": False}
+
+    @staticmethod
+    def counted_in_thread_q() -> models.Q:
+        """All retained messages count, including local drafts, queues and failures."""
+
+        return models.Q(is_trashed=False)
+
+    @property
+    def is_held(self) -> bool:
+        """Whether this retained draft awaits its due time or operator approval."""
+
+        return all(getattr(self, key) == value for key, value in self.held_draft_fields().items())
+
+    hasura_filter_expressions: ClassVar[
+        Mapping[str, Callable[[models.QuerySet[Any]], models.expressions.BaseExpression]]
+    ] = {
+        "is_held": lambda rows: models.ExpressionWrapper(
+            models.Q(**rows.model.held_draft_fields()), output_field=models.BooleanField(),
+        ),
+    }
+
+    @classmethod
+    def ingest_metadata(cls, incoming: dict[str, Any], *, previous: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Replace provider metadata while retaining trusted local facts."""
+
+        metadata = dict(incoming)
+        protected = cls.protected_local_keys()
+        local = metadata.get("local")
+        local = (
+            {key: value for key, value in local.items() if key not in protected}
+            if isinstance(local, dict) else {}
+        )
+        retained = (previous or {}).get("local", {})
+        if isinstance(retained, dict):
+            local.update({key: value for key, value in retained.items() if key in protected})
+        if local:
+            metadata["local"] = local
+        else:
+            metadata.pop("local", None)
+        return metadata
+
+    @property
+    def local_metadata(self) -> dict[str, Any]:
+        """Copy the local facts; older untyped provider values are not local facts."""
+
+        local = (self.metadata or {}).get("local")
+        return dict(local) if isinstance(local, dict) else {}
+
+    @property
+    def is_locally_written(self) -> bool:
+        """Local delivery states distinguish authored envelopes from synced own mail."""
+
+        return self.status not in (self.MessageStatus.SYNCED, self.MessageStatus.EDITED)
+
+    @property
+    def delivery_needs_reconciliation(self) -> bool:
+        """A possibly accepted message needs reconciliation before another send."""
+
+        return bool(self.delivery_possibly_accepted)
+
+    @property
+    def delivery_blocked(self) -> bool:
+        """Whether removal, discard, or a provider identity collision prevents a send."""
+
+        return (self.is_trashed and not self.delivery_needs_reconciliation) or bool(
+            self.local_metadata.get("delivery_conflict")
+        )
+
+    @property
+    def delivery_held(self) -> bool:
+        """Whether this message's release time is still in the future."""
+
+        return (
+            self.status != self.MessageStatus.UNCERTAIN
+            and self.scheduled_at is not None and self.scheduled_at > timezone.now()
+        )
+
+    def validate_delivery(self) -> None:
+        """Require the persisted outbound envelope used by every delivery entrypoint."""
+
+        if self.direction != self.Direction.OUTBOUND or self.channel_id is None or not self.external_id.strip():
+            raise ValidationError("Delivery requires an outbound message, a channel, and a stable external id.")
+
+    def validate_held_draft(self) -> None:
+        """Require an outbound retained draft before an operator acts on it."""
+
+        self.validate_delivery()
+        if not self.is_held or self.delivery_blocked:
+            raise ValidationError("Only held outbound drafts may be sent or discarded.")
+
+    def body_text(self, *, max_bytes: int | None = None) -> str:
+        """Read plain-text BODY fragments in native order, optionally byte-bounded."""
+
+        if not self.has_access("read"):
+            raise PermissionDenied("Message read access is required.")
+        if max_bytes is not None and max_bytes < 0:
+            raise ValueError("Text byte limit cannot be negative.")
+        text = apps.get_model("messaging", "Part").objects.plain_body_text(self)
+        return text if max_bytes is None else text.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
 
     class Meta:
         """Django model options for the message source model."""
@@ -1991,7 +2129,6 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
         ordering = ("-sent_at", "sqid")
         rebac_resource_type = "messaging/message"
         constraints = (
-            CreationKeyMixin.creation_key_constraint(scope="creation_actor"),
             # Channel-scoped idempotency over a fixed digest: the ingest manager
             # looks rows up through the same MD5 expression so this index serves
             # both the constraint and the hot resync lookup.
@@ -2003,6 +2140,17 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
             ),
         )
         indexes = (
+            models.Index(
+                fields=("id",), condition=models.Q(status="uncertain", delivery_operator_only=False),
+                name="ix_message_uncertain",
+            ),
+            models.Index(
+                fields=("scheduled_at",), condition=models.Q(scheduled_at__isnull=False), name="ix_message_due_hold",
+            ),
+            models.Index(
+                fields=("delivery_lease_until",), condition=models.Q(delivery_lease_until__isnull=False),
+                name="ix_message_delivery_lease",
+            ),
             # The exact keyset the feed orders and cursors by
             # (``MessageQuerySet.chronological_time()`` + pk tiebreak): one expression index
             # serves the hot page query verbatim, trailing id for cursor scans.
@@ -2036,28 +2184,10 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
             unverified_submitter_email=email if isinstance(email, str) and email else None,
         )
 
-    @classmethod
-    def has_tracking_values_expression(cls) -> models.Exists:
-        """Project immutable tracking existence independently of the reader's scope."""
-
-        tracking_model = cls._meta.get_field("tracking_values").related_model
-        return models.Exists(tracking_model.system_queryset().filter(message_id=models.OuterRef("pk")))
-
-    def has_tracking_values(self) -> bool:
-        """Use the row's SQL projection, or check authoritative tracking rows."""
-
-        projected = getattr(self, "_has_tracking_values", None)
-        if projected is not None:
-            return bool(projected)
-        return type(self)._base_manager.using(self._state.db).filter(
-            self.has_tracking_values_expression(), pk=self.pk,
-        ).exists()
-
     def content_edit_error(self) -> str | None:
         """Return why this message's body cannot be edited, or ``None`` if it can.
 
-        The Odoo mail edit rule: only an internally authored plain comment carrying
-        no tracking values may be re-edited; a tracked, ingested, or system message
+        Only an internally authored plain comment may be re-edited; an ingested or system message
         is an immutable record. Editability keys on ``direction == INTERNAL`` as well
         as ``COMMENT`` kind, so an ingested COMMENT-kind message (a reused-table
         social/mail row that never came from ``post_to_thread``) stays immutable. This
@@ -2069,8 +2199,6 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
             return "Only comment messages can be edited."
         if self.direction != self.Direction.INTERNAL:
             return "Only internally authored comments can be edited."
-        if self.has_tracking_values():
-            return "Messages with tracking values cannot be edited."
         return None
 
     def delete_error(self) -> str | None:
@@ -2088,8 +2216,6 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
 
         if self.message_type != self.MessageKind.COMMENT:
             return f"Only comment messages can be {verb}."
-        if self.has_tracking_values():
-            return f"Messages with tracking values cannot be {verb}."
         return None
 
     def can_trash(self, *, moderate_access: bool) -> bool:
@@ -2097,18 +2223,22 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
 
         return moderate_access and not self.is_trashed and self.trash_error() is None
 
-    def trash(self, *, reason: str = "", using: str | None = None) -> None:
-        """Trash this message and recount its thread without it."""
+    def trash(self, *, reason: str = "", recount: bool = True) -> None:
+        """Trash and cancel unsent delivery; restoring never re-arms a send."""
 
-        with transaction.atomic(using=using):
-            super().trash(reason=reason, using=using)
-            self._recount_thread()
+        manager = type(self).objects.db_manager(hints={"instance": self})
+        with transaction.atomic(using=manager.db):
+            manager.cancel_delivery(self)
+            super().trash(reason=reason)
+            if recount:
+                self._recount_thread()
 
-    def restore(self, *, using: str | None = None) -> None:
+    def restore(self) -> None:
         """Restore this message and recount its thread with it."""
 
-        with transaction.atomic(using=using):
-            super().restore(using=using)
+        manager = type(self)._base_manager.db_manager(hints={"instance": self})
+        with transaction.atomic(using=manager.db):
+            super().restore()
             self._recount_thread()
 
     def _recount_thread(self) -> None:
@@ -2116,10 +2246,10 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
 
         if self.thread_id is None:
             return
-        thread_model = self._meta.get_field("thread").related_model
+        thread_model = type(self).thread.field.related_model
         with system_context(reason="messaging.message.recount_thread"):
-            thread = thread_model._base_manager.select_for_update().get(pk=self.thread_id)
-            type(self).objects._recount_thread(thread)
+            thread = thread_model._base_manager.db_manager(hints={"instance": self}).get(pk=self.thread_id)
+            type(self).objects.db_manager(hints={"instance": self})._recount_thread(thread)
 
     def can_change_comment(self, *, post_access: bool, moderate_access: bool, actor_id: Any) -> bool:
         """Combine record moderation with the author's continuing post access."""
@@ -2207,20 +2337,20 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
         exact gate the update/delete mutations enforce.
         """
 
-        if self.thread_id is None:
+        reference = self.threaded_record_ref()
+        if reference is None:
             return None
-        attachment = (
-            apps.get_model("messaging", "ThreadAttachment")
-            ._base_manager.filter(
-                thread_id=self.thread_id,
-                role="chatter",
-            )
-            .first()
-        )
-        if attachment is None:
+        return apps.get_model(reference.model_label)._base_manager.using(self._state.db).filter(
+            pk=reference.object_id,
+        ).first()
+
+    def threaded_record_ref(self) -> RecordRef | None:
+        """The chatter host's identity, without loading its document body."""
+
+        thread = self.thread
+        if thread is None:
             return None
-        target = attachment.target
-        return target if isinstance(target, ThreadedModelMixin) else None
+        return thread.chatter_record_ref()
 
     def sender_name(self) -> str:
         """Return the actor-visible sender label, using its selected SQL value."""
@@ -2293,6 +2423,15 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
             or ""
         )
 
+    def authorship(self) -> tuple[str, str]:
+        """The sender's subject and label, falling back to the recorded author."""
+
+        sender = self.sender
+        author = sender if sender is not None else self.created_by
+        if author is None:
+            return "", ""
+        return str(to_subject_ref(author)), (sender.display_name or str(sender)) if sender is not None else str(author)
+
     def title(self) -> str:
         """Return this message's title text — its ``TITLE`` part's fragment, or ``""``.
 
@@ -2310,29 +2449,41 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
         if cache is not None and "parts" in cache:
             for part in self.parts.all():
                 if part.role == Part.PartRole.TITLE:
-                    return part.fragment.text if part.fragment_id else ""
+                    fragment = part.fragment
+                    return fragment.text if fragment is not None else ""
             return ""
-        part = (
+        title_part = (
             apps.get_model("messaging", "Part")
             ._base_manager.filter(message=self, role=Part.PartRole.TITLE)
             .select_related("fragment")
             .first()
         )
-        if part is None or part.fragment_id is None:
-            return ""
-        return part.fragment.text
+        fragment = title_part.fragment if title_part is not None else None
+        return fragment.text if fragment is not None else ""
 
     def deliver(self) -> bool:
-        """Queue this outbound message for idempotent channel delivery.
+        """Queue this outbound message through messaging's fenced delivery owner.
 
         This is the consumer seam: callers compose and persist the message,
         envelope participants, and parts, then call ``message.deliver()``. The
         transport always runs through ``angee.jobs``, never in the request.
         """
 
-        from angee.messaging.delivery import queue_message_delivery
-
         return queue_message_delivery(self)
+
+    def acknowledge_delivery(self, *, actor: Any, expected_revision: int) -> Any:
+        """Confirm an uncertain provider effect as sent without making another call."""
+
+        return type(self).objects.resolve_uncertain_delivery(
+            self, actor=actor, expected_revision=expected_revision, retry=False,
+        )
+
+    def retry_delivery(self, *, actor: Any, expected_revision: int) -> Any:
+        """Retry FAILED, or explicitly accept repeat-effect risk for UNCERTAIN."""
+
+        return type(self).objects.resolve_uncertain_delivery(
+            self, actor=actor, expected_revision=expected_revision, retry=True,
+        )
 
     def __str__(self) -> str:
         """Return a readable message label for Django displays."""
@@ -2359,7 +2510,7 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
             # The thread went first in the same delete cascade (record chatter teardown);
             # a missing thread is no evidence of a generic one, so stay off the surface.
             return False
-        return not thread.is_record_attached()
+        return thread is None or not thread.is_record_attached()
 
 
 class ThreadNotification(AuditMixin, AngeeDataModel):
@@ -2469,44 +2620,6 @@ class ThreadNotification(AuditMixin, AngeeDataModel):
         """Return a readable notification label."""
 
         return f"{self.user_id} notified for {self.message_id}"
-
-
-class TrackingValue(AuditMixin, AngeeDataModel):
-    """One tracked old/new field value attached to a chatter message."""
-
-    runtime = True
-
-    sqid_prefix = "mtv_"
-    message = models.ForeignKey(
-        "messaging.Message",
-        on_delete=models.CASCADE,
-        related_name="tracking_values",
-    )
-    position = models.PositiveIntegerField(default=0)
-    field_name = models.CharField(max_length=128)
-    field_label = models.CharField(max_length=160)
-    field_type = models.CharField(max_length=64, blank=True, default="")
-    old_value = models.JSONField(null=True, blank=True)
-    new_value = models.JSONField(null=True, blank=True)
-    old_display = models.TextField(blank=True, default="")
-    new_display = models.TextField(blank=True, default="")
-    metadata = models.JSONField(blank=True, default=dict)
-
-    class Meta:
-        """Django model options for tracking values."""
-
-        abstract = True
-        ordering = ("message", "position", "sqid")
-        rebac_resource_type = "messaging/tracking_value"
-        indexes = (
-            models.Index(fields=("message", "position")),
-            models.Index(fields=("field_name",)),
-        )
-
-    def __str__(self) -> str:
-        """Return a compact tracked change label."""
-
-        return f"{self.field_label}: {self.old_display} -> {self.new_display}"
 
 
 class Fragment(AuditMixin, AngeeDataModel):
@@ -2751,9 +2864,13 @@ class Participant(AuditMixin, AngeeDataModel):
 
     The raw to/cc/bcc stays in ``Message.metadata`` as the lossless source; this is
     its queryable projection, so the inbox can group/filter by participant.
+    One row states one fact: a handle's role on a message, or, without a message,
+    in a thread. A merge moving a handle's rows onto one already stating the same
+    fact drops the moved copy (``merge_identity``).
     """
 
     runtime = True
+    merge_identity = (("message", "handle", "role"), ("thread", "handle", "role"))
 
     class ParticipantRole(models.TextChoices):
         """The RFC-5322 envelope role of a participant."""
@@ -2801,6 +2918,11 @@ class Participant(AuditMixin, AngeeDataModel):
                 condition=models.Q(message__isnull=False),
                 name="uq_participant_message_handle_role",
             ),
+            models.UniqueConstraint(
+                fields=("thread", "handle", "role"),
+                condition=models.Q(message__isnull=True),
+                name="uq_participant_thread_handle_role",
+            ),
         )
 
     def __str__(self) -> str:
@@ -2825,9 +2947,12 @@ class Reaction(AuditMixin, AngeeDataModel):
     ``handle IS NOT NULL``. A row whose ``handle`` was ``SET_NULL`` by a later
     ``Handle`` delete is de-attributed history, not a live reactor, so it falls out
     of the invariant rather than colliding (SQL treats NULLs as distinct regardless).
+    A merge moving a reactor's rows onto a handle that already reacted the same way
+    drops the moved copy (``merge_identity``).
     """
 
     runtime = True
+    merge_identity = (("message", "handle", "reaction"),)
 
     sqid_prefix = "rxn_"
     message = models.ForeignKey(
@@ -2879,7 +3004,7 @@ class Reaction(AuditMixin, AngeeDataModel):
         cleaned = strip_null_bytes(value or "").strip()
         if not cleaned:
             raise ValueError("Reaction is required.")
-        max_length = cls._meta.get_field("reaction").max_length
+        max_length = cls.reaction.field.max_length
         if max_length is not None and len(cleaned) > max_length:
             raise ValueError("Reaction is too long.")
         return cleaned

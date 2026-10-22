@@ -4,6 +4,8 @@ import {
   NavLink, registerForm, useResourceRecordHrefLookup,
   type ListColumn, type RecordPanelContext, type RecordTabDescriptor,
   type RegisteredFormProps, useTrashActions,
+  useMimeLabel,
+  useResolvedWidget,
 } from "@angee/ui";
 import { useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
@@ -18,6 +20,7 @@ const PART_MODEL = "messaging.Part";
 // included) is the follow target for the attachment cell.
 const FILE_MODEL = "storage.File";
 const STAR_MODEL = "messaging.MessageStar";
+const MESSAGE_TAG_FIELDS = ["tags.id", "tags.name", "permissions"];
 
 // The structural tab defaults to grouping the part rows by role (title / header /
 // body / quoted / signature); regrouping by fragment.hash through the shared
@@ -53,21 +56,13 @@ const PART_FIELDS = [
 function partColumns(
   t: ReturnType<typeof useMessagingT>,
   recordHref: ReturnType<typeof useResourceRecordHrefLookup>,
+  mimeLabel: (mime: string | null | undefined) => string,
 ): readonly ListColumn<PartRow>[] {
   return [
     { field: "position" },
     { field: "role" },
-    { field: "type" },
+    { field: "type", render: (row) => mimeLabel(row.type) },
     { field: "name" },
-    {
-      field: "fragment.hash",
-      header: t("parts.fragment"),
-      render: (row) => {
-        const fragment = row.fragment;
-        if (!fragment?.hash) return null;
-        return <code className="text-2xs text-fg-subtle">{fragment.hash.slice(0, 10)}</code>;
-      },
-    },
     {
       field: "fragment.part_count",
       header: t("parts.shared"),
@@ -94,7 +89,7 @@ function partColumns(
         }
         // An attachment part links to its storage.File record page (breadcrumbs
         // included) so the filename opens the file in-app instead of being dead
-        // text — the same follow pattern the activity agenda uses. Degrades to
+        // text — the same follow pattern record pointers use. Degrades to
         // plain text where storage.File has no routed page.
         const file = row.file;
         // Prefer the part's own name: one File is content-addressed and can back
@@ -120,7 +115,8 @@ function partColumns(
 function MessagePartsTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useMessagingT();
   const recordHref = useResourceRecordHrefLookup();
-  const columns = React.useMemo(() => partColumns(t, recordHref), [t, recordHref]);
+  const mimeLabel = useMimeLabel();
+  const columns = React.useMemo(() => partColumns(t, recordHref, mimeLabel), [t, recordHref, mimeLabel]);
   return (
     <ListView<PartRow>
       resource={PART_MODEL}
@@ -166,25 +162,30 @@ export function messageRecordTabs(
 function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useMessagingT();
   const recordTabs = React.useMemo(() => messageRecordTabs(t), [t]);
+  const RecordTags = useResolvedWidget("angee.tags.recordTags")?.edit;
   // Moderation is the shared trash: channel managers move a message there and
   // back, offered by the message's projected `delete` permission.
   const trashActions = useTrashActions(useModelMetadata(MODEL)?.resource);
+  const returning = React.useMemo(() => [...(props.returning ?? []), ...MESSAGE_TAG_FIELDS], [props.returning]);
   return <Form
     {...props}
     resource={MODEL}
     readOnly={readOnly}
+    returning={returning}
     recordTabs={recordTabs}
-    formExtras={({ recordId }) => recordId ? <MessageRecordReader recordId={recordId} /> : null}
+    formExtras={({ recordId }) => recordId ? <>
+      {RecordTags ? <RecordTags readOnly={readOnly} /> : null}
+      <MessageRecordReader recordId={recordId} />
+    </> : null}
     title={({ record }) => messageSubject(record?.title, t("messages.noSubject"))}
   >
     <Field name="title" title readOnly />
     <Field name="status" readOnly />
-    <Field name="tags" />
     {/* The reader shows the sender and date; the envelope keeps the transport facts. */}
+    {/* The transport id is a wire fact, not user text: the envelope keeps the labelled facts. */}
     <Group label={t("messages.groupEnvelope")} columns={2} pane="envelope">
       <Field name="platform" readOnly />
       <Field name="direction" readOnly />
-      <Field name="external_id" readOnly />
     </Group>
     <Field name="is_trashed" hidden readOnly />
     {!readOnly ? trashActions.map((action) => <Action key={action.id} {...action} />) : null}

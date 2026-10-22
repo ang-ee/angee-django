@@ -523,7 +523,6 @@
         "save": null,
         "delete": null,
         "deletePreview": null,
-        "revisions": null,
         "changes": null
       },
       "typeNames": {
@@ -539,15 +538,17 @@
         "having": null,
         "createInput": null,
         "updateInput": null,
-        "deletePayload": null,
-        "revision": null
+        "deletePayload": null
       },
       "canonicalLabel": null,
       "concreteKinds": [],
       "recordEdges": [],
+      "mergeable": false,
+      "history": false,
       "rowModel": "server",
       "recordRepresentation": null,
       "recordSearchFields": [],
+      "contextFields": [],
       "subjectField": null,
       "subtitle": null,
       "grantable": [],
@@ -1051,7 +1052,6 @@
         "save": null,
         "delete": null,
         "deletePreview": null,
-        "revisions": null,
         "changes": null
       },
       "typeNames": {
@@ -1067,15 +1067,17 @@
         "having": null,
         "createInput": null,
         "updateInput": null,
-        "deletePayload": null,
-        "revision": null
+        "deletePayload": null
       },
       "canonicalLabel": null,
       "concreteKinds": [],
       "recordEdges": [],
+      "mergeable": false,
+      "history": false,
       "rowModel": "server",
       "recordRepresentation": null,
       "recordSearchFields": [],
+      "contextFields": [],
       "subjectField": null,
       "subtitle": null,
       "grantable": [],

@@ -1,5 +1,10 @@
 export { refineFieldsFromPaths } from "./selections";
-export { listQueryMeta, type ListQueryTarget } from "./list-query";
+export {
+  listQueryMeta,
+  type ListQueryFieldArgument,
+  type ListQueryFieldBinding,
+  type ListQueryTarget,
+} from "./list-query";
 // Story/test consumers that pair these bindings with providers returned by this
 // package must resolve Refine's provider types through the same package identity.
 export { Refine, ResourceContext, type DataProvider, type ResourceProps } from "@refinedev/core";
@@ -13,7 +18,6 @@ export {
   groupDocumentForResource,
   maybeOperationDocument,
   operationDocument,
-  revisionDocumentForResource,
   useOperationDocuments,
   type ActionDocumentMap,
   type AggregateDocumentMap,
@@ -21,7 +25,6 @@ export {
   type GroupDocumentMap,
   type OperationDocumentKind,
   type OperationDocumentsBySchema,
-  type RevisionDocumentMap,
   type SaveDocumentMap,
   type SchemaOperationDocuments,
 } from "./operation-documents";
@@ -60,7 +63,6 @@ export {
   useAngeeGroupByBatch,
   useAngeeListBatch,
   useAngeeResourceSave,
-  useAngeeRevisions,
   type ActionMutate,
   type ActionArguments,
   type AngeeListBatchEntry,
@@ -76,7 +78,6 @@ export {
   type UseAngeeFacetsResult,
   type UseAngeeGroupByResult,
   type UseAngeeResourceSaveResult,
-  type UseAngeeRevisionsResult,
 } from "./dialect/hooks";
 export {
   useAuthoredMutation,
@@ -126,13 +127,10 @@ export {
   extractDeletePreview,
   extractFacet,
   extractGroupBy,
-  extractRevisions,
   extractSaveResult,
   groupByRequest,
   groupByVariables,
   groupDimension,
-  revisionSnapshot,
-  revisionsRequest,
   runActionResult,
   saveRequest,
   type ActionOutcome,
@@ -159,7 +157,6 @@ export {
   type LineInput,
   type ResourceFacetOption,
   type ResourceFacetResult,
-  type ResourceRevision,
   type ResourceSaveVariables,
   resourceMutationMeta,
   type MutationRootArguments,

@@ -19,13 +19,16 @@ from typing import Any, ClassVar
 
 import pytest
 from django.core.exceptions import ValidationError
-from imapclient.exceptions import LoginError
+from imapclient.exceptions import IMAPClientError, LoginError
 from rebac import system_context
 
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.streams import BridgeSyncError, CursorInvalid, StreamDefinition, advance_stream, open_stream
-from angee.integrate.testing.models import RecordLink, SyncDiscrepancy, SyncStream
+from angee.integrate.states import StreamDefinition
+from angee.integrate.streams import BridgeSyncError, CursorInvalid, advance_stream, open_stream
+from angee.integrate.testing.models import RecordLink, SyncStream
+from angee.messaging.managers import AUTOMATED_MAIL_HEADERS
 from angee.messaging.testing.models import Handle, Message, MessageEdge, Part, Participant, Thread
+from angee.messaging_integrate_imap import backend as imap_backend
 from angee.messaging_integrate_imap import parser as imap_parser
 from angee.messaging_integrate_imap.backend import (
     MAX_SAMPLE_MESSAGES,
@@ -40,7 +43,7 @@ from angee.messaging_integrate_imap.parser import (
     split_plain_text,
     synthetic_external_id,
 )
-from tests.conftest import make_integration
+from tests.conftest import current_stream, make_integration
 from tests.stream_adapters import AdapterPages
 from tests.test_messaging import _storage_drive
 from tests.test_messaging_graphql import Channel
@@ -256,6 +259,61 @@ def test_corporate_disclaimer_maps_to_signature_role() -> None:
     assert split_plain_text(text) == [
         ("body", "Numbers attached."),
         ("signature", "Disclaimer: This email and any attachments are confidential."),
+    ]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Take the side entrance; the host is on +1 415 555 2671.",
+        "Khalid will call you from +44 20 7946 0958.",
+        "/etc/app/config.yaml holds the settings.",
+        "Data: 42 rows\nDo: call the vendor",
+    ],
+    ids=["take", "kh", "path", "header-like"],
+)
+def test_ordinary_english_lines_stay_body(line: str) -> None:
+    """No language the parser applies may read an English body line as a signature or a reply boundary."""
+
+    assert split_plain_text(f"Thanks for the note.\n\n{line}\n\nBest,\nAlexis") == [
+        ("body", "Thanks for the note."),
+        ("body", line),
+        ("signature", "Best,\nAlexis"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("quote", "header"),
+    [
+        pytest.param(
+            "On Thu, Jul 2, 2026 Monica wrote:\n> Here are the papers.\n>\n"
+            "> Best,\n> Monica Alvarez\n> +1 787 523 6508\n",
+            "On Thu, Jul 2, 2026 Monica wrote:",
+            id="marker-quoted",
+        ),
+        pytest.param(
+            "From: Monica Alvarez <monica@example.com>\nSent: Thursday, July 2, 2026\nSubject: Papers\n\n"
+            "Here are the papers.\n\nBest,\nMonica Alvarez\n+1 787 523 6508\n",
+            "From: Monica Alvarez <monica@example.com>\nSent: Thursday, July 2, 2026\nSubject: Papers",
+            id="outlook",
+        ),
+        pytest.param(
+            "Od: Monica Alvarez <monica@example.com>\nDatum: 2. července 2026 10:57:26 SELČ\nPředmět: Papers\n\n"
+            "Here are the papers.\n\nBest,\nMonica Alvarez\n+1 787 523 6508\n",
+            "Od: Monica Alvarez <monica@example.com>\nDatum: 2. července 2026 10:57:26 SELČ\nPředmět: Papers",
+            id="czech-forward",
+        ),
+    ],
+)
+def test_quoted_reply_signature_stays_with_the_quoted_author(quote: str, header: str) -> None:
+    """Only the sender's signature has the signature role; a quoted author's is quoted."""
+
+    assert split_plain_text(f"Sounds good.\n\nBest,\nAlexis\n\n{quote}") == [
+        ("body", "Sounds good."),
+        ("signature", "Best,\nAlexis"),
+        ("quoted", header),
+        ("quoted", "Here are the papers."),
+        ("quoted", "Best,\nMonica Alvarez\n+1 787 523 6508"),
     ]
 
 
@@ -1313,19 +1371,18 @@ def test_incremental_run_fetches_only_new_uids(monkeypatch: pytest.MonkeyPatch) 
     messages = _drain(backend)
 
     assert [message.subject for message in messages] == ["C"]
-    assert account.searches == [("INBOX", ["UID", "3:*"])]
+    assert account.searches == [("INBOX", ["UID", "3:3"])]
     assert backend.test_pages.cursors["INBOX"]["last_uid"] == 3
 
 
-def test_uid_star_range_quirk_is_filtered_client_side(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The server echoing the max UID below the watermark yields no refetch."""
+def test_expunged_uid_past_the_watermark_fetches_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A UIDNEXT past the watermark with no surviving mail there yields no refetch."""
 
     account = FakeImapAccount({"INBOX": _folder(_eml(message_id="<a@x>"), _eml(message_id="<b@x>"))})
     backend = _backend(monkeypatch, account)
     backend.bridge.cursor = {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 2}}}
     # A UID was allocated then expunged server-side: UIDNEXT moved past the
-    # watermark, so the prescreen lets the search through, and the search echoes
-    # only the highest existing UID (2) per the RFC 3501 ``n:*`` quirk.
+    # watermark, so the prescreen lets the search through, and it finds nothing.
     monkeypatch.setattr(
         FakeIMAPClient,
         "folder_status",
@@ -1333,7 +1390,45 @@ def test_uid_star_range_quirk_is_filtered_client_side(monkeypatch: pytest.Monkey
     )
 
     assert backend.test_pages.next_batch() == []
-    assert account.fetches == []  # the echoed max-UID (2) was filtered, nothing fetched
+    assert account.searches == [("INBOX", ["UID", "3:3"])]
+    assert account.fetches == []
+
+
+def test_a_full_mailbox_is_searched_in_bounded_uid_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No SEARCH answer outgrows imaplib's line limit, however many UIDs a mailbox holds."""
+
+    raws = (_eml(message_id=f"<{uid}@x>", subject=str(uid)) for uid in range(1, 6))
+    account = FakeImapAccount({"INBOX": _folder(*raws)})
+    backend = _backend(monkeypatch, account)
+    monkeypatch.setattr(imap_backend, "_SEARCH_UID_WINDOW", 2)
+
+    messages = _drain(backend)
+    preview = backend.preview_sample(ImapSamplePreviewRequest(mailbox="INBOX", all_dates=True, limit=5))
+
+    windows = [("INBOX", ["UID", window]) for window in ("1:2", "3:4", "5:5")]
+    assert [message.subject for message in messages] == ["1", "2", "3", "4", "5"]
+    assert [message.uid for message in preview.messages] == [5, 4, 3, 2, 1]
+    assert account.searches == windows + windows
+
+
+def test_a_server_failure_names_the_mailbox_and_step_but_not_the_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sync telemetry says where the server failed; its raw reply stays in the worker log."""
+
+    account = FakeImapAccount({"INBOX": _folder(_eml())})
+    backend = _backend(monkeypatch, account)
+
+    def refuse(self: FakeIMAPClient, criteria: Any = "ALL") -> list[int]:
+        raise IMAPClientError("command: SEARCH => got more than 1000000 bytes")
+
+    monkeypatch.setattr(FakeIMAPClient, "search", refuse)
+    with pytest.raises(ImapError) as refused:
+        backend.test_pages.next_batch()
+
+    assert refused.value.public_message == (
+        "The IMAP server refused a command, or sent a reply that could not be read, while listing "
+        "messages in mailbox 'INBOX'. The worker log has the server's reply."
+    )
+    assert isinstance(refused.value.__cause__, IMAPClientError)
 
 
 def test_uidvalidity_change_resets_the_folder_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1351,7 +1446,7 @@ def test_uidvalidity_change_resets_the_folder_cursor(monkeypatch: pytest.MonkeyP
     messages = _drain(backend)
 
     assert [message.subject for message in messages] == ["A"]
-    assert account.searches == [("INBOX", "ALL")]
+    assert account.searches == [("INBOX", ["UID", "1:1"])]
     assert backend.test_pages.cursors["INBOX"] == {"uidvalidity": 777, "last_uid": 1}
 
 
@@ -1629,7 +1724,7 @@ def test_legacy_imap_position_seeds_only_an_empty_stream(
         channel.cursor = {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}}}
         channel.save(update_fields=["cursor"])
         if existing_stream:
-            SyncStream.objects.current(channel, "messages", "INBOX", cursor={"uidvalidity": 100, "last_uid": 2})
+            current_stream(channel, "messages", "INBOX", cursor={"uidvalidity": 100, "last_uid": 2})
         assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == (1 if existing_stream else 2)
         assert seeds == ([] if existing_stream else ["INBOX"])
         channel.cursor = {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 0}}}
@@ -1663,7 +1758,7 @@ def test_legacy_future_only_policy_survives_a_stream_reset(
         }
         channel.save(update_fields=["cursor"])
         assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == 0
-        stream = SyncStream.objects.current(channel, "messages", "INBOX")
+        stream = current_stream(channel, "messages", "INBOX")
         channel.refresh_from_db()
         assert channel.config["delivery_mode"] == "new_only"
         assert channel.config["source_identity"] == identity
@@ -1675,7 +1770,7 @@ def test_legacy_future_only_policy_survives_a_stream_reset(
         stream.resync_required = True
         stream.save(update_fields=["resync_required"])
         assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == 0
-        successor = SyncStream.objects.current(channel, "messages", "INBOX")
+        successor = current_stream(channel, "messages", "INBOX")
         assert successor.generation == stream.generation + 1
         assert successor.config == stream.config
         assert successor.cursor == {"uidvalidity": 200, "last_uid": 2}
@@ -1836,7 +1931,7 @@ def test_channel_sync_partitions_mailboxes(
         try:
             definitions = backend.streams()
             assert {definition.partition for definition in definitions} == {"INBOX", "Archive"}
-            stream = SyncStream.objects.current(channel, "messages", "Archive")
+            stream = current_stream(channel, "messages", "Archive")
             result = advance_stream(stream, backend)
             assert result.count == 1
             assert {row.partition for row in SyncStream.objects.current_for_bridge(channel, "messages")} == {"Archive"}
@@ -1927,7 +2022,9 @@ def test_channel_sync_preserves_overlong_display_name_and_content_id(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("excess", [0, 1])
 def test_channel_sync_bounds_display_names_and_discards_oversized_content_id(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, excess: int,
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+    excess: int,
 ) -> None:
     """Column-sized headers stay intact; larger display text and CIDs land safely."""
 
@@ -1953,22 +2050,30 @@ def test_channel_sync_bounds_display_names_and_discards_oversized_content_id(
     part = Part._base_manager.get(message__external_id="bounded-headers@x", type="text/html")
     assert part.cid == ("" if excess else cid)
     assert part.fragment.text == "<p>Retained body.</p>"
-    assert not SyncDiscrepancy._base_manager.exists()
+    with system_context(reason="test imap inspect retained failures"):
+        assert not any(
+            row for stream_row in SyncStream.objects.all() for row in stream_row.sync_failures(open_only=False)
+        )
 
 
 @pytest.mark.django_db(transaction=True)
 def test_channel_sync_quarantines_oversized_handle_and_lands_remaining_page(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A poison sender leaves one field-specific discrepancy and advances the page."""
 
     del composed_tables
     value = "x" * Handle._meta.get_field("value").max_length + "@example.com"
-    account = FakeImapAccount({"INBOX": _folder(
-        _eml(message_id="<first@x>", subject="First"),
-        _eml(message_id="<poison@x>", subject="Poison", sender=f"Bad <{value}>"),
-        _eml(message_id="<last@x>", subject="Last"),
-    )})
+    account = FakeImapAccount(
+        {
+            "INBOX": _folder(
+                _eml(message_id="<first@x>", subject="First"),
+                _eml(message_id="<poison@x>", subject="Poison", sender=f"Bad <{value}>"),
+                _eml(message_id="<last@x>", subject="Last"),
+            )
+        }
+    )
     _wire_fake(monkeypatch, account)
     channel = _imap_channel(batch_size=3)
 
@@ -1978,16 +2083,23 @@ def test_channel_sync_quarantines_oversized_handle_and_lands_remaining_page(
     assert set(Message._base_manager.values_list("external_id", flat=True)) == {"first@x", "last@x"}
     assert not Thread._base_manager.filter(title__text="Poison").exists()
     assert not Handle._base_manager.filter(value=value).exists()
-    discrepancy = SyncDiscrepancy._base_manager.get()
+    with system_context(reason="test imap inspect retained failures"):
+        discrepancy = next(
+            row for stream_row in SyncStream.objects.all() for row in stream_row.sync_failures(open_only=False)
+        )
     assert discrepancy.code == "invalid_record"
     assert discrepancy.details == {
-        "stream": "messages", "partition": "INBOX", "external_key": "poison@x",
-        "fields": ["value"], "message": "Record validation failed for fields: value.",
+        "stream": "messages",
+        "partition": "INBOX",
+        "external_key": "poison@x",
+        "fields": ["value"],
+        "message": "Record validation failed for fields: value.",
     }
     assert discrepancy.is_open
     assert discrepancy.retry_at is not None
     assert SyncStream.objects.current_for_bridge(channel, "messages").get().cursor == {
-        "uidvalidity": 100, "last_uid": 3,
+        "uidvalidity": 100,
+        "last_uid": 3,
     }
     channel.refresh_from_db()
     assert channel.sync_stage == channel.SyncStage.COMPLETED
@@ -2088,7 +2200,7 @@ def test_channel_sync_lands_threads_parts_and_attachments(
     assert Participant._base_manager.filter(message=reply).count() == 2  # from + to
 
     channel.refresh_from_db()
-    assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 3}
+    assert current_stream(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 3}
     assert channel.sync_stage == channel.SyncStage.COMPLETED
     assert channel.last_sync_items == 3
     assert channel.sync_stage == Channel.SyncStage.COMPLETED
@@ -2156,6 +2268,13 @@ def test_attributed_quote_reuses_the_original_body_fragment(
         message=reply, role=Part.PartRole.QUOTED, fragment__text="Are we still on for Thursday?"
     )
     assert quoted.fragment_id == root_body.fragment_id
+
+
+def test_retained_headers_keep_their_emitted_order_and_every_automation_header() -> None:
+    """The emitted order is part of the ingest sync hash; automation detection reads these parts."""
+
+    assert imap_parser._RETAINED_HEADERS == ("list-id", "list-unsubscribe", "reply-to", "auto-submitted", "precedence")
+    assert set(AUTOMATED_MAIL_HEADERS) <= set(imap_parser._RETAINED_HEADERS)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2237,7 +2356,7 @@ def test_channel_resync_is_incremental_and_idempotent(
 
     assert Message._base_manager.count() == 3  # refetch converged, no duplicates
     channel.refresh_from_db()
-    stream = SyncStream.objects.current(channel, "messages", "INBOX")
+    stream = current_stream(channel, "messages", "INBOX")
     assert stream.cursor == {"uidvalidity": 999, "last_uid": 103}
     assert stream.generation == 2
     assert RecordLink._base_manager.count() == 0
@@ -2265,18 +2384,24 @@ def test_failed_run_never_persists_the_cursor(
     assert isinstance(refused.value.__cause__, RuntimeError)
     assert str(refused.value.__cause__) == "ingest died"
     channel.refresh_from_db()
-    assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {}
+    assert current_stream(channel, "messages", "INBOX").cursor == {}
     assert Message._base_manager.count() == 0
     assert channel.sync_stage == channel.SyncStage.FAILED
     assert channel.sync_stage == Channel.SyncStage.FAILED
     assert channel.sync_error == channel.last_error == "messages (INBOX): Integration operation failed."
     assert channel.sync_progress["stage"] == Channel.SyncStage.FAILED
     assert channel.sync_progress["details"] == {
-        "stream": "messages", "partition": "INBOX", "stage": "pull",
-        "failures": [{
-            "stream": "messages", "partition": "INBOX", "stage": "pull",
-            "message": "Integration operation failed.",
-        }],
+        "stream": "messages",
+        "partition": "INBOX",
+        "stage": "pull",
+        "failures": [
+            {
+                "stream": "messages",
+                "partition": "INBOX",
+                "stage": "pull",
+                "message": "Integration operation failed.",
+            }
+        ],
     }
 
 
@@ -2318,7 +2443,7 @@ def test_failed_run_keeps_successfully_ingested_batch_cursor(
     assert str(refused.value.__cause__) == "second batch died"
     assert Message._base_manager.count() == 2
     channel.refresh_from_db()
-    assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 2}
+    assert current_stream(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 2}
     assert channel.sync_stage == channel.SyncStage.FAILED
     assert channel.sync_error == channel.last_error == "messages (INBOX): Integration operation failed."
 
@@ -2351,7 +2476,7 @@ def test_failed_second_record_rolls_back_the_whole_page(
     assert isinstance(refused.value.__cause__, RuntimeError)
     assert str(refused.value.__cause__) == "second record failed"
     assert Message._base_manager.count() == 0
-    assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {}
+    assert current_stream(channel, "messages", "INBOX").cursor == {}
 
 
 @pytest.mark.django_db(transaction=True)

@@ -4,7 +4,7 @@ from django.apps import AppConfig
 
 
 class ProjectsConfig(AppConfig):
-    """Wire the milestone's retained-receipt deletion rule."""
+    """Wire project model lifecycle receivers."""
 
     default = True
     name = "angee.projects"

@@ -1,28 +1,22 @@
 export { messageFeedRows, messageFeedWindow, messageFeedRevalidation } from "./message-feed";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import { useAuthoredQuery } from "@angee/refine";
-import type { ChatterTabContent, ChatterViewContext, ContainerChild } from "@angee/ui/runtime";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import * as React from "react";
 import { Inbox, Mail, MessagesSquare, Send } from "lucide-react";
 
 import { enMessagingMessages } from "./i18n";
 import { channelForm } from "./ChannelForm";
 import { messageForm } from "./MessageForm";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
-import { RecordActivityPane } from "./RecordActivityPane";
-import { RecordChatterPane } from "./RecordChatterPane";
 import type { RecordThreadConversationProps } from "./RecordThreadConversation";
-import { RecordSourceThreadsPane } from "./RecordSourceThreadsPane";
-import {
-  RECORD_UNREAD_COUNT_MODELS,
-  RecordThreadUnreadCountDocument,
-  THREAD_ATTACHMENT_MODEL,
-} from "./documents";
+import { RecordChatterPane } from "./RecordChatterPane";
+import { FollowRecordChrome } from "./FollowRecordChrome";
+import { RecordConversationsGroup, useRecordConversationsCount } from "./RecordConversationsGroup";
+import { RecordConversationPane } from "./RecordConversationPane";
+import { THREAD_ATTACHMENT_MODEL, THREAD_CHATTER_EDGE } from "./documents";
 
-export { CHANNEL_MODEL, LogRecordActivityDocument } from "./documents";
+export { CHANNEL_MODEL } from "./documents";
+export { RecordChatterPane, type RecordChatterPaneProps } from "./RecordChatterPane";
 export { PublicWebform, type PublicWebformProps } from "./PublicWebform";
-export { ActivityAgendaPane } from "./ActivityAgendaPane";
 export {
   defineChannelBridgeAddon,
   defineChannelPollBridgeAddon,
@@ -71,27 +65,16 @@ export {
 export {
   MESSAGE_SUMMARY_FIELDS,
   MessageSummary,
+  MessagePaneRow,
+  useMessageChannelLabel,
   type MessageSummaryData,
 } from "./MessageSummary";
 export { MessageReader, type MessageReaderProps } from "./MessageReader";
 export type { MessageReaderData } from "./documents";
 
 export interface MessagingAddonOptions {
-  /** Composer shortcut for this app's built-in Comments tab. */
+  /** Composer shortcut for this app's Activity comment source. */
   submitKey?: NonNullable<RecordThreadConversationProps["submitKey"]>;
-}
-
-/** The shared Comments tab, for an addon's `record#aside` or `<model>#aside`, configurable without another addon. */
-export function recordCommentsTab({ submitKey = "enter", aliases }: MessagingAddonOptions & { aliases?: readonly string[] } = {}): ContainerChild<ChatterTabContent> {
-  return {
-    sequence: 10,
-    content: {
-      label: "Comments", icon: "comments",
-      ...(aliases ? { aliases } : {}),
-      useCount: useRecordCommentsUnread,
-      render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
-    },
-  };
 }
 
 /** Configure messaging's app contribution through the existing addon manifest. */
@@ -123,6 +106,8 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
   },
   icons: { inbox: Inbox, threads: MessagesSquare, send: Send, channel: Mail },
   i18n: { messaging: enMessagingMessages },
+  // Channel pairing states on the composed status vocabulary: the overview and lists share them.
+  statusTones: { paired: "success", logged_out: "danger", duplicate_account: "danger", awaiting_scan: "info", awaiting_password: "warning" },
   forms: { "messaging.Channel": channelForm, "messaging.Message": messageForm },
   containers: {
     // The Channels list's Connect menu: each vendor's child renders ActionTrigger or
@@ -131,49 +116,41 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
     "parties.overview#items": {
       "messaging.channel-health": { sequence: 30, content: <MessagingOverviewContribution /> },
     },
-    // Messaging supplies the real comments and activity in place of the framework's placeholders.
+    // Comments and source conversations on the Timeline; Discussion is the record's thread.
+    "timeline#kinds": {
+      "messaging.comment": { content: { label: "Comments", icon: "comments", tone: "info", verb: "Open in Discussion", target: { tab: "messaging.discussion", focus: "message" } } },
+      "messaging.conversation": { content: { label: "Conversations", icon: "channel", tone: "muted", verb: "Open conversation", target: { tab: "messaging.conversation" } } },
+    },
     "record#aside": {
-      "chatter.comments": { remove: true },
-      "chatter.activity": { remove: true },
-      "messaging.comments": recordCommentsTab({ submitKey, aliases: ["comments"] }),
-      "messaging.activity": {
-        sequence: 20,
-        content: { label: "Activity", icon: "activity", aliases: ["activity"], render: (context) => <RecordActivityPane context={context} /> },
-      },
-      "messaging.sources": {
-        sequence: 30,
-        content: {
-          label: "Sources", icon: "inbox", aliases: ["sources"],
-          // Only on types whose schema lets a record retain source conversations.
-          when: (context) => context.route?.recordEdges?.includes(THREAD_ATTACHMENT_MODEL) ?? false,
-          render: (context) => <RecordSourceThreadsPane context={context} />,
-        },
-      },
+      "messaging.conversation": { sequence: 19, content: {
+        label: "Conversation", icon: "channel", panelClassName: "p-0", strip: false,
+        target: { model: THREAD_ATTACHMENT_MODEL },
+        render: (context, selection) => <RecordConversationPane context={context} attachmentId={selection?.target} />,
+      } },
+      "messaging.discussion": { sequence: 20, content: {
+        label: "Discussion", icon: "comments", panelClassName: "p-0",
+        when: (context) => context.route?.recordEdges?.includes(THREAD_CHATTER_EDGE) ?? false,
+        // A newly targeted message starts with clear scope/search filters.
+        render: (context, selection) => <RecordChatterPane key={selection?.target} context={context} selection={selection} submitKey={submitKey} />,
+      } },
+    },
+    // Follow is a record-header control; what to be told about sits behind the Discussion's overflow.
+    "form#chrome": {
+      "messaging.follow": { sequence: 30, content: <FollowRecordChrome /> },
+    },
+    // The conversations a record came from, in the Related tab.
+    "related#groups": {
+      "messaging.conversations": { sequence: 40, content: {
+        label: "Conversations",
+        edge: { model: THREAD_ATTACHMENT_MODEL },
+        useCount: useRecordConversationsCount,
+        render: (context, label) => <>{label()}<li><RecordConversationsGroup context={context} /></li></>,
+      } },
     },
   },
 
 });
 
 const messaging = defineMessagingAddon();
-
-function useRecordCommentsUnread(
-  context: ChatterViewContext,
-): number | undefined {
-  const modelLabel = context.route?.modelLabel;
-  const recordId = context.view.kind === "record" ? context.view.sqid : undefined;
-  const enabled = Boolean(modelLabel && recordId);
-  const variables = React.useMemo(
-    () => ({
-      modelLabel: modelLabel ?? "",
-      recordId: recordId ?? "",
-    }),
-    [modelLabel, recordId],
-  );
-  const query = useAuthoredQuery(RecordThreadUnreadCountDocument, variables, {
-    enabled,
-    models: RECORD_UNREAD_COUNT_MODELS,
-  });
-  return query.data?.record_thread_unread_count || undefined;
-}
 
 export default messaging;

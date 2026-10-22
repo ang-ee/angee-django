@@ -7,10 +7,6 @@ import { textRoleVariants } from "../../ui/text";
 import { PAGE_SIZE_OPTIONS } from "./page-size";
 import type { GroupedListPager } from "./resource-view-list-body";
 
-function formatPagerNumber(value: number): string {
-  return value.toLocaleString();
-}
-
 /** Native group/record pagination shared by the list and board renderers. */
 export function GroupedScopePager({
   pager,
@@ -52,7 +48,6 @@ export function GroupedScopePager({
         onPageSizeChange={(size) => onPageSizeChange(pageKey, size)}
         previousLabel={t("pager.previousSubject", { subject: navLabel })}
         nextLabel={t("pager.nextSubject", { subject: navLabel })}
-        formatNumber={formatPagerNumber}
       />
     </nav>
   );

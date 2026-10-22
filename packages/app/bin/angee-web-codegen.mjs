@@ -222,7 +222,8 @@ function emitAppModule(runtimeDir, manifest, schemaNames, addonSources, installe
     "",
     `export const composedAddons = [${addonValues}] as const;`,
     `export const composedThemeDefinitions = [${installedThemes.packages.map((_pkg, index) => `...canonicalThemes${index}`).join(", ")}].sort((left, right) => left.id.localeCompare(right.id));`,
-    "const contributedThemeDefinitions = composedAddons.flatMap((addon) => (addon.themes ?? []).map((entry) => \"definition\" in entry ? entry.definition : entry)).sort((left, right) => left.id.localeCompare(right.id));",
+    // Only an addon package contributes themes; the deployment layer never does.
+    `const contributedThemeDefinitions = [${addonPackages.map((_pkg, index) => `addon${index}`).join(", ")}].flatMap((addon) => (addon.themes ?? []).map((entry) => "definition" in entry ? entry.definition : entry)).sort((left, right) => left.id.localeCompare(right.id));`,
     "if (contributedThemeDefinitions.length !== composedThemeDefinitions.length || contributedThemeDefinitions.some((definition, index) => definition !== composedThemeDefinitions[index])) {",
     "  throw new Error(\"Composed theme contributions must reference their package's canonical ./themes definitions in id order.\");",
     "}",
@@ -485,7 +486,6 @@ function buildOperationDocuments(name, runtimeDir) {
   const aggregateResources = aggregateFields(index.resources);
   const deletePreviewResources = deletePreviewFields(index.resources);
   const groupResources = groupFields(index.resources);
-  const revisionResources = revisionFields(index.resources);
   const saveResources = saveFields(index);
   const union = names.length > 0 ? names.map((n) => JSON.stringify(n)).join(" | ") : "never";
   const aggregateUnion = aggregateResources.length > 0
@@ -496,9 +496,6 @@ function buildOperationDocuments(name, runtimeDir) {
     : "never";
   const groupUnion = groupResources.length > 0
     ? groupResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
-    : "never";
-  const revisionUnion = revisionResources.length > 0
-    ? revisionResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
     : "never";
   const saveUnion = saveResources.length > 0
     ? saveResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
@@ -531,14 +528,6 @@ function buildOperationDocuments(name, runtimeDir) {
     const ast = JSON.stringify(validatedDocument(schema, groupDocument(resource), resource.groupsRoot), null, 2);
     return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as GroupDocument,`;
   });
-  const revisionDocuments = revisionResources.map((resource) => {
-    const ast = JSON.stringify(
-      validatedDocument(schema, revisionDocument(resource.revisionsRoot, resource.fields), resource.revisionsRoot),
-      null,
-      2,
-    );
-    return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as RevisionDocument,`;
-  });
   const saveDocuments = saveResources.map((resource) => {
     const ast = JSON.stringify(validatedDocument(schema, saveDocument(resource), resource.saveRoot), null, 2);
     return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as SaveDocument,`;
@@ -548,7 +537,7 @@ function buildOperationDocuments(name, runtimeDir) {
     "// Run `pnpm codegen` to regenerate.",
     "//",
     "// Eligible ActionResult mutation fields, plus authored",
-    "// aggregate, group, delete-preview, and revision operation documents.",
+    "// aggregate, group, delete-preview, and save operation documents.",
     "",
     "import type { TypedDocumentNode } from \"@graphql-typed-document-node/core\";",
     "",
@@ -652,29 +641,6 @@ function buildOperationDocuments(name, runtimeDir) {
     ...groupDocuments,
     "};",
     "",
-    `export type RevisionResource = ${revisionUnion};`,
-    "",
-    "export interface RevisionVariables {",
-    "  id: string;",
-    "}",
-    "",
-    "export type RevisionRecord = Record<string, unknown> & {",
-    "  id: string;",
-    "  created_at?: string;",
-    "  comment?: string | null;",
-    "};",
-    "",
-    "export type RevisionDocument = TypedDocumentNode<",
-    "  Record<string, RevisionRecord[]>,",
-    "  RevisionVariables",
-    ">;",
-    "",
-    "export const revisionDocuments: {",
-    "  readonly [Resource in RevisionResource]: RevisionDocument;",
-    "} = {",
-    ...revisionDocuments,
-    "};",
-    "",
     `export type SaveResource = ${saveUnion};`,
     "",
     "export interface SaveVariables {",
@@ -701,7 +667,6 @@ function buildOperationDocuments(name, runtimeDir) {
     "  aggregates: aggregateDocuments,",
     "  deletePreviews: deletePreviewDocuments,",
     "  groups: groupDocuments,",
-    "  revisions: revisionDocuments,",
     "  saves: saveDocuments,",
     "};",
     "",
@@ -714,7 +679,6 @@ function buildOperationDocuments(name, runtimeDir) {
       `${aggregateResources.length} aggregate query(ies), ` +
       `${deletePreviewResources.length} delete-preview mutation(s), ` +
       `${groupResources.length} group query(ies), ` +
-      `${revisionResources.length} revision query(ies), ` +
       `${saveResources.length} save mutation(s)`,
   );
 }
@@ -732,13 +696,11 @@ function actionFields(schema) {
       }
       if (field.args.length === 0) return [];
       const requiredArgs = field.args.filter(isRequiredArgument);
+      // Every argument required, or one required ID target (whatever its name: the
+      // hook's `idArgument` names it) beside optional arguments.
       if (
         requiredArgs.length !== field.args.length &&
-        !(
-          requiredArgs.length === 1 &&
-          requiredArgs[0].name === "id" &&
-          requiredArgs[0].type.ofType === GraphQLID
-        )
+        !(requiredArgs.length === 1 && requiredArgs[0].type.ofType === GraphQLID)
       ) {
         return [];
       }
@@ -844,30 +806,6 @@ function groupFields(resources) {
         measures: Array.isArray(resource?.aggregateMeasures)
           ? resource.aggregateMeasures
           : [],
-      }];
-    })
-    .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
-}
-
-function revisionFields(resources) {
-  return resources
-    .flatMap((resource) => {
-      const modelLabel = resource?.modelLabel;
-      const revisionsRoot = resource?.roots?.revisions;
-      const revisionFields = resource?.revisionFields;
-      if (
-        typeof modelLabel !== "string" ||
-        typeof revisionsRoot !== "string" ||
-        revisionsRoot === "" ||
-        !Array.isArray(revisionFields) ||
-        revisionFields.length === 0
-      ) {
-        return [];
-      }
-      return [{
-        modelLabel,
-        revisionsRoot,
-        fields: uniqueNames(["id", ...revisionFields]),
       }];
     })
     .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
@@ -1039,14 +977,6 @@ function deletePreviewDocument(root) {
   );
 }
 
-function revisionDocument(root, fields) {
-  return parse(
-    `query ${actionOperationName(root)}($id: ID!) { ` +
-      `${root}(id: $id) { ${fields.join(" ")} } }`,
-    { noLocation: true },
-  );
-}
-
 function groupKeyFields(resource) {
   const seen = new Set();
   const fields = [];
@@ -1102,10 +1032,6 @@ function aggregateSelection(measures) {
 
 function actionOperationName(field) {
   return `Angee${field[0].toUpperCase()}${field.slice(1)}`;
-}
-
-function uniqueNames(fields) {
-  return [...new Set(fields)].map(assertGraphQLName);
 }
 
 function assertGraphQLName(name) {

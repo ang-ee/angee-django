@@ -2,10 +2,28 @@
 
 from __future__ import annotations
 
+from typing import overload
+
 from django.apps import apps
 from django.db import models
 
 _Model = type[models.Model]
+
+
+@overload
+def models_with[ModelClass: type[models.Model]](
+    *,
+    base: ModelClass,
+    attribute: str | None = None,
+) -> tuple[ModelClass, ...]: ...
+
+
+@overload
+def models_with(
+    *,
+    base: None = None,
+    attribute: str | None = None,
+) -> tuple[_Model, ...]: ...
 
 
 def models_with(
@@ -24,10 +42,6 @@ def models_with(
                 and (base is None or issubclass(model, base))
                 and (attribute is None or bool(getattr(model, attribute, "")))
             ),
-            key=_model_key,
+            key=lambda model: model._meta.label_lower,
         )
     )
-
-
-def _model_key(model: _Model) -> tuple[str, str]:
-    return (model._meta.app_label, model._meta.model_name)

@@ -9,6 +9,7 @@ extension point (``file_finalized``) and the per-user Trash smart folder.
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 from typing import Any
 
 from django.apps import apps
@@ -18,6 +19,8 @@ from django.db.models import Model
 from django.db.models.signals import post_save
 from django.dispatch import Signal
 from rebac import system_context
+
+from angee.changesets import changeset, current_changeset
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +53,14 @@ def create_trash_folder(sender: type[Model], instance: Model, created: bool, raw
     except LookupError:
         # No composed concrete model (e.g. bare test settings) — nothing to own a Trash row.
         return
+    # The folder keeps history, so its insert is a captured write: a user created
+    # outside any boundary (a shell, a command) gets this system boundary.
+    boundary = (
+        changeset(fresh=True, activity="system", change_reason="storage.trash_folder")
+        if current_changeset() is None else nullcontext()
+    )
     try:
-        with system_context(reason="storage.trash_folder"):
+        with boundary, system_context(reason="storage.trash_folder"):
             folder_model._base_manager.get_or_create(
                 owner_id=instance.pk,
                 smart_kind=folder_model.SmartKind.TRASH,

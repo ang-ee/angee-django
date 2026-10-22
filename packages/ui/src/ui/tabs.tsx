@@ -10,7 +10,11 @@ import type {
 
 import { createVariantContext } from "../lib/variant-context";
 import { tv, type VariantProps } from "../lib/variants";
+import { CountBadge } from "./count-badge";
 
+/**
+ * @kind token
+ */
 export const tabsVariants = tv({
   slots: {
     root: "w-full min-w-0",
@@ -19,8 +23,7 @@ export const tabsVariants = tv({
       "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 text-13 font-medium text-fg-muted outline-none transition-colors hover:text-fg focus-visible:focus-ring data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50 data-[active]:text-fg [&_.glyph]:size-3.5",
     indicator: "absolute bg-brand",
     panel: "focus:outline-none",
-    count:
-      "inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-inset px-1.5 text-2xs font-semibold tabular-nums text-fg-muted",
+    count: "",
   },
   variants: {
     variant: {
@@ -38,7 +41,7 @@ export const tabsVariants = tv({
       },
       pill: {
         list: "gap-1 rounded-6 bg-inset p-1",
-        tab: "h-7 rounded-6 border border-transparent px-2.5 data-[active]:bg-sheet data-[active]:shadow-xs",
+        tab: "h-control-xs rounded-6 border border-transparent px-2.5 data-[active]:bg-sheet data-[active]:shadow-xs",
         indicator: "hidden",
         panel: "pt-3",
       },
@@ -69,6 +72,9 @@ export type TabsRootProps = Omit<BaseTabsRootProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Tabs
+ */
 export const TabsRoot = React.forwardRef<HTMLDivElement, TabsRootProps>(
   function TabsRoot({ className, variant = "card", ...props }, ref) {
     const styles = tabsVariants({ variant });
@@ -91,6 +97,9 @@ export type TabsListProps = Omit<BaseTabsListProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Tabs
+ */
 export const TabsList = React.forwardRef<HTMLDivElement, TabsListProps>(
   function TabsList({ className, variant, ...props }, ref) {
     const resolvedVariant = useTabsVariant(variant);
@@ -113,6 +122,9 @@ export type TabsTabProps = Omit<BaseTabsTabProps, "className" | "render"> &
     render?: BaseTabsTabProps["render"];
   };
 
+/**
+ * @owner Tabs
+ */
 export const TabsTab = React.forwardRef<HTMLElement, TabsTabProps>(
   function TabsTab({ className, icon, children, variant, ...props }, ref) {
     const resolvedVariant = useTabsVariant(variant);
@@ -139,6 +151,9 @@ export type TabsIndicatorProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner Tabs
+ */
 export const TabsIndicator = React.forwardRef<
   HTMLSpanElement,
   TabsIndicatorProps
@@ -160,6 +175,9 @@ export type TabsPanelProps = Omit<BaseTabsPanelProps, "className"> &
     className?: string;
   };
 
+/**
+ * @owner Tabs
+ */
 export const TabsPanel = React.forwardRef<HTMLDivElement, TabsPanelProps>(
   function TabsPanel({ className, variant, ...props }, ref) {
     const resolvedVariant = useTabsVariant(variant);
@@ -179,16 +197,19 @@ export type TabsCountProps = React.HTMLAttributes<HTMLSpanElement> & {
   className?: string;
 };
 
+/**
+ * @owner Tabs
+ */
 export const TabsCount = React.forwardRef<HTMLSpanElement, TabsCountProps>(
   function TabsCount({ className, ...props }, ref) {
-    const styles = tabsVariants();
-    return (
-      <span ref={ref} className={styles.count({ className })} {...props} />
-    );
+    return <CountBadge ref={ref} tone="muted" className={className} {...props} />;
   },
 );
 TabsCount.displayName = "TabsCount";
 
+/**
+ * @kind primitive
+ */
 export const Tabs = Object.assign(TabsRoot, {
   List: TabsList,
   Tab: TabsTab,

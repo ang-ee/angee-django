@@ -1,16 +1,10 @@
-import { Alert, Badge, Card, CardContent, CardHeader, CardTitle, LogStream } from "@angee/ui";
+import { Card, CardContent, CardHeader, CardTitle, ErrorBanner, LogStream, StatusBadge } from "@angee/ui";
 import { isFatalGraphQLWsCloseCode } from "@angee/refine";
-import type { DocumentData } from "@angee/refine";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
-import { useOperatorConnection, useOperatorQuery, useOperatorSubscription } from "../../data/transport";
-import type {
-  WORKSPACE_LOGS_QUERY,
-  WORKSPACE_LOGS_SUBSCRIPTION,
-} from "../../data/documents.daemon";
+import { useOperatorConnection } from "../../data/transport";
 
-const HISTORY_LIMIT = 500;
 const MAX_LIVE_LINES = 2000;
 
 /** Append a line to a live tail, keeping only the last {@link MAX_LIVE_LINES}. */
@@ -21,82 +15,24 @@ function appendCapped(prev: readonly string[], line: string): readonly string[] 
 
 export interface DaemonLogStream {
   lines: readonly string[];
-  /** The subscription/history error, if the stream failed to connect. */
+  /** The stream error: the daemon is unavailable or the log socket closed fatally. */
   error: Error | null;
-  /** The subscription is open and receiving. */
+  /** The log socket is open and receiving. */
   streaming: boolean;
 }
 
-/**
- * A daemon log tail: the one-shot history query for first paint, then the live
- * subscription (v0.6 streams these line-by-line). The subscription's `onData`
- * accumulates each emission so none are dropped; its error/connection state is
- * surfaced so an empty pane is never ambiguous (idle service vs failed stream).
- */
-export function useDaemonLogStream({
-  name,
-  historyQuery,
-  historyField,
-  streamSubscription,
-  streamField,
-}: {
-  name: string | undefined;
-  historyQuery: typeof WORKSPACE_LOGS_QUERY;
-  historyField: keyof DocumentData<typeof WORKSPACE_LOGS_QUERY> & string;
-  streamSubscription: typeof WORKSPACE_LOGS_SUBSCRIPTION;
-  streamField: keyof DocumentData<typeof WORKSPACE_LOGS_SUBSCRIPTION> & string;
-}): DaemonLogStream {
-  const history = useOperatorQuery(
-    historyQuery,
-    { name: name ?? "", limit: HISTORY_LIMIT },
-    { enabled: Boolean(name) },
-  );
-  const [live, setLive] = useState<readonly string[]>([]);
-  const stream = useOperatorSubscription(
-    streamSubscription,
-    { name: name ?? "" },
-    {
-      enabled: Boolean(name),
-      onData: (value) => {
-        const line = value[streamField];
-        if (line == null) return;
-        setLive((prev) => appendCapped(prev, line));
-      },
-    },
-  );
-
-  const lines = useMemo(() => {
-    const text = history.data?.[historyField] ?? "";
-    const historyLines = text === "" ? [] : text.replace(/\n$/, "").split("\n");
-    return [...historyLines, ...live];
-  }, [history.data, historyField, live]);
-
-  return {
-    lines,
-    error: stream.error ?? history.error ?? null,
-    // "Live" means a frame has arrived — the subscription's `fetching` only means
-    // it was requested, which would read Live before the socket connects.
-    streaming: stream.data != null && stream.error == null,
-  };
-}
-
-const SERVICE_LOG_TAIL = 500;
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
 
 // Build the structured per-service log socket URL from the same-origin daemon
 // endpoint: swap the graphql path for the logs-stream path, http→ws, carrying the
-// operator bearer (it passes the admin/operator tier) and a `tail` backlog.
-function serviceLogsSocketUrl(
-  endpoint: string,
-  token: string,
-  name: string,
-  tail: number,
-): string {
+// operator bearer (it passes the admin/operator tier). No `tail`: the daemon owns
+// how much backlog a follow replays, and refuses one a runtime cannot replay whole.
+function serviceLogsSocketUrl(endpoint: string, token: string, name: string): string {
   const url = new URL(endpoint, window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = `${url.pathname.replace(/\/graphql\/?$/, "")}/services/${encodeURIComponent(name)}/logs/stream`;
-  url.search = `tail=${tail}&token=${encodeURIComponent(token)}`;
+  url.search = `token=${encodeURIComponent(token)}`;
   return url.toString();
 }
 
@@ -115,15 +51,17 @@ function parseLogFrame(data: unknown): string | null {
 }
 
 /**
- * A service's live logs over the v0.6 structured `/services/{name}/logs/stream`
- * WebSocket: the socket replays `tail` backlog then follows live, framing each
- * line as a `LogLine` (exact per-service attribution + best-effort level). A
- * transient drop reconnects with capped backoff (re-following without re-replaying
- * the backlog); a fatal close is terminal. The connection token is read from a ref
- * so its 15-minute rotation hot-swaps on the next reconnect rather than tearing
- * down the live socket and wiping the on-screen buffer.
+ * A service's live logs over the structured `/services/{name}/logs/stream`
+ * WebSocket: the socket replays the daemon's backlog then follows live, framing
+ * each line as a `LogLine` (exact per-service attribution + best-effort level). A
+ * transient drop reconnects with capped backoff, and the reconnect's replay
+ * replaces the on-screen buffer: every follow replays a backlog, so keeping the old
+ * lines would show them twice, and the replay carries what the gap missed. A fatal
+ * close is terminal. The connection token is read from a ref so its 15-minute
+ * rotation hot-swaps on the next reconnect rather than tearing down the live socket.
  */
 export function useServiceLogStream(name: string | undefined): DaemonLogStream {
+  const t = useOperatorT();
   const connection = useOperatorConnection();
   const endpoint = connection?.endpoint ?? "";
   const token = connection?.token ?? "";
@@ -143,7 +81,7 @@ export function useServiceLogStream(name: string | undefined): DaemonLogStream {
     if (!name) return;
     if (!endpoint) {
       setStatus("error");
-      setError(new Error("Operator daemon is unavailable."));
+      setError(new Error(t("logs.unavailable")));
       return;
     }
 
@@ -155,12 +93,11 @@ export function useServiceLogStream(name: string | undefined): DaemonLogStream {
 
     const open = (): void => {
       if (disposed) return;
-      const ws = new WebSocket(
-        serviceLogsSocketUrl(endpoint, tokenRef.current, name, connectedOnce ? 0 : SERVICE_LOG_TAIL),
-      );
+      const ws = new WebSocket(serviceLogsSocketUrl(endpoint, tokenRef.current, name));
       socket = ws;
       ws.onopen = () => {
         if (disposed) return;
+        if (connectedOnce) setLines([]);
         connectedOnce = true;
         attempt = 0;
         setStatus("live");
@@ -178,7 +115,7 @@ export function useServiceLogStream(name: string | undefined): DaemonLogStream {
         socket = null;
         if (event.code !== 1000 && isFatalGraphQLWsCloseCode(event.code)) {
           setStatus("error");
-          setError(new Error(`Log stream closed (${event.code})`));
+          setError(new Error(t("logs.closed", { code: event.code })));
           return;
         }
         setStatus("connecting");
@@ -194,7 +131,7 @@ export function useServiceLogStream(name: string | undefined): DaemonLogStream {
       if (timer) clearTimeout(timer);
       socket?.close();
     };
-  }, [endpoint, name]);
+  }, [endpoint, name, t]);
 
   return { lines, error, streaming: status === "live" };
 }
@@ -202,51 +139,31 @@ export function useServiceLogStream(name: string | undefined): DaemonLogStream {
 /**
  * A drop-in live service-log panel: the structured `/logs/stream` WebSocket tail
  * + the connection-status panel. The one service-logs surface — the operator
- * console's service detail and any addon that provisions a service (the agents
- * console) compose this rather than re-plumbing a log subscription.
+ * console's service record page and logs drawer, and any addon that provisions a
+ * service (the agents console), compose this rather than re-plumbing a log stream.
  */
-export function ServiceLogs({
-  name,
-  title,
-}: {
-  name: string | undefined;
-  title?: ReactNode;
-}): ReactNode {
+export function ServiceLogs({ name, title }: { name: string | undefined; title?: ReactNode }): ReactNode {
   const t = useOperatorT();
   const logs = useServiceLogStream(name);
   return <LogPanel logs={logs} title={title ?? t("services.detail.logs")} />;
 }
 
-/** A titled log card with a connection-status badge and the {@link LogStream} tail. */
-export function LogPanel({
-  logs,
-  title,
-}: {
-  logs: DaemonLogStream;
-  title: ReactNode;
-}): ReactNode {
-  const t = useOperatorT();
-  const status = logs.error
-    ? { tone: "danger" as const, label: t("logs.error") }
-    : logs.streaming
-      ? { tone: "success" as const, label: t("logs.live") }
-      : { tone: "neutral" as const, label: t("logs.connecting") };
+const STREAM_STATE_LABEL = { error: "logs.error", live: "logs.live", connecting: "logs.connecting" } as const;
 
+/** A titled log card with the connection state as a status pill and the {@link LogStream} tail. */
+function LogPanel({ logs, title }: { logs: DaemonLogStream; title: ReactNode }): ReactNode {
+  const t = useOperatorT();
+  // The stream's state in the shared status vocabulary: `error` reads danger, `live` success, `connecting` warning.
+  const state = logs.error ? "error" : logs.streaming ? "live" : "connecting";
   return (
     <Card className="flex min-h-0 flex-1 flex-col">
       <CardHeader className="flex flex-row items-center justify-between gap-2">
         <CardTitle>{title}</CardTitle>
-        <Badge density="compact" shape="pill" tone={status.tone}>
-          {status.label}
-        </Badge>
+        <StatusBadge value={state}>{t(STREAM_STATE_LABEL[state])}</StatusBadge>
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col gap-2">
-        {logs.error ? <Alert tone="danger">{logs.error.message}</Alert> : null}
-        <LogStream
-          lines={logs.lines}
-          className="min-h-64 flex-1"
-          emptyContent={t("logs.empty")}
-        />
+        {logs.error ? <ErrorBanner title={t("logs.error")} description={logs.error.message} /> : null}
+        <LogStream lines={logs.lines} className="min-h-64 flex-1" emptyContent={t("logs.empty")} />
       </CardContent>
     </Card>
   );

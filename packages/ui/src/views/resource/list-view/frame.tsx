@@ -33,6 +33,9 @@ import { ResourceQueryError } from "../ResourceQueryError";
 import { validateResourceViewState } from "../model/state";
 import { ErrorBanner } from "../../../fragments/ErrorBanner";
 import { DashboardCollectionSurface } from "../../../dashboard/surface";
+/**
+ * @kind surface
+ */
 export function ListView<TRow extends Row = Row>(
   props: ListViewProps<TRow>,
 ): React.ReactElement {
@@ -95,8 +98,8 @@ function ValidatedListViewBody<TRow extends Row>(
     return <ErrorBanner description={error instanceof Error ? error.message : String(error)} />;
   }
   let error = props.resourceView.state.queryError;
-  if (!error && props.renderItem && props.resourceView.state.view !== "list") {
-    error = new Error("Ordered item lists support only the flat list view.");
+  if (!error && props.renderPaneRow && props.resourceView.state.view !== "list") {
+    error = new Error(`Pane lists support only the list view.`);
   }
   if (!error && query) {
     try {
@@ -126,9 +129,6 @@ function ValidatedListViewBody<TRow extends Row>(
         (props.resourceView.state.view === "board" || props.resourceView.state.view === "gantt") && props.laneSource && group
           ? [group]
           : groups;
-      if (props.renderItem && effectiveGroups.length > 0) {
-        throw new Error("Ordered item lists do not support grouping.");
-      }
       if (effectiveGroups.length > 0) {
         if (
           !isClientRowModel(metadata?.resource) &&
@@ -149,7 +149,7 @@ function ValidatedListViewBody<TRow extends Row>(
     <ResourceViewKinds resource={props.source ? "" : props.resource}>
       {error ? (
         <ResourceQueryError error={error} onReset={() => {
-          if (props.renderItem) props.resourceView.setView("list");
+          if (props.renderPaneRow) props.resourceView.setView("list");
           props.resourceView.resetQuery();
         }} />
       ) : (
@@ -184,9 +184,10 @@ function ListViewBody<TRow extends Row = Row>({
   toolbarWrap,
   tableLayout,
   headerVisibility,
-  selectable,
+  selectable: declaredSelectable,
   renderGroupLabel,
-  renderItem,
+  renderPaneRow,
+  pane,
   columns,
   fields,
   baseFilter,
@@ -240,7 +241,15 @@ function ListViewBody<TRow extends Row = Row>({
   const modelMetadata = source ? null : discoveredMetadata;
   const textFilterField = declaredTextField === undefined && !modelMetadata ? DEFAULT_TEXT_FILTER_FIELD : declaredTextField;
   const recordMatchFields = useResourceRecordMatchFields(source ? "" : resource);
-  const queryFields = useValueStable([...(fields ?? []), ...recordMatchFields, ...(boardCard ? [boardCard.title, ...(boardCard.fields ?? [])] : [])]);
+  // A declared filter option names the fields its rows need while its filter is active.
+  const activeFilter = Filter.from(Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter));
+  const filterOptionFields = (explicitFilterOptions ?? []).flatMap(
+    (option) => option.fields?.length && activeFilter.hasPreset(option.filter) ? option.fields : [],
+  );
+  const queryFields = useValueStable([
+    ...(fields ?? []), ...filterOptionFields, ...recordMatchFields,
+    ...(boardCard ? [boardCard.title, ...(boardCard.fields ?? [])] : []),
+  ]);
   // The Calendar kind is offered only where the page declares occurrence sources;
   // the switcher's options derive from that (list + board always).
   const ganttAvailable = !source && Boolean(gantt && (laneSource || gantt.linked) && modelMetadata);
@@ -320,6 +329,7 @@ function ListViewBody<TRow extends Row = Row>({
     () => Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter),
     [resourceView.state.filter, resourceView.baseFilter],
   );
+  const selectable = declaredSelectable ?? presentation !== "embedded";
   const declaredFacets = useRelationFacets(
     source ? "" : resource,
     facets,
@@ -376,13 +386,14 @@ function ListViewBody<TRow extends Row = Row>({
       resource={resource}
       source={source}
       textFilterField={textFilterField}
-      maxGroupDepth={renderItem ? 0 : maxGroupDepth}
+      maxGroupDepth={maxGroupDepth}
       toolbarWrap={toolbarWrap}
       tableLayout={tableLayout}
       headerVisibility={headerVisibility}
-      selectable={renderItem ? false : selectable}
+      selectable={renderPaneRow ? false : selectable}
       renderGroupLabel={renderGroupLabel}
-      renderItem={renderItem}
+      renderPaneRow={renderPaneRow}
+      pane={pane}
       resolvedColumns={resolvedColumns}
       modelMetadata={modelMetadata}
       resourceView={resourceView}
@@ -422,7 +433,7 @@ function ListViewBody<TRow extends Row = Row>({
     />
   );
   const searchInput = {
-    columns: resolvedColumns, modelMetadata, resourceView, search: searchDeclaration, renderItem: Boolean(renderItem),
+    columns: resolvedColumns, modelMetadata, resourceView, search: searchDeclaration,
     query: source?.query, inferOptions: !source,
     defaultGroup, defaultGroups, textFilterField, groupOptions: explicitGroupOptions,
     declaredFacets, scalarFacets, filterOptions: explicitFilterOptions,
@@ -436,7 +447,8 @@ function ListViewBody<TRow extends Row = Row>({
       surfaceProps={surfaceProps} gantt={gantt} availableViews={availableViews}
       presentation={presentation} className={className} onCreate={onCreate} createLabel={createLabel}
       onRowClick={onRowClick} rowHref={rowHref} toolbarActions={toolbarActions} toolbarWrap={toolbarWrap}
-      maxGroupDepth={maxGroupDepth} selectable={selectable}
+      maxGroupDepth={maxGroupDepth}
+      selectable={selectable}
       searchInput={searchInput}
     />;
     return (

@@ -24,6 +24,9 @@ const ResourceViewUtilityContextBinding = makeContext<ResourceViewUtilityContext
   "ResourceViewUtilityContext",
 );
 
+/**
+ * @owner ResourceToolbar
+ */
 export function useResourceViewUtilityContext(): ResourceViewUtilityContext {
   return ResourceViewUtilityContextBinding.use();
 }
@@ -32,6 +35,7 @@ export function useResourceViewUtilityContext(): ResourceViewUtilityContext {
  * The `resource#utilities` children for one collection's model and its MTI
  * parent. A list over its own `source` names no schema model, so it skips the
  * model lookup (`modelBacked: false`) and keeps the kind-level utilities.
+ * @owner ResourceToolbar
  */
 export function useResourceViewUtilities(
   resource: string,
@@ -42,6 +46,9 @@ export function useResourceViewUtilities(
   return useContainer("resource#utilities", { models });
 }
 
+/**
+ * @owner ResourceToolbar
+ */
 export function ResourceViewUtilities({
   value,
   modelBacked = true,

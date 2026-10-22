@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { formatDayLabel } from "@angee/ui";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ThreadTranscript } from "./ThreadTranscript";
@@ -38,11 +39,18 @@ vi.mock("@angee/ui", async (importOriginal) => {
       (_namespace: string, messages: Record<string, string>) =>
       (key: string) =>
         messages[key] ?? key,
+    // The jump-to-date control is the runtime's date widget; the suite stands in a plain field for it.
+    useResolvedWidget: (key: string) => key === "date" ? {
+      edit: ({ value, onChange, field }: { value: unknown; onChange?: (next: unknown) => void; field?: { label?: string } }) => (
+        <input aria-label={field?.label} value={typeof value === "string" ? value : ""}
+          onChange={(event) => onChange?.(event.target.value || null)} />
+      ),
+    } : undefined,
   };
 });
 
 vi.mock("./thread-message-feed", () => ({ useThreadMessageFeed: mocks.useThreadMessageFeed }));
-
+vi.mock("./MessageSourceCopies", () => ({ MessageSourceCopies: () => null }));
 
 function message(overrides: Partial<ThreadTranscriptRow> = {}): ThreadTranscriptRow {
   return {
@@ -60,6 +68,7 @@ function message(overrides: Partial<ThreadTranscriptRow> = {}): ThreadTranscript
       value: "ada@example.com",
       party_link_confirmed: false,
       party: null,
+      avatar: null,
     },
     parts: [{ role: "BODY", fragment: { text: "Hi there" }, file: null }],
     reaction_groups: [],
@@ -95,7 +104,7 @@ describe("ThreadTranscript", () => {
   test("renders inbound, outbound, and internal turns with their distinct treatments", () => {
     mocks.transcriptRows = [
       message({ id: "in", direction: "INBOUND", parts: [{ role: "BODY", fragment: { text: "Inbound hello" }, file: null }] as never }),
-      message({ id: "out", direction: "OUTBOUND", sender: { id: "hnd_2", display_name: "Support", value: "us@example.com", party_link_confirmed: false, party: null }, parts: [{ role: "BODY", fragment: { text: "Outbound reply" }, file: null }] as never }),
+      message({ id: "out", direction: "OUTBOUND", sender: { id: "hnd_2", display_name: "Support", value: "us@example.com", party_link_confirmed: false, party: null, avatar: null }, parts: [{ role: "BODY", fragment: { text: "Outbound reply" }, file: null }] as never }),
       message({ id: "note", direction: "INTERNAL", parts: [{ role: "BODY", fragment: { text: "Internal jotting" }, file: null }] as never }),
     ];
     mocks.total = mocks.transcriptRows.length;
@@ -164,6 +173,28 @@ describe("ThreadTranscript", () => {
     expect(screen.getByRole("button", { name: "👍 reaction, 2" })).toBeTruthy();
   });
 
+  test("opens an attachment in the host's preview with its message", () => {
+    const attachment = {
+      id: "prt_pdf",
+      name: "contract.pdf",
+      role: "BODY",
+      disposition: "ATTACHMENT",
+      fragment: null,
+      file: { id: "fil_pdf", filename: "contract.pdf", url: "/files/fil_pdf" },
+    };
+    mocks.transcriptRows = [message({ parts: [attachment] as never })];
+    const preview = vi.fn();
+
+    render(<ThreadTranscript threadId="thr_1" onPreviewFile={preview} />);
+
+    expect(screen.queryByRole("link", { name: /contract\.pdf/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /contract\.pdf/ }));
+    expect(preview).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "msg_1" }),
+      expect.objectContaining({ id: "prt_pdf" }),
+    );
+  });
+
   test("offers Load older using the server continuation", () => {
     mocks.transcriptRows = [message()];
     mocks.total = 120;
@@ -207,7 +238,8 @@ describe("ThreadTranscript", () => {
       message({ id: "z", feed_order_key: "v1:0001", parts: [{ role: "BODY", fragment: { text: "Oldest" }, file: null }] as never }),
     ];
     render(<ThreadTranscript threadId="thr_1" />);
-    const items = screen.getAllByRole("listitem");
+    // The transcript's own rows (each wraps its feed row), in reading order.
+    const items = Array.from(screen.getByRole("list", { name: "Conversation transcript" }).querySelectorAll(":scope > li"));
     expect(items[0]?.textContent).toContain("Oldest");
     expect(items[1]?.textContent).toContain("Newest");
   });
@@ -230,7 +262,7 @@ test("day separators and date anchors share the explicitly selected timezone", (
   ];
   const onAnchorChange = vi.fn();
   render(<ThreadTranscript threadId="thr_1" order="history" timezone="America/New_York" onAnchorChange={onAnchorChange} />);
-  const day = new Intl.DateTimeFormat(undefined, { timeZone: "America/New_York" }).format(new Date("2026-07-02T00:30:00Z"));
+  const day = formatDayLabel("2026-07-02T00:30:00Z", { timeZone: "America/New_York" });
   expect(screen.getAllByText(day)).toHaveLength(1);
   fireEvent.change(screen.getByLabelText("Jump to date"), { target: { value: "2026-07-01" } });
   expect(onAnchorChange).toHaveBeenCalledWith("date:2026-07-01@America/New_York");

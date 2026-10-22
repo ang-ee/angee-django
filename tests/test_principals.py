@@ -10,8 +10,8 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, system_context, to_subject_ref
 
+from angee.actors import actor_user_id
 from angee.agents.testing.models import Agent
-from angee.base.actors import actor_user_id
 
 User = get_user_model()
 
@@ -86,13 +86,18 @@ def test_agent_rename_resyncs_service_user_label(composed_tables: None) -> None:
 
 
 def test_agent_full_save_without_name_change_does_not_touch_service_user(
-    composed_tables: None,
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A no-op agent save must not query or update the service-user row."""
 
     owner = User.objects.create_user(username="principal-owner-noop", email="principal-noop@example.com")
     with system_context(reason="test.agent.service_user.noop_setup"):
         agent = Agent.objects.create(name="Noop Save", owner=owner)
+
+    def unexpected_sync(agent: object) -> None:
+        raise AssertionError("A no-op full save must not reconcile reader membership.")
+
+    monkeypatch.setattr("angee.agents.models.sync_resource_reader_role", unexpected_sync)
 
     user_table = User._meta.db_table
     with CaptureQueriesContext(connection) as captured:
@@ -160,17 +165,19 @@ def test_agent_instance_delete_deactivates_service_user(composed_tables: None) -
         assert User.objects.get(pk=user_id).is_active is False
 
 
-def test_agent_owner_delete_cascade_deactivates_service_user(composed_tables: None) -> None:
-    """Owner-user cascades still run the Agent service-user lifecycle side effect."""
+def test_agent_owner_delete_clears_ownership_and_keeps_the_service_user(composed_tables: None) -> None:
+    """Deleting the owner clears it and leaves the agent and its active principal to administrators."""
 
-    owner = User.objects.create_user(username="principal-owner-cascade", email="principal-cascade@example.com")
-    with system_context(reason="test.agent.service_user.cascade_setup"):
-        agent = Agent.objects.create(name="Cascade Deleted", owner=owner)
+    owner = User.objects.create_user(username="principal-owner-cleared", email="principal-cleared@example.com")
+    with system_context(reason="test.agent.service_user.owner_delete_setup"):
+        agent = Agent.objects.create(name="Owner Deleted", owner=owner)
         user_id = agent.user_id
         owner.delete()
 
-    with system_context(reason="test.agent.service_user.assert_cascade"):
-        assert User.objects.get(pk=user_id).is_active is False
+    with system_context(reason="test.agent.service_user.assert_owner_delete"):
+        agent.refresh_from_db()
+        assert agent.owner_id is None
+        assert User.objects.get(pk=user_id).is_active is True
 
 
 def test_agent_bulk_delete_deactivates_service_user(composed_tables: None) -> None:

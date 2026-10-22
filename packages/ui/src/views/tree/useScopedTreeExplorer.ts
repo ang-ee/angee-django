@@ -44,6 +44,7 @@ export interface ScopedTreeExplorerController<
  * Shared state owner for explorer pages with a root picker and scoped tree. The
  * hook owns root pinning and tree-selection clamping; addon pages still own
  * route state, row projection, DnD policy, and domain actions.
+ * @owner ScopedExplorerPane
  */
 export function useScopedTreeExplorer<
   TRoot,

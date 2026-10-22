@@ -6,15 +6,18 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import { gql } from "graphql-tag";
 import {
   ModelMetadataProvider,
   schemaFieldMetadataFromDataResources,
+  type DataResourceFieldMetadata,
   type SchemaFieldMetadata,
 } from "@angee/metadata";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { useRelationOptions } from "./relation-options";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
+import { AppRuntimeProvider } from "../../runtime";
 
 const sdkMocks = vi.hoisted(() => ({
   useListOptions: null as {
@@ -23,7 +26,7 @@ const sdkMocks = vi.hoisted(() => ({
     filters?: readonly unknown[];
     sorters?: readonly unknown[];
     pagination?: unknown;
-    meta?: { fields?: unknown };
+    meta?: { fields?: unknown; gqlQuery?: ReturnType<typeof gql>; gqlVariables?: Record<string, unknown> };
   } | null,
   rows: [
     { id: "rev_1", display_name: "Acme" },
@@ -41,7 +44,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       filters?: readonly unknown[];
       sorters?: readonly unknown[];
       pagination?: unknown;
-      meta?: { fields?: unknown };
+      meta?: { fields?: unknown; gqlQuery?: ReturnType<typeof gql>; gqlVariables?: Record<string, unknown> };
     }) => {
       sdkMocks.useListOptions = options ?? null;
       return {
@@ -80,6 +83,43 @@ describe("useRelationOptions", () => {
     expect(sdkMocks.useListOptions?.pagination).toEqual({ mode: "server", currentPage: 1, pageSize: 200 });
     expect(sdkMocks.useListOptions?.meta?.fields).toEqual(["id", "display_name"]);
     expect(screen.getByText("rev_1: Acme")).toBeTruthy();
+  });
+
+  test("projects declared description and status fields into picker options", () => {
+    sdkMocks.rows = [{
+      id: "rev_1",
+      display_name: "Acme Bank",
+      description: "Checking •••• 4242",
+      verification_state: "VERIFIED",
+    }];
+    render(
+      <ModelMetadataProvider metadata={metadata}>
+        <AppRuntimeProvider runtime={{ statusTones: { verified: "success" } }}>
+          <RelationOptionsProbe relation={reviewerRelation}
+            optionDescriptionField="description" optionStatusField="verification_state" />
+        </AppRuntimeProvider>
+      </ModelMetadataProvider>,
+    );
+
+    expect(sdkMocks.useListOptions?.meta?.fields).toEqual([
+      "id", "display_name", "description", "verification_state",
+    ]);
+    expect(screen.getByText("rev_1: Acme Bank | Checking •••• 4242 | Verified (success)")).toBeTruthy();
+  });
+
+  test("binds a computed option status to its surrounding context", () => {
+    sdkMocks.rows = [{ id: "rev_1", display_name: "Acme Bank", verification_state: "VERIFIED" }];
+    render(
+      <ModelMetadataProvider metadata={metadata}>
+        <RelationOptionsProbe relation={reviewerRelation}
+          optionStatusField="verification_state"
+          optionStatusArguments={[{ name: "company_id", type: "ID!", value: "company_7" }]} />
+      </ModelMetadataProvider>,
+    );
+
+    expect(sdkMocks.useListOptions?.meta?.gqlVariables).toEqual({ selection_0_0: "company_7" });
+    expect(sdkMocks.useListOptions!.meta!.gqlQuery!.loc?.source.body)
+      .toContain("verification_state(company_id: $selection_0_0)");
   });
 
   test("returns relation options in server order without client label sorting", () => {
@@ -246,17 +286,26 @@ function RelationOptionsProbe({
   searchFields,
   searchText,
   sorters,
+  optionDescriptionField,
+  optionStatusField,
+  optionStatusArguments,
 }: {
   relation: RelationFieldInfo;
   searchFields?: readonly string[];
   searchText?: string;
   sorters?: readonly { field: string; order: "asc" | "desc" }[];
+  optionDescriptionField?: string;
+  optionStatusField?: string;
+  optionStatusArguments?: readonly { name: string; type: string; value: unknown }[];
 }) {
-  const { options } = useRelationOptions(relation, { searchFields, searchText, sorters });
+  const { options } = useRelationOptions(relation, {
+    searchFields, searchText, sorters, optionDescriptionField, optionStatusField, optionStatusArguments,
+  });
   return (
     <ul>
       {options.map((option) => (
-        <li key={option.value}>{`${option.value}: ${option.label}`}</li>
+        <li key={option.value}>{`${option.value}: ${option.label}${option.description ? ` | ${option.description}` : ""}${
+          option.status ? ` | ${option.status.label} (${option.status.tone})` : ""}`}</li>
       ))}
     </ul>
   );
@@ -295,10 +344,33 @@ const searchableField = (name: string) => testQueryField(name, {
   },
 });
 
+const displayField = (
+  name: string,
+  kind: DataResourceFieldMetadata["kind"] = "scalar",
+  values?: DataResourceFieldMetadata["values"],
+): DataResourceFieldMetadata => ({
+  name,
+  kind,
+  scalar: "String",
+  ...(values ? { values } : {}),
+  readable: true,
+  aggregatable: false,
+  creatable: false,
+  updatable: false,
+  requiredOnCreate: false,
+});
+
 const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
   testDataResource("example.Reviewer", {
+    roots: { aggregate: "reviewers_aggregate" },
+    typeNames: { filter: "ReviewerBoolExp", order: "ReviewerOrderBy" },
     recordRepresentation: "display_name",
     recordSearchFields: ["username"],
+    fields: [
+      displayField("display_name"),
+      displayField("description"),
+      displayField("verification_state", "enum", [{ value: "VERIFIED", description: "Verified" }]),
+    ],
     query: testResourceQuery({
       fields: {
         display_name: testQueryField("display_name", { filter: null }),

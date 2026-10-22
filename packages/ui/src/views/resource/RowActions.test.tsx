@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   confirm: vi.fn(),
   danger: vi.fn(),
+  success: vi.fn(),
   mutate: vi.fn(),
   mutationOptions: [] as unknown[],
 }));
@@ -17,7 +18,7 @@ vi.mock("../../feedback", () => ({
   errorMessage: (cause: unknown, fallback: string) =>
     cause instanceof Error ? cause.message : fallback,
   useConfirm: () => mocks.confirm,
-  useToast: () => ({ danger: mocks.danger }),
+  useToast: () => ({ danger: mocks.danger, success: mocks.success }),
 }));
 
 vi.mock("../../chrome/Glyph", () => ({

@@ -32,6 +32,9 @@ export interface DeletePreviewDialogProps {
   onCancel: () => void;
 }
 
+/**
+ * @kind surface
+ */
 export function DeletePreviewDialog({
   preview,
   recordCount,

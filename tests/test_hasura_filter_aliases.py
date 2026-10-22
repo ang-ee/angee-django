@@ -7,10 +7,10 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
-from angee.base.models import AngeeDataModel
 from angee.graphql.data.hasura import _declared_aliases, _declared_filter_expressions, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.models import AngeeDataModel
 from tests.composed_host import run_composed_tests
 from tests.conftest import create_user, execute_schema, make_addon, result_data
 from tests.scopedemo.models import Scope

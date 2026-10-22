@@ -35,6 +35,18 @@ def register(server: FastMCP) -> None:
         server,
         [
             GraphQLTool(
+                operation="create_page", name="create_page", fields=("sqid", "title", "kind", _MARKDOWN),
+                args=("vault", "title"),
+                description="Create a page in a writable vault. Supply the vault public id and title.",
+            ),
+            GraphQLTool(
+                operation="vaults",
+                name="list_vaults",
+                fields=("sqid", "name", "description"),
+                limit_arg="limit",
+                description="List readable knowledge vaults and their public ids for a scoped search.",
+            ),
+            GraphQLTool(
                 operation="pages_by_pk",
                 name="read_page",
                 fields=("sqid", "title", "kind", _MARKDOWN, _BACKLINKS),
@@ -48,8 +60,8 @@ def register(server: FastMCP) -> None:
                 fields=("sqid", "title", "kind"),
                 args=("vault", "query"),
                 limit_arg="first",
-                description="Search a vault for pages matching a query, returning the matching pages. "
-                "vault is the vault's public id (sqid).",
+                description="Search readable pages. Supply a vault public id to restrict the search, "
+                "or omit vault to search up to 100 readable vaults by backend. first bounds the total result count.",
             ),
             GraphQLTool(
                 operation="patch_page_section",

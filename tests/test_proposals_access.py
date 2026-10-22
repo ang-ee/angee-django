@@ -24,9 +24,9 @@ from rebac import (
     write_relationships,
 )
 
-from angee.base.errors import RecordAccessSubjectRefused
-from angee.base.mixins import CreationKeyConflict, StaleRevisionError
+from angee.errors import RecordAccessSubjectRefused
 from angee.messaging.testing.models import Person
+from angee.models import CreationKeyConflict, StaleRevisionError
 from angee.projects.testing.models import Project, Task
 from tests.conftest import Backend, Drive, create_platform_admin
 from tests.proposals_models import Answer, Proposal, Round, Topic
@@ -55,18 +55,11 @@ def _grant(resource: Any, relation: str, subject: Any) -> None:
 
 
 def _create_proposal(*, actor: Any, round: Round, responder: Any) -> Proposal:
-    """Exercise the retained manual factory's explicit preflight and scoped insert."""
+    """Exercise the prepared row's native scoped insertion gate."""
 
     proposal = Proposal(round=round, responder=responder)
     with actor_context(actor):
-        Proposal.objects.check_create(
-            {
-                "round": (round,),
-                "responder": (responder,),
-            }
-        )
-        proposal.sudo(reason="tests.proposals.create").save()
-    return proposal
+        return Proposal.objects.insert(proposal)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -251,24 +244,6 @@ def test_proposal_save_leaves_unrelated_deferred_columns_unwritten(
         assert stored.created_at == original_created_at
 
 
-@pytest.mark.django_db(transaction=True)
-def test_task_proposal_donor_preserves_deferred_save() -> None:
-    """The question guard preserves a loaded-fields-only update of unrelated facts."""
-
-    with system_context(reason="tests.proposals.task_deferred_save"):
-        row = Task.objects.create(clarification_creation_key="retained")
-        deferred = Task.objects.only("pk", "note").get(pk=row.pk)
-        deferred.note = "Changed note"
-        with CaptureQueriesContext(connection) as queries:
-            deferred.save()
-        updates = [query["sql"] for query in queries if query["sql"].startswith("UPDATE ")]
-        assert len(updates) == 1
-        assert '"clarification_creation_key" =' not in updates[0]
-        stored = Task.objects.get(pk=row.pk)
-        assert stored.note == "Changed note"
-        assert stored.clarification_creation_key == "retained"
-
-
 def _review_round(admin, *, policy="drafts_and_tracks", **fields):
     with actor_context(admin):
         project = Project.objects.create(title="Round target")
@@ -389,11 +364,11 @@ def test_question_surrender_replay_and_both_immutable_donors(proposal_schema):
         round.admit(recipient)
     with actor_context(asker):
         question = round.with_actor(asker).ask(
-            "Question", "Body", audience="managers", client_creation_key="question-1"
+            "Question", "Body", audience="managers", idempotency_key="question-1"
         )
-        assert round.ask("Question", "Body", audience="managers", client_creation_key="question-1").pk == question.pk
+        assert round.ask("Question", "Body", audience="managers", idempotency_key="question-1").pk == question.pk
         with pytest.raises(CreationKeyConflict):
-            round.ask("Changed", "Body", audience="managers", client_creation_key="question-1")
+            round.ask("Changed", "Body", audience="managers", idempotency_key="question-1")
     with actor_context(admin):
         with pytest.raises(ValidationError, match="surrendered"):
             round.with_actor(admin).pass_clarification(question, recipient)
@@ -406,10 +381,6 @@ def test_question_surrender_replay_and_both_immutable_donors(proposal_schema):
         row.visibility = "inherited"
         with pytest.raises(ValidationError, match="immutable"):
             row.save(update_fields=("visibility",))
-        row.refresh_from_db()
-        row.clarification_creation_key = "replacement"
-        with pytest.raises(ValidationError, match="immutable"):
-            row.save(update_fields=("clarification_creation_key",))
 
 
 @pytest.mark.django_db(transaction=True)

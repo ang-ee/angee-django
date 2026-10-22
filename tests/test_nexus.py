@@ -27,6 +27,8 @@ from angee.messaging.testing.models import (
     Participant,
     Party,
     Person,
+    Relationship,
+    RelationshipKind,
     Thread,
     ThreadFollower,
 )
@@ -146,14 +148,17 @@ def test_cadence_declares_the_only_human_fact() -> None:
 def test_gravity_uses_the_directional_pair_for_reciprocity() -> None:
     """One-way traffic scores zero; reciprocal fresh traffic scores positively."""
 
-    assert Tie.compute_gravity(
-        message_count=40,
-        a_to_b_count=40,
-        b_to_a_count=0,
-        last_at=_T0,
-        platform_count=1,
-        now=_T0,
-    ) == 0.0
+    assert (
+        Tie.compute_gravity(
+            message_count=40,
+            a_to_b_count=40,
+            b_to_a_count=0,
+            last_at=_T0,
+            platform_count=1,
+            now=_T0,
+        )
+        == 0.0
+    )
     reciprocal = Tie.compute_gravity(
         message_count=40,
         a_to_b_count=20,
@@ -246,9 +251,7 @@ def test_recompute_derives_addressed_reply_and_mention_edges_once(composed_table
         assert tie.platforms == ["email"]
         assert tie.first_interaction_at == reply.sent_at
         assert tie.last_interaction_at == reply.sent_at
-        assert (tie.a_to_b_count, tie.b_to_a_count) == (
-            (1, 0) if alice.pk < bob.pk else (0, 1)
-        )
+        assert (tie.a_to_b_count, tie.b_to_a_count) == ((1, 0) if alice.pk < bob.pk else (0, 1))
 
 
 @pytest.mark.django_db(transaction=True)
@@ -672,14 +675,86 @@ def test_party_network_applies_pair_intersection_to_every_edge(
     assert nodes[visible.sqid]["detail"] == "0 handles"
     assert nodes[visible.sqid]["meta"]["handle_count"] == 0
 
-    identity_graph = _data(
-        execute_schema(schema, query, {"id": center.sqid}, user=identity_reader)
-    )["party_graph"]
+    identity_graph = _data(execute_schema(schema, query, {"id": center.sqid}, user=identity_reader))["party_graph"]
     assert len(identity_graph["nodes"]) == 1
     node = identity_graph["nodes"][0]
     assert node["id"] == center.sqid
     assert "detail" not in node
     assert "handle_count" not in node["meta"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_party_graph_projects_visible_typed_relationships(project_access_schema: Any) -> None:
+    """Tracked and free-text relationships render using the current statement model."""
+
+    del project_access_schema
+    reader = User.objects.create_user(username="graph-reader")
+    owner = User.objects.create_user(username="graph-owner")
+    with system_context(reason="test nexus relationship graph seed"):
+        center = Party._base_manager.create(display_name="Center", created_by=owner)
+        visible = Party._base_manager.create(display_name="Visible", created_by=owner)
+        hidden = Party._base_manager.create(display_name="Hidden", created_by=owner)
+        kind = RelationshipKind._base_manager.create(slug="mentor", name="Mentor", inverse_name="Mentee")
+        tracked = Relationship._base_manager.create(party=center, other_party=visible, kind=kind, created_by=owner)
+        untracked = Relationship._base_manager.create(
+            party=center, other_name="Untracked mentor", title="Advisor", kind=kind, created_by=owner
+        )
+        hidden_relationship = Relationship._base_manager.create(
+            party=center, other_party=hidden, kind=kind, created_by=owner
+        )
+    _grant(center, "reader", reader)
+    _grant(visible, "reader", reader)
+    for relationship in (tracked, untracked, hidden_relationship):
+        _grant(relationship, "reader", reader)
+
+    graph = _data(
+        execute_schema(
+            _schema(),
+            "query PartyGraph($id: ID!) { party_graph(root_id: $id) { nodes edges truncated } }",
+            {"id": center.sqid},
+            user=reader,
+        )
+    )["party_graph"]
+
+    untracked_target = f"relationship-target:{untracked.sqid}"
+    nodes = {node["id"]: node for node in graph["nodes"]}
+    assert set(nodes) == {center.sqid, visible.sqid, untracked_target}
+    assert nodes[untracked_target]["title"] == "Untracked mentor"
+    edges = {edge["id"]: edge for edge in graph["edges"]}
+    assert set(edges) == {tracked.sqid, untracked.sqid}
+    assert edges[tracked.sqid]["target"] == visible.sqid
+    assert edges[tracked.sqid]["label"] == "Mentor"
+    assert edges[untracked.sqid]["target"] == untracked_target
+    assert edges[untracked.sqid]["label"] == "Advisor"
+    for edge in edges.values():
+        assert edge["source"] == center.sqid
+        assert edge["kind"] == "relationship"
+        assert edge["meta"]["kind_name"] == "Mentor"
+        assert edge["meta"]["kind_inverse_name"] == "Mentee"
+    assert graph["truncated"] is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_party_graph_identity_lens_uses_the_reader_statement_scope(project_access_schema: Any) -> None:
+    """The identity lens uses the shared statement owner with its reader gate."""
+
+    del project_access_schema
+    reader = User.objects.create_user(username="identity-lens-reader")
+    with system_context(reason="test nexus identity lens seed"):
+        root = Party._base_manager.create(display_name="Identity root", created_by=reader)
+    _grant(root, "reader", reader)
+
+    graph = _data(
+        execute_schema(
+            _schema(),
+            'query IdentityGraph($id: ID!) { party_graph(root_id: $id, lenses: ["identity"]) { nodes edges } }',
+            {"id": root.sqid},
+            user=reader,
+        )
+    )["party_graph"]
+
+    assert [node["id"] for node in graph["nodes"]] == [root.sqid]
+    assert graph["edges"] == []
 
 
 def test_viewer_relative_party_resolvers_remain_objects() -> None:

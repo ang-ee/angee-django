@@ -4,15 +4,13 @@ import type {
 } from "@angee/metadata";
 import { useOne, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
-  Card, CardContent, Column, ResourceList, Field, Form, Group, List, type RecordTabDescriptor } from "@angee/ui";
+  Column, InlineEmpty, ResourceList, Field, Form, Group, List, type RecordTabDescriptor } from "@angee/ui";
 import {
   useModelMetadata,
 } from "@angee/metadata";
 import {
   refineFieldsFromPaths,
 } from "@angee/refine";
-import {
-  textRoleVariants } from "@angee/ui";
 import {
   refineResourceName,
 } from "@angee/metadata";
@@ -57,13 +55,7 @@ function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
   const record = (run.result as Row | undefined) ?? null;
   const runtimeClass = stringField(record, "runtime_class");
   if (!booleanField(record, "can_chat")) {
-    return (
-      <Card>
-        <CardContent>
-          <p className={textRoleVariants({ role: "meta" })}>{t("agent.chatUnavailable")}</p>
-        </CardContent>
-      </Card>
-    );
+    return <InlineEmpty icon="agent" label={t("agent.chatUnavailable")} />;
   }
   const view: AgentChatView = { kind: "record", type: "agents/agent", sqid: agentId };
   return <AgentChat agentId={agentId} view={view} runtimeClass={runtimeClass} />;
@@ -74,6 +66,8 @@ type RowRecord = BaseRecord & Row;
 // Translated copy resolved at a component's render top level (where hooks belong)
 // and threaded into the plain `agentResourceListPage` builder below.
 interface AgentLabels {
+  eyebrowAgent: string;
+  eyebrowTemplate: string;
   modelTemplates: string;
   provisioningInputs: string;
   tabService: string;
@@ -84,6 +78,8 @@ interface AgentLabels {
 function useAgentLabels(): AgentLabels {
   const t = useAgentsT();
   return {
+    eyebrowAgent: t("agent.eyebrow"),
+    eyebrowTemplate: t("agent.eyebrowTemplate"),
     modelTemplates: t("agent.modelTemplates"),
     provisioningInputs: t("agent.provisioningInputs"),
     tabService: t("agent.tabService"),
@@ -145,7 +141,7 @@ function AgentResourceListPage({
         <Column field="runtime_status" />
         <Column field="updated_at" />
       </List>
-      <Form resource={MODEL} deleteVisibleWhen={isTemplate ? undefined : canDeleteAgent}>
+      <Form resource={MODEL} eyebrow={isTemplate ? labels.eyebrowTemplate : labels.eyebrowAgent} deleteVisibleWhen={isTemplate ? undefined : canDeleteAgent}>
         {isTemplate ? null : lifecycleActions}
         <Field name="name" title />
         <Field name="lifecycle" widget="statusbar" status readOnly />
@@ -161,7 +157,6 @@ function AgentResourceListPage({
         <Group label={labels.modelTemplates} columns={2}>
           <Field name="model" />
           <Field name="inference_credential" />
-          <Field name="owner" createOnly />
           <Field name="runtime_class" />
           <Field name="workspace_template" />
         </Group>

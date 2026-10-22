@@ -1,4 +1,3 @@
-import { useConfirm } from "@angee/ui";
 import { useMemo } from "react";
 
 import {
@@ -8,22 +7,18 @@ import {
   SERVICE_STOP_MUTATION,
 } from "../../data/documents.daemon";
 import { useOperatorT } from "../../i18n";
+import { serviceActive } from "../../data/service-state";
 import { useOperatorAction } from "../../data/transport";
 import type { ServiceState } from "../../data/types";
-import { useRunDaemonAction } from "../parts/run-action";
-import type { OperatorAction } from "../parts/OperatorActionButtons";
+import { useDaemonMutationRun, type DaemonVerb } from "../parts/daemon-verbs";
 
-/** A lifecycle action for a service: its label, tone, and bound handler. */
-export type ServiceRowAction = OperatorAction<ServiceState>;
-
-/** Service lifecycle actions shared by the list row, detail page, and embedded ServiceRow. */
+/** Service lifecycle verbs shared by the list rows, the record page and the embedded ServiceRow. */
 export function useServiceActions(refetch: () => void): {
-  actions: readonly ServiceRowAction[];
+  actions: readonly DaemonVerb<ServiceState>[];
   busy: boolean;
 } {
   const t = useOperatorT();
-  const confirm = useConfirm();
-  const runDaemon = useRunDaemonAction(refetch);
+  const runDaemon = useDaemonMutationRun(refetch);
 
   const start = useOperatorAction(SERVICE_START_MUTATION);
   const stop = useOperatorAction(SERVICE_STOP_MUTATION);
@@ -35,75 +30,28 @@ export function useServiceActions(refetch: () => void): {
     restart.result.fetching ||
     destroy.result.fetching;
 
-  const actions = useMemo<readonly ServiceRowAction[]>(() => {
-    const named = <V extends Record<string, unknown>>(
-      field: string,
-      label: string,
-      variant: ServiceRowAction["variant"],
-      run: (variables: V) => Promise<object | undefined>,
-      variablesFor: (service: ServiceState) => V,
-      dangerous = false,
-      visible?: (service: ServiceState) => boolean,
-    ): ServiceRowAction => ({
-      label,
-      variant,
-      visible,
-      perform: async (service) => {
-        if (dangerous) {
-          const ok = await confirm({
-            title: t("services.destroy.confirm.title"),
-            body: t("services.destroy.confirm.body", { name: service.name }),
-            confirm: label,
-            danger: true,
-          });
-          if (!ok) return;
-        }
-        await runDaemon({
-          run,
-          field,
-          variables: variablesFor(service),
-          label,
-        });
-      },
-    });
-    return [
-      named(
-        "serviceStart",
-        t("services.start"),
-        "secondary",
-        start.run,
-        (service) => ({ name: service.name }),
-        false,
-        (service) => service.status.toLowerCase() !== "running",
-      ),
-      named(
-        "serviceRestart",
-        t("services.restart"),
-        "ghost",
-        restart.run,
-        (service) => ({ name: service.name }),
-        false,
-        (service) => service.status.toLowerCase() === "running",
-      ),
-      named(
-        "serviceStop",
-        t("services.stop"),
-        "ghost",
-        stop.run,
-        (service) => ({ name: service.name }),
-        false,
-        (service) => service.status.toLowerCase() === "running",
-      ),
-      named(
-        "delete_services_by_pk",
-        t("services.destroy"),
-        "ghost",
-        destroy.run,
-        (service) => ({ id: service.id }),
-        true,
-      ),
-    ] satisfies readonly ServiceRowAction[];
-  }, [confirm, destroy.run, restart.run, runDaemon, start.run, stop.run, t]);
+  const actions = useMemo<readonly DaemonVerb<ServiceState>[]>(() => [
+    {
+      id: "start", label: t("services.start"), primary: true,
+      visible: (service) => !serviceActive(service),
+      perform: (service) => runDaemon({ run: start.run, field: "serviceStart", variables: { name: service.name } }),
+    },
+    {
+      id: "restart", label: t("services.restart"), primary: true,
+      visible: serviceActive,
+      perform: (service) => runDaemon({ run: restart.run, field: "serviceRestart", variables: { name: service.name } }),
+    },
+    {
+      id: "stop", label: t("services.stop"),
+      visible: serviceActive,
+      perform: (service) => runDaemon({ run: stop.run, field: "serviceStop", variables: { name: service.name } }),
+    },
+    {
+      id: "destroy", label: t("services.destroy"), danger: true, placement: "menu",
+      confirm: { title: t("services.destroy.confirm.title"), body: (service) => t("services.destroy.confirm.body", { name: service.name }) },
+      perform: (service) => runDaemon({ run: destroy.run, field: "delete_services_by_pk", variables: { id: service.id } }),
+    },
+  ], [destroy.run, restart.run, runDaemon, start.run, stop.run, t]);
 
   return { actions, busy };
 }

@@ -16,7 +16,7 @@ import { useUiT } from "../../../i18n";
 import { type ResourceListOrder } from "../resource-view-model";
 import { estimateGroupedItemSize, groupFieldLabel, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures } from "../resource-view-list-body";
 import { listBatchTarget, requireDataResource, useAggregateOperation, useGroupOperation } from "../resource-operations";
-import { modelRowId, idsFromRowSelectionState } from "../resource-view-codecs";
+import { idsFromRowSelectionState, modelRowId } from "../resource-view-codecs";
 import {
   buildGroupedRenderModel,
   groupedPageWindow,
@@ -492,12 +492,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     navigation: { filter: mergedFilter, order: sortOrder },
     onListStateChange,
   });
-  // Publish the snapshot like the flat surface: rows are empty here (the grouped
-  // render stream owns the visible records), but the non-null `navigationScope`
-  // carries the folded scope's own filter/order. Without this, a record pager
-  // built by `useListRecordNavigation` could retain a stale flat descriptor when
-  // a grouped scope becomes active. The clicked row subsequently supplies its
-  // precise leaf descriptor; the native headless query consumes that scope.
+  const selectedIds = React.useMemo(() => idsFromRowSelectionState(resourceView.state.rowSelection), [resourceView.state.rowSelection]);
   return {
     kind: "grouped",
     list,
@@ -518,7 +513,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     visibleFields,
     toggleVisibleField,
     rowModels,
-    selectedIds: idsFromRowSelectionState(resourceView.state.rowSelection),
+    selectedIds,
     expandedKeys,
     toggleGroup,
     setGroupsExpanded,

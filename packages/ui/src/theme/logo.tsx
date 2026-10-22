@@ -16,7 +16,9 @@ export interface ThemeLogoProps extends Omit<
   themeGeometry?: AngeeLogoProps["geometry"];
 }
 
-/** The application mark resolved from the active theme customization. */
+/** The application mark resolved from the active theme customization.
+ * @kind fragment
+ */
 export function ThemeLogo({ logo, themeGeometry, ...props }: ThemeLogoProps): ReactElement {
   const resolvedLogo = useThemeLogoChoice(logo);
   if (resolvedLogo === "theme") {
@@ -51,7 +53,9 @@ export function ThemeLogo({ logo, themeGeometry, ...props }: ThemeLogoProps): Re
   />;
 }
 
-/** Resolve the active bounded logo treatment for brand placements with custom layout. */
+/** Resolve the active bounded logo treatment for brand placements with custom layout.
+ * @owner ThemeLogo
+ */
 export function useThemeLogoChoice(override?: ThemeCustomizationLogo): ThemeCustomizationLogo {
   const appearance = useOptionalAppearance();
   return override ?? readLogoChoice(appearance?.effectiveOptions?.value);

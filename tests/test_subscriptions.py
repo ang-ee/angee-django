@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -25,6 +26,7 @@ from angee.graphql.events import ChangeEvent, ChangePayload, ChangeRelatedRecord
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from tests.conftest import SchemaAddon
+from tests.scopedemo.models import ScopedDoc
 
 ANON = anonymous_actor()
 SubscriptionResolver = Callable[
@@ -345,13 +347,13 @@ def test_change_gate_omits_an_unreadable_related_parent(monkeypatch) -> None:
 
     gate = object.__new__(access.ChangeReadGate)
     gate.actor = ANON
-    parent_model = SimpleNamespace()
-    empty_scope = object()
-    monkeypatch.setattr(access.apps, "get_model", lambda label: parent_model)
-    monkeypatch.setattr(access, "read_scoped_queryset", lambda model, actor: empty_scope)
+    monkeypatch.setattr(access.apps, "get_model", lambda label: ScopedDoc)
+    scopes = []
 
     def unreadable(model, public_id, *, queryset):
-        assert queryset is empty_scope
+        assert model is ScopedDoc
+        assert queryset.model is ScopedDoc
+        scopes.append(queryset)
         return None
 
     monkeypatch.setattr(access, "instance_from_public_id", unreadable)
@@ -362,10 +364,11 @@ def test_change_gate_omits_an_unreadable_related_parent(monkeypatch) -> None:
         related_records=(ChangeRelatedRecord(model="tests.Parent", id="parent-1"),),
     )
     assert gate._filter_related_records(change).related_records == ()
+    assert len(scopes) == 1
 
 
 def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
-    """``publish_change`` drops a row whose ``broadcasts_changes()`` returns False.
+    """``publish_change`` keeps opted-out rows off the subscription transport.
 
     The emission mirror of a read scope that hides rows: a model isolates some rows
     (record chatter) to a record-scoped surface, so their changes never reach the
@@ -381,9 +384,8 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
     monkeypatch.setattr(
         publishing.ChangePayload,
         "from_instance",
-        classmethod(lambda cls, instance, **kwargs: stub_payload),
+        classmethod(lambda cls, instance, **kwargs: replace(stub_payload, broadcasts=kwargs["broadcasts"])),
     )
-    publishing.connect_change_broadcast_receiver()
 
     class Row:
         """Minimal instance carrying only the broadcast opt-out decision."""

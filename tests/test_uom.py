@@ -13,10 +13,11 @@ from typing import Any
 
 import pytest
 from django.contrib.auth.models import AnonymousUser
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, models, transaction
 from rebac import actor_context, system_context, to_object_ref
 from rebac.models import active_relationship_model
 
+from angee.uom.models import UomExpressions
 from angee.uom.testing.models import Uom, UomCategory
 from tests.conftest import create_user
 
@@ -148,6 +149,52 @@ def test_conversion_quantizes_to_destination_rounding(units: SimpleNamespace) ->
     """1 unit -> 1/12 dozen = 0.08333…, quantized to the dozen step (0.01)."""
 
     assert units.each.convert(Decimal(1), units.dozen) == Decimal("0.08")
+
+
+def _literal_uom(unit: Any) -> UomExpressions:
+    decimal_field = models.DecimalField(max_digits=26, decimal_places=10)
+    return UomExpressions(
+        category_id=models.Value(unit.category_id),
+        ratio=models.Value(unit.ratio, output_field=decimal_field),
+        offset=models.Value(unit.offset, output_field=decimal_field),
+        rounding=models.Value(unit.rounding, output_field=decimal_field),
+    )
+
+
+@pytest.mark.parametrize("field_reference", [False, True])
+def test_expression_conversion_uses_affine_half_up_owner(units: SimpleNamespace, field_reference: bool) -> None:
+    """ORM consumers get the same conversion and destination precision as scalar callers."""
+
+    quantity_field = models.DecimalField(max_digits=26, decimal_places=10)
+    quantity = models.Value(Decimal("1234.5"), output_field=quantity_field)
+    expression = Uom.convert_expression(
+        models.F("input_quantity") if field_reference else quantity,
+        UomExpressions.from_path(""),
+        _literal_uom(units.kilogram),
+        output_field=quantity_field,
+    )
+    with system_context(reason="uom expression conversion"):
+        converted = Uom.objects.filter(pk=units.gram.pk).alias(input_quantity=quantity).annotate(
+            converted=expression
+        ).values_list("converted", flat=True).get()
+    assert converted == Decimal("1.235")
+
+
+def test_expression_conversion_rejects_cross_category_rows(units: SimpleNamespace) -> None:
+    """Unlike-category set rows project NULL instead of entering an aggregate."""
+
+    quantity_field = models.DecimalField(max_digits=26, decimal_places=10)
+    expression = Uom.convert_expression(
+        models.Value(Decimal(1), output_field=quantity_field),
+        UomExpressions.from_path(""),
+        _literal_uom(units.litre),
+        output_field=quantity_field,
+    )
+    with system_context(reason="uom expression category validation"):
+        converted = Uom.objects.filter(pk=units.kilogram.pk).annotate(
+            converted=expression
+        ).values_list("converted", flat=True).get()
+    assert converted is None
 
 
 def test_one_reference_per_category_is_rejected(composed_tables: None) -> None:

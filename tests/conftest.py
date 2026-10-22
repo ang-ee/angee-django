@@ -13,7 +13,6 @@ from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
-import reversion
 import tomlkit
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
@@ -36,6 +35,8 @@ from angee.integrate.models import ExternalAccount as AbstractExternalAccount
 from angee.integrate.models import OAuthClient as AbstractOAuthClient
 from angee.integrate.models import Vendor as AbstractVendor
 from angee.integrate.models import WebhookSubscription as AbstractWebhookSubscription
+from angee.integrate.states import StreamDefinition
+from angee.integrate.streams import StreamPage
 from angee.integrate.testing.integration import Integration
 from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 from angee.integrate_vcs.models import Repository as AbstractRepository
@@ -47,7 +48,7 @@ from angee.knowledge.models import MarkdownPage as AbstractMarkdownPage
 from angee.knowledge.models import Page as AbstractPage
 from angee.knowledge.models import RecordBinding as AbstractRecordBinding
 from angee.knowledge.models import Vault as AbstractVault
-from angee.messaging.testing import models as messaging_models
+from angee.messaging.testing import models as messaging_models  # noqa: F401 -- register messaging test models
 from angee.messaging.testing.models import Channel
 from angee.platform.models import Addon as AbstractAddon
 from angee.platform.models import PlatformExplorer as AbstractPlatformExplorer
@@ -72,11 +73,12 @@ from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 from angee.workflows_integrate.testing import models as sync_cycle_models  # noqa: F401 -- register bridge test subject
-from tests import extraction_models  # noqa: F401 -- register shared FK targets before database setup
+from tests import (
+    extraction_models,  # noqa: F401 -- register shared FK targets before database setup
+    integrate_fixtures,  # noqa: F401 -- register discovery targets before database setup
+)
 from tests.extcontrib.models import Role
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
-
-pytest_plugins = ("angee.testing.fixtures", "angee.workflows.testing.fixtures")
 
 # Settings reloads in the suite compose through ProjectContract, which starts
 # Sentry for a configured DSN; a developer's exported DSN never receives test errors.
@@ -84,13 +86,28 @@ os.environ.pop("SENTRY_DSN", None)
 
 
 @pytest.fixture
-def activity_catalog(composed_tables: None) -> None:
-    """Declare the activity keys used by existing scheduling scenarios."""
+def composed_tables(composed_tables: None) -> None:
+    """The source host's composed tables also carry the declared statement principals.
+
+    Extends the ``angee.testing`` plugin fixture of the same name: after its REBAC
+    sync, the install-tier principals and grants that admission reads are loaded
+    (``angee.provenance.testing.load_statement_sources``), exactly as the composed
+    host does.
+    """
 
     del composed_tables
-    with system_context(reason="tests.messaging.activity_catalog"):
-        messaging_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")
-        messaging_models.ActivityType.objects.create(key="call", name="Call", glyph="phone")
+    load_statement_sources("parties")
+    load_statement_sources("messaging")
+
+
+@pytest.fixture
+def activity_catalog(composed_tables: None) -> None:
+    """Declare the activity types record tasks use in these scenarios."""
+
+    del composed_tables
+    with system_context(reason="tests.projects.activity_catalog"):
+        projects_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")
+        projects_models.ActivityType.objects.create(key="call", name="Call", glyph="phone")
 
 
 class OAuthClient(AbstractOAuthClientOidc, AbstractOAuthClient):
@@ -166,14 +183,20 @@ class Vault(RecordChangedOptIn, VaultSpace, VaultProjects, AbstractVault):
     @classmethod
     def record_changed_grant_targets(cls, trigger):
         """The test source delegates its global role from workflow writers."""
-        return (TriggerGrantTarget(
-            ObjectRef("knowledge/role", "vault_viewer"), "member", "write", to_object_ref(trigger.workflow),
-        ),)
+        return (
+            TriggerGrantTarget(
+                ObjectRef("knowledge/role", "vault_viewer"),
+                "member",
+                "write",
+                to_object_ref(trigger.workflow),
+            ),
+        )
 
     class Meta(AbstractVault.Meta):
         """Django model options for the canonical test vault."""
 
         abstract = False
+        base_manager_name = "_angee_base"
         app_label = "knowledge"
         db_table = "test_knowledge_vault"
         rebac_resource_type = "knowledge/vault"
@@ -185,34 +208,33 @@ class Page(RecordChangedOptIn, AbstractPage):
     @classmethod
     def record_changed_grant_targets(cls, trigger):
         """Page read follows the vault permission boundary in this fixture."""
-        return (TriggerGrantTarget(
-            ObjectRef("knowledge/role", "vault_viewer"), "member", "write", to_object_ref(trigger.workflow),
-        ),)
+        return (
+            TriggerGrantTarget(
+                ObjectRef("knowledge/role", "vault_viewer"),
+                "member",
+                "write",
+                to_object_ref(trigger.workflow),
+            ),
+        )
 
     class Meta(AbstractPage.Meta):
         """Django model options for the canonical test page."""
 
         abstract = False
+        base_manager_name = "_angee_base"
         app_label = "knowledge"
         db_table = "test_knowledge_page"
         rebac_resource_type = "knowledge/page"
 
 
-reversion.register(Page, fields=())
-
-
-@reversion.register(fields=("body", "page_ptr"))
 class MarkdownPage(AbstractMarkdownPage, Page):
-    """Concrete knowledge markdown child used by source-addon tests.
-
-    Registered with django-reversion the way the composer registers the
-    completed runtime model.
-    """
+    """Concrete knowledge markdown child used by source-addon tests."""
 
     class Meta(AbstractMarkdownPage.Meta):
         """Django model options for the canonical test markdown page."""
 
         abstract = False
+        base_manager_name = "_angee_base"
         app_label = "knowledge"
         db_table = "test_knowledge_markdown_page"
         rebac_resource_type = "knowledge/markdown_page"
@@ -319,6 +341,8 @@ def make_integration(
             slug=slug,
             display_name=slug.title(),
             client_id=f"{slug}-cid",
+            authorize_endpoint="https://provider.example/auth",
+            token_endpoint="https://provider.example/token",
         )
         credential = Credential.objects.upsert_for_user(user, oauth_client, kind, material)
         vendor = Vendor.objects.create(slug=slug, display_name=slug.title())
@@ -332,6 +356,14 @@ def make_integration(
         if backend_class is not None:
             values["backend_class"] = backend_class
         return model.objects.create(**values)
+
+
+def current_stream(bridge: Any, key: str, partition: str = "", **facts: Any) -> Any:
+    """Open a test stream through its declaration-owned manager contract."""
+
+    from angee.integrate.testing.models import SyncStream
+
+    return SyncStream.objects.current(bridge, StreamDefinition(key, partition, **facts))
 
 
 class StubVCSBackend(VCSBackend):
@@ -414,13 +446,14 @@ class StubFeedBackend(FeedBackend):
     """In-memory feed backend for tests; canned posts are queued per feed row.
 
     Registered as the ``stub`` key in the test ``ANGEE_POSTS_FEED_BACKEND_CLASSES`` so
-    a ``Feed(backend_class="stub")`` resolves to it. ``ParsedPost`` carries nested
+    a ``Feed(feed_backend_class="stub")`` resolves to it. ``ParsedPost`` carries nested
     dataclasses (not JSON), so a test queues the posts through :meth:`queue` keyed by
-    the feed row rather than riding them on the JSON ``config``; ``fetch_posts`` returns
+    the feed row rather than riding them on the JSON ``config``; ``extract`` returns
     what was queued for the bound feed.
     """
 
     key = "stub"
+    requires_connection_discovery = False
     label = "Stub"
     _posts: dict[Any, list[ParsedPost]] = {}
 
@@ -436,10 +469,19 @@ class StubFeedBackend(FeedBackend):
 
         cls._posts.clear()
 
-    def fetch_posts(self) -> list[ParsedPost]:
-        """Return the posts queued for the bound feed row."""
+    def streams(self, *, deadline=None):
+        """Expose the native independently committed feed partition."""
 
-        return type(self)._posts.get(self.bridge.pk, [])
+        return (StreamDefinition(key="activity", partition=str(self.bridge.pk)),)
+
+    def extract(self, stream, page_bound, *, deadline=None):
+        """Return one bounded deterministic page through integrate's driver."""
+
+        posts = type(self)._posts.get(self.bridge.pk, [])
+        offset = stream.cursor.get("offset", 0)
+        end = offset + page_bound
+        exhausted = end >= len(posts)
+        return StreamPage(records=posts[offset:end], cursor={} if exhausted else {"offset": end}, exhausted=exhausted)
 
 
 class Link(AbstractLink):
@@ -579,6 +621,7 @@ from angee.nexus.testing import models as nexus_models  # noqa: E402, F401
 from angee.operator.testing import models as operator_models  # noqa: E402, F401
 from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401
 from angee.projects.testing import models as projects_models  # noqa: E402, F401
+from angee.provenance.testing import load_statement_sources  # noqa: E402
 from angee.sequence.testing import models as sequence_models  # noqa: E402, F401
 from angee.tags.testing import models as tags_models  # noqa: E402, F401
 from angee.uom.testing import models as uom_models  # noqa: E402, F401

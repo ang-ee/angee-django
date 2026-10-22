@@ -9,7 +9,6 @@ from django.db.models.functions import Now
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
-from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.workflows.decision_steps import AskDecision, DecisionStep
 from angee.workflows.runner import runner
@@ -54,9 +53,9 @@ def test_deletion_only_enqueues_active_runs_that_modify_the_record(review, regis
     workflow = load_workflow({"nodes": {"entry": {"step": Touch.key}}}, actor=actor)
     run = start_run(workflow, actor=actor, subject=question.review_subject, input={})
     run_until(run)
-    assert run.status == "waiting", [(s.status, s.output) for s in system_queryset(StepRun).filter(run=run)]
+    assert run.status == "waiting", [(s.status, s.output) for s in StepRun.system_queryset().filter(run=run)]
     sent.clear()
-    system_queryset(type(target)).filter(pk=target.pk).delete()
+    type(target).system_queryset().filter(pk=target.pk).delete()
     cancellations = [payload["kwargs"]["run_id"] for name, payload in sent if name == "workflows.cancel"]
     assert cancellations == ([run.pk] if canceled else [])
 
@@ -82,6 +81,15 @@ def test_timeline_bounds_inputs_and_calls_the_set_owner_once(schema, review, mon
     result = timeline(schema, actor, [record])["records"][0]["runs"]
     assert len(result) == 20 and result[-1]["id"] == latest[-1].sqid
     assert run.sqid not in {item["id"] for item in result}
+    limited = result_data(execute_schema(
+        schema,
+        """query($records:[TimelineRecordInput!]!) {
+          record_timeline(records:$records, run_limit:2) { records { runs { id } } }
+        }""",
+        {"records": [{"model": record._meta.label, "id": record.sqid}]},
+        user=actor,
+    ))["record_timeline"]["records"][0]["runs"]
+    assert [item["id"] for item in limited] == [latest[-2].sqid, latest[-1].sqid]
     result = execute_schema(
         schema, "query($records:[TimelineRecordInput!]!) { record_timeline(records:$records) { open_decision_count } }",
         {"records": [{"model": record._meta.label, "id": record.sqid}] * 101}, user=actor,
@@ -197,7 +205,7 @@ def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(revi
     }}}, "results": [{"from": "ask", "when": ["renamed"], "as": "renamed"}]}, actor=actor)
     run = start_run(workflow, actor=actor, subject=target)
     run_until(run)
-    step = system_queryset(StepRun).get(run=run)
+    step = StepRun.system_queryset().get(run=run)
     assert step.hold == "decision"
     decision = step.decision
     assert target.sqid in decision.proposal["alternatives"][0]["actions"]
@@ -242,7 +250,7 @@ def test_a_routed_failure_is_done_and_does_not_hold_the_next_question(review, sc
         "failure": {"step": Fail.key, "next": {"error": "review"}},
         "review": {"step": "question", "input": {}},
     }})
-    failed = system_queryset(StepRun).get(run=run, node_key="failure")
+    failed = StepRun.system_queryset().get(run=run, node_key="failure")
     assert run.status == "waiting" and failed.hold is None
     data = timeline(schema, actor, [question.review_subject])["records"][0]["runs"][0]
     assert {node["key"]: node["plan"] for node in data["graph"]["nodes"]} == {"failure": "done", "review": "current"}
@@ -290,11 +298,11 @@ def test_open_question_and_attempts_survive_retention_then_record_deletion_withd
     actor, _, sent, question = review
     run, step = start_review(review)
     settings.ANGEE_WORKFLOW_RETENTION_DAYS = 1
-    system_queryset(WorkflowRun).filter(pk=run.pk).update(created_at=Now() - timedelta(days=40))
+    WorkflowRun.system_queryset().filter(pk=run.pk).update(created_at=Now() - timedelta(days=40))
     assert WorkflowRun.objects.prune() == 0
-    assert system_queryset(StepAttempt).filter(step_run=step).exists()
+    assert StepAttempt.system_queryset().filter(step_run=step).exists()
     if retired_actor:
-        system_queryset(type(actor)).filter(pk=actor.pk).update(is_active=False)
+        type(actor).system_queryset().filter(pk=actor.pk).update(is_active=False)
     with system_context(reason="test delete reviewed record"):
         question.review_subject.delete()
     from angee.workflows.tasks import cancel
@@ -320,9 +328,9 @@ def test_terminal_withdrawal_allows_retention_to_prune_the_failed_run(review, se
     }})
     assert run.status == "failed" and not questions(step)[0].is_open
     settings.ANGEE_WORKFLOW_RETENTION_DAYS = 1
-    system_queryset(WorkflowRun).filter(pk=run.pk).update(finished_at=Now() - timedelta(days=40))
+    WorkflowRun.system_queryset().filter(pk=run.pk).update(finished_at=Now() - timedelta(days=40))
     assert WorkflowRun.objects.prune() == 1
-    assert not system_queryset(StepAttempt).filter(step_run__run_id=run.pk).exists()
+    assert not StepAttempt.system_queryset().filter(step_run__run_id=run.pk).exists()
 
 
 def test_stop_error_hold_disables_retry_and_removes_the_future_plan(execution, register_step):
@@ -336,7 +344,7 @@ def test_stop_error_hold_disables_retry_and_removes_the_future_plan(execution, r
         "failure": {"step": Fail.key, "next": {"done": "finish"}}, "finish": {"step": "echo", "input": {}},
     }}, actor=actor), actor=actor)
     run_until(run)
-    step = system_queryset(StepRun).get(run=run)
+    step = StepRun.system_queryset().get(run=run)
     assert step.hold == "error" and step.can_retry(actor) and run.can_cancel(actor)
     WorkflowRun.objects.cancel(run, actor=actor)
     run.refresh_from_db()

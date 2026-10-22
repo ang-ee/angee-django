@@ -8,12 +8,15 @@ from typing import Any
 import httpx2
 import pytest
 import vobject
+from django.core import checks
 from django.db import connection
 from rebac import system_context
 
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClient
-from angee.messaging.testing.models import Directory, Handle, Party, PartyHandle, Person
+from angee.messaging.testing.models import Directory, Handle, Party, Person
+from angee.parties_integrate_carddav import apps as carddav_apps
+from angee.parties_integrate_carddav.apps import check_expat_version
 from angee.parties_integrate_carddav.backend import (
     CardDavDirectoryBackend,
     CardDavError,
@@ -69,6 +72,22 @@ NOTE:First programmer.
 END:VCARD"""
 
 
+@pytest.mark.parametrize("version", [(2, 7, 1), (2, 7, 2), (3, 0, 0)])
+def test_carddav_requires_expat_amplification_protections(
+    monkeypatch: pytest.MonkeyPatch,
+    version: tuple[int, int, int],
+) -> None:
+    monkeypatch.setattr(carddav_apps.pyexpat, "version_info", version)
+    errors = check_expat_version()
+    if version >= (2, 7, 2):
+        assert errors == []
+    else:
+        [error] = errors
+        assert isinstance(error, checks.Error)
+        assert "Expat 2.7.2 or later" in error.msg
+        assert ".".join(str(part) for part in version) in error.msg
+
+
 def _backend_with_http(http: Any) -> CardDavDirectoryBackend:
     bridge = Directory(credential=None, config={"server_url": "https://dav.example/"})
     backend = CardDavDirectoryBackend(bridge)
@@ -96,7 +115,8 @@ def test_native_httpx2_multistatus_and_case_insensitive_redirect(monkeypatch: py
 
 def test_http_refusal_is_an_integration_error_without_vendor_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        HttpClient, "transport_factory",
+        HttpClient,
+        "transport_factory",
         staticmethod(lambda **_: httpx2.MockTransport(lambda request: httpx2.Response(503, content=b"secret=private"))),
     )
     with pytest.raises(CardDavError) as refused:
@@ -105,16 +125,16 @@ def test_http_refusal_is_an_integration_error_without_vendor_payloads(monkeypatc
     assert refused.value.public_message == "CardDAV PROPFIND returned HTTP 503."
 
 
-def test_photo_download_is_capped_and_uses_the_collection_origin() -> None:
-    """Photo downloads preserve vCard MIME and use the shared SSRF-safe cap."""
+def test_photo_download_is_capped_and_uses_the_collection_origin(settings: Any) -> None:
+    """Photo downloads preserve vCard MIME and use storage's image cap over the SSRF-safe client."""
 
     class FakeHttp:
-        def download_capped(self, url: str, **kwargs: Any) -> bytes:
-            assert url == "https://dav.example/books/photo.jpg"
-            assert kwargs["cap"] == 5 * 1024 * 1024
+        def request(self, method: str, url: str, **kwargs: Any) -> Any:
+            assert (method, url) == ("GET", "https://dav.example/books/photo.jpg")
+            assert kwargs["max_bytes"] == settings.ANGEE_STORAGE_IMAGE_MAX_BYTES
             assert kwargs["allow_private"] is False
-            assert kwargs["follow_redirects"] is False
-            return b"photo"
+            assert not kwargs.get("follow_redirects") and not kwargs.get("same_origin_redirects")
+            return httpx2.Response(200, content=b"photo")
 
     contact = ParsedContact(
         uid="one",
@@ -150,7 +170,7 @@ def test_connect_probe_failure_writes_no_rows(
     assert result.errors[0].extensions == {"code": "INTERNAL"}
     assert probe_atomic_states == [False]
     with system_context(reason="test.parties.carddav.probe_failure.verify"):
-        for model in (Credential, Vendor, Integration, Directory, Handle, Party, Person, PartyHandle):
+        for model in (Credential, Vendor, Integration, Directory, Handle, Party, Person, Party.statements.model):
             assert not model._base_manager.exists(), model._meta.label
 
 
@@ -169,14 +189,14 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         probe_atomic_states.append(connection.in_atomic_block)
 
     manager_type = type(Handle.objects)
-    claim_own = manager_type.claim_own
+    claim_control = manager_type.claim_control
 
-    def atomic_claim_own(manager: Any, user: Any, **kwargs: Any) -> Any:
+    def atomic_claim_control(manager: Any, user: Any, **kwargs: Any) -> Any:
         write_atomic_states.append(connection.in_atomic_block)
-        return claim_own(manager, user, **kwargs)
+        return claim_control(manager, user, **kwargs)
 
     monkeypatch.setattr(CardDavDirectoryBackend, "probe", accept_probe)
-    monkeypatch.setattr(manager_type, "claim_own", atomic_claim_own)
+    monkeypatch.setattr(manager_type, "claim_control", atomic_claim_control)
     admin = parties_graphql._platform_admin("carddav-probe-success-admin")
 
     result = _connect_carddav(admin)
@@ -202,7 +222,7 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         integration = Integration.objects.get(pk=directory.pk)
         handle = Handle.objects.get()
         person = Person.objects.get()
-        link = PartyHandle.objects.get()
+        link = Party.statements.handles().get()
 
         assert credential.user_id == admin.pk
         assert credential.name == "CardDAV — Ada Contacts"
@@ -216,14 +236,18 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         assert directory.backend_class == "carddav"
         assert directory.lifecycle == "connected"
         assert directory.config == {"server_url": "https://dav.example.com/"}
-        assert handle.owner_id == admin.pk
+        assert handle.controller_id == admin.pk
         assert (handle.platform, handle.value) == ("email", "ada@example.com")
         assert person.user_id == admin.pk
-        assert link.party_id == person.pk
+        assert link.subject_id == person.pk
         assert link.handle_id == handle.pk
-        assert link.source == "carddav"
+        assert link.source_kind == "person"
+        assert link.asserted_by == f"auth/user:{admin.pk}"
+        assert link.rank == link.StatementRank.NORMAL
+        assert link.link_id is None
+        assert link.evidence == [{"model": integration._meta.label, "id": integration.public_id, "pointer": ""}]
         assert link.confidence == 1.0
-        assert link.is_confirmed is True
+        assert link.is_confirmed is False
 
 
 def _connect_carddav(admin: Any) -> Any:

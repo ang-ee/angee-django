@@ -60,7 +60,7 @@ def test_oidc_login_establishes_person_only_for_explicitly_verified_email(compos
         lambda self, **kwargs: {"access_token": "test-token", "id_token": "test-id-token"},
     )
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, token, **kwargs: claims)
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, token: {})
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, token, params=None: {})
     completion = identity.complete_login(
         oauth_client, code="test-code", state_token=state_token, redirect_uri=redirect_uri
     )
@@ -69,7 +69,7 @@ def test_oidc_login_establishes_person_only_for_explicitly_verified_email(compos
     assert not user.has_usable_password()
     account = ExternalAccount._base_manager.get(oauth_client=oauth_client, external_id="first-login")
     with system_context(reason="test.oidc.link-owner"):
-        assert ExternalAccount.objects.owner_for(account) == user
+        assert ExternalAccount.objects.get(pk=account.pk).owner_id == user.pk
     people = Person._base_manager.filter(user=user)
     assert people.count() == (1 if verified is True else 0)
     if verified is True:

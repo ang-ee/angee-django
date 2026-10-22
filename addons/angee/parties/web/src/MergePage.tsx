@@ -1,24 +1,9 @@
 import * as React from "react";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
-  Avatar,
-  Button,
-  Card,
-  Chip,
-  Collapsible,
-  EmptyState,
-  ErrorBanner,
-  LoadingPanel,
-  Page,
-  PageBody,
-  PageFooter,
-  PageHeader,
-  RadioGroup,
-  RailPanel,
-  Tag,
-  avatarInitials,
-  useRouteHref,
-  useRouteParam,
+  Avatar, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Chip, Collapsible, ComparisonRows, CountBadge, EmptyState, ErrorBanner,
+  LoadingPanel, MetaGrid, Page, PageBody, PageFooter, PageHeader, RadioGroup, RailPanel, avatarInitials, optionLabel, useConfirm,
+  useEnumOptions, useRouteHref, useRouteParam, type WidgetOption,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
@@ -26,7 +11,7 @@ import {
   MergeParties,
   PARTY_MERGE_INVALIDATES,
   PartyMergeComparison,
-  VetoMerge,
+  DismissSameAs,
   type MergePartyRecord,
   type MergePersonRecord,
 } from "./documents";
@@ -125,24 +110,20 @@ function relationshipIds(record: MergePartyRecord): readonly string[] {
 
 function originLabel(
   record: MergePartyRecord,
-  person: MergePersonRecord | null | undefined,
+  platforms: readonly WidgetOption[],
   t: ReturnType<typeof usePartiesT>,
 ): string {
-  const platforms = [...new Set(record.handles.map((handle) => handle.platform))].join(", ");
-  if (person?.folder?.name) return t("merge.origin.folder", { name: person.folder.name });
-  if (platforms) return t("merge.origin.handles", { platforms });
+  const names = [...new Set(record.handles.map((handle) => optionLabel(platforms, handle.platform)))].join(", ");
+  if (names) return t("merge.origin.handles", { platforms: names });
   return t("merge.origin.manual");
 }
 
-function ProvenanceTag({
-  provenance,
-  label,
-}: {
-  provenance: Provenance;
-  label: string;
-}): React.ReactElement {
-  const tone = provenance === "both" ? "success" : provenance === "left" ? "info" : "warning";
-  return <Tag tone={tone}>{label}</Tag>;
+/** Where a merged item comes from: both records, or only one, named. */
+function ProvenanceChip({ provenance, names }: { provenance: Provenance; names: Record<MergeSide, string> }): React.ReactElement {
+  const t = usePartiesT();
+  return provenance === "both"
+    ? <Chip tone="success">{t("merge.provenance.both")}</Chip>
+    : <Chip tone="neutral">{t("merge.provenance.only", { name: names[provenance] })}</Chip>;
 }
 
 function SurvivorOption({
@@ -162,10 +143,14 @@ function SurvivorOption({
       variant="card"
       label={
         <span className="flex min-w-0 items-center gap-3">
-          <Avatar size="lg" initials={avatarInitials(record.display_name)} />
+          <Avatar
+            size="lg"
+            src={record.display_avatar?.url || undefined}
+            initials={avatarInitials(record.display_name)}
+          />
           <span className="min-w-0">
             <span className="block truncate text-sm font-semibold text-fg">{record.display_name}</span>
-            <span className="block truncate text-xs text-fg-muted">{origin}</span>
+            <span className="block truncate text-12 text-fg-muted">{origin}</span>
           </span>
         </span>
       }
@@ -192,11 +177,13 @@ export function MergePage(): React.ReactElement {
   const [merge, mergeState] = useAuthoredMutation(MergeParties, {
     invalidateModels: PARTY_MERGE_INVALIDATES,
   });
-  const [veto, vetoState] = useAuthoredMutation(VetoMerge, {
+  const [dismiss, dismissState] = useAuthoredMutation(DismissSameAs, {
     invalidateModels: PARTY_MERGE_INVALIDATES,
   });
   const [survivor, setSurvivor] = React.useState<MergeSide>("left");
   const [fieldChoices, setFieldChoices] = React.useState<Partial<Record<MergeField, MergeSide>>>({});
+  const platforms = useEnumOptions("parties.Handle", "platform", { casing: "upper" });
+  const confirm = useConfirm();
 
   React.useEffect(() => {
     setSurvivor("left");
@@ -236,16 +223,25 @@ export function MergePage(): React.ReactElement {
   const relationshipTotal = left && right
     ? new Set([...relationshipIds(left), ...relationshipIds(right)]).size
     : 0;
-  const busy = mergeState.fetching || vetoState.fetching;
+  const busy = mergeState.fetching || dismissState.fetching;
 
+  // The merge flow's home is the review queue (its route parent).
   const goBack = React.useCallback(() => {
-    window.history.back();
-  }, []);
+    void navigate({ to: routeHref("parties.review") });
+  }, [navigate, routeHref]);
 
   const submitMerge = React.useCallback(async () => {
     if (!left || !right) return;
     const into = survivor === "left" ? left : right;
     const source = survivor === "left" ? right : left;
+    // Merging is irreversible: the source record disappears into the survivor.
+    const ok = await confirm({
+      title: t("merge.confirmTitle", { name: into.display_name }),
+      body: t("merge.confirmBody", { source: source.display_name, name: into.display_name }),
+      confirm: t("merge.submit", { name: into.display_name }),
+      danger: true,
+    });
+    if (!ok) return;
     const fieldOverrides = Object.fromEntries(
       differing
         .filter((field) => (fieldChoices[field.name] ?? survivor) !== survivor)
@@ -266,13 +262,13 @@ export function MergePage(): React.ReactElement {
       ),
       replace: true,
     });
-  }, [differing, fieldChoices, left, leftPerson, merge, navigate, right, rightPerson, routeHref, survivor]);
+  }, [confirm, differing, fieldChoices, left, leftPerson, merge, navigate, right, rightPerson, routeHref, survivor, t]);
 
   const keepSeparate = React.useCallback(async () => {
     if (!left || !right) return;
-    const result = await veto({ aId: left.id, bId: right.id });
-    if (result?.veto_merge) goBack();
-  }, [goBack, left, right, veto]);
+    const result = await dismiss({ aId: left.id, bId: right.id });
+    if (result?.dismiss_same_as) goBack();
+  }, [goBack, left, right, dismiss]);
 
   if (comparison.isFetching && !left && !right) {
     return (
@@ -312,6 +308,7 @@ export function MergePage(): React.ReactElement {
   }
 
   const survivorRecord = survivor === "left" ? left : right;
+  const names: Record<MergeSide, string> = { left: left.display_name, right: right.display_name };
 
   return (
     <Page>
@@ -328,72 +325,57 @@ export function MergePage(): React.ReactElement {
             <SurvivorOption
               side="left"
               record={left}
-              origin={originLabel(left, leftPerson, t)}
+              origin={originLabel(left, platforms, t)}
               survivorLabel={t("merge.survivor")}
             />
             <SurvivorOption
               side="right"
               record={right}
-              origin={originLabel(right, rightPerson, t)}
+              origin={originLabel(right, platforms, t)}
               survivorLabel={t("merge.survivor")}
             />
           </RadioGroup>
 
-          <Card className="p-4 shadow-none">
-            <div className="mb-4">
-              <h2 className="text-sm font-semibold text-fg">{t("merge.fields.title")}</h2>
-              <p className="mt-1 text-13 text-fg-muted">{t("merge.fields.description")}</p>
-            </div>
-            <div className="grid gap-3">
-              {differing.map((field) => (
-                <div key={field.name} className="grid gap-2 border-b border-border-subtle pb-3 last:border-0">
-                  <span className="text-13 font-medium text-fg">{t(`merge.field.${field.name}`)}</span>
-                  <RadioGroup
-                    aria-label={t(`merge.field.${field.name}`)}
-                    value={fieldChoices[field.name] ?? survivor}
-                    onValueChange={(value) =>
-                      setFieldChoices((current) => ({ ...current, [field.name]: value as MergeSide }))
-                    }
-                    variant="card"
-                    className="grid gap-2 md:grid-cols-2"
-                  >
-                    <RadioGroup.Item
-                      value="left"
-                      variant="card"
-                      label={formatScalar(field.left, t("merge.fields.empty"))}
-                    />
-                    <RadioGroup.Item
-                      value="right"
-                      variant="card"
-                      label={formatScalar(field.right, t("merge.fields.empty"))}
-                    />
-                  </RadioGroup>
-                </div>
-              ))}
-            </div>
+          <Card className="shadow-none">
+            <CardHeader>
+              <CardTitle>{t("merge.fields.title")}</CardTitle>
+              <CardDescription>{t("merge.fields.description")}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ComparisonRows
+                columns={[{ key: "left", label: left.display_name }, { key: "right", label: right.display_name }]}
+                rows={differing.map((field) => ({
+                  key: field.name,
+                  label: t(`merge.field.${field.name}`),
+                  cells: {
+                    left: formatScalar(field.left, t("merge.fields.empty")),
+                    right: formatScalar(field.right, t("merge.fields.empty")),
+                  },
+                }))}
+                choice={{
+                  value: Object.fromEntries(differing.map((field) => [field.name, fieldChoices[field.name] ?? survivor])),
+                  onChange: (name, side) => setFieldChoices((current) => ({ ...current, [name]: side as MergeSide })),
+                  label: (row) => t("merge.fields.choose", { field: String(row.label) }),
+                }}
+              />
+            </CardContent>
             {identical.length > 0 ? (
-              <Collapsible variant="section" className={differing.length > 0 ? "mt-3" : undefined}>
-                <Collapsible.Trigger>
-                  <Collapsible.Icon />
-                  {t("merge.fields.identical")}
-                  <Tag>{identical.length}</Tag>
-                </Collapsible.Trigger>
-                <Collapsible.Panel>
-                  <div className="grid gap-2">
-                    {identical.map((field) => (
-                      <div key={field.name} className="flex items-center justify-between gap-3 rounded-6 bg-inset px-3 py-2">
-                        <span className="text-13 font-medium text-fg">{t(`merge.field.${field.name}`)}</span>
-                        <span className="flex min-w-0 items-center gap-2">
-                          <span className="truncate text-13 text-fg-muted">
-                            {formatScalar(field.left, t("merge.fields.empty"))}
-                          </span>
-                          <Tag tone="success">{t("merge.fields.identicalTag")}</Tag>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </Collapsible.Panel>
-              </Collapsible>
+              <CardContent>
+                <Collapsible variant="section">
+                  <Collapsible.Trigger>
+                    <Collapsible.Icon />
+                    {t("merge.fields.identical")}
+                    <CountBadge value={identical.length} />
+                  </Collapsible.Trigger>
+                  <Collapsible.Panel>
+                    <MetaGrid rows={identical.map((field) => ({
+                      id: field.name,
+                      label: t(`merge.field.${field.name}`),
+                      value: formatScalar(field.left, t("merge.fields.empty")),
+                    }))} />
+                  </Collapsible.Panel>
+                </Collapsible>
+              </CardContent>
             ) : null}
           </Card>
 
@@ -404,10 +386,7 @@ export function MergePage(): React.ReactElement {
                   {handles.map((item) => (
                     <div key={item.key} className="flex min-w-0 items-center justify-between gap-2">
                       <Chip className="min-w-0" mono>{item.value.value}</Chip>
-                      <ProvenanceTag
-                        provenance={item.provenance}
-                        label={t(`merge.provenance.${item.provenance}`)}
-                      />
+                      <ProvenanceChip provenance={item.provenance} names={names} />
                     </div>
                   ))}
                 </div>
@@ -419,36 +398,35 @@ export function MergePage(): React.ReactElement {
                   {circles.map((item) => (
                     <div key={item.key} className="flex min-w-0 items-center justify-between gap-2">
                       <Chip>{item.value.circle?.name ?? t("merge.preview.none")}</Chip>
-                      <ProvenanceTag
-                        provenance={item.provenance}
-                        label={t(`merge.provenance.${item.provenance}`)}
-                      />
+                      <ProvenanceChip provenance={item.provenance} names={names} />
                     </div>
                   ))}
                 </div>
               ) : null}
             </RailPanel>
             <RailPanel title={t("merge.preview.relationships")} count={relationshipTotal}>
-              <div className="grid gap-2 text-13 text-fg-muted">
-                <span>{t("merge.relationships.left", { count: leftRelationships })}</span>
-                <span>{t("merge.relationships.right", { count: rightRelationships })}</span>
-              </div>
+              <MetaGrid rows={[
+                { id: "left", label: left.display_name, value: leftRelationships },
+                { id: "right", label: right.display_name, value: rightRelationships },
+              ]} />
             </RailPanel>
           </div>
 
-          <Card className="flex flex-wrap items-center gap-2 p-3 shadow-none">
-            <span className="mr-1 text-13 font-semibold text-fg">{t("merge.summary")}</span>
-            <Chip>{t("merge.summary.handles", { count: handles.length })}</Chip>
-            <Chip>{t("merge.summary.circles", { count: circles.length })}</Chip>
-            <Chip>{t("merge.summary.relationships", { count: relationshipTotal })}</Chip>
+          <Card className="shadow-none">
+            <CardHeader><CardTitle>{t("merge.summary")}</CardTitle></CardHeader>
+            <CardContent className="flex flex-wrap items-center gap-2">
+              <Chip>{t("merge.summary.handles", { count: handles.length })}</Chip>
+              <Chip>{t("merge.summary.circles", { count: circles.length })}</Chip>
+              <Chip>{t("merge.summary.relationships", { count: relationshipTotal })}</Chip>
+            </CardContent>
           </Card>
 
           <ErrorBanner
             description={
               mergeState.error
                 ? t("merge.mutationError")
-                : vetoState.error
-                  ? t("merge.vetoError")
+                : dismissState.error
+                  ? t("merge.dismissError")
                   : null
             }
           />
@@ -458,11 +436,11 @@ export function MergePage(): React.ReactElement {
         <Button
           variant="danger"
           disabled={busy}
-          loading={vetoState.fetching}
-          loadingText={t("merge.vetoing")}
+          loading={dismissState.fetching}
+          loadingText={t("merge.dismissing")}
           onClick={() => void keepSeparate()}
         >
-          {t("merge.veto")}
+          {t("merge.dismiss")}
         </Button>
         <span className="flex items-center gap-2">
           <Button disabled={busy} onClick={goBack}>{t("merge.cancel")}</Button>

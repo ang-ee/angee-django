@@ -2,6 +2,7 @@ import { Filter } from "@angee/metadata";
 import { stableSerialize } from "@angee/refine";
 import type { FilterClauseOperator } from "../../../toolbars/FilterClauseEditor";
 import type { ResourceViewState } from "../resource-view-model";
+import { resourceViewFavoriteIsActive } from "../model/favorites";
 import { customFilterChipsFor } from "../utils/filter-mutations";
 import { fieldLabel } from "../model-metadata-defaults";
 import type { SearchActiveItem, SearchCatalog } from "./types";
@@ -59,8 +60,7 @@ export function activeItems(state: ResourceViewState, catalog: SearchCatalog, t?
     items.push({ id: `group:${index}`, kind: "group", index, level, label: axis?.label ?? fieldLabel(level.field, undefined) });
   });
   for (const favorite of catalog.favorites) {
-    if (stableSerialize(favorite.filter ?? {}) === stableSerialize(state.filter)
-      && (favorite.preset ?? undefined) === (state.preset || undefined)) {
+    if (resourceViewFavoriteIsActive(favorite, state)) {
       items.push({ id: `favorite:${favorite.id}`, kind: "favorite", label: favorite.label });
     }
   }

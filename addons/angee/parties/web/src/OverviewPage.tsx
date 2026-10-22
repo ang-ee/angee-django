@@ -5,30 +5,30 @@ import { DashboardView, ErrorBanner, Metric, ContainerOutlet, useContainer } fro
 import { PartiesOverview } from "./documents";
 import { usePartiesT } from "./i18n";
 
-const DUPLICATE_COUNT_LIMIT = 100;
-const DUPLICATE_QUERY_LIMIT = DUPLICATE_COUNT_LIMIT + 1;
+const SAME_AS_COUNT_LIMIT = 100;
+const SAME_AS_QUERY_LIMIT = SAME_AS_COUNT_LIMIT + 1;
 
 /** Relationship-management overview owned by Parties and extended through its slot. */
 export function OverviewPage(): React.ReactElement {
   const t = usePartiesT();
   const overview = useAuthoredQuery(PartiesOverview, {
-    duplicateLimit: DUPLICATE_QUERY_LIMIT,
+    sameAsLimit: SAME_AS_QUERY_LIMIT,
   }, {
     models: [
       "parties.Party",
       "parties.Person",
       "parties.Organization",
       "parties.Handle",
-      "parties.PartyHandle",
-      "parties.MergeVeto",
+      "parties.PartyStatement",
+      "parties.PartySameAsPairStatement",
     ],
   });
   const contributions = useContainer("parties.overview#items");
   const data = overview.data;
-  const duplicateCount = data?.duplicate_party_candidates.length;
+  const sameAsCount = data?.same_as_pairs.length;
 
   return (
-    <DashboardView className="p-1">
+    <DashboardView>
       <Metric
         label={t("overview.metric.contacts")}
         value={data?.contacts.aggregate?.count}
@@ -58,17 +58,17 @@ export function OverviewPage(): React.ReactElement {
         format="count"
         loading={overview.isFetching}
         icon="user-check"
-        tone="info"
+        tone="warning"
       />
       <Metric
-        label={t("overview.metric.duplicates")}
-        value={duplicateCount}
+        label={t("overview.metric.sameAs")}
+        value={sameAsCount}
         format="count"
         loading={overview.isFetching}
-        max={DUPLICATE_COUNT_LIMIT}
+        max={SAME_AS_COUNT_LIMIT}
         icon="users"
-        tone="danger"
-        detail={duplicateCount !== undefined && duplicateCount > DUPLICATE_COUNT_LIMIT ? t("overview.metric.duplicatesCapped") : undefined}
+        tone="warning"
+        detail={sameAsCount !== undefined && sameAsCount > SAME_AS_COUNT_LIMIT ? t("overview.metric.sameAsCapped") : undefined}
       />
 
       {overview.error ? <ErrorBanner description={t("overview.error")} /> : null}

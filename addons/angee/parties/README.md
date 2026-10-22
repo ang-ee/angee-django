@@ -1,109 +1,57 @@
 # Directory synchronization
 
-A Directory is an Integration child driven by the shared
-[record-sync driver](../integrate/README.md). Its backend discovers address books,
-each mapped to one Folder and one `contacts` stream whose partition is the
-collection href. `SyncStream` owns progress and generations; Folder carries only
-collection identity and display metadata.
+A Directory composes the [record-sync driver](../integrate/README.md). Each
+address book maps to a Folder and contacts stream; RecordLink owns external
+identity and wire payloads. Party rows remain independent of any one directory.
 
-The CardDAV backend takes a full listing and bounded multiget baseline, then
-uses [RFC 6578 sync-collection](https://www.rfc-editor.org/rfc/rfc6578.html) deltas.
-It captures the collection token before listing so edits during a baseline replay
-on the next delta. Pending hrefs and the next token live only in the stream cursor.
-An unchanged token produces an empty page. `DAV:valid-sync-token` failure creates
-a new baseline generation, retaining links and revisions. Explicit removed-member
-404 responses become tombstones; a failed transport never advances the cursor.
-Per-identity discrepancy rescans use CardDAV multiget without advancing that
-cursor. A daily depth-one PROPFIND sweep seeks in href order and reads bounded
-multiget pages through the same apply path, importing contacts missed by the
-change feed. The driver checkpoints each page before counting absent resources;
-callers pulse until `SyncStream.reconcile_state` is empty. A silently
-vanished resource becomes unavailable even when the change feed omits it.
+The [CardDAV backend](../parties_integrate_carddav/backend.py) compares the shared
+[contact projection](backends.py); wire properties outside that projection stay
+in RecordLink history and survive conditional writes.
 
-`RecordLink.external_key` preserves the existing `(folder, source_uid)` identity:
-vCard UID, falling back to href for legacy cards without UID. A newly enumerated
-href also becomes its identity before a sweep can read its UID; parsed UIDs stay
-in link metadata. A resource keeps that first identity on later reads and when
-a delta relocates its UID. Duplicate UIDs quarantine the colliding card while
-other cards proceed. Observed link metadata retains the href even when the first
-card is malformed, allowing a
-corrected card to resolve the same quarantine. Applied revisions retain the
-resource href separately with the vCard version used for conditional writes.
-Its target is the Person produced by `Party.objects.ingest_contact`; shared
-contact points still use `Handle.objects.upsert`. A local person added to a synced
-folder receives a stable `angee-<primary key>` remote UID on its first push. A
-later pull reuses that person through the same ingest owner.
+[PartyManager.ingest_contact](managers.py) asserts directory facts; Address and
+Relationship keep their own identities and statements. Missing members withdraw
+only that source. Canonical scopes retain unasserted rows and exclude trash and
+wholly withdrawn rows. [Handle sources](managers.py) compose `Party.statements`
+through the shared Handle, Party lock order; resolution owns the cross-party
+winner and derived counters outside Party history.
 
-On the first baseline, existing people matched by `(folder, source_uid)` use the
-driver's [baseline adoption rule](../integrate/README.md). Local-only people can
-be created remotely as soon as that baseline completes, including in the same
-sync call. Before upgrading a pull-only Directory, remove people that must remain
-local from synchronized folders.
+A card's `PHOTO` is stored as the person's avatar through storage's idempotent
+`File.objects.ingest_image` before the page transaction; a photo storage refuses
+(not a raster image, or over `ANGEE_STORAGE_IMAGE_MAX_BYTES`) quarantines its
+card while the rest of the page lands, and write-back refuses to send such an
+avatar as a remote rejection. Only the person's own `avatar` is projected. A
+handle carries the avatar its own network shows: live sessions report it as an
+`AvatarReport` through `Handle.objects.fill_avatar`, which never creates a
+handle. A party without a readable avatar of its own displays the avatar of its
+strongest handle the viewer can read (`Party.objects.display_avatar`); that
+fallback is derived for reading and never stored or written to a card. Avatars
+live on storage's image drive, which every signed-in user reads; which avatar a
+party or handle shows stays with that record's readers.
 
-[`contact_projection`](backends.py) declares exactly the fields synchronized in
-both directions. It includes names, notes, dates, email/phone contact points,
-postal addresses, the source employment edge and the avatar content hash and MIME
-type. Email and phone contact points come only from the person's
-[asserted links](managers.py): those the card itself carries, those a person
-added, and confirmed suggestions. Unreviewed suggestions such as mined
-signature phones or display-name matches stay inside Angee and are never
-written to a card. Extraction fetches and pre-stores avatars through storage's
-idempotent `File.objects.ingest_bytes` before the page transaction. Apply only
-validates and links the prepared File under the row lock; it performs database
-work only.
-Local comparisons use the stored hash without reading avatar bytes, and revisions
-retain the content address instead of base64 photo bytes. Collection order
-does not affect hashes. The remote and local bases are separate because domain
-fields may normalize values. Transport metadata, unmapped ORG department units,
-and other vCard properties remain outside the comparison. Conditional writes
-preserve those unmapped properties in the retained vCard.
+A handle that proves to be another's spelling folds through the shared
+`MergeableMixin` into the contact point on the same platform. Handle owns missing
+value carry and the directory identity lock order; the shared reference mover
+preserves statement decisions and evidence. The alias remains as a historized
+redirect, reserving its ingestion keys so later syncs resolve to the survivor.
 
-Each cycle compares local projections with their last applied bases. Remote-only
-edits use the existing ingest verb; local-only edits use a conditional PUT with
-the resource ETag as `If-Match`, following
-[CardDAV's resource write contract](https://www.rfc-editor.org/rfc/rfc6352.html#section-6.3.2).
-New resources use `If-None-Match: *`. Successful writes refresh both bases and the
-remote version and retain origin `local`, so the next pull recognizes the write.
-Both-sided changes and HTTP 412 responses remain unresolved `CONFLICT`
-discrepancies until the operator chooses Keep remote or Keep local. Keeping the
-remote re-reads and applies that record; keeping the local re-reads the remote
-version before a conditional write. A newer remote edit can reject that write
-and leave the conflict open.
+Ordinary person edits assert normal statements; confirm/dismiss writes preferred
+statements without rewriting the source or copying evidence. Person preferences
+survive remote removal: confirmed handles can be republished; dismissal makes
+removal stick. Revert restores local state; sync retains its remote preconditions.
+Consumers declare domain aspects; losing statements stay inspectable, and normal
+handle statements below the Party's review threshold remain pending review.
 
-Deletion defaults preserve data: remote deletion tombstones the link and retains
-the local person; local deletion while the remote remains live produces a
-conflict. The initial stream policy can be seeded per collection:
+Review and Identity read through the Party, with independent Handle and evidence
+gates. Once asserted, subjects leave active use only through trash;
+retained statements protect their subjects and Handle evidence from deletion.
+Circle and spaces memberships keep plain acceptance/rejection decisions.
 
-```json
-{
-  "streams": {
-    "contacts": {
-      "https://dav.example/books/contacts/": {
-        "remote_delete": "retain",
-        "local_delete": "conflict"
-      }
-    }
-  }
-}
-```
+Source admission follows RecordLinks and seeded Rule/Seed role membership.
+Sources gain no private reads. Imports supply their
+Integration and observed links; parties binds targets in the application transaction.
 
-Either policy may explicitly be `propagate`. Local propagation uses conditional
-DELETE with `If-Match`; remote propagation deletes the unchanged local party.
-An edited retained tombstone cannot silently recreate the remote. Existing
-streams own their persisted `config`; changing a Directory's seed does not
-overwrite an existing policy. Epoch changes preserve that configuration.
-
-Contact fields remain locally editable; the stream's comparison bases and
-conflict policy govern synchronization with the remote address book.
-The Integration owner supplies the credential and the local audit owner.
-
-Malformed cards are quarantined individually. Unsupported or malformed DAV
-responses fail the page without skipping its cursor. A server must implement
-RFC 6578 and strong per-resource ETags for this bidirectional backend. Basic
-authentication remains supported; Digest authentication needs a credential
-handler. Tests in `tests/test_parties_carddav_sync.py` exercise the real adapter,
-driver and ingest against a deterministic DAV server double.
-
-The public GraphQL `ContactFolderType.ctag` field was removed when collection
-progress moved to `SyncStream`; clients must remove it from their selections.
-The repository's addon, package and example web sources have no remaining reads.
+Identity matching writes normal RULE same_as statements on the ordered Party
+pair, skipping current assertions and dismissals before each run's cap without
+continuation state. A preferred no_value is the symmetric anti-link; preferred value
+awaits a person's survivor choice. `survivor.merge` owns the changeset and redirect;
+pointing owners union statements, retaining collisions as superseded.

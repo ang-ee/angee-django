@@ -30,10 +30,14 @@ describe("decisions fragment", () => {
       filter: { is_open: { exact: true }, can_act: { exact: true } } });
     expect(Object.keys(decisions.i18n ?? {})).toEqual(["decisions"]);
   });
-  test("exports consumer and waiting-owner contracts without registering mandatory content", () => {
+  test("exports consumer contracts and contributes the decision kind to the Timeline", () => {
     expect(DECISION_MODEL).toBe("decisions.Decision");
     // Independent waiters contribute origin links through the declared container.
-    expect(decisions.containers).toEqual({ "decisions#origin": {} });
+    expect(decisions.containers?.["decisions#origin"]).toEqual({});
+    expect(Object.keys(decisions.containers?.["timeline#kinds"] ?? {})).toEqual(["decisions.decision"]);
+    // Related: every record lists the decisions that concern it; a decision lists what it concerns.
+    expect(Object.keys(decisions.containers?.["related#groups"] ?? {})).toEqual(["decisions.decisions"]);
+    expect(Object.keys(decisions.containers?.["decisions.Decision#groups"] ?? {})).toEqual(["decisions.concerns"]);
     expect(DecisionCard).toBeTypeOf("function");
   });
 });

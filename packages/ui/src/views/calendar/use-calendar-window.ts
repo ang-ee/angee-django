@@ -22,6 +22,8 @@ export interface CalendarWindowBounds {
  * The window contract encoded once: `start` inclusive, `end` exclusive,
  * ISO-8601. A source's `variables` builder spreads it so the argument names stay
  * with the query while the bounds conversion lives here.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function calendarWindowBounds(window: CalendarWindow): CalendarWindowBounds {
   return {
@@ -67,6 +69,8 @@ export type AnyCalendarWindowSource = CalendarWindowSource<AuthoredDocument>;
  * Widen a typed source into the erased set type, keeping its `variables`/`select`
  * checked against `TDocument` at the authoring site. The erasure boundary is here,
  * once, so a page never hand-casts.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function calendarWindowSource<TDocument extends AuthoredDocument>(
   source: CalendarWindowSource<TDocument>,
@@ -90,6 +94,7 @@ const NO_OCCURRENCES: readonly Occurrence[] = [];
  * ({@link useAuthoredQuery}) — the window bounds ride the query variables, so a
  * new window is a new key and the owner refetches; the caller stays a thin
  * composer and never re-authors the mapping per page.
+ * @owner CalendarView
  */
 export function useCalendarWindow<TDocument extends AuthoredDocument>(
   source: CalendarWindowSource<TDocument>,

@@ -57,7 +57,7 @@ below.
 | Artifact assembly and explicit build/check/cleanup orchestration | [`Runtime`](../angee/compose/runtime.py) |
 | Atomic writes, drift and guarded filesystem cleanup | [`GeneratedTree`](../angee/fs.py) |
 | Addon migration materialization and dependency projection | [`RuntimeMigrations`](../angee/compose/migrations.py), [`AddonDependencyGroup`](../angee/compose/dependencies.py) |
-| Autodetected drop guards | [`RuntimeMigrations`](../angee/compose/migrations.py) refuses deleting a still-owned table at build; [`DropGuardAutodetector`](../angee/compose/migrations.py) refuses dropping a populated column in `makemigrations` |
+| Autodetected drop guards | [`RuntimeMigrations`](../angee/compose/migrations.py) refuses deleting a still-owned table at build; [`DropGuardAutodetector`](../angee/compose/migrations.py) refuses dropping a populated column or table in `makemigrations`, apart from rows the retiring addon declares seeded |
 | Runtime import during Django app population | [`ComposeConfig.import_models()`](../angee/compose/apps.py) |
 | HTTP route aggregation | [`angee.urls`](../angee/urls.py) |
 | WebSocket routes, HTTP sub-app mounts, mount lifespans | [`angee.asgi`](../angee/asgi.py) |
@@ -192,14 +192,29 @@ constraint seam. See `ModelComposition` for validation and ordering rules,
 including rejection of model-parent cycles and mutually importing generated app
 modules.
 
+An abstract capability may declare `requires_parent = "app.Model"` when its
+methods require that materialized ancestor. The compiler checks every composed
+source and donor using the capability against its declared `extends` chain,
+including indirect parents. This requirement changes no Python bases or fields;
+the parent remains the MTI persistence owner. The typing view consumes the same
+validated contract. See [Bridge](../addons/angee/integrate/models.py) and
+[`ModelComposition`](../angee/compose/model_composition.py).
+
 Tracking and batch behavior stay with their owners. `HistoryMixin` uses a native
 simple-history descriptor adapted for generated module labels and virtual fields;
-a concrete parent's tracking alone does not opt its MTI child into another
-history table. Revision sources use django-reversion registration on completed
-concrete classes. Resource participants inherit the resources-owned
+every concrete descendant of a tracked source has its own history table,
+including MTI children. Each emitted concrete Meta names the tracked
+`_angee_base` manager; retained models supply its guarded queryset. Resource
+participants inherit the resources-owned
 [`ResourceLoadMixin`](../addons/angee/resources/mixins.py) and delegate through
 `super()`. The renderer has no generic decorator/attribute language or resource
 hook aggregator.
+
+Adding native history to an existing model emits only Django's schema changes:
+the first tracked write after the upgrade is the row's first version. An addon
+whose upgrade needs earlier snapshots declares that in its own runtime migration
+(simple-history's `bulk_history_create` on the historical model); the composer
+emits no checkpoint of its own.
 
 The composer emits package/model files, static web projections and effective
 permission extensions, and explicitly materializes addon-owned migrations.
@@ -232,42 +247,47 @@ each applicable origin it copies the complete source module to
 `runtime/<app_label>/migrations/`, gives it the next numeric name, and attaches
 it to the target app's single current leaf. The footer records the stable
 `<addon>:<name>` origin and source digest. Existing materialized bodies are
-immutable and repeated builds are idempotent. A declaration may list exact
-released digests under `compatible_source_sha256` when a source fix must keep
-already-materialized copies valid; the copies themselves still never change.
-Other changed source digests, copied-body edits, duplicate origins, split leaves, and invalid graphs fail
-before migration execution. A guarded app-label adoption may deliberately
+immutable and repeated builds are idempotent. Changed source digests,
+copied-body edits, duplicate origins, split leaves, and invalid graphs fail before
+migration execution. A guarded app-label adoption may deliberately
 write reviewed staging nodes and then stop at the physical-table-owner drop check.
 This gives downstream migrations a concrete new graph without allowing the
 following `makemigrations` command to delete retained tables. The exact validation
 contract belongs to [`RuntimeMigrations`](../angee/compose/migrations.py) and its
-[history tests](../tests/test_runtime_migrations.py). A dependency on
+[mechanism tests](../tests/test_runtime_migrations.py). A dependency on
 `(<app_label>, "__latest__")` is resolved to a concrete current leaf when copied.
+`RuntimeMigrations.schedule(state, only=...)` runs the same round loop for the named
+origins from a given state without a migration graph.
 
-For new transitions, add a new declaration. Preserve old import paths needed by
-released history when code moves. See the [backend migration
-rules](backend/guidelines.md#migrations-and-runtime) before recovering a local
-database or changing historical source compatibility.
+A stack's composed migration history is disposable: after every upgrade,
+`reset_migration_history` verifies and replaces it with fresh initials; a data
+transition that `makemigrations` cannot express uses `[[migrations]]` only as a
+write → apply on every stack → delete in the next change vehicle, never as released
+history or a reason for a compatibility import.
 
-A destructive retirement owned by an addon that has left the composition can
-declare `uninstalled_only = true`. The migration owner reads these declarations
-from available addon manifests only when the addon is uninstalled and the target
-label has retained runtime migration files. It resolves the source AppConfig
-without installing its models, dependencies, autoconfig, permissions or resources.
-The same pure state guards and append-only materialization rules apply. Declarations
-without this explicit opt-in are never materialized for uninstalled addons;
-declarations with it are never materialized while their addon is installed. Once
-materialized, Django owns their execution as retained history. Keep the composition
-fixed through build and migrate; reinstalling a retired addon requires a reviewed
-forward migration path. Incoming relations must be retired by their own owners
-before the table retirement becomes applicable.
+The reset preserves matching migration records, records missing fresh nodes
+through Django's recorder, and removes only obsolete composed records in one
+transaction. Applied external migrations keep their composed dependencies, and
+an exception restores the original migration sources and recorder state.
 
-An installed addon that stops composing one of its labels retires that label's
-tables with `retained_only = true`. The declaration exists only where the target
-label has retained runtime migration files; a database that never had the label
-has nothing to retire, so a fresh install composes without it. Without the opt-in,
-a target label that is neither composed nor retained fails the build as a typo.
-The two flags are exclusive.
+If an already copied declaration needs a source correction, first use
+`manage.py reset_migration_history --database default` on its fully applied,
+model-clean stack. This guarded reset can load the immutable copied graph even
+when its source digest has changed; do not edit the copy or its footer. Then run
+`manage.py angee build` and `manage.py migrate` so the corrected declaration is
+materialized with its resolved dependencies and applied. A data-only declaration
+whose schema guard still holds can be emitted again after a reset; its body must
+therefore preserve safe replay until the declaration is retired.
+
+For a conversion followed by retirement, declare the fold first and guard the
+retirement against its completed schema. The composer attaches retirement to the
+fold's concrete leaf. Keep data verification in the copied migration body, since
+schema guards alone cannot prove that the conversion preserved every row.
+
+Guards are evaluated in rounds against the state each round starts from, and a
+declaration planned in a later round depends on every other app's leaf planned so
+far. A guard therefore returns `False` for the state an earlier declaration of the
+same build still has to produce (a pending predecessor is not a partial history).
 
 Normal app boot and `emit_if_stale()` never materialize migrations.
 `angee build --check` validates existing history and reports applicable pending
@@ -277,20 +297,33 @@ read-only filesystem probe. After a successful build, normal `makemigrations` ma
 generate any remaining lossless changes and Django handles the rest of the
 migration lifecycle.
 
-`makemigrations` never drops a column that still holds data. `angee.compose`
-gives Django's `makemigrations` and `migrate` the shared
-[`DropGuardAutodetector`](../angee/compose/migrations.py), which refuses an
-autodetected `RemoveField` before any file is written when a row differs from
-the field's empty value (NULL, or a non-null field's default) in a database that
-may receive the migration, or when such a database cannot be checked. Empty
-columns drop automatically, so toggling a layer in development stays free.
-Retire populated data with a cutover: an addon runtime migration, declared by an
-addon that stays installed, that preserves or retires the data and removes the
-field. Build materializes it first, so the reviewed removal is never
-autodetected.
+`makemigrations` never drops a column or a table that still holds data.
+`angee.compose` gives Django's `makemigrations` and `migrate` the shared
+[`DropGuardAutodetector`](../angee/compose/migrations.py), which refuses before
+any file is written:
 
-Follow the [migration policy](backend/guidelines.md#migrations-and-runtime) for
-the upgrade floor, carried-forward history, and consumer reset authorization.
+- an autodetected `RemoveField` when a row differs from the field's empty value
+  (NULL, or a non-null field's default);
+- an autodetected `DeleteModel` when its table holds a row. An addon that removes
+  a model may name it under `retired_models` in its `addon.toml` `[resources]`
+  (for example `retired_models = ["messaging.ActivityType"]`): the rows its own
+  resource files seeded then retire with the model, read through the resource
+  ledger (`ResourceQuerySet.retired_seed_keys`); other addons' seeded rows still
+  count. The ledger rows stay as `angee.resources` history; the loader skips a
+  model it cannot resolve.
+
+Both proofs run on every database that may receive the migration; without
+`DATABASE_ROUTERS` that is `default` alone, as in Django's history consistency
+check. A database that cannot be checked refuses the drop. The guard runs only
+inside `makemigrations` and `migrate`, which need the database anyway;
+`angee build` never probes it. Empty columns and tables drop automatically, so
+toggling a layer in development stays free. Retire populated data with a
+cutover: an addon runtime migration, declared by an addon that stays installed,
+that preserves or retires the data and removes the field or model. Build
+materializes it first, so the reviewed removal is never autodetected.
+
+Follow the [migration policy](backend/guidelines.md#migrations-and-runtime) when
+authoring a data transition or resetting composed history.
 
 [`angee provision`](../angee/compose/management/commands/angee.py) owns full
 runtime preparation. It builds in the initial process, then starts one fresh
@@ -299,8 +332,15 @@ Keep that post-build boundary; native command loaders and cache invalidation
 allow subsequent database preparation, checks and schema output to share the
 initialized registry. Each command retains its own transactions and failures
 stop later steps. Provision runs `makemigrations --noinput`; missing required
-migration defaults and populated column drops fail immediately so their defaults
-or cutovers can be authored before retrying.
+migration defaults and populated column or table drops fail immediately so their
+defaults or cutovers can be authored before retrying.
+
+Optional addon commands can follow provision through `--after-if-installed`;
+the composer runs an explicitly named command only when Django's registry
+contains it. The timeline reads source rows directly and requires no backfill.
+An addon declaring migrations for its own app label keeps that native runtime
+app, even after its last model is retired, so Django can apply the cutover and
+retain its migration history.
 
 ### Composed addon dependencies
 
@@ -352,25 +392,11 @@ validated against those concrete classes.
   Django setup still precedes management-command dispatch, so normal boot repair
   also precedes `angee clean` and `angee build --check`.
 
-Both cleanup operations preserve every `migrations/` subtree and report only
-history for labels no longer composed. Those labels may retain directories solely
-to hold their history. An absent addon does not establish that its migrations are
-disposable: the [migration policy](backend/guidelines.md#migrations-and-runtime)
-requires preserving files and investigating the recorded graph before recovery.
-During app population, [`Runtime`](../angee/compose/runtime.py) binds migration
-modules for current composed labels and retained historical labels, preserving
-project-owned bindings. The settings composer registers absent historical labels
-with model-free Django AppConfigs so Django can load the complete dependency graph.
-Their stale generated models and former addon capabilities remain disabled.
-Retaining a label does not itself authorize discarding its data; a declared owner
-cutover specifies that disposition.
-
-When Django generates a retirement for a migration-only label, the composer's
-[`DropGuardAutodetector`](../angee/compose/migrations.py) wraps its table operations
-behind `SeparateDatabaseAndState`. State advances normally; database operations
-run only when their historical table exists on the execution connection. Tables
-already removed or renamed by an earlier runtime are left alone. An existing
-retirement, including one recorded with `--fake`, produces no replacement name.
+Both cleanup operations preserve current `migrations/` subtrees; migration history
+changes only through `reset_migration_history`, after its applied-plan and model-drift
+guards pass. During app population, [`Runtime`](../angee/compose/runtime.py) binds
+migration modules for current composed labels while preserving unrelated
+project-owned bindings.
 
 ## Addon Declarations
 
@@ -471,21 +497,22 @@ explicit `None` disabling migrations for an emitted label, fail clearly.
 - Rendering produces artifacts; explicit lifecycle operations bind derived integration paths.
 - Normal startup heals the runtime in place but never resets or prunes it.
 - Composer drift checks cover runtime sources, the generated host dependency
-  group, and addon migration history; GraphQL SDL and frontend codegen checks
+  group, and addon migration declarations; GraphQL SDL and frontend codegen checks
   belong to their respective owners.
 - Apps read `django.conf.settings`; process environment is normalized during
   settings composition.
 - `addon.toml` owns addon declarations; native AppConfig owns Django identity and lifecycle.
 - Capability conventions are defaults, with explicit manifest declarations taking precedence.
 - Generated `runtime/` is output; edit addon source, not emitted files.
-- Workflow graphs are complete documents in declared resource files, as in the
+- Base workflow graphs are complete documents in declared resource files, as in the
   [notes workflow](../examples/addons/example/notes/resources/demo/100_workflows.workflow.yaml).
   [`WorkflowDefinitionResource`](../addons/angee/workflows/resources.py) delegates
   identity, draft validation and publication to `WorkflowManager.install_definition`.
-  Publication freezes the normalized child contracts in each version. Edit the
-  source document and republish affected parents when a child contract changes.
+  Addons may contribute fragments only through declared definition points and the
+  `workflows.workflowextension` install kind; the resource loader composes those
+  fragments for publication without modifying the base draft. Publication freezes
+  the normalized child contracts in each version. Edit the source declaration and
+  republish affected parents when a child contract changes.
 - Runtime cleanup may delete only the configured generated runtime directory,
   only after verifying Angee's generated sentinel, and must preserve migrations.
-  A fresh-stack reset that also discards generated migration history has no
-  owner yet (Decision 29). `Runtime.clean_configured` cannot serve as that reset;
-  see [the migration debt](backend/guidelines.md#migrations-and-runtime).
+  `reset_migration_history` owns the separately guarded history replacement.

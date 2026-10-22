@@ -46,13 +46,10 @@ class ProjectAccessTask(AbstractTask):
     project = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
     milestone = None
     milestone_id = None
-    converted_from_activity = None
     links = None
     file_attachments = None
     thread_attachments = None
-    thread_create_log = False
     thread_create_autofollow_author = False
-    thread_tracking_fields = ()
 
     class Meta(AbstractTask.Meta):
         abstract = False

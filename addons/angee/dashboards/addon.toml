@@ -5,4 +5,4 @@ name = "angee.dashboards"
 description = "Composable resource, addon, and personal dashboards"
 keywords = ["dashboards", "analytics", "widgets"]
 category = "Data"
-depends_on = ["angee.iam", "angee.resources", "angee.graphql"]
+depends_on = ["angee.iam", "angee.resources", "angee.graphql", "angee.provenance"]

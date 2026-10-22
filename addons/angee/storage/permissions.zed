@@ -1,7 +1,7 @@
 // Authorization schema for the storage addon.
 // @rebac_package: storage
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 10
+// @rebac_schema_revision: 11
 
 // Roles-as-namespace anchor, mirroring operator/role: `includes` lets one
 // storage role imply another, and resources gate on `effective_member` so
@@ -75,6 +75,8 @@ definition storage/folder {
     permission read   = drive->read + parent->read + owner + admin->member
     permission write  = drive->write + parent->write + owner + admin->member
     permission delete = drive->write + owner + admin->member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
 }
 
 // `owner` is independent of upload attribution. `viewer` grants read

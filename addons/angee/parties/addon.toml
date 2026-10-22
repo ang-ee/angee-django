@@ -5,7 +5,7 @@ name = "angee.parties"
 description = "Contacts — people and organizations, their circles, relationships, addresses, and directory sync"
 keywords = ["parties", "contacts", "crm"]
 category = "Data"
-depends_on = ["angee.graphql", "angee.iam", "angee.integrate", "angee.storage", "angee.tags"]
+depends_on = ["angee.provenance", "angee.graphql", "angee.iam", "angee.integrate", "angee.storage", "angee.tags"]
 dependencies = [
   "django-countries>=9,<10",
   "phonenumbers>=9.0",
@@ -13,11 +13,20 @@ dependencies = [
 ]
 
 [[migrations]]
-name = "directory_sync_status"
+name = "handle_controller"
 app_label = "parties"
-module = "runtime_migrations.directory_sync_status"
+module = "runtime_migrations.handle_controller"
+
+[[migrations]]
+name = "owner_column"
+app_label = "parties"
+module = "runtime_migrations.owner_column"
 
 [resources]
+install = [
+  { path = "resources/install/010_provenance.rule.yaml", adopt = "key" },
+  { path = "resources/install/020_statement_source_grants.yaml", kind = "grants", depends_on = ["resources/install/010_provenance.rule.yaml"] },
+]
 master = [
   { path = "resources/master/010_parties.relationshipkind.yaml", adopt = "slug" },
 ]

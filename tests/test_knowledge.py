@@ -5,11 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-import reversion
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import AnonymousUser
-from django.contrib.sessions.base_session import AbstractBaseSession
-from django.test.utils import isolate_apps
 from rebac import (
     MissingActorError,
     PermissionDenied,
@@ -30,7 +27,7 @@ from angee.knowledge.models import (
     parse_wikilinks,
 )
 from angee.mcp.graphql import execute_under_actor
-from tests.conftest import Link, MarkdownPage, Page, RecordBinding, SchemaAddon, Vault, create_user, vault_for
+from tests.conftest import Link, MarkdownPage, Page, SchemaAddon, Vault, create_user, vault_for
 
 
 def test_create_for_sets_owner_and_audit_stamps(composed_tables: None) -> None:
@@ -268,31 +265,6 @@ def test_write_body_rejects_bodyless_kinds(composed_tables: None) -> None:
             MarkdownPage.objects.write_body(folder, "nope")
 
 
-def test_body_revisions_roll_back(composed_tables: None) -> None:
-    """Body edits snapshot through django-reversion and revert cleanly."""
-
-    alice = create_user("alice")
-    vault = vault_for(alice)
-    with actor_context(alice):
-        page = Page.objects.create_in(vault, title="Versioned")
-        with reversion.create_revision():
-            markdown = MarkdownPage.objects.write_body(page, "first body")
-        with reversion.create_revision():
-            MarkdownPage.objects.write_body(page, "second body")
-
-        markdown.refresh_from_db()
-        versions = list(markdown.revisions)
-        assert [version.field_dict["body"] for version in versions] == [
-            "second body",
-            "first body",
-        ]
-
-        markdown.revert_to(versions[-1])
-    markdown.refresh_from_db()
-    assert markdown.body == "first body"
-    assert markdown.word_count == 2
-
-
 def test_excerpt_truncates_long_bodies(composed_tables: None) -> None:
     """The excerpt keeps short bodies intact and ellipsizes long ones."""
 
@@ -364,7 +336,7 @@ def test_backlinks_respect_source_page_read(composed_tables: None) -> None:
 
 
 def test_patch_section_splices_guards_and_reindexes(composed_tables: None) -> None:
-    """A section patch CAS-guards, records a revision, and rebuilds backlinks."""
+    """A section patch CAS-guards and rebuilds backlinks."""
 
     alice = create_user("alice")
     vault = vault_for(alice)
@@ -379,22 +351,17 @@ def test_patch_section_splices_guards_and_reindexes(composed_tables: None) -> No
         with pytest.raises(SectionNotFoundError):
             MarkdownPage.objects.patch_section(page, ["Missing"], "replace", "nope")
 
-        with reversion.create_revision():
-            patched = MarkdownPage.objects.patch_section(
-                page,
-                ["Usage"],
-                "replace",
-                "see [[Target]]",
-                expected_hash=markdown.body_hash,
-            )
+        patched = MarkdownPage.objects.patch_section(
+            page,
+            ["Usage"],
+            "replace",
+            "see [[Target]]",
+            expected_hash=markdown.body_hash,
+        )
 
     assert "see [[Target]]" in patched.body
     assert "old usage" not in patched.body
     assert "keep me" in patched.body  # sibling section untouched
-
-    versions = list(patched.revisions)
-    assert len(versions) == 1
-    assert "see [[Target]]" in versions[0].field_dict["body"]
 
     links = {link.target_text: link for link in Link._base_manager.filter(source_page=page)}
     assert links["Target"].is_resolved
@@ -417,8 +384,8 @@ def test_replace_unique_swaps_exact_text_with_guard(composed_tables: None) -> No
     assert updated.body == "alpha BETA gamma"
 
 
-def test_append_and_prepend_grow_body_and_record_revisions(composed_tables: None) -> None:
-    """Whole-page append/prepend join one blank apart, CAS-guard, and version."""
+def test_append_and_prepend_grow_body(composed_tables: None) -> None:
+    """Whole-page append/prepend join one blank apart and CAS-guard."""
 
     alice = create_user("alice")
     vault = vault_for(alice)
@@ -429,27 +396,15 @@ def test_append_and_prepend_grow_body_and_record_revisions(composed_tables: None
         with pytest.raises(StaleBodyError):
             MarkdownPage.objects.append(page, "blocked", expected_hash="stale")
 
-        with reversion.create_revision():
-            appended = MarkdownPage.objects.append(page, "second line", expected_hash=first.body_hash)
-        with reversion.create_revision():
-            prepended = MarkdownPage.objects.prepend(page, "header", expected_hash=appended.body_hash)
+        appended = MarkdownPage.objects.append(page, "second line", expected_hash=first.body_hash)
+        prepended = MarkdownPage.objects.prepend(page, "header", expected_hash=appended.body_hash)
 
     assert appended.body == "first line\n\nsecond line"
     assert prepended.body == "header\n\nfirst line\n\nsecond line"
 
-    versions = list(prepended.revisions)
-    assert versions[0].field_dict["body"] == "header\n\nfirst line\n\nsecond line"
 
-
-def test_mcp_body_write_records_a_revision(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A section patch driven through the MCP engine is versioned like an HTTP edit.
-
-    The MCP path has no HTTP middleware, so ``RevisionMiddleware`` never
-    opens the ``create_revision()`` block an HTTP write rides — the engine itself must.
-    Drive ``patch_page_section`` through :func:`execute_under_actor` (the MCP engine
-    entry point, not the HTTP schema) and assert a ``Version`` lands, bound to the actor,
-    mirroring :func:`test_patch_section_splices_guards_and_reindexes`.
-    """
+def test_mcp_body_write_updates_section(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A section patch driven through the MCP engine updates the body."""
 
     parts = {key: tuple(knowledge_schema.schemas["public"].get(key, ())) for key in SCHEMA_PART_KEYS}
     schemas = GraphQLSchemas([SchemaAddon({"public": parts})])
@@ -459,7 +414,6 @@ def test_mcp_body_write_records_a_revision(composed_tables: None, monkeypatch: p
     vault = vault_for(alice)
     with actor_context(alice):
         page = Page.objects.create_in(vault, title="Guide")
-        # Written outside a revision block, so the only Version can come from the MCP edit.
         markdown = MarkdownPage.objects.write_body(page, "# Doc\n\nintro\n\n## Usage\n\nold usage\n")
 
     document = (
@@ -479,11 +433,6 @@ def test_mcp_body_write_records_a_revision(composed_tables: None, monkeypatch: p
     assert data["patch_page_section"]["ok"] is True
     markdown.refresh_from_db()
     assert "new usage through mcp" in markdown.body
-
-    versions = list(markdown.revisions)
-    assert len(versions) == 1
-    assert versions[0].field_dict["body"] == markdown.body
-    assert versions[0].revision.user_id == alice.pk  # the MCP actor bound as the revision user
 
 
 def test_lexical_retrieval_matches_title_and_body_scoped_to_actor(composed_tables: None) -> None:
@@ -525,20 +474,3 @@ def _rename(vault: Any, name: str) -> None:
 
     vault.name = name
     vault.save(update_fields=("name",))
-
-
-@pytest.mark.django_db
-@isolate_apps()
-def test_binding_teardown_ignores_string_pk_rows() -> None:
-    """A row no binding can name (untyped, such as django's Session) is a no-op, not an error.
-
-    Coercing Session's string key into the integer object_id filter once crashed
-    logout; typed rows with non-integer keys are skipped the same way.
-    """
-
-    class Session(AbstractBaseSession):
-        class Meta:
-            app_label = "tests"
-
-    probe = Session(session_key="5nak4kkrccy3b268oc6zt7hbcui3ru1l")
-    RecordBinding.objects.teardown_for_record(probe)

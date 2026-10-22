@@ -10,11 +10,9 @@ from django.core.exceptions import ValidationError
 from django.test.utils import isolate_apps
 from rebac import system_context
 
-from angee.base.mixins import ArchiveMixin, ArchiveQuerySet
-from angee.base.models import AngeeManager
-from angee.messaging.testing.models import Handle, Organization, Party, PartyHandle
+from angee.messaging.testing.models import Handle, Organization, Party
+from angee.models import AngeeManager, ArchiveMixin, ArchiveQuerySet
 from angee.parties.managers import PartyQuerySet
-from angee.parties.mixins import LinkSource
 from tests.tables import model_tables
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -189,7 +187,10 @@ def test_named_excludes_archived_rows_in_an_archivable_composition(owner: Any) -
                 app_label = "party_lookup"
                 rebac_resource_type = "parties/party"
 
-        with model_tables((ArchivableParty,)), system_context(reason="test archived party names"):
+        with (
+            model_tables((ArchivableParty, ArchivableParty.history.model)),
+            system_context(reason="test archived party names"),
+        ):
             active = ArchivableParty.objects.create(display_name="Alex Example", created_by=owner)
             ArchivableParty.objects.create(display_name="Alex Example", is_archived=True, created_by=owner)
             assert list(ArchivableParty.objects.named("alex example")) == [active]
@@ -208,7 +209,7 @@ def test_confirmed_uses_platform_normalization(owner: Any, platform: str, stored
     with system_context(reason="test confirmed handle lookup"):
         party = Party.objects.create(display_name="Alex Example", created_by=owner)
         handle = Handle.objects.create(platform=platform, value=stored, created_by=owner)
-        PartyHandle.objects.link(party, handle, source=LinkSource.MANUAL, is_confirmed=True, created_by_id=owner.pk)
+        party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
 
     candidates = Handle.objects.with_actor(owner).confirmed(platform, query)
 
@@ -224,7 +225,7 @@ def test_confirmed_ignores_unconfirmed_and_unlinked_handles(owner: Any) -> None:
     with system_context(reason="test unconfirmed handle lookup"):
         party = Party.objects.create(display_name="Alex Example", created_by=owner)
         handle = Handle.objects.create(platform="email", value="alex@example.test", is_verified=True, created_by=owner)
-        PartyHandle.objects.link(party, handle, source=LinkSource.MANUAL, created_by_id=owner.pk)
+        Party.objects.assert_handle(party, handle, asserted_by=owner, confidence=1.0)
         Handle.objects.create(
             platform="email",
             value="unlinked@example.test",
@@ -243,6 +244,6 @@ def test_confirmed_preserves_actor_scope(owner: Any) -> None:
     with system_context(reason="test scoped confirmed handle"):
         party = Party.objects.create(display_name="Morgan Example", created_by=other)
         handle = Handle.objects.create(platform="email", value="morgan@example.test", created_by=other)
-        PartyHandle.objects.link(party, handle, source=LinkSource.MANUAL, is_confirmed=True, created_by_id=other.pk)
+        party.with_actor(other).confirm(aspect="handle", handle=handle, values={})
 
     assert not Handle.objects.with_actor(owner).confirmed("email", handle.value).exists()

@@ -1,20 +1,18 @@
 """Additional intake scenarios on the shared emitted-host fixtures."""
 
-from io import StringIO
 from unittest.mock import patch
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import connection
 from django.test import TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 
-from angee.base.errors import RecordAccessSubjectRefused
+from angee.errors import RecordAccessSubjectRefused
+from angee.identity import public_id_of
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
-from angee.parties.mixins import LinkSource
-from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessCase
+from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessCase, grant_rows
 
 
 class IntakeCampaign(IntakeAccessCase):
@@ -35,10 +33,7 @@ class IntakeCampaign(IntakeAccessCase):
                 user.save(update_fields=("username", "email"))
 
     def tuples(self):
-        return tuple(
-            list(apps.get_model("rebac", name)._base_manager.order_by("pk").values())
-            for name in ("Relationship", "RelationshipRegistry")
-        )
+        return tuple(grant_rows(apps.get_model("rebac", name)) for name in ("Relationship", "RelationshipRegistry"))
 
     def test_reconsideration_retains_answer_and_approval_is_final(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))
@@ -179,21 +174,6 @@ class IntakeCampaign(IntakeAccessCase):
         with actor_context(self.reader), self.assertRaises(PermissionDenied):
             first.task.with_actor(self.reader).message_post("Unusable comment arm")
 
-    def test_reconciliation_dry_run_and_apply_clear_only_untouched_unconfirmed_party(self):
-        eligible = self.legacy_need()
-        confirmed = self.legacy_need(confirmed=True)
-        edited = self.legacy_need(touched=True)
-        output = StringIO()
-        call_command("intake_reconcile_parties", stdout=output)
-        eligible.refresh_from_db()
-        self.assertIsNotNone(eligible.party_id)
-        call_command("intake_reconcile_parties", "--apply", stdout=StringIO())
-        for row in (eligible, confirmed, edited):
-            row.refresh_from_db()
-            self.assertEqual(row.party_id is None, row.pk == eligible.pk)
-
-
-
 class IntakeDenormalizedCampaign(IntakeCampaign):
     storage = "denormalized"
 
@@ -303,7 +283,7 @@ class CaptureCampaign(TransactionTestCase):
         channel = self.webform(domains=("example.test",))
         email = f"claim-{self._testMethodName}@example.test"
         stores = [apps.get_model("rebac", name) for name in ("Relationship", "RelationshipRegistry")]
-        before = [list(store._base_manager.order_by("pk").values()) for store in stores]
+        before = [grant_rows(store) for store in stores]
         for key in ("first", "first", "second"):
             parsed = channel.webform_message(
                 submission_id=key,
@@ -325,7 +305,15 @@ class CaptureCampaign(TransactionTestCase):
             self.assertEqual(need.task.estimate, 4)
             self.assertEqual(need.claimed_name, "Request author")
             self.assertEqual(need.access_verdict, None)
-        self.assertEqual([list(store._base_manager.order_by("pk").values()) for store in stores], before)
+        # The claimed address is unverified: its link waits for review and decides nothing.
+        handle = apps.get_model("parties", "Handle")._base_manager.get(platform="email", value=email)
+        link = apps.get_model("parties", "Party").statements.get(handle=handle, subject_id=needs[0].party_id)
+        self.assertEqual((link.confidence, link.is_confirmed, handle.party_id), (0.4, False, None))
+        self.assertEqual(
+            link.evidence,
+            [{"model": need._meta.label, "id": public_id_of(need), "pointer": ""} for need in needs],
+        )
+        self.assertEqual([grant_rows(store) for store in stores], before)
 
     def test_email_capture_requires_confirmed_sender_link_and_replays_once(self):
         email = f"sender-{self._testMethodName}@example.test"
@@ -333,13 +321,14 @@ class CaptureCampaign(TransactionTestCase):
             self.channel.intake_queue = self.queue
             self.channel.save(update_fields=("intake_queue",))
             party = apps.get_model("parties", "Party").objects.for_user(self.actor)
-            handle = apps.get_model("parties", "Handle").objects.upsert(platform="email", value=email)
-            links = apps.get_model("parties", "PartyHandle")
-            links.objects.link(party, handle, source=LinkSource.MANUAL, is_confirmed=False)
+            handle = apps.get_model("parties", "Handle").objects.upsert(
+                platform="email", value=email, created_by_id=self.actor.pk
+            )
+            party.with_actor(self.actor).statements_for("handle").set(aspect="handle", handle=handle, values={})
         for key, confirmed in (("suggested", False), ("confirmed", True)):
             with system_context(reason="tests.t3.email"):
                 if confirmed:
-                    links.objects.link(party, handle, source=LinkSource.MANUAL, is_confirmed=True)
+                    party.with_actor(self.actor).confirm(aspect="handle", handle=handle, values={})
                 parsed = ParsedMessage(
                     external_id=key,
                     platform="email",

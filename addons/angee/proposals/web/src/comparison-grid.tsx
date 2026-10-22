@@ -1,11 +1,6 @@
 import { holdsPermission } from "@angee/metadata";
 import { extractActionOutcome } from "@angee/refine";
-import {
-  Avatar, Badge, Button, FieldDescriptorControl, FormView, Glyph, Select, Table, TableBody,
-  NavLink, TableCell, TableHead, TableHeader, TableRow, Textarea, VisibilityControl,
-  avatarInitials, canonicalOptionValue, errorMessage, optionLabel, useAuthoredResourceMutation,
-  useEnumOptions, useRuntimeAuth, useRuntimeViewAs, type FieldDescriptor, type WidgetOption,
-} from "@angee/ui";
+import { Avatar, Chip, Button, FieldDescriptorControl, FormView, Glyph, InlineTextAction, Select, Table, TableBody, NavLink, TableCell, TableHead, TableHeader, TableRow, VisibilityControl, avatarInitials, canonicalOptionValue, cn, errorMessage, optionLabel, textRoleVariants, useAuthoredResourceMutation, useEnumOptions, useRuntimeAuth, useRuntimeViewAs, type FieldDescriptor, type WidgetOption } from "@angee/ui";
 import * as React from "react";
 
 import type { ComparisonAnswer, ComparisonProposal, ComparisonTopic } from "./comparison-data";
@@ -27,6 +22,11 @@ const FACT_DESCRIPTORS: Readonly<Record<ComparisonFactField, FieldDescriptor>> =
   confidence: { name: "confidence", widget: "statusBadge" },
   valid_until: { name: "valid_until", widget: "date" },
 };
+
+/** One geometry for every grid cell; the subject column is sticky, the answer cells wide. */
+const CELL_CLASS = "h-auto border-r border-border-subtle bg-canvas px-4 py-3 text-13";
+const EMPTY_CELL_CLASS = cn(CELL_CLASS, "text-fg-muted");
+const ANSWER_CELL_CLASS = cn(CELL_CLASS, "min-w-72 text-fg");
 
 export interface RoundComparisonGridProps {
   topics: readonly ComparisonTopic[];
@@ -68,7 +68,7 @@ export function RoundComparisonGrid({
     }
     const value = comparisonCellValue(row, proposal, answers);
     return isEmptyComparisonValue(value)
-      ? <span className="text-fg-muted">{t("comparison.nothingYet")}</span>
+      ? <span className={textRoleVariants({ role: "meta" })}>{t("comparison.nothingYet")}</span>
       : <FieldDescriptorControl field={FACT_DESCRIPTORS[row.field]} value={value} row={proposal} readOnly />;
   };
 
@@ -95,24 +95,22 @@ export function RoundComparisonGrid({
           return <TableRow key={row.id}>
             <ComparisonRowHeader row={row} t={t} />
             {emptyTopic && !renderCell && ownIndex < 0
-              ? <TableCell colSpan={proposals.length} className="h-auto border-r border-border-subtle bg-canvas px-4 py-3 text-13 text-fg-muted">
+              ? <TableCell colSpan={proposals.length} className={EMPTY_CELL_CLASS}>
                   {t("comparison.nothingYet")}
                 </TableCell>
               : emptyTopic && !renderCell && ownIndex >= 0
                 ? <>
-                    {ownIndex > 0 ? <TableCell colSpan={ownIndex} className="h-auto border-r border-border-subtle bg-canvas px-4 py-3 text-13 text-fg-muted">
+                    {ownIndex > 0 ? <TableCell colSpan={ownIndex} className={EMPTY_CELL_CLASS}>
                       {t("comparison.nothingYet")}
                     </TableCell> : null}
-                    <TableCell className="h-auto min-w-72 border-r border-border-subtle bg-canvas px-4 py-3 text-13 text-fg">
+                    <TableCell className={ANSWER_CELL_CLASS}>
                       {cell(row, proposals[ownIndex]!)}
                     </TableCell>
-                    {ownIndex < proposals.length - 1 ? <TableCell colSpan={proposals.length - ownIndex - 1}
-                      className="h-auto border-r border-border-subtle bg-canvas px-4 py-3 text-13 text-fg-muted">
+                    {ownIndex < proposals.length - 1 ? <TableCell colSpan={proposals.length - ownIndex - 1} className={EMPTY_CELL_CLASS}>
                       {t("comparison.nothingYet")}
                     </TableCell> : null}
                   </>
-                : proposals.map((proposal) => <TableCell key={proposal.id}
-                    className="h-auto min-w-72 border-r border-border-subtle bg-canvas px-4 py-3 text-13 text-fg">
+                : proposals.map((proposal) => <TableCell key={proposal.id} className={ANSWER_CELL_CLASS}>
                     {cell(row, proposal)}
                   </TableCell>)}
           </TableRow>;
@@ -151,7 +149,7 @@ function ProposalHeader({ proposal, href, content, answers, options }: {
         {content !== undefined ? content : href ? <NavLink href={href} variant="inline">{label}</NavLink> : label}
       </span>
     </div>
-    {audience ? <div className="ml-8 mt-1 text-xs font-normal text-fg-muted">{t("comparison.visibility", { visibility: audience })}</div> : null}
+    {audience ? <div className="ml-8 mt-1 text-12 font-normal text-fg-muted">{t("comparison.visibility", { visibility: audience })}</div> : null}
   </TableHead>;
 }
 
@@ -164,7 +162,7 @@ function ComparisonRowHeader({ row, t }: {
   return <TableHead scope="row" className="sticky left-0 z-sticky-col h-auto min-w-56 border-r border-border-subtle bg-sheet px-4 py-3 align-top text-fg">
     <div className="text-13 font-semibold text-fg">{label}</div>
     {row.kind === "topic" && !isEmptyComparisonValue(row.topic.hint)
-      ? <div className="mt-1 text-xs text-fg-muted">
+      ? <div className="mt-1 text-12 text-fg-muted">
           <FieldDescriptorControl field={{ name: "hint", widget: "markdown.preview" }}
             value={row.topic.hint} row={row.topic} readOnly />
         </div> : null}
@@ -176,7 +174,7 @@ function AnswerContent({ answer, options }: {
 }): React.ReactElement {
   const t = useProposalsT();
   if (!answer || isEmptyComparisonValue(answer.body)) {
-    return <div className="space-y-1"><span className="text-fg-muted">{t("comparison.nothingYet")}</span>
+    return <div className="space-y-1"><span className={textRoleVariants({ role: "meta" })}>{t("comparison.nothingYet")}</span>
       {answer?.visibility != null ? <AnswerAudience answer={answer} options={options} /> : null}
     </div>;
   }
@@ -199,7 +197,7 @@ function AnswerAudience({ answer, options }: {
       && choices.some((value) => canonicalOptionValue(options, value) === option.value));
   return canChange
     ? <ManageAnswerAudience answer={answer} options={options} />
-    : <Badge tone="neutral" density="compact" shape="pill">{answerAudience(answer, options, t)}</Badge>;
+    : <Chip tone="neutral">{answerAudience(answer, options, t)}</Chip>;
 }
 
 function ManageAnswerAudience({ answer, options }: {
@@ -214,9 +212,9 @@ function ManageAnswerAudience({ answer, options }: {
       answer: answer.id, revision: answer.revision,
       visibility: value.toUpperCase() as "ROUND" | "RESPONDER" | "SEALED",
     }), "set_proposal_answer_visibility")} />
-    {answer.shared_with_responders === true ? <Badge tone="neutral" density="compact" shape="pill">
+    {answer.shared_with_responders === true ? <Chip tone="neutral">
       {t("comparison.visibility.shared")}
-    </Badge> : null}
+    </Chip> : null}
   </span>;
 }
 
@@ -228,16 +226,13 @@ function EditableAnswerCell({ row, proposal, answer, options }: {
   const subject = String(row.topic.name ?? row.topic.key ?? "");
   const writer = useComparisonAnswerWrite();
   const [editing, setEditing] = React.useState(false);
-  const [body, setBody] = React.useState(String(answer?.body ?? ""));
+  const [failure, setFailure] = React.useState<string | null>(null);
   const [visibility, setVisibility] = React.useState(
     canonicalOptionValue(options, answer?.visibility) ?? options[0]?.value ?? "round",
   );
-  const [failure, setFailure] = React.useState<string | null>(null);
   const empty = !answer || isEmptyComparisonValue(answer.body);
   const open = () => {
-    setBody(String(answer?.body ?? ""));
     setVisibility(canonicalOptionValue(options, answer?.visibility) ?? options[0]?.value ?? "round");
-    setFailure(null);
     setEditing(true);
   };
   if (!editing) {
@@ -257,29 +252,27 @@ function EditableAnswerCell({ row, proposal, answer, options }: {
     ? options.filter((option) => (answer.allowed_visibility ?? []).some((allowed) =>
       canonicalOptionValue(options, allowed) === option.value))
     : options;
-  return <form className="space-y-2" onSubmit={(event) => {
-    event.preventDefault();
-    if (!body.trim() || writer.pending) return;
-    void writer.save(proposal.id, row.topic.id, body.trim(), visibility, answer)
-      .then((saved) => { if (saved) { setFailure(null); setEditing(false); } })
-      .catch((error) => setFailure(errorMessage(error, t("comparison.saveError"))));
-  }}>
-    <Textarea value={body} onChange={(event) => setBody(event.target.value)}
-      aria-label={t("comparison.writePrompt", { subject })} placeholder={t("comparison.writePrompt", { subject })}
-      rows={3} />
-    <div className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
+  return <InlineTextAction multiline open value={String(answer?.body ?? "")} inputLabel={t("comparison.writePrompt", { subject })}
+    placeholder={t("comparison.writePrompt", { subject })} busy={writer.pending} submitLabel={t("comparison.save")}
+    submitVariant="primary" submitUnchanged error={failure}
+    extra={<span className={textRoleVariants({ role: "caption", className: "inline-flex items-center gap-2" })}>
       <span>{t("comparison.postingTo")}</span>
       <Select size="sm" className="min-w-36 w-auto" aria-label={t("comparison.postingTo")}
         options={choices.map((option) => ({ value: option.value, label: option.label }))}
         value={visibility} onValueChange={(value) => setVisibility(value)}
         readOnly={choices.length < 2} />
-      <Button type="submit" variant="primary" size="sm" loading={writer.pending}
-        disabled={!body.trim() || writer.pending}>{t("comparison.save")}</Button>
-      <Button type="button" variant="ghost" size="sm" disabled={writer.pending}
-        onClick={() => setEditing(false)}>{t("comparison.cancel")}</Button>
-    </div>
-    {failure ? <p role="alert" className="text-xs text-danger-text">{failure}</p> : null}
-  </form>;
+    </span>}
+    onSubmit={async (body) => {
+      try {
+        const saved = await writer.save(proposal.id, row.topic.id, body, visibility, answer);
+        if (saved) { setFailure(null); setEditing(false); }
+        return Boolean(saved);
+      } catch (error) {
+        setFailure(errorMessage(error, t("comparison.saveError")));
+        return false;
+      }
+    }}
+    onCancel={() => setEditing(false)} />;
 }
 
 function factLabel(field: ComparisonFactField, t: ProposalsT): string {

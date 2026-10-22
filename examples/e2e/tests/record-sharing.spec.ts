@@ -6,26 +6,22 @@ const CREATE_PERSONAL_DASHBOARD = `
   mutation CreateRecordSharingDashboard(
     $name: String!
     $description: String!
-    $clientCreationKey: String!
+    $idempotencyKey: String!
   ) {
     create_personal_dashboard(
       name: $name
       description: $description
-      client_creation_key: $clientCreationKey
+      idempotency_key: $idempotencyKey
     ) { status id revision message }
   }
 `;
 
-const ARCHIVE_PERSONAL_DASHBOARD = `
-  mutation ArchiveRecordSharingDashboard(
-    $id: ID!
-    $expectedRevision: Int!
-  ) {
-    set_personal_dashboard_archived(
-      id: $id
-      expected_revision: $expectedRevision
-      archived: true
-    ) { status message }
+// The shared trash verb removes the dashboard; the suite leaves nothing behind.
+const TRASH_PERSONAL_DASHBOARD = `
+  mutation TrashRecordSharingDashboard($id: ID!) {
+    trash_record(target_type: "dashboards.Dashboard", target_id: $id, reason: "e2e cleanup", confirm: true) {
+      ok message
+    }
   }
 `;
 
@@ -208,7 +204,7 @@ test.describe("shared record access", () => {
     }>(CREATE_PERSONAL_DASHBOARD, {
       name: "Dashboard E2E Verified",
       description: "Self-contained record sharing coverage",
-      clientCreationKey: `record-sharing-${Date.now()}`,
+      idempotencyKey: `record-sharing-${Date.now()}`,
     });
     expect(created.errors).toBeUndefined();
     const dashboard = created.data?.create_personal_dashboard;
@@ -222,11 +218,8 @@ test.describe("shared record access", () => {
         page.getByRole("button", { name: "Share", exact: true }),
       ).toHaveCount(1);
     } finally {
-      const archived = await consoleApi.query(ARCHIVE_PERSONAL_DASHBOARD, {
-        id: dashboard!.id,
-        expectedRevision: dashboard!.revision,
-      });
-      expect(archived.errors).toBeUndefined();
+      const removed = await consoleApi.query(TRASH_PERSONAL_DASHBOARD, { id: dashboard!.id });
+      expect(removed.errors).toBeUndefined();
     }
   });
 

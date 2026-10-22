@@ -3,11 +3,11 @@
 from datetime import timedelta
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models.functions import Now
 from rebac import actor_context
 
-from angee.base.scoping import system_queryset
 from angee.workflows import schema as workflow_schema
 from angee.workflows import tasks
 from angee.workflows.runner import runner
@@ -34,7 +34,7 @@ def start_watcher(step, record, actor, *, key="watch"):
     workflow = load_workflow(document("entry", step=step.key), key=key, actor=actor,
                              subject_model=record._meta.label_lower)
     run = start_run(workflow, actor=actor, subject=record, input={"value": 7})
-    return run, system_queryset(StepRun).get(run=run)
+    return run, StepRun.system_queryset().get(run=run)
 
 
 def record_deliveries(sent):
@@ -62,7 +62,7 @@ def test_saved_record_wakes_once_rearms_and_then_settles(watched_source, registe
     step.refresh_from_db()
     assert (step.status, step.waiting_kind, step.wake_at) == ("waiting", "record", None)
     assert step.state == {"observed": True} and step.retries == 0
-    assert system_queryset(StepWatch).filter(step_run=step).count() == 1
+    assert StepWatch.system_queryset().filter(step_run=step).count() == 1
     sent.clear()
     with transaction.atomic(), actor_context(actor):
         record.save(update_fields=("name",))
@@ -70,9 +70,9 @@ def test_saved_record_wakes_once_rearms_and_then_settles(watched_source, registe
         assert not record_deliveries(sent)
     assert len(record_deliveries(sent)) == 2
     assert [tasks.wake_records(**payload) for payload in record_deliveries(sent)] == [1, 0]
-    assert not system_queryset(StepWatch).exists()
+    assert not StepWatch.system_queryset().exists()
     run_until(run)
-    assert system_queryset(StepWatch).filter(step_run=step, pending=False).count() == 1
+    assert StepWatch.system_queryset().filter(step_run=step, pending=False).count() == 1
     with actor_context(actor):
         record.name = "Ready"
         record.save(update_fields=("name",))
@@ -80,7 +80,7 @@ def test_saved_record_wakes_once_rearms_and_then_settles(watched_source, registe
     run_until(run)
     run.refresh_from_db()
     assert run.status == "succeeded" and run.output == {"value": 7}
-    assert not system_queryset(StepWatch).exists()
+    assert not StepWatch.system_queryset().exists()
 
 
 def test_rolled_back_save_does_not_wake_and_tick_recovers_lost_delivery(watched_source, register_step):
@@ -93,13 +93,37 @@ def test_rolled_back_save_does_not_wake_and_tick_recovers_lost_delivery(watched_
         record.save()
         transaction.set_rollback(True)
     assert not record_deliveries(sent)
-    assert not system_queryset(StepWatch).filter(pending=True).exists()
+    assert not StepWatch.system_queryset().filter(pending=True).exists()
     with actor_context(actor):
         record.save()
     sent.clear()  # Simulate a lost broker message; the native pending fact remains.
     assert runner.tick()["records"] == 1
     assert runner.tick()["records"] == 0
     assert sum(name == "workflows.execute" for name, _ in sent) == 1
+
+
+@pytest.mark.parametrize("failure", [ValueError, ValidationError])
+def test_watch_capture_logs_enqueue_failure_without_rolling_back_the_source(
+    watched_source, register_step, monkeypatch, caplog, failure,
+):
+    actor, sent, record = watched_source
+    register_step(Watch)
+    run, step = start_watcher(Watch, record, actor)
+    run_until(run)
+    sent.clear()
+
+    def fail_enqueue(*args, **kwargs):
+        raise failure("Watch enqueue interrupted")
+
+    monkeypatch.setattr("angee.workflows.managers.enqueue_task", fail_enqueue)
+    with actor_context(actor):
+        record.name = "Source write retained"
+        record.save(update_fields=["name"])
+    record.refresh_from_db()
+    assert record.name == "Source write retained"
+    assert not StepWatch.system_queryset().filter(step_run=step, pending=True).exists()
+    assert record_deliveries(sent) == []
+    assert "Workflow watch capture failed" in caplog.text and "Watch enqueue interrupted" in caplog.text
 
 
 @pytest.mark.parametrize("ending", ["done", "fail", "invalid", "next_page", "cancel"])
@@ -125,11 +149,11 @@ def test_watch_cleanup_follows_settlement_cancel_and_prune(watched_source, regis
     run, step = start_watcher(Observe, record, actor)
     run_until(run)
     if ending == "cancel":
-        assert system_queryset(StepWatch).filter(step_run=step).exists()
+        assert StepWatch.system_queryset().filter(step_run=step).exists()
         WorkflowRun.objects.cancel(run, actor=actor)
-    assert not system_queryset(StepWatch).exists()
+    assert not StepWatch.system_queryset().exists()
     if ending in {"fail", "invalid"}:
-        assert system_queryset(StepAttempt).get(step_run=step).result == "failed"
+        assert StepAttempt.system_queryset().get(step_run=step).result == "failed"
 
 
 def test_retention_cascades_watches_from_a_failed_runs_open_branch(watched_source, register_step):
@@ -146,14 +170,14 @@ def test_retention_cascades_watches_from_a_failed_runs_open_branch(watched_sourc
     workflow = load_workflow(graph, actor=actor, subject_model=record._meta.label_lower)
     run = start_run(workflow, actor=actor, subject=record, input={"value": 7})
     run_until(run, node="watch")
-    waiter = system_queryset(StepRun).get(run=run, node_key="watch")
+    waiter = StepRun.system_queryset().get(run=run, node_key="watch")
     assert runner.execute(waiter.pk)
     run_until(run)
     assert run.status == "failed"
-    assert system_queryset(StepWatch).filter(step_run=waiter).exists()
-    system_queryset(WorkflowRun).filter(pk=run.pk).update(finished_at=Now() - timedelta(days=91))
+    assert StepWatch.system_queryset().filter(step_run=waiter).exists()
+    WorkflowRun.system_queryset().filter(pk=run.pk).update(finished_at=Now() - timedelta(days=91))
     assert WorkflowRun.objects.prune() == 1
-    assert not system_queryset(StepWatch).exists()
+    assert not StepWatch.system_queryset().exists()
 
 
 @pytest.mark.parametrize("case", ["timeout", "empty", "io", "same_body_change"])
@@ -176,11 +200,11 @@ def test_record_wait_admission_and_deadline_recovery(watched_source, register_st
     assert runner.execute(step.pk)
     step.refresh_from_db()
     if case in {"empty", "io"}:
-        assert step.status == "failed" and not system_queryset(StepWatch).exists()
+        assert step.status == "failed" and not StepWatch.system_queryset().exists()
     else:
         assert step.status == "waiting" and step.waiting_kind == "record"
         assert (runner.wake() if case == "timeout" else runner.wake_records()) == 1
-        assert not system_queryset(StepWatch).exists()
+        assert not StepWatch.system_queryset().exists()
 
 
 @pytest.mark.parametrize("access", ["readable", "private", "unsaved"])
@@ -205,15 +229,15 @@ def test_registration_requires_the_run_actors_read_permission(watched_source, re
     run = start_run(workflow, actor=starter, subject=subject, input={"value": 7})
     run_until(run)
     if access == "readable":
-        assert system_queryset(StepWatch).filter(step_run__run=run).count() == 2
+        assert StepWatch.system_queryset().filter(step_run__run=run).count() == 2
         with actor_context(starter):
             subject.save()
             target.save()
         assert runner.wake_records() == 1
         assert runner.wake_records() == 0
     else:
-        assert run.status == "failed" and not system_queryset(StepWatch).exists()
-        assert "Read access" in system_queryset(StepAttempt).get(step_run__run=run).error
+        assert run.status == "failed" and not StepWatch.system_queryset().exists()
+        assert "Read access" in StepAttempt.system_queryset().get(step_run__run=run).error
 
 
 def test_watch_resources_follow_run_reads_and_record_reference_owner(

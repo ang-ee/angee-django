@@ -1,24 +1,29 @@
-"""Import-export widgets for resolving resource xrefs."""
+"""Import-export widgets for resolving resource xrefs and content-type labels."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any, overload
 
 from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
 from import_export import fields, widgets
 from rebac import GenericTarget, generic_target
 
-from angee.base.refs import RecordRefMixin
-from angee.base.serialization import canonical_json
+from angee.fields import ModelLabelField
+from angee.refs import RecordRefMixin
+from angee.serialization import canonical_json
+
+if TYPE_CHECKING:
+    from angee.resources.models import Resource
 
 
 class XrefWidgetMixin:
     """Carry the resource ledger model bound by ``AngeeResource``."""
 
-    ledger_model: type[models.Model] | None = None
+    ledger_model: type[Resource] | None = None
     """Concrete resource ledger model used to resolve xrefs."""
 
     addon_aliases: Mapping[str, str] | None = None
@@ -39,10 +44,7 @@ class XrefWidgetMixin:
         unrelated type.
         """
 
-        target = resolve_xref(ref, self.ledger_model, self.addon_aliases)
-        if not isinstance(target, self.model):
-            raise ValueError(f"xref {ref!r} targets {target._meta.label}, not {self.model._meta.label}")
-        return target
+        return resolve_xref(ref, self.ledger_model, self.addon_aliases, model=self.model)
 
 
 class RecordRefWidget(XrefWidgetMixin, widgets.Widget):
@@ -96,6 +98,8 @@ class RecordRefField(fields.Field):
         values = (target.content_type.pk, target.object_id) if target is not None else None
         for index, name in enumerate(field_names):
             field = instance._meta.get_field(name)
+            if not isinstance(field, models.Field):
+                raise ValueError(f"Record reference backing column {name!r} must be a concrete field.")
             value = values[index] if values is not None else (None if field.null else field.get_default())
             try:
                 # Field.clean owns to_python and null/default validation before assignment.
@@ -135,7 +139,37 @@ class XrefManyToManyWidget(XrefWidgetMixin, widgets.ManyToManyWidget):
         """Return target model objects for every xref in ``value``."""
 
         del row, kwargs
-        return [self.resolve_field_target(ref) for ref in xref_list(value)]
+        return [self.resolve_field_target(ref) for ref in many_to_many_values(value)]
+
+
+class ContentTypeForeignKeyWidget(widgets.ForeignKeyWidget):
+    """Resolve a foreign key to ``contenttypes.ContentType`` from a model label.
+
+    Content types are never ledger rows, so a seed names the target model by
+    its Django label (``parties.PartyStatement``) instead of an xref. The native
+    ``clean`` keeps empty values and ``key_is_id`` handling.
+    """
+
+    def get_instance_by_lookup_fields(self, value: Any, row: Mapping[str, Any] | None, **kwargs: Any) -> ContentType:
+        """Return the content type of the model ``value`` names."""
+
+        del row, kwargs
+        return resolve_content_type(value)
+
+
+class ContentTypeManyToManyWidget(widgets.ManyToManyWidget):
+    """Resolve scalar or list model labels for many-to-many fields to ``ContentType``."""
+
+    def clean(
+        self,
+        value: Any,
+        row: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> list[ContentType]:
+        """Return the content type of every model label in ``value``."""
+
+        del row, kwargs
+        return [resolve_content_type(label) for label in many_to_many_values(value)]
 
 
 class _NativeJSONWidget(widgets.JSONWidget):
@@ -168,10 +202,29 @@ class _NativeJSONWidget(widgets.JSONWidget):
         return canonical_json(value)
 
 
+@overload
+def resolve_xref[TargetT: models.Model](
+    value: str,
+    ledger_model: type[Resource] | None,
+    addon_aliases: Mapping[str, str] | None,
+    *, model: type[TargetT],
+) -> TargetT: ...
+
+
+@overload
 def resolve_xref(
     value: str,
-    ledger_model: type[models.Model] | None,
+    ledger_model: type[Resource] | None,
     addon_aliases: Mapping[str, str] | None,
+    *, model: None = None,
+) -> models.Model: ...
+
+
+def resolve_xref(
+    value: str,
+    ledger_model: type[Resource] | None,
+    addon_aliases: Mapping[str, str] | None,
+    *, model: type[models.Model] | None = None,
 ) -> models.Model:
     """Resolve ``<addon>.<xref>`` through the resource ledger."""
 
@@ -196,32 +249,40 @@ def resolve_xref(
     target = ledger.target_instance()
     if target is None:
         raise ValueError(f"xref {value!r} has no ORM target")
+    if model is not None and not isinstance(target, model):
+        raise ValueError(f"xref {value!r} targets {target._meta.label}, not {model._meta.label}")
     return target
 
 
-def resolve_ledger_xref(handle: str) -> models.Model | None:
+@overload
+def resolve_ledger_xref[TargetT: models.Model](handle: str, *, model: type[TargetT]) -> TargetT | None: ...
+
+
+@overload
+def resolve_ledger_xref(handle: str, *, model: None = None) -> models.Model | None: ...
+
+
+def resolve_ledger_xref(handle: str, *, model: type[models.Model] | None = None) -> models.Model | None:
     """Resolve a ``<addon>.<xref>`` handle through the composed resource ledger.
 
-    The high-level companion to :func:`resolve_xref`: it binds the concrete
-    ``resources.Resource`` ledger and builds the addon-alias map from the app
-    registry — each installed app's dotted name and short label both resolve to
-    its canonical dotted name, the same alias convention the loader builds per
-    selected addon (:meth:`~angee.resources.managers.ResourceManager._addon_aliases`).
-    So a demo-seed ``after_resource_load`` hook resolves a persona (or any ledger
-    row) by the very xref the grant fixtures use, with a single owner for who a
-    handle names. Returns ``None`` for an unresolved or ambiguous handle so the
-    hook can skip gracefully rather than raise.
+    Delegates aliasing and resolution to ``Resource.objects.resolve``. Returns
+    ``None`` for an unresolved or ambiguous handle, so optional resource hooks
+    can skip missing targets. A supplied model uses the same target validation;
+    a wrong-model reference also returns ``None``. Alias collisions remain
+    configuration errors.
     """
 
     ledger_model = apps.get_model("resources", "Resource")
-    aliases: dict[str, str] = {}
-    for app_config in apps.get_app_configs():
-        aliases.setdefault(app_config.name, app_config.name)
-        aliases.setdefault(app_config.label, app_config.name)
     try:
-        return resolve_xref(handle, ledger_model, aliases)
+        return ledger_model.objects.resolve(handle, model=model)
     except ValueError:
         return None
+
+
+def is_xref(value: str) -> bool:
+    """Distinguish dotted resource handles from literal public record ids."""
+
+    return "." in value
 
 
 def split_xref(
@@ -239,8 +300,21 @@ def split_xref(
     raise ValueError(f"unresolved xref {value!r}")
 
 
-def xref_list(value: Any) -> list[str]:
-    """Return xref strings from a comma-separated string or sequence."""
+def resolve_content_type(label: Any) -> ContentType:
+    """Return the content type of the model a Django model label names.
+
+    ``ModelLabelField`` owns which labels name a configured model and raises
+    the ``ValueError`` import-export reports against the row; Django's
+    content-type manager owns the cached row for that model.
+    """
+
+    if not isinstance(label, str):
+        raise ValueError("model labels must be strings")
+    return ContentType.objects.get_for_model(ModelLabelField.get_model(label))
+
+
+def many_to_many_values(value: Any) -> list[str]:
+    """Return the xrefs or model labels of a comma-separated string or sequence."""
 
     if value in (None, ""):
         return []
@@ -250,7 +324,7 @@ def xref_list(value: Any) -> list[str]:
         refs: list[str] = []
         for item in value:
             if not isinstance(item, str):
-                raise ValueError("many-to-many values must be xref strings")
+                raise ValueError("many-to-many values must be strings")
             refs.append(item)
         return refs
     raise ValueError("many-to-many values must be a list or string")

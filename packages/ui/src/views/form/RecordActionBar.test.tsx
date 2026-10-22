@@ -96,6 +96,28 @@ describe("RecordActionBar", () => {
     await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     expect(run.mock.calls[0]?.[0].record).toEqual(record);
   });
+  test("menu actions expose their disabled reason and its recovery link", async () => {
+    const run = vi.fn();
+    renderActionBar(<RecordActionBar record={record} actions={[
+      {
+        id: "pay",
+        label: "Register payment",
+        run,
+        disabledReason: <><span>Verify the destination first.</span> <a href="/verification">Review accounts</a></>,
+      },
+    ]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    const item = await screen.findByRole("menuitem", { name: "Register payment" });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.getAttribute("aria-describedby")).toBeTruthy();
+    expect(screen.getByText("Verify the destination first.").parentElement?.id)
+      .toBe(item.getAttribute("aria-describedby"));
+    expect(screen.getByRole("link", { name: "Review accounts" }).getAttribute("href"))
+      .toBe("/verification");
+    fireEvent.click(item);
+    expect(run).not.toHaveBeenCalled();
+  });
   test("primary contributed descriptors inherit the saved form's dirty gate", () => {
     const run = vi.fn();
     renderActionBar(<RecordChromeProvider value={{ resource: "example.Item", canonicalResource: "example.Item",

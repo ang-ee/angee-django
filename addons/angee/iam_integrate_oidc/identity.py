@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -29,7 +29,9 @@ from angee.integrate.models import AccountStatus
 from angee.integrate.oauth import flow
 from angee.integrate.oauth.errors import INVALID_ID_TOKEN, INVALID_STATE, OAuthFlowError
 from angee.integrate.oauth.state import StateFlow, StateRecord
-from angee.parties.mixins import LinkSource
+
+if TYPE_CHECKING:
+    from django.contrib.auth.models import _User
 
 SESSION_AUTH_BACKEND = "angee.iam.auth.ModelBackend"
 logger = logging.getLogger(__name__)
@@ -39,7 +41,7 @@ logger = logging.getLogger(__name__)
 class LoginCompletion:
     """Resolved user and verified claims from one completed OIDC login flow."""
 
-    user: AbstractBaseUser
+    user: _User
     claims: dict[str, Any]
     next_path: str
 
@@ -134,15 +136,15 @@ class OidcLoginCompletion:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Return ``(tokens, claims)``: verified ID-token claims enriched by userinfo."""
 
-        tokens = self.protocol.exchange_code(
+        tokens, userinfo, id_token = self.protocol.exchange_identity(
             code=code,
             redirect_uri=redirect_uri,
             code_verifier=record.code_verifier,
             state=state_token,
         )
-        claims = self.protocol.verify_id_token(str(tokens.get("id_token", "")), nonce=record.nonce)
-        userinfo = self.protocol.fetch_userinfo(str(tokens.get("access_token", "") or ""))
-        if userinfo:
+        claims = self.protocol.verify_id_token(id_token, nonce=record.nonce)
+        # OIDC Core §5.3.2: userinfo may enrich only the verified token's subject.
+        if userinfo.get("sub") and userinfo["sub"] == claims.get("sub"):
             claims = {**userinfo, **claims}
         return tokens, claims
 
@@ -175,11 +177,15 @@ class OidcIdentityResolver:
         _require_login_enabled(oauth_client)
 
     def resolve(
-        self, *, sub: str, email: str | None, claims: dict[str, Any],
-    ) -> AbstractBaseUser:
+        self,
+        *,
+        sub: str,
+        email: str | None,
+        claims: dict[str, Any],
+    ) -> _User:
         """Return the user for one verified OIDC identity, or fail closed."""
 
-        Account = cast(Any, apps.get_model("integrate", "ExternalAccount"))
+        Account = apps.get_model("integrate", "ExternalAccount")
 
         manager = Account.objects
         with system_context(reason="iam_integrate_oidc.resolve"), transaction.atomic():
@@ -188,10 +194,10 @@ class OidcIdentityResolver:
                 # A revoked/expired/disabled account or a deactivated user must not log in.
                 if account.status != AccountStatus.ACTIVE:
                     raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
-                owner = manager.owner_for(account)
+                owner = account.owner
                 if owner is None or not can_authenticate_user(owner):
                     raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
-                return cast(AbstractBaseUser, owner)
+                return owner
 
             normalized_email = get_user_model().objects.normalize_email(email)
             email_verified = claims.get("email_verified") is True
@@ -227,34 +233,34 @@ class OidcIdentityResolver:
 
         raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
 
-    def user_for_link_state(self, record: StateRecord) -> AbstractBaseUser:
+    def user_for_link_state(self, record: StateRecord) -> _User:
         """Return the user captured when the authenticated link flow started."""
 
         if not record.user_id:
             raise OAuthFlowError(INVALID_STATE, 400)
         user_model = get_user_model()
 
-        manager = cast(Any, user_model.objects)
+        manager = user_model.objects
         with system_context(reason="iam_integrate_oidc.link_user"):
             try:
                 user = manager.get(pk=record.user_id)
             except user_model.DoesNotExist as exc:
                 raise OAuthFlowError(INVALID_STATE, 400) from exc
-        return cast(AbstractBaseUser, user)
+        return user
 
-    def _find_by_email(self, email: str) -> AbstractBaseUser | None:
+    def _find_by_email(self, email: str) -> _User | None:
         """Return the person selected by IAM's canonical email-key lookup."""
 
-        manager = cast(Any, get_user_model().objects)
+        manager = get_user_model().objects
         try:
-            return cast(AbstractBaseUser | None, manager.person_for_email(email))
+            return manager.person_for_email(email)
         except AmbiguousAccountEmail:
             raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403) from None
 
-    def _create_for_identity(self, email: str, sub: str, *, claims: dict[str, Any]) -> AbstractBaseUser:
+    def _create_for_identity(self, email: str, sub: str, *, claims: dict[str, Any]) -> _User:
         """Create a non-superuser user for one OIDC identity."""
 
-        manager = cast(Any, get_user_model().objects)
+        manager = get_user_model().objects
         user_fields: dict[str, Any] = {}
         if given_name := claims.get("given_name"):
             user_fields["first_name"] = str(given_name)
@@ -262,16 +268,13 @@ class OidcIdentityResolver:
             user_fields["last_name"] = str(family_name)
         try:
             with transaction.atomic():
-                return cast(
-                    AbstractBaseUser,
-                    manager.create_user(
-                        username=self._available_username(email or f"oidc-{sub}"),
-                        email=email,
-                        password=None,
-                        is_staff=False,
-                        is_superuser=False,
-                        **user_fields,
-                    ),
+                return manager.create_user(
+                    username=self._available_username(email or f"oidc-{sub}"),
+                    email=email,
+                    password=None,
+                    is_staff=False,
+                    is_superuser=False,
+                    **user_fields,
                 )
         except IntegrityError:
             user = self._find_by_email(email)
@@ -282,7 +285,7 @@ class OidcIdentityResolver:
     def _available_username(self, seed: str) -> str:
         """Return a unique Django username derived from ``seed``."""
 
-        manager = cast(Any, get_user_model().objects)
+        manager = get_user_model().objects
         base = re.sub(r"[^\w.@+-]", "-", seed).strip("-")[:140] or "oidc-user"
         candidate = base
         suffix = 1
@@ -294,8 +297,12 @@ class OidcIdentityResolver:
 
 
 def resolve(
-    oauth_client: Any, *, sub: str, email: str | None, claims: dict[str, Any],
-) -> AbstractBaseUser:
+    oauth_client: Any,
+    *,
+    sub: str,
+    email: str | None,
+    claims: dict[str, Any],
+) -> _User:
     """Resolve OIDC claims to a host user, linking or provisioning when policy allows.
 
     The identity-resolution seam the login completion calls (and callers/tests can
@@ -309,17 +316,17 @@ def _claim_login_handle(user: Any, email: str, claims: dict[str, Any]) -> None:
     """Record the signed-in user's own email address as their own handle.
 
     OIDC first login is the earliest Person-establishing path: the parties owner
-    ``Handle.objects.claim_own`` writes both the control fact (``Handle.owner``) and
-    the confirmed identity link to ``Person.objects.for_user(user)`` — so the login
+    ``Handle.objects.claim_control`` writes both the control fact (``Handle.controller``) and
+    the normal person identity statement for ``Person.objects.for_user(user)`` — so the login
     address resolves to the user's own party.
     """
 
     handle_model = apps.get_model("parties", "Handle")
-    handle_model.objects.claim_own(
+    handle_model.objects.claim_control(
         user,
         platform=handle_model.Platform.EMAIL,
         value=email,
-        source=LinkSource.OAUTH,
+        asserted_by=user,
         display_name=str(claims.get("name") or "").strip(),
     )
 

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from functools import partial
+from typing import Any, cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import models
+from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -15,10 +17,16 @@ from angee.graphql.actions import ActionResult, action_guard, authorized_permiss
 from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
 from angee.graphql.data.hasura import with_filter_aliases
-from angee.graphql.ids import PublicID
+from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import AngeeNode
-from angee.graphql.relations import RecordReferenceNode, actor_scoped_to_many, actor_scoped_to_one
+from angee.graphql.relations import (
+    RecordReferenceNode,
+    actor_scoped_to_many,
+    actor_scoped_to_one,
+    with_record_reference_access,
+)
 from angee.graphql.subscriptions import changes
+from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
 
 Decision = apps.get_model("decisions", "Decision")
@@ -61,6 +69,18 @@ class DecisionType(AngeeNode):
     is_open: bool = strawberry_django.field(only=["verdict"])
     permissions = permissions_field(("act",))
 
+    @strawberry_django.field(only=["id"])
+    def concerns_label(self, info: strawberry.Info) -> str:
+        """The readable records this question concerns, by their own labels (a bill number, a supplier).
+
+        One read per decision when selected: the dashboard's attention table names the bill
+        beside the question; the inbox list links the records through ``records`` instead.
+        """
+        actor = request_from_info(info).user
+        links = DecisionRecord.objects.with_actor(actor).filter(decision_id=cast(Any, self).pk)
+        return "; ".join(str(link.record) for link in with_record_reference_access(links)
+                         if link._angee_record_readable and link.record is not None)
+
 
 _DECISIONS = hasura_model_resource(
     DecisionType, model=Decision, name="decisions",
@@ -93,8 +113,28 @@ class DecisionMutation:
         return ActionResult(ok=True, message="Decision recorded.", id=decision.sqid)
 
 
+@strawberry.type
+class DecisionQuery:
+    @strawberry_django.field
+    def record_decision_answers(
+        self, info: strawberry.Info, model: str, id: PublicID, limit: int = 25,
+    ) -> list[DecisionType]:
+        """Newest answered decisions attached to one actor-readable record."""
+
+        actor = request_from_info(info).user
+        record_model = apps.get_model(model)
+        record = require_instance_for_id(record_model, str(id), queryset=record_model.objects.with_actor(actor))
+        queryset = (
+            Decision.objects.with_actor(actor)
+            .for_records(record)
+            .exclude(answered_at=None)
+            .order_by("-answered_at", "-pk")[: max(1, min(limit, 100))]
+        )
+        return list(optimize(DecisionType.get_queryset(queryset, info), info))
+
+
 schemas = {"console": {
-    "query": [_DECISIONS.query, _RECORDS.query],
+    "query": [DecisionQuery, _DECISIONS.query, _RECORDS.query],
     "mutation": [DecisionMutation],
     "subscription": [changes(Decision, field="decisionChanged")],
     "types": [DecisionType, DecisionRecordType, *_DECISIONS.types, *_RECORDS.types],

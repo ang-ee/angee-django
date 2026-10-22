@@ -15,9 +15,10 @@ from django.core.exceptions import ImproperlyConfigured
 
 from angee.compose.autoconfig import AutoConfig
 from angee.compose.composer import Composer
+from angee.compose.project import prepend_import_paths
 from angee.project import PROJECT_DIR_ENV, find_project_dir, project_dir
 
-BASE_APP = "angee.base.apps.BaseConfig"
+BASE_APP = "angee.apps.BaseConfig"
 GRAPHQL_APP = "angee.graphql.apps.GraphQLConfig"
 
 
@@ -58,9 +59,7 @@ def _default_installed_apps(tmp_path: Path, roots: tuple[str, ...]) -> tuple[str
     return tuple(defaults["INSTALLED_APPS"])
 
 
-def test_public_origin_joins_csrf_trusted_origins(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_public_origin_joins_csrf_trusted_origins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """ANGEE_PUBLIC_ORIGIN (set by ingress-fronted stacks) is a CSRF trusted origin."""
 
     monkeypatch.setenv("ANGEE_PUBLIC_ORIGIN", "https://demo.example.com")
@@ -190,6 +189,15 @@ def test_iam_installs_csrf_middleware_for_session_graphql(tmp_path: Path) -> Non
     assert session_at < csrf_at < auth_at < actor_at < bearer_at
 
 
+def test_django_security_headers_lead_and_csp_middleware_applies_view_policies(tmp_path: Path) -> None:
+    """Every response passes Django's SecurityMiddleware first; its CSP middleware is composed too."""
+
+    middleware = _compose(tmp_path)["MIDDLEWARE"]
+
+    assert middleware[0] == "django.middleware.security.SecurityMiddleware"
+    assert "django.middleware.csp.ContentSecurityPolicyMiddleware" in middleware
+
+
 def test_iam_auth_throttling_comes_from_axes(tmp_path: Path) -> None:
     """IAM wires login throttling at Django's authenticate/backend seam."""
 
@@ -237,7 +245,6 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "angee.compose.apps.ComposeConfig",
         "django.contrib.contenttypes.apps.ContentTypesConfig",
         "rebac.apps.RebacConfig",
-        "reversion.apps.ReversionConfig",
         "simple_history",
         BASE_APP,
         # Core apps are an always-on prefix rather than addon dependencies.
@@ -250,6 +257,8 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "django.contrib.auth.apps.AuthConfig",
         "django.contrib.sessions.apps.SessionsConfig",
         "angee.iam.apps.IAMConfig",
+        "angee.timeline.apps.TimelineConfig",
+        "angee.provenance",
         "angee.integrate.apps.IntegrateConfig",
         "angee.integrate_vcs.apps.IntegrateVcsConfig",
         "angee.mcp.apps.MCPConfig",
@@ -266,6 +275,10 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "angee.iam_integrate_oidc.apps.IAMIntegrateOidcConfig",
         "django.contrib.postgres.apps.PostgresConfig",
         "angee.messaging.apps.MessagingConfig",
+        # The notes example takes record tasks, so projects and its dependencies sort before it.
+        "angee.knowledge.apps.KnowledgeConfig",
+        "angee.scheduling.apps.SchedulingConfig",
+        "angee.projects.apps.ProjectsConfig",
         "angee.workflows.apps.WorkflowsConfig",
         "example.notes",
     ]
@@ -433,7 +446,10 @@ def test_autoconfig_environment_precedence_is_shared_by_declared_and_derived_set
     [(None, None, 60), (30, None, 30), (30, "15", 15)],
 )
 def test_web_statement_timeout_is_declared_with_project_and_environment_overrides(
-    monkeypatch: pytest.MonkeyPatch, project: int | None, environment: str | None, expected: int,
+    monkeypatch: pytest.MonkeyPatch,
+    project: int | None,
+    environment: str | None,
+    expected: int,
 ) -> None:
     """The composer declares the web statement bound; a project or deployment changes it."""
 
@@ -688,6 +704,27 @@ def test_compose_settings_module_reads_settings_yaml(
     assert "django_yamlconf" in installed
     assert "angee.resources" in installed
     assert installed.index("angee.compose.apps.ComposeConfig") < installed.index("angee.resources")
+
+
+def test_prepend_import_paths_refreshes_the_loaded_foundation_package(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Configured addon roots join ``angee.__path__`` after settings imports the foundation."""
+
+    import angee
+
+    addon_root = tmp_path / "addons"
+    addon_portion = addon_root / "angee"
+    addon_portion.mkdir(parents=True)
+    foundation_paths = list(angee.__path__)
+    monkeypatch.setattr(angee, "__path__", foundation_paths.copy())
+    monkeypatch.setattr(sys, "path", [path for path in sys.path if path != str(addon_root)])
+
+    prepend_import_paths((addon_root,))
+
+    assert angee.__path__[0] == str(addon_portion)
+    assert all(path in angee.__path__ for path in foundation_paths)
 
 
 def test_compose_settings_module_uses_configured_addon_dirs(
@@ -1067,9 +1104,8 @@ def test_defaults_module_seeds_compose_installed_app(tmp_path: Path) -> None:
         "angee.compose",
         "django.contrib.contenttypes",
         "rebac",
-        "reversion",
         "simple_history",
-        "angee.base",
+        "angee",
         "django_celery_beat",
         "angee.jobs",
         "angee.resources",
@@ -1178,7 +1214,9 @@ def test_addon_autoconfig_applies_setting_fragments(
     assert settings["ALPHA_SETTING"] == "ok"
     assert settings["CHANNEL_LAYERS"]["alpha"]["BACKEND"] == "tests.Layer"
     assert settings["MIDDLEWARE"] == [
+        "django.middleware.security.SecurityMiddleware",
         "django.middleware.common.CommonMiddleware",
+        "django.middleware.csp.ContentSecurityPolicyMiddleware",
         "alpha.middleware.One",
     ]
 
@@ -1247,7 +1285,9 @@ def test_addon_autoconfig_merges_sequences_in_dependency_order(
     Composer(settings).compose_settings()
 
     assert settings["MIDDLEWARE"] == [
+        "django.middleware.security.SecurityMiddleware",
         "django.middleware.common.CommonMiddleware",
+        "django.middleware.csp.ContentSecurityPolicyMiddleware",
         "alpha.middleware.One",
         "beta.middleware.Two",
     ]
@@ -1764,7 +1804,10 @@ def test_bare_settings_use_addon_owned_defaults(settings):
     assert settings.ANGEE_WORKFLOW_MAP_CONCURRENCY == 10
     assert settings.ANGEE_WORKFLOW_RETENTION_DAYS == 90
     assert {
-        "prepare_pages", "recognize_page", "process_evidence", "infer_evidence",
+        "prepare_pages",
+        "recognize_page",
+        "process_evidence",
+        "infer_evidence",
     } <= steps.keys()
     assert {"none", "retention_notes", "step_text"} <= settings.ANGEE_EXTRACTION_PROFILE_CLASSES.keys()
     assert not hasattr(settings, "ANGEE_EXTRACTION_BACKEND_CLASSES")

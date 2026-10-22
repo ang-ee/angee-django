@@ -17,12 +17,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from django.apps import apps
 from django.db import connections, models
 from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery, When, Window
-from django.db.models.functions import RowNumber
+from django.db.models.functions import Coalesce, RowNumber
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import current_actor
 
-from angee.base.actors import actor_user_id
+from angee.actors import actor_user_id
 
 
 class InboxCoverage(BaseModel):
@@ -150,9 +150,9 @@ class MessageInbox:
         self.messages = (
             queryset.inbox()
             .untrashed()
-            .filter(status__in=("synced", "edited", "sent"))
+            .filter(status__in=queryset.model.PUBLISHED_STATUSES)
             .exclude(thread__modality="public_thread")
-            .for_feed()
+            .for_feed(all_copies=True)
         )
         self.handles = self.collection("parties", "Handle").with_sender_name()
         self.parties = self.collection("parties", "Party")
@@ -278,6 +278,8 @@ class MessageInbox:
                 raise ValueError("Handle unavailable.")
             rows = self.involving_handles(rows, self.handles.filter(pk=handle.pk))
         if search.starred:
+            if self.user_id is None:
+                return rows.none()
             stars = apps.get_model("messaging", "MessageStar").objects.filter(user_id=self.user_id)
             rows = rows.filter(pk__in=Subquery(stars.values("message_id")))
         parts = self.parts.filter(message_id=OuterRef("pk"))
@@ -344,17 +346,29 @@ class MessageInbox:
     def results(self, coverage: InboxCoverage, search: InboxSearch, *, sender: str = "", circle: str = "") -> Any:
         """The one intersection used by conversation rows, counts and selection status."""
 
-        return self.matching(self.scoped(self.coverage(coverage), sender=sender, circle=circle), search)
+        scoped = self.scoped(self.coverage(coverage), sender=sender, circle=circle)
+        return self.matching(scoped, search).canonical()
 
     def _conversation_rows(self, rows: Any) -> Any:
-        # An unreadable thread is not an exposed grouping identity. Its readable
-        # messages remain independently reachable as standalone sections.
-        return rows.annotate(
+        # A conversation groups under the readable survivor of its thread's
+        # redirect. An unreadable thread is not an exposed grouping identity: its
+        # readable messages remain independently reachable as standalone sections.
+        thread_model = self.threads.model
+        survivor_id = Coalesce(F("thread__merged_into_id"), F("thread_id"))
+        survivor = thread_model(
+            pk=Coalesce(OuterRef("thread__merged_into_id"), OuterRef("thread_id")),
+        )
+        visible_group = self.threads.redirect_group(survivor)
+        return rows.alias(
+            _survivor_visible=Exists(visible_group.filter(pk=survivor.pk)),
+            _thread_visible=Exists(visible_group.filter(pk=OuterRef("thread_id"))),
+        ).annotate(
             _conversation=Case(
-                When(thread_id__in=Subquery(self.threads.order_by().values("pk")), then=F("thread_id")),
+                When(_survivor_visible=True, then=survivor_id),
+                When(_thread_visible=True, then=F("thread_id")),
                 default=-F("pk"),
                 output_field=models.BigIntegerField(),
-            )
+            ),
         )
 
     def conversations(self, rows: Any, *, page: int = 1, size: int = 25, oldest: bool = False) -> InboxPage:

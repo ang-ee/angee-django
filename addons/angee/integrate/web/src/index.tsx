@@ -28,10 +28,13 @@ import {
   INTEGRATION_PAUSE_ACTION_ID,
   INTEGRATION_RESUME_ACTION_ID,
   INTEGRATION_TEST_CONNECTION_ACTION_ID,
+  INTEGRATION_RETRY_DISCOVERY_ACTION_ID,
   PauseIntegrationAction,
   ResumeIntegrationAction,
+  RetryDiscoveryAction,
   TestConnectionAction,
 } from "./IntegrationLifecycleActions";
+import { RECORD_SOURCES_GROUP_ID, recordSourcesGroup } from "./RecordSourcesPane";
 
 const INTEGRATE_ID = "integrate";
 
@@ -104,8 +107,8 @@ const integrateMenu: readonly BaseMenuItem[] = [
         label: "OAuth",
         icon: "auth",
         children: [
-          { id: "integrate.providers", label: "OAuth Providers", route: "integrate.providers", icon: "auth" },
-          { id: "integrate.accounts", label: "External Accounts", route: "integrate.accounts", icon: "users" },
+          { id: "integrate.providers", label: "OAuth providers", route: "integrate.providers", icon: "auth" },
+          { id: "integrate.accounts", label: "External accounts", route: "integrate.accounts", icon: "users" },
         ],
       },
       { id: "integrate.credentials", label: "Credentials", route: "integrate.credentials", icon: "check" },
@@ -116,7 +119,7 @@ const integrateMenu: readonly BaseMenuItem[] = [
 const integrate = defineBaseAddon({
   id: INTEGRATE_ID,
   routes: integrateRoutes,
-  recordSearchKeys: Object.values(INTEGRATION_STREAM_SEARCH_KEYS),
+  recordSearchKeys: [...Object.values(INTEGRATION_STREAM_SEARCH_KEYS)],
   menus: integrateMenu,
   i18n: { integrate: enIntegrateMessages },
   widgets: {
@@ -132,6 +135,8 @@ const integrate = defineBaseAddon({
   // handshake wherever an integration has credentials, and the addon that owns
   // the vendor contributes that against its own model.
   containers: {
+    // The Related tab's Sources group, on records that admit RecordLink edges.
+    "related#groups": { [RECORD_SOURCES_GROUP_ID]: recordSourcesGroup },
     [`${INTEGRATION_MODEL}#sections`]: {
       [INTEGRATION_STREAMS_TAB_ID]: {
         sequence: 30,
@@ -148,12 +153,17 @@ const integrate = defineBaseAddon({
       },
     },
     [`${INTEGRATION_MODEL}#actions`]: {
-      [INTEGRATION_PAUSE_ACTION_ID]: { sequence: 11, content: <PauseIntegrationAction /> },
-      [INTEGRATION_RESUME_ACTION_ID]: { sequence: 12, content: <ResumeIntegrationAction /> },
+      [INTEGRATION_PAUSE_ACTION_ID]: { sequence: 11, requiredFields: ["lifecycle"], content: <PauseIntegrationAction /> },
+      [INTEGRATION_RESUME_ACTION_ID]: {
+        sequence: 12, requiredFields: ["can_resume"], content: <ResumeIntegrationAction />,
+      },
     },
     [`${INTEGRATION_MODEL}#actions-menu`]: {
-      [INTEGRATION_DISCONNECT_ACTION_ID]: { sequence: 13, content: <DisconnectIntegrationAction /> },
-      [INTEGRATION_TEST_CONNECTION_ACTION_ID]: { sequence: 14, content: <TestConnectionAction /> },
+      [INTEGRATION_DISCONNECT_ACTION_ID]: { sequence: 13, requiredFields: ["lifecycle"], content: <DisconnectIntegrationAction /> },
+      [INTEGRATION_TEST_CONNECTION_ACTION_ID]: { sequence: 14, requiredFields: ["lifecycle"], content: <TestConnectionAction /> },
+      [INTEGRATION_RETRY_DISCOVERY_ACTION_ID]: {
+        sequence: 15, requiredFields: ["can_retry_discovery"], content: <RetryDiscoveryAction />,
+      },
     },
   },
   icons: {
@@ -164,12 +174,19 @@ const integrate = defineBaseAddon({
   },
 });
 
+export { ConnectIntegration } from "./documents";
 export {
-  canConnectRecord,
+  CONNECT_RECORD_FIELDS,
   ConnectOAuthButton,
+  type ConnectOAuthButtonProps,
   parseManualCode,
   type OAuthConnectPayload,
 } from "./connect/ConnectOAuthButton";
+export {
+  useOAuthAuthorization,
+  type OAuthAuthorization,
+  type OAuthAuthorizationStart,
+} from "./connect/use-oauth-authorization";
 export {
   ConditionalMutationButton,
   type ConditionalMutationButtonContext,
@@ -177,12 +194,14 @@ export {
 } from "./ConditionalMutationButton";
 export {
   DisconnectIntegrationAction,
+  INTEGRATION_CONNECTION_FIELDS,
   INTEGRATION_DISCONNECT_ACTION_ID,
   INTEGRATION_MODEL,
   INTEGRATION_LIFECYCLE_TOKENS,
   INTEGRATION_PAUSE_ACTION_ID,
   INTEGRATION_RESUME_ACTION_ID,
   INTEGRATION_TEST_CONNECTION_ACTION_ID,
+  INTEGRATION_RETRY_DISCOVERY_ACTION_ID,
   integrationHasCredential,
   integrationLifecycle,
   integrationLifecycleIs,
@@ -190,6 +209,7 @@ export {
   isConnectedOrPaused,
   PauseIntegrationAction,
   ResumeIntegrationAction,
+  RetryDiscoveryAction,
   TestConnectionAction,
 } from "./IntegrationLifecycleActions";
 export {
@@ -206,5 +226,11 @@ export {
   type IntegrationSyncFieldsOptions,
   type IntegrationSyncFragmentOptions,
 } from "./sync-fragments";
+export {
+  RECORD_LINK_MODEL,
+  RECORD_SOURCES_GROUP_ID,
+  RecordSourcesPane,
+  recordSourcesGroup,
+} from "./RecordSourcesPane";
 
 export default integrate;

@@ -3,34 +3,45 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import time
 from collections.abc import Iterator
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import MethodType, SimpleNamespace
 from typing import Any
 from urllib import parse
 
 import httpx2
 import pytest
+import yaml
 from asgiref.sync import async_to_sync, sync_to_async
 from cryptography.hazmat.primitives.asymmetric import rsa
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
+from django.contrib.sessions.backends.signed_cookies import SessionStore
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.management import call_command
 from django.db import connection
-from django.test import override_settings
+from django.test import RequestFactory, override_settings
 from django.utils import timezone
 from rebac import system_context
 from strawberry_django_aggregates import AggregateOp, compute_aggregation
 
+from angee.graphql.schema import GraphQLSchemas
+from angee.iam import schema as iam_schema
 from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc import protocol as oidc_protocol
+from angee.iam_integrate_oidc import schema as oidc_schema
 from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
 from angee.iam_integrate_oidc.models import OAuthClientOidc
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
+from angee.iam_integrate_oidc.providers import GoogleType
+from angee.integrate import schema as integrate_schema
 from angee.integrate.connect import complete_account_connect
+from angee.integrate.errors import IntegrationError
 from angee.integrate.http import _PinnedBackend
 from angee.integrate.models import AccountStatus, CredentialStatus
 from angee.integrate.oauth import client as oauth_protocol
@@ -50,6 +61,9 @@ from tests.conftest import (
     Credential,
     ExternalAccount,
     OAuthClient,
+    SchemaAddon,
+    execute_schema,
+    result_data,
 )
 from tests.test_parties_graphql import Person as PartiesPerson
 
@@ -316,6 +330,7 @@ def test_fixed_public_client_never_reads_encrypted_secret(request_format: str, g
     captured: dict[str, Any] = {}
 
     class PublicClient:
+        is_public_client = OAuthClient.is_public_client
         slug = "public-client"
         client_id = "public-client-id"
         token_endpoint = "https://issuer.example/oauth/token"
@@ -361,6 +376,7 @@ def test_confidential_json_client_keeps_unreadable_secret_fail_closed() -> None:
     """A confidential client still fails before exchange when its secret is unreadable."""
 
     class ConfidentialClient:
+        is_public_client = OAuthClient.is_public_client
         slug = "confidential-client"
         client_id = "confidential-client-id"
         token_endpoint = "https://issuer.example/oauth/token"
@@ -438,17 +454,23 @@ def test_refresh_token_form_path_returns_renewed_material() -> None:
     assert tokens == {"access_token": "new-access", "refresh_token": "rotated", "expires_in": 3600}
 
 
-def test_exchange_code_public_client_posts_client_id_and_verifier() -> None:
+@pytest.mark.parametrize("request_format", ["form", "json"])
+def test_exchange_code_public_client_posts_client_id_and_verifier(request_format: str) -> None:
     """A public client (no secret) still posts ``client_id`` and the PKCE ``code_verifier``
     (RFC 7636) and never a ``client_secret``."""
 
     captured: dict[str, Any] = {}
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        captured["body"] = dict(parse.parse_qsl(request.content.decode()))
+        captured["body"] = (
+            json.loads(request.content) if request_format == "json" else dict(parse.parse_qsl(request.content.decode()))
+        )
+        assert "authorization" not in request.headers
         return httpx2.Response(200, json={"access_token": "access-token"})
 
-    protocol = OAuthClientProtocol(_stub_oauth_client(client_secret="", supports_pkce=True))
+    protocol = OAuthClientProtocol(_stub_oauth_client(
+        client_secret="", supports_pkce=True, token_request_format=request_format,
+    ))
     protocol._transport = httpx2.MockTransport(handler)
 
     protocol.exchange_code(
@@ -462,7 +484,7 @@ def test_exchange_code_public_client_posts_client_id_and_verifier() -> None:
     assert body["client_id"] == "oidc-client"
     assert body["code_verifier"] == "verifier"
     assert body["grant_type"] == "authorization_code"
-    assert "state" not in body
+    assert body.get("state") == ("state-token" if request_format == "json" else None)
     assert "client_secret" not in body
 
 
@@ -1084,7 +1106,7 @@ def test_complete_link_populates_credential_token_fields(
         "verify_id_token",
         lambda self, id_token, **kwargs: {"sub": "sub-token-fields", "email": "tokens@example.com"},
     )
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token: {})
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
 
     before = timezone.now()
     result = identity.complete_link(
@@ -1147,7 +1169,7 @@ def test_complete_account_connect_links_oauth_userinfo_claims_and_credential(
         return tokens
 
     monkeypatch.setattr(OAuthClientProtocol, "exchange_code", exchange_code)
-    monkeypatch.setattr(OAuthClientProtocol, "fetch_userinfo", lambda self, access_token: claims)
+    monkeypatch.setattr(OAuthClientProtocol, "fetch_userinfo", lambda self, access_token, params=None: claims)
     monkeypatch.setattr(
         OAuthClientOidcProtocol,
         "verify_id_token",
@@ -1217,7 +1239,7 @@ def test_complete_account_connect_falls_back_to_token_response_account(
         }
 
     monkeypatch.setattr(OAuthClientProtocol, "exchange_code", exchange_code)
-    monkeypatch.setattr(OAuthClientProtocol, "fetch_userinfo", lambda self, access_token: {})
+    monkeypatch.setattr(OAuthClientProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
 
     result = complete_account_connect(
         oauth_client,
@@ -1266,7 +1288,7 @@ def test_complete_account_connect_rejects_missing_stable_external_id(
     monkeypatch.setattr(
         OAuthClientProtocol,
         "fetch_userinfo",
-        lambda self, access_token: {"email": "missing@example.com"},
+        lambda self, access_token, params=None: {"email": "missing@example.com"},
     )
 
     with pytest.raises(OAuthFlowError) as exc_info:
@@ -1462,6 +1484,7 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
         "preferred_username": "id-token-name",
     }
     userinfo_claims = {
+        "sub": "sub-merged",
         "email": "userinfo@example.com",
         "preferred_username": "userinfo-name",
         "groups": ["ops"],
@@ -1490,7 +1513,14 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
 
     monkeypatch.setattr(OAuthClientOidcProtocol, "exchange_code", lambda self, **kwargs: token_response)
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, id_token, **kwargs: id_claims)
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token: userinfo_claims)
+    userinfo_calls = []
+
+    def fetch_userinfo(self, access_token, *, params=None):
+        userinfo_calls.append((access_token, params))
+        return userinfo_claims
+
+    monkeypatch.setattr(type(oauth_client), "userinfo_params", lambda self, protocol, token: {"proof": token})
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", fetch_userinfo)
     monkeypatch.setattr(identity, "resolve", resolve_user)
 
     login_state, _login_record = oauth_state.issue(
@@ -1514,11 +1544,11 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
     assert captured["email"] == "id-token@example.com"
     assert captured["claims"] == expected_claims
 
-    # First login establishes the user's own party: an owned handle + confirmed self-link.
+    # First login establishes the user's own party: a controlled handle + confirmed self-link.
     with system_context(reason="test verify login claim"):
         own_handle = PartiesHandle.objects.get(value="id-token@example.com")
         person = PartiesPerson.objects.for_user(link_user)
-        assert own_handle.owner_id == link_user.pk
+        assert own_handle.controller_id == link_user.pk
         assert own_handle.party_id == person.pk
 
     link_state, _link_record = oauth_state.issue(
@@ -1541,6 +1571,7 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
     assert link_result.claims == expected_claims
     assert link_result.next_path == "/link-next"
     assert account.identity_claims == expected_claims
+    assert userinfo_calls == [("access", {"proof": "access"}), ("access", {"proof": "access"})]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1566,7 +1597,7 @@ def test_complete_login_does_not_claim_an_unverified_email(
         lambda self, **kwargs: {"access_token": "access", "id_token": "id-token"},
     )
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, id_token, **kwargs: claims)
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token: {})
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
     monkeypatch.setattr(identity, "resolve", lambda *args, **kwargs: user)
     monkeypatch.setattr(identity, "_claim_login_handle", lambda user_arg, email, claims_arg: claimed.append(email))
 
@@ -1604,7 +1635,7 @@ def test_complete_login_contains_parties_bookkeeping_failure(
         lambda self, **kwargs: {"access_token": "access", "id_token": "id-token"},
     )
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, id_token, **kwargs: claims)
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token: {})
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
     monkeypatch.setattr(identity, "resolve", lambda *args, **kwargs: user)
 
     def fail_bookkeeping(user_arg: Any, email: str, claims_arg: dict[str, Any]) -> None:
@@ -1657,7 +1688,7 @@ def test_complete_link_rejects_account_owned_by_another_user(
         "verify_id_token",
         lambda self, id_token, **kwargs: {"sub": "sub-linked", "email": "other@example.com"},
     )
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token: {})
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
 
     with pytest.raises(OAuthFlowError) as exc_info:
         identity.complete_link(
@@ -1697,7 +1728,7 @@ def test_complete_link_binds_to_state_user_after_session_swap(
         "verify_id_token",
         lambda self, id_token, **kwargs: {"sub": "sub-swapped", "email": "start@example.com"},
     )
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token: {})
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
 
     result = identity.complete_link(
         oauth_client,
@@ -1708,7 +1739,7 @@ def test_complete_link_binds_to_state_user_after_session_swap(
     account = result.account
 
     with system_context(reason="test oidc assertions"):
-        owner = ExternalAccount.objects.owner_for(account)
+        owner = ExternalAccount.objects.get(pk=account.pk).owner
         start_credential = Credential.objects.filter(user=start_user, external_account=account).exists()
         swapped_credential = Credential.objects.filter(user=swapped_user, external_account=account).exists()
     assert owner is not None
@@ -1944,3 +1975,330 @@ def test_oidc_login_picker_queryset_scope(composed_tables: None) -> None:
         slugs = set(queryset.values_list("slug", flat=True))
 
     assert slugs == {"picker-enabled", "picker-discovery"}
+
+
+
+@pytest.mark.usefixtures("composed_tables")
+def test_oidc_link_refines_the_grant_before_userinfo_and_credential_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with override_settings(ANGEE_OAUTH_PROVIDER_TYPE_CLASSES={
+        "generic_oauth2": "tests.integrate_fixtures.RefiningProvider",
+    }), system_context(reason="test refined OIDC link"):
+        user = get_user_model().objects.create_user(username="refined-link")
+        client = _oauth_client("refined-link-client")
+        state_token, _record = oauth_state.issue(
+            client, "https://app.example/callback", user_id=str(user.pk), flow="link",
+        )
+        grants = []
+
+        def respond(request: httpx2.Request) -> httpx2.Response:
+            if request.url.path == "/oauth/userinfo":
+                assert request.headers["Authorization"] == "Bearer refined"
+                assert request.url.params["proof"] == "refined"
+                return httpx2.Response(200, json={"sub": "linked-subject", "name": "Linked identity"})
+            body = parse.parse_qs(request.content.decode())
+            grants.append(body["grant_type"][0])
+            if body["grant_type"] == ["resource_grant"]:
+                assert body["short_token"] == ["short"]
+                return httpx2.Response(200, json={"access_token": "refined", "id_token": "refined-identity"})
+            return httpx2.Response(200, json={"access_token": "short", "id_token": "initial-identity"})
+
+        original = OAuthClientProtocol.__init__
+
+        def with_transport(self: Any, oauth_client: Any) -> None:
+            original(self, oauth_client)
+            self._transport = httpx2.MockTransport(respond)
+
+        def verify(self: Any, token: str, **kwargs: Any) -> dict[str, Any]:
+            assert token == "initial-identity"
+            return {"sub": "linked-subject"}
+
+        monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
+        monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", verify)
+        result = identity.complete_link(
+            client, code="code", state_token=state_token, redirect_uri="https://app.example/callback",
+        )
+        assert grants == ["authorization_code", "resource_grant"]
+        assert result.account.external_id == "linked-subject"
+        assert Credential.objects.get(user=user, oauth_client=client).secret_value() == "refined"
+
+
+@pytest.mark.usefixtures("composed_tables")
+def test_google_preset_owns_the_subject_bearing_profile_endpoint() -> None:
+    with system_context(reason="test Google preset identity"):
+        client = OAuthClient.objects.create(slug="google-profile", provider_type="google")
+    endpoint = GoogleType.effective_defaults()["userinfo_endpoint"]
+    assert endpoint == "https://openidconnect.googleapis.com/v1/userinfo"
+    assert client.userinfo_endpoint == endpoint
+
+    def profile(request: httpx2.Request) -> httpx2.Response:
+        assert str(request.url) == endpoint
+        return httpx2.Response(200, json={"sub": "provider-subject"})
+
+    protocol = OAuthClientProtocol(client)
+    protocol._transport = httpx2.MockTransport(profile)
+    claims = protocol.fetch_userinfo("fake")
+    assert client.external_id_from_claims(claims) == "provider-subject"
+
+
+def test_google_seed_discovers_the_preset_profile_without_a_conflicting_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_file = Path(__file__).parents[1] / "addons/angee/integrate/resources/install/010_integrate.oauthclient.yaml"
+    seed = next(row for row in yaml.safe_load(seed_file.read_text()) if row["xref"] == "oauth_gemini")
+    client = _stub_oauth_client(**{key: value for key, value in seed.items() if key != "xref"})
+    endpoint = GoogleType.effective_defaults()["userinfo_endpoint"]
+    discovery_calls: list[str] = []
+
+    def discover(url: str, **kwargs: Any) -> dict[str, str]:
+        discovery_calls.append(url)
+        return {"userinfo_endpoint": endpoint}
+
+    def profile(request: httpx2.Request) -> httpx2.Response:
+        assert str(request.url) == endpoint
+        return httpx2.Response(200, json={"sub": "seed-subject"})
+
+    monkeypatch.setattr(oauth_discovery, "_get_json", discover)
+    monkeypatch.setattr(oauth_discovery.cache, "get", lambda key: None)
+    protocol = OAuthClientProtocol(client)
+    protocol._transport = httpx2.MockTransport(profile)
+    claims = protocol.fetch_userinfo("fake")
+    assert discovery_calls == [client.discovery_url]
+    assert client.external_id_from_claims(claims) == "seed-subject"
+
+
+@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.parametrize("flow_name", ["login", "link", "connect"])
+@pytest.mark.parametrize("request_format", ["form", "json"])
+def test_oauth_completion_returns_typed_outage_for_refused_endpoint(
+    monkeypatch: pytest.MonkeyPatch, flow_name: str, request_format: str,
+) -> None:
+    schema = GraphQLSchemas([
+        SchemaAddon(module.schemas) for module in (iam_schema, integrate_schema, oidc_schema)
+    ]).build("console")
+    with system_context(reason="test refused provider"):
+        user = get_user_model().objects.create_user(username="refused-provider-user")
+        client = _oauth_client("refused-provider", token_request_format=request_format)
+    redirect = "https://app.example/callback"
+    with socket.socket() as reserved:
+        reserved.bind(("127.0.0.1", 0))
+        client.token_endpoint = f"http://127.0.0.1:{reserved.getsockname()[1]}/token"
+        token, _record = oauth_state.issue(
+            client, redirect, user_id=str(user.pk) if flow_name != "login" else None, flow=flow_name,
+        )
+        monkeypatch.setattr(oauth_protocol, "HTTP_TIMEOUT_SECONDS", 1)
+        monkeypatch.setattr(integrate_schema.flow, "remembered_oauth_client", lambda *args: client)
+        mutation = {
+            "login": "login_complete", "link": "link_account_complete", "connect": "connect_account_complete",
+        }[flow_name]
+        request = RequestFactory().post("/graphql/console/")
+        request.user = AnonymousUser() if flow_name == "login" else user
+        result = result_data(execute_schema(schema, f'''mutation {{
+          {mutation}(code: "code", state: "{token}", redirect_uri: "{redirect}") {{
+            error error_code
+          }}
+        }}''', request=request))[mutation]
+    expected_code = "provider_unavailable" if flow_name == "connect" else TOKEN_EXCHANGE_FAILED
+    assert result == {"error": OAuthFlowError(expected_code, 503).public_message, "error_code": expected_code}
+    with system_context(reason="test refused provider wrote no credential"):
+        assert not Credential.objects.filter(user=user, oauth_client=client).exists()
+
+
+@pytest.mark.usefixtures("composed_tables")
+def test_oidc_login_verifies_code_exchange_when_refinement_omits_id_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with override_settings(ANGEE_OAUTH_PROVIDER_TYPE_CLASSES={
+        "generic_oauth2": "tests.integrate_fixtures.RefiningProvider",
+    }), system_context(reason="test nonce proof survives refinement"):
+        user = get_user_model().objects.create_user(username="refined-login")
+        client = _oauth_client("refined-login-client")
+        ExternalAccount.objects.link(client, "login-subject", owner=user)
+        token, record = oauth_state.issue(client, "https://app.example/callback")
+        grants = []
+
+        def respond(request: httpx2.Request) -> httpx2.Response:
+            if request.url.path == "/oauth/userinfo":
+                assert request.headers["Authorization"] == "Bearer refined"
+                return httpx2.Response(200, json={"sub": "login-subject"})
+            body = parse.parse_qs(request.content.decode())
+            grants.append(body["grant_type"][0])
+            if body["grant_type"] == ["resource_grant"]:
+                return httpx2.Response(200, json={"access_token": "refined"})
+            return httpx2.Response(200, json={"access_token": "short", "id_token": "nonce-bound-proof"})
+
+        original = OAuthClientProtocol.__init__
+
+        def with_transport(self: Any, oauth_client: Any) -> None:
+            original(self, oauth_client)
+            self._transport = httpx2.MockTransport(respond)
+
+        def verify(self: Any, id_token: str, *, nonce: str) -> dict[str, Any]:
+            assert id_token == "nonce-bound-proof"
+            assert nonce == record.nonce
+            return {"sub": "login-subject"}
+
+        monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
+        monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", verify)
+        completed = identity.complete_login(
+            client, code="code", state_token=token, redirect_uri="https://app.example/callback",
+        )
+        assert completed.user.pk == user.pk
+        assert grants == ["authorization_code", "resource_grant"]
+
+
+@pytest.mark.parametrize("operation", ["revoke", "metadata"])
+def test_oauth_helpers_map_refused_endpoint_to_transient_flow_error(operation: str) -> None:
+    with socket.socket() as reserved:
+        reserved.bind(("127.0.0.1", 0))
+        endpoint = f"http://127.0.0.1:{reserved.getsockname()[1]}/oauth"
+        with pytest.raises(OAuthFlowError) as raised:
+            if operation == "revoke":
+                OAuthClientProtocol(_stub_oauth_client(revoke_endpoint=endpoint)).revoke_token("synthetic-token")
+            else:
+                oauth_protocol._get_json(endpoint, error_code=DISCOVERY_FAILED)
+    assert raised.value.http_status == 503 and raised.value.transient
+    assert raised.value.code == (TOKEN_EXCHANGE_FAILED if operation == "revoke" else DISCOVERY_FAILED)
+
+
+@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.parametrize("request_format", ["form", "json"])
+def test_blank_secret_public_client_refreshes_credential(monkeypatch: pytest.MonkeyPatch, request_format: str) -> None:
+    with system_context(reason="test public refresh"):
+        user = get_user_model().objects.create_user(username="public-refresh")
+        client = _oauth_client("public-refresh", client_secret="", token_request_format=request_format)
+        credential = Credential.objects.upsert_for_user(
+            user, client, "oauth", {"access_token": "old-access", "refresh_token": "old-refresh", "expires_in": 1},
+        )
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        body = (
+            json.loads(request.content) if request_format == "json" else dict(parse.parse_qsl(request.content.decode()))
+        )
+        assert body["grant_type"] == "refresh_token"
+        assert body["client_id"] == client.client_id
+        assert body["refresh_token"] == "old-refresh"
+        assert "client_secret" not in body and "authorization" not in request.headers
+        return httpx2.Response(200, json={
+            "access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 3600,
+        })
+
+    original = OAuthClientProtocol.__init__
+
+    def with_transport(self: Any, oauth_client: Any) -> None:
+        original(self, oauth_client)
+        self._transport = httpx2.MockTransport(respond)
+
+    monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
+    with system_context(reason="test public refresh operation"):
+        credential.refresh_now()
+        assert credential.reveal()["access_token"] == "new-access"
+        assert credential.reveal()["refresh_token"] == "new-refresh"
+        assert credential.last_refresh_status == "ok"
+        assert not credential.is_reconnect_required
+
+
+@pytest.mark.usefixtures("composed_tables")
+def test_oidc_login_with_blank_secret_public_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    schema = GraphQLSchemas([
+        SchemaAddon(module.schemas) for module in (iam_schema, integrate_schema, oidc_schema)
+    ]).build("console")
+    with system_context(reason="test public OIDC login"):
+        user = get_user_model().objects.create_user(username="public-login")
+        client = _oauth_client("public-login", client_secret="")
+        ExternalAccount.objects.link(client, "public-subject", owner=user)
+    redirect = "https://app.example/callback"
+    token, record = oauth_state.issue(client, redirect)
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/oauth/userinfo":
+            return httpx2.Response(200, json={"sub": "public-subject"})
+        body = dict(parse.parse_qsl(request.content.decode()))
+        assert body["client_id"] == client.client_id and body["code_verifier"] == record.code_verifier
+        assert "client_secret" not in body and "authorization" not in request.headers
+        return httpx2.Response(200, json={"access_token": "access", "id_token": "proof"})
+
+    original = OAuthClientProtocol.__init__
+
+    def with_transport(self: Any, oauth_client: Any) -> None:
+        original(self, oauth_client)
+        self._transport = httpx2.MockTransport(respond)
+
+    def verify(self: Any, id_token: str, *, nonce: str) -> dict[str, Any]:
+        assert id_token == "proof" and nonce == record.nonce
+        return {"sub": "public-subject"}
+
+    monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
+    monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", verify)
+    monkeypatch.setattr(oidc_schema.oauth_flow, "remembered_oauth_client", lambda *args: client)
+    request = RequestFactory().post("/graphql/console/")
+    request.user = AnonymousUser()
+    request.session = SessionStore()
+    result = result_data(execute_schema(schema, f'''mutation {{
+      login_complete(code: "code", state: "{token}", redirect_uri: "{redirect}") {{ ok error error_code }}
+    }}''', request=request))["login_complete"]
+    assert result == {"ok": True, "error": None, "error_code": None}
+    assert request.user.pk == user.pk
+
+
+@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.parametrize("flow_name", ["login", "link"])
+@pytest.mark.parametrize("transient", [False, True])
+def test_oidc_completion_returns_typed_integration_error(
+    monkeypatch: pytest.MonkeyPatch, flow_name: str, transient: bool,
+) -> None:
+    schema = GraphQLSchemas([
+        SchemaAddon(module.schemas) for module in (iam_schema, integrate_schema, oidc_schema)
+    ]).build("console")
+    with system_context(reason="test OIDC integration refusal"):
+        user = get_user_model().objects.create_user(username="integration-refusal")
+        client = _oauth_client("integration-refusal")
+
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise IntegrationError("Connection was refused.", transient=transient)
+
+    monkeypatch.setattr(oidc_schema.oauth_flow, "remembered_oauth_client", lambda *args: client)
+    monkeypatch.setattr(identity, f"complete_{flow_name}", refuse)
+    mutation = "login_complete" if flow_name == "login" else "link_account_complete"
+    request = RequestFactory().post("/graphql/console/")
+    request.user = user if flow_name == "link" else AnonymousUser()
+    result = result_data(execute_schema(schema, f'''mutation {{
+      {mutation}(code: "code", state: "state", redirect_uri: "https://app.example/callback") {{ error error_code }}
+    }}''', request=request))[mutation]
+    assert result == {
+        "error": (
+            "The provider is temporarily unavailable. Try again later." if transient else "Connection was refused."
+        ),
+        "error_code": "provider_unavailable" if transient else "connection_refused",
+    }
+
+
+@pytest.mark.usefixtures("composed_tables")
+@pytest.mark.parametrize("userinfo_sub", [None, "different-subject", "verified-subject"])
+def test_oidc_userinfo_email_link_requires_matching_subject(
+    monkeypatch: pytest.MonkeyPatch, userinfo_sub: str | None,
+) -> None:
+    user = get_user_model().objects.create_user(username="email-link-target", email="target@example.com")
+    client = _oauth_client("subject-check", link_on_email_match=True)
+    redirect = "https://app.example/callback"
+    token, _record = oauth_state.issue(client, redirect)
+    userinfo = {"email": "target@example.com", "email_verified": True}
+    if userinfo_sub is not None:
+        userinfo["sub"] = userinfo_sub
+    monkeypatch.setattr(OAuthClientOidcProtocol, "exchange_code", lambda self, **kwargs: {
+        "access_token": "access", "id_token": "proof",
+    })
+    monkeypatch.setattr(
+        OAuthClientOidcProtocol, "verify_id_token", lambda self, *args, **kwargs: {"sub": "verified-subject"},
+    )
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, *args, **kwargs: userinfo)
+    if userinfo_sub == "verified-subject":
+        completion = identity.complete_login(client, code="code", state_token=token, redirect_uri=redirect)
+        assert completion.user.pk == user.pk
+        assert completion.claims["email"] == "target@example.com"
+    else:
+        with pytest.raises(IdentityFlowError):
+            identity.complete_login(client, code="code", state_token=token, redirect_uri=redirect)
+        with system_context(reason="test untrusted userinfo never linked"):
+            assert not ExternalAccount.objects.filter(oauth_client=client).exists()

@@ -6,7 +6,6 @@ import sys
 from types import ModuleType
 
 import pytest
-import reversion
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
@@ -15,9 +14,9 @@ from django.db.migrations.operations import CreateModel
 from django.db.migrations.state import ModelState, ProjectState
 from django.test.utils import isolate_apps
 
-from angee.base.mixins import HistoryMixin, RevisionMixin, SqidMixin
 from angee.compose.model_composition import ModelComposition
 from angee.compose.rendering import render_models
+from angee.models import HistoryMixin, SqidMixin
 from tests.tables import model_tables
 
 
@@ -162,6 +161,8 @@ def test_rendered_model_exports_donor_field_provenance(modules):
     concrete = emit(composition)[owner_config.label].Root
 
     assert composition.contributed_field_origins(Root) == (("external_id", donor_config.name),)
+    (field,) = composition.contributed_fields(Root)
+    assert field is donor_module.RootExtension._meta.get_field("external_id")
     assert concrete.angee_contributed_field_origins == (("external_id", donor_config.name),)
 
 
@@ -257,6 +258,23 @@ def test_shared_abstract_fields_are_one_declaration(modules):
 
 
 @isolate_apps()
+def test_shared_donor_field_keeps_one_native_declaration_without_exclusive_owner(modules):
+    create, emit = modules
+    config, module = create("native_shared_donors")
+    Common = source(module, "Common", config.label, value=models.IntegerField())
+    Root = source(module, "Root", config.label, runtime=True)
+    First = source(module, "First", config.label, bases=(Common,), extends=f"{config.label}.Root")
+    source(module, "Second", config.label, bases=(Common,), extends=f"{config.label}.Root")
+    composition = ModelComposition.discover((config,))
+    (field,) = composition.contributed_fields(Root)
+    assert field is First._meta.get_field("value")
+    assert field.model is First
+    assert composition.contributed_field_origins(Root) == ()
+    concrete = emit(composition)[config.label].Root
+    assert [field.name for field in concrete._meta.local_fields] == ["id", "value"]
+
+
+@isolate_apps()
 def test_cross_app_parent_cycle_fails_before_rendering(modules):
     create, _emit = modules
     left, left_module = create("native_left")
@@ -274,9 +292,9 @@ def test_final_composed_transition_metadata_is_validated(modules):
     exec(
         """
 from django.db import models
-from angee.base.fields import StateField
-from angee.base.models import AngeeModel
-from angee.base.transitions import StateTransitions, transition, save_state
+from angee.fields import StateField
+from angee.models import AngeeModel
+from angee.models import StateTransitions, transition, save_state
 class Status(models.TextChoices):
     DRAFT = "draft", "Draft"
     DONE = "done", "Done"
@@ -421,9 +439,10 @@ def test_native_history_excludes_generated_fields_from_final_model(modules):
 
     assert generated.HistoricalTracked is history
     assert not history._meta.abstract
-    assert {
-        field.name for field in Tracked._meta.local_fields if isinstance(field, models.GeneratedField)
-    } == {"doubled", "positive"}
+    assert {field.name for field in Tracked._meta.local_fields if isinstance(field, models.GeneratedField)} == {
+        "doubled",
+        "positive",
+    }
     assert isinstance(Tracked._meta.get_field("positive"), BooleanGeneratedField)
     historical_fields = {field.name for field in history._meta.local_fields}
     assert {"id", "value"} <= historical_fields
@@ -458,10 +477,10 @@ def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modul
     history = Tracked.history.model
     assert history._meta.app_label == config.label
     assert history._meta.db_table == f"{config.label}_historicaltracked"
-    assert not hasattr(generated, "HistoricalChild")
-    assert generated.Child.history.model is history
+    assert generated.Child.history.model is generated.HistoricalChild
+    assert generated.Child.history.model is not history
     assert "sqid" not in {field.name for field in history._meta.local_fields}
-    with model_tables((Tracked, history)):
+    with model_tables((Tracked, generated.Child, history, generated.HistoricalChild)):
         record = Tracked.objects.create(title="first")
         record.title = "second"
         record.save()
@@ -515,6 +534,7 @@ def test_native_history_mti_reference_has_a_migration_dependency(modules):
         state = ModelState.from_model(model)
         if state.name == "HistoricalChild":
             state.fields.pop("history_user")
+            state.fields.pop("changeset")
         target.add_model(state)
     changes = MigrationAutodetector(ProjectState(), target)._detect_changes()
     operations = changes[config.label][0].operations
@@ -534,31 +554,6 @@ def test_native_history_mti_reference_has_a_migration_dependency(modules):
     for operation in operations:
         operation.state_forwards(config.label, rendered)
     rendered.apps.get_model(config.label, "HistoricalChild")
-
-
-@isolate_apps()
-def test_native_reversion_registration_uses_final_model_fields(modules):
-    create, emit = modules
-    config, module = create("native_revisions")
-    source(
-        module,
-        "Document",
-        config.label,
-        bases=(RevisionMixin, models.Model),
-        runtime=True,
-        revisioned_fields=("body",),
-        body=models.TextField(),
-    )
-    source(module, "Child", config.label, runtime=True, extends=f"{config.label}.Document")
-    generated = emit(ModelComposition.discover((config,)))[config.label]
-    try:
-        assert reversion.is_registered(generated.Document)
-        assert not reversion.is_registered(generated.Child)
-        from reversion.revisions import _get_options
-
-        assert _get_options(generated.Document).fields == ("body",)
-    finally:
-        reversion.unregister(generated.Document)
 
 
 @isolate_apps()
@@ -583,9 +578,9 @@ def test_final_composition_rejects_a_donor_transition_outside_the_owner_graph(mo
     exec(
         """
 from django.db import models
-from angee.base.fields import StateField
-from angee.base.models import AngeeModel
-from angee.base.transitions import StateTransitions, transition
+from angee.fields import StateField
+from angee.models import AngeeModel
+from angee.models import StateTransitions, transition
 class Status(models.TextChoices):
     DRAFT = "draft", "Draft"
     DONE = "done", "Done"
@@ -622,3 +617,70 @@ def test_concrete_extension_donor_is_rejected_without_changing_plain_django_mode
     source(module, "Donor", config.label, meta={"abstract": False}, extends=f"{config.label}.Ordinary")
     with pytest.raises(ImproperlyConfigured, match="must be abstract"):
         ModelComposition.discover((config,))
+
+
+@pytest.mark.parametrize("indirect", [False, True])
+@isolate_apps()
+def test_required_parent_validates_native_parent_chain_without_changing_fields(modules, indirect):
+    create, emit = modules
+    config, module = create("native_required_parent")
+    Parent = source(module, "Parent", config.label, runtime=True, title=models.CharField(max_length=32))
+    Middle = source(module, "Middle", config.label, runtime=True, extends=f"{config.label}.Parent")
+    Capability = source(module, "Capability", config.label, requires_parent=f"{config.label}.Parent")
+    Child = source(
+        module, "Child", config.label, bases=(Capability,), runtime=True,
+        extends=f"{config.label}.{'Middle' if indirect else 'Parent'}", count=models.IntegerField(),
+    )
+    composition = ModelComposition.discover((config,))
+    assert composition.required_parents == {Capability: Parent}
+    concrete = emit(composition)[config.label]
+    assert not issubclass(Capability, Parent)
+    assert Child.__bases__ == (Capability,)
+    assert issubclass(concrete.Child, concrete.Parent)
+    assert {field.name for field in concrete.Child._meta.local_fields} == {
+        "middle_ptr" if indirect else "parent_ptr", "count",
+    }
+    assert concrete.Child._meta.get_field("title").model is concrete.Parent
+    assert composition.parent(Child) is (Middle if indirect else Parent)
+
+
+@pytest.mark.parametrize(
+    ("required", "parent", "message"),
+    [
+        ("Parent", None, "requires parent"),
+        ("Parent", "Other", "requires parent"),
+        ("Missing", "Parent", "references unknown model"),
+        (123, "Parent", "requires_parent must be a string"),
+        ("invalid", "Parent", "requires_parent must be an 'app_label.ModelName' reference"),
+    ],
+)
+@isolate_apps()
+def test_required_parent_rejects_invalid_materialized_contract(modules, required, parent, message):
+    create, _emit = modules
+    config, module = create("native_bad_requirement")
+    source(module, "Parent", config.label, runtime=True)
+    source(module, "Other", config.label, runtime=True)
+    reference = f"{config.label}.{required}" if required in ("Parent", "Missing") else required
+    Capability = source(module, "Capability", config.label, requires_parent=reference)
+    source(
+        module, "Child", config.label, bases=(Capability,), runtime=True,
+        **({"extends": f"{config.label}.{parent}"} if parent is not None else {}),
+    )
+    with pytest.raises(ImproperlyConfigured, match=message):
+        ModelComposition.discover((config,))
+
+
+@isolate_apps()
+def test_required_parent_applies_to_donors_and_leaves_undeclared_mixins_unchanged(modules):
+    create, _emit = modules
+    config, module = create("native_donor_requirement")
+    Parent = source(module, "Parent", config.label, runtime=True)
+    Child = source(module, "Child", config.label, runtime=True, extends=f"{config.label}.Parent")
+    Plain = source(module, "Plain", config.label)
+    source(module, "PlainChild", config.label, bases=(Plain,), runtime=True)
+    Capability = source(module, "Capability", config.label, requires_parent=f"{config.label}.Parent")
+    source(module, "Extension", config.label, bases=(Capability,), extends=f"{config.label}.Child")
+    composition = ModelComposition.discover((config,))
+    assert composition.required_parents == {Capability: Parent}
+    assert composition.parent(Child) is Parent
+    assert not issubclass(Capability, Parent)

@@ -123,12 +123,79 @@ addon (discovered by convention); `django-zed-rebac` owns sync.
 **Principal** — an identity that acts: a row in the swappable
 `AUTH_USER_MODEL` table and its
 `auth/user` REBAC subject. The row may represent a person or a service. Every
-fact that answers "who" (audit stamps, history rows, revision authors) is an FK
-to that table.
+user-backed audit and history stamps refer to that table. Changeset attribution
+also accepts non-user REBAC subjects.
 
-**Actor** — the `auth/user` REBAC subject bound to the current operation (the
-`django-zed-rebac` actor context). Its subject ID is the user's database primary
-key; `actor_user_id` converts that canonical value to the FK's Python type.
+**Actor** — the REBAC `SubjectRef` bound to the current operation. For an
+`auth/user` subject its ID is the user's database primary key; `actor_user_id`
+converts it to the FK's Python type and returns no user for other subject types.
+
+**Changeset** — attribution for one logical write, owned by
+[`changeset()`](../angee/changesets.py) and stored by the
+[provenance addon](../addons/angee/provenance/models.py).
+
+**Action / activity** — action uses FHIR AuditEvent's C/U/D verbs; activity
+classifies the logical work, including `pull`/`push` for sync, `import` for a
+one-shot import and `seed` for seed loads. The
+[`Changeset` enums](../addons/angee/provenance/models.py) own that vocabulary.
+
+**Write group** — an internal ephemeral identity for nested ORM dispatch. Its
+deduplication ends with the dispatch; successive writes in one changeset remain
+distinct history events.
+
+**Statement** — one source's current stance on one aspect of one subject row
+(Wikibase's statement: claim, references, rank). Each canonical model declaring
+`statements = StatementRecords(aspects=…)` gets a typed `<Model>Statement` table
+beside its history table, read through the subject like history rows and
+written only by `statements.set()` and the status verbs
+([owner](../angee/models/statements.py)).
+
+**Aspect** — a declared field group of a canonical model, optionally with a
+typed member (a Handle, a counterparty), carrying its survivorship strategy and
+source precedence. The aspect is the unit of resolution; a value field belongs
+to exactly one aspect, and consumer donors contribute aspects additively.
+
+**Survivorship** — how an aspect's asserted normal-rank statements resolve onto
+the operational row through `SOURCE_PRIORITY`. Preferred person statements always
+precede it; the winner is marked **applied** and its values materialise on the
+row. A re-derivation, never a migration, when a knob flips.
+
+**SourceKind** — the assertion-time classification of the asserting principal:
+`PERSON`, `SYSTEM_OF_RECORD`, `DIRECTORY`, `NETWORK`, `IMPORT`, `SEED`,
+`DOCUMENT`, `EXTRACTION`, `RULE`. Resolved through
+`StatementSourceMixin.source_kind` and retained on the statement; precedence is
+declared per aspect, never globally.
+
+**Authoritative** — the per-stream knob (`SyncStream.authoritative`) that makes a
+`SYSTEM_OF_RECORD` source the system of record for the aspects naming its kind,
+ahead of people's normal-rank statements; unset, the stream is a system of
+reference below people (DAMA). A person's confirm or dismiss stays on top.
+
+**Rank / snak / status** — a statement's three facts (Wikibase): rank
+`preferred`/`normal` (a PERSON writes `preferred`; seeded install data may hold a standing decision), snak
+`value`/`some_value`/`no_value`, and status `asserted`/`withdrawn`/
+`quarantined`/`deprecated` — the source's current stance. Canonical candidates
+are asserted; `confirm()` writes a preferred value, `dismiss()` a preferred
+no-value that clears the aspect's values and keeps a removal durable.
+
+**Applied** — the statement survivorship chose for its aspect and member: one per
+current key, the row `provenance(field)` returns, flagged on the statement so a
+trace is one indexed read.
+
+**Withdraw / quarantine** — `withdraw` is a source retracting its stance
+(`status=withdrawn`; the row and its history stay); `quarantined` is a stance
+held back from resolution (PREMIS). Sync's quarantine of a failed inbound
+application is a **SyncFailure**, not a statement status.
+
+**SyncFailure** — one failed inbound application or refused write-back, retained
+on its `RecordLink` (or on the `SyncStream` when no link exists) with kind, code,
+source hash, mapping version, details, attempts, retry and resolution. The one
+noun for that state; "discrepancy" is retired.
+
+**Rule / Seed** — provenance's persisted non-user principals: `Rule` (one row per
+registered rule or matcher, kind RULE, created by the owning resource
+declaration) and `Seed` (one row per seed load, kind SEED). They assert the
+statements no person or integration made.
 
 **User (row)** — the database-layer principal record. Not synonymous with "a
 human" or "a login": `kind` distinguishes `person` from `service`, and only
@@ -197,6 +264,25 @@ surface, not an import file.
 may target. A data resource's `recordEdges` lists the edges its records can
 carry; record surfaces for one edge apply only there.
 
+**Merge** — folding one or more *merged records* into a *survivor* of the same
+model (`MergeableMixin.merge`, the shared `merge_records` verb). Each
+*reference* to a merged record, meaning a foreign key or a record edge pointing
+at it, follows its merge policy: move to the survivor, keep pointing at the
+merged record, or block the merge. The merged record is then retired
+(`retire_merged`): kept as a redirect to the survivor (`merged_into`, trashed on
+a trash owner) when the model, its trash owner or the references naming it
+retain it, otherwise deleted. A resource's `mergeable` says the verb serves it.
+An actor merges through `merge`; system work folds through `fold`, inside the
+caller's changeset.
+
+**Canonical record** — the operational survivor a redirect resolves to
+(`MergeableMixin.canonical()`, `objects.canonical()`): the one row readers,
+writers and counts address once its duplicates are merged. A merged record stays
+as evidence and reads as *merged into* its canonical record. A queryset's
+`canonical()` keeps a retained redirect whose survivor that queryset does not
+reach (an actor's read, a channel filter), so a reader who can see only the copy
+still sees the record.
+
 **Resource query** — the executable query contract of a data resource. The
 backend finalizes `DataResourceQuery` against the composed schema; frontend
 `ResourceQuery` resolves filters, selections, ordering and group axes from it.
@@ -221,6 +307,22 @@ boundaries instead of importing it, to avoid import cycles.
 contributes to fixed buckets, and Angee builds one Strawberry `Schema` per name.
 
 ## Workflows
+
+**Held reply** — an outbound draft awaiting operator approval or its scheduled
+release. Discarded and failed replies do not exclude another answer. See
+[posts reply policy](../addons/angee/posts/README.md).
+
+**Reply hold** — a feed's operator-controlled release policy: approval-only,
+release after a duration, or queue immediately. See the
+[posts owner](../addons/angee/posts/models.py).
+
+**Feed stream** — an independently ordered public-feed partition driven by
+integrate's shared stream engine; activity and history classify each record
+against the feed's live horizon. See [public feeds](../addons/angee/posts/README.md).
+
+**Delivery settlement** — messaging's reflection of provider acceptance or refusal
+into the outbound message's status, provider identity and retry schedule. See
+[the delivery owner](../addons/angee/messaging/delivery.py).
 
 **Workflow version** — an immutable published definition, including the
 normalized contracts of any child workflows it awaits. A run pins one version.
@@ -257,7 +359,7 @@ read, created, changed, deleted or called. Admission inputs use the same relatio
 with no step. Readers see record identities through their current read scope.
 
 **Derived-from evidence** — a frozen fact or source link admitted through
-`angee.base.evidence`'s standing-read check. Decisions, run inputs and
+`angee.evidence`'s standing-read check. Decisions, run inputs and
 extraction retain their own edges to this shared source identity.
 
 ## Decisions
@@ -291,9 +393,15 @@ documents, facts and revisions against an explicit file or message target.
 that participates in identity, communication, and relationship facts.
 
 **Handle** — a normalized contact point such as an email address or account.
-The Handle's owner records the **control** fact (who may act through it), while
-**PartyHandle** records the **identity** fact (which Party it reaches); neither
-fact implies the other.
+The Handle's controller records the **control** fact (who may act through it), while
+**PartyStatement** records the **identity** fact (`aspect="handle"`, typed Handle
+member); neither fact implies the other. A **suggestion** is an asserted
+normal statement below 0.5 confidence: it awaits review and never decides which
+Party the Handle reaches. A person's preferred value confirms membership; a
+preferred no-value dismisses it durably. Applied directory/person statements
+and confirmations publish to a card. Other sources remain inferences even at
+full confidence. Reads follow Party authorization, with separate Handle and
+evidence gates.
 
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.
@@ -304,6 +412,23 @@ which is a set of authorization principals.
 
 **Relationship** — the single typed Party-to-Party factual edge, including
 employment as one relationship kind rather than a separate identity model.
+It remains canonical for tracked or free-text, time-bounded counterparties;
+its asserted values live in its own statement table. Address is likewise a
+canonical, referencable subject with independently retained source assertions.
+
+**same_as** — a symmetric identity statement on an ordered pair of records of
+one model (Party, and messaging's Thread and Message). Preferred no-value keeps
+both directions separate and refuses their merge. For a Party a preferred value
+awaits a merge action whose input chooses the survivor; survivorship never
+merges rows. For a channel copy of a message or thread the applied statement
+itself folds the newer copy into the older as a retained redirect.
+The pointing model's **merge_contract** owns statement union and retained
+supersession through the existing reference dispatcher.
+
+**Revert** — a Changeset restoring each row's pre-boundary state and re-running
+survivorship after refusing later touches. Created subjects use trash where
+available; their statements withdraw rather than disappear. A **document** is
+the deterministic changeset/history export consumed by a future archive sink.
 
 **Tie** — a derived Party-to-Party interaction edge. **Cadence** is the human,
 per-user stay-in-touch intent; recomputable interaction evidence and personal

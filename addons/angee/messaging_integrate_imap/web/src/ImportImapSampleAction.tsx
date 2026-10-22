@@ -1,6 +1,6 @@
 import { useMessagingT } from "@angee/messaging";
 import { keysetFeedRows, useAuthoredMutation } from "@angee/refine";
-import { Alert, Button, Checkbox, ControlBandProvider, DialogForm, FieldRoot, FieldRow, Input, ActionTrigger, ResourceViewProvider, RowsListView, errorMessage, useLatestRef, useRecordChromeContext, useResourceView, type ListColumn } from "@angee/ui";
+import { Alert, Button, Checkbox, ControlBandProvider, DialogForm, FieldRoot, Glyph, Input, ActionTrigger, ResourceViewProvider, RowsListView, errorMessage, formatDateTime, formatSize, useLatestRef, useRecordChromeContext, useResourceView, type ListColumn } from "@angee/ui";
 import type { DocumentType } from "@angee/gql/console";
 import * as React from "react";
 import { flushSync } from "react-dom";
@@ -22,6 +22,15 @@ function isoDate(offsetDays = 0): string {
   return date.toISOString().slice(0, 10);
 }
 
+/** The IMAP system flags, as words; a mailbox keyword keeps its own name without the backslash. */
+const FLAG_KEYS: Readonly<Record<string, string>> = {
+  "\\Seen": "channel.imap.sample.flag.seen",
+  "\\Answered": "channel.imap.sample.flag.answered",
+  "\\Flagged": "channel.imap.sample.flag.flagged",
+  "\\Draft": "channel.imap.sample.flag.draft",
+  "\\Deleted": "channel.imap.sample.flag.deleted",
+};
+
 /** Operator-selected historical import. The server owns IMAP safety and admission. */
 export function ImportImapSampleAction(): React.ReactElement {
   return <ResourceViewProvider scope="local" initialState={{ pageSize: IMAP_SAMPLE_LIMIT }}>
@@ -34,6 +43,7 @@ function ImportImapSampleDialog(): React.ReactElement | null {
   const { recordId, record } = useRecordChromeContext();
   const { clearSelectedIds, setPage } = useResourceView();
   const [open, setOpen] = React.useState(false);
+  const fieldId = React.useId();
   const form = useForm<PreviewValues>({
     defaultValues: { mailbox: "INBOX", since: isoDate(-30), before: isoDate(1), allDates: false, limit: 20 },
   });
@@ -60,12 +70,17 @@ function ImportImapSampleDialog(): React.ReactElement | null {
   const rows = keysetFeedRows(previewValues ? previewFeed.data : undefined, (left, right) => right.uid - left.uid);
   const page = previewValues ? previewFeed.data?.pages.at(-1) : undefined;
   const preview = page?.metadata;
+  const flagLabel = (flag: string): string => {
+    const key = FLAG_KEYS[flag];
+    return key ? t(key) : flag.replace(/^\\/, "");
+  };
   const columns: readonly ListColumn<SampleRow>[] = [
     { field: "subject", header: t("channel.imap.sample.subject"), render: (row) => row.subject || t("channel.imap.sample.noSubject") },
     { field: "sender", header: t("channel.imap.sample.sender") },
-    { field: "sent_at", header: t("channel.imap.sample.sent") },
-    { field: "size", header: t("channel.imap.sample.bytes"), align: "right" },
-    { field: "flags", header: t("channel.imap.sample.flags"), render: (row) => row.flags.join(", ") },
+    { field: "sent_at", header: t("channel.imap.sample.sent"), render: (row) => (row.sent_at ? formatDateTime(row.sent_at) : null) },
+    { field: "size", header: t("channel.imap.sample.size"), align: "right", render: (row) => formatSize(row.size) },
+    // IMAP system flags read as words; anything else is a keyword the mailbox invented.
+    { field: "flags", header: t("channel.imap.sample.flags"), render: (row) => row.flags.map((flag) => flagLabel(flag)).join(", ") },
   ];
 
   const invalidatePreview = (): void => {
@@ -106,30 +121,42 @@ function ImportImapSampleDialog(): React.ReactElement | null {
       </ActionTrigger>
     }
     footer={<Button type="submit" variant="primary" disabled={busy}>{previewFeed.isFetching ? t("channel.imap.sample.previewing") : t("channel.imap.sample.preview")}</Button>}>
-      <FieldRow label={t("channel.imap.sample.mailbox")}><Input disabled={busy} invalid={Boolean(errors.mailbox)} aria-describedby={errors.mailbox ? formErrorId : undefined} {...form.register("mailbox", {
+      <FieldRoot invalid={Boolean(errors.mailbox)}>
+        <FieldRoot.Label htmlFor={`${fieldId}-mailbox`}>{t("channel.imap.sample.mailbox")}</FieldRoot.Label>
+        <Input id={`${fieldId}-mailbox`} invalid={Boolean(errors.mailbox)} disabled={busy} aria-describedby={errors.mailbox ? formErrorId : undefined} {...form.register("mailbox", {
         setValueAs: (value: string) => value.trim(), required: t("channel.imap.sample.invalidRange"), onChange: invalidatePreview,
-      })} /></FieldRow>
+      })} />
+      </FieldRoot>
       <Controller name="allDates" control={form.control} render={({ field }) => <FieldRoot>
         <FieldRoot.Label>{t("channel.imap.sample.allDates")}</FieldRoot.Label>
         <Checkbox ref={field.ref} name={field.name} checked={field.value} disabled={busy} onBlur={field.onBlur}
           onCheckedChange={(checked) => { field.onChange(checked); invalidatePreview(); }} />
       </FieldRoot>} />
-      <FieldRow label={t("channel.imap.sample.since")}><Input type="date" disabled={busy || allDates} invalid={Boolean(errors.before)} aria-describedby={errors.before ? formErrorId : undefined} {...form.register("since", { onChange: invalidatePreview })} /></FieldRow>
-      <FieldRow label={t("channel.imap.sample.before")}><Input type="date" disabled={busy || allDates} invalid={Boolean(errors.before)} aria-describedby={errors.before ? formErrorId : undefined} {...form.register("before", {
+      <FieldRoot invalid={Boolean(errors.before)}>
+        <FieldRoot.Label htmlFor={`${fieldId}-since`}>{t("channel.imap.sample.since")}</FieldRoot.Label>
+        <Input id={`${fieldId}-since`} invalid={Boolean(errors.before)} type="date" disabled={busy || allDates} aria-describedby={errors.before ? formErrorId : undefined} {...form.register("since", { onChange: invalidatePreview })} />
+      </FieldRoot>
+      <FieldRoot invalid={Boolean(errors.before)}>
+        <FieldRoot.Label htmlFor={`${fieldId}-before`}>{t("channel.imap.sample.before")}</FieldRoot.Label>
+        <Input id={`${fieldId}-before`} invalid={Boolean(errors.before)} type="date" disabled={busy || allDates} aria-describedby={errors.before ? formErrorId : undefined} {...form.register("before", {
         validate: (value, values) => {
           if (values.allDates) return true;
           const span = Date.parse(`${value}T00:00:00Z`) - Date.parse(`${values.since}T00:00:00Z`);
           if (!Number.isFinite(span) || span <= 0) return t("channel.imap.sample.invalidRange");
           return span / 86_400_000 <= 366 || t("channel.imap.sample.rangeTooLong");
         }, onChange: invalidatePreview,
-      })} /></FieldRow>
-      <FieldRow label={t("channel.imap.sample.limit")}><Input type="number" min={1} max={IMAP_SAMPLE_LIMIT} disabled={busy} invalid={Boolean(errors.limit)} aria-describedby={errors.limit ? formErrorId : undefined} {...form.register("limit", {
+      })} />
+      </FieldRoot>
+      <FieldRoot invalid={Boolean(errors.limit)}>
+        <FieldRoot.Label htmlFor={`${fieldId}-limit`}>{t("channel.imap.sample.limit")}</FieldRoot.Label>
+        <Input id={`${fieldId}-limit`} invalid={Boolean(errors.limit)} type="number" min={1} max={IMAP_SAMPLE_LIMIT} disabled={busy} aria-describedby={errors.limit ? formErrorId : undefined} {...form.register("limit", {
         valueAsNumber: true, required: invalidLimit,
         min: { value: 1, message: invalidLimit },
         max: { value: IMAP_SAMPLE_LIMIT, message: invalidLimit },
         validate: (value) => Number.isInteger(value) || invalidLimit,
         onChange: invalidatePreview,
-      })} /></FieldRow>
+      })} />
+      </FieldRoot>
       {formError || operationError ? <Alert id={formErrorId} className="col-span-full" tone="danger">{formError || errorMessage(operationError, t("channel.imap.sample.failed"))}</Alert> : null}
       {outcome ? <Alert
         className="col-span-full"
@@ -144,18 +171,15 @@ function ImportImapSampleDialog(): React.ReactElement | null {
           : t("channel.imap.sample.flagsChanged")}
       </Alert> : null}
       {preview ? <div className="col-span-full min-h-0 space-y-3">
-        <Alert tone="info">{t("channel.imap.sample.count", {
-          loaded: rows.length, total: page?.count,
-          uidvalidity: preview.uidvalidity, upperUid: preview.upperUid,
-        })}</Alert>
+        <Alert tone="info">{t("channel.imap.sample.count", { loaded: rows.length, total: page?.count })}</Alert>
         <ControlBandProvider host={undefined}>
           <RowsListView scope="inherit" rows={rows} columns={columns} selectable emptyContent={t("channel.imap.sample.empty")}
             bulkActions={(selectedIds, clear) => <Button size="sm" variant="primary" disabled={busy || selectedIds.size > IMAP_SAMPLE_LIMIT}
               title={selectedIds.size > IMAP_SAMPLE_LIMIT ? t("channel.imap.sample.selectionTooLarge", { limit: IMAP_SAMPLE_LIMIT }) : undefined}
               onClick={() => void importSelected(selectedIds, clear)}>{importState.fetching ? t("channel.imap.sample.importing") : t("channel.imap.sample.importSelected", { count: selectedIds.size })}</Button>} />
         </ControlBandProvider>
-        {previewFeed.hasNextPage ? <Button type="button" variant="secondary" disabled={busy}
-          onClick={() => void previewFeed.fetchNextPage()}>{previewFeed.isFetching ? t("channel.imap.sample.previewing") : t("channel.imap.sample.loadOlder")}</Button> : null}
+        {previewFeed.hasNextPage ? <Button type="button" variant="secondary" size="sm" disabled={busy}
+          onClick={() => void previewFeed.fetchNextPage()}><Glyph name="chevron-up" />{previewFeed.isFetching ? t("channel.imap.sample.previewing") : t("channel.imap.sample.loadOlder")}</Button> : null}
       </div> : null}
     </DialogForm>;
 }

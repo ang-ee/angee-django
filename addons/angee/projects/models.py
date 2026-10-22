@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from enum import StrEnum
-from typing import Any, cast
+from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -20,28 +20,35 @@ from rebac import (
     generic_target,
     system_context,
     to_object_ref,
+    to_subject_ref,
 )
 from rebac.backends import backend
 from rebac.field_backing import canonical_model
 
-from angee.base.actors import actor_user_id
-from angee.base.fields import FractionalRankField, StateField
-from angee.base.mixins import (
+from angee.actors import actor_user_id
+from angee.changesets import changeset, changeset_model, creation_fingerprint, require_changeset
+from angee.errors import RecordAccessSubjectRefused
+from angee.fields import FractionalRankField, StateField
+from angee.messaging.models import AudienceMember, ThreadedModelMixin
+from angee.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
     AuditMixin,
-    CreationKeyMixin,
-    CreationKeyQuerySet,
+    HierarchyMixin,
+    HierarchyQuerySet,
     HistoryMixin,
     ImmutableFieldsMixin,
     ItemOwnershipMixin,
+    MergeableMixin,
+    MergeableQuerySet,
     OptimisticLockMixin,
     OwnerMixin,
     OwnerQuerySet,
-    RevisionMixin,
+    TrashMixin,
+    TrashQuerySet,
+    candidate_relationships,
 )
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
-from angee.base.refs import RecordRefMixin
-from angee.base.scoping import bind_actor, system_queryset
-from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
 from angee.projects.events import (
     milestone_reached,
@@ -50,7 +57,9 @@ from angee.projects.events import (
     task_promoted,
 )
 from angee.projects.inputs import MilestoneTemplate
+from angee.refs import MergePolicy, RecordRefMixin
 from angee.scheduling.fields import RecurrenceField
+from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
 
 
@@ -62,7 +71,7 @@ class ProjectSetupState(StrEnum):
     COMPLETE = "complete"
 
 
-class ProjectQuerySet(OwnerQuerySet[Any], AngeeQuerySet[Any]):
+class ProjectQuerySet[ProjectT: Project](OwnerQuerySet[ProjectT], AngeeQuerySet[ProjectT]):
     """Project rows with the shared ownership release contract."""
 
     def update(self, **kwargs: Any) -> int:
@@ -79,7 +88,7 @@ class ProjectQuerySet(OwnerQuerySet[Any], AngeeQuerySet[Any]):
             raise ValueError("Project.folder requires both-end authorization through save().")
         return super().bulk_update(objs, fields, *args, **kwargs)
 
-    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
+    def bulk_create(self, objs: Iterable[ProjectT], *args: Any, **kwargs: Any) -> list[ProjectT]:
         """Require target authorization for every new home-folder attachment."""
 
         objs = tuple(objs)
@@ -88,64 +97,77 @@ class ProjectQuerySet(OwnerQuerySet[Any], AngeeQuerySet[Any]):
         return super().bulk_create(objs, *args, **kwargs)
 
 
-class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: ignore[misc]
+_ProjectManagerBase = AngeeManager.from_queryset(ProjectQuerySet)
+
+
+class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
     """Own the idempotent Task-to-Project maturation write."""
 
     def setup_from_task(
-        self, task: Any, *, configuration: Mapping[str, Any], client_creation_key: str,
+        self,
+        task: Any,
+        *,
+        configuration: Mapping[str, Any],
+        idempotency_key: str,
         expected_revision: int | None = None,
-    ) -> Any:
+    ) -> ProjectT:
         """Apply all setup acts atomically; replay never overwrites subsequent edits.
 
-        Receipts belong to the actor, task and client key, independently of
-        ordinary Project inserts. Existing partial projects can be completed;
-        failed invocations leave neither partial acts nor a receipt.
+        The ambient changeset owns replay independently of ordinary Project
+        inserts. Existing partial projects can be completed; failed invocations
+        leave neither partial acts nor an idempotency claim.
         """
 
         actor, bypass = task.effective_actor(strict=True)
         actor_id = actor_user_id(actor)
         if actor_id is None:
-            raise ValidationError({"client_creation_key": "Setup requires a user actor."})
-        receipt_model = apps.get_model("projects", "ProjectSetupReceipt")
-        fingerprint = receipt_model.creation_fingerprint_for(configuration)
-        with transaction.atomic():
-            locked = system_queryset(type(task), lock=("self",)).get(pk=task.pk)
-            bind_actor(locked, actor)
+            raise ValidationError({"idempotency_key": "Setup requires a user actor."})
+        fingerprint = creation_fingerprint(configuration)
+        with changeset(fresh=True), transaction.atomic():
+            locked = type(task).system_queryset(lock=("self",)).get(pk=task.pk)
+            if actor is not None:
+                locked.with_actor(actor)
             if not bypass and not locked.has_access("write"):
                 raise PermissionDenied("Task write access is required for project setup.")
-            project = system_queryset(self.model, lock=("self",)).filter(converted_from=locked).first()
+            project = self.model.system_queryset(lock=("self",)).filter(converted_from=locked).first()
             if project is not None:
-                bind_actor(project, actor)
+                if actor is not None:
+                    project.with_actor(actor)
                 if not bypass and not project.has_access("write"):
                     raise PermissionDenied("Project write access is required for setup.")
 
-            def insert() -> Any:
-                if expected_revision is not None:
-                    locked.require_revision(expected_revision)
-                target = project if project is not None else self.from_task(locked)
-                target.apply_setup(**configuration)
-                return receipt_model.objects.create(
-                    actor_id=actor_id, task=locked, project=target,
-                    client_creation_key=client_creation_key, creation_fingerprint=fingerprint,
-                )
-
-            receipt, _created = receipt_model.objects.replay_or_insert(
-                (actor_id, locked.pk), client_creation_key, fingerprint, insert,
+            replay = changeset_model().objects.claim(
+                f"projects.setup:{actor_id}:{locked.pk}",
+                idempotency_key,
+                fingerprint=fingerprint,
             )
-            result = receipt.project
-            bind_actor(result, actor)
-            if not bypass and not result.has_access("write"):
-                raise PermissionDenied("Project write access is required for setup replay.")
+            if replay is not None:
+                result = replay.created_row
+                if not isinstance(result, self.model):
+                    raise ValidationError({"idempotency_key": "The claimed setup result is unavailable."})
+                if actor is not None:
+                    result.with_actor(actor)
+                if not bypass and not result.has_access("write"):
+                    raise PermissionDenied("Project write access is required for setup replay.")
+                return result
+
+            if expected_revision is not None:
+                locked.require_revision(expected_revision)
+            result = project if project is not None else self.from_task(locked)
+            result.apply_setup(**configuration)
+            require_changeset().record_created(result)
+            if actor is not None:
+                result.with_actor(actor)
             return result
 
-    def from_task(self, task: Any, *, expected_revision: int | None = None) -> models.Model:
+    def from_task(self, task: Task, *, expected_revision: int | None = None) -> ProjectT:
         """Return the one project promoted from ``task``, creating it if needed."""
 
         if task.pk is None:
             raise ValidationError("A task must be saved before it can be promoted.")
         actor, bypass = task.effective_actor(strict=True)
         with transaction.atomic():
-            locked_task = system_queryset(type(task), lock=("self",)).get(pk=task.pk)
+            locked_task = type(task).system_queryset(lock=("self",)).get(pk=task.pk)
             if not bypass and not locked_task.with_actor(actor).has_access("write"):
                 raise PermissionDenied("Write access to the task is required to promote it.")
             if expected_revision is not None:
@@ -153,10 +175,8 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
             with system_context(reason="projects.project.promote_from_task.lookup"):
                 existing = self.filter(converted_from_id=task.pk).first()
             if existing is not None:
-                bind_actor(existing, actor)
-                return existing
+                return existing.with_actor(actor) if actor is not None else existing
 
-            verified_actor = self.check_create()
             project = self.model(
                 title=locked_task.title,
                 body=locked_task.note,
@@ -164,42 +184,34 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
                 converted_from_id=locked_task.pk,
             )
             project.full_clean(validate_unique=False, validate_constraints=False)
-            project.sudo(reason="projects.project.promote_from_task")
             try:
                 with transaction.atomic():
-                    project.save()
+                    if actor is None:
+                        project.sudo(reason="projects.project.promote_from_task").save()
+                    else:
+                        project = self.with_actor(actor).insert(project)
             except IntegrityError:
                 with system_context(reason="projects.project.promote_from_task.concurrent_lookup"):
                     project = self.get(converted_from_id=task.pk)
             else:
+                project.unsudo()
                 locked_task.sudo(reason="projects.task.promoted").save_without_historical_record(
                     update_fields=("revision",),
                 )
-                bind_actor(locked_task.unsudo(), actor)
-                bind_actor(project.unsudo(), verified_actor)
+                locked_task.unsudo()
+                if actor is not None:
+                    locked_task.with_actor(actor)
                 task_promoted.send(sender=type(locked_task), task=locked_task, project=project)
             task.refresh_from_db()
-            bind_actor(project, verified_actor)
-            return project
+            return project.with_actor(actor) if actor is not None else project
 
 
-class ProjectSetupReceipt(CreationKeyMixin, models.Model):
-    """Internal receipt for one actor/task/key; only the setup owner writes it."""
+class TaskVisibilityQuerySet[TaskT: Task](models.QuerySet[TaskT]):
+    """Keep visibility transitions on the authorized instance verb.
 
-    runtime = True
-    creation_key_scope = ("actor", "task")
-    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
-    task = models.ForeignKey("projects.Task", on_delete=models.CASCADE, related_name="+")
-    project = models.ForeignKey("projects.Project", on_delete=models.CASCADE, related_name="+")
-    objects = models.Manager.from_queryset(CreationKeyQuerySet)()
-
-    class Meta:
-        abstract = True
-        constraints = (CreationKeyMixin.creation_key_constraint(scope=("actor", "task")),)
-
-
-class TaskQuerySet(CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[Any]):
-    """Task rows with shared creation replay and ownership release contracts."""
+    A guard on ``update`` sits after ``HierarchyQuerySet`` in the task queryset so
+    the hierarchy's own path rewrites pass through it (``angee.E021``).
+    """
 
     def update(self, **kwargs: Any) -> int:
         """Keep visibility transitions on the authorized instance verb."""
@@ -215,19 +227,51 @@ class TaskQuerySet(CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[A
             raise ValueError("Task.visibility requires set_visibility().")
         return super().bulk_update(objs, fields, *args, **kwargs)
 
-    def priority_rank_expression(self) -> models.Case:
-        """Order urgency by the priority field's declared enum order."""
 
-        priorities = self.model._meta.get_field("priority").choices_enum
-        return models.Case(
-            *(models.When(priority=priority, then=models.Value(rank)) for rank, priority in enumerate(priorities)),
-            output_field=models.IntegerField(),
+class TaskQuerySet[TaskT: Task](
+    HierarchyQuerySet[TaskT],
+    TaskVisibilityQuerySet[TaskT],
+    MergeableQuerySet[TaskT],
+    TrashQuerySet[TaskT],
+    OwnerQuerySet[TaskT],
+    AngeeQuerySet[TaskT],
+):
+    """Task rows with hierarchy, merge, trash, and ownership contracts."""
+
+    def waiting_on(self, actor: Any) -> Self:
+        """Open, untrashed tasks assigned to this actor, within the caller's scope."""
+
+        identity = actor_user_id(to_subject_ref(actor)) if actor is not None else None
+        return (
+            self.none()
+            if identity is None
+            else self.untrashed().filter(
+                status=self.model.TaskStatus.OPEN,
+                assignee_id=identity,
+            )
         )
 
-    def promoted_phase_expression(self) -> models.Expression:
+    def for_record(self, record: Any, *, include_done: bool = True) -> Self:
+        """Return ``record``'s tasks this queryset reads: open first, then by due date and title.
+
+        The task schema answers who reads them through its declared subject.
+        """
+
+        self.model.validate_target(record)
+        tasks = self.filter(**generic_target(record).lookups(self.model, "subject"))
+        if not include_done:
+            tasks = tasks.filter(status=self.model.TaskStatus.OPEN)
+        closed = models.Case(
+            models.When(status=self.model.TaskStatus.OPEN, then=models.Value(0)),
+            default=models.Value(1),
+            output_field=models.IntegerField(),
+        )
+        return tasks.order_by(closed, F("due_date").asc(nulls_last=True), "title", "sqid")
+
+    def promoted_phase_expression(self) -> models.expressions.BaseExpression:
         """Project only the phase name admitted by the task's narrow permission."""
 
-        tasks = cast(TaskQuerySet, self.with_action("read_promoted_phase"))
+        tasks = self.with_action("read_promoted_phase")
         return (
             tasks.filter(pk=models.OuterRef("pk"))
             .order_by()
@@ -237,45 +281,85 @@ class TaskQuerySet(CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[A
         )
 
 
-class TaskManager(AngeeManager.from_queryset(TaskQuerySet)):  # type: ignore[misc]
-    """Own idempotent task promotion from a ThreadActivity."""
+_TaskManagerBase = AngeeManager.from_queryset(TaskQuerySet)
 
-    def from_activity(self, activity: models.Model) -> models.Model:
-        """Return the one task promoted from ``activity``, creating it if needed."""
 
-        if activity.pk is None:
-            raise ValidationError("An activity must be saved before it can be promoted.")
-        actor = current_actor()
+class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
+    """Own record tasks: tasks whose subject is a declared record.
+
+    permissions.zed derives a record task's access from its record, so these
+    verbs write under the actor and the task schema refuses a record the actor
+    cannot write.
+    """
+
+    def schedule(
+        self,
+        record: Any,
+        *,
+        title: str,
+        assignee: Any = None,
+        due_date: Any = None,
+        note: str = "",
+        activity_type: str | None = None,
+    ) -> TaskT:
+        """Create an open record task, assigned to ``assignee`` or the actor and due today by default."""
+
+        self.model.validate_target(record)
+        if isinstance(record, self.model) and record.subject_object_id is not None:
+            # Its access is its record's: a task about it would answer to nobody's.
+            raise ValidationError("A record task takes no record tasks of its own.")
+        title = strip_null_bytes(title or "").strip()
+        if not title:
+            raise ValidationError({"title": "A record task needs a title."})
+        assignee_id = getattr(assignee, "pk", assignee) or actor_user_id(current_actor())
+        if assignee_id is None:
+            raise ValidationError({"assignee": "A record task needs an assignee."})
+        kinds = self.model.activity_type.field.related_model
         with transaction.atomic():
-            with system_context(reason="projects.task.promote_from_activity.lookup"):
-                locked_activity = type(activity).objects.lock_if_supported().get(pk=activity.pk)
-                existing = self.filter(converted_from_activity_id=activity.pk).first()
-            if existing is not None:
-                bind_actor(existing, actor)
-                return existing
-
-            verified_actor = self.check_create()
             task = self.model(
-                title=locked_activity.summary,
-                note=locked_activity.note,
-                assignee_id=locked_activity.user_id,
-                due_date=locked_activity.due_date,
-                converted_from_activity_id=locked_activity.pk,
+                title=title,
+                note=strip_null_bytes(note or ""),
+                assignee_id=assignee_id,
+                due_date=due_date or timezone.localdate(),
+                **generic_target(record).lookups(self.model, "subject"),
+                activity_type_id=strip_null_bytes(activity_type or kinds.DEFAULT_KEY),
             )
             task.allocate_ordering_ranks()
             task.full_clean(validate_unique=False, validate_constraints=False)
-            task.sudo(reason="projects.task.promote_from_activity")
-            try:
-                with transaction.atomic():
-                    task.save()
-            except IntegrityError:
-                with system_context(reason="projects.task.promote_from_activity.concurrent_lookup"):
-                    task = self.get(converted_from_activity_id=activity.pk)
-            bind_actor(task, verified_actor)
-            return task
+            task.save()
+        return task
+
+    def log(self, record: Any, *, activity_type: str, occurred_on: Any, note: str) -> TaskT:
+        """Record one exchange about ``record`` that already happened, as a done task of its type.
+
+        The note's first line is the title; completing the task posts the rest on
+        the record's chatter.
+        """
+
+        note = strip_null_bytes(note or "")
+        first_line, _newline, rest = note.strip().partition("\n")
+        title = first_line.strip()
+        if not title:
+            raise ValidationError({"note": "A logged exchange needs a nonempty first line."})
+        if occurred_on is None:
+            raise ValidationError({"due_date": "The day the exchange happened is required."})
+        length = self.model.title.field.max_length
+        assert length is not None
+        if len(title) > length:
+            title, rest = title[: length - 1] + "…", note
+        with transaction.atomic():
+            task = self.schedule(
+                record,
+                title=title,
+                note=note,
+                due_date=occurred_on,
+                activity_type=activity_type,
+            )
+            task.complete(feedback=rest.strip())
+        return task
 
 
-class LinkManager(AngeeManager):
+class LinkManager[LinkT: Link](AngeeManager[LinkT]):
     """Own URL-keyed upserts on live project and task targets.
 
     permissions.zed backs the link's project and task relations with
@@ -284,7 +368,7 @@ class LinkManager(AngeeManager):
     :func:`rebac.generic_target` and written under the actor.
     """
 
-    def create(self, **kwargs: Any) -> models.Model:
+    def create(self, **kwargs: Any) -> LinkT:
         """Create through the URL-keyed upsert contract."""
 
         try:
@@ -302,7 +386,7 @@ class LinkManager(AngeeManager):
         title: str = "",
         metadata: Mapping[str, Any] | None = None,
         **fields: Any,
-    ) -> models.Model:
+    ) -> LinkT:
         """Create or update one link per canonical target and URL.
 
         The link's create requires write on the target through the relation
@@ -324,8 +408,7 @@ class LinkManager(AngeeManager):
         return link
 
 
-
-class ProjectBindingManager(AngeeManager):
+class ProjectBindingManager[BindingT: ProjectBinding](AngeeManager[BindingT]):
     """Own project-container bindings; ``permissions.zed`` authorizes both ends."""
 
     def validate_target(self, target: models.Model) -> None:
@@ -337,7 +420,7 @@ class ProjectBindingManager(AngeeManager):
         ):
             raise ValidationError({"target": "Project bindings reach an integration only through its channel."})
 
-    def bind(self, *, project: models.Model, target: models.Model) -> models.Model:
+    def bind(self, *, project: models.Model, target: models.Model) -> BindingT:
         """Idempotently persist one canonical binding under the actor.
 
         The binding's ``create`` requires share on the project and the resource
@@ -365,14 +448,13 @@ class Project(
     OptimisticLockMixin,
     ThreadedModelMixin,
     HistoryMixin,
-    RevisionMixin,
     AngeeDataModel,
 ):
     """A bounded endeavor whose access is owned by direct ReBAC grants."""
 
     runtime = True
     sqid_prefix = "prj_"
-    revisioned_fields = ("title", "body")
+    history_relations = ("milestones",)
     rebac_grantable = {"reader": "share", "editor": "share"}
 
     class ProjectStatus(models.TextChoices):
@@ -450,12 +532,15 @@ class Project(
         abstract = True
         ordering = ("status", "target_date", "title", "sqid")
         rebac_resource_type = "projects/project"
-        constraints = (
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.UniqueConstraint(
                 fields=("converted_from",),
                 name="uq_projects_project_converted_from",
             ),
         )
+
+    # Promotion lineage stays on the original retained identity.
+    merge_policies = {"converted_from": MergePolicy.KEEP}
 
     def __str__(self) -> str:
         """Return the project title."""
@@ -469,7 +554,10 @@ class Project(
         return self.status == self.ProjectStatus.OPEN
 
     def apply_setup(
-        self, *, milestones: list[dict[str, Any]] | None = None, vault_template: Any = None,
+        self,
+        *,
+        milestones: list[dict[str, Any]] | None = None,
+        vault_template: Any = None,
     ) -> None:
         """Terminal cooperative hook; contributors consume their own named inputs.
 
@@ -493,6 +581,7 @@ class Project(
             if matches:
                 milestone.complete_setup_template(item)
             first = first or milestone
+        assert first is not None  # The validated template contains at least one milestone.
         if self.current_milestone_id is None:
             self.set_current_milestone(first)
         binding_model = apps.get_model("projects", "ProjectBinding")
@@ -502,7 +591,9 @@ class Project(
             if vault_template is None:
                 raise ValidationError({"vault_template": "Choose a vault template."})
             vault = vault_model.objects.create_from(
-                vault_template, name=self.title, client_creation_key=f"project:{self.pk}",
+                vault_template,
+                name=self.title,
+                idempotency_key=f"project:{self.pk}",
             )
             binding_model.objects.bind(project=self, target=vault)
 
@@ -513,31 +604,49 @@ class Project(
         milestones = apps.get_model("projects", "Milestone").objects.with_actor(actor).scoped()
         bindings = apps.get_model("projects", "ProjectBinding").objects.with_actor(actor).scoped()
         return Q(models.Exists(milestones.filter(pk=models.OuterRef("current_milestone_id")))) & Q(
-            models.Exists(bindings.filter(
-                project_id=models.OuterRef("pk"), content_type__app_label="knowledge", content_type__model="vault",
-            )),
+            models.Exists(
+                bindings.filter(
+                    project_id=models.OuterRef("pk"),
+                    content_type__app_label="knowledge",
+                    content_type__model="vault",
+                )
+            ),
         )
 
     @classmethod
-    def setup_state_expression(cls, actor: Any) -> models.Expression:
+    def setup_state_expression(cls, actor: Any) -> models.expressions.BaseExpression:
         """Annotate persisted setup readiness without per-row queries."""
 
         if actor is None:
             return models.Value(ProjectSetupState.PARTIAL.value)
         return models.Case(
             models.When(cls.setup_complete_condition(actor), then=models.Value(ProjectSetupState.COMPLETE.value)),
-            default=models.Value(ProjectSetupState.PARTIAL.value), output_field=models.CharField(),
+            default=models.Value(ProjectSetupState.PARTIAL.value),
+            output_field=models.CharField(),
         )
 
     @classmethod
-    def overdue_milestone_count_expression(cls, actor: Any, *, milestone_name: str | None = None) -> models.Expression:
+    def overdue_milestone_count_expression(
+        cls,
+        actor: Any,
+        *,
+        milestone_name: str | None = None,
+    ) -> models.expressions.BaseExpression:
         """Count the named unfinished phase, or the current phase when omitted."""
 
-        milestones = apps.get_model("projects", "Milestone").objects.overdue().filter(
-            project_id=models.OuterRef("pk"),
+        milestones = (
+            apps.get_model("projects", "Milestone")
+            .objects.overdue()
+            .filter(
+                project_id=models.OuterRef("pk"),
+            )
         )
-        milestones = milestones.filter(name=milestone_name) if milestone_name is not None else milestones.filter(
-            pk=models.OuterRef("current_milestone_id"),
+        milestones = (
+            milestones.filter(name=milestone_name)
+            if milestone_name is not None
+            else milestones.filter(
+                pk=models.OuterRef("current_milestone_id"),
+            )
         )
         return milestones.readable_count_subquery(actor=actor)
 
@@ -566,29 +675,29 @@ class Project(
     def pause(self, *, expected_revision: int | None = None) -> Project:
         """Pause this project, idempotently."""
 
-        return self._set_status(str(self.ProjectStatus.PAUSED), expected_revision=expected_revision)
+        return self._set_status(self.ProjectStatus.PAUSED, expected_revision=expected_revision)
 
     def resume(self, *, expected_revision: int | None = None) -> Project:
         """Return this project to open work, idempotently."""
 
-        return self._set_status(str(self.ProjectStatus.OPEN), expected_revision=expected_revision)
+        return self._set_status(self.ProjectStatus.OPEN, expected_revision=expected_revision)
 
     def complete(self, *, expected_revision: int | None = None) -> Project:
         """Complete this project, idempotently."""
 
-        return self._set_status(str(self.ProjectStatus.DONE), expected_revision=expected_revision)
+        return self._set_status(self.ProjectStatus.DONE, expected_revision=expected_revision)
 
     def drop(self, *, expected_revision: int | None = None) -> Project:
         """Drop this project, idempotently."""
 
-        return self._set_status(str(self.ProjectStatus.DROPPED), expected_revision=expected_revision)
+        return self._set_status(self.ProjectStatus.DROPPED, expected_revision=expected_revision)
 
-    def _set_status(self, status: str, *, expected_revision: int | None = None) -> Project:
+    def _set_status(self, status: ProjectStatus, *, expected_revision: int | None = None) -> Project:
         """Persist and announce one authorized lifecycle change in one transaction."""
 
         actor, bypass = self.effective_actor(strict=True)
         with transaction.atomic():
-            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
             if not bypass and not locked.with_actor(actor).has_access("write"):
                 raise PermissionDenied("Write access to the project is required to change its status.")
             if expected_revision is not None:
@@ -600,7 +709,9 @@ class Project(
                 locked.sudo(reason="projects.project.set_status").save(
                     update_fields=("status", "status_changed_at", "updated_at"),
                 )
-                bind_actor(locked.unsudo(), actor)
+                locked.unsudo()
+                if actor is not None:
+                    locked.with_actor(actor)
                 project_status_changed.send(
                     sender=type(locked),
                     project=locked,
@@ -610,14 +721,14 @@ class Project(
             self.refresh_from_db()
         return self
 
-    def selectable_milestones(self) -> models.QuerySet[Any]:
+    def selectable_milestones(self) -> MilestoneQuerySet[Milestone]:
         """Return this project's phase choices; contributors may narrow eligibility."""
 
         return self.milestones.all()
 
     def set_current_milestone(
         self,
-        milestone: models.Model,
+        milestone: Milestone,
         *,
         expected_revision: int | None = None,
     ) -> Project:
@@ -625,7 +736,7 @@ class Project(
 
         actor, bypass = self.effective_actor(strict=True)
         with transaction.atomic():
-            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
             if not bypass and not locked.with_actor(actor).has_access("write"):
                 raise PermissionDenied("Write access to the project is required to select its phase.")
             if expected_revision is not None:
@@ -641,12 +752,18 @@ class Project(
                 )
                 if locked.status == self.ProjectStatus.DONE:
                     if not bypass:
-                        bind_actor(locked, actor)
-                    locked._set_status(str(self.ProjectStatus.OPEN))
-                bind_actor(locked.unsudo(), actor)
+                        locked.with_actor(actor)
+                    locked._set_status(self.ProjectStatus.OPEN)
+                locked.unsudo()
+                if actor is not None:
+                    locked.with_actor(actor)
                 if previous is not None:
-                    bind_actor(previous.unsudo(), actor)
-                bind_actor(milestone.unsudo(), actor)
+                    previous.unsudo()
+                    if actor is not None:
+                        previous.with_actor(actor)
+                milestone.unsudo()
+                if actor is not None:
+                    milestone.with_actor(actor)
                 project_phase_changed.send(
                     sender=type(locked),
                     project=locked,
@@ -657,24 +774,30 @@ class Project(
         return self
 
 
-class MilestoneQuerySet(CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
-    """Milestone rows with the shared creation replay contract."""
+class MilestoneQuerySet[MilestoneT: Milestone](AngeeQuerySet[MilestoneT]):
+    """Milestone rows with project scheduling helpers."""
 
-    def overdue(self) -> Any:
+    def overdue(self) -> Self:
         """Unfinished milestones past their target on open projects."""
 
         return self.filter(target_date__lt=timezone.localdate(), reached_at__isnull=True, project__status="open")
 
 
-class Milestone(CreationKeyMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
+_MilestoneManagerBase = AngeeManager.from_queryset(MilestoneQuerySet)
+
+
+class _MilestoneManager[MilestoneT: Milestone](_MilestoneManagerBase[MilestoneT]):
+    """Preserve the native milestone scheduling queryset on manager reads."""
+
+
+class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
     """A named marker reached within one project."""
 
     runtime = True
     sqid_prefix = "mls_"
     immutable_fields = ("reached_at", "reached_by_id")
-    creation_key_scope = "project"
 
-    objects = AngeeManager.from_queryset(MilestoneQuerySet)()
+    objects = _MilestoneManager()
 
     @classmethod
     def setup_template_values(cls, values: Mapping[str, Any]) -> dict[str, Any]:
@@ -719,8 +842,7 @@ class Milestone(CreationKeyMixin, OptimisticLockMixin, ImmutableFieldsMixin, Aud
         abstract = True
         ordering = ("project", "sort_order", "sqid")
         rebac_resource_type = "projects/milestone"
-        constraints = (
-            CreationKeyMixin.creation_key_constraint(scope="project"),
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.CheckConstraint(
                 condition=Q(start_date__isnull=True)
                 | Q(target_date__isnull=True)
@@ -750,7 +872,7 @@ class Milestone(CreationKeyMixin, OptimisticLockMixin, ImmutableFieldsMixin, Aud
 
         actor, bypass = self.effective_actor(strict=True)
         with transaction.atomic():
-            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
             if not bypass and not locked.with_actor(actor).has_access("reach"):
                 raise PermissionDenied("Reach access to the milestone is required.")
             if expected_revision is not None:
@@ -762,7 +884,9 @@ class Milestone(CreationKeyMixin, OptimisticLockMixin, ImmutableFieldsMixin, Aud
                 locked.sudo(reason="projects.milestone.mark_reached").save(
                     update_fields=("reached_at", "reached_by", "updated_at"),
                 )
-                bind_actor(locked.unsudo(), actor)
+                locked.unsudo()
+                if actor is not None:
+                    locked.with_actor(actor)
                 milestone_reached.send(sender=type(locked), milestone=locked)
             self.refresh_from_db()
         return self
@@ -778,9 +902,42 @@ class Milestone(CreationKeyMixin, OptimisticLockMixin, ImmutableFieldsMixin, Aud
             raise ValidationError("A reached milestone cannot be deleted.")
 
 
+class ActivityType(AuditMixin, AngeeDataModel):
+    """Resource-declared kinds of record task; tasks keep the stable key."""
+
+    DEFAULT_KEY: ClassVar[str] = "todo"
+    """The plain to-do projects seeds: a record task's kind when none is named."""
+
+    runtime = True
+    sqid_prefix = "act_"
+    key = models.SlugField(max_length=64, unique=True)
+    name = models.CharField(max_length=160)
+    glyph = models.CharField(max_length=128, blank=True, default="")
+
+    class Meta:
+        abstract = True
+        ordering = ("name", "key")
+        rebac_resource_type = "projects/activity_type"
+
+    def __str__(self) -> str:
+        return self.name
+
+    @classmethod
+    def completion_line(cls, key: str | None, title: str) -> str:
+        """Return the record chatter line announcing a done record task of kind ``key``."""
+
+        if key in (None, cls.DEFAULT_KEY):
+            return f"Done: {title}"
+        kind = cls._base_manager.filter(key=key).only("name").first()
+        return f"{kind.name if kind is not None else key} done: {title}"
+
+
 class Task(
+    HierarchyMixin,
+    MergeableMixin,
+    TrashMixin,
+    RecordRefMixin,
     TaggedModel,
-    CreationKeyMixin,
     ImmutableFieldsMixin,
     OwnerMixin,
     OptimisticLockMixin,
@@ -792,10 +949,13 @@ class Task(
 
     runtime = True
     sqid_prefix = "tsk_"
-    thread_tracking_fields = ("status", "assignee", "due_date", "priority", "visibility")
+    MERGED_PERMISSION = "write"
+    retains_merged = True
+    merge_policy = MergePolicy.MOVE
+    on_target_delete = models.CASCADE
     thread_post_access = "comment"
     owner_container = "project"
-    immutable_fields = ("visibility",)
+    immutable_fields: ClassVar[tuple[str, ...]] = ("visibility",)
     rebac_grantable = {"reader": "share", "editor": "share"}
 
     class TaskVisibility(models.TextChoices):
@@ -815,8 +975,11 @@ class Task(
     def visibility_audience_label(self) -> str:
         """Describe the task's declared read audience for its current visibility."""
 
-        return ("Project readers and task participants" if self.visibility == self.TaskVisibility.INHERITED
-                else "Task participants")
+        return (
+            "Project readers and task participants"
+            if self.visibility == self.TaskVisibility.INHERITED
+            else "Task participants"
+        )
 
     class TaskStatus(models.TextChoices):
         """Coarse task lifecycle states."""
@@ -855,13 +1018,6 @@ class Task(
         on_delete=models.SET_NULL,
         related_name="tasks",
     )
-    parent = models.ForeignKey(
-        "self",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="subtasks",
-    )
     title = models.CharField(max_length=240)
     note = models.TextField(blank=True, default="")
     status = StateField(choices_enum=TaskStatus, default=TaskStatus.OPEN)
@@ -891,12 +1047,23 @@ class Task(
     sub_sort_order = FractionalRankField()
     done_at = models.DateTimeField(null=True, blank=True, db_index=True)
     dropped_at = models.DateTimeField(null=True, blank=True, db_index=True)
-    converted_from_activity = models.ForeignKey(
-        "messaging.ThreadActivity",
+    subject_content_type = models.ForeignKey(
+        ContentType,
         null=True,
         blank=True,
-        on_delete=models.SET_NULL,
-        related_name="promoted_tasks",
+        on_delete=models.PROTECT,
+        related_name="+",
+    )
+    subject_object_id = models.PositiveBigIntegerField(null=True, blank=True)
+    subject = GenericForeignKey("subject_content_type", "subject_object_id")
+    """The record this action is about; independent of its optional conversation."""
+    activity_type = models.ForeignKey(
+        "projects.ActivityType",
+        to_field="key",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="tasks",
     )
     links = GenericRelation(
         "projects.Link",
@@ -914,7 +1081,14 @@ class Task(
         abstract = True
         ordering = ("project", "sort_order", "sub_sort_order", "sqid")
         rebac_resource_type = "projects/task"
-        constraints = (
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
+            models.CheckConstraint(
+                condition=(
+                    Q(subject_content_type__isnull=True, subject_object_id__isnull=True)
+                    | Q(subject_content_type__isnull=False, subject_object_id__isnull=False)
+                ),
+                name="ck_projects_task_subject_pair",
+            ),
             models.UniqueConstraint(
                 fields=("project", "sort_order"),
                 name="uq_projects_task_project_rank",
@@ -925,11 +1099,11 @@ class Task(
                 name="uq_projects_task_parent_sub_rank",
                 nulls_distinct=False,
             ),
-            models.UniqueConstraint(
-                fields=("converted_from_activity",),
-                name="uq_projects_task_converted_activity",
-            ),
-            CreationKeyMixin.creation_key_constraint(),
+        )
+        indexes = (
+            *HierarchyMixin.Meta.indexes,
+            models.Index(fields=("subject_content_type", "subject_object_id", "status", "due_date")),
+            models.Index(fields=("assignee", "status", "due_date")),
         )
 
     def __str__(self) -> str:
@@ -938,7 +1112,19 @@ class Task(
         return self.title
 
     @classmethod
-    def setup_state_expression(cls, actor: Any) -> models.Expression:
+    def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> Any:
+        """Append reparented children through the rank and hierarchy owners."""
+
+        if reference.name != "parent":
+            return NotImplemented
+        list(cls.system_queryset(lock=("self",)).using(rows.db).filter(parent=survivor).order_by("pk"))
+        for child in rows.order_by("sub_sort_order", "pk"):
+            child.parent = survivor
+            child.sub_sort_order = None
+            child.save(using=rows.db, update_fields=("parent", "sub_sort_order", "updated_at"))
+
+    @classmethod
+    def setup_state_expression(cls, actor: Any) -> models.expressions.BaseExpression:
         """Read setup state only through a project the task's actor can read."""
 
         if actor is None:
@@ -946,21 +1132,35 @@ class Task(
         project = apps.get_model("projects", "Project")
         rows = project.objects.with_actor(actor).scoped().filter(converted_from_id=models.OuterRef("pk"))
         return rows.annotate(_setup=project.setup_state_expression(actor)).readable_scalar_subquery(
-            "_setup", actor=actor, default=ProjectSetupState.NOT_SET_UP.value, output_field=models.CharField(),
+            "_setup",
+            actor=actor,
+            default=ProjectSetupState.NOT_SET_UP.value,
+            output_field=models.CharField(),
         )
 
     @classmethod
-    def overdue_milestone_count_expression(cls, actor: Any, *, milestone_name: str | None = None) -> models.Expression:
+    def overdue_milestone_count_expression(
+        cls,
+        actor: Any,
+        *,
+        milestone_name: str | None = None,
+    ) -> models.expressions.BaseExpression:
         """Count readable linked/promoted projects with an overdue named/current phase."""
 
         if actor is None:
             return models.Value(0)
         project = apps.get_model("projects", "Project")
-        rows = project.objects.with_actor(actor).scoped().filter(
-            Q(converted_from_id=models.OuterRef("pk")) | Q(pk=models.OuterRef("project_id")),
-        ).alias(
-            _overdue=project.overdue_milestone_count_expression(actor, milestone_name=milestone_name),
-        ).filter(_overdue__gt=0)
+        rows = (
+            project.objects.with_actor(actor)
+            .scoped()
+            .filter(
+                Q(converted_from_id=models.OuterRef("pk")) | Q(pk=models.OuterRef("project_id")),
+            )
+            .alias(
+                _overdue=project.overdue_milestone_count_expression(actor, milestone_name=milestone_name),
+            )
+            .filter(_overdue__gt=0)
+        )
         return rows.readable_count_subquery(actor=actor)
 
     def allocate_ordering_ranks(self) -> None:
@@ -970,12 +1170,22 @@ class Task(
             field = cast(FractionalRankField, self._meta.get_field(field_name))
             field.pre_save(self, True)
 
+    @classmethod
+    def priority_rank_expression(cls) -> models.Case:
+        """Order urgency by the priority field's declared enum order."""
+
+        priorities = cls.priority.field.choices_enum
+        return models.Case(
+            *(models.When(priority=priority, then=models.Value(rank)) for rank, priority in enumerate(priorities)),
+            output_field=models.IntegerField(),
+        )
+
     def priority_rank(self) -> int:
         """Use the SQL annotation or the priority field's declared enum order."""
 
         if hasattr(self, "_priority_rank"):
             return self._priority_rank
-        return list(self._meta.get_field("priority").choices_enum).index(self.priority)
+        return list(type(self).priority.field.choices_enum).index(self.priority)
 
     def promoted_phase(self) -> str | None:
         """Use the annotation or fetch the phase through the same scoped expression."""
@@ -998,7 +1208,7 @@ class Task(
 
         super().clean()
         self._normalize_insert_lifecycle()
-        self._validate_structure(lock=False)
+        self._validate_structure()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Authorize project moves and assignment before revalidating task structure."""
@@ -1014,12 +1224,13 @@ class Task(
         previous_project_id, previous_assignee_id = None, None
         if not self._state.adding and (project_is_written or assignee_is_written):
             previous_project_id, previous_assignee_id = (
-                system_queryset(type(self)).filter(pk=self.pk).values_list("project_id", "assignee_id").get()
+                type(self).system_queryset().filter(pk=self.pk).values_list("project_id", "assignee_id").get()
             )
-        if project_is_written and self.project_id is not None:
+        project = self.project
+        if project_is_written and project is not None:
             if self._state.adding or self.project_id != previous_project_id:
                 actor, bypass = self.effective_actor(strict=True)
-                if not bypass and not self.project.with_actor(actor).has_access("write"):
+                if not bypass and not project.with_actor(actor).has_access("write"):
                     raise PermissionDenied("Write access to the project is required to add a task.")
         if assignee_is_written and self.assignee_id is not None:
             if self._state.adding or self.assignee_id != previous_assignee_id:
@@ -1035,7 +1246,7 @@ class Task(
         structure_fields = {"project", "project_id", "milestone", "milestone_id", "parent", "parent_id"}
         if self._state.adding or update_fields is None or structure_fields.intersection(update_fields):
             with transaction.atomic():
-                self._validate_structure(lock=True)
+                self._validate_structure()
                 super().save(*args, **kwargs)
                 # The persisted candidate lets REBAC evaluate every composed share arm.
                 # A refusal rolls the insert and its transactional side effects back.
@@ -1065,18 +1276,29 @@ class Task(
         The verbs and the batched ``task_actions`` projection share these
         conditions, so a control is offered exactly where its verb admits it.
         Contributors extend them through ``super()``; a verb checks them after
-        its idempotent replay, so a blocker never refuses a no-op.
+        its idempotent replay, so a blocker never refuses a no-op. A record task
+        completes or cancels only while open: its record already carries the
+        completion post.
         """
 
+        if action in ("complete", "drop"):
+            closed = Q(subject_object_id__isnull=False) & ~Q(status=cls.TaskStatus.OPEN)
+            return ((closed, {"status": "Reopen this record task first."}),)
         return ()
 
     @classmethod
-    def action_allowed_expression(cls, actor: Any, action: str) -> models.Expression:
-        """Batch the verb's write permission and its blockers for one actor's rows."""
+    def action_permission(cls, action: str) -> str:
+        """The permission admitting a hand verb; contributors own stricter actions."""
+
+        return "write"
+
+    @classmethod
+    def action_allowed_expression(cls, actor: Any, action: str) -> models.expressions.BaseExpression:
+        """Batch the verb's permission and its blockers for one actor's rows."""
 
         if actor is None:
             return models.Value(False)
-        rows = cls.objects.with_actor(actor).with_action("write").scoped_for_aggregate()
+        rows = cls.objects.with_actor(actor).with_action(cls.action_permission(action)).scoped_for_aggregate()
         for condition, _error in cls.action_blockers(action):
             rows = rows.exclude(condition)
         return models.Exists(rows.filter(pk=models.OuterRef("pk")))
@@ -1085,21 +1307,70 @@ class Task(
         """Refuse ``action`` with the first declared blocker the stored row matches."""
 
         for condition, error in self.action_blockers(action):
-            if system_queryset(type(self)).filter(condition, pk=self.pk).exists():
+            if type(self).system_queryset().filter(condition, pk=self.pk).exists():
                 raise ValidationError(error)
 
-    def complete(self) -> Task:
-        """Mark this task done, idempotently preserving its first completion time."""
+    def complete(self, *, feedback: str = "") -> Task:
+        """Mark this task done, idempotently preserving its first completion time.
 
-        if self.status == self.TaskStatus.DONE and self.done_at is not None and self.dropped_at is None:
-            return self
-        self.validate_action("complete")
-        cast(Any, self).status = str(self.TaskStatus.DONE)
-        self.done_at = self.done_at or timezone.now()
-        cast(Any, self).dropped_reason = None
-        self.dropped_at = None
-        self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
+        A record task announces the completion, with ``feedback``, on its record.
+        """
+
+        with transaction.atomic():
+            self._lock_lifecycle()
+            if self.status == self.TaskStatus.DONE and self.done_at is not None and self.dropped_at is None:
+                return self
+            self.validate_action("complete")
+            cast(Any, self).status = str(self.TaskStatus.DONE)
+            self.done_at = self.done_at or timezone.now()
+            cast(Any, self).dropped_reason = None
+            self.dropped_at = None
+            self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
+            self.post_completion(feedback)
         return self
+
+    def _lock_lifecycle(self) -> None:
+        """Hold this row's lock and load its stored lifecycle, so a concurrent verb replays."""
+
+        if self.pk is None:
+            return
+        stored = (
+            type(self)
+            .system_queryset(lock=("self",))
+            .values("status", "done_at", "dropped_at", "dropped_reason")
+            .get(pk=self.pk)
+        )
+        for name, value in stored.items():
+            setattr(self, name, value)
+
+    def post_completion(self, feedback: str = "") -> None:
+        """Announce this record task's completion, with ``feedback``, on its record's chatter.
+
+        Every lifecycle that completes a task calls it once, after the transition;
+        a task about no record posts nothing.
+        """
+
+        if self.subject_object_id is None:
+            return
+        # Structural: whoever completes a record task reads its record.
+        with system_context(reason="projects.task.post_completion"):
+            record = self.subject
+        if not isinstance(record, ThreadedModelMixin):
+            return
+        kinds = type(self).activity_type.field.related_model
+        body = kinds.completion_line(self.activity_type_id, self.title)
+        feedback = strip_null_bytes(feedback or "").strip()
+        record.message_system_post(
+            body=f"{body}\n\n{feedback}" if feedback else body,
+            message_type=apps.get_model("messaging", "Message").MessageKind.NOTIFICATION,
+            subtype_key="activity_done",
+        )
+
+    def _message_after_create(self) -> None:
+        """A record task keeps its conversation on the record, not a thread of its own."""
+
+        if self.subject_object_id is None:
+            super()._message_after_create()
 
     def drop(self, reason: str | TaskDroppedReason) -> Task:
         """Drop this task for ``reason``, idempotently preserving the drop time."""
@@ -1108,35 +1379,39 @@ class Task(
             reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
         except ValueError as error:
             raise ValidationError({"reason": "Choose duplicate, declined, or obsolete."}) from error
-        if self.status == self.TaskStatus.DROPPED and self.dropped_reason == reason_member and self.dropped_at:
-            return self
-        self.validate_action("drop")
-        cast(Any, self).status = str(self.TaskStatus.DROPPED)
-        cast(Any, self).dropped_reason = str(reason_member)
-        self.dropped_at = self.dropped_at or timezone.now()
-        self.done_at = None
-        self.save(update_fields=("status", "dropped_reason", "dropped_at", "done_at", "updated_at"))
+        with transaction.atomic():
+            self._lock_lifecycle()
+            if self.status == self.TaskStatus.DROPPED and self.dropped_reason == reason_member and self.dropped_at:
+                return self
+            self.validate_action("drop")
+            cast(Any, self).status = str(self.TaskStatus.DROPPED)
+            cast(Any, self).dropped_reason = str(reason_member)
+            self.dropped_at = self.dropped_at or timezone.now()
+            self.done_at = None
+            self.save(update_fields=("status", "dropped_reason", "dropped_at", "done_at", "updated_at"))
         return self
 
     def reopen(self) -> Task:
         """Return a done or dropped task to the open state, idempotently."""
 
-        if (
-            self.status == self.TaskStatus.OPEN
-            and self.done_at is None
-            and self.dropped_reason is None
-            and self.dropped_at is None
-        ):
-            return self
-        self.validate_action("reopen")
-        cast(Any, self).status = str(self.TaskStatus.OPEN)
-        self.done_at = None
-        cast(Any, self).dropped_reason = None
-        self.dropped_at = None
-        self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
+        with transaction.atomic():
+            self._lock_lifecycle()
+            if (
+                self.status == self.TaskStatus.OPEN
+                and self.done_at is None
+                and self.dropped_reason is None
+                and self.dropped_at is None
+            ):
+                return self
+            self.validate_action("reopen")
+            cast(Any, self).status = str(self.TaskStatus.OPEN)
+            self.done_at = None
+            cast(Any, self).dropped_reason = None
+            self.dropped_at = None
+            self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
         return self
 
-    def promote_to_project(self, *, expected_revision: int | None = None) -> models.Model:
+    def promote_to_project(self, *, expected_revision: int | None = None) -> Project:
         """Return the one project matured from this task."""
 
         project_model = apps.get_model("projects", "Project")
@@ -1148,12 +1423,12 @@ class Task(
         return "narrow" if value == cls.TaskVisibility.RESTRICTED else "widen"
 
     @classmethod
-    def visibility_blockers(cls, value: str) -> tuple[tuple[models.Q, type[ValidationError]], ...]:
+    def visibility_blockers(cls, value: str) -> tuple[tuple[models.Q, Callable[[], ValidationError]], ...]:
         """Domain constraints shared by the locked verb and choice projections."""
         return ()
 
     @classmethod
-    def visibility_allowed_expression(cls, actor: Any, value: str) -> models.Expression:
+    def visibility_allowed_expression(cls, actor: Any, value: str) -> models.expressions.BaseExpression:
         """Batch permission and domain eligibility without exposing hidden facts."""
         if actor is None:
             return models.Value(False)
@@ -1172,7 +1447,7 @@ class Task(
         actor, bypass = self.effective_actor(strict=True)
         permission = self.visibility_permission(visibility)
         with transaction.atomic():
-            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
             if not bypass and (
                 actor is None
                 or not backend().check_access(subject=actor, action=permission, resource=to_object_ref(locked)).allowed
@@ -1185,7 +1460,8 @@ class Task(
                     locked.validate_visibility(visibility)
                 locked.visibility = visibility
                 locked.allow_immutable_save("visibility")
-                bind_actor(locked, actor)
+                if actor is not None:
+                    locked.with_actor(actor)
                 locked.sudo(reason="projects.task.set_visibility").save(update_fields=("visibility", "updated_at"))
             self.refresh_from_db()
         return self
@@ -1198,15 +1474,37 @@ class Task(
         their audience invariants under the same task lock.
         """
         for condition, error in self.visibility_blockers(value):
-            if system_queryset(type(self)).filter(condition, pk=self.pk).exists():
+            if type(self).system_queryset().filter(condition, pk=self.pk).exists():
                 raise error()
+
+    def validate_record_access_subject(self, relation: str, subject: Any) -> None:
+        """Refuse a record task's account holder who cannot read its record.
+
+        The task schema hides a record task from anyone who cannot read the
+        record, so such an assignee or grantee would hold a task they never see.
+        Group holders are not resolved: members who cannot read the record simply
+        do not see the task. An elevated write (a seed or a migration) assigns
+        within grants it manages itself.
+        """
+
+        super().validate_record_access_subject(relation, subject)
+        reference = to_subject_ref(subject)
+        if self.subject_object_id is None or reference.optional_relation or reference.subject_type != "auth/user":
+            return
+        if self.effective_actor()[1]:
+            return
+        if reference.subject_id == "*":
+            raise RecordAccessSubjectRefused()
+        candidate = candidate_relationships(self, "subject_read")
+        if candidate is None or not candidate.allows(reference, "subject_read"):
+            raise RecordAccessSubjectRefused()
 
     def thread_audience_members(self) -> Iterable[AudienceMember]:
         """Notify the current assignee's existing party without creating a follower."""
 
         yield from super().thread_audience_members()
         if self.assignee_id is not None:
-            person = system_queryset(apps.get_model("parties", "Person")).filter(user_id=self.assignee_id).first()
+            person = apps.get_model("parties", "Person").system_queryset().filter(user_id=self.assignee_id).first()
             if person is not None:
                 yield AudienceMember(party_id=person.pk)
 
@@ -1230,29 +1528,18 @@ class Task(
         if self.done_at is not None or self.dropped_at is not None or self.dropped_reason is not None:
             raise ValidationError({"status": "An open task cannot carry done or dropped state."})
 
-    def _validate_structure(self, *, lock: bool) -> None:
-        """Validate milestone scope and the complete parent chain."""
+    def _validate_structure(self) -> None:
+        """Validate project-owned milestone scope; HierarchyMixin owns ancestry."""
 
         with system_context(reason="projects.task.validate_structure"):
             if self.milestone_id is not None:
-                milestone_model = self._meta.get_field("milestone").related_model
+                milestone_model = type(self).milestone.field.related_model
                 milestone = milestone_model._base_manager.filter(pk=self.milestone_id).first()
                 if milestone is not None and milestone.project_id != self.project_id:
                     raise ValidationError({"milestone": "Milestone must belong to the task's project."})
 
-            ancestor_id = self.parent_id
-            visited: set[Any] = set()
-            while ancestor_id is not None:
-                if ancestor_id == self.pk or ancestor_id in visited:
-                    raise ValidationError({"parent": "Task parents cannot form a cycle."})
-                visited.add(ancestor_id)
-                ancestors = type(self).objects.filter(pk=ancestor_id)
-                if lock:
-                    ancestors = ancestors.lock_if_supported()
-                ancestor_id = ancestors.values_list("parent_id", flat=True).first()
 
-
-class TaskRelation(AuditMixin, AngeeDataModel):
+class TaskRelation(HistoryMixin, AuditMixin, AngeeDataModel):
     """One canonical directed relation between two tasks."""
 
     runtime = True
@@ -1262,14 +1549,11 @@ class TaskRelation(AuditMixin, AngeeDataModel):
         """Canonical task relation kinds."""
 
         BLOCKS = "blocks", "Blocks"
-        DUPLICATE = "duplicate", "Duplicate"
         RELATES = "relates", "Relates"
 
     SYMMETRIC_KINDS = frozenset({TaskRelationKind.RELATES})
     """Kinds whose endpoints have no semantic direction.
 
-    Duplicate edges deliberately keep ``task -> related_task`` direction: the
-    first endpoint is the duplicate and the second is its canonical task.
     """
 
     task = models.ForeignKey(
@@ -1290,7 +1574,7 @@ class TaskRelation(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("task", "related_task", "sqid")
         rebac_resource_type = "projects/task_relation"
-        constraints = (
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.UniqueConstraint(
                 fields=("task", "related_task"),
                 name="uq_projects_task_relation_pair",
@@ -1337,8 +1621,6 @@ class TaskRelation(AuditMixin, AngeeDataModel):
 
         if self.kind == self.TaskRelationKind.BLOCKS:
             return "blocked_by"
-        if self.kind == self.TaskRelationKind.DUPLICATE:
-            return "duplicated_by"
         return str(self.kind)
 
     def __str__(self) -> str:
@@ -1347,7 +1629,7 @@ class TaskRelation(AuditMixin, AngeeDataModel):
         return f"{self.task_id} {self.kind} {self.related_task_id}"
 
 
-class Participant(AuditMixin, AngeeDataModel):
+class Participant(HistoryMixin, AuditMixin, AngeeDataModel):
     """A party's involvement in a project, never an access grant."""
 
     runtime = True
@@ -1378,7 +1660,7 @@ class Participant(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("project", "kind", "sqid")
         rebac_resource_type = "projects/participant"
-        constraints = (
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.UniqueConstraint(
                 fields=("project", "party"),
                 name="uq_projects_participant_project_party",
@@ -1391,7 +1673,7 @@ class Participant(AuditMixin, AngeeDataModel):
         return f"{self.party_id} in {self.project_id}"
 
 
-class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
+class ProjectBinding(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     """One explicit projects-owned statement that a resource belongs to a project.
 
     The resource is stored at :func:`rebac.generic_target`. ``permissions.zed``
@@ -1402,6 +1684,9 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     binding is not moved: the library refuses a retargeting save under an actor.
     """
 
+    history_revert_permission = "delete"
+    merge_policy = MergePolicy.MOVE
+    merge_identity = (("project", "content_type", "object_id"),)
     runtime = True
     sqid_prefix = "pbd_"
 
@@ -1422,7 +1707,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
         abstract = True
         ordering = ("project", "content_type", "object_id", "sqid")
         rebac_resource_type = "projects/project_binding"
-        constraints = (
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.UniqueConstraint(
                 fields=("project", "content_type", "object_id"),
                 name="uq_projects_binding_project_target",
@@ -1456,9 +1741,11 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
         return f"{self.project_id} -> {self.content_type_id}:{self.object_id}"
 
 
-class Link(AuditMixin, RecordRefMixin, AngeeDataModel):
+class Link(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     """A URL-keyed external reference attached to a project or task."""
 
+    merge_policy = MergePolicy.MOVE
+    merge_identity = (("content_type", "object_id", "url"),)
     runtime = True
     sqid_prefix = "plk_"
 
@@ -1477,7 +1764,7 @@ class Link(AuditMixin, RecordRefMixin, AngeeDataModel):
         abstract = True
         ordering = ("-updated_at", "url", "sqid")
         rebac_resource_type = "projects/link"
-        constraints = (
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.UniqueConstraint(
                 fields=("content_type", "object_id", "url"),
                 name="uq_projects_link_target_url",
@@ -1499,23 +1786,6 @@ class Link(AuditMixin, RecordRefMixin, AngeeDataModel):
         return self.title or self.url
 
 
-class ThreadActivityProjects(models.Model):
-    """Contribute Activity-to-Task maturation onto messaging.ThreadActivity."""
-
-    extends = "messaging.ThreadActivity"
-
-    class Meta:
-        """Abstract same-row behavior donor for messaging.ThreadActivity."""
-
-        abstract = True
-
-    def promote_to_task(self) -> models.Model:
-        """Return the one task matured from this thread activity."""
-
-        task_model = apps.get_model("projects", "Task")
-        return task_model.objects.from_activity(self)
-
-
 class ProjectBindingsMixin(models.Model):
     """Projects-owned reverse collection for canonical generic bindings."""
 
@@ -1532,7 +1802,7 @@ class ProjectBindingsMixin(models.Model):
 class FolderProjects(ProjectBindingsMixin):
     """Compose project binding collection onto storage folders."""
 
-    extends = "storage.Folder"
+    extends: ClassVar[str | None] = "storage.Folder"
 
     class Meta:
         abstract = True
@@ -1541,7 +1811,7 @@ class FolderProjects(ProjectBindingsMixin):
 class DriveProjects(ProjectBindingsMixin):
     """Projects-owned reverse collection for storage-drive bindings."""
 
-    extends = "storage.Drive"
+    extends: ClassVar[str | None] = "storage.Drive"
 
     class Meta:
         abstract = True
@@ -1550,7 +1820,7 @@ class DriveProjects(ProjectBindingsMixin):
 class IntegrationProjects(ProjectBindingsMixin):
     """Projects-owned reverse collection for canonical messaging-channel bindings."""
 
-    extends = "integrate.Integration"
+    extends: ClassVar[str | None] = "integrate.Integration"
 
     class Meta:
         abstract = True
@@ -1559,7 +1829,7 @@ class IntegrationProjects(ProjectBindingsMixin):
 class ThreadProjects(ProjectBindingsMixin):
     """Projects-owned reverse collection for messaging-thread bindings."""
 
-    extends = "messaging.Thread"
+    extends: ClassVar[str | None] = "messaging.Thread"
 
     class Meta:
         abstract = True
@@ -1568,7 +1838,7 @@ class ThreadProjects(ProjectBindingsMixin):
 class VaultProjects(ProjectBindingsMixin):
     """Projects-owned reverse collection for knowledge-vault bindings."""
 
-    extends = "knowledge.Vault"
+    extends: ClassVar[str | None] = "knowledge.Vault"
 
     class Meta:
         abstract = True

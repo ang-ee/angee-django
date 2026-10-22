@@ -29,8 +29,6 @@ export interface SearchFacet {
 export interface SearchCatalog {
   /** Executable capabilities behind the choices, when built from a resource query. */
   query?: ResourceQuery;
-  /** A custom item renderer cannot offer grouping, even when the query has axes. */
-  renderItem?: boolean;
   text: readonly { field: string; label: ReactNode }[];
   filters: readonly ResourceToolbarFilterOption[];
   facets: readonly SearchFacet[];

@@ -43,6 +43,8 @@ export interface WidgetOption {
  * Extract the scalar id a relation widget reads and writes. Refine/Hasura detail
  * reads may carry a nested related record (`{ id }`) while write inputs expect
  * the flat public id.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function relationValueId(value: unknown): string {
   if (value == null) return "";
@@ -52,7 +54,10 @@ export function relationValueId(value: unknown): string {
   return typeof id === "string" || typeof id === "number" ? String(id) : "";
 }
 
-/** Normalize related records or scalar ids to de-duplicated, non-empty public ids. */
+/** Normalize related records or scalar ids to de-duplicated, non-empty public ids.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function relationIdList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map(relationValueId))].filter(Boolean);
@@ -61,6 +66,8 @@ export function relationIdList(value: unknown): string[] {
 /**
  * The label for an option value. GraphQL enum member names resolve against
  * authored input values through the same canonical matching rule as selects.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
  */
 export function optionLabel(
   options: readonly WidgetOption[] | undefined,
@@ -80,6 +87,8 @@ export function optionLabel(
  * exactly. The one owner of that rule: `canonicalOptionValue` applies it when an
  * authored option list is available to resolve against, `statusTone` against the
  * status vocabulary, and a caller with neither compares tokens directly.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function optionToken(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -90,6 +99,8 @@ export function optionToken(value: unknown): string {
  * win; a unique case-insensitive match ({@link optionToken}) covers GraphQL enum
  * reads such as `ANTHROPIC` when mutation inputs use the lower-case value
  * `anthropic`.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function canonicalOptionValue(
   options: readonly WidgetOption[] | undefined,
@@ -107,6 +118,10 @@ export function canonicalOptionValue(
   return matches.length === 1 ? matches[0]?.value : undefined;
 }
 
+/**
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export function optionTextLabel(value: ReactNode): string | undefined;
 export function optionTextLabel(value: ReactNode, fallback: string): string;
 export function optionTextLabel(
@@ -132,6 +147,8 @@ export interface FieldPresentation {
    * field (`"currency"`) or a one-hop related path (`"order.currency"`).
    */
   currencyField?: string;
+  /** For a money widget: the row path holding the presentation precision (a company's display places). */
+  fractionDigitsField?: string;
   /** Status widget shape; absent fields use the status widget's pill default. */
   statusDisplay?: StatusDisplay;
 }

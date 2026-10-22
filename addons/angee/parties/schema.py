@@ -1,13 +1,13 @@
 """Strawberry-Django schema contributions for parties.
 
 ``Party`` is the unified contact list (the multi-table-inheritance parent);
-``Person`` and ``Organization`` are the concrete kinds you create and edit. A
-contact is created as a person or an organisation and deleted through the party
-(the parent delete cascades to the child row).
+``Person`` and ``Organization`` are the concrete kinds you create and edit.
+Asserted subjects leave active use through the Party's trash owner.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import StrEnum
 from typing import Any, cast
 
@@ -15,8 +15,12 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import transaction
+from django.db.models import Exists, OuterRef, Prefetch
 from rebac import system_context
+from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
+from strawberry_django.fields.field import StrawberryDjangoField
+from strawberry_django.queryset import run_type_get_queryset
 
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
 from angee.graphql.data import (
@@ -32,21 +36,25 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
+from angee.identity import public_subject_ref
 from angee.integrate.schema import BridgeTypeMixin
-from angee.parties.mixins import LinkSource
+from angee.parties.managers import DisplayAvatarPrefetches
+from angee.parties.models import Party as PartyModel
+from angee.parties.models import RelationshipKind as RelationshipKindModel
+from angee.storage.schema import FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Party = apps.get_model("parties", "Party")
 Person = apps.get_model("parties", "Person")
 Organization = apps.get_model("parties", "Organization")
 Handle = apps.get_model("parties", "Handle")
-PartyHandle = apps.get_model("parties", "PartyHandle")
+PartyStatement = apps.get_model("parties", "PartyStatement")
 Address = apps.get_model("parties", "Address")
 Directory = apps.get_model("parties", "Directory")
 Folder = apps.get_model("parties", "Folder")
 Circle = apps.get_model("parties", "Circle")
 CircleMember = apps.get_model("parties", "CircleMember")
-MergeVeto = apps.get_model("parties", "MergeVeto")
+SameAsStatement = Party.same_as.model.statements.model
 RelationshipKind = apps.get_model("parties", "RelationshipKind")
 strawberry.enum(cast(Any, RelationshipKind.PartyKind))
 Relationship = apps.get_model("parties", "Relationship")
@@ -75,6 +83,23 @@ _ORGANIZATION_EXTENSION_PUBLIC_ID_FIELDS = tuple(
 )
 
 
+def _display_avatar_prefetch(name: str) -> Callable[[strawberry.Info], Prefetch]:
+    """Select the named read :meth:`PartyManager.display_avatar_prefetches` batches for a page.
+
+    Avatars load through the actor's readable files, optimized for the selected
+    ``FileType`` fields.
+    """
+
+    def prefetch(info: strawberry.Info) -> Prefetch:
+        actor = session_user(info)
+        field = cast(StrawberryDjangoField, info._field)
+        files = apps.get_model("storage", "File").objects.with_actor(actor)
+        avatars = optimize(run_type_get_queryset(files, field.django_type, info), info)
+        return cast(Prefetch, getattr(Party.objects.display_avatar_prefetches(actor, avatars=avatars), name))
+
+    return prefetch
+
+
 @strawberry_django.type(Party)
 class PartyType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a party (the unified contact)."""
@@ -84,17 +109,40 @@ class PartyType(AuthoredRefMixin, AngeeNode):
     handle_count: int | None
     first_met_note: str | None
     introduced_by: "PartyType | None" = actor_scoped_to_one("introduced_by")
+    avatar: FileType | None = actor_scoped_to_one("avatar")
     created_at: auto
     updated_at: auto
 
+    @strawberry_django.field(
+        only=["avatar_id"],
+        prefetch_related=[_display_avatar_prefetch(name) for name in DisplayAvatarPrefetches._fields],
+    )
+    def display_avatar(self, info: strawberry.Info) -> FileType | None:
+        """Return the avatar the party shows: its own, else its strongest handle's."""
+
+        return cast(Any, Party.objects.display_avatar(cast(Any, self), actor=session_user(info)))
+
     @strawberry.field
-    def concrete_kind(self) -> RelationshipKind.PartyKind | None:
+    def concrete_kind(parent: strawberry.Parent[PartyModel]) -> RelationshipKindModel.PartyKind | None:
         """Return the native MTI subtype used for canonical Party navigation."""
 
-        return Party.concrete_kind.fget(self)
+        return parent.concrete_kind
 
     handles: list["HandleType"]
-    party_handles: list["PartyHandleType"]
+
+    @strawberry_django.field(
+        only=["id"],
+        prefetch_related=lambda info: Prefetch(
+            "partystatement_set",
+            queryset=Party.objects.handle_statements()
+            .for_reader(session_user(info))
+            .select_related("subject", "handle"),
+            to_attr="_readable_handle_statements",
+        ),
+    )
+    def statements(self, info: strawberry.Info) -> list["PartyStatementType"]:
+        return cast(Any, self)._readable_handle_statements
+
     addresses: list["AddressType"]
     circle_members: list["CircleMemberType"]
     relationships: list["PartyRelationshipType"]
@@ -113,7 +161,6 @@ class PersonType(PartyType):
     nickname: str | None
     birthday: auto
     anniversary: auto
-    folder: "ContactFolderType | None" = actor_scoped_to_one("folder")
 
     @strawberry_django.field(only=["id"])
     def circle_names(self) -> list[str]:
@@ -153,80 +200,84 @@ class HandleType(AngeeNode):
     updated_at: auto
 
     party: PartyType | None = actor_scoped_to_one("party")
+    avatar: FileType | None = actor_scoped_to_one("avatar")
 
-    @strawberry_django.field(only=["owner_id"])
-    def owner(self) -> strawberry.ID | None:
+    @strawberry_django.field(only=["controller_id"])
+    def controller(self) -> strawberry.ID | None:
         """Return the controlling user's public id, when a user has claimed this handle."""
 
-        return optional_public_id(user_public_id(cast(Any, self).owner_id))
+        return optional_public_id(user_public_id(cast(Any, self).controller_id))
 
-    @strawberry_django.field(only=["party_id"], prefetch_related="party_links")
+    @strawberry_django.field(
+        only=["party_id"],
+        annotate={
+            "_resolved_confidence": lambda info: Handle.objects.with_actor(
+                session_user(info)
+            ).resolved_confidence_expression()
+        },
+    )
     def confidence(self) -> float | None:
-        """Confidence of the link that resolved this handle's owner (null if unowned).
-
-        The rule lives on the model; the prefetch keeps it a single query per page.
-        """
-
-        return cast("Any", self).resolved_confidence
+        """Batch the subject-authorized resolution confidence."""
+        return cast(Any, self).resolved_confidence
 
 
 @strawberry.type
-class PartyHandleEvidenceType:
-    """One actor-readable native record supporting a handle association claim."""
+class StatementEvidenceType:
+    """One independently readable origin."""
 
     model: str
     id: strawberry.ID
+    pointer: str
 
 
-@strawberry_django.type(PartyHandle)
-class PartyHandleType(AngeeNode):
-    """GraphQL projection of a confidence-bearing party↔handle link."""
+@strawberry_django.type(PartyStatement)
+class PartyStatementType(AngeeNode):
+    """Subject-authorized handle assertion; the member retains its read gate."""
 
-    @strawberry_django.field(
-        only=["party_id", "handle_id"],
-        annotate={
-            "_readable_party_name": lambda info: PartyHandle.objects.readable_party_name_expression(
-                actor=session_user(info),
-            ),
-            "_readable_handle_value": lambda info: PartyHandle.objects.readable_handle_value_expression(
-                actor=session_user(info),
-            ),
-        },
-    )
-    def display_name(self) -> str:
-        """Return the readable Party and Handle components for this association."""
-
-        label = " — ".join(
-            value
-            for value in (
-                str(getattr(self, "_readable_party_name", "") or "").strip(),
-                str(getattr(self, "_readable_handle_value", "") or "").strip(),
-            )
-            if value
-        )
-        return label or "Contact association"
-
-    party: PartyType | None
-    handle: HandleType | None
+    subject: PartyType | None = actor_scoped_to_one("subject")
+    handle: HandleType | None = actor_scoped_to_one("handle")
     confidence: auto
-    source: auto
-    is_confirmed: auto
-    is_dismissed: auto
+    source_kind: auto
+    rank: auto
+    snak: auto
+    status: auto
+    applied: auto
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["metadata"])
-    def evidence_refs(self, info: strawberry.Info) -> list["PartyHandleEvidenceType"]:
-        """Return at most twenty actor-readable records supporting this claim."""
+    @strawberry_django.field(only=["asserted_by", "source_kind"])
+    def asserted_by(self) -> str:
+        """The asserting principal when the reader may read it; otherwise only its source kind.
 
-        page = cast(Any, self).evidence_page(session_user(info))
-        return [PartyHandleEvidenceType(model=item.model, id=item.id) for item in page.items]
+        A statement read never widens what the party reader sees: the principal
+        resolves through its own read gate, like ``handle`` and ``subject``.
+        """
 
-    @strawberry_django.field(only=["metadata"])
+        row = cast(Any, self)
+        source = row.readable_asserting_source
+        if source is not None:
+            return str(public_subject_ref(source))
+        return str(row.source_kind)
+
+    @strawberry_django.field(only=["rank", "snak"])
+    def is_confirmed(self) -> bool:
+        return bool(cast(Any, self).is_confirmed)
+
+    @strawberry_django.field(only=["rank", "snak"])
+    def is_dismissed(self) -> bool:
+        return bool(cast(Any, self).is_dismissed)
+
+    @strawberry_django.field(only=["subject_id", "evidence"])
+    def evidence(self, info: strawberry.Info) -> list[StatementEvidenceType]:
+        row = cast(Any, self)
+        refs = row.__dict__.get("_readable_evidence")
+        if refs is None:
+            refs = row.readable_evidence(session_user(info))
+        return [StatementEvidenceType(model=ref.model, id=strawberry.ID(ref.id), pointer=ref.pointer) for ref in refs]
+
+    @strawberry_django.field(only=["subject_id", "evidence"])
     def evidence_truncated(self, info: strawberry.Info) -> bool:
-        """Return whether more retained evidence exists beyond the bounded projection."""
-
-        return bool(cast(Any, self).evidence_page(session_user(info)).truncated)
+        return bool(cast(Any, self).evidence_truncated)
 
 
 @strawberry_django.type(Address)
@@ -295,18 +346,18 @@ class CircleMemberType(AngeeNode):
     circle: CircleType | None
     party: PartyType | None
     confidence: auto
-    source: auto
+    is_confirmed: auto
+    is_dismissed: auto
     created_at: auto
 
 
-@strawberry_django.type(MergeVeto)
-class MergeVetoType(AngeeNode):
-    """GraphQL projection of a durable canonical keep-separate pair."""
+@strawberry_django.type(SameAsStatement)
+class SameAsStatementType(AngeeNode):
+    """A symmetric identity statement, admitted and read through its endpoints."""
 
-    party_a: PartyType | None
-    party_b: PartyType | None
-    created_at: auto
-    updated_at: auto
+    snak: auto
+    rank: auto
+    status: auto
 
 
 @strawberry_django.type(RelationshipKind)
@@ -329,7 +380,6 @@ class PartyRelationshipType(AngeeNode):
     other_party: PartyType | None
     other_name: auto
     kind: RelationshipKindType | None
-    source: auto
     title: auto
     started_at: auto
     ended_at: auto
@@ -338,7 +388,7 @@ class PartyRelationshipType(AngeeNode):
 
 
 @strawberry.type
-class DuplicatePartyCandidateType:
+class SameAsPairType:
     """Two actor-visible parties sharing one deterministic normalized handle."""
 
     left: PartyType
@@ -373,12 +423,12 @@ class PartiesReviewQuery:
     """Bounded read surfaces for party search and human review queues."""
 
     @strawberry.field
-    def duplicate_party_candidates(self, limit: int = 50) -> list[DuplicatePartyCandidateType]:
-        """Return canonical party pairs that share a handle and have no merge veto."""
+    def same_as_pairs(self, limit: int = 50) -> list[SameAsPairType]:
+        """Return resolved identity statements awaiting a survivor choice."""
 
         return cast(
-            "list[DuplicatePartyCandidateType]",
-            Party.objects.all().duplicate_candidates(limit=limit),
+            "list[SameAsPairType]",
+            Party.objects.all().same_as_pairs(limit=limit),
         )
 
     @strawberry.field
@@ -434,7 +484,7 @@ class PartiesReviewQuery:
 
 @strawberry.type
 class PartiesIdentityMutation:
-    """Human decisions on party identity claims and duplicate records."""
+    """Human decisions on party statements and same_as pairs."""
 
     @strawberry.mutation
     @action_guard("Could not add this contact.")
@@ -450,45 +500,43 @@ class PartiesIdentityMutation:
 
         actor = session_user(info)
         party = authorized_action_target(info, Party, party_id, "write")
-        link = PartyHandle.objects.propose_manual_contact(
+        statement = Party.objects.propose_manual_contact(
             party,
             platform=platform,
             value=value,
             label=label,
             actor=actor,
         )
-        if link.is_dismissed:
+        if statement.is_dismissed:
             return ActionResult(
                 ok=False,
                 message=("This contact remains dismissed. Confirm it in Identity if it should be restored."),
             )
-        return ActionResult(ok=True, message="Contact is available in Identity for review.", id=link.sqid)
+        return ActionResult(ok=True, message="Contact is available in Identity for review.", id=statement.sqid)
 
     @strawberry.mutation
-    def confirm_party_handle(self, info: strawberry.Info, id: strawberry.ID) -> PartyHandleType:
-        """Confirm a party↔handle link (the review queue's accept)."""
+    def confirm_party_statement(self, info: strawberry.Info, id: strawberry.ID) -> PartyStatementType:
+        """Confirm a handle statement (the review queue's accept)."""
 
         link = require_instance_for_id(
-            PartyHandle,
+            PartyStatement,
             id,
-            queryset=PartyHandle.objects.all(),
-            not_found="party handle link not found",
+            queryset=Party.objects.handle_statements().for_reader(session_user(info)),
+            not_found="party statement not found",
         )
-        link.confirm()
-        return cast(PartyHandleType, link)
+        return cast(PartyStatementType, link.with_actor(session_user(info)).confirm())
 
     @strawberry.mutation
-    def dismiss_party_handle(self, info: strawberry.Info, id: strawberry.ID) -> PartyHandleType:
-        """Dismiss a party↔handle link — the durable anti-link (the review queue's reject)."""
+    def dismiss_party_statement(self, info: strawberry.Info, id: strawberry.ID) -> PartyStatementType:
+        """Dismiss a handle statement — the durable anti-link (the review queue's reject)."""
 
         link = require_instance_for_id(
-            PartyHandle,
+            PartyStatement,
             id,
-            queryset=PartyHandle.objects.all(),
-            not_found="party handle link not found",
+            queryset=Party.objects.handle_statements().for_reader(session_user(info)),
+            not_found="party statement not found",
         )
-        link.dismiss()
-        return cast(PartyHandleType, link)
+        return cast(PartyStatementType, link.with_actor(session_user(info)).dismiss())
 
     @strawberry.mutation
     def merge_parties(
@@ -505,22 +553,18 @@ class PartiesIdentityMutation:
             raise ValueError("party not found")
         return cast(
             PartyType,
-            Party.objects.merge(
-                into=survivor,
-                source=source,
-                field_overrides=field_overrides,
-            ),
+            survivor.merge(records=[source.public_id], field_overrides=field_overrides),
         )
 
     @strawberry.mutation
-    def veto_merge(self, a_id: strawberry.ID, b_id: strawberry.ID) -> MergeVetoType:
+    def dismiss_same_as(self, a_id: strawberry.ID, b_id: strawberry.ID) -> SameAsStatementType:
         """Persist the durable keep-separate decision for two writable parties."""
 
         party_a = Party.objects.all().from_public_id(str(a_id))
         party_b = Party.objects.all().from_public_id(str(b_id))
         if party_a is None or party_b is None:
             raise ValueError("party not found")
-        return cast(MergeVetoType, MergeVeto.objects.veto(party_a, party_b))
+        return cast(SameAsStatementType, Party.same_as.for_pair(party_a, party_b).dismiss(aspect="same_as"))
 
 
 @strawberry.type
@@ -547,11 +591,8 @@ class PartiesDirectoryMutation:
         user = session_user(info)
         credential_model = apps.get_model("integrate", "Credential")
         vendor_model = apps.get_model("integrate", "Vendor")
-        credential_values = {
-            "kind": "basic_auth",
-            "name": f"CardDAV — {name}",
-            "material": {"username": username, "password": password},
-        }
+        credential_name = f"CardDAV — {name}"
+        credential_material = {"username": username, "password": password}
         directory_values = {
             "owner": user,
             "backend_class": "carddav",
@@ -563,12 +604,22 @@ class PartiesDirectoryMutation:
 
         # Complete validation and network discovery before opening the database
         # transaction. Both rows are intentionally unsaved probe inputs.
-        probe_credential = credential_model.objects.prepare_local_credential(user, **credential_values)
+        probe_credential = credential_model.objects.prepare_local_credential(
+            user,
+            kind="basic_auth",
+            name=credential_name,
+            material=credential_material,
+        )
         Directory(credential=probe_credential, **directory_values).backend.probe()
 
         # Persist every owned row in one write-only transaction after the probe.
         with system_context(reason="parties.graphql.connect_carddav"), transaction.atomic():
-            credential = credential_model.objects.create_local_credential(user, **credential_values)
+            credential = credential_model.objects.create_local_credential(
+                user,
+                kind="basic_auth",
+                name=credential_name,
+                material=credential_material,
+            )
             vendor, _created = vendor_model.objects.get_or_create(slug="carddav", defaults={"display_name": "CardDAV"})
             directory = Directory.objects.create(
                 vendor=vendor,
@@ -576,14 +627,15 @@ class PartiesDirectoryMutation:
                 **directory_values,
             )
             # The connected account's own login address is the admin's own handle:
-            # claim it (control ownership + confirmed self-identity link). Synced
+            # claim it (control + normal person identity statement). Synced
             # *contacts'* handles get neither fact — only this connected account's.
             if username.strip():
-                Handle.objects.claim_own(
+                Handle.objects.claim_control(
                     user,
                     platform=Handle.Platform.for_value(username),
                     value=username.strip(),
-                    source=LinkSource.CARDDAV,
+                    asserted_by=user,
+                    evidence=[directory],
                     display_name=name,
                 )
         return cast(DirectoryType, directory)
@@ -634,7 +686,6 @@ _PERSON_RESOURCE = hasura_model_resource(
                 "display_name",
                 "given_name",
                 "family_name",
-                "folder",
                 "created_at",
                 "updated_at",
                 *declared_hasura_resource_fields(Person, "hasura_filterable_fields"),
@@ -645,7 +696,6 @@ _PERSON_RESOURCE = hasura_model_resource(
         "display_name",
         "given_name",
         "family_name",
-        "folder",
         "created_at",
         "updated_at",
         *declared_hasura_resource_fields(Person, "hasura_sortable_fields"),
@@ -654,8 +704,6 @@ _PERSON_RESOURCE = hasura_model_resource(
     groupable=list(
         dict.fromkeys(
             [
-                "folder",
-                "folder__name",
                 "created_at",
                 *declared_hasura_resource_fields(Person, "hasura_groupable_fields"),
             ]
@@ -688,10 +736,9 @@ _PERSON_RESOURCE = hasura_model_resource(
         *_PERSON_EXTENSION_UPDATE_FIELDS,
     ],
     delete=False,
-    field_id_decode={"folder": public_pk_decoder(Folder)},
     write_backend=AngeeHasuraWriteBackend(
         Person,
-        public_id_fields=("folder", *_PERSON_EXTENSION_PUBLIC_ID_FIELDS),
+        public_id_fields=_PERSON_EXTENSION_PUBLIC_ID_FIELDS,
     ),
     get_queryset=lambda info: Person.objects.all().with_circle_names(),
 )
@@ -754,6 +801,7 @@ _HANDLE_RESOURCE = hasura_model_resource(
     HandleType,
     model=Handle,
     name="handles",
+    get_queryset=lambda info: Handle.objects.canonical(),
     filterable=[
         "id",
         "value",
@@ -768,7 +816,7 @@ _HANDLE_RESOURCE = hasura_model_resource(
     aggregatable=["id"],
     groupable=["party", "party__display_name"],
     # Handle identity and its resolved Party projection are maintained by
-    # ingestion, connection, and PartyHandle owners, never generic CRUD.
+    # ingestion, connection, and PartyStatement owners, never generic CRUD.
     insert=False,
     update=False,
     delete=False,
@@ -806,33 +854,45 @@ _ADDRESS_RESOURCE = hasura_model_resource(
     ],
     field_id_decode={"party": public_pk_decoder(Party)},
     write_backend=AngeeHasuraWriteBackend(Address, public_id_fields=("party",)),
+    get_queryset=lambda info: Address.objects.canonical(),
 )
-_PARTY_HANDLE_RESOURCE = hasura_model_resource(
-    PartyHandleType,
-    model=PartyHandle,
-    name="party_handles",
+_PARTY_STATEMENT_RESOURCE = hasura_model_resource(
+    PartyStatementType,
+    model=PartyStatement,
+    name="party_statements",
     filterable=[
         "id",
-        "party",
+        "subject",
         "handle",
         "confidence",
-        "source",
-        "is_confirmed",
-        "is_dismissed",
+        "asserted_by",
+        "source_kind",
+        "rank",
+        "snak",
+        "status",
+        "applied",
         "created_at",
+        "to_review",
     ],
-    sortable=["confidence", "source", "created_at", "updated_at"],
+    filter_expressions={
+        "to_review": Exists(Party.statements.to_review().filter(pk=OuterRef("pk"))),
+    },
+    sortable=["confidence", "rank", "created_at", "updated_at"],
     aggregatable=["id", "confidence"],
-    groupable=["source", "party", "party__display_name"],
-    # Links are written by syncs/suggesters (system context) and changed only
-    # through the confirm/dismiss mutations — never generic CRUD.
+    # No handle-field axis: a group key would read handle rows the party reader may
+    # not read; ``handle`` resolves through its own gate.
+    groupable=["handle", "subject", "subject__display_name", "source_kind"],
     insert=False,
     update=False,
     delete=False,
-    field_id_decode={
-        "party": public_pk_decoder(Party),
-        "handle": public_pk_decoder(Handle),
-    },
+    field_id_decode={"subject": public_pk_decoder(Party), "handle": public_pk_decoder(Handle)},
+    get_queryset=lambda info: (
+        Party.objects.handle_statements()
+        .for_reader(session_user(info))
+        .with_readable_records(session_user(info))
+        .members()
+        .select_related("subject", "handle")
+    ),
 )
 _CIRCLE_RESOURCE = hasura_model_resource(
     CircleType,
@@ -852,12 +912,12 @@ _CIRCLE_MEMBER_RESOURCE = hasura_model_resource(
     CircleMemberType,
     model=CircleMember,
     name="circle_members",
-    filterable=["id", "circle", "party", "source", "confidence", "created_at"],
+    filterable=["id", "circle", "party", "confidence", "created_at"],
     sortable=["circle", "confidence", "created_at"],
     aggregatable=["id"],
-    groupable=["circle", "circle__name", "party", "party__display_name", "source"],
-    # A human adds a membership by naming the pair; confidence/source are
-    # server-owned (manual/1.0 defaults; suggesters write elevated).
+    groupable=["circle", "circle__name", "party", "party__display_name"],
+    # A human names the membership pair; its score and decision flags are
+    # server-owned.
     insertable=["circle", "party"],
     update=False,
     field_id_decode={
@@ -865,20 +925,6 @@ _CIRCLE_MEMBER_RESOURCE = hasura_model_resource(
         "party": public_pk_decoder(Party),
     },
     write_backend=AngeeHasuraWriteBackend(CircleMember, public_id_fields=("circle", "party")),
-)
-_MERGE_VETO_RESOURCE = hasura_model_resource(
-    MergeVetoType,
-    model=MergeVeto,
-    name="merge_vetoes",
-    filterable=["id", "party_a", "party_b", "created_at", "updated_at"],
-    sortable=["party_a", "party_b", "created_at", "updated_at"],
-    aggregatable=["id"],
-    insert=False,
-    update=False,
-    field_id_decode={
-        "party_a": public_pk_decoder(Party),
-        "party_b": public_pk_decoder(Party),
-    },
 )
 _RELATIONSHIP_KIND_RESOURCE = hasura_model_resource(
     RelationshipKindType,
@@ -895,10 +941,10 @@ _RELATIONSHIP_RESOURCE = hasura_model_resource(
     PartyRelationshipType,
     model=Relationship,
     name="party_relationships",
-    filterable=["id", "party", "other_party", "kind", "source", "started_at", "ended_at", "created_at"],
-    sortable=["kind", "source", "started_at", "created_at"],
+    filterable=["id", "party", "other_party", "kind", "started_at", "ended_at", "created_at"],
+    sortable=["kind", "started_at", "created_at"],
     aggregatable=["id"],
-    groupable=["kind", "kind__name", "source"],
+    groupable=["kind", "kind__name"],
     insertable=["party", "other_party", "other_name", "kind", "title", "started_at", "ended_at", "notes"],
     updatable=["other_party", "other_name", "kind", "title", "started_at", "ended_at", "notes"],
     field_id_decode={
@@ -907,6 +953,7 @@ _RELATIONSHIP_RESOURCE = hasura_model_resource(
         "kind": public_pk_decoder(RelationshipKind),
     },
     write_backend=AngeeHasuraWriteBackend(Relationship, public_id_fields=("party", "other_party", "kind")),
+    get_queryset=lambda info: Relationship.objects.canonical(),
 )
 _CONTACT_FOLDER_RESOURCE = hasura_model_resource(
     ContactFolderType,
@@ -968,11 +1015,10 @@ _RESOURCE_TYPES = [
     *_PERSON_RESOURCE.types,
     *_ORGANIZATION_RESOURCE.types,
     *_HANDLE_RESOURCE.types,
-    *_PARTY_HANDLE_RESOURCE.types,
+    *_PARTY_STATEMENT_RESOURCE.types,
     *_ADDRESS_RESOURCE.types,
     *_CIRCLE_RESOURCE.types,
     *_CIRCLE_MEMBER_RESOURCE.types,
-    *_MERGE_VETO_RESOURCE.types,
     *_RELATIONSHIP_KIND_RESOURCE.types,
     *_RELATIONSHIP_RESOURCE.types,
     *_CONTACT_FOLDER_RESOURCE.types,
@@ -987,11 +1033,10 @@ _PARTIES_SCHEMA_BUCKET = {
         _PERSON_RESOURCE.query,
         _ORGANIZATION_RESOURCE.query,
         _HANDLE_RESOURCE.query,
-        _PARTY_HANDLE_RESOURCE.query,
+        _PARTY_STATEMENT_RESOURCE.query,
         _ADDRESS_RESOURCE.query,
         _CIRCLE_RESOURCE.query,
         _CIRCLE_MEMBER_RESOURCE.query,
-        _MERGE_VETO_RESOURCE.query,
         _RELATIONSHIP_KIND_RESOURCE.query,
         _RELATIONSHIP_RESOURCE.query,
         _CONTACT_FOLDER_RESOURCE.query,
@@ -1004,11 +1049,10 @@ _PARTIES_SCHEMA_BUCKET = {
         _PERSON_RESOURCE.mutation,
         _ORGANIZATION_RESOURCE.mutation,
         _HANDLE_RESOURCE.mutation,
-        _PARTY_HANDLE_RESOURCE.mutation,
+        _PARTY_STATEMENT_RESOURCE.mutation,
         _ADDRESS_RESOURCE.mutation,
         _CIRCLE_RESOURCE.mutation,
         _CIRCLE_MEMBER_RESOURCE.mutation,
-        _MERGE_VETO_RESOURCE.mutation,
         _RELATIONSHIP_KIND_RESOURCE.mutation,
         _RELATIONSHIP_RESOURCE.mutation,
         _CONTACT_FOLDER_RESOURCE.mutation,
@@ -1019,12 +1063,12 @@ _PARTIES_SCHEMA_BUCKET = {
         PersonType,
         OrganizationType,
         HandleType,
-        PartyHandleType,
+        PartyStatementType,
         AddressType,
         CircleType,
         CircleMemberType,
-        MergeVetoType,
-        DuplicatePartyCandidateType,
+        SameAsStatementType,
+        SameAsPairType,
         PeopleWorkbenchScope,
         PeopleWorkbenchType,
         RelationshipKindType,
@@ -1048,7 +1092,6 @@ schemas = {
             changes(Directory, field="directoryChanged"),
             changes(Circle, field="circleChanged"),
             changes(CircleMember, field="circleMemberChanged"),
-            changes(MergeVeto, field="mergeVetoChanged"),
             changes(Relationship, field="relationshipChanged"),
         ],
         "type_extensions": [PartyTags, PersonTags, OrganizationTags, HandleTags],

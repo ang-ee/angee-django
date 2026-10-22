@@ -1,6 +1,6 @@
 import * as React from "react";
 import { extractActionOutcome, useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
-import { useAccessRole, type AccessRoleOwnerProps, type AccessRoleState } from "@angee/iam";
+import { subjectUserId, useAccessRole, type AccessRoleOwnerProps, type AccessRoleState } from "@angee/iam";
 import { useActionResultRun } from "@angee/ui";
 
 import { AdmitProjectManagerDocument, ProjectManagerRosterDocument, RemoveProjectManagerDocument } from "./documents";
@@ -26,9 +26,10 @@ export function ProjectManagerAccessRole({ targetId }: AccessRoleOwnerProps): nu
     roleId: "work.manager", roleLabel: t("access.manager"), removable: person.removable,
   })) ?? [], [roster?.people, t]);
   const add = React.useCallback(async (subject: string) => {
-    if (!subject.startsWith("auth/user:")) return false;
+    const user = subjectUserId(subject);
+    if (user === null) return false;
     const result = await settle(async () => extractActionOutcome(await admit({
-      project: targetId, user: subject.slice("auth/user:".length),
+      project: targetId, user,
     }), "admit_project_manager"));
     return result?.ok === true;
   }, [admit, settle, targetId]);

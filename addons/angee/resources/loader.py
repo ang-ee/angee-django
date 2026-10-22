@@ -11,31 +11,32 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 import tablib
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models.fields import NOT_PROVIDED
 from import_export import fields, resources
 from import_export.instance_loaders import BaseInstanceLoader
-from import_export.results import RowResult
 from import_export.utils import get_related_model
 
-from angee.base.identity import instances_from_public_ids, public_id_of
-from angee.base.impl import ImplDefaultsMixin
-from angee.base.mixins import update_fields_with_auto_now
-from angee.base.models import AngeeModel
-from angee.base.refs import RecordRefMixin
-from angee.base.serialization import json_safe
-from angee.base.transitions import StateTransitions
+from angee.identity import instances_from_public_ids, public_id_of
+from angee.impl import ImplDefaultsMixin
+from angee.models import AngeeModel, StateTransitions, update_fields_with_auto_now
+from angee.refs import RecordRefMixin
 from angee.resources.entries import ResourceEntry, resolve_model
 from angee.resources.exceptions import ResourceLoadError
+from angee.resources.kinds import ResourceKindDeclarations
 from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.widgets import (
+    ContentTypeForeignKeyWidget,
+    ContentTypeManyToManyWidget,
     RecordRefField,
     XrefForeignKeyWidget,
     XrefManyToManyWidget,
     XrefWidgetMixin,
     _NativeJSONWidget,
 )
+from angee.serialization import json_safe
 
 if TYPE_CHECKING:
     from angee.resources.models import Resource
@@ -66,14 +67,16 @@ class AngeeResource(resources.ModelResource):
         self,
         *,
         entry: ResourceEntry,
-        ledger_model: type[models.Model],
+        ledger_model: type[Resource],
         addon_aliases: Mapping[str, str],
+        kind_declarations: ResourceKindDeclarations | None = None,
     ) -> None:
         """Bind one resource entry and concrete ledger model."""
 
         self.entry = entry
         self.ledger_model = ledger_model
         self.addon_aliases = addon_aliases
+        self.kind_declarations = kind_declarations
         self._existing_ledgers: dict[str, Resource | None] = {}
         self._instances: dict[str, models.Model | None] = {}
         self._row_hashes: dict[str, str] = {}
@@ -94,21 +97,19 @@ class AngeeResource(resources.ModelResource):
 
     @classmethod
     def get_fk_widget(cls, field: Any) -> functools.partial[Any]:
-        """Return the xref-aware widget factory for a foreign key."""
+        """Return the foreign-key widget factory: model labels for content types, xrefs otherwise."""
 
-        return functools.partial(
-            XrefForeignKeyWidget,
-            model=get_related_model(field),
-        )
+        model = get_related_model(field)
+        widget = ContentTypeForeignKeyWidget if model is ContentType else XrefForeignKeyWidget
+        return functools.partial(widget, model=model)
 
     @classmethod
     def get_m2m_widget(cls, field: Any) -> functools.partial[Any]:
-        """Return the xref-aware widget factory for a many-to-many field."""
+        """Return the many-to-many widget factory: model labels for content types, xrefs otherwise."""
 
-        return functools.partial(
-            XrefManyToManyWidget,
-            model=get_related_model(field),
-        )
+        model = get_related_model(field)
+        widget = ContentTypeManyToManyWidget if model is ContentType else XrefManyToManyWidget
+        return functools.partial(widget, model=model)
 
     def before_import(self, dataset: tablib.Dataset, **kwargs: Any) -> None:
         """Validate headers and reset any batch-planning state before importing."""
@@ -132,6 +133,27 @@ class AngeeResource(resources.ModelResource):
         row["_xref"] = xref
         self._row_hashes[xref] = self._row_content_hash(row)
         super().before_import_row(row, **kwargs)
+
+    def bind_instance(self, xref: str, instance: models.Model, *, replace: bool = False) -> None:
+        """Ledger an owner-created identity; retarget only through an explicit owner verb."""
+
+        xref = self._row_xref(xref, row_number=0)
+        identity = str(public_id_of(instance))
+        defaults = self._ledger_defaults(instance, self._row_content_hash({"identity": identity}))
+        manager = self.ledger_model._default_manager
+        if replace:
+            ledger, _created = manager.update_or_create(
+                source_addon=self.entry.addon.name, xref=xref, defaults=defaults,
+            )
+        else:
+            ledger, _created = manager.get_or_create(
+                source_addon=self.entry.addon.name, xref=xref, defaults=defaults,
+            )
+        self._check_ledger_target(xref, ledger)
+        if ledger.target_id != identity:
+            raise ResourceLoadError(f"{self.entry.addon.name}.{xref} already identifies another record.")
+        self._existing_ledgers[xref] = ledger
+        self._instances[xref] = instance
 
     @functools.cached_property
     def _transition_state_fields(self) -> tuple[fields.Field, ...]:
@@ -159,6 +181,8 @@ class AngeeResource(resources.ModelResource):
             for field in self._transition_state_fields:
                 if field.column_name in row and not field.readonly:
                     model_field = instance._meta.get_field(field.attribute)
+                    if not isinstance(model_field, models.Field):
+                        raise ImproperlyConfigured(f"Transition field {field.attribute!r} must be a concrete field.")
                     try:
                         model_field.clean(field.clean(row), instance)
                     except ValidationError as error:
@@ -178,21 +202,6 @@ class AngeeResource(resources.ModelResource):
         """Let native import-export record hash skips and all other row outcomes."""
 
         return row["_xref"] in self._hash_skips or super().skip_row(instance, original, row, import_validation_errors)
-
-    def after_import_row(self, row: Mapping[str, Any], row_result: RowResult, **kwargs: Any) -> None:
-        """Carry an unchanged row's old state-inclusive hash forward without saving its target."""
-
-        xref = row["_xref"]
-        if (
-            xref in self._hash_skips and row_result.import_type == RowResult.IMPORT_TYPE_SKIP
-            and (self._is_using_transactions(kwargs) or not self._is_dry_run(kwargs))
-        ):
-            ledger = self._ledger_for_xref(xref)
-            row_hash = self._row_hashes[xref]
-            if ledger is not None and ledger.content_hash != row_hash:
-                self.ledger_model._default_manager.filter(pk=ledger.pk).update(content_hash=row_hash)
-                ledger.content_hash = row_hash
-        super().after_import_row(row, row_result, **kwargs)
 
     def after_save_instance(
         self,
@@ -266,9 +275,7 @@ class AngeeResource(resources.ModelResource):
         if instance is None:
             instance = self._adopt_existing_target(row, identity)
         elif ledger is not None and (row_hash := self._row_hashes.get(xref)) is not None:
-            if ledger.content_hash == row_hash or ledger.content_hash == self._row_content_hash(
-                row, include_initial_state=True,
-            ):
+            if ledger.content_hash == row_hash:
                 self._hash_skips.add(xref)
         self._instances[xref] = instance
         return instance
@@ -389,19 +396,10 @@ class AngeeResource(resources.ModelResource):
             raise ResourceLoadError(f"{self.entry.display} row {row_number}: missing _xref")
         return value.strip()
 
-    def _row_content_hash(self, row: Mapping[str, Any], *, include_initial_state: bool = False) -> str:
-        """Hash updateable seed values, excluding identity and initial state.
+    def _row_content_hash(self, row: Mapping[str, Any]) -> str:
+        """Hash updateable seed values, excluding identity and initial state."""
 
-        ``include_initial_state`` exists only to carry stored ledger hashes
-        across the rule change that excluded transition-owned state. Once those
-        hashes have been migrated, delete this keyword, its conditional, and
-        the old-hash comparison in ``instance_for_row``, and the ledger rewrite
-        hook in ``after_import_row``.
-        """
-
-        excluded = {"_xref"}
-        if not include_initial_state:
-            excluded.update(field.column_name for field in self._transition_state_fields)
+        excluded = {"_xref", *(field.column_name for field in self._transition_state_fields)}
         payload = {key: value for key, value in sorted(row.items()) if key not in excluded}
         body = json.dumps(
             json_safe(payload),
@@ -471,15 +469,20 @@ class AngeeResource(resources.ModelResource):
         ledger, _ = self.ledger_model._default_manager.update_or_create(
             source_addon=self.entry.addon.name,
             xref=xref,
-            defaults={
-                "source_path": self.entry.source,
-                "target_model": self._meta.model._meta.label,
-                "content_hash": row_hash,
-                "target_id": public_id_of(instance),
-                "tier": self.entry.tier,
-            },
+            defaults=self._ledger_defaults(instance, row_hash),
         )
         self._existing_ledgers[xref] = ledger
+
+    def _ledger_defaults(self, instance: models.Model, row_hash: str) -> dict[str, Any]:
+        """Project ledger metadata once for file imports and owner-created identities."""
+
+        return {
+            "source_path": self.entry.source,
+            "target_model": self._meta.model._meta.label,
+            "content_hash": row_hash,
+            "target_id": public_id_of(instance),
+            "tier": self.entry.tier,
+        }
 
     def _ledger_resolution_is_stale(
         self,
@@ -604,6 +607,8 @@ class AngeeResource(resources.ModelResource):
             if isinstance(child, models.Q):
                 results.append(self._row_matches_condition(row, child))
                 continue
+            if not isinstance(child, tuple):
+                raise ImproperlyConfigured(f"{self.entry.display}: adopt conditions require field lookups or Q nodes")
             lookup, expected = child
             results.append(self._row_matches_lookup(row, str(lookup), expected))
         if condition.connector == models.Q.OR:
@@ -829,8 +834,9 @@ def build_resource(
     model: type[models.Model],
     entry: ResourceEntry,
     *,
-    ledger_model: type[models.Model],
+    ledger_model: type[Resource],
     addon_aliases: Mapping[str, str],
+    kind_declarations: ResourceKindDeclarations | None = None,
 ) -> AngeeResource:
     """Compose the model's ``resource_class`` with native xref import options.
 
@@ -870,5 +876,6 @@ def build_resource(
             entry=entry,
             ledger_model=ledger_model,
             addon_aliases=addon_aliases,
+            kind_declarations=kind_declarations,
         ),
     )

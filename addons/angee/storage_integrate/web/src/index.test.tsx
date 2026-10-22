@@ -12,7 +12,7 @@ describe("angee.storage_integrate addon manifest", () => {
     expect(storageIntegrate.containers?.["storage-integrate.mounts#toolbar"]).toMatchObject({
       "storage-integrate.connect-local-folder": { sequence: 10, content: expect.anything() },
     });
-    expect(Object.keys(storageIntegrate.i18n?.storage ?? {}).sort()).toEqual([
+    expect(Object.keys(storageIntegrate.i18n?.["storage-integrate"] ?? {}).sort()).toEqual([
       "mount.action.sync",
       "mount.browse.alreadyMounted",
       "mount.browse.empty",
@@ -20,9 +20,11 @@ describe("angee.storage_integrate addon manifest", () => {
       "mount.browse.loading",
       "mount.browse.manualHint",
       "mount.browse.notReadable",
+      "mount.browse.open",
       "mount.browse.truncated",
       "mount.browse.up",
       "mount.browse.useThisFolder",
+      "mount.connect.menu",
       "mount.connect.mode",
       "mount.connect.modeCopy",
       "mount.connect.modeReference",

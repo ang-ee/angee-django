@@ -5,12 +5,12 @@ from typing import Any
 from django.db import models
 from django.db.models.signals import pre_delete
 
-from angee.base.signals import connect_for_models
 from angee.projects.models import Milestone
+from angee.signals import connect_for_models
 
 
 def connect() -> None:
-    """Bind the receipt rule to the milestone models only."""
+    """Bind the receipt rule to milestones."""
     connect_for_models(pre_delete, retain_milestone_receipt,
                        applies=lambda model: issubclass(model, Milestone),
                        dispatch_uid="projects.milestone.retain_receipt")

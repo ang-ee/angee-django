@@ -7,32 +7,38 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import reversion
+import yaml
 from django.apps import AppConfig, apps
+from django.contrib.auth.models import Group, Permission
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models
+from django.test.utils import CaptureQueriesContext
 from import_export.results import Result, RowResult
 from rebac import system_context
 from rebac.errors import MissingActorError
-from reversion.models import Version
 
 from angee.addons import addon_manifest
-from angee.base.mixins import RevisionMixin
-from angee.base.models import AngeeModel
-from angee.base.tiers import ResourceTier
+from angee.models import AngeeModel
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import _grant_tuples, materialize_grant_groups
 from angee.resources.loader import AngeeResource, build_resource
 from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.models import Resource
+from angee.resources.testing.models import ContentTypeRow
+from angee.resources.testing.models import Resource as ResourceLedger
 from angee.resources.widgets import (
+    ContentTypeForeignKeyWidget,
+    ContentTypeManyToManyWidget,
     XrefForeignKeyWidget,
     XrefManyToManyWidget,
+    XrefWidgetMixin,
     resolve_ledger_xref,
     resolve_xref,
 )
 from angee.testing.permissions import install_permission_schema
+from angee.tiers import ResourceTier
 from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- share fake-addon lifetime
 from tests.tables import model_tables
 
@@ -119,6 +125,8 @@ def test_resource_condition_q_evaluator_supported_lookup_set(tmp_path: Path) -> 
     assert resource._row_matches_condition(row, models.Q(status="active"))
     with pytest.raises(ImproperlyConfigured, match="lookup 'name__icontains' is not supported"):
         resource._row_matches_condition(row, models.Q(name__icontains="api"))
+    with pytest.raises(ImproperlyConfigured, match="adopt conditions require field lookups or Q nodes"):
+        resource._row_matches_condition(row, models.Q(models.Value(True)))
 
 
 def test_resource_entry_reads_structured_rows_and_fields(
@@ -403,7 +411,7 @@ def test_resolve_xref_accepts_addon_label_alias() -> None:
             app_label = "base"
 
     with model_tables((ResolveExactTarget, ResolveExactLedger)):
-        target = ResolveExactTarget.objects.create(name="target")
+        target = ResolveExactTarget._default_manager.create(name="target")
         ResolveExactLedger.objects.create(
             tier=Resource.Tier.MASTER,
             source_addon="tests.resource_addon",
@@ -462,8 +470,8 @@ def test_resolve_xref_reports_ambiguous_source_rows() -> None:
             app_label = "base"
 
     with model_tables((ResolveAmbiguousTargetA, ResolveAmbiguousTargetB, ResolveAmbiguousLedger)):
-        first = ResolveAmbiguousTargetA.objects.create(name="first")
-        second = ResolveAmbiguousTargetB.objects.create(name="second")
+        first = ResolveAmbiguousTargetA._default_manager.create(name="first")
+        second = ResolveAmbiguousTargetB._default_manager.create(name="second")
         ResolveAmbiguousLedger.objects.create(
             tier=Resource.Tier.MASTER,
             source_addon="tests.resource_addon",
@@ -509,7 +517,7 @@ def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(composed_tabl
 
     ledger = apps.get_model("resources", "Resource")
     with model_tables((LedgerXrefTarget,)), system_context(reason="test ledger xref registry aliases"):
-        target = LedgerXrefTarget.objects.create(name="alice")
+        target = LedgerXrefTarget._default_manager.create(name="alice")
         ledger.objects.create(
             tier=Resource.Tier.MASTER,
             source_addon="angee.resources",
@@ -521,6 +529,11 @@ def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(composed_tabl
         # ``resources`` is the short label of the ``angee.resources`` app, so the
         # app-registry alias map resolves the label form to the canonical addon name.
         assert resolve_ledger_xref("resources.user_alice") == target
+        assert resolve_ledger_xref("resources.user_alice", model=LedgerXrefTarget) == target
+        assert ledger.objects.resolve("resources.user_alice", model=LedgerXrefTarget) == target
+        with pytest.raises(ValueError, match="not contenttypes.ContentType"):
+            ledger.objects.resolve("resources.user_alice", model=ContentType)
+        assert resolve_ledger_xref("resources.user_alice", model=ContentType) is None
         # An unresolved handle is a graceful ``None``, never a raise.
         assert resolve_ledger_xref("resources.user_missing") is None
         assert resolve_ledger_xref("no_such_addon.user_alice") is None
@@ -588,9 +601,9 @@ def test_xref_widgets_resolve_mti_descendant_to_parent_fk() -> None:
         return widget
 
     with model_tables((XrefMtiParent, XrefMtiChild, XrefMtiPeer, XrefMtiLedger)):
-        child = XrefMtiChild.objects.create(name="Acme", detail="org")
-        peer = XrefMtiPeer.objects.create(name="Nope")
-        parent_row = XrefMtiParent.objects.create(name="Bare")
+        child = XrefMtiChild._default_manager.create(name="Acme", detail="org")
+        peer = XrefMtiPeer._default_manager.create(name="Nope")
+        parent_row = XrefMtiParent._default_manager.create(name="Bare")
         for xref, target in (
             ("acme", "base.XrefMtiChild"),
             ("nope", "base.XrefMtiPeer"),
@@ -687,42 +700,6 @@ def test_resource_manager_loads_rows_and_resolves_xrefs(
         assert second.created == 0
         assert second.updated == 0
         assert second.skipped == 2
-
-
-@pytest.mark.django_db(transaction=True)
-def test_resource_import_records_native_revisions(tmp_path: Path) -> None:
-    """A seeded revisioned row has a history entry after the import transaction."""
-
-    class RevisionImportRow(RevisionMixin, AngeeModel):
-        title = models.CharField(max_length=80)
-        revisioned_fields = ("title",)
-
-        class Meta:
-            app_label = "base"
-            rebac_resource_type = "base/revision-import-row"
-
-    class RevisionLedger(Resource):
-        class Meta(Resource.Meta):
-            app_label = "base"
-            abstract = False
-
-    (tmp_path / "010_base.revisionimportrow.csv").write_text(
-        "_xref,title\nfirst,Initial\n", encoding="utf-8",
-    )
-    owner = addon(tmp_path, manifest={"master": ({"path": "010_base.revisionimportrow.csv"},)})
-    reversion.register(RevisionImportRow, fields=RevisionImportRow.revisioned_fields)
-    try:
-        with model_tables((RevisionImportRow, RevisionLedger)):
-            RevisionLedger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
-            with system_context(reason="revision import assertion"):
-                row = RevisionImportRow.objects.get(title="Initial")
-            versions = Version.objects.get_for_object(row)
-            assert versions.count() == 1
-            assert versions.first().field_dict["title"] == "Initial"
-            RevisionLedger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
-            assert Version.objects.get_for_object(row).count() == 1
-    finally:
-        reversion.unregister(RevisionImportRow)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -932,9 +909,10 @@ def test_resource_load_moves_a_parent_xref_onto_its_child(tmp_path: Path) -> Non
     with model_tables((MovedPage, MovedNote, MovedLedger)):
         with system_context(reason="moved xref fixture"):
             existing = MovedNote.objects.create(title="Welcome", body="Existing")
+            parent = MovedPage._default_manager.get(pk=existing.pk)
         MovedLedger.objects.create(
             source_addon=owner.name, source_path="resources/010_base.movedpage.csv", xref="welcome",
-            target_model=MovedPage._meta.label, target_id=existing.movedpage_ptr.public_id,
+            target_model=MovedPage._meta.label, target_id=parent.public_id,
             content_hash="sha256:released", tier=Resource.Tier.INSTALL,
         )
 
@@ -2279,7 +2257,7 @@ def test_mti_grants_follow_ancestor_relation_contract(
         resource="resource_addon.child", relation="reviewer", subject="iam.reader", index=1,
     )
 
-    tuples = _grant_tuples(row, Resource, {})
+    tuples = _grant_tuples(row, ResourceLedger, {})
     assert [grant.resource for grant in tuples] == ([child, parent] if expected_parent else [child])
     assert all(grant.subject == subject and grant.relation == "reviewer" for grant in tuples)
 
@@ -2311,7 +2289,7 @@ def test_invalid_explicit_mti_grant_still_fails_native_validation(
         resource="resource_addon.child", relation="unknown", subject="iam.reader", index=1,
     )
 
-    tuples = _grant_tuples(row, Resource, {})
+    tuples = _grant_tuples(row, ResourceLedger, {})
     assert [grant.resource for grant in tuples] == [child]
     with pytest.raises(ValueError, match="unknown"):
         active.write_relationships(tuples)
@@ -2368,8 +2346,8 @@ def test_resource_factory_defaults_and_model_declared_native_subclass(tmp_path: 
             abstract = True
 
     source = entry(tmp_path, {"path": "resources/model.yaml"})
-    default = build_resource(DefaultModel, source, ledger_model=Resource, addon_aliases={})
-    selected = build_resource(SelectedModel, source, ledger_model=Resource, addon_aliases={})
+    default = build_resource(DefaultModel, source, ledger_model=ResourceLedger, addon_aliases={})
+    selected = build_resource(SelectedModel, source, ledger_model=ResourceLedger, addon_aliases={})
     assert isinstance(default, AngeeResource)
     assert not isinstance(default, CustomResource)
     assert isinstance(selected, CustomResource)
@@ -2385,7 +2363,7 @@ def test_resource_factory_defaults_and_model_declared_native_subclass(tmp_path: 
             abstract = True
 
     with pytest.raises(ImproperlyConfigured, match="must subclass AngeeResource"):
-        build_resource(InvalidModel, source, ledger_model=Resource, addon_aliases={})
+        build_resource(InvalidModel, source, ledger_model=ResourceLedger, addon_aliases={})
 
 
 def test_empty_structured_entry_retains_its_facet_model(tmp_path: Path) -> None:
@@ -2397,3 +2375,128 @@ def test_empty_structured_entry_retains_its_facet_model(tmp_path: Path) -> None:
     assert group.dataset.headers == ["_xref"]
     assert len(group.dataset) == 0
     assert group.source_rows == []
+
+
+def _content_type_seed(tmp_path: Path, rows: list[dict[str, Any]]) -> AppConfig:
+    """Write one ``ContentTypeRow`` seed and return the addon that owns it."""
+
+    payload = {"_meta": {"model": ContentTypeRow._meta.label}, "rows": rows}
+    (tmp_path / "rows.yaml").write_text(yaml.safe_dump(payload), encoding="utf-8")
+    return addon(tmp_path, manifest={"master": ({"path": "rows.yaml"},)})
+
+
+def test_only_content_type_relations_take_model_label_widgets(tmp_path: Path) -> None:
+    """Relations to ContentType take label widgets; every other relation keeps a ledger-bound xref widget."""
+
+    ledger = apps.get_model("resources", "Resource")
+    source = entry(tmp_path, {"path": "rows.yaml"})
+    resource = build_resource(ContentTypeRow, source, ledger_model=ledger, addon_aliases={})
+    content_type, content_types, parent = (
+        resource.fields[name].widget for name in ("content_type", "content_types", "parent")
+    )
+
+    assert isinstance(content_type, ContentTypeForeignKeyWidget)
+    assert isinstance(content_types, ContentTypeManyToManyWidget)
+    assert not isinstance(content_type, XrefWidgetMixin) and not isinstance(content_types, XrefWidgetMixin)
+    assert isinstance(parent, XrefForeignKeyWidget) and parent.ledger_model is ledger
+    assert isinstance(AngeeResource.get_m2m_widget(Group._meta.get_field("permissions"))(), XrefManyToManyWidget)
+    with pytest.raises(ValueError, match="model labels must be strings"):
+        content_type.clean(5)
+
+
+@pytest.mark.django_db
+def test_content_type_relations_load_from_model_labels(tmp_path: Path) -> None:
+    """A FK takes one label and an M2M a list or scalar, beside an ordinary xref relation."""
+
+    listed_row = {
+        "_xref": "listed",
+        "name": "Listed",
+        "content_type": "auth.Group",
+        "content_types": ["auth.Group", "auth.permission"],
+    }
+    scalar_row = {"_xref": "scalar", "name": "Scalar", "content_types": "auth.Group", "parent": "resource_addon.listed"}
+    owner = _content_type_seed(tmp_path, [listed_row, scalar_row])
+    ledger = apps.get_model("resources", "Resource")
+    group, permission = (ContentType.objects.get_for_model(model) for model in (Group, Permission))
+
+    with system_context(reason="content-type label seed"):
+        result = ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+        listed = ContentTypeRow._default_manager.get(name="Listed")
+        scalar = ContentTypeRow._default_manager.get(name="Scalar")
+
+        assert result.created == 2
+        assert listed.content_type == group
+        assert set(listed.content_types.all()) == {group, permission}
+        assert scalar.content_type is None
+        assert list(scalar.content_types.all()) == [group]
+        assert scalar.parent == listed
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("column", ["content_type", "content_types"])
+def test_unknown_content_type_label_fails_its_row(tmp_path: Path, column: str) -> None:
+    """An unknown label fails the load through the native row diagnostics, naming the row and value."""
+
+    known_row = {"_xref": "known", "name": "Known", column: "auth.Group"}
+    broken_row = {"_xref": "broken", "name": "Broken", column: "auth.Missing"}
+    owner = _content_type_seed(tmp_path, [known_row, broken_row])
+    ledger = apps.get_model("resources", "Resource")
+
+    with system_context(reason="unknown content-type label"):
+        with pytest.raises(ResourceLoadError) as raised:
+            ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+
+        message = str(raised.value)
+        assert "Unknown model label 'auth.Missing'." in message
+        assert ": 2: " in message and "'_xref': 'broken'" in message
+        assert not ContentTypeRow._default_manager.exists()
+        assert not ledger.objects.filter(source_addon=owner.name).exists()
+
+
+@pytest.mark.django_db
+def test_content_type_label_rows_hash_labels_not_ids(tmp_path: Path) -> None:
+    """Replays write nothing, and the same seed hashes the same under other content-type ids."""
+
+    label = ContentTypeRow._meta.label
+    row = {"_xref": "row", "name": "Row", "content_type": label, "content_types": [label, "auth.Group"]}
+    owner = _content_type_seed(tmp_path, [row])
+    ledger = apps.get_model("resources", "Resource")
+    tables = tuple(
+        connection.ops.quote_name(model._meta.db_table)
+        for model in (ContentTypeRow, ContentTypeRow.content_types.through, ledger)
+    )
+
+    try:
+        with system_context(reason="content-type label hashes"):
+            ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+            seeded_hash = ledger.objects.get(source_addon=owner.name, xref="row").content_hash
+            with CaptureQueriesContext(connection) as queries:
+                replay = ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+
+            assert (replay.loaded, replay.skipped) == (0, 1)
+            assert not [
+                query["sql"]
+                for query in queries
+                if query["sql"].startswith(("INSERT", "UPDATE", "DELETE"))
+                and any(table in query["sql"] for table in tables)
+            ]
+
+            # A fresh database assigns the same label another content-type id.
+            previous_id = ContentType.objects.get_for_model(ContentTypeRow).pk
+            ledger.objects.filter(source_addon=owner.name).delete()
+            ContentTypeRow._default_manager.all().delete()
+            Permission.objects.filter(content_type_id=previous_id).delete()
+            # A content-type delete through the ORM collects every registered model
+            # relating to content types, including other modules' unmigrated test models.
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"DELETE FROM {connection.ops.quote_name(ContentType._meta.db_table)} WHERE id = %s",
+                    [previous_id],
+                )
+            ContentType.objects.clear_cache()
+            ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+
+            assert ContentTypeRow._default_manager.values_list("content_type", flat=True).get() != previous_id
+            assert ledger.objects.get(source_addon=owner.name, xref="row").content_hash == seeded_hash
+    finally:
+        ContentType.objects.clear_cache()

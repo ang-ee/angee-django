@@ -2,7 +2,30 @@
 
 from __future__ import annotations
 
-SETTINGS = {
+from typing import TypedDict
+
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "ANGEE_HOOKS:append": list[str],
+        "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS": list[str],
+        "ANGEE_PARTIES_SIGNING_PROVIDERS": list[str],
+        "ANGEE_IMPL_REGISTRIES:append": list[str],
+        "CELERY_BEAT_SCHEDULE:append": dict[str, dict[str, object]],
+        "ANGEE_DIRECTORY_BACKEND_CLASSES": dict[str, str],
+    },
+)
+
+SETTINGS: _Settings = {
+    "ANGEE_HOOKS:append": [
+        "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS",
+        "ANGEE_PARTIES_SIGNING_PROVIDERS",
+    ],
+    # Evidence a downstream addon contributes to the hourly suggestion task, as
+    # dotted callables: handles whose display names are no evidence, and
+    # ``angee.parties.managers.Signing`` rows for signature mining.
+    "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS": [],
+    "ANGEE_PARTIES_SIGNING_PROVIDERS": [],
     "ANGEE_IMPL_REGISTRIES:append": ["angee.parties.backends.DirectoryBackend"],
     "CELERY_BEAT_SCHEDULE:append": {
         "parties.refresh_handle_suggestions": {

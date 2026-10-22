@@ -12,6 +12,7 @@
   "dependencies": {
     "@angee/agents": "workspace:*",
     "@angee/app": "workspace:*",
+    "@angee/provenance": "workspace:*",
     "@angee/ui": "workspace:*",
     "date-fns": "^4.1.0",
     "lucide-react": "^1.21.0"

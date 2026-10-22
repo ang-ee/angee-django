@@ -6,6 +6,7 @@ from typing import Any
 
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
+from django.db.models.fields.reverse_related import ForeignObjectRel
 from strawberry.types import get_object_definition
 from strawberry_django.utils.typing import get_django_definition
 
@@ -49,7 +50,7 @@ class FieldPathError(Exception):
         super().__init__("to-many" if to_many else "unknown")
 
 
-def require_field_for_path(model: type[models.Model], path: str) -> models.Field[Any, Any]:
+def require_field_for_path(model: type[models.Model], path: str) -> models.Field[Any, Any] | ForeignObjectRel:
     """Resolve a ``__``/``.``-separated relation ``path`` to a leaf to-one field.
 
     Walks each segment with ``_meta.get_field``, following the forward relation at
@@ -64,11 +65,11 @@ def require_field_for_path(model: type[models.Model], path: str) -> models.Field
 def fields_for_path(
     model: type[models.Model],
     path: str,
-) -> tuple[models.Field[Any, Any], ...]:
+) -> tuple[models.Field[Any, Any] | ForeignObjectRel, ...]:
     """Resolve every field in a scalar path through to-one relations."""
 
     current_model: type[models.Model] | None = model
-    fields: list[models.Field[Any, Any]] = []
+    fields: list[models.Field[Any, Any] | ForeignObjectRel] = []
     for part in path.replace(".", "__").split("__"):
         if current_model is None:
             raise FieldPathError(to_many=False)

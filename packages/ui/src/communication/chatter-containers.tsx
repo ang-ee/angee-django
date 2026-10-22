@@ -1,40 +1,42 @@
-import type { ReactElement } from "react";
+import type { ChatterTabContent, ChatterViewContext, CoreContainer } from "../runtime";
+import { RelatedPane } from "./RelatedPane";
 
-import { EmptyState } from "../fragments/EmptyState";
-import { useUiT } from "../i18n";
-import type { CoreContainer } from "../runtime";
-
-function PlaceholderLabel({ kind }: { kind: "comments" | "activity" }): ReactElement {
-  const t = useUiT();
-  return <>{t(kind === "comments" ? "chatter.tabComments" : "chatter.tabActivity")}</>;
-}
-
-function Placeholder({ kind }: { kind: "comments" | "activity" }): ReactElement {
-  const t = useUiT();
-  return kind === "comments"
-    ? <EmptyState icon="comments" title={t("chatter.noComments")} description={t("chatter.commentsHint")} className="min-h-48 p-4" />
-    : <EmptyState icon="activity" title={t("chatter.noActivity")} description={t("chatter.activityHint")} className="min-h-48 p-4" />;
-}
+/** The Related tab's id in `record#aside`.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
+export const RELATED_TAB_ID = "related";
+/** The container the Related tab lists: one child per edge, declared by the edge's owner.
+ * @kind contribution
+ */
+export const RELATED_GROUPS_CONTAINER = "related#groups";
 
 /**
- * The chatter aside's container: `record#aside` children show on every record
- * view, `<model>#aside` children on that model's pages. The framework's
- * placeholder comments and activity tabs stand until an addon that supplies the
- * real ones removes them.
+ * The context aside's containers: `record#aside` children are strip tabs and
+ * drill-ins contributed by addons, plus the tabs a page publishes at render
+ * time; the framework declares the Related tab, whose groups are the
+ * `related#groups` children the edge owners (files, pages, sources) declare.
+ * The timeline addon owns the first tab.
+ * @kind contribution
  */
-export const CHATTER_CONTAINERS: readonly CoreContainer[] = [{
-  address: "record#aside",
-  models: true,
-  // Pages publish their own tabs at render time; `only` may name them.
-  extras: true,
-  children: {
-    "chatter.comments": {
-      sequence: 10,
-      content: { label: <PlaceholderLabel kind="comments" />, icon: "comments", aliases: ["comments"], render: () => <Placeholder kind="comments" /> },
-    },
-    "chatter.activity": {
-      sequence: 20,
-      content: { label: <PlaceholderLabel kind="activity" />, icon: "activity", aliases: ["activity"], render: () => <Placeholder kind="activity" /> },
+export const CHATTER_CONTAINERS: readonly CoreContainer[] = [
+  {
+    address: "record#aside",
+    models: true,
+    // Pages publish their own tabs at render time; `only` may name them.
+    extras: true,
+    children: {
+      [RELATED_TAB_ID]: {
+        sequence: 40,
+        content: {
+          label: "Related",
+          icon: "link",
+          panelClassName: "p-0",
+          when: (context: ChatterViewContext) => context.view.kind === "record",
+          render: (context: ChatterViewContext) => <RelatedPane context={context} />,
+        } satisfies ChatterTabContent,
+      },
     },
   },
-}];
+  { address: RELATED_GROUPS_CONTAINER, models: true },
+];

@@ -48,9 +48,8 @@ _CORE_INSTALLED_APPS_PREFIX = (
     "angee.compose",
     "django.contrib.contenttypes",
     "rebac",
-    "reversion",
     "simple_history",
-    "angee.base",
+    "angee",
     "django_celery_beat",
     "angee.jobs",
 )

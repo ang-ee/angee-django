@@ -15,14 +15,20 @@ from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from graphql import GraphQLInputObjectType, get_named_type, parse, validate
 from rebac import PermissionDenied, actor_context, system_context
-from rebac.actors import is_sudo, to_subject_ref
+from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
-from angee.base.errors import RecordAccessSubjectRefused
-from angee.base.mixins import StaleRevisionError
+from angee.errors import RecordAccessSubjectRefused
 from angee.graphql.schema import GraphQLSchemas
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
-from angee.parties.mixins import LinkSource
+from angee.models import StaleRevisionError
+
+
+def grant_rows(store):
+    """A relationship store's rows; a changeset's attribution of its actor is provenance, not a grant."""
+
+    field = "resource_type" if store._meta.model_name == "relationship" else "resource_fk__resource_type"
+    return list(store._base_manager.exclude(**{field: "provenance/changeset"}).order_by("pk").values())
 
 
 class HasuraFilterDeclarationTests(TransactionTestCase):
@@ -205,10 +211,9 @@ class ChannelIntakeCaptureTests(TransactionTestCase):
             handle = apps.get_model("parties", "Handle").objects.upsert(
                 platform="email",
                 value="customer@example.com",
+                created_by_id=self.actor.pk,
             )
-            apps.get_model("parties", "PartyHandle").objects.link(
-                party, handle, source=LinkSource.MANUAL, is_confirmed=True
-            )
+            party.with_actor(self.actor).confirm(aspect="handle", handle=handle, values={})
         task_model = apps.get_model("projects", "Task")
         with patch.object(
             task_model, "validate_record_access_subject", side_effect=RecordAccessSubjectRefused()
@@ -262,7 +267,11 @@ class IntakeAccessCase(TransactionTestCase):
             task.save()
             task.grant_record_access("reader", self.reader)
             return self.Need.objects.create(
-                task=task, party=party, claimed_email=email, claimed_name=name, body="Request",
+                task=task,
+                party=party,
+                claimed_email=email,
+                claimed_name=name,
+                body="Request",
             )
 
     def as_user(self, need, user=None):
@@ -292,52 +301,12 @@ class IntakeAccessCase(TransactionTestCase):
             self.assertEqual([error.extensions.get("code") for error in result.errors or ()], [error_code])
         return result.data
 
-    def legacy_need(self, *, confirmed=False, touched=False):
-        """Reproduce a pre-transition copied sender party without live hooks."""
-
-        with system_context(reason="test legacy capture"):
-            apps.get_model("integrate", "Vendor").objects.get_or_create(
-                slug="manual",
-                defaults={"display_name": "Manual"},
-            )
-            channel = apps.get_model("messaging", "Channel").objects.create_disconnected(
-                self.owner,
-                name="Legacy source",
-                backend_class="manual",
-            )
-            (message,) = apps.get_model("messaging", "Message").objects.ingest(
-                [
-                    ParsedMessage(
-                        external_id=f"legacy-{channel.pk}",
-                        platform="email",
-                        sender=ParsedHandle(platform="email", value=f"legacy-{channel.pk}@example.com"),
-                        body=ParsedPart(type="text/plain", role="body", text="Legacy request"),
-                    ),
-                ],
-                channel=channel,
-            )
-            party = self.party(self.reader)
-            models.QuerySet.update(
-                type(message.sender)._base_manager.filter(pk=message.sender_id),
-                party_id=party.pk,
-                party_link_confirmed=confirmed,
-            )
-            need = self.need(email="", party=party)
-            models.QuerySet.update(
-                self.Need._base_manager.filter(pk=need.pk),
-                source_message_id=message.pk,
-                updated_by_id=self.writer.pk if touched else message.updated_by_id,
-            )
-            need.refresh_from_db()
-            return need
-
-
 class NeedAccessDecisionTests(IntakeAccessCase):
     def test_inbox_answers_use_the_same_account_owner_and_write_no_grants(self):
         need = self.need(email="", party=self.party(self.reader))
         decision = need.access_decision
         stores = [apps.get_model("rebac", name) for name in ("Relationship", "RelationshipRegistry")]
-        before = [list(store._base_manager.order_by("pk").values()) for store in stores]
+        before = [grant_rows(store) for store in stores]
         mutation = """
           mutation Decide($id: ID!, $revision: Int!) {
             decide(id: $id, revision: $revision, chosen: ["intake.approve"]) {
@@ -356,7 +325,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         self.assertEqual(need.access_verdict, ["intake.approve"])
         self.assertEqual(need.access_answered_by_id, self.admin.pk)
         self.assertEqual(need._account_for_party(need.party_id).pk, self.reader.pk)
-        self.assertEqual([list(store._base_manager.order_by("pk").values()) for store in stores], before)
+        self.assertEqual([grant_rows(store) for store in stores], before)
 
     def test_need_without_cutover_question_refuses_plainly(self):
         # A need captured before the decisions cutover carries no question; an authorised answerer
@@ -419,6 +388,22 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         with self.assertRaisesMessage(ValidationError, "Approved access is final"):
             need.decide_access("intake.deny")
         self.assertEqual(self.User._base_manager.filter(email="new@example.com").count(), 1)
+
+    def test_a_decider_without_write_on_the_requesters_person_still_records_the_claim(self):
+        """The claimed address is the decision's own system work, not a check of the decider's party write."""
+
+        person = self.party(self.reader)
+        self.assertFalse(person.with_actor(self.owner).has_access("write"))
+        need = self.as_user(self.need(email="reader@example.com"), self.owner)
+        # A deployment may let this decider create accounts (a role extension)
+        # without party write; the account gate is not what this test is about.
+        with patch("angee.intake.models.check_new", return_value=SimpleNamespace(allowed=True)):
+            self.assertEqual(need.decide_access("intake.approve").pk, self.reader.pk)
+        with system_context(reason="test claimed address"):
+            link = apps.get_model("parties", "Party").statements.get(
+                subject_id=person.pk, handle__platform="email", handle__value="reader@example.com"
+            )
+        self.assertIn("intake.Need", {ref["model"] for ref in link.evidence})
 
     def test_existing_account_without_claimed_email_can_be_approved(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))
@@ -496,38 +481,13 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         self.assertEqual(need.access_verdict, ["intake.approve"])
         self.assertEqual(need.party_id, self.party(self.reader).pk)
 
-    def test_reconcile_never_yields_system_context_and_clears_old_decision(self):
-        need = self.legacy_need()
-        apps.get_model("decisions", "Decision").objects.decide(
-            need.access_decision_id,
-            actor=self.owner,
-            revision=need.access_decision.revision,
-            chosen=["intake.deny"],
-        )
-        self.assertFalse(is_sudo())
-        # The historical fixture predates owner application on every answer.
-        with system_context(reason="test historical untouched request"):
-            self.Need._base_manager.filter(pk=need.pk).update(updated_by_id=None)
-        reports = self.Need.objects.reconcile_parties()
-        self.assertTrue(next(reports)["eligible"])
-        self.assertFalse(is_sudo())
-        reports.close()
-        self.assertIsNotNone(self.Need._base_manager.get(pk=need.pk).party_id)
-        reports = self.Need.objects.reconcile_parties(apply=True)
-        self.assertTrue(next(reports)["applied"])
-        self.assertFalse(is_sudo())
-        reports.close()
-        need.refresh_from_db()
-        self.assertIsNone(need.party_id)
-        self.assertEqual(need.access_verdict, None)
-
     def test_deciding_writes_neither_relationship_store(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))
         stores = [apps.get_model("rebac", name) for name in ("Relationship", "RelationshipRegistry")]
-        before = [list(store._base_manager.order_by("pk").values()) for store in stores]
+        before = [grant_rows(store) for store in stores]
         need.decide_access("intake.deny")
         need.decide_access("intake.approve")
-        self.assertEqual([list(store._base_manager.order_by("pk").values()) for store in stores], before)
+        self.assertEqual([grant_rows(store) for store in stores], before)
 
     def test_access_projections_batch_one_seat_query_for_lists(self):
         query = "query { intake_needs { access_verdict access_answered_at } }"
@@ -546,12 +506,33 @@ class NeedAccessDecisionTests(IntakeAccessCase):
 
 
 class NeedAccessTests(IntakeAccessCase):
+    def test_setup_without_promoted_task_leaves_unrelated_project_requests_unassigned(self):
+        Project = apps.get_model("projects", "Project")
+        Vault = apps.get_model("knowledge", "Vault")
+        with system_context(reason="test project setup request isolation"):
+            template = Vault.objects.create(name="Setup template", owner=self.owner)
+            unrelated = Project.objects.create(title="Other project", owner=self.owner)
+            request = self.Need.objects.create(project=unrelated, body="Unassigned project request")
+            project = Project.objects.create(title="Standalone project", owner=self.owner)
+        with actor_context(self.admin), transaction.atomic():
+            project.with_actor(self.admin).apply_setup(
+                team=self.queue, milestones=[{"name": "Start"}], vault_template=template,
+            )
+        request.refresh_from_db()
+        self.assertIsNone(request.party_id)
+        self.assertEqual(project.milestones.with_actor(self.admin).count(), 1)
+
     def assert_task_filter(self, where, expected, *, user, bucket):
         """Pin both read roots to the same task set, including its aggregate count."""
-        data = self.graphql("""query($where: project_tasks_bool_exp!) {
+        data = self.graphql(
+            """query($where: project_tasks_bool_exp!) {
           project_tasks(where: $where) { id }
           project_tasks_aggregate(where: $where) { aggregate { count } }
-        }""", {"where": where}, user=user, bucket=bucket)
+        }""",
+            {"where": where},
+            user=user,
+            bucket=bucket,
+        )
         self.assertCountEqual(data["project_tasks"], [{"id": task.sqid} for task in expected])
         self.assertEqual(data["project_tasks_aggregate"]["aggregate"]["count"], len(expected))
 
@@ -605,13 +586,22 @@ class NeedAccessTests(IntakeAccessCase):
                 self.assert_task_filter(by_name, [visible.task], user=self.reader, bucket=bucket)
                 self.assert_task_filter(
                     {"_or": [by_name, {"title": {"_eq": "Another predicate"}}]},
-                    [visible.task, other.task], user=self.reader, bucket=bucket,
+                    [visible.task, other.task],
+                    user=self.reader,
+                    bucket=bucket,
                 )
                 self.assert_task_filter(
-                    {"_not": {"_and": [
-                        {"requester_name": {"_eq": "Other Requester"}},
-                        {"title": {"_eq": "Another predicate"}},
-                    ]}}, [visible.task], user=self.reader, bucket=bucket,
+                    {
+                        "_not": {
+                            "_and": [
+                                {"requester_name": {"_eq": "Other Requester"}},
+                                {"title": {"_eq": "Another predicate"}},
+                            ]
+                        }
+                    },
+                    [visible.task],
+                    user=self.reader,
+                    bucket=bucket,
                 )
 
     def test_requested_by_viewer_attributes_only_the_first_need_not_later_requesters(self):
@@ -638,27 +628,47 @@ class NeedAccessTests(IntakeAccessCase):
                 with self.subTest(bucket=bucket, viewer=user.username):
                     self.assertFalse(hidden.task.with_actor(user).has_access("read"))
                     self.assert_task_filter(
-                        {"requested_by_viewer": {"_eq": True}}, [first.task] if own_first else [],
-                        user=user, bucket=bucket,
+                        {"requested_by_viewer": {"_eq": True}},
+                        [first.task] if own_first else [],
+                        user=user,
+                        bucket=bucket,
                     )
                     self.assert_task_filter(
-                        {"requested_by_viewer": {"_eq": False}}, [] if own_first else [first.task],
-                        user=user, bucket=bucket,
+                        {"requested_by_viewer": {"_eq": False}},
+                        [] if own_first else [first.task],
+                        user=user,
+                        bucket=bucket,
                     )
                     self.assert_task_filter(
                         {"_or": [{"requested_by_viewer": {"_eq": True}}, {"title": {"_eq": "Absent"}}]},
-                        [first.task] if own_first else [], user=user, bucket=bucket,
+                        [first.task] if own_first else [],
+                        user=user,
+                        bucket=bucket,
                     )
                     self.assert_task_filter(
-                        {"_not": {"_and": [
-                            {"requested_by_viewer": {"_eq": True}}, {"title": {"_eq": "Request"}},
-                        ]}}, [] if own_first else [first.task], user=user, bucket=bucket,
+                        {
+                            "_not": {
+                                "_and": [
+                                    {"requested_by_viewer": {"_eq": True}},
+                                    {"title": {"_eq": "Request"}},
+                                ]
+                            }
+                        },
+                        [] if own_first else [first.task],
+                        user=user,
+                        bucket=bucket,
                     )
                     self.assert_task_filter(
-                        {"requester_name": {"_eq": first.party.display_name}}, [first.task], user=user, bucket=bucket,
+                        {"requester_name": {"_eq": first.party.display_name}},
+                        [first.task],
+                        user=user,
+                        bucket=bucket,
                     )
                     self.assert_task_filter(
-                        {"requester_name": {"_eq": later.party.display_name}}, [], user=user, bucket=bucket,
+                        {"requester_name": {"_eq": later.party.display_name}},
+                        [],
+                        user=user,
+                        bucket=bucket,
                     )
 
     def test_anonymous_actor_matches_neither_task_requester_filter(self):
@@ -678,7 +688,8 @@ class NeedAccessTests(IntakeAccessCase):
         schemas = GraphQLSchemas.from_discovery()
         for bucket in ("public", "console"):
             fields = next(
-                resource for resource in schemas.render_metadata()[bucket]["angee"]["resources"]
+                resource
+                for resource in schemas.render_metadata()[bucket]["angee"]["resources"]
                 if resource["modelLabel"] == "projects.Task"
             )["query"]["fields"]
             self.assertIn("iContains", fields["requester_name"]["filter"]["operators"])
@@ -686,7 +697,8 @@ class NeedAccessTests(IntakeAccessCase):
             filters = schemas.graphql_schema(bucket).get_type("project_tasks_bool_exp")
             self.assertFalse({"email", "claimed_email", "requester_email", "requester__email"} & filters.fields.keys())
             text_filters = [
-                name for name, field in filters.fields.items()
+                name
+                for name, field in filters.fields.items()
                 if isinstance(comparison := get_named_type(field.type), GraphQLInputObjectType)
                 and "_ilike" in comparison.fields
             ]
@@ -696,7 +708,10 @@ class NeedAccessTests(IntakeAccessCase):
                 for email in ("contact-sentinel@example.com", self.reader.email):
                     with self.subTest(bucket=bucket, filter=name, email=email):
                         self.assert_task_filter(
-                            {name: {"_ilike": f"%{email}%"}}, [], user=self.reader, bucket=bucket,
+                            {name: {"_ilike": f"%{email}%"}},
+                            [],
+                            user=self.reader,
+                            bucket=bucket,
                         )
 
     def test_decision_tracks_the_current_sharers(self):
@@ -937,7 +952,6 @@ class NeedAccessTests(IntakeAccessCase):
         self.assertEqual(result, {"ok": False, "validation_errors": {"canonical": ["RECORD_ACCESS_SUBJECT_REFUSED"]}})
         source.refresh_from_db()
         self.assertNotEqual(source.task_id, canonical.task_id)
-        self.assertIsNone(source.original_task_id)
         self.assertEqual(self.Task._base_manager.get(pk=source.task_id).stage_id, before_stage)
         self.assertFalse(
             apps.get_model("projects", "TaskRelation")._base_manager.filter(task_id=source.task_id).exists()

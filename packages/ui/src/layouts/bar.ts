@@ -38,6 +38,9 @@ import { textRoleVariants } from "../ui/text";
 // (px-3 / px-3.5 / px-4 / px-5) and gaps that this scale normalizes. A bar that
 // must keep a non-scale value (TopBar's asymmetric `pl-4`, Statusline's `px-3.5`)
 // passes it via `className`; intentional convergence is recorded when wired.
+/**
+ * @kind token
+ */
 export const barVariants = tv({
   base: "flex min-w-0 shrink-0",
   variants: {

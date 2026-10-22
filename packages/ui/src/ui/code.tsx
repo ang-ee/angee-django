@@ -7,6 +7,9 @@ import { tv, type VariantProps } from "../lib/variants";
 // the bundled fill matrix, which would add a background). `box` is the
 // orthogonal surface axis (renamed from `surface` so the word stays reserved
 // for the `variant="surface"` fill elsewhere).
+/**
+ * @kind token
+ */
 export const codeVariants = tv({
   base: "inline-flex max-w-full items-center rounded-6 font-mono leading-none",
   variants: {
@@ -25,7 +28,7 @@ export const codeVariants = tv({
     },
     size: {
       sm: "text-2xs",
-      md: "text-xs",
+      md: "text-12",
     },
     truncate: {
       true: "min-w-0 truncate",
@@ -40,8 +43,11 @@ export const codeVariants = tv({
   },
 });
 
+/**
+ * @kind token
+ */
 export const codeBlockVariants = tv({
-  base: "block max-w-full overflow-x-auto rounded-6 border border-border-subtle bg-inset p-3 font-mono text-xs leading-5 text-fg",
+  base: "block max-w-full overflow-x-auto rounded-6 border border-border-subtle bg-inset p-3 font-mono text-12 leading-5 text-fg",
   variants: {
     wrap: {
       true: "whitespace-pre-wrap break-words",
@@ -64,11 +70,6 @@ export const codeBlockVariants = tv({
 type CodeRecipeProps = VariantProps<typeof codeVariants>;
 type CodeBlockRecipeProps = VariantProps<typeof codeBlockVariants>;
 
-export type CodeTone = NonNullable<CodeRecipeProps["tone"]>;
-export type CodeBox = NonNullable<CodeRecipeProps["box"]>;
-export type CodeSize = NonNullable<CodeRecipeProps["size"]>;
-export type CodeBlockTone = NonNullable<CodeBlockRecipeProps["tone"]>;
-
 export type CodeProps = Omit<
   React.HTMLAttributes<HTMLElement>,
   "className" | "color"
@@ -77,6 +78,9 @@ export type CodeProps = Omit<
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const Code = React.forwardRef<HTMLElement, CodeProps>(function Code(
   {
     className,
@@ -106,6 +110,9 @@ export type CodeBlockProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner Code
+ */
 export const CodeBlock = React.forwardRef<HTMLPreElement, CodeBlockProps>(
   function CodeBlock(
     { children, className, tone = "neutral", wrap = false, ...props },

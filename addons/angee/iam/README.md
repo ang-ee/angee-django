@@ -24,8 +24,7 @@ confirmed opening verb.
 ## The people directory
 
 - **Names for everyone signed in.** `auth/user#read` is `authenticated`, so a
-  record embedding an account (assignee, owner, requester, `run_as`, an
-  activity's user) shows its display name to every reader. The web draws the
+  record embedding an account (assignee, owner, requester, `run_as`) shows its display name to every reader. The web draws the
   avatar's initials from that name. Records that carry a label instead resolve
   the same IAM label elevated (`angee.iam.identity`).
 - **Restricted fields** are field gates on `read_private` (`self + list`):
@@ -50,9 +49,9 @@ confirmed opening verb.
   query. Their search and ordering use the sign-in name and email only where
   the viewer reads them.
 - **Query axes.** Gated columns are never filters, sorts or groups. The `users`
-  resource filters activity through its `active` expression, which
-  `angee.base.scoping.gated_field_expression` makes NULL wherever the viewer
-  cannot read the field. The `iam.users.active` and `iam.users.deactivated`
+  resource filters activity through its `active` expression, REBAC's
+  `readable("is_active")`, which is NULL wherever the viewer cannot read the
+  field. The `iam.users.active` and `iam.users.deactivated`
   presets use it.
 
 ## Managed people

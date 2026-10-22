@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 16
+// @rebac_schema_revision: 22
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -9,13 +9,16 @@
 
 definition messaging/channel {
     relation integration: integrate/integration // rebac:field=integration_ptr
+    relation replier: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read   = integration->read + reader + admin->member
+    permission read   = integration->read + reader + replier + admin->member
+    permission reply  = replier + integration->write + admin->member
     permission write  = integration->write + admin->member
     permission delete = integration->write + admin->member
+    permission write__owner = integration->transfer
 }
 
 definition messaging/thread {
@@ -26,8 +29,16 @@ definition messaging/thread {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = channel->read + owner + editor + reader + admin->member
-    permission write  = channel->write + owner + editor + admin->member
+    // A folded conversation (`merged_into`) keeps its own grants: a channel copy
+    // reads through its channel, and a retired record's chatter is read through
+    // the surviving record's transcript. No arm reaches the survivor here: it
+    // would inline every chatter grant a second time, past SQLite's expression depth.
+    // The identity rule asserts same_as statements, which need read and write on both copies.
+    relation identity_role: provenance/role // rebac:const=messaging_identity_source
+    permission identity_source = identity_role->effective_member
+    permission read_granted = channel->read + owner + editor + reader + identity_source + admin->member
+    permission read = read_granted
+    permission write  = channel->write + owner + editor + identity_source + admin->member
     permission share  = owner + editor + admin->member
     permission delete = owner + channel->delete + admin->member
     permission transfer = owner + admin->member
@@ -41,6 +52,7 @@ definition messaging/message {
     relation thread: messaging/thread // rebac:field=thread
     relation channel: messaging/channel // rebac:field=channel
     relation editor: auth/user | auth/group#member
+    // Evidence-producing rules receive only explicit origin reads.
     relation reader: auth/user | auth/group#member
     relation trashed: messaging/message // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
     relation admin: angee/role // rebac:const=admin
@@ -49,9 +61,13 @@ definition messaging/message {
     // authenticated. Arrow-only through `trashed`; never check it directly.
     permission conceal = authenticated
     permission withheld = trashed->conceal
+    relation identity_role: provenance/role // rebac:const=messaging_identity_source
+    permission identity_source = identity_role->effective_member
     permission create = authenticated
-    permission read   = ((thread->read + channel->read + editor + reader) - withheld) + channel->write + admin->member
-    permission write  = thread->write + channel->write + editor + admin->member
+    permission read_granted = thread->read + channel->read + editor + reader
+    permission read = (read_granted - withheld) + channel->write + identity_source + admin->member
+    permission send_held = channel->write + admin->member
+    permission write  = thread->write + channel->write + editor + identity_source + admin->member
     permission delete = thread->delete + channel->write + editor + admin->member
 }
 
@@ -69,6 +85,7 @@ definition messaging/message {
 // chatter edge is the record's own thread, which the record's verbs materialize
 // under system context; its access rides on the thread. Files carry source
 // conversations, declared here.
+//
 definition messaging/thread_attachment {
     relation thread: messaging/thread // rebac:field=thread
     relation file: storage/file // rebac:field=target
@@ -101,27 +118,6 @@ definition messaging/thread_follower {
     permission delete = user + thread->write + attachment->write + admin->member
 }
 
-definition messaging/activity_type {
-    relation admin: angee/role // rebac:const=admin
-
-    permission read = authenticated
-    permission create = admin->member
-    permission write = admin->member
-    permission delete = admin->member
-}
-
-definition messaging/thread_activity {
-    relation thread: messaging/thread // rebac:field=thread
-    relation attachment: messaging/thread_attachment // rebac:field=attachment
-    relation user: auth/user // rebac:field=user
-    relation admin: angee/role // rebac:const=admin
-
-    permission create = authenticated
-    permission read   = user + thread->read + attachment->read + admin->member
-    permission write  = user + thread->write + attachment->write + admin->member
-    permission delete = user + thread->write + attachment->write + admin->member
-}
-
 definition messaging/thread_notification {
     relation thread: messaging/thread // rebac:field=thread
     relation attachment: messaging/thread_attachment // rebac:field=attachment
@@ -146,18 +142,6 @@ definition messaging/part {
     permission read   = message->read + editor + reader + admin->member
     permission write  = message->write + editor + admin->member
     permission delete = message->delete + admin->member
-}
-
-definition messaging/tracking_value {
-    relation message: messaging/message // rebac:field=message
-    relation editor: auth/user | auth/group#member
-    relation reader: auth/user | auth/group#member
-    relation admin: angee/role // rebac:const=admin
-
-    permission create = authenticated
-    permission read   = message->read + editor + reader + admin->member
-    permission write  = message->write + editor + admin->member
-    permission delete = message->write + admin->member
 }
 
 // A Fragment is content-addressed and shared across owners (dedup by text hash),

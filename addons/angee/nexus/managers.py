@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 
 from django.apps import apps
 from django.db import models, transaction
@@ -13,7 +13,10 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rebac import current_actor
 
-from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.models import AngeeManager, AngeeQuerySet
+
+if TYPE_CHECKING:
+    from angee.nexus.models import Cadence, Tie
 
 
 @dataclass
@@ -75,7 +78,7 @@ class NexusOverviewRows:
     due_count: int
 
 
-class TieQuerySet(AngeeQuerySet[Any]):
+class TieQuerySet[TieT: Tie](AngeeQuerySet[TieT]):
     """Party-pair scopes over the derived edge collection."""
 
     def around_party(self, party: Any) -> Self:
@@ -142,7 +145,6 @@ class TieQuerySet(AngeeQuerySet[Any]):
         circle_model = apps.get_model("parties", "Circle")
         circle_member_model = apps.get_model("parties", "CircleMember")
         handle_model = apps.get_model("parties", "Handle")
-        party_handle_model = apps.get_model("parties", "PartyHandle")
         cadence_model = apps.get_model("nexus", "Cadence")
         nodes: dict[str, dict[str, Any]] = {}
         edges: list[dict[str, Any]] = []
@@ -260,12 +262,12 @@ class TieQuerySet(AngeeQuerySet[Any]):
             }
             next_frontier: set[Any] = set()
             for party_id in candidate_party_ids:
-                party = visible_candidates.get(party_id)
-                if party is None:
+                candidate = visible_candidates.get(party_id)
+                if candidate is None:
                     continue
-                if not add_party(party):
+                if not add_party(candidate):
                     break
-                next_frontier.add(party.pk)
+                next_frontier.add(candidate.pk)
 
             for tie in tie_candidates:
                 if len(edges) >= edge_limit:
@@ -348,7 +350,6 @@ class TieQuerySet(AngeeQuerySet[Any]):
                             "kind": str(kind.slug if kind else ""),
                             "kind_name": str(kind.name if kind else ""),
                             "kind_inverse_name": str(kind.inverse_name if kind else ""),
-                            "source": str(relationship.source),
                         },
                     }
                 )
@@ -359,10 +360,10 @@ class TieQuerySet(AngeeQuerySet[Any]):
         party_ids = set(parties)
         cadences = cadence_model.objects.filter(party_id__in=party_ids).scoped()
         for cadence in cadences:
-            party = parties.get(cadence.party_id)
-            if party is None:
+            cadence_party = parties.get(cadence.party_id)
+            if cadence_party is None:
                 continue
-            nodes[public_id(party)]["meta"]["cadence"] = {
+            nodes[public_id(cadence_party)]["meta"]["cadence"] = {
                 "id": public_id(cadence),
                 "cadence_days": int(cadence.cadence_days),
                 "touch_due_at": (cadence.touch_due_at.isoformat() if cadence.touch_due_at is not None else None),
@@ -424,33 +425,36 @@ class TieQuerySet(AngeeQuerySet[Any]):
                             "model": "parties.CircleMember",
                             "record_id": edge_id,
                             "confidence": float(membership.confidence),
-                            "source": str(membership.source),
                         },
                     }
                 )
 
         if "identity" in selected_lenses:
-            party_handles = list(
-                party_handle_model.objects.filter(
-                    party_id__in=party_ids,
-                    is_dismissed=False,
+            statement_model = party_model.statements.model
+            statements = list(
+                party_model.objects.handle_statements()
+                .for_reader(current_actor())
+                .members()
+                .filter(
+                    subject_id__in=party_ids,
+                    status=statement_model.StatementStatus.ASSERTED,
+                    snak=statement_model.StatementSnak.VALUE,
                 )
-                .scoped()
-                .order_by("-is_confirmed", "-confidence", "sqid")[: edge_limit + 1]
+                .order_by(*statement_model.trust_ordering)[: edge_limit + 1]
             )
-            if len(party_handles) > edge_limit:
-                party_handles = party_handles[:edge_limit]
+            if len(statements) > edge_limit:
+                statements = statements[:edge_limit]
                 truncated = True
-            handle_ids = {link.handle_id for link in party_handles}
+            handle_ids = {statement.handle_id for statement in statements}
             handles = {
                 handle.pk: handle
                 for handle in handle_model.objects.filter(pk__in=handle_ids)
                 .scoped()
                 .order_by("platform", "normalized_value", "sqid")
             }
-            for link in party_handles:
-                handle = handles.get(link.handle_id)
-                if link.party_id not in parties or handle is None:
+            for statement in statements:
+                handle = handles.get(statement.handle_id)
+                if statement.subject_id not in parties or handle is None:
                     continue
                 node_id = public_id(handle)
                 if node_id not in nodes:
@@ -468,10 +472,10 @@ class TieQuerySet(AngeeQuerySet[Any]):
                             "record_id": node_id,
                             "platform": str(handle.platform),
                             "confirmed": bool(handle.party_link_confirmed),
-                            "resolved": handle.party_id == link.party_id,
+                            "resolved": handle.party_id == statement.subject_id,
                         },
                     }
-                edge_id = public_id(link)
+                edge_id = public_id(statement)
                 if len(edges) >= edge_limit:
                     truncated = True
                     break
@@ -481,17 +485,17 @@ class TieQuerySet(AngeeQuerySet[Any]):
                 edges.append(
                     {
                         "id": edge_id,
-                        "source": public_id(parties[link.party_id]),
+                        "source": public_id(parties[statement.subject_id]),
                         "target": node_id,
                         "kind": "identity",
                         "meta": {
-                            "model": "parties.PartyHandle",
+                            "model": "parties.PartyStatement",
                             "record_id": edge_id,
                             "handle_id": node_id,
-                            "confidence": float(link.confidence),
-                            "source": str(link.source),
-                            "is_confirmed": bool(link.is_confirmed),
-                            "is_resolved": handle.party_id == link.party_id,
+                            "confidence": float(statement.confidence),
+                            "source": str(statement.asserted_by),
+                            "is_confirmed": bool(statement.is_confirmed),
+                            "is_resolved": handle.party_id == statement.subject_id,
                         },
                     }
                 )
@@ -539,10 +543,13 @@ class TieQuerySet(AngeeQuerySet[Any]):
         )
 
 
-class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
+_TieManagerBase = AngeeManager.from_queryset(TieQuerySet)
+
+
+class TieManager[TieT: Tie](_TieManagerBase[TieT]):
     """Own the deliberate-interaction derivation and canonical pair lookups."""
 
-    def for_parties(self, first: Any, second: Any) -> Any | None:
+    def for_parties(self, first: Any, second: Any) -> TieT | None:
         """Return the canonically ordered edge between two parties, when present."""
 
         party_a_id, party_b_id = sorted((first.pk, second.pk))
@@ -709,7 +716,7 @@ class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
         return addressed_rows, reply_rows, mention_rows
 
 
-class CadenceManager(AngeeManager):
+class CadenceManager[CadenceT: Cadence](AngeeManager[CadenceT]):
     """Own derived due-date refreshes for the human cadence collection."""
 
     def refresh_touch_due(self) -> None:

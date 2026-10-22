@@ -1,7 +1,7 @@
 import * as React from "react";
 import { holdsPermission } from "@angee/metadata";
 import { useAuthoredMutation, useAuthoredQuery, extractActionOutcome } from "@angee/refine";
-import { useAccessRole, type AccessRoleOwnerProps, type AccessRoleState } from "@angee/iam";
+import { subjectUserId, useAccessRole, userSubject, type AccessRoleOwnerProps, type AccessRoleState } from "@angee/iam";
 import { useActionResultRun } from "@angee/ui";
 
 import { AdmitNeedRequesterDocument, RemoveNeedRequesterDocument, TaskAccessNeedsDocument } from "./documents";
@@ -26,15 +26,16 @@ export function TaskRequesterAccessRole({ targetId, record }: AccessRoleOwnerPro
   const canManage = Boolean(record && holdsPermission(record, "share"));
   const people = React.useMemo(() => needs.flatMap((need) =>
     need.requester_user && need.requester_access_granted ? [{
-      subject: `auth/user:${need.requester_user}`, label: need.party?.display_name || need.claimed_name || t("access.requester"),
+      subject: userSubject(need.requester_user), label: need.party?.display_name || need.claimed_name || t("access.requester"),
       roleId: "intake.requester", seatId: need.id,
       roleLabel: t("access.requester"), removable: canManage && holdsPermission(need, "write"),
     }] : []), [canManage, needs, t]);
   const add = React.useCallback(async (subject: string) => {
     const need = vacant.length === 1 ? vacant[0] : undefined;
-    if (!need || !subject.startsWith("auth/user:")) return false;
+    const user = subjectUserId(subject);
+    if (!need || user === null) return false;
     const result = await settle(async () => extractActionOutcome(await admit({
-      need: need.id, user: subject.slice("auth/user:".length),
+      need: need.id, user,
     }), "admit_need_requester"));
     return result?.ok === true;
   }, [admit, settle, vacant]);

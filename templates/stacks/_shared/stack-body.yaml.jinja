@@ -77,7 +77,7 @@ secrets_backend:
 
 secrets:
   # The instance's Django SECRET_KEY, in BOTH modes: encrypted-at-rest fields
-  # (angee.base EncryptedField — e.g. integrate.oauthclient.client_secret) derive
+  # (angee EncryptedField — e.g. integrate.oauthclient.client_secret) derive
   # their Fernet key from it, so switching a stack between process and docker
   # rendering must NEVER rotate it. The env-file backend reuses the value already
   # in .env, so a re-render keeps the key stable.
@@ -421,26 +421,28 @@ services:
     after: [provision{% if stack_flavor == "instance" %}, caddy{% else %}{% if effective_serve_mode == "production" %}, frontend{% endif %}{% endif %}]
 
 {# pongo2 has no list literals and takes Django-style filter args; split a string. #}
-{# The shared worker plus one dedicated `celery-<queue>` worker per `celery_queues` entry: #}
-{# a queue worker isolates an addon's long-lived tasks (threads pool — enforces no time #}
-{# limits, so queue isolation IS the protection) from the shared prefork worker, and #}
-{# inherits this block's env/command owner instead of duplicating it elsewhere. The shared #}
-{# worker embeds beat (`--beat`): never scale it, beat has no leader lock (one scheduler per #}
-{# stack); beat's schedule lives in the database. The #}
-{# trailing comma yields one empty item when celery_queues is blank; the guard skips it. #}
-{% for role in "worker,"|add:celery_queues|split:"," %}{% if role %}
-  # Dedicated queue workers retain their own pool and concurrency policy.
+{# The shared worker plus one `celery-queues` worker consuming every `celery_queues` entry: #}
+{# it isolates addons' long-lived tasks (threads pool — enforces no time limits, so queue #}
+{# isolation IS the protection) from the shared prefork worker, and inherits this block's #}
+{# env/command owner instead of duplicating it elsewhere. A live session holds one thread #}
+{# for its connection, so the pool keeps 8 threads per queue; one process loads the app #}
+{# once for every queue instead of once per queue. The shared worker embeds beat #}
+{# (`--beat`): never scale it, beat has no leader lock (one scheduler per stack); beat's #}
+{# schedule lives in the database. A blank `queue_worker` skips the queue worker's item. #}
+{% if celery_queues %}{% set queue_worker = "queues" %}{% else %}{% set queue_worker = "" %}{% endif %}
+{% for role in "worker,"|add:queue_worker|split:"," %}{% if role %}
+  # The queue worker retains its own pool and concurrency policy.
   celery-{{ role }}:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
     # Let Celery finish a warm shutdown, then bound native supervisor updates.
     stop_grace_period: 30s
-{% if runtime_mode == "process" %}    command: ["uv", "run", "celery", "-A", "angee.jobs.celery:app", "worker", {% if role == "worker" %}"--beat"{% else %}"-Q", "{{ role }}", "--pool", "threads", "--concurrency", "8"{% endif %}, "--loglevel=INFO"]
+{% if runtime_mode == "process" %}    command: ["uv", "run", "celery", "-A", "angee.jobs.celery:app", "worker", {% if role == "worker" %}"--beat"{% else %}"-Q", "{{ celery_queues }}", "--pool", "threads", "--concurrency", "{{ celery_queues|split:","|length * 8 }}"{% endif %}, "--loglevel=INFO"]
     after: [provision]
 {% else %}    command:
       - sh
       - "-c"
       - >-
-        {{ python_sync }}exec celery -A angee.jobs.celery:app worker {% if role == "worker" %}--beat{% else %}-Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO
+        {{ python_sync }}exec celery -A angee.jobs.celery:app worker {% if role == "worker" %}--beat{% else %}-Q {{ celery_queues }} --pool threads --concurrency {{ celery_queues|split:","|length * 8 }}{% endif %} --loglevel=INFO
     after: [provision{% if redis_mode == "external" %}{% else %}, redis{% endif %}]
 {% endif %}
 {% endif %}{% endfor %}

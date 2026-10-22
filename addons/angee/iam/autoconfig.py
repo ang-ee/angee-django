@@ -15,9 +15,8 @@ SETTINGS = {
         "django.middleware.csrf.CsrfViewMiddleware",
         "django.contrib.auth.middleware.AuthenticationMiddleware",
         "rebac.middleware.ActorMiddleware",
+        "angee.middleware.ChangesetMiddleware",
         "angee.iam.middleware.BearerTokenCsrfExemptMiddleware",
-        "simple_history.middleware.HistoryRequestMiddleware",
-        "reversion.middleware.RevisionMiddleware",
         "axes.middleware.AxesMiddleware",
     ],
     "AUTHENTICATION_BACKENDS:append": [

@@ -1,87 +1,44 @@
 import * as React from "react";
 import type { DeletePreviewNode } from "@angee/refine";
 
-import { Glyph } from "../../chrome/Glyph";
+import { useUiT } from "../../i18n";
+import { Card } from "../../ui/card";
+import { textRoleVariants } from "../../ui/text";
+import { Tree, type TreeNode } from "../../ui/tree";
 
 export interface DeletePreviewTreeProps {
   nodes: readonly DeletePreviewNode[];
 }
 
+/** The delete preview as a `Tree`: records to delete with their dependents, two levels open.
+ * @kind surface
+ * @owner Tree
+ */
 export function DeletePreviewTree({
   nodes,
 }: DeletePreviewTreeProps): React.ReactElement {
+  const t = useUiT();
+  const treeNodes = React.useMemo(
+    () => nodes.map((node, index) => toTreeNode(node, String(index), 0)),
+    [nodes],
+  );
   return (
-    <div className="max-h-[22rem] overflow-auto rounded-6 border border-border-subtle bg-sheet-2 p-2">
-      <ul className="space-y-1">
-        {nodes.map((node, index) => (
-          <DeletePreviewTreeItem
-            key={treeNodeKey(node, index)}
-            node={node}
-            depth={0}
-          />
-        ))}
-      </ul>
-    </div>
+    <Card className="max-h-[22rem] overflow-auto p-2 shadow-none">
+      <Tree aria-label={t("deletePreview.rowsAffected")} nodes={treeNodes} />
+    </Card>
   );
 }
 
-function DeletePreviewTreeItem({
-  node,
-  depth,
-}: {
-  node: DeletePreviewNode;
-  depth: number;
-}): React.ReactElement {
-  const hasChildren = node.children.length > 0;
-  const [expanded, setExpanded] = React.useState(() => depth < 2);
-  const labelId = React.useId();
-  const content = (
-    <span className="flex min-w-0 items-baseline gap-2">
-      <span id={labelId} className="truncate text-fg">
-        {node.objectLabel}
+function toTreeNode(node: DeletePreviewNode, path: string, depth: number): TreeNode {
+  return {
+    id: `${path}:${node.objectId ?? ""}:${node.label}:${node.objectLabel}`,
+    label: (
+      <span className="flex min-w-0 items-baseline gap-2">
+        <span className="truncate text-fg">{node.objectLabel}</span>
+        {node.label ? <span className={textRoleVariants({ role: "caption", className: "shrink-0" })}>{node.label}</span> : null}
       </span>
-      {node.label ? (
-        <span className="shrink-0 text-12 text-fg-muted">{node.label}</span>
-      ) : null}
-    </span>
-  );
-
-  return (
-    <li>
-      <div
-        className="flex min-w-0 items-center gap-1 rounded-6 px-1 py-0.5 text-13"
-        style={{ paddingLeft: `${depth * 1.125 + 0.25}rem` }}
-      >
-        {hasChildren ? (
-          <button
-            type="button"
-            className="grid size-5 shrink-0 place-content-center rounded-6 text-fg-muted outline-none hover:bg-inset hover:text-fg focus-visible:focus-ring"
-            aria-expanded={expanded}
-            aria-labelledby={labelId}
-            onClick={() => setExpanded((current) => !current)}
-          >
-            <Glyph name={expanded ? "chevron-down" : "chevron-right"} />
-          </button>
-        ) : (
-          <span className="size-5 shrink-0" aria-hidden />
-        )}
-        {content}
-      </div>
-      {hasChildren && expanded ? (
-        <ul className="space-y-1">
-          {node.children.map((child, index) => (
-            <DeletePreviewTreeItem
-              key={treeNodeKey(child, index)}
-              node={child}
-              depth={depth + 1}
-            />
-          ))}
-        </ul>
-      ) : null}
-    </li>
-  );
-}
-
-function treeNodeKey(node: DeletePreviewNode, index: number): string {
-  return `${node.objectId ?? ""}:${node.label}:${node.objectLabel}:${index}`;
+    ),
+    defaultCollapsed: depth >= 2,
+    children: node.children.map((child, index) => toTreeNode(child, `${path}.${index}`, depth + 1)),
+  };
 }

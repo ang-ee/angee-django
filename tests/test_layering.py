@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -12,13 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from angee.messaging import _wire, identity
+from angee.messaging import identity
 from tests.test_base_layering import _module_imports
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CORE_SERVING_IMPORTS = (
     "angee.asgi",
-    "angee.base",
+    "angee",
     "angee.compose",
     "angee.jobs",
 )
@@ -153,7 +154,6 @@ def test_messaging_identity_public_owner() -> None:
     for name in ("mapping", "millis_to_utc", "sequence", "text"):
         public = getattr(identity, name)
         assert public.__module__ == "angee.messaging.identity"
-        assert getattr(_wire, name) is public
     assert identity.mapping({"id": 1}) == {"id": 1}
     assert identity.mapping("id") is None
     assert identity.sequence([1, 2]) == [1, 2]
@@ -161,14 +161,6 @@ def test_messaging_identity_public_owner() -> None:
     assert identity.text("  id  ") == "id"
     assert identity.millis_to_utc(1000) == datetime(1970, 1, 1, 0, 0, 1, tzinfo=timezone.utc)
     assert identity.millis_to_utc("invalid") is None
-
-    violations = {
-        str(path.relative_to(PROJECT_ROOT))
-        for path in sorted((PROJECT_ROOT / "addons" / "angee").rglob("*.py"))
-        if "angee.messaging._wire" in _module_imports(path)
-    }
-    assert not violations
-
 
 def test_framework_does_not_import_retired_ownership_owner() -> None:
     """Framework code never imports the retired ownership owner."""
@@ -186,6 +178,20 @@ def test_framework_does_not_import_retired_ownership_owner() -> None:
     assert not {path: names for path, names in violations.items() if names}
 
 
+def test_addons_never_import_the_build_time_composer() -> None:
+    """Serving code never loads ``angee.compose``; addons share its facts through ``angee``."""
+    root = PROJECT_ROOT / "addons/angee"
+    violations = {
+        path.relative_to(PROJECT_ROOT).as_posix(): sorted(
+            name for name in _module_imports(path)
+            if name == "angee.compose" or name.startswith("angee.compose.")
+        )
+        for path in root.rglob("*.py")
+        if "tests" not in path.relative_to(root).parts
+    }
+    assert not {path: names for path, names in violations.items() if names}
+
+
 def test_addon_test_harness_does_not_import_the_composer() -> None:
     """Build-time permission composition belongs to core test support."""
     root = PROJECT_ROOT / "addons/angee/workflows/testing"
@@ -199,22 +205,8 @@ def test_addon_test_harness_does_not_import_the_composer() -> None:
     assert not {path: names for path, names in violations.items() if names}
 
 
-def test_source_does_not_import_historical_relationships() -> None:
-    """Only external materialized history and tests may use the frozen API."""
-
-    module = "angee.base.historical_relationships"
-    violations = {}
-    for directory in ("angee", "addons", "examples", "templates"):
-        for path in sorted((PROJECT_ROOT / directory).rglob("*.py")):
-            relative = path.relative_to(PROJECT_ROOT)
-            imports = sorted(name for name in _module_imports(path) if name == module or name.startswith(f"{module}."))
-            if imports:
-                violations[str(relative)] = imports
-    assert not violations
-
-
 def _production_sources(root: Path) -> Iterator[tuple[Path, ast.Module]]:
-    """Read active Python sources, preserving migration history and test probes."""
+    """Read active Python sources, excluding migrations and test probes."""
 
     for path in sorted(root.rglob("*.py")):
         if (
@@ -271,3 +263,43 @@ def test_blank_state_fields_use_null() -> None:
 def test_blank_state_field_syntax(declaration: str, expected: list[int]) -> None:
     tree = ast.parse(f"class Example:\n    state = {declaration}\n")
     assert list(_blank_state_fields_without_null(tree)) == expected
+
+
+INFERENCE_BACKEND_MODULES = (
+    "angee.agents_integrate_anthropic.backend",
+    "angee.agents_integrate_ollama.backend",
+    "angee.agents_integrate_openai.backend",
+)
+INFERENCE_VENDOR_SDKS = ("anthropic", "openai")
+
+
+def test_inference_backends_catalogue_without_their_vendor_sdks() -> None:
+    """Listing and labelling provider backends loads no vendor SDK; binding a model does."""
+
+    script = "\n".join(
+        (
+            "import django, importlib, json, sys",
+            "django.setup()",
+            "from angee.agents.backends import InferenceBackend",
+            "from angee.impl import check_impl_registry, impl_choices",
+            f"for name in {INFERENCE_BACKEND_MODULES!r}:",
+            "    importlib.import_module(name)",
+            "impl_choices(InferenceBackend)",
+            "check_impl_registry(InferenceBackend)",
+            "print(json.dumps(sorted(sys.modules)))",
+        )
+    )
+    paths = (PROJECT_ROOT, PROJECT_ROOT / "addons", PROJECT_ROOT / "examples" / "addons")
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=PROJECT_ROOT,
+        env={**os.environ, "DJANGO_SETTINGS_MODULE": "tests.settings", "PYTHONPATH": os.pathsep.join(map(str, paths))},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    closure = set(json.loads(result.stdout.splitlines()[-1]))
+
+    assert {
+        sdk for sdk in INFERENCE_VENDOR_SDKS if any(module == sdk or module.startswith(f"{sdk}.") for module in closure)
+    } == set()

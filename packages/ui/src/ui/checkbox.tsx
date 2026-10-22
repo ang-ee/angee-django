@@ -7,6 +7,9 @@ import { Glyph } from "../chrome/Glyph";
 import { tv, type VariantProps } from "../lib/variants";
 import { interactiveSurface, widgetControlPresentationProps, type WidgetControlSurfaceProps } from "./widget-control";
 
+/**
+ * @kind token
+ */
 export const checkboxVariants = tv({
   slots: {
     // Checkbox is a check square (not a box-surface widget control), so it
@@ -40,8 +43,6 @@ type CheckboxRecipeProps = VariantProps<typeof checkboxVariants>;
 type CheckedChangeHandler = NonNullable<BaseCheckboxRootProps["onCheckedChange"]>;
 type CheckedChangeDetails = Parameters<CheckedChangeHandler>[1];
 
-export type CheckboxSize = NonNullable<CheckboxRecipeProps["size"]>;
-
 export interface CheckboxVisualProps
   extends Pick<CheckboxRecipeProps, "invalid" | "size"> {
   checked?: boolean;
@@ -49,6 +50,9 @@ export interface CheckboxVisualProps
   indeterminate?: boolean;
 }
 
+/**
+ * @owner Checkbox
+ */
 export function CheckboxVisual({
   checked = false,
   className,
@@ -84,6 +88,9 @@ export type CheckboxProps = Omit<
     onCheckedChange?: BaseCheckboxRootProps["onCheckedChange"];
   };
 
+/**
+ * @kind primitive
+ */
 export const Checkbox = React.forwardRef<HTMLElement, CheckboxProps>(
   function Checkbox(
     {

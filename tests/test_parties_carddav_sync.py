@@ -7,6 +7,7 @@ persistence, without replacing the ingest owner or the three-way classifier.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
@@ -14,6 +15,7 @@ import xml.etree.ElementTree as ElementTree
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, replace
 from datetime import date, timedelta
+from io import StringIO
 from typing import Any
 from urllib.parse import urljoin
 from xml.sax.saxutils import escape
@@ -22,22 +24,23 @@ import httpcore2
 import httpx2
 import pytest
 import vobject
+from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.db import connection
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClient, PinnedTransport, ResponseTooLargeError
 from angee.integrate.states import (
     ConflictKeep,
-    DiscrepancyKind,
-    DiscrepancyStatus,
     LinkStatus,
     StreamDirection,
     StreamKind,
     StreamPhase,
+    SyncFailureKind,
+    SyncFailureStatus,
 )
 from angee.integrate.streams import (
     BridgeSyncError,
@@ -45,12 +48,13 @@ from angee.integrate.streams import (
     RemoteRejected,
     advance_stream,
     begin_stream_cycle,
+    preview_push,
     push_stream,
     reconcile_stream,
     sync_bridge,
 )
-from angee.integrate.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
-from angee.messaging.testing.models import Directory, Folder, Handle, Party, PartyHandle, Person, RelationshipKind
+from angee.integrate.testing.models import RecordLink, SyncStream
+from angee.messaging.testing.models import Directory, Folder, Handle, Party, Person, RelationshipKind
 from angee.parties.backends import (
     CONTACT_FIELDS,
     ParsedAddress,
@@ -59,7 +63,6 @@ from angee.parties.backends import (
     contact_from_projection,
     contact_projection,
 )
-from angee.parties.mixins import LinkSource
 from angee.parties_integrate_carddav import backend as carddav_backend
 from angee.parties_integrate_carddav.backend import (
     _DAV_RESPONSE_CAP,
@@ -68,8 +71,12 @@ from angee.parties_integrate_carddav.backend import (
     _parse_vcard,
     _xml,
 )
+from angee.serialization import canonical_json_sha256
+from angee.storage.exceptions import UploadTargetNotFound, UploadTooLarge
 from angee.storage.models import UploadState
-from tests.conftest import Backend, Drive, File, MimeType, make_integration
+from tests.conftest import Backend, Drive, File, MimeType, current_stream, make_integration
+from tests.stream_adapters import applied_history, failure_state
+from tests.test_storage import PNG_BYTES
 
 _BASE = "https://dav.example/"
 _BOOK = f"{_BASE}books/contacts/"
@@ -217,9 +224,8 @@ class FakeDav:
             )
         card, etag = self.cards[href]
         props = (
-            (f"<d:getetag>{escape(etag)}</d:getetag>" if self.list_etags or data else "")
-            + "<d:getcontenttype>text/vcard</d:getcontenttype><d:resourcetype/>"
-        )
+            f"<d:getetag>{escape(etag)}</d:getetag>" if self.list_etags or data else ""
+        ) + "<d:getcontenttype>text/vcard</d:getcontenttype><d:resourcetype/>"
         if data:
             props += f"<card:address-data>{escape(card)}</card:address-data>"
         return self._property(href, props)
@@ -256,7 +262,15 @@ class Replica:
     def baseline(self) -> tuple[Any, Any]:
         result = self.pull()
         assert result.count == 1
-        return Person.objects.get(source_uid="ada"), RecordLink.objects.get(stream=self.stream, external_key="ada")
+        link = RecordLink.objects.get(stream=self.stream, external_key="ada")
+        return link.target, link
+
+    def enroll(self, person: Any, *, external_key: str | None = None) -> Any:
+        """Bind the existing contact fixture through the external-identity owner."""
+        link = RecordLink.objects.observe(self.stream, external_key or f"angee-{person.pk}")
+        link.target = person
+        link.save(update_fields=["target_content_type", "target_object_id"])
+        return link
 
     def reconcile(self, *, page_bound: int = 100) -> int:
         absent = 0
@@ -269,10 +283,10 @@ class Replica:
 
 
 @pytest.fixture
-def replica(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[Replica]:
+def replica(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[Replica]:
     """Create the complete existing model graph, preserving real ingest/cascades."""
 
-    del transactional_db
+    del composed_tables
     with system_context(reason="test CardDAV replica"):
         directory = make_integration(
             "carddav-replica",
@@ -304,25 +318,28 @@ def replica(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[
             StreamKind.RECORD_REPLICA,
             StreamDirection.BIDIRECTIONAL,
         )
-        stream = SyncStream.objects.current(directory, **asdict(definition))
+        stream = current_stream(directory, **asdict(definition))
         yield Replica(directory, backend, server, stream)
         backend.close()
 
 
 def test_new_remote_contact_uses_ingest_identity_and_both_bases(replica: Replica) -> None:
     person, link = replica.baseline()
-    assert person.folder_id == Folder.objects.get(directory=replica.directory, source_href=_BOOK).pk
+    assert link.stream.partition == Folder.objects.get(directory=replica.directory, source_href=_BOOK).source_href
     assert link.target_object_id == str(person.pk)
     assert link.remote_version == replica.server.cards[_HREF][1]
-    assert link.remote_base_hash and link.local_base_hash
-    assert link.local_base_hash == canonical_json_sha256(contact_projection(Party.objects.project_contact(person)))
+    assert link.applied_base.source_hash and canonical_json_sha256(link.applied_base.mapped_payload)
+    assert canonical_json_sha256(link.applied_base.mapped_payload) == canonical_json_sha256(
+        contact_projection(Party.objects.project_contact(person))
+    )
     assert link.origin == "remote"
     assert replica.stream.cursor == {"sync_token": replica.server.token}
 
 
 @pytest.mark.parametrize("ctag", [False, True])
 def test_tokenless_collection_lists_etags_for_new_changed_removed_and_unchanged_cards(
-    replica: Replica, ctag: bool,
+    replica: Replica,
+    ctag: bool,
 ) -> None:
     replica.server.has_sync_token = False
     replica.server.has_ctag = ctag
@@ -345,11 +362,12 @@ def test_tokenless_collection_lists_etags_for_new_changed_removed_and_unchanged_
     link.refresh_from_db()
     assert person.notes == "Changed"
     assert link.remote_version == replica.server.cards[_HREF][1]
-    assert Person.objects.get(source_uid="grace").display_name == "Grace Hopper"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="grace").target.display_name == "Grace Hopper"
     multigets = [body for method, _, _, body in replica.server.requests if method == "REPORT"]
     assert len(multigets) == 1 and "sync-collection" not in multigets[0]
     assert {item.text for item in ElementTree.fromstring(multigets[0]).findall("d:href", _NAMESPACES)} == {
-        _HREF, grace_href,
+        _HREF,
+        grace_href,
     }
 
     replica.server.remove(_HREF)
@@ -371,7 +389,10 @@ def test_tokenless_listing_pages_resume_without_relisting_and_commit_the_capture
     replica.stream = result.stream
     assert not result.exhausted
     assert replica.stream.cursor == {
-        "sync_token": "", "next_token": "", "next_ctag": captured_ctag, "more": False,
+        "sync_token": "",
+        "next_token": "",
+        "next_ctag": captured_ctag,
+        "more": False,
         "pending": [{"href": grace_href, "removed": False}],
     }
     replica.server.store(_HREF, _card(notes="Edited during paging"))
@@ -382,7 +403,7 @@ def test_tokenless_listing_pages_resume_without_relisting_and_commit_the_capture
     assert [request[0] for request in replica.server.requests] == ["REPORT"]
     assert replica.stream.cursor == {"sync_token": "", "ctag": captured_ctag}
     assert replica.pull().count == 1
-    assert Person.objects.get(source_uid="ada").notes == "Edited during paging"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="ada").target.notes == "Edited during paging"
     assert replica.stream.cursor == {"sync_token": "", "ctag": str(replica.server.version)}
 
 
@@ -395,11 +416,12 @@ def test_tokenless_collection_completes_a_bridge_sync_without_error_telemetry(re
     assert replica.directory.sync_error == replica.directory.last_error == ""
     assert replica.directory.sync_stage == replica.directory.SyncStage.COMPLETED
     assert replica.stream.cursor == {"sync_token": "", "ctag": str(replica.server.version)}
-    assert Person.objects.get(source_uid="ada").display_name == "Ada Lovelace"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="ada").target.display_name == "Ada Lovelace"
 
 
 def test_carddav_refusal_reaches_bridge_telemetry_with_the_failed_partition(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch,
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cause = CardDavError("The CardDAV address book does not expose a DAV:sync-token.")
 
@@ -419,14 +441,15 @@ def test_carddav_refusal_reaches_bridge_telemetry_with_the_failed_partition(
 
 
 def test_collection_markers_ignore_unsupported_properties_and_preserve_successful_ctag(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch,
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     props = (
-        f'<d:response><d:href>{_BOOK}</d:href>'
-        '<d:propstat><d:prop><d:sync-token>unavailable-token</d:sync-token></d:prop>'
-        '<d:status>HTTP/1.1 404 Not Found</d:status></d:propstat>'
-        '<d:propstat><d:prop><cs:getctag>available-ctag</cs:getctag></d:prop>'
-        '<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>'
+        f"<d:response><d:href>{_BOOK}</d:href>"
+        "<d:propstat><d:prop><d:sync-token>unavailable-token</d:sync-token></d:prop>"
+        "<d:status>HTTP/1.1 404 Not Found</d:status></d:propstat>"
+        "<d:propstat><d:prop><cs:getctag>available-ctag</cs:getctag></d:prop>"
+        "<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
     )
     monkeypatch.setattr(replica.server, "handle_request", lambda request: replica.server._multistatus(props))
     assert replica.backend._collection_state(_BOOK) == ("", "available-ctag")
@@ -434,7 +457,9 @@ def test_collection_markers_ignore_unsupported_properties_and_preserve_successfu
 
 @pytest.mark.parametrize("unavailable", ["missing_etag", "http_error", "invalid_inventory", "invalid_xml"])
 def test_tokenless_collection_without_complete_etag_inventory_reports_a_safe_error(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch, unavailable: str,
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
+    unavailable: str,
 ) -> None:
     replica.server.has_sync_token = False
     replica.server.list_etags = unavailable != "missing_etag"
@@ -445,7 +470,8 @@ def test_tokenless_collection_without_complete_etag_inventory_reports_a_safe_err
             if unavailable == "http_error":
                 return httpx2.Response(403, content=b"private vendor payload")
             return httpx2.Response(
-                207, content=b"invalid XML" if unavailable == "invalid_xml" else b'<d:multistatus xmlns:d="DAV:"/>',
+                207,
+                content=b"invalid XML" if unavailable == "invalid_xml" else b'<d:multistatus xmlns:d="DAV:"/>',
             )
         return original(request)
 
@@ -465,21 +491,20 @@ def test_tokenless_collection_without_complete_etag_inventory_reports_a_safe_err
 def test_baseline_adopts_existing_contacts_across_pages_without_write_back(
     replica: Replica, reset_before_baseline: bool
 ) -> None:
-    folder = Folder.objects.get(directory=replica.directory, source_href=_BOOK)
     existing = {
         uid: Person.objects.create(
             display_name=f"Local {uid}",
             notes="Pre-existing local notes",
-            source_uid=uid,
-            folder=folder,
             created_by_id=replica.directory.owner_id,
         )
         for uid in ("ada", "grace")
     }
+    for uid, person in existing.items():
+        replica.enroll(person, external_key=uid)
     replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper", notes="Remote Grace"))
     if reset_before_baseline:
         replica.stream = SyncStream.objects.bump_generation(replica.stream)
-    assert not RecordRevision.objects.exists()
+    assert not applied_history().exists()
     replica.server.requests.clear()
 
     for index, (uid, person) in enumerate(existing.items(), start=1):
@@ -487,7 +512,7 @@ def test_baseline_adopts_existing_contacts_across_pages_without_write_back(
         replica.stream = result.stream
 
         assert result.count == 1
-        assert not result.discrepancy_ids
+        assert not result.failure_ids
         assert result.exhausted is (index == 2)
         assert replica.stream.phase == (StreamPhase.DELTA if result.exhausted else StreamPhase.BASELINE)
         person.refresh_from_db()
@@ -500,35 +525,31 @@ def test_baseline_adopts_existing_contacts_across_pages_without_write_back(
         assert link.target_object_id == str(person.pk)
         assert link.status == LinkStatus.CURRENT
         assert link.origin == "remote"
-        assert link.local_base_hash == canonical_json_sha256(projection)
-        assert link.remote_base_hash == canonical_json_sha256(contact_projection(remote))
+        assert canonical_json_sha256(link.applied_base.mapped_payload) == canonical_json_sha256(projection)
+        assert link.applied_base.source_hash == canonical_json_sha256(contact_projection(remote))
         assert link.remote_version == etag
-        assert RecordRevision.objects.filter(link=link, applied_at__isnull=False).count() == 1
-        assert RecordRevision.objects.count() == index
+        assert applied_history().filter(id=link.pk, applied_at__isnull=False).count() == 1
+        assert applied_history().count() == index
 
     assert Person.objects.count() == RecordLink.objects.count() == 2
-    assert not SyncDiscrepancy.objects.exists()
+    assert not bool(SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False))
     assert push_stream(replica.stream, replica.backend).count == 0
     assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
 
 
 @pytest.mark.parametrize("bounded", [False, True])
-def test_local_only_contact_waits_until_first_baseline_completes(
-    replica: Replica, bounded: bool
-) -> None:
-    folder = Folder.objects.get(directory=replica.directory, source_href=_BOOK)
+def test_local_only_contact_waits_until_first_baseline_completes(replica: Replica, bounded: bool) -> None:
     person = Person.objects.create(
         display_name="Grace Hopper",
         given_name="Grace",
         family_name="Hopper",
-        source_uid="grace",
-        folder=folder,
         created_by_id=replica.directory.owner_id,
     )
+    replica.enroll(person, external_key="grace")
     replica.server.requests.clear()
 
     assert push_stream(replica.stream, replica.backend).count == 0
-    assert not RecordLink.objects.exists()
+    assert not RecordLink.objects.filter(applied_base__isnull=False).exists()
     assert not replica.server.requests
 
     if bounded:
@@ -548,10 +569,10 @@ def test_local_only_contact_waits_until_first_baseline_completes(
     assert puts[0][2]["if-none-match"] == "*"
     assert link.external_key == "grace"
     assert link.remote_version == replica.server.cards[puts[0][1]][1]
-    assert link.remote_base_hash and link.local_base_hash
+    assert link.applied_base.source_hash and canonical_json_sha256(link.applied_base.mapped_payload)
     assert link.origin == "local"
     assert vobject.readOne(replica.server.cards[puts[0][1]][0]).fn.value == "Grace Hopper"
-    assert not SyncDiscrepancy.objects.exists()
+    assert not bool(SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False))
     replica.server.requests.clear()
 
     assert sync_bridge(replica.directory) == 0
@@ -568,12 +589,16 @@ def test_remote_edit_updates_same_party_through_adapter(replica: Replica) -> Non
     assert person.notes == "Remote edit"
     assert link.target_object_id == str(person.pk)
     assert link.remote_version == replica.server.cards[_HREF][1]
-    assert not SyncDiscrepancy.objects.exists()
+    assert not bool(SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False))
 
 
 def test_local_edit_conditional_put_updates_version_and_both_bases(replica: Replica) -> None:
     person, link = replica.baseline()
-    old_version, old_remote, old_local = link.remote_version, link.remote_base_hash, link.local_base_hash
+    old_version, old_remote, old_local = (
+        link.remote_version,
+        link.applied_base.source_hash,
+        canonical_json_sha256(link.applied_base.mapped_payload),
+    )
     person.notes = "Local edit"
     person.save(update_fields=["notes"])
     result = push_stream(replica.stream, replica.backend)
@@ -582,12 +607,14 @@ def test_local_edit_conditional_put_updates_version_and_both_bases(replica: Repl
     assert result.count == len(puts) == 1
     assert puts[0][2]["if-match"] == old_version
     assert link.remote_version == replica.server.cards[_HREF][1] != old_version
-    assert link.remote_base_hash != old_remote
-    assert link.local_base_hash != old_local
-    assert link.local_base_hash == canonical_json_sha256(contact_projection(Party.objects.project_contact(person)))
+    assert link.applied_base.source_hash != old_remote
+    assert canonical_json_sha256(link.applied_base.mapped_payload) != old_local
+    assert canonical_json_sha256(link.applied_base.mapped_payload) == canonical_json_sha256(
+        contact_projection(Party.objects.project_contact(person))
+    )
     raw, etag = replica.server.cards[_HREF]
     observed = _parse_vcard(vobject.readOne(raw), etag=etag, href=_HREF, raw=raw)
-    assert link.remote_base_hash == canonical_json_sha256(contact_projection(observed))
+    assert link.applied_base.source_hash == canonical_json_sha256(contact_projection(observed))
     assert link.origin == "local"
 
 
@@ -600,26 +627,24 @@ def test_selected_push_projects_only_requested_contacts(
     person.save(update_fields=["notes"])
     named = Person.objects.create(
         display_name="Grace Hopper",
-        source_uid="grace",
-        folder_id=person.folder_id,
         created_by_id=replica.directory.owner_id,
     )
     generated = Person.objects.create(
         display_name="Margaret Hamilton",
-        folder_id=person.folder_id,
         created_by_id=replica.directory.owner_id,
     )
+    replica.enroll(generated)
+    if selected != "bound-alias":
+        replica.enroll(named, external_key="grace")
     choices = {
         "linked": (link.external_key, person),
-        "named": (named.source_uid, named),
+        "named": ("grace", named),
         "generated": (f"angee-{generated.pk}", generated),
-        "bound-alias": (named.source_uid, named),
+        "bound-alias": ("grace", named),
     }
     if selected == "bound-alias":
         aliased = RecordLink.objects.observe(replica.stream, "remote-grace")
-        RecordLink.objects.promote(
-            aliased, source_payload={}, source_hash="base", mapped_payload={}, local_hash="base", target=named
-        )
+        RecordLink.objects.promote(aliased, source_payload={}, source_hash="base", mapped_payload={}, target=named)
     keys = frozenset() if selected == "empty" else frozenset({choices[selected][0]})
     expected = set() if selected in {"empty", "bound-alias"} else {choices[selected][1].pk}
     projected: set[int] = set()
@@ -650,10 +675,14 @@ def test_concurrent_vcard_changes_remain_conflicts(
     """Both edit, remote delete/local edit and local delete/remote edit have no winner."""
 
     person, link = replica.baseline()
-    old_bases = link.remote_base_hash, link.local_base_hash, link.remote_version
+    old_bases = (
+        link.applied_base.source_hash,
+        canonical_json_sha256(link.applied_base.mapped_payload),
+        link.applied_base.remote_version,
+    )
     person_pk = person.pk
     if local_deleted:
-        person.delete()
+        person.trash()
     else:
         person.notes = "Local edit"
         person.save(update_fields=["notes"])
@@ -663,13 +692,22 @@ def test_concurrent_vcard_changes_remain_conflicts(
         replica.server.store(_HREF, _card(notes="Remote edit"))
     result = replica.pull()
     link.refresh_from_db()
-    assert result.discrepancy_ids
-    assert SyncDiscrepancy.objects.get(link=link).kind == DiscrepancyKind.CONFLICT
-    assert link.status == LinkStatus.DISCREPANT
-    assert (link.remote_base_hash, link.local_base_hash, link.remote_version) == old_bases
+    assert result.failure_ids
+    assert (
+        next((row for row in RecordLink.objects.get(pk=link.pk).failures(open_only=False))).kind
+        == SyncFailureKind.CONFLICT
+    )
+    assert link.status == LinkStatus.FAILED
+    assert (
+        link.applied_base.source_hash,
+        canonical_json_sha256(link.applied_base.mapped_payload),
+        link.applied_base.remote_version,
+    ) == old_bases
+    assert link.remote_version == ("" if remote_deleted else replica.server.cards[_HREF][1])
     assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
     if local_deleted:
-        assert not Party.objects.filter(pk=person_pk).exists()
+        assert not Party.objects.canonical().filter(pk=person_pk).exists()
+        assert Party.objects.get(pk=person_pk).is_trashed
     else:
         person.refresh_from_db()
         assert person.notes == "Local edit"
@@ -677,7 +715,11 @@ def test_concurrent_vcard_changes_remain_conflicts(
 
 def test_put_etag_mismatch_records_conflict_without_local_overwrite(replica: Replica) -> None:
     person, link = replica.baseline()
-    old_bases = link.remote_base_hash, link.local_base_hash, link.remote_version
+    old_bases = (
+        link.applied_base.source_hash,
+        canonical_json_sha256(link.applied_base.mapped_payload),
+        link.applied_base.remote_version,
+    )
     person.notes = "Keep local edit"
     person.save(update_fields=["notes"])
     replica.server.store(_HREF, _card(notes="Concurrent remote edit"))
@@ -685,10 +727,17 @@ def test_put_etag_mismatch_records_conflict_without_local_overwrite(replica: Rep
     person.refresh_from_db()
     link.refresh_from_db()
     assert result.count == 0
-    assert result.discrepancy_ids
-    assert SyncDiscrepancy.objects.get(link=link).kind == DiscrepancyKind.CONFLICT
+    assert result.failure_ids
+    assert (
+        next((row for row in RecordLink.objects.get(pk=link.pk).failures(open_only=False))).kind
+        == SyncFailureKind.CONFLICT
+    )
     assert person.notes == "Keep local edit"
-    assert (link.remote_base_hash, link.local_base_hash, link.remote_version) == old_bases
+    assert (
+        link.applied_base.source_hash,
+        canonical_json_sha256(link.applied_base.mapped_payload),
+        link.applied_base.remote_version,
+    ) == old_bases
     assert "Concurrent remote edit" in replica.server.cards[_HREF][0]
 
 
@@ -701,24 +750,252 @@ def test_read_only_book_sets_a_refused_card_aside_without_failing_the_book(repli
     result = push_stream(replica.stream, replica.backend)
 
     link.refresh_from_db()
-    discrepancy = SyncDiscrepancy.objects.get(link=link)
+    failure = next((row for row in RecordLink.objects.get(pk=link.pk).failures(open_only=False)))
     assert result.count == 0
-    assert discrepancy.kind == DiscrepancyKind.REMOTE_REJECTED
-    assert discrepancy.code == "remote_forbidden"
+    assert failure.kind == SyncFailureKind.REMOTE_REJECTED
+    assert failure.code == "remote_forbidden"
     person.refresh_from_db()
     assert person.notes == "Local edit a shared directory will not take"
-    # A later cycle meets the same refusal on the same discrepancy row; the book
-    # keeps syncing and the shared directory's card is never overwritten.
-    again = push_stream(replica.stream, replica.backend)
-    assert again.count == 0
-    assert SyncDiscrepancy.objects.filter(link=link).count() == 1
+    # A later cycle inside the refusal's backoff asks the server nothing, and the
+    # preview shows the card held back.
+    replica.server.requests.clear()
+    assert push_stream(replica.stream, replica.backend).count == 0
+    assert not [request for request in replica.server.requests if request[0] == "PUT"]
+    assert preview_push(replica.stream, replica.backend).held == ("ada",)
+    # Once the backoff passes, the push asks once more and meets the same refusal on
+    # the same failure row; the shared directory's card is never overwritten.
+    for failure_row in [
+        row
+        for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)
+        if row.id == failure.pk
+    ]:
+        failure_state(failure_row, retry_at=timezone.now() - timedelta(seconds=1))
+    assert push_stream(replica.stream, replica.backend).count == 0
+    assert len([request for request in replica.server.requests if request[0] == "PUT"]) == 1
+    assert len(RecordLink.objects.get(pk=link.pk).failures(open_only=False)) == 1
     assert "Local edit" not in replica.server.cards[_HREF][0]
 
 
-@pytest.mark.parametrize("keep", [ConflictKeep.REMOTE, ConflictKeep.LOCAL])
-def test_etag_conflict_resolution_re_reads_before_keeping_a_side(
-    replica: Replica, keep: ConflictKeep
+def _refused_new_contacts(replica: Replica, count: int) -> list[Any]:
+    """Create ``count`` local contacts a read-only book refuses, after one push."""
+
+    person, _link = replica.baseline()
+    replica.server.read_only = True
+    with system_context(reason="test new local contacts"):
+        people = [
+            Person.objects.create(display_name=f"New {index}", created_by_id=person.created_by_id)
+            for index in range(count)
+        ]
+    for local in people:
+        replica.enroll(local)
+    replica.server.requests.clear()
+    assert push_stream(replica.stream, replica.backend).count == 0
+    return people
+
+
+def test_refused_new_contacts_each_wait_out_their_own_backoff(replica: Replica) -> None:
+    """Two new records share an empty source hash; each still keeps its own refusal and retry time."""
+
+    people = _refused_new_contacts(replica, 3)
+    keys = {f"angee-{person.pk}" for person in people}
+    assert len([request for request in replica.server.requests if request[0] == "PUT"]) == 3
+    refusals = [
+        row
+        for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)
+        if row.kind == SyncFailureKind.REMOTE_REJECTED
+        if row.is_open
+    ]
+    assert {row.link.external_key for row in refusals} == keys
+    assert {row.attempts for row in refusals} == {1}
+
+    replica.server.requests.clear()
+    assert push_stream(replica.stream, replica.backend).count == 0
+    assert not [request for request in replica.server.requests if request[0] == "PUT"]
+    assert set(preview_push(replica.stream, replica.backend).held) == keys
+
+
+def test_a_refused_new_contact_does_not_stop_the_book(replica: Replica) -> None:
+    """The rescan leaves refused writes to the push: a record the remote never stored has nothing to read."""
+
+    _refused_new_contacts(replica, 1)
+    for failure_row in [row for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures()]:
+        failure_state(failure_row, retry_at=timezone.now() - timedelta(seconds=1))
+    begin_stream_cycle(replica.stream, replica.backend)
+    replica.server.requests.clear()
+    assert push_stream(replica.stream, replica.backend).count == 0
+    assert len([request for request in replica.server.requests if request[0] == "PUT"]) == 1
+
+
+def test_a_write_that_lands_after_a_refusal_resolves_it(replica: Replica) -> None:
+    person, link = replica.baseline()
+    person.notes = "Local edit"
+    person.save(update_fields=["notes"])
+    replica.server.read_only = True
+    assert push_stream(replica.stream, replica.backend).count == 0
+    refusal = next((row for row in RecordLink.objects.get(pk=link.pk).failures(open_only=False)))
+
+    replica.server.read_only = False
+    for failure_row in [
+        row
+        for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)
+        if row.id == refusal.pk
+    ]:
+        failure_state(failure_row, retry_at=timezone.now() - timedelta(seconds=1))
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    refusal = failure_state(refusal)
+    assert not refusal.is_open
+
+
+def test_a_resync_does_not_resend_a_card_held_by_its_refusal(replica: Replica) -> None:
+    """The page write pass and the push share one hold rule."""
+
+    person, _link = replica.baseline()
+    person.notes = "Local edit a shared directory will not take"
+    person.save(update_fields=["notes"])
+    replica.server.read_only = True
+    assert push_stream(replica.stream, replica.backend).count == 0
+    replica.server.requests.clear()
+    SyncStream.objects.request_resync(replica.stream)
+    for _ in range(3):
+        replica.pull()
+    assert not [request for request in replica.server.requests if request[0] == "PUT"]
+
+
+def test_a_refusal_resolved_between_the_page_passes_waits_for_the_next_page(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The first pass's hold decides: the page neither writes nor fails, and the next push writes."""
+
+    person, _link = replica.baseline()
+    person.notes = "Local edit a shared directory will not take"
+    person.save(update_fields=["notes"])
+    replica.server.read_only = True
+    assert push_stream(replica.stream, replica.backend).count == 0
+    refusal = next(
+        (
+            row
+            for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)
+            if row.kind == SyncFailureKind.REMOTE_REJECTED
+            if row.is_open
+        )
+    )
+    replica.server.read_only = False
+    replica.server.requests.clear()
+    prepare_page = replica.backend.prepare_page
+
+    def resolve_meanwhile(stream: Any, page: Any) -> None:
+        prepare_page(stream, page)
+        refusal.resolve()
+
+    monkeypatch.setattr(replica.backend, "prepare_page", resolve_meanwhile)
+    SyncStream.objects.request_resync(replica.stream)
+    for _ in range(3):
+        replica.pull()
+
+    refusal = failure_state(refusal)
+    assert not refusal.is_open
+    assert not [request for request in replica.server.requests if request[0] == "PUT"]
+    assert push_stream(replica.stream, replica.backend).count == 1
+    assert "Local edit a shared directory will not take" in replica.server.cards[_HREF][0]
+
+
+def test_a_due_refusal_no_longer_holds_its_write(replica: Replica) -> None:
+    person, _link = replica.baseline()
+    person.notes = "Local edit a shared directory will not take"
+    person.save(update_fields=["notes"])
+    replica.server.read_only = True
+    assert push_stream(replica.stream, replica.backend).count == 0
+    refusal = next(
+        (
+            row
+            for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)
+            if row.kind == SyncFailureKind.REMOTE_REJECTED
+            if row.is_open
+        )
+    )
+    assert RecordLink.objects.get(pk=refusal.link_pk).write_holds
+    preview = preview_push(replica.stream, replica.backend)
+    assert (preview.writes, preview.held) == ((), ("ada",))
+
+    for failure_row in [
+        row
+        for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)
+        if row.id == refusal.pk
+    ]:
+        failure_state(failure_row, retry_at=timezone.now() - timedelta(seconds=1))
+
+    assert refusal.is_open
+    assert not RecordLink.objects.get(pk=refusal.link_pk).write_holds
+    assert preview_push(replica.stream, replica.backend).writes == ("ada",)
+
+
+def test_a_remote_edit_the_hash_cannot_see_survives_the_next_write(replica: Replica) -> None:
+    """An unchanged pull retains the card it read, so the next write-back starts from it."""
+
+    base = _card().replace("END:VCARD", "item1.TEL;type=CELL:+14155552671\r\nitem1.X-ABLabel:WhatsApp\r\nEND:VCARD")
+    replica.server.store(_HREF, base)
+    person, _link = replica.baseline()
+    replica.server.store(_HREF, base.replace("X-ABLabel:WhatsApp", "X-ABLabel:Signal"))
+    replica.pull()
+    person.notes = "Changed locally"
+    person.save(update_fields=["notes"])
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    assert [line.value for line in card.contents["x-ablabel"]] == ["Signal"]
+    assert card.note.value == "Changed locally"
+
+
+def test_the_preview_command_reports_each_current_stream_without_a_request(replica: Replica) -> None:
+    person, _link = replica.baseline()
+    person.notes = "Changed locally"
+    person.save(update_fields=["notes"])
+    replica.server.requests.clear()
+    out = StringIO()
+    call_command("preview_push", replica.directory.sqid, "--keys", stdout=out)
+    assert out.getvalue().splitlines() == [
+        f"{replica.directory.sqid} contacts {_BOOK}: 1 to write, 0 held back by conflicts or refusals",
+        "  write ada",
+    ]
+    assert not replica.server.requests
+
+
+def test_a_refused_contact_deleted_locally_closes_its_refusal(replica: Replica) -> None:
+    """Nothing is left to write, and the remote never stored it, so no rescan would read it."""
+
+    (person,) = _refused_new_contacts(replica, 1)
+    refusal = next(
+        (
+            row
+            for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)
+            if row.kind == SyncFailureKind.REMOTE_REJECTED
+            if row.is_open
+        )
+    )
+    replica.server.requests.clear()
+    with system_context(reason="test refused contact deleted"):
+        person.trash()
+    assert push_stream(replica.stream, replica.backend).count == 0
+
+    refusal = failure_state(refusal)
+    assert refusal.is_open
+
+    for failure_row in [
+        row
+        for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)
+        if row.id == refusal.pk
+    ]:
+        failure_state(failure_row, retry_at=timezone.now() - timedelta(seconds=1))
+    assert push_stream(replica.stream, replica.backend).count == 0
+
+    refusal = failure_state(refusal)
+    assert not refusal.is_open
+    assert not [request for request in replica.server.requests if request[0] == "PUT"]
+
+
+@pytest.mark.parametrize("keep", [ConflictKeep.REMOTE, ConflictKeep.LOCAL])
+def test_etag_conflict_resolution_re_reads_before_keeping_a_side(replica: Replica, keep: ConflictKeep) -> None:
     person, link = replica.baseline()
     original_version = link.remote_version
     person.notes = "Chosen local edit"
@@ -727,15 +1004,15 @@ def test_etag_conflict_resolution_re_reads_before_keeping_a_side(
     assert push_stream(replica.stream, replica.backend).count == 0
     failed_put = [request for request in replica.server.requests if request[0] == "PUT"][-1]
     assert failed_put[2]["if-match"] == original_version
-    discrepancy = SyncDiscrepancy.objects.get(link=link)
+    failure = next((row for row in RecordLink.objects.get(pk=link.pk).failures(open_only=False)))
     replica.server.requests.clear()
 
-    resolved = SyncDiscrepancy.objects.resolve_conflict(discrepancy, keep=keep)
+    resolved = failure.resolve_conflict(keep=keep)
 
     person.refresh_from_db()
     link.refresh_from_db()
-    assert resolved.status == DiscrepancyStatus.RESOLVED
-    assert not SyncDiscrepancy.objects.unresolved().filter(link=link).exists()
+    assert resolved.status == SyncFailureStatus.RESOLVED
+    assert not bool(RecordLink.objects.get(pk=link.pk).failures(open_only=True))
     puts = [request for request in replica.server.requests if request[0] == "PUT"]
     if keep == "local":
         assert person.notes == "Chosen local edit"
@@ -748,20 +1025,85 @@ def test_etag_conflict_resolution_re_reads_before_keeping_a_side(
     assert push_stream(replica.stream, replica.backend).count == 0
 
 
+def test_keeping_the_local_side_keeps_a_remote_edit_the_hash_cannot_see(replica: Replica) -> None:
+    """A conflict kept local is written onto the card as re-read, not the card before the conflict."""
+
+    labelled = "item1.TEL;type=CELL:+14155552671\r\nitem1.X-ABLabel:{label}\r\nEND:VCARD"
+    replica.server.store(_HREF, _card().replace("END:VCARD", labelled.format(label="WhatsApp")))
+    person, link = replica.baseline()
+    person.notes = "Chosen local edit"
+    person.save(update_fields=["notes"])
+    replica.server.store(
+        _HREF, _card(notes="Concurrent remote edit").replace("END:VCARD", labelled.format(label="Signal"))
+    )
+    assert push_stream(replica.stream, replica.backend).count == 0
+    conflict = next(
+        (
+            row
+            for row in RecordLink.objects.get(pk=link.pk).failures(open_only=False)
+            if row.kind == SyncFailureKind.CONFLICT
+        )
+    )
+
+    conflict.resolve_conflict(keep=ConflictKeep.LOCAL)
+
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    assert card.note.value == "Chosen local edit"
+    assert [line.value for line in card.contents["x-ablabel"]] == ["Signal"]
+
+
 @pytest.mark.parametrize("policy", ["retain", "propagate"])
-def test_removed_member_tombstones_link_and_obeys_local_policy(replica: Replica, policy: str) -> None:
+def test_removed_member_tombstones_link_and_withdraws_directory_statements(replica: Replica, policy: str) -> None:
     person, link = replica.baseline()
     replica.stream.config = {**replica.stream.config, "remote_delete": policy}
     replica.stream.save(update_fields=["config"])
     replica.server.remove(_HREF)
     result = replica.pull()
     link.refresh_from_db()
-    assert not result.discrepancy_ids
+    assert not result.failure_ids
     assert link.status == LinkStatus.TOMBSTONE
     assert link.tombstoned_at is not None
-    assert Party.objects.filter(pk=person.pk).exists() is (policy == "retain")
+    assert Party.objects.filter(pk=person.pk).exists()
+    assert not Party.statements.filter(
+        subject_id=person.pk,
+        link=link,
+        status=Party.statements.model.StatementStatus.ASSERTED,
+    ).exists()
     assert push_stream(replica.stream, replica.backend).count == 0
     assert not [request for request in replica.server.requests if request[0] == "PUT"]
+
+
+def test_a_tombstone_keeps_the_assertions_another_link_of_the_source_still_observes(replica: Replica) -> None:
+    """One source observing a record through two links keeps its assertions until the last link goes.
+
+    The directory's second address book stands in for an instance's second company stream.
+    """
+
+    person, link = replica.baseline()
+    with system_context(reason="test second observation"):
+        other = current_stream(
+            replica.directory,
+            key="contacts",
+            partition="/books/other/",
+            kind=StreamKind.RECORD_REPLICA,
+            direction=StreamDirection.BIDIRECTIONAL,
+        )
+        sibling = replica.enroll(person, external_key="ada-elsewhere")
+        sibling.stream = other
+        sibling.save(update_fields=["stream"])
+    asserted = Party.statements.model.StatementStatus.ASSERTED
+    linked = set(Party.statements.filter(subject_id=person.pk, link=link, status=asserted).values_list("pk", flat=True))
+    assert linked
+
+    replica.server.remove(_HREF)
+    replica.pull()
+
+    rows = Party.statements.filter(pk__in=linked)
+    assert {(row.status, row.link_id) for row in rows} == {(asserted, sibling.pk)}
+    with system_context(reason="test last observation leaves"):
+        # Every statement table the link evidences: the party rows tracked here among them.
+        assert RecordLink.objects.get(pk=sibling.pk).withdraw_statements() >= len(linked)
+    assert set(rows.values_list("status", flat=True)) == {Party.statements.model.StatementStatus.WITHDRAWN}
 
 
 @pytest.mark.parametrize("policy", ["conflict", "propagate"])
@@ -769,15 +1111,18 @@ def test_local_delete_requires_explicit_propagation(replica: Replica, policy: st
     person, link = replica.baseline()
     replica.stream.config = {**replica.stream.config, "local_delete": policy}
     replica.stream.save(update_fields=["config"])
-    person.delete()
+    person.trash()
     result = push_stream(replica.stream, replica.backend)
     link.refresh_from_db()
     if policy == "conflict":
-        assert result.discrepancy_ids
-        assert SyncDiscrepancy.objects.get(link=link).kind == DiscrepancyKind.CONFLICT
+        assert result.failure_ids
+        assert (
+            next((row for row in RecordLink.objects.get(pk=link.pk).failures(open_only=False))).kind
+            == SyncFailureKind.CONFLICT
+        )
         assert _HREF in replica.server.cards
     else:
-        assert not result.discrepancy_ids
+        assert not result.failure_ids
         assert _HREF not in replica.server.cards
         assert link.status == LinkStatus.TOMBSTONE
 
@@ -789,7 +1134,7 @@ def test_unchanged_token_does_not_ingest_put_or_change_cursor(
     person, link = replica.baseline()
     old_cursor = dict(replica.stream.cursor)
     old_updated = person.updated_at
-    revision_count = RecordRevision.objects.filter(link=link).count()
+    revision_count = applied_history().filter(id=link.pk).count()
 
     def unexpected_ingest(*args: Any, **kwargs: Any) -> None:
         del args, kwargs
@@ -803,7 +1148,7 @@ def test_unchanged_token_does_not_ingest_put_or_change_cursor(
     assert result.count == pushed.count == 0
     assert replica.stream.cursor == old_cursor
     assert person.updated_at == old_updated
-    assert RecordRevision.objects.filter(link=link).count() == revision_count
+    assert applied_history().filter(id=link.pk).count() == revision_count
     assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
     assert not any("addressbook-multiget" in request[3] for request in replica.server.requests)
 
@@ -833,14 +1178,13 @@ def test_invalid_sync_token_bumps_generation_and_repeats_baseline(replica: Repli
 
 def test_new_local_person_is_created_conditionally_then_recognized(replica: Replica) -> None:
     replica.baseline()
-    folder = Folder.objects.get(directory=replica.directory, source_href=_BOOK)
     person = Person.objects.create(
         display_name="Grace Hopper",
         given_name="Grace",
         family_name="Hopper",
-        folder=folder,
         created_by_id=replica.directory.owner_id,
     )
+    replica.enroll(person)
     result = push_stream(replica.stream, replica.backend)
     link = RecordLink.objects.get(stream=replica.stream, target_object_id=str(person.pk))
     puts = [request for request in replica.server.requests if request[0] == "PUT"]
@@ -860,7 +1204,7 @@ def test_new_local_person_is_created_conditionally_then_recognized(replica: Repl
     assert replica.stream.cursor == cursor
     assert replica.pull().count == 0
     assert Person.objects.filter(pk=person.pk).count() == 1
-    assert not SyncDiscrepancy.objects.exists()
+    assert not bool(SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False))
     remote_href = puts[-1][1]
     replica.server.store(
         remote_href,
@@ -879,81 +1223,220 @@ def test_successful_own_write_is_applied_on_next_pull(replica: Replica) -> None:
     person.save(update_fields=["notes"])
     assert push_stream(replica.stream, replica.backend).count == 1
     link.refresh_from_db()
-    bases = link.remote_base_hash, link.local_base_hash, link.remote_version
+    bases = link.applied_base.source_hash, canonical_json_sha256(link.applied_base.mapped_payload), link.remote_version
     local_updated_at = person.updated_at
     result = replica.pull()
     link.refresh_from_db()
     assert result.count == 0
     assert link.origin == "local"
-    assert (link.remote_base_hash, link.local_base_hash, link.remote_version) == bases
+    assert (
+        link.applied_base.source_hash,
+        canonical_json_sha256(link.applied_base.mapped_payload),
+        link.remote_version,
+    ) == bases
     person.refresh_from_db()
     assert person.updated_at == local_updated_at
-    assert not SyncDiscrepancy.objects.exists()
+    assert not bool(SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False))
     assert len([request for request in replica.server.requests if request[0] == "PUT"]) == 1
 
 
-def test_signature_suggestion_is_written_only_after_a_person_confirms_it(replica: Replica) -> None:
-    person, link = replica.baseline()
-    bases = link.remote_base_hash, link.local_base_hash, link.remote_version
-    with system_context(reason="test signature suggestion"):
-        created = PartyHandle.objects.suggest_from_signature(
-            text="Ada Lovelace\nM: +1 415 555 2671",
-            party_ids=(person.pk,),
-            fragment_hash="ada-signature",
-            owner_id=person.created_by_id,
-        )
-    assert created == 1
-    replica.server.requests.clear()
+def test_removing_one_line_of_a_shared_group_keeps_its_other_properties(replica: Replica) -> None:
+    """A vCard group may hold several properties; only Apple's X-AB companions leave with a line."""
 
-    assert push_stream(replica.stream, replica.backend).count == 0
-    link.refresh_from_db()
-    assert (link.remote_base_hash, link.local_base_hash, link.remote_version) == bases
-    assert not [request for request in replica.server.requests if request[0] == "PUT"]
-
-    suggestion = PartyHandle.objects.select_related("handle").get(party=person, source=LinkSource.RULE)
-    with system_context(reason="test confirmed suggestion"):
-        PartyHandle.objects.link(person, suggestion.handle, source=LinkSource.MANUAL, is_confirmed=True)
-
-    assert push_stream(replica.stream, replica.backend).count == 1
-    assert "+14155552671" in replica.server.cards[_HREF][0]
-
-
-@pytest.mark.parametrize(
-    ("source", "confirmed", "written"),
-    [
-        (LinkSource.MANUAL, False, True),
-        (LinkSource.RULE, True, True),
-        (LinkSource.RULE, False, False),
-        (LinkSource.EMAIL_MATCH, False, False),
-        (LinkSource.LLM, False, False),
-        (LinkSource.IMPORT, False, False),
-        (LinkSource.COMMUNITY, False, False),
-    ],
-)
-def test_only_asserted_contact_points_are_written_to_the_card(
-    replica: Replica, source: LinkSource, confirmed: bool, written: bool
-) -> None:
+    replica.server.store(
+        _HREF,
+        _card().replace(
+            "END:VCARD",
+            "work.TEL;type=WORK:+14155550100\r\n"
+            "work.EMAIL;type=WORK:ada@work.test\r\n"
+            "item1.TEL;type=CELL:+14155552671\r\n"
+            "item1.X-ABLabel:WhatsApp\r\n"
+            "item2.TEL;type=HOME:+14155550199\r\n"
+            "item2.X-ABLabel:Thuis\r\n"
+            "END:VCARD",
+        ),
+    )
     person, _link = replica.baseline()
-    with system_context(reason="test contact point provenance"):
-        handle = Handle.objects.upsert(platform="email", value="ada@example.test", created_by_id=person.created_by_id)
-        PartyHandle.objects.link(
-            person,
-            handle,
-            confidence=0.3,
-            source=source,
-            is_confirmed=confirmed,
-            created_by_id=person.created_by_id,
-        )
+    with system_context(reason="test shared group edit"):
+        for row in person.statements_for("handle").filter(handle__value__in=("+14155550100", "+14155550199")):
+            row.with_actor(person.created_by).dismiss()
+    assert push_stream(replica.stream, replica.backend).count == 1
 
-    assert push_stream(replica.stream, replica.backend).count == int(written)
-    assert ("ada@example.test" in replica.server.cards[_HREF][0]) is written
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    assert [(line.group, line.value) for line in card.contents["email"]] == [("work", "ada@work.test")]
+    assert [(line.group, line.value) for line in card.tel_list] == [("item1", "+14155552671")]
+    assert {line.group: line.value for line in card.contents["x-ablabel"]} == {"item1": "WhatsApp"}
+    assert push_stream(replica.stream, replica.backend).count == 0
+
+
+def test_removing_a_line_takes_its_own_label_when_labels_are_equal(replica: Replica) -> None:
+    """vobject compares lines without their group, so a companion leaves by its group alone."""
+
+    replica.server.store(
+        _HREF,
+        _card().replace(
+            "END:VCARD",
+            "item1.TEL;type=CELL:+14155552671\r\n"
+            "item1.X-ABLabel:Other\r\n"
+            "item2.TEL;type=CELL:+14155550199\r\n"
+            "item2.X-ABLabel:Other\r\n"
+            "END:VCARD",
+        ),
+    )
+    person, _link = replica.baseline()
+    with system_context(reason="test equal labels"):
+        for row in person.statements_for("handle").filter(handle__value="+14155550199"):
+            row.with_actor(person.created_by).dismiss()
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    assert [(line.group, line.value) for line in card.tel_list] == [("item1", "+14155552671")]
+    assert [(line.group, line.value) for line in card.contents["x-ablabel"]] == [("item1", "Other")]
+
+
+def test_contact_point_edit_rewrites_only_the_changed_lines(replica: Replica) -> None:
+    """Untouched numbers and addresses keep their Apple group, label and every TYPE."""
+
+    replica.server.store(
+        _HREF,
+        _card().replace(
+            "END:VCARD",
+            "item1.TEL;type=CELL;type=VOICE;type=pref:+14155552671\r\n"
+            "item1.X-ABLabel:WhatsApp\r\n"
+            "item2.TEL;type=HOME;type=FAX:+14155550100\r\n"
+            "item2.X-ABLabel:Thuis\r\n"
+            "item3.ADR;type=HOME:;;1 Main St;Springfield;IL;62701;US\r\n"
+            "item3.X-ABADR:us\r\n"
+            "item4.URL:https://example.test\r\n"
+            "item4.X-ABLabel:_$!<HomePage>!$_\r\n"
+            "END:VCARD",
+        ),
+    )
+    person, _link = replica.baseline()
+    with system_context(reason="test contact point edit"):
+        for row in person.statements_for("handle").filter(handle__value="+14155550100"):
+            row.with_actor(person.created_by).dismiss()
+        handle = Handle.objects.upsert(platform="phone", value="+14155550199", created_by_id=person.created_by_id)
+        person.with_actor(person.created_by).confirm(aspect="handle", handle=handle, values={})
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    phones = {
+        line.value: (line.group, [str(item).lower() for item in line.params.get("TYPE", [])]) for line in card.tel_list
+    }
+    assert phones == {"+14155552671": ("item1", ["cell", "voice", "pref"]), "+14155550199": (None, [])}
+    assert {line.group: line.value for line in card.contents["x-ablabel"]} == {
+        "item1": "WhatsApp",
+        "item4": "_$!<HomePage>!$_",
+    }
+    assert [(line.group, line.value) for line in card.contents["x-abadr"]] == [("item3", "us")]
+    assert card.adr.group == "item3"
+    assert push_stream(replica.stream, replica.backend).count == 0
+
+
+def test_a_number_listed_twice_keeps_both_lines_when_another_number_changes(replica: Replica) -> None:
+    """A card may repeat one number under two Apple labels; the projection holds it once."""
+
+    replica.server.store(
+        _HREF,
+        _card().replace(
+            "END:VCARD",
+            "item1.TEL;type=CELL:+14155552671\r\nitem1.X-ABLabel:WhatsApp\r\n"
+            "item2.TEL;type=CELL:+14155552671\r\nitem2.X-ABLabel:Signal\r\n"
+            "END:VCARD",
+        ),
+    )
+    person, _link = replica.baseline()
+    with system_context(reason="test duplicate lines"):
+        handle = Handle.objects.upsert(platform="phone", value="+14155550199", created_by_id=person.created_by_id)
+        person.with_actor(person.created_by).confirm(aspect="handle", handle=handle, values={})
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    assert sorted((line.group or "", line.value) for line in card.tel_list) == [
+        ("", "+14155550199"),
+        ("item1", "+14155552671"),
+        ("item2", "+14155552671"),
+    ]
+    assert {line.group: line.value for line in card.contents["x-ablabel"]} == {"item1": "WhatsApp", "item2": "Signal"}
+    assert push_stream(replica.stream, replica.backend).count == 0
+
+
+def test_a_country_the_field_cannot_resolve_stays_as_written() -> None:
+    """The stored form converts each component through its field and keeps what a field refuses."""
+
+    addresses = Person._meta.get_field("addresses").related_model.objects
+    stored = addresses.as_stored(ParsedAddress(label="home", city="Springfield", country="USA"))
+    assert (stored.label, stored.city, stored.country) == ("home", "Springfield", "US")
+    assert addresses.as_stored(ParsedAddress(country="Atlantis")).country == "Atlantis"
+
+
+def test_written_out_country_survives_an_address_edit(replica: Replica) -> None:
+    """The card's "USA" is the "US" parties stores, so adding an address keeps that line."""
+
+    replica.server.store(
+        _HREF,
+        _card().replace(
+            "END:VCARD",
+            "item3.ADR;type=HOME:;;1 Main St;Springfield;IL;62701;USA\r\nitem3.X-ABADR:us\r\nEND:VCARD",
+        ),
+    )
+    person, _link = replica.baseline()
+    assert person.addresses.get().country == "US"
+    with system_context(reason="test address edit"):
+        address = person.addresses.create(
+            street="2 Rue Neuve", city="Paris", country="FR", created_by_id=person.created_by_id
+        )
+        address.statements.set(
+            aspect="address",
+            values={
+                name: getattr(address, name) for name in address.statements.model.statement_aspects["address"].fields
+            },
+            asserted_by=replica.directory.owner,
+        )
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    assert {line.value.street: (line.group, line.value.country) for line in card.adr_list} == {
+        "1 Main St": ("item3", "USA"),
+        "2 Rue Neuve": (None, "FR"),
+    }
+    assert [(line.group, line.value) for line in card.contents["x-abadr"]] == [("item3", "us")]
+    assert push_stream(replica.stream, replica.backend).count == 0
+
+
+def test_deleting_one_of_two_equal_addresses_reaches_the_card(replica: Replica) -> None:
+    """Addresses compare as a list, so the card keeps one line per local address."""
+
+    line = ";;1 Main St;Springfield;IL;62701;USA"
+    replica.server.store(
+        _HREF,
+        _card().replace(
+            "END:VCARD",
+            f"item3.ADR;type=HOME:{line}\r\nitem3.X-ABADR:us\r\n"
+            f"item4.ADR;type=HOME:{line}\r\nitem4.X-ABADR:us\r\nEND:VCARD",
+        ),
+    )
+    person, _link = replica.baseline()
+    with system_context(reason="test equal addresses"):
+        person.addresses.order_by("pk").last().trash()
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    assert [line.group for line in card.adr_list] == ["item3"]
+    assert [(line.group, line.value) for line in card.contents["x-abadr"]] == [("item3", "us")]
+    assert push_stream(replica.stream, replica.backend).count == 0
+    assert replica.pull().count == 0
+    assert person.addresses.canonical().count() == 1
 
 
 def test_nameless_card_stays_nameless_across_a_local_edit(replica: Replica) -> None:
     replica.server.store(_HREF, "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:ada\r\nTEL:+14155552671\r\nEND:VCARD\r\n")
     person, link = replica.baseline()
     assert person.display_name == Person.PLACEHOLDER_NAME
-    assert link.local_base_hash == canonical_json_sha256(contact_projection(Party.objects.project_contact(person)))
+    assert canonical_json_sha256(link.applied_base.mapped_payload) == canonical_json_sha256(
+        contact_projection(Party.objects.project_contact(person))
+    )
     assert push_stream(replica.stream, replica.backend).count == 0
 
     person.notes = "Local edit"
@@ -1013,7 +1496,7 @@ def test_bounded_baseline_commits_each_identity_and_replays_concurrent_edit(repl
     assert first.stream.cursor["sync_token"] == ""
     assert first.stream.cursor["next_token"] == baseline_token
     assert len(first.stream.cursor["pending"]) == 1
-    ada = Person.objects.get(source_uid="ada")
+    ada = RecordLink.objects.get(stream=replica.stream, external_key="ada").target
     ada_link = RecordLink.objects.get(stream=first.stream, external_key="ada")
 
     replica.server.store(_HREF, _card(notes="Edited during the baseline"))
@@ -1045,12 +1528,16 @@ def test_malformed_vcard_is_quarantined_while_later_contact_commits(replica: Rep
     result = replica.pull()
     assert result.exhausted
     assert result.count == 1
-    assert result.discrepancy_ids
-    discrepancy = SyncDiscrepancy.objects.get(stream=replica.stream)
-    assert discrepancy.kind == DiscrepancyKind.SEMANTIC
-    assert discrepancy.source_hash
-    assert RecordLink.objects.get(pk=discrepancy.link_id).status == LinkStatus.DISCREPANT
-    assert list(Person.objects.values_list("source_uid", flat=True)) == ["grace"]
+    assert result.failure_ids
+    failure = next((row for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)))
+    assert failure.kind == SyncFailureKind.SEMANTIC
+    assert failure.source_hash
+    assert RecordLink.objects.get(pk=failure.link_pk).status == LinkStatus.FAILED
+    assert list(
+        RecordLink.objects.filter(stream=replica.stream, target_object_id__isnull=False).values_list(
+            "external_key", flat=True
+        )
+    ) == ["grace"]
     assert RecordLink.objects.get(stream=replica.stream, external_key="grace").status == LinkStatus.CURRENT
     assert replica.stream.cursor == {"sync_token": replica.server.token}
 
@@ -1059,17 +1546,19 @@ def test_corrected_first_seen_vcard_reuses_its_quarantined_identity(replica: Rep
     """A newly readable UID cannot strand the original href-keyed quarantine."""
 
     replica.server.store(_HREF, "This is not a vCard")
-    assert replica.pull().discrepancy_ids
+    assert replica.pull().failure_ids
     link = RecordLink.objects.get(stream=replica.stream)
-    discrepancy = SyncDiscrepancy.objects.get(link=link)
+    failure = next((row for row in RecordLink.objects.get(pk=link.pk).failures(open_only=False)))
     replica.server.store(_HREF, _card())
     assert replica.pull().count == 1
     link.refresh_from_db()
-    discrepancy.refresh_from_db()
+
+    failure = failure_state(failure)
     assert RecordLink.objects.filter(stream=replica.stream).count() == 1
-    assert Person.objects.get().source_uid == link.external_key == _HREF
+    assert str(Person.objects.get().pk) == link.target_object_id
+    assert link.external_key == _HREF
     assert link.status == LinkStatus.CURRENT
-    assert discrepancy.status == DiscrepancyStatus.RESOLVED
+    assert failure.status == SyncFailureStatus.RESOLVED
 
 
 def test_conditional_put_preserves_unmapped_vcard_extensions_and_departments(replica: Replica) -> None:
@@ -1092,7 +1581,29 @@ def test_conditional_put_preserves_unmapped_vcard_extensions_and_departments(rep
     assert written.contents["x-acme-code"][0].value == "legacy-value"
     put = next(request for request in replica.server.requests if request[0] == "PUT")
     assert put[2]["if-match"] == prior_version
-    assert not SyncDiscrepancy.objects.exists()
+    assert not bool(SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False))
+
+
+def test_push_preview_lists_what_a_push_writes_and_writes_nothing(replica: Replica) -> None:
+    """The preview names the edited card and the new local contact; only the push sends them."""
+
+    person, _link = replica.baseline()
+    assert preview_push(replica.stream, replica.backend).writes == ()
+    person.notes = "Changed locally"
+    person.save(update_fields=["notes"])
+    with system_context(reason="test new local contact"):
+        grace = Person.objects.create(display_name="Grace Hopper", created_by_id=person.created_by_id)
+    replica.enroll(grace)
+    replica.server.requests.clear()
+
+    preview = preview_push(replica.stream, replica.backend)
+    assert set(preview.writes) == {"ada", f"angee-{grace.pk}"}
+    assert preview.held == ()
+    assert RecordLink.objects.filter(stream=replica.stream).count() == 2
+    assert not replica.server.requests
+
+    assert push_stream(replica.stream, replica.backend).count == 2
+    assert preview_push(replica.stream, replica.backend).writes == ()
 
 
 def test_propagated_local_delete_round_trip_keeps_local_tombstone(replica: Replica) -> None:
@@ -1101,7 +1612,7 @@ def test_propagated_local_delete_round_trip_keeps_local_tombstone(replica: Repli
     person, link = replica.baseline()
     replica.stream.config = {**replica.stream.config, "local_delete": "propagate"}
     replica.stream.save(update_fields=["config"])
-    person.delete()
+    person.trash()
     assert push_stream(replica.stream, replica.backend).count == 1
     link.refresh_from_db()
     assert (link.status, link.origin) == (LinkStatus.TOMBSTONE, "local")
@@ -1115,8 +1626,8 @@ def test_propagated_local_delete_round_trip_keeps_local_tombstone(replica: Repli
     link.refresh_from_db()
     assert (link.status, link.origin) == (LinkStatus.TOMBSTONE, "local")
     assert link.tombstoned_at is not None
-    assert not SyncDiscrepancy.objects.exists()
-    assert not Party.objects.exists()
+    assert not bool(SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False))
+    assert not Party.objects.canonical().exists()
     assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
 
 
@@ -1134,9 +1645,7 @@ def test_remote_xml_rejects_entity_expansion_before_parsing_resources() -> None:
 def test_remote_xml_parses_normal_multistatus(padding_bytes: int) -> None:
     payload = (
         b'<d:multistatus xmlns:d="DAV:"><d:response><d:href>/contacts/ada.vcf</d:href>'
-        b'</d:response>'
-        + b" " * padding_bytes
-        + b'<d:sync-token>opaque-token</d:sync-token></d:multistatus>'
+        b"</d:response>" + b" " * padding_bytes + b"<d:sync-token>opaque-token</d:sync-token></d:multistatus>"
     )
     root = _xml(payload)
     assert root.tag == "{DAV:}multistatus"
@@ -1146,7 +1655,8 @@ def test_remote_xml_parses_normal_multistatus(padding_bytes: int) -> None:
 
 @pytest.mark.parametrize("prefix_bytes", [0, 64 * 1024 - 8])
 def test_remote_xml_stops_feeding_at_document_type_refusal(
-    monkeypatch: pytest.MonkeyPatch, prefix_bytes: int,
+    monkeypatch: pytest.MonkeyPatch,
+    prefix_bytes: int,
 ) -> None:
     """Count real Expat feeds, including a declaration crossing a feed boundary."""
 
@@ -1185,7 +1695,7 @@ def test_remote_xml_stops_feeding_at_document_type_refusal(
 @pytest.mark.parametrize(
     "declaration",
     [
-        '<!DOCTYPE multistatus>',
+        "<!DOCTYPE multistatus>",
         '<!DOCTYPE multistatus [<!ENTITY value "expanded">]>',
         '<!DOCTYPE multistatus [<!ENTITY value SYSTEM "file:///etc/passwd">]>',
         '<!DOCTYPE multistatus SYSTEM "https://dav.example/external.dtd">',
@@ -1201,12 +1711,14 @@ def test_remote_xml_refuses_document_types(declaration: str, encoding: str) -> N
 
 @pytest.mark.parametrize("status", [207, 403])
 def test_refused_xml_preserves_committed_sync_state(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch, status: int,
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
 ) -> None:
     person, link = replica.baseline()
     cursor = dict(replica.stream.cursor)
     generation = replica.stream.generation
-    revisions = RecordRevision.objects.filter(link=link).count()
+    revisions = applied_history().filter(id=link.pk).count()
     payload = b'<!DOCTYPE error><d:error xmlns:d="DAV:"><d:valid-sync-token/></d:error>'
     monkeypatch.setattr(replica.server, "handle_request", lambda request: httpx2.Response(status, content=payload))
 
@@ -1218,16 +1730,18 @@ def test_refused_xml_preserves_committed_sync_state(
     assert replica.stream.cursor == cursor
     assert replica.stream.generation == generation
     assert person.notes == "Original"
-    assert RecordRevision.objects.filter(link=link).count() == revisions
+    assert applied_history().filter(id=link.pk).count() == revisions
 
 
 @pytest.mark.parametrize("declared_length", [False, True])
 def test_oversized_dav_response_preserves_committed_sync_state(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch, declared_length: bool,
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
+    declared_length: bool,
 ) -> None:
     person, link = replica.baseline()
     cursor = dict(replica.stream.cursor)
-    revisions = RecordRevision.objects.filter(link=link).count()
+    revisions = applied_history().filter(id=link.pk).count()
     reads = 0
     closed = False
 
@@ -1244,7 +1758,8 @@ def test_oversized_dav_response_preserves_committed_sync_state(
 
     headers = {"Content-Length": str(_DAV_RESPONSE_CAP + 1)} if declared_length else {}
     monkeypatch.setattr(
-        replica.server, "handle_request",
+        replica.server,
+        "handle_request",
         lambda request: httpx2.Response(207, headers=headers, stream=OversizedStream()),
     )
     with pytest.raises(CardDavError, match="byte limit") as refused:
@@ -1257,13 +1772,14 @@ def test_oversized_dav_response_preserves_committed_sync_state(
     person.refresh_from_db()
     assert replica.stream.cursor == cursor
     assert person.notes == "Original"
-    assert RecordRevision.objects.filter(link=link).count() == revisions
+    assert applied_history().filter(id=link.pk).count() == revisions
     replica.directory.record_sync_error(refused.value, now=timezone.now())
     assert replica.directory.sync_error == "CardDAV response exceeds the byte limit."
 
 
 def test_discovery_falls_back_after_oversized_principal_response(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch,
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original_request = replica.server.handle_request
     requested_urls: list[str] = []
@@ -1280,7 +1796,8 @@ def test_discovery_falls_back_after_oversized_principal_response(
 
 
 def test_oversized_multiget_splits_until_every_card_fits_and_advances_sync(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch,
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(carddav_backend, "_DAV_RESPONSE_CAP", 4096)
     replica.server.store(_HREF, _card(notes="x" * 3000))
@@ -1291,12 +1808,13 @@ def test_oversized_multiget_splits_until_every_card_fits_and_advances_sync(
     result = replica.pull()
 
     assert result.count == 4 and result.exhausted
-    assert Person.objects.count() == RecordRevision.objects.count() == 4
-    assert not SyncDiscrepancy.objects.exists()
+    assert Person.objects.count() == applied_history().count() == 4
+    assert not bool(SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False))
     assert replica.stream.cursor == {"sync_token": replica.server.token}
     batches = [
         len(ElementTree.fromstring(body).findall("d:href", _NAMESPACES))
-        for method, _, _, body in replica.server.requests if method == "REPORT" and "multiget" in body
+        for method, _, _, body in replica.server.requests
+        if method == "REPORT" and "multiget" in body
     ]
     assert batches == [4, 2, 1, 1, 2, 1, 1]
     assert replica.pull().count == 0
@@ -1304,7 +1822,9 @@ def test_oversized_multiget_splits_until_every_card_fits_and_advances_sync(
 
 @pytest.mark.parametrize("existing", [False, True])
 def test_oversized_single_card_is_quarantined_while_healthy_card_and_cursor_commit(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch, existing: bool,
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
+    existing: bool,
 ) -> None:
     previous_person = replica.baseline()[0] if existing else None
     monkeypatch.setattr(carddav_backend, "_DAV_RESPONSE_CAP", 4096)
@@ -1314,15 +1834,15 @@ def test_oversized_single_card_is_quarantined_while_healthy_card_and_cursor_comm
     result = replica.pull()
 
     assert result.count == 1 and result.exhausted
-    assert result.discrepancy_ids
-    assert Person.objects.get(source_uid="grace").display_name == "Grace Hopper"
-    discrepancy = SyncDiscrepancy.objects.get(stream=replica.stream)
-    link = RecordLink.objects.get(pk=discrepancy.link_id)
-    assert link.status == LinkStatus.DISCREPANT
+    assert result.failure_ids
+    assert RecordLink.objects.get(stream=replica.stream, external_key="grace").target.display_name == "Grace Hopper"
+    failure = next((row for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)))
+    link = RecordLink.objects.get(pk=failure.link_pk)
+    assert link.status == LinkStatus.FAILED
     assert link.metadata["href"] == _HREF
-    assert discrepancy.kind == DiscrepancyKind.SEMANTIC
-    assert discrepancy.code == "vcard_response_too_large"
-    assert discrepancy.source_hash
+    assert failure.kind == SyncFailureKind.SEMANTIC
+    assert failure.code == "vcard_response_too_large"
+    assert failure.source_hash
     assert replica.stream.cursor == {"sync_token": replica.server.token}
     if previous_person is not None:
         previous_person.refresh_from_db()
@@ -1333,15 +1853,16 @@ def test_oversized_single_card_is_quarantined_while_healthy_card_and_cursor_comm
     [record] = replica.backend.read_keys(replica.stream, [link.external_key])
     assert record.external_key == link.external_key
     assert record.source_payload == {"href": _HREF, "error": "vcard_response_too_large"}
-    assert record.source_hash == discrepancy.source_hash
+    assert record.source_hash == failure.source_hash
     assert replica.pull().count == 0
 
     replica.server.store(_HREF, _card(notes="Now fits"))
     assert replica.pull().count == 1
     link.refresh_from_db()
-    discrepancy.refresh_from_db()
+
+    failure = failure_state(failure)
     assert link.status == LinkStatus.CURRENT
-    assert discrepancy.status == DiscrepancyStatus.RESOLVED
+    assert failure.status == SyncFailureStatus.RESOLVED
     assert Person.objects.get(pk=link.target_object_id).notes == "Now fits"
     assert Person.objects.count() == 2
     assert replica.stream.cursor == {"sync_token": replica.server.token}
@@ -1349,7 +1870,9 @@ def test_oversized_single_card_is_quarantined_while_healthy_card_and_cursor_comm
 
 @pytest.mark.parametrize("operation", ["baseline", "reconcile"])
 def test_oversized_listing_fails_explicitly_without_advancing_or_marking_absences(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch, operation: str,
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
 ) -> None:
     person, link = replica.baseline()
     if operation == "baseline":
@@ -1422,7 +1945,9 @@ def test_same_origin_private_photo_is_refused_by_pinned_client(
     assert isinstance(rejected.value.__cause__, ValidationError)
 
 
-def test_photo_download_uses_shared_cap_and_disallows_private_addresses(replica: Replica) -> None:
+def test_photo_download_uses_storages_image_cap_and_disallows_private_addresses(
+    replica: Replica, settings: Any
+) -> None:
     uri = f"{_BASE}avatar.png"
     replica.server.photos[uri] = b"ABC"
     contact = ParsedContact(photo=ParsedPhoto(uri=uri, mime="image/png"))
@@ -1432,8 +1957,8 @@ def test_photo_download_uses_shared_cap_and_disallows_private_addresses(replica:
     assert [request[1] for request in replica.server.requests if request[0] == "GET"] == [uri]
     assert replica.server.private_access[-1] is False
 
-    replica.server.photos[uri] = b"x" * (5 * 1024 * 1024 + 1)
-    with pytest.raises(CardDavError):
+    settings.ANGEE_STORAGE_IMAGE_MAX_BYTES = 2
+    with pytest.raises(UploadTooLarge):
         replica.backend._resolve_photo(contact, collection=_BOOK)
 
 
@@ -1444,9 +1969,10 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
     """The storage-owner double observes intake before apply; only hashes enter revisions."""
 
     backend = Backend.objects.create(slug="avatar-double", label="Avatar double", backend_class="local")
-    drive = Drive.objects.create(backend=backend, slug="assets", name="Assets")
+    drive = Drive.objects.create(backend=backend, slug=settings.ANGEE_STORAGE_IMAGE_DRIVE, name="Images")
     mime = MimeType.objects.create(mime_type="image/png", category="image", label="PNG")
-    digest = hashlib.sha256(b"ABC").hexdigest()
+    encoded = base64.b64encode(PNG_BYTES).decode()
+    digest = hashlib.sha256(PNG_BYTES).hexdigest()
     phases: list[str] = []
 
     def ingest_bytes(
@@ -1459,7 +1985,7 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
     ) -> Any:
         del kwargs
         assert not connection.in_atomic_block
-        assert content == b"ABC"
+        assert content == PNG_BYTES
         phases.append("extract")
         stored, _ = manager.get_or_create(
             drive=drive,
@@ -1489,23 +2015,24 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
         phases.append("apply")
         return original_apply(stream, record)
 
+    monkeypatch.setattr(type(Drive.objects), "image_drive", lambda manager: drive)
     monkeypatch.setattr(type(File.objects), "ingest_bytes", ingest_bytes)
     monkeypatch.setattr(File, "open_stream", unexpected_open)
     monkeypatch.setattr(replica.backend, "apply_record", apply_after_intake)
-    replica.server.store(_HREF, _card().replace("END:VCARD", "PHOTO;ENCODING=b;TYPE=PNG:QUJD\r\nEND:VCARD"))
+    replica.server.store(_HREF, _card().replace("END:VCARD", f"PHOTO;ENCODING=b;TYPE=PNG:{encoded}\r\nEND:VCARD"))
     person, link = replica.baseline()
     stored = File.objects.get(content_hash=digest)
     assert phases == ["extract", "apply"]
     assert person.avatar_id == stored.pk
     assert tuple(replica.backend.local_changes(replica.stream)) == ()
     assert phases == ["extract", "apply"]
-    revisions = list(RecordRevision.objects.filter(link=link))
+    revisions = list(applied_history().filter(id=link.pk))
     assert revisions
     for revision in revisions:
         assert revision.source_payload["contact"]["photo"] == {"hash": digest, "mime": "image/png"}
         assert revision.mapped_payload["photo"] == {"hash": digest, "mime": "image/png"}
-        assert "QUJD" not in json.dumps(revision.source_payload)
-        assert "QUJD" not in json.dumps(revision.mapped_payload)
+        assert encoded not in json.dumps(revision.source_payload)
+        assert encoded not in json.dumps(revision.mapped_payload)
 
 
 @pytest.mark.parametrize("page_bound", [1, 100])
@@ -1522,13 +2049,94 @@ def test_duplicate_uid_quarantines_one_resource_and_commits_the_rest(replica: Re
             break
     assert result.exhausted
     assert landed == 2
-    assert set(Person.objects.values_list("source_uid", flat=True)) == {"ada", "grace"}
-    discrepancy = SyncDiscrepancy.objects.get(stream=replica.stream)
-    link = RecordLink.objects.get(pk=discrepancy.link_id)
-    assert discrepancy.kind == DiscrepancyKind.SEMANTIC
-    assert link.status == LinkStatus.DISCREPANT
+    assert set(
+        RecordLink.objects.filter(stream=replica.stream, target_object_id__isnull=False).values_list(
+            "external_key", flat=True
+        )
+    ) == {"ada", "grace"}
+    failure = next((row for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)))
+    link = RecordLink.objects.get(pk=failure.link_pk)
+    assert failure.kind == SyncFailureKind.SEMANTIC
+    assert link.status == LinkStatus.FAILED
     assert link.external_key == link.metadata["href"] == duplicate_href
     assert replica.stream.cursor == {"sync_token": replica.server.token}
+
+
+@pytest.mark.parametrize("photo", ["inline_script", "fetched_oversized"])
+def test_a_card_whose_photo_storage_refuses_waits_in_quarantine_and_the_rest_land(
+    replica: Replica, settings: Any, photo: str
+) -> None:
+    """Inline or fetched, syncing it without the photo would let a later write-back strip the photo from the card."""
+
+    if photo == "inline_script":
+        script = base64.b64encode(b'<svg xmlns="http://www.w3.org/2000/svg"><script>x()</script></svg>').decode()
+        line = f"PHOTO;ENCODING=b;TYPE=SVG:{script}"
+    else:
+        uri = f"{_BASE}avatar.png"
+        replica.server.photos[uri] = PNG_BYTES
+        settings.ANGEE_STORAGE_IMAGE_MAX_BYTES = len(PNG_BYTES) - 1
+        line = f"PHOTO;VALUE=URI:{uri}"
+    replica.server.store(_HREF, _card().replace("END:VCARD", f"{line}\r\nEND:VCARD"))
+    replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
+
+    result = replica.pull()
+
+    targeted = RecordLink.objects.filter(stream=replica.stream).exclude(target_object_id=None)
+    assert set(targeted.values_list("external_key", flat=True)) == {"grace"}
+    assert len(result.failure_ids) == 1
+    retained = {row.id: row for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)}
+    failure = retained[result.failure_ids[0]]
+    assert (failure.kind, failure.code) == (SyncFailureKind.SEMANTIC, "unsupported_photo")
+    assert not File.objects.exists()
+
+
+def test_a_photo_storage_cannot_take_yet_fails_the_page_so_it_retries(replica: Replica) -> None:
+    """No default drive to provision the image drive beside is a transient state, not a card to set aside."""
+
+    photo = base64.b64encode(PNG_BYTES).decode()
+    replica.server.store(_HREF, _card().replace("END:VCARD", f"PHOTO;ENCODING=b;TYPE=PNG:{photo}\r\nEND:VCARD"))
+    with pytest.raises(UploadTargetNotFound):
+        replica.pull()
+    assert not Person.objects.exists()
+    replica.stream.refresh_from_db()
+    assert replica.stream.cursor == {}
+
+
+@pytest.mark.parametrize(("refusal", "code"), [("oversized", "unsupported_photo"), ("unverified", "photo_unavailable")])
+def test_write_back_refuses_an_avatar_the_image_rule_refuses_and_writes_nothing(
+    replica: Replica, settings: Any, monkeypatch: pytest.MonkeyPatch, refusal: str, code: str
+) -> None:
+    """An avatar the image rule refuses, or whose bytes no longer verify, is a remote rejection, never a PUT."""
+
+    person, link = replica.baseline()
+    backend = Backend.objects.create(slug="legacy", label="Legacy", backend_class="local")
+    drive = Drive.objects.create(backend=backend, slug="assets", name="Assets")
+    legacy = File.objects.create(
+        drive=drive,
+        content_hash=hashlib.sha256(PNG_BYTES).hexdigest(),
+        filename="old.png",
+        size_bytes=len(PNG_BYTES),
+        mime_type=MimeType.objects.create(mime_type="image/png", category="image", label="PNG"),
+        storage_path="assets/old.png",
+        upload_state=UploadState.READY,
+    )
+    if refusal == "oversized":
+        settings.ANGEE_STORAGE_IMAGE_MAX_BYTES = len(PNG_BYTES) - 1
+    else:
+
+        def unverified(*_args: Any, **_kwargs: Any) -> bytes:
+            raise ValidationError("The stored bytes do not match the file identity.")
+
+        monkeypatch.setattr(File, "read_verified", unverified)
+    person.avatar = legacy
+    person.save(update_fields=["avatar"])
+
+    result = push_stream(replica.stream, replica.backend)
+
+    failure = next(iter(RecordLink.objects.get(pk=link.pk).failures(open_only=False)))
+    assert result.count == 0
+    assert (failure.kind, failure.code) == (SyncFailureKind.REMOTE_REJECTED, code)
+    assert not [request for request in replica.server.requests if request[0] == "PUT"]
 
 
 def test_uidless_cards_with_same_name_use_distinct_resource_hrefs(replica: Replica) -> None:
@@ -1538,8 +2146,12 @@ def test_uidless_cards_with_same_name_use_distinct_resource_hrefs(replica: Repli
     replica.server.store(other_href, raw)
     result = replica.pull()
     assert result.count == 2
-    assert not result.discrepancy_ids
-    assert set(Person.objects.values_list("source_uid", flat=True)) == {_HREF, other_href}
+    assert not result.failure_ids
+    assert set(
+        RecordLink.objects.filter(stream=replica.stream, target_object_id__isnull=False).values_list(
+            "external_key", flat=True
+        )
+    ) == {_HREF, other_href}
     assert set(RecordLink.objects.values_list("external_key", flat=True)) == {_HREF, other_href}
 
 
@@ -1548,9 +2160,13 @@ def test_uid_matching_uidless_resource_href_quarantines_without_rebinding_owner(
     collision_href = f"{_BOOK}duplicate.vcf"
     replica.server.store(_HREF, _card(uid=collision_href))
     assert replica.pull().count == 1
-    original = Person.objects.get(source_uid=collision_href)
+    original = RecordLink.objects.get(stream=replica.stream, external_key=collision_href).target
     owner = RecordLink.objects.get(stream=replica.stream, external_key=collision_href)
-    bases = owner.remote_base_hash, owner.local_base_hash, owner.remote_version
+    bases = (
+        owner.applied_base.source_hash,
+        canonical_json_sha256(owner.applied_base.mapped_payload),
+        owner.remote_version,
+    )
     old_cursor = dict(replica.stream.cursor)
     replica.server.store(collision_href, _card(name="Impostor").replace("UID:ada\r\n", ""))
     replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
@@ -1561,10 +2177,10 @@ def test_uid_matching_uidless_resource_href_quarantines_without_rebinding_owner(
         result = replica.pull()
         assert result.exhausted
         assert result.count == 1
-    discrepancy = SyncDiscrepancy.objects.get(stream=replica.stream)
-    refused = RecordLink.objects.get(pk=discrepancy.link_id)
-    assert discrepancy.kind == DiscrepancyKind.SEMANTIC
-    assert refused.status == LinkStatus.DISCREPANT
+    failure = next((row for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)))
+    refused = RecordLink.objects.get(pk=failure.link_pk)
+    assert failure.kind == SyncFailureKind.SEMANTIC
+    assert refused.status == LinkStatus.FAILED
     assert refused.metadata["href"] == collision_href
     assert refused.external_key != owner.external_key
     assert refused.target_object_id is None
@@ -1572,7 +2188,11 @@ def test_uid_matching_uidless_resource_href_quarantines_without_rebinding_owner(
     original.refresh_from_db()
     assert owner.metadata["href"] == _HREF
     assert owner.target_object_id == str(original.pk)
-    assert (owner.remote_base_hash, owner.local_base_hash, owner.remote_version) == bases
+    assert (
+        owner.applied_base.source_hash,
+        canonical_json_sha256(owner.applied_base.mapped_payload),
+        owner.remote_version,
+    ) == bases
     assert original.display_name == "Ada Lovelace"
     assert set(Person.objects.values_list("display_name", flat=True)) == {"Ada Lovelace", "Grace Hopper"}
     assert replica.stream.cursor == (old_cursor if sweep else {"sync_token": replica.server.token})
@@ -1582,23 +2202,28 @@ def test_due_read_keys_redrives_only_discrepant_hrefs_without_advancing_cursor(r
     replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
     assert replica.pull().count == 2
     replica.server.store(_HREF, "Not a vCard")
-    assert replica.pull().discrepancy_ids
-    discrepancy = SyncDiscrepancy.objects.get(stream=replica.stream)
-    link = RecordLink.objects.get(pk=discrepancy.link_id)
+    assert replica.pull().failure_ids
+    failure = next((row for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)))
+    link = RecordLink.objects.get(pk=failure.link_pk)
     assert link.external_key == "ada"
     replica.server.store(_HREF, _card(notes="Fixed without a baseline"))
-    SyncDiscrepancy.objects.filter(pk=discrepancy.pk).update(retry_at=timezone.now() - timedelta(seconds=1))
+    for failure_row in [
+        row
+        for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)
+        if row.id == failure.pk
+    ]:
+        failure_state(failure_row, retry_at=timezone.now() - timedelta(seconds=1))
     old_cursor = dict(replica.stream.cursor)
     old_generation, old_advanced_at = replica.stream.generation, replica.stream.last_advanced_at
     replica.server.requests.clear()
 
     replica.stream = begin_stream_cycle(replica.stream, replica.backend)
 
-    discrepancy.refresh_from_db()
+    failure = failure_state(failure)
     link.refresh_from_db()
-    assert discrepancy.status == DiscrepancyStatus.RESOLVED
+    assert failure.status == SyncFailureStatus.RESOLVED
     assert link.status == LinkStatus.CURRENT
-    assert Person.objects.get(source_uid="ada").notes == "Fixed without a baseline"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="ada").target.notes == "Fixed without a baseline"
     assert replica.stream.cursor == old_cursor
     assert replica.stream.generation == old_generation
     assert replica.stream.last_advanced_at == old_advanced_at
@@ -1629,7 +2254,7 @@ def test_read_keys_returns_tombstone_for_missing_unbound_href(replica: Replica, 
 def test_enumeration_sweep_reads_present_href_and_marks_vanished_unavailable(replica: Replica) -> None:
     replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
     assert replica.pull().count == 2
-    person = Person.objects.get(source_uid="ada")
+    person = RecordLink.objects.get(stream=replica.stream, external_key="ada").target
     replica.server.remove(_HREF)
     old_cursor = dict(replica.stream.cursor)
     replica.server.requests.clear()
@@ -1669,14 +2294,14 @@ def test_enumeration_sweep_imports_unlinked_contact_once_across_later_delta(repl
     assert person.display_name == "Grace Hopper"
     assert link.metadata["uid"] == "grace"
     assert link.status == LinkStatus.CURRENT
-    assert link.remote_base_hash and link.local_base_hash
+    assert link.applied_base.source_hash and canonical_json_sha256(link.applied_base.mapped_payload)
     assert replica.stream.cursor == old_cursor
-    assert RecordRevision.objects.filter(link=link).count() == 1
+    assert applied_history().filter(id=link.pk).count() == 1
     assert replica.pull().count == 0
     link.refresh_from_db()
     assert link.target_object_id == str(person.pk)
-    assert Person.objects.count() == RecordLink.objects.count() == RecordRevision.objects.count() == 2
-    assert not SyncDiscrepancy.objects.exists()
+    assert Person.objects.count() == RecordLink.objects.count() == applied_history().count() == 2
+    assert not bool(SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False))
 
 
 @pytest.mark.parametrize("filename", ["0-ada.vcf", "z-ada.vcf"])
@@ -1693,7 +2318,7 @@ def test_sweep_imported_identity_survives_remote_href_relocation(replica: Replic
     result = replica.pull()
 
     assert result.exhausted
-    assert not result.discrepancy_ids
+    assert not result.failure_ids
     link.refresh_from_db()
     assert link.external_key == _HREF
     assert link.target_object_id == str(person.pk)
@@ -1735,13 +2360,13 @@ def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
     committed_cursor = dict(replica.stream.cursor)
     committed_reconcile_state = dict(replica.stream.reconcile_state)
     assert committed_reconcile_state["after"] == "zulu"
-    assert Person.objects.get(source_uid="zulu").notes == "First committed page"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="zulu").target.notes == "First committed page"
     original_apply = replica.backend.apply_record
 
     def crash_after_apply(stream: Any, record: Any) -> Any:
         outcome = original_apply(stream, record)
         assert record.external_key == "alpha"
-        assert Person.objects.get(source_uid="alpha").notes == "Second page"
+        assert RecordLink.objects.get(stream=replica.stream, external_key="alpha").target.notes == "Second page"
         assert outcome
         raise RuntimeError("Interrupted CardDAV sweep apply")
 
@@ -1751,9 +2376,9 @@ def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
     replica.stream.refresh_from_db()
     assert replica.stream.cursor == committed_cursor
     assert replica.stream.reconcile_state == committed_reconcile_state
-    assert Person.objects.get(source_uid="alpha").notes == "Original"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="alpha").target.notes == "Original"
     assert Person.objects.count() == 2
-    assert RecordRevision.objects.count() == 3
+    assert applied_history().count() == 3
 
     replica.backend = CardDavDirectoryBackend(replica.directory)
     replica.stream = SyncStream.objects.get(pk=replica.stream.pk)
@@ -1761,16 +2386,16 @@ def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
     assert replica.reconcile(page_bound=1) == 0
     assert replica.stream.cursor == old_cursor
     assert replica.stream.last_reconciled_at is not None
-    assert Person.objects.get(source_uid="alpha").notes == "Second page"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="alpha").target.notes == "Second page"
     assert Person.objects.count() == RecordLink.objects.count() == 3
-    assert RecordRevision.objects.count() == 5
+    assert applied_history().count() == 5
     fetched = [
         [item.text for item in ElementTree.fromstring(body).findall("d:href", _NAMESPACES)]
         for method, _, _, body in replica.server.requests
         if method == "REPORT"
     ]
     assert fetched == [[second_href], [unseen_href]]
-    assert not SyncDiscrepancy.objects.exists()
+    assert not bool(SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False))
 
 
 def test_generation_bump_deepcopies_nested_config(replica: Replica, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1798,7 +2423,9 @@ def test_generation_bump_deepcopies_nested_config(replica: Replica, monkeypatch:
 
 @pytest.mark.parametrize("url", ["file:///tmp/addressbook", "http://169.254.169.254/addressbook/"])
 def test_request_preserves_url_gate_validation_error(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch, url: str,
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
+    url: str,
 ) -> None:
     monkeypatch.setattr(HttpClient, "transport_factory", PinnedTransport)
     with pytest.raises(ValidationError):
@@ -1826,7 +2453,9 @@ def test_cross_origin_redirect_refuses_to_forward_basic_auth(
 
 @pytest.mark.parametrize("status", [207, 412, 404])
 def test_same_origin_redirect_retains_dav_request_and_failure_translation(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch, status: int,
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
 ) -> None:
     sent: list[httpx2.Request] = []
 

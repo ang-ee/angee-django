@@ -4,7 +4,7 @@ Parties are the people and organisations a project keeps track of. A party is
 reached through one or more :class:`Handle` rows (an email address, a phone
 number, a social handle) — the same handle that messaging uses as a participant,
 so this addon is the contacts foundation the messaging addon builds on. The link
-between a party and a handle is itself confidence-bearing (:class:`PartyHandle`)
+between a party and a handle is a confidence-bearing member statement
 so a sync can record an uncertain match as a weak candidate instead of guessing.
 
 ``Party`` is a multi-table-inheritance parent; the concrete kind is the child
@@ -14,7 +14,7 @@ carries its legal name and domain.
 
 Parties are organised two ways, both human-owned facts: :class:`Circle` is a
 private, overlapping grouping (a party may belong to many circles; circles nest
-as a :class:`~angee.base.mixins.HierarchyMixin` tree), and :class:`Relationship`
+as a :class:`~angee.models.HierarchyMixin` tree), and :class:`Relationship`
 is a typed, directed party↔party edge whose vocabulary
 (:class:`RelationshipKind`) is catalogue data seeded from the XFN / vCard
 ``RELATED`` values — never a schema fact.
@@ -22,8 +22,8 @@ is a typed, directed party↔party edge whose vocabulary
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -38,43 +38,111 @@ from phonenumbers import (
     is_valid_number,
     parse,
 )
-from rebac import PermissionDenied, actor_context, current_actor
+from rebac import PermissionDenied, actor_context
 from rebac.mixins import RebacModelBase
 
-from angee.base.actors import instance_actor
-from angee.base.fields import ColorField, StateField
-from angee.base.identity import public_id_of
-from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, HierarchyMixin
-from angee.base.models import AngeeDataModel, AngeeManager
-from angee.base.refs import concrete_child, concrete_child_models
+from angee.actors import instance_actor
+from angee.fields import ColorField, StateField
+from angee.identity import public_id_of
+from angee.impl import ImplClassField
 from angee.integrate.models import Bridge, IntegrationCreateMode
+from angee.lineage import concrete_child, concrete_child_models
+from angee.models import (
+    AngeeDataModel,
+    AngeeManager,
+    Aspect,
+    AuditMixin,
+    HierarchyMixin,
+    HistoryMixin,
+    MergeableMixin,
+    ModelHistory,
+    OwnerMixin,
+    PairAspect,
+    SourceKind,
+    StatementRecords,
+    StatementsMixin,
+    StatementSubjectManager,
+    TrashMixin,
+)
 from angee.parties.backends import DirectoryBackend
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
     CircleManager,
     HandleManager,
-    MergeVetoManager,
-    PartyHandleManager,
     PartyManager,
+    PartyStatementQuerySet,
 )
-from angee.parties.mixins import LinkSource, ScoredLinkMixin
+from angee.parties.mixins import MembershipDecisionMixin, PartyAspectMixin, PartyStatementMixin
+from angee.refs import RetainedGenericRelation
 from angee.tags.models import TaggedModel
 
 
-class Party(TaggedModel, AuditMixin, AngeeDataModel):
+class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel):
     """A person or organisation the project tracks.
 
     The parent owns the common contact identity — the public id, ownership, the
-    display name, avatar, notes, tags, and the lossless-vCard carriers. The
-    concrete kind (and its kind-specific fields) lives on the :class:`Person` /
-    :class:`Organization` child row; a child's tags key on its party.
+    display name, avatar, notes and tags. Ownership is the transferable ``owner``
+    (:class:`~angee.models.OwnerMixin`), which an insert defaults to the
+    creator; ``created_by`` stays attribution. RecordLink owns directory payloads.
+    The concrete kind (and its kind-specific fields) lives on the :class:`Person` /
+    :class:`Organization` child row, which inherits the owner; a child's tags key
+    on its party.
     """
 
     runtime = True
     rebac_grantable = {"reader": "write"}
 
     sqid_prefix = "pty_"
+    history = ModelHistory(inherit=True, excluded_fields=("handle_count",))
+    REVIEW_CONFIDENCE: ClassVar[float] = 0.5
+
+    def handle_candidates(self, candidates: Sequence[Any]) -> Sequence[Any]:
+        return [row for row in candidates if row.confidence >= self.REVIEW_CONFIDENCE]
+
+    def apply_handle(self, *, member: Mapping[str, Any], **kwargs: Any) -> None:
+        apps.get_model("parties", "Handle").objects.db_manager(self._state.db).resolve(member["handle"])
+
+    record_links = RetainedGenericRelation(
+        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
+    )
+    statements = StatementRecords(
+        link="integrate.RecordLink",
+        aspects={
+            "identity": Aspect(
+                fields=("display_name",),
+                precedence=cast(
+                    tuple[SourceKind, ...],
+                    (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD, SourceKind.DIRECTORY, SourceKind.IMPORT),
+                ),
+            ),
+            "contact": Aspect(
+                fields=("notes", "avatar"),
+                precedence=cast(tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.DIRECTORY)),
+            ),
+            "handle": Aspect(
+                member={"handle": models.ForeignKey("parties.Handle", on_delete=models.PROTECT)},
+                precedence=cast(
+                    tuple[SourceKind, ...],
+                    (
+                        SourceKind.PERSON,
+                        SourceKind.SYSTEM_OF_RECORD,
+                        SourceKind.DIRECTORY,
+                        SourceKind.IMPORT,
+                        SourceKind.RULE,
+                    ),
+                ),
+                candidates=handle_candidates,
+                apply=apply_handle,
+            ),
+        },
+        sqid_prefix="pst_",
+        bases=(PartyStatementMixin,),
+        historical_queryset=PartyStatementQuerySet,
+    )
+    same_as = PairAspect(link="integrate.RecordLink")
+    MERGED_PERMISSION = "write"
+    retains_merged = True
+
     display_name = models.TextField()
     notes = models.TextField(blank=True, default="")
     avatar = models.ForeignKey(
@@ -82,27 +150,10 @@ class Party(TaggedModel, AuditMixin, AngeeDataModel):
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name="+",
+        related_name="party_avatars",
     )
+    """The party's own avatar (a directory card's ``PHOTO``), on storage's image drive every signed-in user reads."""
     handle_count = models.PositiveIntegerField(default=0, db_index=True)
-    merged_into = models.ForeignKey(
-        "self",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="merged_from",
-    )
-    raw_vcard = models.TextField(blank=True, default="")
-    extensions = models.JSONField(blank=True, default=dict)
-    folder = models.ForeignKey(
-        "parties.Folder",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="parties",
-    )
-    source_uid = models.CharField(max_length=512, blank=True, default="")
-    source_etag = models.CharField(max_length=512, blank=True, default="")
     introduced_by = models.ForeignKey(
         "self",
         null=True,
@@ -140,18 +191,32 @@ class Party(TaggedModel, AuditMixin, AngeeDataModel):
         verbose_name_plural = "parties"
         rebac_resource_type = "parties/party"
         constraints = (
-            # The directory-sync idempotency key: one party per source UID per
-            # folder, so re-sync updates the same row instead of duplicating.
-            models.UniqueConstraint(
-                fields=("folder", "source_uid"),
-                condition=~models.Q(source_uid=""),
-                name="uq_party_folder_source_uid",
-            ),
             models.CheckConstraint(
                 condition=~models.Q(merged_into=models.F("id")),
                 name="ck_party_not_merged_into_self",
             ),
         )
+
+    def lock_subject(self, members: Mapping[str, Any] | None = None) -> Any:
+        """Lock identity Handles before the statement owner's core Party lock."""
+
+        owner = apps.get_model("parties", "Party").objects.db_manager(hints={"instance": self})
+        members = members or {}
+        handle = members.get("handle")
+        handle_ids = (
+            (handle.pk if isinstance(handle, models.Model) else handle,)
+            if handle is not None
+            else owner.handle_statements().filter(subject_id=self.pk).values_list("handle_id", flat=True)
+        )
+        owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
+        return super().lock_subject(members)
+
+    def lock_for_merge(self) -> None:
+        """Lock this party's Handles before the shared merge owner locks Parties."""
+
+        owner = apps.get_model("parties", "Party").objects.db_manager(hints={"instance": self})
+        handle_ids = owner.handle_statements().filter(subject_id=self.pk).values_list("handle_id", flat=True)
+        owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
 
     def __str__(self) -> str:
         """Return the party's display name for Django displays."""
@@ -166,8 +231,9 @@ class Party(TaggedModel, AuditMixin, AngeeDataModel):
         """Whether ``display_name`` is a human-given name.
 
         The import placeholder and letterless names (a phone number or other
-        handle spelling promoted into the name slot) do not count; ranking
-        surfaces such as merge-survivor proposals prefer parties that pass.
+        handle spelling promoted into the name slot) do not count. When links tie,
+        a handle resolves to a party that passes
+        (:meth:`~angee.parties.managers.HandleManager.resolve`).
         """
 
         name = (self.display_name or "").strip()
@@ -188,25 +254,9 @@ class Party(TaggedModel, AuditMixin, AngeeDataModel):
         for child_model in concrete_child_models(apps.get_model("parties", "Party")):
             if isinstance(self, child_model) or concrete_child(self, child_model) is not None:
                 for kind in (RelationshipKind.PartyKind.ORGANIZATION, RelationshipKind.PartyKind.PERSON):
-                    if kind.model() is child_model:
+                    if RelationshipKind.PartyKind(kind).model() is child_model:
                         return cast(RelationshipKind.PartyKind, kind)
         return None
-
-    def canonical(self) -> Party:
-        """Return the surviving party this one resolves to, following merge pointers.
-
-        :meth:`merge_into` flattens normal writes to the terminal, but this method
-        still follows a longer chain and guards a cycle so legacy/corrupt data
-        cannot loop forever during a read.
-        """
-
-        seen = {self.pk}
-        party = self
-        while party.merged_into_id is not None and party.merged_into_id not in seen:
-            seen.add(party.merged_into_id)
-            # Keep inherited calls bound to Person/Organization's concrete table.
-            party = type(self)._base_manager.get(pk=party.merged_into_id)
-        return party
 
     def apply_merge_field_overrides(
         self,
@@ -240,7 +290,7 @@ class Party(TaggedModel, AuditMixin, AngeeDataModel):
             person = person_model.objects.filter(pk=self.pk).first()
             if person is None or not person.has_access("write"):
                 raise PermissionDenied("write access to the surviving person is required")
-            person.sudo(reason="parties.merge.person_field_overrides")
+            person = person.with_actor(instance_actor(self))
             person._apply_merge_scalar_values(field_overrides, self._person_merge_scalar_fields)
 
     def _apply_merge_scalar_values(
@@ -265,15 +315,21 @@ class Party(TaggedModel, AuditMixin, AngeeDataModel):
     decision_methods = ("apply_identity",)
 
     def apply_identity(
-        self, *, expected_facts_hash: str = "", proposed: Mapping[str, Any] | None = None,
+        self,
+        *,
+        expected_facts_hash: str = "",
+        proposed: Mapping[str, Any] | None = None,
         choices: Mapping[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Apply a proposed identity through the directory's conflict-checking owner."""
         if proposed is None or choices is None or not expected_facts_hash:
             raise ValidationError("An identity application needs its proposed values, choices and facts hash.")
         return type(self).objects.apply_identity(
-            party_id=public_id_of(self), expected_facts_hash=expected_facts_hash,
-            proposed=proposed, choices=choices, actor=instance_actor(self),
+            party_id=public_id_of(self),
+            expected_facts_hash=expected_facts_hash,
+            proposed=proposed,
+            choices=choices,
+            actor=instance_actor(self),
         )
 
     def identity_differs(self, current: Mapping[str, Any], proposed: Mapping[str, Any]) -> bool:
@@ -287,10 +343,20 @@ class Party(TaggedModel, AuditMixin, AngeeDataModel):
             proposed_key = addresses.identity_key(address)
             if all(addresses.identity_key(row) != proposed_key for row in current["addresses"]):
                 return True
-        link_id = proposed["handle"]["party_handle_id"]
-        return bool(link_id and any(row["id"] == link_id and not row["is_confirmed"] for row in current["handles"]))
+        link_id = proposed["handle"]["statement_id"]
+        statement_model = self.statements.model
+        confirmed = (statement_model.StatementRank.PREFERRED, statement_model.StatementSnak.VALUE)
+        return bool(
+            link_id
+            and any(
+                row["id"] == link_id and (row["rank"], row["snak"]) != confirmed
+                for row in current["handles"]
+            )
+        )
 
-    def identity_values(self, addresses: list[Any], links: list[Any]) -> dict[str, Any]:
+    def identity_values(
+        self, addresses: list[Any], links: list[Any], *, include_evidence: bool = False
+    ) -> dict[str, Any]:
         """Project the exact native identity facts used by expected-state checks."""
 
         return {
@@ -311,50 +377,62 @@ class Party(TaggedModel, AuditMixin, AngeeDataModel):
                     "platform": str(link.handle.platform),
                     "value": link.handle.value,
                     "confidence": link.confidence,
-                    "is_confirmed": link.is_confirmed,
-                    "is_dismissed": link.is_dismissed,
+                    "asserted_by": link.asserted_by,
+                    "rank": link.rank,
+                    "snak": link.snak,
+                    "status": link.status,
+                    "applied": link.applied,
+                    **({"evidence": link.evidence} if include_evidence else {}),
                 }
                 for link in links
             ],
         }
 
-    def merge_into(self, target: Party) -> Party:
-        """Atomically merge this party into ``target`` and return the terminal target.
+    def apply_pair(self, *, aspect: str, other: Any, statement: Any | None) -> None:
+        """Identity survivorship selects a pending decision; merge chooses the survivor."""
 
-        The source chain head is row-locked through ``lock_if_supported`` before
-        its pointer changes. The target resolves defensively to its canonical
-        terminal, and existing rows that pointed at the source are repointed in the
-        same transaction so normal merge chains stay one hop deep. Reversing an
-        existing merge raises :class:`ValidationError` instead of silently clearing
-        either pointer.
-        """
+        if aspect != "same_as":
+            super().apply_pair(aspect=aspect, other=other, statement=statement)
 
-        if self.pk is None or target.pk is None:
-            raise ValidationError({"merged_into": "Both parties must be saved before merging."})
-        party_model = apps.get_model("parties", "Party")
-        with transaction.atomic():
-            source = party_model.objects.lock_if_supported().get(pk=self.pk)
-            target_head = party_model.objects.lock_if_supported().get(pk=target.pk)
-            terminal = target_head.canonical()
-            if terminal.pk == source.pk:
-                raise ValidationError(
-                    {"merged_into": "Cannot reverse a merge by merging its target back into the source."}
-                )
-            source.merged_into = terminal
-            source.save(update_fields=["merged_into", "updated_at"])
-            party_model._base_manager.filter(merged_into_id=source.pk).exclude(pk=source.pk).update(
-                merged_into_id=terminal.pk
-            )
-        self.merged_into = terminal
-        self.merged_into_id = terminal.pk
-        return cast(Party, terminal)
+    def validate_merge(self, merged: Sequence[Any]) -> None:
+        super().validate_merge(merged)
+        for row in merged:
+            if self.same_as.kept_separate(self, row):
+                raise ValidationError("These parties have been marked to stay separate.")
+
+    def merge_fields(self, merged: Sequence[Any], *, field_overrides: Any = None, **options: Any) -> None:
+        super().merge_fields(merged, **options)
+        for row in merged:
+            self.apply_merge_field_overrides(row, field_overrides)
+            self.same_as.for_pair(self, row).with_actor(instance_actor(self)).confirm(aspect="same_as", values={})
 
 
 class Person(models.Model, metaclass=RebacModelBase):
     """A human party — carries name parts and an optional platform-user link."""
 
     runtime = True
-    extends = "parties.Party"
+    extends: ClassVar[str | None] = "parties.Party"
+
+    statements = StatementRecords(
+        link="integrate.RecordLink",
+        aspects={
+            "name": Aspect(
+                fields=("name_prefix", "given_name", "additional_name", "family_name", "name_suffix", "nickname"),
+                precedence=cast(
+                    tuple[SourceKind, ...],
+                    (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD, SourceKind.DIRECTORY, SourceKind.IMPORT),
+                ),
+            ),
+            "dates": Aspect(
+                fields=("birthday", "anniversary"),
+                precedence=cast(
+                    tuple[SourceKind, ...],
+                    (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD, SourceKind.DIRECTORY, SourceKind.IMPORT),
+                ),
+            ),
+        },
+        sqid_prefix="pns_",
+    )
 
     name_prefix = models.TextField(blank=True, default="")
     given_name = models.TextField(blank=True, default="")
@@ -380,72 +458,24 @@ class Person(models.Model, metaclass=RebacModelBase):
         rebac_resource_type = "parties/person"
 
 
-class MergeVeto(AuditMixin, AngeeDataModel):
-    """A durable decision that two canonically ordered parties must stay separate."""
-
-    runtime = True
-    sqid_prefix = "mvt_"
-
-    party_a = models.ForeignKey(
-        "parties.Party",
-        on_delete=models.CASCADE,
-        related_name="merge_vetoes_as_a",
-    )
-    party_b = models.ForeignKey(
-        "parties.Party",
-        on_delete=models.CASCADE,
-        related_name="merge_vetoes_as_b",
-    )
-
-    objects = MergeVetoManager()
-
-    class Meta:
-        """Django model options for the canonical keep-separate pair."""
-
-        abstract = True
-        ordering = ("party_a", "party_b", "sqid")
-        rebac_resource_type = "parties/merge_veto"
-        constraints = (
-            models.CheckConstraint(
-                condition=models.Q(party_a__lt=models.F("party_b")),
-                name="ck_merge_veto_party_order",
-            ),
-            models.UniqueConstraint(
-                fields=("party_a", "party_b"),
-                name="uq_merge_veto_party_pair",
-            ),
-        )
-
-    def __str__(self) -> str:
-        """Return the canonical pair for Django displays."""
-
-        return f"merge-veto:{self.party_a_id}<->{self.party_b_id}"
-
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the veto in canonical primary-key order."""
-
-        party_a_id = getattr(self, "party_a_id", None)
-        party_b_id = getattr(self, "party_b_id", None)
-        if party_a_id is not None and party_b_id is not None and party_a_id > party_b_id:
-            party_a = self._state.fields_cache.pop("party_a", None)
-            party_b = self._state.fields_cache.pop("party_b", None)
-            self.party_a_id = party_b_id
-            self.party_b_id = party_a_id
-            if party_b is not None:
-                self.party_a = party_b
-            if party_a is not None:
-                self.party_b = party_a
-            update_fields = kwargs.get("update_fields")
-            if update_fields is not None:
-                kwargs["update_fields"] = {*update_fields, "party_a", "party_b"}
-        super().save(*args, **kwargs)
-
-
 class Organization(models.Model, metaclass=RebacModelBase):
     """An organisation party — carries its legal name and primary domain."""
 
     runtime = True
-    extends = "parties.Party"
+    extends: ClassVar[str | None] = "parties.Party"
+
+    statements = StatementRecords(
+        link="integrate.RecordLink",
+        aspects={
+            "legal_identity": Aspect(
+                fields=("legal_name", "domain"),
+                precedence=cast(
+                    tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD, SourceKind.DIRECTORY)
+                ),
+            )
+        },
+        sqid_prefix="ogs_",
+    )
 
     legal_name = models.TextField(blank=True, default="")
     domain = models.CharField(max_length=255, blank=True, default="", db_index=True)
@@ -458,12 +488,12 @@ class Organization(models.Model, metaclass=RebacModelBase):
         rebac_resource_type = "parties/organization"
 
 
-class Handle(TaggedModel, AuditMixin, AngeeDataModel):
+class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel):
     """A reachable address or handle of a party on one platform.
 
     Keyed on ``(platform, value)`` and, when present, ``(platform, external_id)``
     — those unique constraints are the ingestion-dedup keys that make re-sync
-    idempotent. ``party`` is the resolved owner the :class:`PartyHandle` manager
+    idempotent. ``party`` is the resolved identity the Handle manager
     materialises; it is null until a handle is linked, so a handle synced for an
     unknown sender is still a valid row. A handle carries tags of its own, apart
     from its party's (a consumer marks a company's accounts-payable address).
@@ -471,6 +501,7 @@ class Handle(TaggedModel, AuditMixin, AngeeDataModel):
 
     runtime = True
     rebac_grantable = {"reader": "write"}
+    retains_merged = True
 
     class Platform(models.TextChoices):
         """The kind of channel a handle reaches a party through."""
@@ -505,20 +536,21 @@ class Handle(TaggedModel, AuditMixin, AngeeDataModel):
     display_name = models.CharField(max_length=4096, blank=True, default="")
     label = models.CharField(max_length=64, blank=True, default="")
     is_preferred = models.BooleanField(default=False)
-    owner = models.ForeignKey(
+    controller = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name="own_handles",
+        related_name="controlled_handles",
         db_index=True,
     )
     """The user who controls this address — sends, posts, or syncs as it.
 
     The **control** fact, distinct from the **identity** fact (``party`` — who the
-    address reaches, resolved from :class:`PartyHandle`). A shared team inbox or a
-    service account may carry an ``owner`` without resolving to that user's party,
-    and an ex-address may reach a person's party without anyone controlling it.
+    address reaches, resolved from member statements) and from access, which
+    belongs to the handle's creator. A shared team inbox or a service account may
+    carry a ``controller`` without resolving to that user's party, and an
+    ex-address may reach a person's party without anyone controlling it.
     """
 
     is_verified = models.BooleanField(default=False)
@@ -532,6 +564,19 @@ class Handle(TaggedModel, AuditMixin, AngeeDataModel):
     )
     party_link_confirmed = models.BooleanField(default=False, editable=False)
     """Whether the winning link materialised into ``party`` is human-confirmed."""
+
+    avatar = models.ForeignKey(
+        "storage.File",
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=models.SET_NULL,
+        related_name="handle_avatars",
+    )
+    """The avatar the handle's own network shows for it (a messenger profile picture).
+
+    Written only by :meth:`HandleManager.set_avatar`, onto storage's image drive every signed-in user reads.
+    """
 
     objects = HandleManager()
 
@@ -606,8 +651,47 @@ class Handle(TaggedModel, AuditMixin, AngeeDataModel):
                 kwargs["update_fields"] = [*update_fields, "normalized_value"]
         super().save(*args, **kwargs)
 
+    def validate_merge(self, merged: Sequence[Any]) -> None:
+        """A contact alias keeps its platform and the directory identity lock order."""
+
+        super().validate_merge(merged)
+        if any(row.platform != self.platform for row in merged):
+            raise ValidationError("Only handles on the same platform can be merged.")
+        apps.get_model("parties", "Party").objects.db_manager(self._state.db).lock_identity_rows(
+            party_ids=(), handle_ids=(self.pk, *(row.pk for row in merged)),
+        )
+
+    def merge_fields(self, merged: Sequence[Any], **options: Any) -> None:
+        """Fill missing contact display/control facts; retain the survivor's choices."""
+
+        super().merge_fields(merged, **options)
+        for row in merged:
+            filled = []
+            for name in ("controller", "label", "display_name", "is_verified"):
+                field = self._meta.get_field(name)
+                assert isinstance(field, models.Field)
+                attname = field.attname
+                if not getattr(self, attname) and getattr(row, attname):
+                    setattr(self, attname, getattr(row, attname))
+                    filled.append(name)
+            if filled:
+                self.save(using=self._state.db, update_fields=(*filled, "updated_at"))
+            if self.avatar_id is None and row.avatar_id is not None:
+                type(self).objects.db_manager(self._state.db).set_avatar(self, row.avatar)
+
+    def retire_merged(self, merged: Any) -> None:
+        """Recompute identity projections after shared reference moves, then redirect."""
+
+        owner = type(self).objects.db_manager(self._state.db)
+        owner.resolve(merged)
+        owner.resolve(self)
+        # Resolution wrote the party on its own locked row; the redirect's history
+        # snapshot must carry that party, not this instance's stale one.
+        merged.refresh_from_db(using=self._state.db, fields=("party", "party_link_confirmed"))
+        super().retire_merged(merged)
+
     def _party_links_resolved(self) -> None:
-        """Run addon contributions after this handle's owner is fully resolved.
+        """Run addon contributions after this handle's party is fully resolved.
 
         The parties owner invokes this hook inside the same database transaction as
         its derived ``party`` and counter writes.  Base parties has no additional
@@ -618,154 +702,61 @@ class Handle(TaggedModel, AuditMixin, AngeeDataModel):
 
     @property
     def resolved_confidence(self) -> float | None:
-        """Confidence of the link that resolved this handle's owner.
-
-        ``party`` is materialised from the winning :class:`PartyHandle` (see
-        :meth:`PartyHandleManager.resolve`) and ``(party, handle)`` is unique, so
-        the link matching the resolved ``party`` is that winner — its score is the
-        resolution confidence. ``None`` when the handle is unowned or, under
-        actor-scoped loading, the resolving link is not readable by the actor.
-        """
-
+        """Confidence of the subject-authorized applied party assertion."""
         if self.party_id is None:
             return None
-        for link in self.party_links.all():
-            if link.party_id == self.party_id:
-                return link.confidence
-        return None
-
-
-@dataclass(frozen=True, slots=True)
-class PartyHandleEvidence:
-    """One actor-readable native record supporting a handle claim."""
-
-    model: str
-    id: str
-
-
-@dataclass(frozen=True, slots=True)
-class PartyHandleEvidencePage:
-    """Bounded actor-scoped projection of retained handle evidence."""
-
-    items: tuple[PartyHandleEvidence, ...]
-    truncated: bool
-
-
-class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
-    """A confidence-bearing link between a party and one of its handles.
-
-    A handle may carry several scored candidate parties (:class:`ScoredLinkMixin`),
-    so a sync can surface an uncertain match as a weak link (a conflicting claim is
-    recorded at ``0.3`` confidence) instead of silently reassigning. The resolved
-    owner is the highest-confidence, non-dismissed link — the value the manager
-    materialises onto :attr:`Handle.party`.
-    """
-
-    runtime = True
-
-    sqid_prefix = "phl_"
-    party = models.ForeignKey(
-        "parties.Party",
-        on_delete=models.CASCADE,
-        related_name="party_handles",
-    )
-    handle = models.ForeignKey(
-        "parties.Handle",
-        on_delete=models.CASCADE,
-        related_name="party_links",
-    )
-    metadata = models.JSONField(blank=True, default=dict)
-
-    objects = PartyHandleManager()
-
-    class Meta:
-        """Django model options for the party-handle link source model."""
-
-        abstract = True
-        ordering = ("-is_confirmed", "-confidence", "sqid")
-        rebac_resource_type = "parties/party_handle"
-        constraints = (
-            models.UniqueConstraint(
-                fields=("party", "handle"),
-                name="uq_party_handle",
-            ),
+        if "_resolved_confidence" in self.__dict__:
+            return cast(float | None, self.__dict__["_resolved_confidence"])
+        row = (
+            apps.get_model("parties", "Party")
+            .objects.handle_statements()
+            .for_reader(instance_actor(self))
+            .applied()
+            .filter(subject_id=self.party_id, handle_id=self.pk)
+            .first()
         )
-
-    def __str__(self) -> str:
-        """Return a readable link description for Django displays."""
-
-        return f"{self.party_id}↔{self.handle_id} ({self.confidence})"
-
-    def evidence_page(self, actor: Any, *, limit: int = 20) -> PartyHandleEvidencePage:
-        """Return a hard-bounded actor-readable projection of retained evidence."""
-
-        if actor is None:
-            return PartyHandleEvidencePage((), False)
-        bounded = max(1, min(int(limit), 20))
-        from angee.base.identity import instance_from_public_id
-        from angee.base.scoping import read_scoped_queryset
-
-        raw = (self.metadata or {}).get("evidence", ())
-        refs = list(raw) if isinstance(raw, (list, tuple)) else []
-        visible: list[PartyHandleEvidence] = []
-        for ref in refs[: bounded + 1]:
-            if not isinstance(ref, Mapping):
-                continue
-            try:
-                model = apps.get_model(str(ref.get("model") or ""))
-            except LookupError, ValueError:
-                continue
-            public_id = str(ref.get("id") or "")
-            queryset = read_scoped_queryset(model, actor)
-            if (
-                public_id
-                and instance_from_public_id(model, public_id, queryset=queryset) is not None
-            ):
-                visible.append(PartyHandleEvidence(model=model._meta.label, id=public_id))
-        return PartyHandleEvidencePage(tuple(visible[:bounded]), len(refs) > bounded)
-
-    def confirm(self) -> None:
-        """Human-confirm this link, then re-resolve the handle's owner.
-
-        Overrides the plain :meth:`ScoredLinkMixin.confirm` to add the two facts a
-        contacts confirmation carries that the generic mixin must not: the actor must
-        hold ``write`` on the link, and the resolution cascade (the handle's owner
-        pointer, both parties' counts) is server-owned bookkeeping that runs elevated.
-        """
-
-        actor = self.actor() or current_actor()
-        type(self).objects._transition(self, action="confirm", actor=actor)
-
-    def dismiss(self) -> None:
-        """Dismiss this link — the durable anti-link — then re-resolve the handle.
-
-        Gated and elevated like :meth:`confirm`; the mixin flips the flags and calls
-        :meth:`_resolve_link`, which demotes the handle to its next candidate or to
-        unowned.
-        """
-
-        actor = self.actor() or current_actor()
-        type(self).objects._transition(self, action="dismiss", actor=actor)
-
-    def _resolve_link(self) -> None:
-        """Re-materialise :attr:`Handle.party` from this handle's surviving links."""
-
-        handle = self.handle
-        type(self).objects.resolve(handle)
+        return row.confidence if row is not None else None
 
 
-class AddressManager(AngeeManager):
+class AddressManager[AddressT: Address](StatementSubjectManager[AddressT]):
     """Own normalized, conflict-safe attachment of canonical party addresses."""
 
     components = ("po_box", "extended", "street", "city", "region", "postal_code", "country")
 
-    def _normalize_components(self, values: Mapping[str, Any]) -> dict[str, str]:
-        """Normalize address components through their owning model fields."""
+    def as_stored(self, address: Any) -> Any:
+        """Return a parsed address as its fields store it: a country name becomes its ISO code.
 
-        return {
-            name: self.model._meta.get_field(name).to_python(" ".join(str(values.get(name) or "").split()).strip())
-            for name in self.components
-        }
+        A card's components keep their whitespace (a street may span lines), and a
+        value its field refuses (an unresolvable country) stays as written, for
+        ingest to refuse. Both sides of a directory sync compare this form, so a
+        card's "USA" reads as the stored "US".
+        """
+
+        values = {name: getattr(address, name) for name in self.components}
+        return replace(address, **self._through_fields(values, lenient=True))
+
+    def _normalize_components(self, values: Mapping[str, Any]) -> dict[str, str]:
+        """Collapse the whitespace of free-text components, then store them through their fields."""
+
+        return self._through_fields({name: " ".join(str(values.get(name) or "").split()) for name in self.components})
+
+    def _through_fields(self, values: Mapping[str, Any], *, lenient: bool = False) -> dict[str, Any]:
+        """Pass each component through its own field's ``to_python``.
+
+        A refused value raises, or with ``lenient`` stays as written.
+        """
+
+        stored: dict[str, Any] = {}
+        for name in self.components:
+            try:
+                field = self.model._meta.get_field(name)
+                assert isinstance(field, models.Field)
+                stored[name] = field.to_python(values[name])
+            except ValidationError:
+                if not lenient:
+                    raise
+                stored[name] = values[name]
+        return stored
 
     def identity_key(self, values: Mapping[str, Any]) -> tuple[str, ...]:
         """Return the field-normalized, case-insensitive identity of an address."""
@@ -776,7 +767,7 @@ class AddressManager(AngeeManager):
     def lock_party(self, party_id: Any) -> None:
         """Serialize address writes for one party, including its first address."""
 
-        party_model = self.model._meta.get_field("party").remote_field.model
+        party_model = self.model.party.field.related_model
         party_model.objects.sudo(
             reason="parties.address.lock_party",
         ).locked_get(pk=party_id)
@@ -810,7 +801,7 @@ class AddressManager(AngeeManager):
         label: str = "Primary",
         is_primary: bool = True,
         conflict: str = "raise",
-    ) -> tuple[str, models.Model | None]:
+    ) -> tuple[str, AddressT | None]:
         if conflict not in {"raise", "retain", "append"}:
             raise ValueError("Address conflict policy must be 'raise', 'retain', or 'append'.")
         normalized = self._normalize_components(values)
@@ -834,7 +825,6 @@ class AddressManager(AngeeManager):
                 if conflict == "raise":
                     raise ValidationError({"address": "A different address already exists for this party."})
                 is_primary = False
-            verified_actor = self.check_create()
             row = self.model(
                 party=party,
                 label=" ".join(label.split()).strip()[:64],
@@ -842,9 +832,8 @@ class AddressManager(AngeeManager):
                 created_by_id=getattr(actor, "pk", None),
                 **normalized,
             )
-            row.sudo(reason="parties.address.attach_exact")
-            row.save()
-            return "created", row.with_actor(verified_actor)
+            row = self.with_actor(actor).insert(row)
+            return "created", row.with_actor(actor)
 
     def replace_primary_exact(
         self,
@@ -854,7 +843,7 @@ class AddressManager(AngeeManager):
         actor: Any,
         expected_id: Any | None,
         label: str = "Primary",
-    ) -> tuple[str, models.Model]:
+    ) -> tuple[str, AddressT]:
         """Replace the frozen primary address, or create it when none existed."""
 
         normalized = self._normalize_components(values)
@@ -900,7 +889,7 @@ class AddressManager(AngeeManager):
             return "matched", current.with_actor(actor)
 
 
-class Address(AuditMixin, AngeeDataModel):
+class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataModel):
     """A physical or postal address of a party (the vCard ``ADR`` property).
 
     There is intentionally no ``(party, label)`` uniqueness — a party may carry
@@ -911,6 +900,27 @@ class Address(AuditMixin, AngeeDataModel):
     runtime = True
 
     sqid_prefix = "adr_"
+    statements = StatementRecords(
+        link="integrate.RecordLink",
+        aspects={
+            "address": Aspect(
+                fields=(
+                    "label",
+                    "po_box",
+                    "extended",
+                    "street",
+                    "city",
+                    "region",
+                    "postal_code",
+                    "country",
+                ),
+                precedence=cast(
+                    tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD, SourceKind.DIRECTORY)
+                ),
+            )
+        },
+        sqid_prefix="ads_",
+    )
     party = models.ForeignKey(
         "parties.Party",
         on_delete=models.CASCADE,
@@ -961,15 +971,16 @@ class Address(AuditMixin, AngeeDataModel):
         return ", ".join(part for part in (self.street, self.city, self.country) if part)
 
 
-class Folder(AuditMixin, AngeeDataModel):
+class Folder(OwnerMixin, AngeeDataModel):
     """A group of parties — the local mirror of a synced address book.
 
     The contacts counterpart of storage's ``Drive``/``Folder`` and knowledge's
     ``Vault`` container idea, kept to exactly what sync needs today: the directory
     it mirrors, the collection ``source_href`` (one folder per ``(directory,
     source_href)`` makes the folder upsert idempotent). Sync progress belongs to
-    ``integrate.SyncStream``. Owned via ``created_by``; deleting a folder leaves
-    its parties (``SET_NULL`` on :attr:`Party.folder`). Manual creation and a folder
+    ``integrate.SyncStream``. Owned through its transferable ``owner``, which a
+    sync's insert takes from the directory owner it stamps as ``created_by``;
+    deleting a folder leaves its linked parties. Manual creation and a folder
     tree (``parent``) are deferred until a create path lands to exercise them.
     """
 
@@ -1008,17 +1019,19 @@ class Folder(AuditMixin, AngeeDataModel):
         return self.name
 
 
-class Circle(HierarchyMixin, AuditMixin, AngeeDataModel):
+class Circle(HierarchyMixin, OwnerMixin, AngeeDataModel):
     """A private, overlapping grouping of parties — how the owner organises people.
 
     Circles are the curated counterpart of :class:`Folder` (which mirrors a synced
     address book): "Family", "Inner Circle", a climbing crew. A party may belong to
     many circles (:class:`CircleMember`), and circles nest as a tree — overlap
     comes from multi-membership, never from multiple parents. The tree is
-    :class:`~angee.base.mixins.HierarchyMixin`'s materialized path, so "everyone in
+    :class:`~angee.models.HierarchyMixin`'s materialized path, so "everyone in
     this circle including sub-circles" is an indexed prefix scan
     (``Circle.objects.subtree_of(circle)``), and ``hierarchy_scope_fields`` keeps a
-    personal circle tree from straddling owners.
+    personal circle tree from straddling owners: the transferable ``owner`` scopes
+    the tree, so a transfer never leaves a circle's parent or children under
+    another owner.
 
     Circles are an organising surface only — they never gate visibility or
     sharing; REBAC stays the one authorization owner.
@@ -1026,7 +1039,7 @@ class Circle(HierarchyMixin, AuditMixin, AngeeDataModel):
 
     runtime = True
     sqid_prefix = "cir_"
-    hierarchy_scope_fields = ("created_by",)
+    hierarchy_scope_fields = ("owner",)
 
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True, default="")
@@ -1053,12 +1066,12 @@ class Circle(HierarchyMixin, AuditMixin, AngeeDataModel):
         return self.name
 
 
-class CircleMember(ScoredLinkMixin, AuditMixin, AngeeDataModel):
-    """A party's membership of one circle, scored like a :class:`PartyHandle` link.
+class CircleMember(MembershipDecisionMixin, AuditMixin, AngeeDataModel):
+    """A party's reviewable membership of one circle.
 
-    Membership is a :class:`ScoredLinkMixin` so a suggester (community detection, an
+    Membership is a plain decision row so a suggester (community detection, an
     org-domain rule, an LLM) can propose a weak membership for review instead of
-    silently filing people; a human decision writes ``manual`` at full confidence.
+    silently filing people; a human decision records acceptance at full confidence.
     One row per ``(circle, party)`` — re-suggesting an existing membership updates
     the row rather than duplicating it.
     """
@@ -1174,6 +1187,12 @@ class RelationshipKind(AuditMixin, AngeeDataModel):
 
         return self.name
 
+    @classmethod
+    def employee(cls) -> RelationshipKind | None:
+        """Return the employment vocabulary row when this installation provides it."""
+
+        return cls._base_manager.filter(slug="employee").first()
+
     @property
     def is_symmetric(self) -> bool:
         """Whether the kind reads the same in both directions."""
@@ -1219,7 +1238,9 @@ class RelationshipKind(AuditMixin, AngeeDataModel):
         for _field, required, _end in checked:
             model = required.model()
             if model is not None:
-                relation_names.add(model._meta.model_name)
+                model_name = model._meta.model_name
+                assert model_name is not None
+                relation_names.add(model_name)
         party_model = apps.get_model("parties", "Party")
         concrete_by_pk = {
             row["pk"]: row
@@ -1247,11 +1268,13 @@ class RelationshipKind(AuditMixin, AngeeDataModel):
         if model is None:
             return
         row = concrete_by_pk.get(party.pk, {})
-        if row.get(model._meta.model_name) is None:
+        model_name = model._meta.model_name
+        assert model_name is not None
+        if row.get(model_name) is None:
             errors[field] = f"{self.name} requires {required} on this end."
 
 
-class Relationship(AuditMixin, AngeeDataModel):
+class Relationship(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataModel):
     """A typed edge from one party's viewpoint: the *other* is ``kind`` of ``party``.
 
     ``kind.name`` names what the counterparty is to the anchor ("Mother",
@@ -1267,7 +1290,24 @@ class Relationship(AuditMixin, AngeeDataModel):
     """
 
     runtime = True
+    objects = StatementSubjectManager()
     sqid_prefix = "rel_"
+    statements = StatementRecords(
+        link="integrate.RecordLink",
+        aspects={
+            "relationship": Aspect(
+                fields=(
+                    "other_name",
+                    "title",
+                    "started_at",
+                    "ended_at",
+                    "notes",
+                ),
+                precedence=cast(tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.DIRECTORY, SourceKind.IMPORT)),
+            )
+        },
+        sqid_prefix="rls_",
+    )
 
     party = models.ForeignKey(
         "parties.Party",
@@ -1296,9 +1336,6 @@ class Relationship(AuditMixin, AngeeDataModel):
         on_delete=models.PROTECT,
         related_name="relationships",
     )
-    source = StateField(choices_enum=LinkSource, default=LinkSource.MANUAL)
-    """Provenance of the edge; sync-owned rows stay distinct from human rows."""
-
     title = models.TextField(blank=True, default="")
     """Role title on this edge — the vCard ``TITLE`` ("CTO", "Godmother of")."""
 
@@ -1330,14 +1367,6 @@ class Relationship(AuditMixin, AngeeDataModel):
                 condition=models.Q(other_party__isnull=False) | ~models.Q(other_name=""),
                 name="ck_relationship_has_other",
             ),
-            models.UniqueConstraint(
-                fields=("party", "kind", "source"),
-                condition=models.Q(
-                    other_party__isnull=True,
-                    source=LinkSource.CARDDAV,
-                ),
-                name="uq_relationship_carddav_employment",
-            ),
         )
 
     def __str__(self) -> str:
@@ -1358,8 +1387,8 @@ class Relationship(AuditMixin, AngeeDataModel):
         update_fields = kwargs.get("update_fields")
         end_fields = {"party", "party_id", "other_party", "other_party_id", "kind", "kind_id"}
         if self.kind_id is not None and (update_fields is None or end_fields.intersection(update_fields)):
-            party_model = self._meta.get_field("party").remote_field.model
-            kind_model = self._meta.get_field("kind").remote_field.model
+            party_model = type(self).party.field.related_model
+            kind_model = type(self).kind.field.related_model
             kind = kind_model._base_manager.get(pk=self.kind_id)
             ends = party_model._base_manager.in_bulk([self.party_id, self.other_party_id])
             kind.validate_ends(ends.get(self.party_id), ends.get(self.other_party_id))
@@ -1378,10 +1407,17 @@ class Directory(Bridge):
     """
 
     runtime = True
-    extends = "integrate.Integration"
-    integration_create_mode = IntegrationCreateMode.CONNECT
+    extends: ClassVar[str | None] = "integrate.Integration"
+    integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
 
-    backend_class = ImplClassField(DirectoryBackend,
+    @property
+    def source_kind(self) -> SourceKind:
+        """Contacts asserted by this integration are directory statements."""
+
+        return cast(SourceKind, SourceKind.DIRECTORY)
+
+    backend_class = ImplClassField(
+        DirectoryBackend,
         default="manual",
         create_only=True,
     )

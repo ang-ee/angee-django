@@ -3,7 +3,6 @@
 import pytest
 from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
 
-from angee.base.scoping import system_queryset
 from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
@@ -64,9 +63,9 @@ def linked_decision(execution, register_step, composed_permissions):
     run = start_run(workflow, actor=owner)
     run.with_actor(owner).grant_record_access("operator", operator)
     run_until(run)
-    step = system_queryset(StepRun).get(run=run)
+    step = StepRun.system_queryset().get(run=run)
     assert (step.status, step.waiting_kind) == ("waiting", "decision")
-    decision = system_queryset(Decision).get(pk=step.decision_id)
+    decision = Decision.system_queryset().get(pk=step.decision_id)
     return workflow, run, step, decision, owner, operator, stranger, assignee
 
 
@@ -110,7 +109,7 @@ def test_step_decision_filter_uses_public_identity(schema, linked_decision):
 
 def test_record_timeline_reads_the_asking_run_and_its_question(schema, linked_decision):
     _, run, step, decision, owner, *_ = linked_decision
-    link = system_queryset(step.records.model).get(step_run=step)
+    link = step.records.model.system_queryset().get(step_run=step)
     query = """query($records: [TimelineRecordInput!]!) {
       record_timeline(records: $records) { open_decision_count records {
         record_model record_id decisions { id } runs { id graph { nodes {

@@ -42,14 +42,8 @@ class AccountConnectCompletion:
     integration_id: str = ""
 
 
-def enabled_oauth_client_from_hint(
-    hint: Any,
-    *,
-    owner_label: str,
-    reason: str,
-    vendor_slug: str = "",
-) -> Any:
-    """Resolve an enabled OAuth client from a backend-declared client hint."""
+def oauth_client_slug_from_hint(hint: Any, *, owner_label: str, vendor_slug: str = "") -> str:
+    """Expand a backend's client hint using its vendor identity."""
 
     raw_hint = str(hint or "").strip()
     if not raw_hint:
@@ -58,7 +52,19 @@ def enabled_oauth_client_from_hint(
             400,
             f"{owner_label} has no OAuth client.",
         )
-    slug = raw_hint.format(vendor=vendor_slug)
+    return raw_hint.format(vendor=vendor_slug)
+
+
+def enabled_oauth_client_from_hint(
+    hint: Any,
+    *,
+    owner_label: str,
+    reason: str,
+    vendor_slug: str = "",
+) -> Any:
+    """Resolve a complete enabled registration for an actual OAuth flow."""
+
+    slug = oauth_client_slug_from_hint(hint, owner_label=owner_label, vendor_slug=vendor_slug)
     OAuthClient = cast(Any, apps.get_model("integrate", "OAuthClient"))
     with system_context(reason=reason):
         oauth_client = OAuthClient.objects.enabled_for_slug(slug)
@@ -93,13 +99,12 @@ def complete_account_connect(
     )
     user = _state_user(record)
     protocol = OAuthClientProtocol(oauth_client)
-    tokens = protocol.exchange_code(
+    tokens, claims, _id_token = protocol.exchange_identity(
         code=code,
         redirect_uri=redirect_uri,
         code_verifier=record.code_verifier,
         state=state_token,
     )
-    claims = protocol.fetch_userinfo(str(tokens.get("access_token", "") or ""))
     external_id = oauth_client.external_id_from_claims(claims)
     if not external_id:
         # Restricted tokens may be unable to call userinfo. Anthropic's one-year
@@ -142,10 +147,8 @@ def complete_external_account_link(
     Credential = cast(Any, apps.get_model("integrate", "Credential"))
     with system_context(reason=reason), transaction.atomic():
         account = Account.objects.filter(oauth_client=oauth_client, external_id=external_id).first()
-        if account is not None:
-            owner = Account.objects.owner_for(account)
-            if owner is not None and owner.pk != user.pk:
-                raise OAuthFlowError("account_already_linked", 409)
+        if account is not None and account.owner_id not in (None, user.pk):
+            raise OAuthFlowError("account_already_linked", 409)
         account = Account.objects.link(
             oauth_client,
             external_id,

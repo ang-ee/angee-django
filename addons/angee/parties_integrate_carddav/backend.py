@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import date, datetime
 from typing import Any, ClassVar
@@ -27,13 +27,15 @@ from xml.sax.saxutils import escape
 
 import vobject
 from django.apps import apps
+from django.conf import settings
+from django.core.exceptions import ValidationError
 
-from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import RedirectOriginError, ResponseTooLargeError, same_origin
 from angee.integrate.states import LinkStatus
 from angee.integrate.streams import CursorInvalid, RecordChange, RemoteRejected, StreamPage, WriteBackResult
 from angee.parties.backends import (
+    SET_FIELDS,
     DirectoryBackend,
     ParsedAddress,
     ParsedAddressbook,
@@ -42,6 +44,8 @@ from angee.parties.backends import (
     contact_from_projection,
     contact_projection,
 )
+from angee.serialization import canonical_json_sha256
+from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
 
 _NS = {
     "d": "DAV:",
@@ -52,13 +56,12 @@ _MULTIGET_CHUNK = 100
 _DAV_RESPONSE_CAP = 16 * 1024 * 1024
 """Limit accepted DAV bodies to 16 MiB before XML tree construction.
 
-A card whose inline photo is as large as the fetched-photo limit (``_PHOTO_CAP``) is about 6.7 MiB once
-base64-encoded, so the cap admits such a card with room to spare while bounding the memory of one parse.
-Multigets split to fit; oversized singletons are quarantined.
+A card whose inline photo is as large as storage's default image cap (``ANGEE_STORAGE_IMAGE_MAX_BYTES``,
+5 MiB) is about 6.7 MiB once base64-encoded, so the cap admits such a card with room to spare while
+bounding the memory of one parse. Multigets split to fit; oversized singletons are quarantined.
 """
 _XML_FEED_BYTES = 64 * 1024
 """Bound each Expat feed so a document type refusal stops before the rest of the body."""
-_PHOTO_CAP = 5 * 1024 * 1024
 # vCard's reserved year for a birthday/anniversary whose year is omitted (``--MMDD``).
 _NO_YEAR_SENTINEL = 1604
 
@@ -264,9 +267,18 @@ class CardDavDirectoryBackend(DirectoryBackend):
         photo_data = None
         photo = contact_from_projection(projection).photo
         if photo is not None:
-            file = apps.get_model("parties", "Party").objects.resolve_contact_photo(photo)
-            with file.open_stream() as content:
-                photo_data = content.read()
+            avatar = link.target.avatar if link.target is not None else None
+            try:
+                if avatar is None:
+                    raise ValidationError("The projected contact photo is no longer available.")
+                # Still the projected photo; one stored before storage's image rule
+                # may be a type or size it now refuses.
+                photo_data = avatar.read_image(expected_digest=photo.content_hash)
+            except (UploadTooLarge, UploadTypeRefused) as error:
+                raise RemoteRejected("unsupported_photo", conflict=False) from error
+            except ValidationError as error:
+                # The avatar changed or its bytes no longer verify: set the write aside.
+                raise RemoteRejected("photo_unavailable", conflict=False) from error
         raw = _render_vcard(projection, source=source, uid=link.external_key, photo_data=photo_data)
         response = self._request(
             "PUT",
@@ -306,17 +318,17 @@ class CardDavDirectoryBackend(DirectoryBackend):
         if not same_origin(photo.uri, collection):
             raise CardDavError("The vCard photo must share the address book's origin.")
         try:
-            data = self.http.download_capped(
-                photo.uri,
-                cap=_PHOTO_CAP,
-                allow_private=False,
-                follow_redirects=False,
+            response = self.http.request(
+                "GET", photo.uri, allow_private=False, max_bytes=int(settings.ANGEE_STORAGE_IMAGE_MAX_BYTES)
             )
+        except ResponseTooLargeError as error:
+            # Storage's image cap refuses it, as it refuses an inline photo that size.
+            raise UploadTooLarge("The vCard photo is larger than the image size cap.") from error
         except Exception as error:  # noqa: BLE001 — do not promote a partial comparison base.
             raise CardDavError("The vCard photo could not be retrieved.") from error
-        if not data:
+        if not response.is_success or not response.content:
             raise CardDavError("The vCard photo could not be retrieved.")
-        return replace(contact, photo=ParsedPhoto(data=data, mime=photo.mime or "application/octet-stream"))
+        return replace(contact, photo=ParsedPhoto(data=response.content, mime=photo.mime or "application/octet-stream"))
 
     # --- transport ---
 
@@ -554,7 +566,18 @@ class CardDavDirectoryBackend(DirectoryBackend):
                     remote_version=etag,
                 )
                 continue
-            contacts[href] = self._prepare_contact(self._resolve_photo(contact, collection=collection))
+            try:
+                contacts[href] = self._prepare_contact(self._resolve_photo(contact, collection=collection))
+            except (UploadTooLarge, UploadTypeRefused):
+                # A photo storage refuses to render (an SVG, an oversized image)
+                # quarantines its card rather than syncing it without the photo,
+                # which a later write-back would then strip from the card. Storage
+                # that cannot take it yet (no image drive) fails the page, which retries.
+                contacts[href] = _quarantined(
+                    href,
+                    {"href": href, "source_digest": canonical_json_sha256(data), "error": "unsupported_photo"},
+                    remote_version=etag,
+                )
         if set(contacts) != set(hrefs):
             raise CardDavError("The CardDAV multiget omitted a requested resource.")
         return contacts
@@ -618,8 +641,9 @@ def _render_vcard(
     for field, prop in (("emails", "email"), ("phones", "tel")):
         if field not in changed:
             continue
-        card.contents.pop(prop, None)
-        for value, label, preferred in getattr(contact, field):
+        for value, label, preferred in _retain_lines(
+            card, prop, getattr(contact, field), _labelled, repeats=field in SET_FIELDS
+        ):
             item = card.add(prop)
             item.value = value
             types = [label] if label else []
@@ -631,8 +655,10 @@ def _render_vcard(
             if types:
                 item.params["TYPE"] = types
     if "addresses" in changed:
-        card.contents.pop("adr", None)
-        for address in contact.addresses:
+        stored = apps.get_model("parties", "Address").objects.as_stored
+        for address in _retain_lines(
+            card, "adr", contact.addresses, lambda line: stored(_address(line)), repeats="addresses" in SET_FIELDS
+        ):
             item = card.add("adr")
             item.value = vobject.vcard.Address(
                 box=address.po_box,
@@ -654,6 +680,52 @@ def _render_vcard(
         if contact.photo.mime:
             photo.params["TYPE"] = [contact.photo.mime.removeprefix("image/").upper()]
     return card.serialize()
+
+
+def _retain_lines[T](
+    card: Any, prop: str, wanted: Sequence[T], parse: Callable[[Any], T], *, repeats: bool
+) -> list[T]:
+    """Keep the ``prop`` lines whose parsed value is still wanted and return the rest to add.
+
+    With ``repeats`` (a collection the projection compares as a set), the card's own
+    repeat of a kept value stays (one number under two Apple labels); otherwise each
+    wanted value keeps one line, so deleting one of two equal addresses reaches the card.
+    A kept line stays verbatim with its Apple group (``itemN.X-ABLabel`` and kin), so the
+    custom label and the TYPEs the projection does not carry (VOICE, a second TYPE)
+    survive an edit to a sibling line. A removed line takes along its group's ``X-AB*``
+    companions unless a remaining standard (non-``X-``) property still uses that group:
+    a vCard group may hold several properties (``work.TEL`` with ``work.EMAIL``).
+    Companions are dropped by group, never by equality: vobject compares lines without
+    their group, so two ``X-ABLabel:Other`` lines are equal.
+    """
+
+    missing = list(wanted)
+    kept: list[Any] = []
+    gone: set[str] = set()
+    for line in card.contents.pop(prop, []):
+        value = parse(line)
+        if value in missing:
+            missing.remove(value)
+            kept.append(line)
+        elif repeats and value in wanted:
+            kept.append(line)
+        elif line.group:
+            gone.add(line.group.lower())
+    if kept:
+        card.contents[prop] = kept
+    gone -= {
+        line.group.lower()
+        for name, lines in card.contents.items()
+        if not name.startswith("x-")
+        for line in lines
+        if getattr(line, "group", None)
+    }
+    for name in [name for name in card.contents if name.startswith("x-ab")]:
+        if remaining := [line for line in card.contents[name] if (line.group or "").lower() not in gone]:
+            card.contents[name] = remaining
+        else:
+            del card.contents[name]
+    return missing
 
 
 def _quarantined(href: str, payload: dict[str, Any], *, remote_version: str = "") -> RecordChange:

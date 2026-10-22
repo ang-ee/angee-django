@@ -205,7 +205,7 @@ function WidgetExample<TValue>({
 
   return (
     <div className="grid grid-cols-[10rem_minmax(14rem,1fr)_minmax(14rem,1fr)_minmax(14rem,1fr)] items-start gap-3 px-4 py-3">
-      <span className="pt-1.5 font-mono text-xs text-fg-muted">{kind}</span>
+      <span className="pt-1.5 font-mono text-12 text-fg-muted">{kind}</span>
       <div className="min-w-0">
         <Edit value={value} field={widgetField} onChange={setValue} />
       </div>

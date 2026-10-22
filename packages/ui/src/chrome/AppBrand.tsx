@@ -11,6 +11,9 @@ export interface AppBrandProps extends Omit<ComponentPropsWithRef<"a">, "childre
   to?: string;
 }
 
+/**
+ * @kind fragment
+ */
 export function AppBrand({
   className,
   compact = false,

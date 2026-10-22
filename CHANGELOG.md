@@ -9,8 +9,160 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — AP consolidation 2026-10-18 (breaking; ships in 0.3.0)
+
+- `angee.base` is `angee`: `angee.models` (base model, ownership, statements,
+  merge, locks), `angee.fields`, `angee.impl`, `angee.identity`, `angee.indexes`,
+  `angee.lineage`, `angee.refs`. Generated migrations of a stack that keeps its
+  database import the old paths; `angee/base/{fields,mixins,impl,identity,indexes}`
+  and `angee.parties.runtime_migrations` stay as thin re-export aliases until every
+  stack has collapsed its history (`reset_migration_history`), then leave.
+- One spelling of ownership: `OwnerMixin.owner` is the column and a relation named
+  `owner` is that column (`angee.E045`). `AgentSession.owner` is `user`,
+  `parties.Handle.owner` is `controller` (GraphQL `AgentSessionType.user`,
+  `HandleType.controller`); `Integration.owner` and `WebhookSubscription.owner` are
+  nullable `retained_set_null`; `owner` lands on `Party`, `Folder`, `Circle`,
+  `Workflow` and `ExternalAccount` (the external-account `#owner` tuples fold into the
+  column). Each addon declares the cutover as a `[[migrations]]` runtime migration.
+- `client_creation_key` is `idempotency_key` on every create argument and on the
+  GraphQL wire; the conflict error keeps its code.
+- Workflows: extension points (`workflows.workflowextension` resources add steps to
+  a published workflow at `after_<node>` / `before_<node>`), `blocks` tokens with
+  `WorkflowRun.objects.blocking(record, action)` evaluated as policy, blocking runs,
+  `reap_interrupted()`, page references on decisions.
+- Decisions on records; a record call may name required arguments (binding is the
+  check).
+- One provenance surface: the `record#activity` container and the facts line
+  (`context_fields`), `attentionColumn`, lock marks for redacted fields, the Sources
+  aside with the provider `source_url` hook; see the `@angee/ui` changeset.
+- `FileType.permissions` (verbs contributed to `storage.File#actions` gate on it).
+
+## Unreleased — sync provenance and native history (breaking; ships in 0.3.0)
+
+The retired names and their owners are listed below; the upgrade path for a
+stack that keeps its database is the incremental one in "Unreleased — AP
+consolidation" (a stack with re-importable data starts a fresh database).
+
+- A record's facts are statements: who asserted a value, from what evidence,
+  through which link. `StatementsMixin` and `Aspect` (`angee.models.statements`)
+  declare them, `StatementManager` resolves the winner, and every write runs
+  under a provenance changeset. Parties, circles and spaces memberships,
+  addresses and relationships carry statements instead of `source` columns.
+- django-reversion is retired. `RevisionMixin`, `revisioned_fields`,
+  `angee.graphql.revisions` and each resource's `<resource>_revisions` root are
+  removed, and every stored revision is dropped by ruling. Models keep native
+  history; provenance serves it through `history(model, id)` and
+  `revert_changeset`, and shows it as the form's History tab.
+- Parties: `PartyHandle`, `MergeVeto`, `LinkSource`, `ScoredLinkMixin` and the
+  CardDAV columns on `Party` are folded into statements and record links, then
+  retired by a declared chain that preflights every refusal before it drops.
+  `Party.merge_into` and `PartyManager.merge` give way to the shared record
+  merge (`angee.models.merge`).
+- Integrate: `RecordRevision` and `SyncDiscrepancy` are retired. A link's
+  observations are its native history and a sync failure is a state of its link
+  (`SyncFailure`, `LinkStatus.FAILED`); `SyncStream.authoritative` marks a
+  system of record.
+- Removed ahead of the 0.4.0 window they were promised (ruling 2026-10-18, with the
+  `angee.base` → `angee` rename): the `DerivedFromRelation` alias of
+  `angee.refs.RetainedGenericRelation` and `@angee/ui`'s `RevisionsTab`.
+- GraphQL removals: `confirm_party_handle`, `dismiss_party_handle`, `veto_merge`,
+  `duplicate_party_candidates`, `Party.party_handles`, `Person.folder`, the
+  `source` field on circle members, relationships and space memberships,
+  `resolve_sync_discrepancy`, `retry_sync_discrepancy`,
+  `SyncStream.open_discrepancy_count` and the record link hash bases.
+
+## Unreleased — django-zed-rebac 0.27
+
+- The `angee.graphql` manifest declares `django-zed-rebac[strawberry-django]`
+  with a release floor; the core wheel alone pins the exact release. Two exact
+  pins made every bump break a host whose generated `addons` group still held the
+  old one: `uv` refused to resolve before `angee build` could rewrite the group.
+  A host that took 0.27.3 before this change runs `manage.py angee build` once
+  with its existing environment to regenerate the group.
+- Require django-zed-rebac 0.27.3. Point checks on a type backed by a
+  `GenericForeignKey` compile only the arms of the row's content type, so
+  SQLite no longer fails with "Expression tree is too large" on polymorphic
+  edges, and an exclusion nested in another exclusion no longer raises
+  `FieldError` when it is evaluated at an identity that is not a model row.
+- Since 0.27.1, read guards refuse filtering or ordering
+  on a gated field under an actor; filters and sorts over a gated field use the
+  queryset's `readable(field)`, and Angee's `gated_field_expression` is removed.
+- IAM declares its deliberate disclosures in Zed: filtered constants on the
+  account's own `is_active` and `is_staff` back `active_account` and
+  `nonstaff_account`, each within the reach of the sites that use them, which
+  pickers, preview and account protection match by primary key. Pickers leave
+  inactive accounts out without showing their state; protection counts staff,
+  and any account outside the verbs' reach, as protected.
+- `AngeeModel.validate_unique` and `validate_constraints` compare against every
+  row under a named system context when the row's save would pass its REBAC
+  gates (REBAC's `check_save`, decided once per `full_clean`), leaving out the
+  fields a saved row's actor may not read; before, an actor-scoped check saw only
+  readable rows. `OwnerMixin`'s owner default is held for the checks.
+- `AngeeModel.system_queryset` returns a permission-naive default queryset as it
+  is, and GraphQL filter expressions take their output fields from it.
+
+## Unreleased — record tasks (breaking; ships in 0.3.0)
+
+Upgrade steps: see "Unreleased — AP consolidation" below.
+
+- Record activities are record tasks: a `projects.Task` whose `subject` is a
+  record's chatter attachment, typed by `projects.ActivityType` (moved from
+  messaging with its public ids). A record task answers to its record alone, in
+  the permission schema: a record type takes tasks once its owner declares
+  `record_read` and `record_write` on `messaging/thread_attachment`.
+- The cutover, `projects:record_tasks`, is irreversible: it converts every
+  activity and drops messaging's `ThreadActivity` and `ActivityType` tables,
+  holding the task tables' lock throughout. projects refuses the `migrate` run
+  that would apply it while activities sit on undeclared record types.
+- GraphQL removals: messaging's activity types and nodes, `activity_agenda`, the
+  record activity mutations and the activity fields on the record-thread
+  payload; `promote_thread_activity_to_task` and `Task.converted_from_activity`.
+  Record tasks use `record_tasks`, `schedule_record_task`, `log_record_task`,
+  `complete_task(id, feedback)` and `drop_task`.
+- Messaging's change-history tab is `messaging.history` (placeholder
+  `chatter.history`); the former ids stay as `?chatterTab=` aliases until 0.4.0.
+- The composer's drop guard refuses an autodetected `DeleteModel` whose table
+  holds rows, except rows the retiring addon's resource files seeded once it
+  names the model under `retired_models` in its `addon.toml` `[resources]`.
+
 ## Unreleased — in-process agent sessions
 
+- Integrate feed identity discovery, committed live horizons, quota reply
+  reserves and serialized webhook landing with the shared stream and delivery
+  owners. Held replies exclude further answers under the comment lock; reply
+  hold and delivery settlement remain operator and messaging concerns.
+- Publish workflow resource references through the resources ledger. Narrow
+  agents can persistently opt out of the generated resource-reader role.
+  Administrators own the reader opt-out; `resync_tool_grants` rebuilds every
+  agent's membership from its current policy, readiness and runtime.
+  Knowledge can ensure role-bound memory pages and create pages through
+  vault-scoped GraphQL tools. One canonical `post_delete` teardown removes
+  committed bindings and trashes only memory pages no other memory binding uses.
+  Binding admission and teardown serialize on the page after the canonical target.
+  A re-synced message without a receipt time keeps its stored `received_at`.
+
+- Resource selection follows committed routes and its effective filter scope.
+  Bulk actions receive retained `selectedRows` snapshots and explicitly declare
+  whether they replace generic delete. Nonselectable views suppress selection in
+  render. Held actions read one console `action_selection_limit` and clear settled
+  ids for revision-aware reselection. Tags owns the independent record-tag widget.
+  Integration models project and enforce `can_connect`, `can_resume` and
+  `can_retry_discovery`; discovery owns a saved feed's read-only display name.
+
+- Restore workflow conversations on persisted ACP turns with status-only
+  watches, expiring delivery recovery, a deadline starting at claimed-turn observation,
+  operator retry and explicit close. Terminal transitions close created sessions
+  and cancel run-created turns on continued sessions. Deferred cancellation
+  waits for its task to own the run locks; cleanup failures stay in receiver savepoints.
+  Compose comment responding through `workflows_posts`: check the posts-owned
+  reply predicate, prepare answer text with an agent, and schedule through
+  the message owner's creation-key replay. The workflow principal holds reply
+  authority; the responding agent receives only read tools and record access.
+  Prompt bindings carry JSON only; publisher authority still gates agent calls.
+  Builtin tool catalogue sync provisions its server and binds resource handles
+  before agent tool selections resolve, without demo resources.
+  Knowledge search groups bounded readable vaults by backend; lexical search
+  scans each group once and MCP exposes `list_vaults`.
 - Enforce transition-owned state assignment guards on composed concrete models,
   including inherited and deferred fields. Reload through `AngeeModel`, and copy
   loaded persisted row values through `StateTransitions.copy_persisted_state`.
@@ -31,7 +183,7 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
-- `angee.base.refs.canonical_record_target`, `canonical_record_model` and
+- `angee.refs.canonical_record_target`, `canonical_record_model` and
   `CanonicalRecordTarget` are removed: a polymorphic edge stores
   `rebac.generic_target`, and model-level canonical projections read
   `rebac.field_backing.canonical_model`. Currency-rate contexts, resource
@@ -39,7 +191,7 @@ live in code docstrings.
   refuse an untyped row with `ValueError` (a currency-rate context reports it as
   a `ValidationError`). The two edges that name rows outside REBAC — a chatter
   thread on an ungated host and an import record link to a plain domain sink —
-  store `angee.base.refs.generic_pointer_target`, the library's identity for a
+  store `angee.refs.generic_pointer_target`, the library's identity for a
   gated row and Django's own for an ungated one. Consumers that imported the removed
   helpers move to `rebac.generic_target` (an instance's stored content type and
   id) or `rebac.field_backing.canonical_model` (a model's canonical class,
@@ -62,7 +214,7 @@ live in code docstrings.
   on the row's role): the chatter edge remains the record's own thread,
   materialized by its verbs under system context, with access riding on the
   thread as before, and an ungated host keeps its own concrete content type
-  (`angee.base.refs.generic_pointer_target`). The edge's `create` no longer
+  (`angee.refs.generic_pointer_target`). The edge's `create` no longer
   admits every authenticated actor.
 - Project links, project resource bindings and portfolio health reports
   authorize their target in the REBAC schema: each edge's per-type relations are
@@ -166,9 +318,9 @@ live in code docstrings.
   default; explicitly configuring `None` enables daemon URL derivation.
 - Rebuild the workflows engine around immutable published definitions,
   actor-scoped runs, database steps and durable attempts. Remove the workflows
-  web fragment and the five satellite addons `workflows_agents`,
-  `workflows_extraction`, `workflows_integrate`, `workflows_messaging` and
-  `workflows_parties` pending their ports. Remove
+  web fragment. The `workflows_agents`, `workflows_extraction`,
+  `workflows_integrate`, `workflows_messaging` and `workflows_parties` satellites
+  compose the rebuilt step, settlement and trigger owners. Remove
   `ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT`, `ANGEE_WORKFLOW_SUBJECT_SETTLERS`,
   `ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES`, `ANGEE_EXTRACTION_PROFILE_CLASSES`,
   `ANGEE_EXTRACTION_MAX_BYTES` and `ANGEE_EXTRACTION_TIMEOUT_SECONDS`.
@@ -226,7 +378,7 @@ live in code docstrings.
 - Workflow definition validation asserts JSON Schema formats for inputs and
   binding literals.
 - Declare core `jsonschema[format-nongpl]` and `referencing` dependencies.
-  `angee.base.jsonschema` owns declaration checks, local-reference proof,
+  `angee.jsonschema` owns declaration checks, local-reference proof,
   format validation and bounded schema algebra for core and addon callers.
 - Row-lock callers consistently use `lock_if_supported`, which delegates write
   routing and backend support to Django.
@@ -237,10 +389,10 @@ live in code docstrings.
   locale-specific zero-count selection unless the fallback declares a zero form.
   Test fixtures use the shared initializer, and runtime translation types match
   i18next's language contract without instance casts.
-- Row and batch resource target resolution share `angee.base.identity` and its
+- Row and batch resource target resolution share `angee.identity` and its
   field-owned public-ID decoding with Django's `in_bulk`; row adoption and hash-skip state
   stay on the resource and are reset before import.
-- `angee.base.jsonschema.LocalSchemaReferences` owns root-local JSON Schema
+- `angee.jsonschema.LocalSchemaReferences` owns root-local JSON Schema
   pointers and anchors through `referencing` for workflow structural proofs and
   implementation forms; remote references and nested resource scopes remain
   unsupported.
@@ -262,7 +414,7 @@ live in code docstrings.
 - Existing stacks must build and migrate on the previous release line first,
   at least through source revision `0a55a6fb`. Framework runtime history is
   carried forward, including materialized bodies from retired declarations and
-  the frozen `angee.base.historical_relationships` import module. Never empty
+  the frozen `angee.historical_relationships` import module. Never empty
   `runtime/*/migrations` on a stack whose database is carried forward. Stacks
   depending on the retired `workflows_ocr` label must remain at that upgrade floor
   until their migration graph has a supported transition.
@@ -416,7 +568,7 @@ HTTP stack. Durable decisions:
   while the ambient actor stamps `created_by`; the GraphQL mutations are thin
   dispatchers. Console backend/drive CRUD uses `crud(...,
   permission_classes=[StorageAdminPermission], write_context=…)`.
-- **`SqidField` (None-safe `SqidsField`) in `angee.base.fields`:**
+- **`SqidField` (None-safe `SqidsField`) in `angee.fields`:**
   `from_db_value` passes the `NULL` of nullable-FK joins through — the exact
   query REBAC field-backed arrows run (`parent->read`). `SqidMixin` and every
   model across iam/integrate/storage/notes now declare it; raw `SqidsField`
@@ -436,7 +588,7 @@ HTTP stack. Durable decisions:
   handing out a purge-doomed row or blocking the re-upload.
 - **Audit-reference projections are shared, not copied.** Storage reuses
   `angee.iam.identity.user_public_id` / `user_display_label` (the home the
-  knowledge work established) instead of carrying its own. `angee.base.mixins.actor_user_id`
+  knowledge work established) instead of carrying its own. `angee.mixins.actor_user_id`
   is the one reading of "current actor as a user id" (used by `AuditMixin`,
   `File.delete`, the proxy push gate). The layering test derives its addon
   list from `addons/angee/` so new base addons are guarded automatically.
@@ -519,11 +671,11 @@ Commit map (newest→oldest): `1e2cbb1` (A1 SDK auth) · `3838048`
   `django-angee-addons` / `angee-react` split **without changing a single
   import**: `angee` stays a PEP 420 namespace (no `__init__.py` at `angee/` or
   `addons/angee/`), so two source roots merge into one `angee.*` namespace.
-- **Django-shaped recomposition**: `angee/base` is now the model toolkit only
+- **Django-shaped recomposition**: `angee` is now the model toolkit only
   (the `django.db` analog); the GraphQL runtime moved to its own `angee/graphql/`
   package (schema, CRUD, deletion preview, events, publishing, access); `net.py`
   moved to `addons/angee/integrate`. (`json_safe` stays the single public
-  serializer in `angee/base/serialization.py`, consumed by both graphql and
+  serializer in `angee/serialization.py`, consumed by both graphql and
   resources.) `tests/test_layering.py` enforces base ⊥ {graphql, compose,
   addons}, graphql ⊥ compose, and addons ⊥ compose.
 
@@ -561,7 +713,7 @@ that proposed it.
   (`packages = ["angee"]`, framework-only deps) and `addons/pyproject.toml`
   `django-angee-addons` (`dependencies = ["django-angee", …]`). Partition
   dependencies from real imports — `django-import-export` / `tablib` / `pyyaml` →
-  addons, `pyjwt[crypto]` → iam, whatever `angee/base` + `angee/compose` import →
+  addons, `pyjwt[crypto]` → iam, whatever `angee` + `angee/compose` import →
   framework — so the addons→framework dependency direction is enforced, not just
   implied by directory. The repo split then becomes "move `addons/` to a new repo
   + point its `django-angee` dependency at the published version."

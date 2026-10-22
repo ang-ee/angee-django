@@ -4,15 +4,22 @@ import { createNamespaceT } from "@angee/ui";
 // runtime owns the active translations; these are the defaults used when a key is
 // missing — model-driven `<Column>`/`<Field>` labels stay metadata-driven and are
 // not listed here. Keys are dotted within the `integrate` namespace.
+// The addon that owns a vendor owns its connect label; this addon supplies
+// optional generic defaults and the shared authorization dialog copy.
 export const enIntegrateMessages: Record<string, string> = {
-  // Shared integration lifecycle record actions. Connect is absent by design:
-  // it is a real handshake per subtype, so the addon that owns the vendor owns
-  // its label as well as its UX.
+  "connect.action": "Connect",
+  "connect.reconnect": "Reconnect",
+  "connect.connected": "Connection saved",
+  "connect.startError": "Could not start authorization",
+  "connection.retryDiscovery": "Retry discovery",
   "connection.test": "Test connection",
   "streams.title": "Streams",
-  "streams.openDiscrepancies": "Open discrepancies",
+  "streams.openFailures": "Open failures",
   "streams.links": "Links",
   "streams.openLinks": "Open links",
+  "streams.history": "History",
+  "streams.pin": "Pin",
+  "streams.unpin": "Unpin",
   "streams.resync": "Resync",
   "streams.resyncConfirm.title": "Resync this stream?",
   "streams.resyncConfirm.body":
@@ -28,9 +35,12 @@ export const enIntegrateMessages: Record<string, string> = {
   "streams.target": "Target",
   "streams.openTarget": "Open target",
   "streams.targetUnavailable": "Target unavailable",
+  "sources.title": "Sources",
+  "sources.loading": "Loading sources…",
+  "sources.empty": "No sources are attached to this record.",
+  "sources.never": "Never",
   "streams.back": "Back to streams",
-  "streams.discrepancyScope": "Discrepancies · {key} · {partition}",
-  "streams.linkScope": "Links · {key} · {partition}",
+  "streams.scope": "{key} · {partition}",
   "streams.cursor.items_one": "{count} item",
   "streams.cursor.items_other": "{count} items",
   "streams.cursor.object": "Object",
@@ -60,6 +70,7 @@ export const enIntegrateMessages: Record<string, string> = {
   "integrations.add.none": "No integration types are available to you.",
   "integrations.add.connectDescription": "Continue to its connection setup.",
   "integrations.add.back": "Back",
+  "integrations.add.choose": "Choose",
   "integrations.add.continue": "Continue",
   // Webhooks page.
   "webhooks.filters": "Filters",
@@ -71,7 +82,7 @@ export const enIntegrateMessages: Record<string, string> = {
   "webhooks.signingSecret": "Signing secret",
   "webhooks.rotated": "Signing secret rotated.",
   // --- Connect surface (outbound OAuth: providers, accounts, credentials) ---
-  // Cohesive block; relocatable to a future `iam_integrate_oidc/web` as a unit.
+  // Integrate owns outbound account connection; login copy belongs to its login addon.
   // OAuth providers page — form-section labels and actions.
   "providers.group.client": "Client",
   "providers.group.endpoints": "Endpoints",

@@ -15,9 +15,10 @@ from django.db.models.deletion import PROTECT
 from pydantic import BaseModel
 
 import angee.workflows as workflows
-from angee.base.evidence import DerivedFrom, EvidenceFact, EvidenceReference, FactAuthority, readable_records
-from angee.base.refs import RecordRefMixin
 from angee.decisions.contracts import DecisionFact, DecisionRecordReference, DecisionRequest
+from angee.evidence import EvidenceFact, EvidenceReference, FactAuthority, readable_records
+from angee.models import DerivedFrom
+from angee.refs import RecordRefMixin
 from angee.workflows.managers import PublishResult
 from angee.workflows.states import RunOrigin
 from angee.workflows.steps import Settlement, Step
@@ -26,8 +27,8 @@ from angee.workflows.triggers import RecordChanged, RecordChangedOptIn, TriggerG
 
 EXPECTED_MODELS = {
     "workflows": (
-        "StepAttempt StepRecord StepRun StepWatch Trigger TriggerEvent Workflow WorkflowRun "
-        "WorkflowVersion"
+        "HistoricalStepWatch HistoricalWorkflow StepAttempt StepRecord StepRun StepWatch Trigger TriggerEvent "
+        "Workflow WorkflowRun WorkflowVersion"
     ),
     "decisions": "Decision DecisionRecord",
     "extraction": "Extraction ExtractionLineage ExtractionPage ExtractionPart ExtractionSource",
@@ -59,11 +60,13 @@ EXPECTED_VERBS = {
     "workflows.TriggerEvent.manager": "record_change",
     "workflows.TriggerEvent.queryset": "pending",
     "workflows.Workflow.manager": "authoring_outcomes install_definition publish save_draft save_identity",
-    "workflows.WorkflowRun.manager": "cancel cancel_abandoned cancel_on_commit prune reopen reprocess start",
-    "workflows.WorkflowRun.queryset": "about for_subject hold hold_owned retention_candidates",
+    "workflows.WorkflowRun.manager": (
+        "cancel cancel_abandoned cancel_on_commit prune reap_interrupted reopen reprocess start"
+    ),
+    "workflows.WorkflowRun.queryset": "about blocking for_subject hold hold_owned retention_candidates working_on",
     "decisions.Decision.manager": "ask decide withdraw",
     "decisions.Decision.queryset": (
-        "attention_expression open open_expression open_for"
+        "attention_expression for_records open open_expression open_for waiting_on"
     ),
 }
 

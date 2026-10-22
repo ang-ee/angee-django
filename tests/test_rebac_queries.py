@@ -18,7 +18,8 @@ from tests.queries import is_rebac_revision_read
     (
         # Message read adds the trash manager arm's channel seed read.
         ("messaging/message_edge", "read", 9),
-        ("projects/task_relation", "read", 6),
+        # A task's withholding exempts its removal authority, so its read adds a project write seed.
+        ("projects/task_relation", "read", 7),
         # The base schema declares no target type: the knowledge end still seeds.
         ("knowledge/record_binding", "read", 7),
         ("projects/task", "comment", 5),
@@ -27,7 +28,7 @@ from tests.queries import is_rebac_revision_read
         ("extraction/extraction", "read", 13),
         ("storage/file", "read", 7),
         ("storage/file_attachment", "read", 8),
-        ("projects/link", "read", 6),
+        ("projects/link", "read", 7),
         ("messaging/thread", "read", 6),
     ),
 )

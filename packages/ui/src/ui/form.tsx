@@ -20,6 +20,9 @@ import {
   type FieldRootProps,
 } from "./field";
 
+/**
+ * @kind token
+ */
 export const formVariants = tv({
   base: "min-w-0",
   variants: {
@@ -43,7 +46,6 @@ export const formVariants = tv({
 
 export type FormRecipeProps = VariantProps<typeof formVariants>;
 export type FormLayout = NonNullable<FormRecipeProps["layout"]>;
-export type FormDensity = NonNullable<FormRecipeProps["density"]>;
 
 export type FormRootProps<
   FormValues extends Record<string, any> = Record<string, any>,
@@ -136,6 +138,9 @@ const FormField = React.forwardRef<HTMLDivElement, FormFieldProps>(
 );
 FormField.displayName = "FormField";
 
+/**
+ * @kind primitive
+ */
 export const FormRoot = Object.assign(FormRootBase, {
   Field: FormField,
   FieldRoot,

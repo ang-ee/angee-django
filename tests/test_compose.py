@@ -21,34 +21,18 @@ from rebac import schema_changes
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
 from angee.addons import addon_manifest
-from angee.base.mixins import HistoryMixin, RevisionMixin
-from angee.base.models import AngeeModel, role_anchor
 from angee.compose.appgraph import AppGraph
 from angee.compose.apps import ComposeConfig
 from angee.compose.dependencies import AddonDependencyGroupResult
 from angee.compose.management.commands.angee import Command
 from angee.compose.model_composition import ModelComposition
+from angee.compose.project import ProjectContract
 from angee.compose.rendering import render_models
 from angee.compose.runtime import Runtime
 from angee.compose.web import WebRuntime
 from angee.fs import GENERATED_SENTINEL
+from angee.models import AngeeModel, HistoryMixin, role_anchor
 from tests.conftest import make_addon
-
-
-class DecoratedRevisionThing(RevisionMixin, AngeeModel):
-    """Abstract model used to test composer-emitted model decorators."""
-
-    runtime = True
-
-    revisioned_fields = ("body",)
-
-    body = models.TextField()
-
-    class Meta:
-        """Django model options for the test source model."""
-
-        abstract = True
-        app_label = "tests"
 
 
 class DecoratedHistoryThing(HistoryMixin, AngeeModel):
@@ -351,6 +335,24 @@ def test_nexus_aggregation_dependencies_reach_web_runtime() -> None:
     assert {"angee.messaging", "angee.parties", "angee.spaces", "angee.posts"} <= set(nexus["dependsOn"])
 
 
+def test_oidc_web_documents_follow_the_enabled_backend_addon() -> None:
+    """An IAM-only host never scans operations belonging to the optional OIDC schema."""
+
+    iam_configs = AppGraph().resolve(("angee.iam",))
+    oidc_configs = AppGraph().resolve(("angee.iam_integrate_oidc",))
+    iam_manifest = WebRuntime(iam_configs).manifest
+    oidc_manifest = WebRuntime(oidc_configs).manifest
+
+    assert "@angee/iam-integrate-oidc" not in {entry["package"] for entry in iam_manifest["addonPackages"]}
+    oidc = next(entry for entry in oidc_manifest["addonPackages"] if entry["app"] == "angee.iam_integrate_oidc")
+    assert oidc["package"] == "@angee/iam-integrate-oidc"
+    assert {"angee.iam", "angee.integrate", "angee.parties"} <= set(oidc["dependsOn"])
+    iam_config = next(config for config in iam_configs if config.name == "angee.iam")
+    assert not (Path(iam_config.path) / "web/src/documents.public.ts").exists()
+    oidc_config = next(config for config in oidc_configs if config.name == "angee.iam_integrate_oidc")
+    assert (Path(oidc_config.path) / "web/src/documents.public.ts").is_file()
+
+
 def test_web_runtime_carries_the_deployment_ui_layer() -> None:
     """``ANGEE_UI`` reaches the web runtime as the last layer; unknown keys fail composition."""
 
@@ -504,8 +506,7 @@ def test_runtime_renders_iam_user_sources(tmp_path: Path) -> None:
     assert "class User" in user_source
     assert "app_label = 'iam'" in user_source
     assert "rebac_resource_type = 'auth/user'" in user_source
-    assert "_UserMeta = getattr(AbstractUser, 'Meta', object)" in user_source
-    assert "class Meta(_UserMeta):" in user_source
+    assert "class Meta(AbstractUser.Meta):" in user_source
     assert "swappable = 'AUTH_USER_MODEL'" not in user_source
 
 
@@ -536,9 +537,8 @@ def test_role_anchor_emits_the_hand_rolled_runtime_source(tmp_path: Path) -> Non
     source = render_models(ModelComposition({"tests": (probe,)}, {}), "tests")
 
     assert "from tests.role_anchor_probe import ProbeRole as AbstractProbeRole" in source
-    assert "_ProbeRoleMeta = getattr(AbstractProbeRole, 'Meta', object)" in source
     assert "class ProbeRole(AbstractProbeRole):" in source
-    assert "class Meta(_ProbeRoleMeta):" in source
+    assert "class Meta(AbstractProbeRole.Meta):" in source
     assert "abstract = False" in source
     assert "rebac_resource_type = 'tests/role'" in source
 
@@ -597,7 +597,7 @@ def test_runtime_emits_only_models_marked_runtime(tmp_path: Path) -> None:
 
     source = Runtime.discover((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
 
-    assert "class DecoratedRevisionThing" in source
+    assert "class DecoratedHistoryThing" in source
     assert "class SkippedRuntimeThing" not in source
 
 
@@ -657,7 +657,7 @@ def test_runtime_renders_materialized_child_extension(tmp_path: Path, monkeypatc
 
     class RuntimeChild(models.Model):
         runtime = True
-        extends = "tests.DecoratedRevisionThing"
+        extends = "tests.DecoratedHistoryThing"
         child_value = models.CharField(max_length=16)
 
         class Meta:
@@ -670,16 +670,16 @@ def test_runtime_renders_materialized_child_extension(tmp_path: Path, monkeypatc
         name=__name__,
         module=sys.modules[__name__],
         models_module=SimpleNamespace(
-            DecoratedRevisionThing=DecoratedRevisionThing,
+            DecoratedHistoryThing=DecoratedHistoryThing,
             RuntimeChild=RuntimeChild,
         ),
     )
 
     source = Runtime.discover((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
 
-    assert "from runtime.tests.models import DecoratedRevisionThing" not in source
-    assert "class DecoratedRevisionThing(AbstractDecoratedRevisionThing):" in source
-    assert "class RuntimeChild(AbstractRuntimeChild, DecoratedRevisionThing):" in source
+    assert "from runtime.tests.models import DecoratedHistoryThing" not in source
+    assert "class DecoratedHistoryThing(AbstractDecoratedHistoryThing):" in source
+    assert "class RuntimeChild(AbstractRuntimeChild, DecoratedHistoryThing):" in source
 
 
 def test_runtime_renders_materialized_child_extension_across_apps(tmp_path: Path) -> None:
@@ -1448,6 +1448,20 @@ def test_provision_post_build_runs_remaining_steps_in_order_without_respawning(
     assert "angee provision: ok" not in messages
 
 
+def test_provision_runs_declared_installed_addon_commands_after_migrations(monkeypatch) -> None:
+    calls = []
+    command = Command()
+    monkeypatch.setattr(command, "_run_step", calls.append)
+    monkeypatch.setattr(
+        "angee.compose.management.commands.angee.get_commands", lambda: {"addon_post_build": "timeline"},
+    )
+    command._handle_provision(_provision_options(
+        post_build=True, after_if_installed=["addon_post_build", "absent_addon_command"],
+    ))
+    assert calls[-1] == ["addon_post_build"]
+    assert calls.index(["migrate", "--noinput", "--skip-checks"]) < len(calls) - 1
+
+
 def test_provision_post_build_aborts_on_the_first_failed_step(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1772,7 +1786,7 @@ def test_appgraph_distinguishes_project_roots_from_injected_runtime_roots() -> N
 def test_appgraph_rejects_duplicate_dependencies() -> None:
     """Repeated dependencies are rejected at their declaring owner."""
 
-    config = make_addon(name="tests.duplicate_dependency", depends_on=("angee.base", "angee.base"))
+    config = make_addon(name="tests.duplicate_dependency", depends_on=("angee", "angee"))
 
     with pytest.raises(ImproperlyConfigured, match="duplicate dependency"):
         AppGraph().resolve([config])
@@ -1785,8 +1799,6 @@ def test_project_env_file_loads_without_overriding_process_env(tmp_path: Path, m
     a bare `uv run manage.py …` talk to the stack database; operator-managed
     services set their env explicitly, so read_env must never overwrite it.
     """
-
-    from angee.compose.project import ProjectContract
 
     (tmp_path / ".env").write_text(
         'DATABASE_URL="postgres://angee:pw@127.0.0.1:5433/angee"\nYAMLCONF_SECRET_KEY="from-env-file"\n',
@@ -1812,16 +1824,12 @@ def test_project_env_file_loads_without_overriding_process_env(tmp_path: Path, m
 def test_project_env_file_is_optional(tmp_path: Path) -> None:
     """A project without .env composes exactly as before — silent no-op."""
 
-    from angee.compose.project import ProjectContract
-
     ProjectContract({})._read_project_env(tmp_path)
 
 
 def test_database_pool_follows_project_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    from angee.compose.project import ProjectContract
-
     monkeypatch.setenv("DATABASE_URL", "postgres://user:password@localhost:5432/db")
     project_settings = ModuleType("test_project_settings")
     project_settings.BASE_DIR = tmp_path
@@ -2035,7 +2043,7 @@ import angee.compose.project
 import angee.compose.bootstrap
 import angee.compose.composer
 assert not settings.configured
-for module in ('angee.compose.runtime', 'angee.base.models', 'rebac.models'):
+for module in ('angee.compose.runtime', 'angee.models', 'rebac.models'):
     assert module not in sys.modules, module
 """,
         ],

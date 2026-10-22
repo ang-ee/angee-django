@@ -44,9 +44,12 @@ page. The alias reuses the route's page, detail page and model, so nothing is
 exported or re-declared; its path is the app's `path` (`/<app id>` by default,
 since an app's own target may itself be a mount) joined with the node's. A
 node targets one of `route`, `mount` and `to`; an addon mounts only routes of
-addons it depends on. The node's `defaultResourceView` and `recordMatch` go onto
-the alias, and inside it `useRouteHref()` builds the mounted route's names as
-the alias's, so the page's own links stay in the borrowing app. `remove: true`
+addons it depends on. The node's `defaultResourceView`, `defaultFilter` (an
+initial editable `QueryFilter`) and `recordMatch` go onto the alias. Inside the
+borrowing app, `useRouteHref()` builds the mounted route's names as the alias's
+from every page, so dashboards and the borrowed page stay in that app. Use
+`defaultResourceView` for a named shipped/saved view and `defaultFilter` for a
+mount-specific starting filter. `remove: true`
 takes a node and its subtree out and makes the pages only it reached
 unavailable: they stay
 registered, redirect home, and drop out of record links and claims (a
@@ -172,8 +175,11 @@ containers: {
     "desk.review": { sequence: 40, content: reviewSection },
   },
   "form#chrome": { only: ["iam.share-record"] },
+  "timeline#kinds": {
+    "messaging.comments": { sequence: 10 },
+  },
   "record#aside": [
-    { "chatter.comments": { remove: true } },
+    { only: ["timeline.rail", "related"] },
     { only: [], when: { route: "notes.detail" } }, // may be owned by another addon
   ],
 },

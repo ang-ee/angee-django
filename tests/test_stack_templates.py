@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
+import subprocess
+import sys
+import textwrap
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -22,6 +26,7 @@ from typing import Any
 import pytest
 import yaml
 from django.apps import AppConfig
+from uvicorn._types import ASGIReceiveCallable, ASGISendCallable, ASGISendEvent, HTTPRequestEvent, HTTPScope, Scope
 
 from angee.addons import addon_manifest
 
@@ -113,7 +118,8 @@ def _render_stack_manifest(
 
     Runs the template passes in dependency order: inline the shared-body include,
     strip comments, bind ``{% set %}`` variables, expand the celery ``{% for %}``
-    loop, evaluate nested/inline conditionals, then substitute the remaining
+    loop, evaluate nested/inline conditionals, evaluate the queue worker's
+    ``{{ var|split:…|length * n }}`` product, then substitute the remaining
     ``{{ var }}`` interpolations.
     """
 
@@ -122,6 +128,7 @@ def _render_stack_manifest(
     text = _render_jinja_set_tags(text, variables)
     text = _render_for_loops(text, variables)
     text = _render_conditionals(text, variables)
+    text = _render_length_products(text, variables)
     for key, value in variables.items():
         text = text.replace(f"{{{{ {key} }}}}", value)
     assert "{{" not in text, text
@@ -129,6 +136,18 @@ def _render_stack_manifest(
     rendered = yaml.safe_load(text)
     assert isinstance(rendered, dict)
     return rendered
+
+
+_LENGTH_PRODUCT = re.compile(r'{{\s*(\w+)\|split:"([^"]*)"\|length\s*\*\s*(\d+)\s*}}')
+
+
+def _render_length_products(text: str, variables: dict[str, str]) -> str:
+    """Evaluate pongo2 ``{{ var|split:"sep"|length * n }}``: ``var``'s item count times ``n``."""
+
+    return _LENGTH_PRODUCT.sub(
+        lambda match: str(len(variables.get(match.group(1), "").split(match.group(2))) * int(match.group(3))),
+        text,
+    )
 
 
 def _inline_includes(manifest_path: Path) -> str:
@@ -805,7 +824,9 @@ def test_docker_operator_reads_the_stack_owner_ssh_at_its_home(render: str) -> N
     """An operator home gives the daemon that literal HOME and its .ssh, read-only, at the same path."""
 
     home = "/home/deploy"
-    stack = _render_local_stack(operator_home=home) if render == "local" else _render_dev_docker_stack(operator_home=home)
+    stack = (
+        _render_local_stack(operator_home=home) if render == "local" else _render_dev_docker_stack(operator_home=home)
+    )
     operator = stack["services"]["operator"]
 
     assert operator["env"] == {"HOME": home}
@@ -958,6 +979,98 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     arp = _render_project_settings(framework_workspace=True, include_arp=True)
     assert "{BASE_DIR}/workspaces/src/angee-arp/addons" in arp["ANGEE_ADDON_DIRS"]
     assert not any(app.startswith("arp.") for app in arp["INSTALLED_APPS"])
+
+
+STALE_MANAGE_PY = textwrap.dedent("""\
+    import os
+    import sys
+
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.compose.settings")
+    from django.core.management import execute_from_command_line
+
+    execute_from_command_line(sys.argv)
+    """)
+"""A manage.py rendered before the framework owned the entrypoint: no attribution boundary."""
+
+
+def _run_probe_command(tmp_path: Path, manage_source: str) -> subprocess.CompletedProcess[str]:
+    """Run a one-shot command that captures a write through the given ``manage.py`` body."""
+
+    (tmp_path / "manage.py").write_text(manage_source)
+    addon_dir = tmp_path / "addons"
+    commands = addon_dir / "captureprobe" / "management" / "commands"
+    commands.mkdir(parents=True)
+    for package in (commands, commands.parent, commands.parent.parent):
+        (package / "__init__.py").touch()
+    (commands / "captureprobe.py").write_text(
+        textwrap.dedent("""\
+        from django.apps import apps
+        from django.core.management.base import BaseCommand
+        from rebac import system_context
+
+        class Command(BaseCommand):
+            requires_system_checks = []
+
+            def handle(self, *args, **options):
+                with system_context(reason="captureprobe.write"):
+                    apps.get_model("notes", "Note").objects.create(title="Command write")
+        """)
+    )
+    script = textwrap.dedent("""\
+        import runpy
+        import sys
+        from pathlib import Path
+        from django.apps import apps
+        from django.conf import settings
+        from django.core.management import call_command
+        from tests.composed_host import boot
+
+        root, target = map(Path, sys.argv[1:])
+        boot(root, target / "runtime", [target / "addons"], root_apps=["example.notes", "captureprobe"])
+        settings.MIGRATION_MODULES = {config.label: None for config in apps.get_app_configs()}
+        call_command("migrate", run_syncdb=True, interactive=False, verbosity=0, skip_checks=True)
+        call_command("rebac", "sync", verbosity=0)
+        sys.argv = [str(target / "manage.py"), "captureprobe"]
+        runpy.run_path(sys.argv[0], run_name="__main__")
+        Changeset = apps.get_model(settings.ANGEE_CHANGESET_MODEL)
+        context = Changeset._base_manager.get()
+        history = apps.get_model("notes", "Note").history.get()
+        assert history.changeset_id == context.pk
+        assert history.history_change_reason == context.change_reason == "manage.captureprobe"
+        assert context.actor_ref == ""
+        assert context.activity == "system"
+        assert context.state == "closed"
+        assert context.outcome == "success"
+        """)
+    env = dict(os.environ)
+    env.pop("DJANGO_SETTINGS_MODULE", None)
+    return subprocess.run(
+        [sys.executable, "-c", script, str(ROOT), str(tmp_path)],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+
+def test_rendered_management_command_closes_its_changeset(tmp_path: Path) -> None:
+    """A real one-shot command attributes its captured write through rendered manage.py."""
+
+    rendered = (PROJECT_SETTINGS_TEMPLATE.parent / "manage.py.jinja").read_text().replace("{{ project_name }}", "probe")
+    assert "from angee.compose.manage import main" in rendered
+    result = _run_probe_command(tmp_path, rendered)
+    assert result.returncode == 0, f"rendered management command failed:\n{result.stdout}\n{result.stderr}"
+
+
+def test_stale_manage_py_fails_loudly_with_the_remedy(tmp_path: Path) -> None:
+    """A manage.py without the framework entrypoint refuses the captured write and names the fix."""
+
+    result = _run_probe_command(tmp_path, STALE_MANAGE_PY)
+    assert result.returncode != 0
+    assert "ChangesetRequired" in result.stderr
+    assert "manage.py must call angee.compose.manage.main()" in result.stderr
 
 
 # --- dev (process) contracts ---------------------------------------------------
@@ -1479,7 +1592,7 @@ def test_readiness_is_owned_by_long_running_http_and_django_services() -> None:
     assert framework["services"]["frontend"]["ready"] == FRONTEND_READY
     assert instance["services"]["django"]["ready"] == DJANGO_READY
 
-    for name in ("celery-worker", "celery-whatsapp"):
+    for name in ("celery-worker", "celery-queues"):
         assert framework["services"][name]["after"] == ["provision", "redis"]
         assert instance["services"][name]["after"] == ["provision", "redis"]
     assert framework["services"]["frontend"]["after"] == ["django", "codegen"]
@@ -1494,9 +1607,7 @@ def test_readiness_is_owned_by_long_running_http_and_django_services() -> None:
 def test_dev_stack_ingress_aliases_serve_further_hosts() -> None:
     """Alias host names join the edge site and the UI's allowed hosts."""
 
-    stack = _render_dev_docker_stack(
-        ingress_domain="dev.example.com", ingress_aliases="ap.example.com,crm.example.com"
-    )
+    stack = _render_dev_docker_stack(ingress_domain="dev.example.com", ingress_aliases="ap.example.com,crm.example.com")
 
     assert stack["ingress"]["domain"] == "dev.example.com"
     assert stack["ingress"]["aliases"] == ["ap.example.com", "crm.example.com"]
@@ -1824,15 +1935,16 @@ def test_forwarded_headers_reach_django_without_client_spoofing() -> None:
     assert "trusted_proxies_strict" in caddyfile
     assert "header_up X-Forwarded-For {client_ip}" in caddyfile
 
-    seen: list[tuple[tuple[str, int], str]] = []
+    seen: list[tuple[tuple[str, int] | None, str]] = []
 
-    async def app(scope: dict[str, Any], _receive: Any, _send: Any) -> None:
-        seen.append((scope["client"], scope["scheme"]))
+    async def app(scope: Scope, _receive: ASGIReceiveCallable, _send: ASGISendCallable) -> None:
+        if scope["type"] != "lifespan":
+            seen.append((scope["client"], scope["scheme"]))
 
-    async def receive() -> dict[str, Any]:
-        return {"type": "http.request"}
+    async def receive() -> HTTPRequestEvent:
+        return {"type": "http.request", "body": b"", "more_body": False}
 
-    async def send(_message: dict[str, Any]) -> None:
+    async def send(_message: ASGISendEvent) -> None:
         pass
 
     middleware = ProxyHeadersMiddleware(app, trusted_hosts=trusted)
@@ -1841,8 +1953,16 @@ def test_forwarded_headers_reach_django_without_client_spoofing() -> None:
         ("192.0.2.21", "198.51.100.9, 203.0.113.8", "https"),
         ("198.51.100.9", "198.51.100.9", "https"),
     ):
-        scope: dict[str, Any] = {
+        scope: HTTPScope = {
             "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "GET",
+            "path": "/",
+            "raw_path": b"/",
+            "query_string": b"",
+            "root_path": "",
+            "server": None,
             "client": (peer, 4123),
             "scheme": "http",
             "headers": [
@@ -1862,9 +1982,13 @@ def test_production_provision_loads_no_demo_data() -> None:
     """Production serving runs with DEBUG off, where demo data is refused; development loads it."""
 
     production = _render_dev_stack(_runtime_mode="docker", serve_mode="production")["jobs"]["provision"]
-    assert production["command"][-1].endswith("python manage.py angee provision --force-rebac")
+    assert production["command"][-1].endswith(
+        "python manage.py angee provision --force-rebac",
+    )
     development = _render_dev_stack(_runtime_mode="docker")["jobs"]["provision"]
-    assert development["command"][-1].endswith("python manage.py angee provision --demo --force-rebac")
+    assert development["command"][-1].endswith(
+        "python manage.py angee provision --demo --force-rebac",
+    )
 
 
 def test_localhost_production_frontend_needs_no_edge_lookup() -> None:
@@ -1899,7 +2023,7 @@ def test_every_stack_leases_its_process_compose_control_port() -> None:
 def test_secret_key_is_mode_invariant() -> None:
     """Both modes declare the secret-key secret and run Django on it.
 
-    Encrypted-at-rest fields (angee.base EncryptedField) derive their Fernet key
+    Encrypted-at-rest fields (angee EncryptedField) derive their Fernet key
     from SECRET_KEY, so re-rendering a stack from process to docker (or back)
     must never rotate the effective key: both modes declare the same generated
     `secret-key` (the env-file backend reuses the existing .env value) and pin
@@ -2003,13 +2127,14 @@ def test_dev_stack_local_processes_do_not_depend_on_container_services() -> None
         assert not dependencies & container_services, name
 
 
-def test_celery_queue_workers_render_in_both_modes() -> None:
-    """`celery_queues` renders one dedicated `celery-<queue>` worker per entry.
+def test_celery_queues_share_one_queue_worker_in_both_modes() -> None:
+    """`celery_queues` renders one `celery-queues` worker that consumes every entry.
 
     The queue worker inherits the celery block's env/command owner (no duplicated
-    stack facts) and isolates long-lived addon tasks on a threads pool: `-Q <queue>`
+    stack facts) and isolates long-lived addon tasks on a threads pool: `-Q <queues>`
     is the routing contract an addon like messaging_integrate_whatsapp dispatches to.
-    A blank input (the default) renders no extra service.
+    A live session holds one thread, so the pool keeps 8 threads per queue while the
+    app loads once. A blank input (the default) renders no extra service.
     """
 
     for render in (_render_dev_stack, _render_dev_docker_stack, _render_local_stack):
@@ -2018,34 +2143,38 @@ def test_celery_queue_workers_render_in_both_modes() -> None:
         assert stack["services"]["celery-worker"]["stop_grace_period"] == "30s"
 
     dev = _render_dev_stack(celery_queues="whatsapp")
-    dev_service = dev["services"]["celery-whatsapp"]
+    dev_service = dev["services"]["celery-queues"]
     assert dev_service["runtime"] == "local"
     assert dev_service["stop_grace_period"] == "30s"
     command = dev_service["command"]
     assert command[command.index("-Q") + 1] == "whatsapp"
     assert command[command.index("--pool") + 1] == "threads"
+    assert command[command.index("--concurrency") + 1] == "8"
     # Queue workers never embed beat: one scheduler per stack.
     assert "--beat" not in command
     # The queue worker shares the shared block's env owner verbatim.
     assert dev_service["env"] == dev["services"]["celery-worker"]["env"]
 
     dev_docker = _render_dev_docker_stack(celery_queues="whatsapp")
-    dev_docker_service = dev_docker["services"]["celery-whatsapp"]
+    dev_docker_service = dev_docker["services"]["celery-queues"]
     assert dev_docker_service["runtime"] == "container"
     assert "uv sync --inexact && exec celery" in dev_docker_service["command"][-1]
     assert "worker -Q whatsapp --pool threads --concurrency 8" in dev_docker_service["command"][-1]
     assert dev_docker_service["env"] == dev_docker["services"]["celery-worker"]["env"]
 
     local = _render_local_stack(celery_queues="whatsapp")
-    local_service = local["services"]["celery-whatsapp"]
+    local_service = local["services"]["celery-queues"]
     assert local_service["runtime"] == "container"
     exec_line = local_service["command"][-1]
     assert "worker -Q whatsapp --pool threads --concurrency 8" in exec_line
     assert local_service["image"] == local["services"]["celery-worker"]["image"]
 
-    # Two queues render two workers; the shared worker stays untouched.
-    two = _render_dev_stack(celery_queues="whatsapp,voice")
-    assert {"celery-whatsapp", "celery-voice", "celery-worker"} <= set(two["services"])
+    # More queues join the same worker with 8 threads each; the shared worker stays untouched.
+    five = _render_dev_stack(celery_queues="whatsapp,telegram,signal,matrix,discord")
+    assert {name for name in five["services"] if name.startswith("celery-")} == {"celery-worker", "celery-queues"}
+    command = five["services"]["celery-queues"]["command"]
+    assert command[command.index("-Q") + 1] == "whatsapp,telegram,signal,matrix,discord"
+    assert command[command.index("--concurrency") + 1] == "40"
 
 
 _BACKEND_DSN = "https://backend@sentry.example.invalid/1"

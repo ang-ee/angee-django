@@ -16,8 +16,8 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from rebac import system_context
 
-from angee.base.errors import exception_text
-from angee.base.impl import resolve_impl_class
+from angee.errors import exception_text
+from angee.impl import resolve_impl_class
 from angee.integrate.impl import BridgeImpl
 from angee.storage.exceptions import UploadError
 from angee.storage.uploads import MIME_SNIFF_BYTES, detect_mime, sha256_stream

@@ -35,7 +35,7 @@ from rebac import (
 from rebac.models import active_relationship_model
 from rebac.roles import grant as grant_role
 
-from angee.base.identity import public_id_for
+from angee.identity import public_id_for
 from angee.messaging.testing.models import Handle, Message, Party, Person, Thread
 from angee.projects.testing.models import Project, Task
 from angee.tags import schema as tags_schema
@@ -97,9 +97,7 @@ def test_a_partys_tags_resolve_by_content_type_and_object_id(composed_tables: No
             TagAssignment.objects.create(tag=tag, content_type=content_type, object_id=party.pk)
 
         tagged = set(
-            TagAssignment.objects.filter(content_type=content_type, object_id=party.pk).values_list(
-                "tag_id", flat=True
-            )
+            TagAssignment.objects.filter(content_type=content_type, object_id=party.pk).values_list("tag_id", flat=True)
         )
 
     assert tagged == {tag_one.pk, tag_two.pk}
@@ -130,15 +128,29 @@ def test_base_tag_is_always_shared_and_declares_no_policy_fields(composed_tables
     """The vocabulary uses authenticated membership without a row-level policy."""
 
     del composed_tables
+    # Audit stamps and the merge redirect are identity, not a row-level policy.
     tag_relation_fields = {
-        field.name
-        for field in Tag._meta.fields
-        if field.is_relation and field.name not in {"created_by", "updated_by"}
+        field.name for field in Tag._meta.fields
+        if field.is_relation and field.name not in {"created_by", "updated_by", "merged_into"}
     }
     assert tag_relation_fields == set()
     with system_context(reason="tags vocabulary setup"):
         tag = Tag.objects.create(name="Framework")
     _assert_authenticated_reads(tag)
+
+
+def test_attention_category_is_one_tag_owned_resource_flag(composed_tables: None) -> None:
+    """The console writes and reads the category bit the unified attention column selects."""
+
+    del composed_tables
+    admin = create_platform_admin("tags-attention-admin")
+    schema = addon_schema(tags_schema.schemas, "console")
+    data = result_data(execute_schema(schema, """
+      mutation { insert_tags_one(object: {name: "Urgent", attention: true}) { name attention } }
+    """, user=admin))
+    assert data["insert_tags_one"] == {"name": "Urgent", "attention": True}
+    rows = result_data(execute_schema(schema, "{ tags { name attention } }", user=admin))["tags"]
+    assert rows == [{"name": "Urgent", "attention": True}]
 
 
 def test_consumer_marker_does_not_control_authenticated_reads(composed_tables: None) -> None:
@@ -164,9 +176,14 @@ def test_deleting_a_tag_removes_the_row_without_wildcard_tuples(composed_tables:
         tag.delete()
     with actor_context(SubjectRef.of("auth/user", "1")):
         assert not Tag.objects.filter(pk=resource_id).exists()
-    assert not active_relationship_model().objects.filter(
-        resource_type="tags/tag", resource_id=resource_id,
-    ).exists()
+    assert (
+        not active_relationship_model()
+        .objects.filter(
+            resource_type="tags/tag",
+            resource_id=resource_id,
+        )
+        .exists()
+    )
 
 
 def test_flipping_consumer_marker_keeps_authenticated_reads(composed_tables: None) -> None:
@@ -244,7 +261,8 @@ def test_targeted_content_save_needs_no_reader_reconciliation(composed_tables: N
             tag.save(update_fields={"name"})
     _assert_authenticated_reads(tag)
     assert not [
-        query for query in queries.captured_queries
+        query
+        for query in queries.captured_queries
         if "rebac" in query["sql"].lower() and "relationship" in query["sql"].lower()
     ]
 
@@ -490,14 +508,15 @@ def test_a_record_writer_saves_tags_with_the_record_and_a_reader_cannot(party_ed
         assert not TagAssignment.objects.for_record(party_edge.party).exists()
 
 
-def test_deleting_a_tagged_record_removes_its_edges_under_its_owner(party_edge: SimpleNamespace) -> None:
-    """The record's delete cascades its edges through ``TaggedModel``'s generic relation."""
+def test_trashing_a_tagged_record_retains_its_edges_under_its_owner(party_edge: SimpleNamespace) -> None:
+    """Statements retain the subject; trash keeps its tag associations available for restore."""
 
     with actor_context(party_edge.owner):
         TagAssignment.objects.attach(*party_edge.party_address, [party_edge.tag.sqid])
-        Party.objects.get(pk=party_edge.party.pk).delete()
+        Party.objects.get(pk=party_edge.party.pk).trash()
     with system_context(reason="tags test count"):
-        assert not TagAssignment.objects.exists()
+        assert Party.objects.get(pk=party_edge.party.pk).is_trashed
+        assert TagAssignment.objects.for_record(party_edge.party).count() == 1
 
 
 def test_a_type_no_relation_names_cannot_be_tagged(party_edge: SimpleNamespace) -> None:
@@ -517,7 +536,10 @@ def test_a_handle_carries_its_own_tags_under_its_writer(party_edge: SimpleNamesp
 
     with system_context(reason="tags test handle"):
         handle = Handle.objects.create(
-            platform="email", value="billing@example.test", party=party_edge.party, created_by=party_edge.owner,
+            platform="email",
+            value="billing@example.test",
+            party=party_edge.party,
+            created_by=party_edge.owner,
         )
     handle_address = ("parties/handle", public_id_for(Handle, handle.pk))
     with actor_context(party_edge.outsider), pytest.raises(ValueError):
@@ -569,8 +591,7 @@ def _tag_errors(errors: list[Any]) -> list[Any]:
 
     owned = _taggable_test_models()
     return [
-        error for error in errors
-        if error.id.startswith("tags.") and (error.obj in owned or error.obj is TagAssignment)
+        error for error in errors if error.id.startswith("tags.") and (error.obj in owned or error.obj is TagAssignment)
     ]
 
 

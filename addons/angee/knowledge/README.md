@@ -1,7 +1,24 @@
 # Record pages
 
-Knowledge contributes a **Pages** chatter tab for record routes. It lists
-actor-readable page bindings and embeds `KnowledgePageView`. Binding and
+The Knowledge navigator also serves mounted page collections. A mount's
+`defaultFilter` for `knowledge.Page` is translated by the shared resource query
+owner and applied to the pages read. The navigator offers vaults represented in
+that collection and uses the same page editor, hierarchy and permissions. New
+pages are created in the selected vault; creating an unrelated vault is offered
+only in the unscoped wiki.
+
+Every binding write locks and rechecks the canonical target through `upsert`, so
+deleted targets refuse writes. `RecordBinding.on_target_delete` declares cascade
+teardown through the shared record-pointer lifecycle; deleting a target removes
+its bindings without changing their Page or Vault owners.
+
+MCP exposes vault-scoped `create_page` through the same GraphQL tool compiler as
+`read_page` and `append_to_page`; vault write grants remain the boundary.
+Retrieval backends implement `search_many` over each bounded readable vault group;
+the lexical owner performs one text scan for the group.
+
+Knowledge contributes a **Pages** group to the Related tab of record routes. It lists
+actor-readable page bindings as `PaneRow` links to each page's reader. Binding and
 unbinding use the existing role-keyed mutations, which require write access to
 both the page and target record. A record owner declares its type bindable from
 its `permissions.extends.zed` — one relation backed by the binding's `target`,
@@ -16,35 +33,52 @@ definition knowledge/record_binding {
 ```
 
 An undeclared type cannot be bound under an actor and its bindings stay
-unreadable; the binding grants no access by itself. The Pages tab shows only on
+unreadable; the binding grants no access by itself. The Pages group shows only on
 record views of declared types (their resource metadata lists
 `knowledge.RecordBinding` in `recordEdges`), and `record_knowledge_can_bind`
 offers binding only on a declared type the actor can write.
 
-The tab is the `record#aside/knowledge.pages` child. The rendered addon exports
-`recordPagesTab({ label, role, sequence, when, aliases })`, which returns a
-chatter tab child. A product addon can add a second tab with a specific binding
-role on its own model's aside, for example:
+The group is the `related#groups/knowledge.pages` child of the framework's
+Related tab. The rendered addon exports `recordPagesGroup({ label, role, sequence, when })`,
+which returns a Related group child. A product addon can declare a specific binding
+role on its own model, for example:
 
 ```tsx
 containers: {
-  "notes.Note#aside": {
-    "notes.reference-pages": recordPagesTab({ label: "Reference pages", role: "reference" }),
+  "notes.Note#groups": {
+    "notes.reference-pages": recordPagesGroup({ label: "Reference pages", role: "reference" }),
   },
 },
 ```
 
-The configured role is passed to the same binding query and write controls.
-The record owner continues to own the permission arm and any narrowing of the
-aside.
+The framework checks `edge.model` against `recordEdges`. Knowledge declares the
+configured role as its own `bindingRole` content and uses it for writes. All groups
+observe one cached binding read with `role: null` per record and partition it on
+the client. The generic Pages group excludes roles claimed
+by eligible sibling groups on that record; it shows `related` and other unclaimed
+roles. Counts use the same selection, so a Contract binding appears and counts
+once. Model scope, container narrowing and each group's `when` determine which
+role claims apply. The record owner continues to own the permission arm and
+narrowing of the aside.
+
+Bind uses `PaneLabelPopover` with a page selector and Bind button. One group
+component owns the picker and rows through `render(context, label)`, sharing
+busy state with Unbind. The picker closes on success and shows binding failures
+inside it. Generic Bind writes `related` and is absent if a sibling claims that
+role; a role-specific group writes its configured role. Both groups' `useVerb`
+rules include view-as restrictions. The page reader and editor use `SurfaceHeader`
+and publish Edit, Done and Delete into the shell's `ControlBand`. On a page,
+Backlinks and Bound to are Related groups using the shared pane rows; Bound to
+uses `RecordReferenceRow` for one bounded label read per model, registered record
+links and non-interactive references when the model has no record route.
 
 For dated, role-scoped notes, use `RecordNotesStream({ target, role, vault,
 heading, composer })` in a record section or `recordNotesTab({ label, role,
 vault, heading, composer, sequence, when })` as an aside child; the tab shows
-where the Pages tab does. `vault` is the public vault id. The stream reads page content through the binding query and offers its inline
+where the Pages group does. `vault` is the public vault id. The stream reads page content through the binding query and offers its inline
 composer only when the record can be bound and that vault projects `write`.
 It creates a note page, writes its markdown body, then binds it under `role`.
-The existing Pages tab keeps its binding and inline reader behavior.
+The Pages group continues to link to each page's reader.
 
 Pages are trashable through the shared `trash_record` / `restore_record` verbs,
 authorized by page `delete`. Trashing a page trashes the untrashed pages below it
@@ -56,3 +90,9 @@ pages trashed with it, never a page trashed on its own.
 Page access follows the current schema. The former one-shot author-attribution
 transition and its management command were removed before any deployment used
 them; schema sync is the only policy transition for this addon.
+
+Pages compose the shared hierarchy for parent moves and subtree scopes, and their
+Comments pane reads through the page policy. Vault removal uses trash: its pages
+are withheld while preserving their own removal flags, so restoring a vault does
+not restore separately removed pages. RecordBinding retargets retain history for
+merge reversal.

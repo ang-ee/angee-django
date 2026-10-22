@@ -5,7 +5,8 @@ import { Button } from "../../ui/button";
 import { Tabs } from "../../ui/tabs";
 import { useBreadcrumbLeafLabel } from "../../chrome/Breadcrumb";
 import { renderGlyph } from "../../chrome/Glyph";
-import { ControlBand, ControlBandProvider } from "../../layouts/ControlBand";
+import { ControlBandProvider } from "../../layouts/ControlBand";
+import { CommandBand } from "../resource/CommandBand";
 import { cn } from "../../lib/cn";
 import { ContainerOutlet } from "../../lib/container-outlet";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
@@ -13,7 +14,6 @@ import { EmptyState } from "../../fragments/EmptyState";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import { errorMessage } from "../../feedback";
 import {
-  RecordChrome,
   RecordChromeProvider,
 } from "../resource/record-chrome-context";
 import { RecordActionBar } from "./RecordActionBar";
@@ -80,6 +80,8 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   publishBreadcrumbLabel?: boolean;
   /** Override the record heading from the same live create/edit form context. */
   title?: React.ReactNode | ((context: RecordToolbarContext) => React.ReactNode);
+  /** The eyebrow above the title: the record's kind and container ("Vendor bill · Apexive"). */
+  eyebrow?: React.ReactNode | ((context: RecordToolbarContext) => React.ReactNode);
   submitLabel?: React.ReactNode;
   toolbarStart?:
     | React.ReactNode
@@ -123,7 +125,9 @@ function FormViewComponent(props: FormViewProps): React.ReactElement {
   />;
 }
 
-/** Existing public FormView export also exposes form-owned declaration seams. */
+/** Existing public FormView export also exposes form-owned declaration seams.
+ * @kind surface
+ */
 export const FormView = Object.assign(FormViewComponent, {
   RailGroup: RecordRailGroup,
   SectionHeading,
@@ -146,6 +150,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     toolbarStart,
     toolbar,
     title,
+    eyebrow,
     recordExtras,
     formExtras,
     headerExtras,
@@ -293,7 +298,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   };
   // Tabbed, each pane is a tab panel; a lone one is the plain region beneath the sheet.
   const paneRegions = panes.map((pane) => {
-    const paneClass = fullBleed(pane) ? "min-h-0 flex-1 overflow-hidden pt-0" : cn(FORM_VIEW_COLUMN_CLASS, "pt-3 pb-12");
+    const paneClass = fullBleed(pane) ? "flex min-h-0 flex-1 flex-col overflow-hidden pt-0" : cn(FORM_VIEW_COLUMN_CLASS, "pt-3 pb-12");
     const content = <ControlBandProvider host={undefined}>{renderPane(pane)}</ControlBandProvider>;
     // The lines pane stays mounted so its draft rows and their errors survive switching panes.
     const keepMounted = pane.id === EDITABLE_LINES_SECTION || recordTabById.get(pane.id)?.keepMounted;
@@ -302,12 +307,13 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       : <div key={pane.id} className={paneClass}>{content}</div>;
   });
   const formTitle = awaitingRecord ? t("form.loading") : typeof title === "function" ? title(recordToolbarContext) : title;
+  const formEyebrow = awaitingRecord ? undefined : typeof eyebrow === "function" ? eyebrow(recordToolbarContext) : eyebrow;
   const headerExtra = awaitingRecord ? undefined : headerExtras?.(recordToolbarContext);
   // A declared context line replaces the generic subtitle even when it says nothing for this record.
   const headerContextLine = awaitingRecord ? undefined : contextLine ? (contextLine(recordToolbarContext) ?? <></>) : undefined;
   const recordHeader = (compact = false) => {
     const header = <FormViewRecordHeader surface={surface} compact={compact} awaiting={awaitingRecord} title={formTitle}
-      extra={headerExtra} contextLine={headerContextLine} />;
+      eyebrow={formEyebrow} extra={headerExtra} contextLine={headerContextLine} />;
     return recordChromeContext
       ? <RecordChromeProvider value={recordChromeContext}>{header}</RecordChromeProvider>
       : header;
@@ -329,8 +335,9 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     void submitForm();
   };
   const rawControlBand = readOnly && props.hideRecordChrome && !toolbarStartNode && !toolbar ? null : (
-    <ControlBand className={cn("overflow-x-auto overflow-y-hidden", formIsDirty ? dirtyControlBandClassName : undefined)}>
-      <div className="flex min-w-max shrink-0 items-center gap-2">
+    <CommandBand
+      className={formIsDirty ? dirtyControlBandClassName : undefined}
+      verbs={<>
         {toolbarStartNode}
         <SaveDiscardActions
           isDirty={formIsDirty}
@@ -360,20 +367,16 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
               ) : undefined
             }
             blocked={actionsBlocked}
+            menuPlacement="leading"
           />
         ) : null}
         {!awaitingRecord && !readOnly && recordChromeContext ? (
           <ContainerOutlet entries={primaryRecordActions} />
         ) : null}
-      </div>
-      <div className="min-w-2 flex-1" />
-      <div className="flex min-w-max shrink-0 items-center gap-2">
-        {recordChromeContext && !props.hideRecordChrome ? (
-          <RecordChrome value={recordChromeContext} />
-        ) : null}
-        {toolbar}
-      </div>
-    </ControlBand>
+      </>}
+      chrome={recordChromeContext && !props.hideRecordChrome ? recordChromeContext : null}
+      end={toolbar}
+    />
   );
   const controlBand = recordChromeContext
     ? <RecordChromeProvider value={recordChromeContext}>{rawControlBand}</RecordChromeProvider> : rawControlBand;

@@ -11,12 +11,11 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldError, ImproperlyConfigured, ValidationError
 from django.db import connection, models
-from django.db.migrations.state import ModelState, ProjectState
 from django.db.models import F, Value
 from django.db.models.functions import Concat
-from django.test.utils import isolate_apps
+from django.test.utils import isolate_apps, override_settings
 
-from angee.base.fields import (
+from angee.fields import (
     DiagnosticTextField,
     EncryptedField,
     FractionalRankExhausted,
@@ -26,7 +25,7 @@ from angee.base.fields import (
     StateField,
     _derive_fernet,
 )
-from angee.base.mixins import SqidMixin
+from angee.models import SqidMixin
 from tests.tables import model_tables
 
 
@@ -59,7 +58,9 @@ def test_diagnostic_and_model_label_fields_normalize_instance_and_queryset_write
 
 
 @pytest.mark.django_db(transaction=True)
-def test_encrypted_field_round_trips_plaintext() -> None:
+@pytest.mark.parametrize("secret_key", ["field-encryption-key", b"field-encryption-key"])
+@isolate_apps()
+def test_encrypted_field_round_trips_plaintext(secret_key: str | bytes) -> None:
     """Plaintext assigned in Python decrypts when the row is reloaded."""
 
     class FieldRoundTrip(models.Model):
@@ -72,7 +73,7 @@ def test_encrypted_field_round_trips_plaintext() -> None:
 
             app_label = "auth"
 
-    with model_tables((FieldRoundTrip,)):
+    with override_settings(SECRET_KEY=secret_key), model_tables((FieldRoundTrip,)):
         instance = FieldRoundTrip.objects.create(secret="open sesame")
 
         reloaded = FieldRoundTrip.objects.get(pk=instance.pk)
@@ -175,7 +176,7 @@ def test_encrypted_field_caches_bound_fernet(monkeypatch: pytest.MonkeyPatch) ->
         calls.append(label)
         return _derive_fernet(label)
 
-    monkeypatch.setattr("angee.base.fields._derive_fernet", derive)
+    monkeypatch.setattr("angee.fields._derive_fernet", derive)
 
     first = field._fernet()
     second = field._fernet()
@@ -498,31 +499,6 @@ def test_state_field_check_requires_null_for_concrete_optional_states(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_historical_state_field_supports_blank_string_rows() -> None:
-    """Retained migration states can still reconstruct and read legacy rows."""
-
-    state = ProjectState()
-    state.add_model(
-        ModelState(
-            "auth",
-            "FieldBlankState",
-            fields=[
-                ("id", models.AutoField(primary_key=True)),
-                ("state", StateField(choices=[("enabled", "Enabled")], default="", blank=True)),
-            ],
-        )
-    )
-    FieldBlankState = state.apps.get_model("auth", "FieldBlankState")
-
-    with model_tables((FieldBlankState,)):
-        blank = FieldBlankState.objects.create()
-        enabled = FieldBlankState.objects.create(state="enabled")
-
-        assert FieldBlankState.objects.get(pk=blank.pk).state == ""
-        assert FieldBlankState.objects.get(pk=enabled.pk).state == "enabled"
-
-
-@pytest.mark.django_db(transaction=True)
 def test_sqid_field_passes_null_joins_through() -> None:
     """A nullable-FK join selecting ``__sqid`` yields None instead of raising.
 
@@ -591,19 +567,34 @@ def test_sqid_field_deconstruct_preserves_public_id_contract() -> None:
 @pytest.mark.parametrize(
     ("module", "model_name", "prefix"),
     [
-        *(('angee.parties.models', name, prefix) for name, prefix in (
-            ('Party', 'pty_'), ('Handle', 'hdl_'), ('PartyHandle', 'phl_'),
-            ('Address', 'adr_'), ('Folder', 'fol_'),
-        )),
-        *(('angee.messaging.models', name, prefix) for name, prefix in (
-            ('Thread', 'thr_'), ('Message', 'msg_'), ('Fragment', 'frg_'),
-            ('Part', 'prt_'), ('MessageEdge', 'mge_'), ('Participant', 'ptp_'),
-            ('Reaction', 'rxn_'), ('MessageStar', 'msr_'),
-        )),
+        *(
+            ("angee.parties.models", name, prefix)
+            for name, prefix in (
+                ("Party", "pty_"),
+                ("Handle", "hdl_"),
+                ("Address", "adr_"),
+                ("Folder", "fol_"),
+            )
+        ),
+        *(
+            ("angee.messaging.models", name, prefix)
+            for name, prefix in (
+                ("Thread", "thr_"),
+                ("Message", "msg_"),
+                ("Fragment", "frg_"),
+                ("Part", "prt_"),
+                ("MessageEdge", "mge_"),
+                ("Participant", "ptp_"),
+                ("Reaction", "rxn_"),
+                ("MessageStar", "msr_"),
+            )
+        ),
     ],
 )
 def test_declared_sqid_prefix_keeps_explicit_field_deconstruction(
-    module: str, model_name: str, prefix: str,
+    module: str,
+    model_name: str,
+    prefix: str,
 ) -> None:
     """The removed redeclarations leave Django's field state unchanged."""
 
@@ -686,9 +677,7 @@ def test_fractional_rank_appends_within_its_unique_context() -> None:
             """Django model options for the test model."""
 
             app_label = "auth"
-            constraints = (
-                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_item_lane_rank"),
-            )
+            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="ranked_item_lane_rank"),)
 
     with model_tables((RankedItem,)):
         first = RankedItem.objects.create(lane="a")
@@ -754,9 +743,7 @@ def test_fractional_rank_full_clean_allows_the_pending_none() -> None:
             """Django model options for the test model."""
 
             app_label = "auth"
-            constraints = (
-                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_pending_lane_rank"),
-            )
+            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="ranked_pending_lane_rank"),)
 
     with model_tables((RankedPending,)):
         instance = RankedPending(lane="a")
@@ -870,9 +857,7 @@ def test_fractional_rank_rebalance_rewrites_a_clean_spread() -> None:
             """Django model options for the test model."""
 
             app_label = "auth"
-            constraints = (
-                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_rebalance_lane_rank"),
-            )
+            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="ranked_rebalance_lane_rank"),)
 
     with model_tables((RankedRebalance,)):
         RankedRebalance.objects.create(lane="a", rank=0.25)
@@ -884,9 +869,7 @@ def test_fractional_rank_rebalance_rewrites_a_clean_spread() -> None:
         changed = field.rebalance(context={"lane": "a"})
 
         assert changed == 3
-        ranks = list(
-            RankedRebalance.objects.filter(lane="a").order_by("rank").values_list("rank", flat=True)
-        )
+        ranks = list(RankedRebalance.objects.filter(lane="a").order_by("rank").values_list("rank", flat=True))
         step = FractionalRankField.STEP
         assert ranks == [step, step * 2, step * 3]
         untouched.refresh_from_db()
@@ -900,9 +883,7 @@ def test_fractional_rank_rebalance_rewrites_a_clean_spread() -> None:
         for occupied in (step / 2, step, step * 2):
             RankedRebalance.objects.create(lane="c", rank=occupied)
         assert field.rebalance(context={"lane": "c"}) == 3
-        crowded = list(
-            RankedRebalance.objects.filter(lane="c").order_by("rank").values_list("rank", flat=True)
-        )
+        crowded = list(RankedRebalance.objects.filter(lane="c").order_by("rank").values_list("rank", flat=True))
         assert crowded == [step, step * 2, step * 3]
 
 
@@ -919,9 +900,7 @@ def test_fractional_rank_rebalance_rejects_traversal_context_keys() -> None:
             """Django model options for the test model."""
 
             app_label = "auth"
-            constraints = (
-                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_guard_lane_rank"),
-            )
+            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="ranked_guard_lane_rank"),)
 
     field = RankedContextGuard._meta.get_field("rank")
     for bad_context in ({"lane__icontains": "a"}, {"missing": 1}, {"rank": 1.0}):
@@ -951,9 +930,7 @@ def test_fractional_rank_rebalance_accepts_a_relation_attname_context() -> None:
             """Django model options for the test model."""
 
             app_label = "auth"
-            constraints = (
-                models.UniqueConstraint(fields=("owner", "rank"), name="ranked_rel_owner_rank"),
-            )
+            constraints = (models.UniqueConstraint(fields=("owner", "rank"), name="ranked_rel_owner_rank"),)
 
     with model_tables((RankOwner, RankedRelationContext)):
         field = RankedRelationContext._meta.get_field("rank")

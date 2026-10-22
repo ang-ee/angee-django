@@ -14,12 +14,23 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/ui")>()),
   useDashboardRegistry: () => ({ store: mocks.store }),
   useResourceViewUtilityContext: () => ({ resource: "example.Item", filter: {} }),
+  // The shared settle toasts the outcome; here a failure lands in the document.
+  useActionResultRun: () => async (fire: () => Promise<{ ok: boolean; message?: string } | null | undefined>) => {
+    try {
+      return (await fire()) ?? undefined;
+    } catch (error) {
+      const note = document.createElement("p");
+      note.textContent = error instanceof Error ? error.message : String(error);
+      document.body.append(note);
+      return undefined;
+    }
+  },
 }));
 
 import { CaptureDashboardAction } from "./CaptureDashboardAction";
 
 const target = { scope: "personal", id: "dashboard-1" } as const;
-const capabilities = { canEdit: true, canReset: true, canArchive: true };
+const capabilities = { canEdit: true, canReset: true, canTrash: true };
 const snapshot = { schemaVersion: 1, columns: 12, widgets: [] } as const;
 const saved: DashboardSaveResult = {
   persistedId: target.id, revision: 2, snapshot: { ...snapshot, widgets: [] }, capabilities,
@@ -44,7 +55,7 @@ beforeEach(() => {
       state: { status: "ready", capabilities, persistedId: target.id, revision: 1,
         name: "My dashboard", declarationRevision: "", snapshot: { ...snapshot, widgets: [] } },
       reload: vi.fn(async () => {}), save: mocks.save, reset: vi.fn(async () => {}),
-      createPersonal: write, duplicate: write, archive: write,
+      createPersonal: write, duplicate: write,
     }),
   };
 });

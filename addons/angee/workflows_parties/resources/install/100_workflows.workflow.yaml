@@ -16,7 +16,7 @@ rows:
   - xref: parties_dedupe
     fields:
       key: parties_dedupe
-      name: Duplicate party review
+      name: Same identity review
       description: Find shared-handle candidates and review each pair independently.
       publish: true
       draft:

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Badge, Page, PageBody, PageHeader, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@angee/ui";
+import { Chip, Page, PageBody, PageHeader, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@angee/ui";
 
 const meta = {
   title: "Page/PageBody",
@@ -32,9 +32,9 @@ export const ScrollRegion: Story = {
                 <TableCell>Record update {index + 1}</TableCell>
                 <TableCell className="text-fg-muted">System</TableCell>
                 <TableCell>
-                  <Badge tone={index % 3 === 0 ? "success" : "neutral"}>
+                  <Chip tone={index % 3 === 0 ? "success" : "neutral"}>
                     {index % 3 === 0 ? "Complete" : "Queued"}
-                  </Badge>
+                  </Chip>
                 </TableCell>
               </TableRow>
             ))}

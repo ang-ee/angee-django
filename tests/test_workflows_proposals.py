@@ -82,9 +82,8 @@ def test_missing_action_link_raises_validation_error(targets):
     # A detached retained concern can no longer apply its proposed write.
     from rebac import system_context
 
-    from angee.base.scoping import system_queryset
     with system_context(reason="test detached decision concern"):
-        for link in system_queryset(decision.records.model).filter(decision=decision):
+        for link in decision.records.model.system_queryset().filter(decision=decision):
             link._owner_delete()
     with pytest.raises(ValidationError, match="missing"):
         apply_proposals(decision, actor=reviewer)

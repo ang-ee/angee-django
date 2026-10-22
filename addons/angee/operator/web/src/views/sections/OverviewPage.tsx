@@ -1,23 +1,17 @@
-import { Button, Card, CardContent, CardHeader, CardTitle, cn, MetricStrip, Skeleton, textRoleVariants, type MetricTileValue } from "@angee/ui";
-import type { ReactNode } from "react";
+import { CommandBand, DetailSection, ErrorBanner, MetricStrip, RecordActionBar, RecordHeader, StatusBadge, type ActionDescriptor, type MetricTileValue } from "@angee/ui";
+import type { Row } from "@angee/metadata";
+import { useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
-import { useOperatorSnapshot } from "../../data/transport";
-import { OperatorSection } from "../parts/OperatorSection";
-import { StateTag } from "../parts/StateTag";
+import { useOperatorConnection, useOperatorSnapshot } from "../../data/transport";
 import { useJobRunOperation } from "../../data/job-run";
-import { useOperatorConnection } from "../../data/transport";
 import { applicationHealth } from "../../data/application-health";
 
-/** Overview page: stack + health summary above per-resource count tiles. */
+/** Overview page: the restart verb on the band, stack and health facts, then per-resource count tiles. */
 export function OverviewPage(): ReactNode {
   const t = useOperatorT();
   const { snapshot, result } = useOperatorSnapshot({
-    overview: true,
-    services: true,
-    workspaces: true,
-    sources: true,
-    secrets: true,
+    overview: true, services: true, workspaces: true, sources: true, secrets: true,
   });
   const connection = useOperatorConnection();
   const jobRun = useJobRunOperation();
@@ -31,96 +25,44 @@ export function OverviewPage(): ReactNode {
     { label: t("section.operator.sources.title"), value: snapshot?.sources.length ?? 0 },
     { label: t("section.operator.secrets.title"), value: snapshot?.secrets.length ?? 0 },
   ];
+  const restartJob = connection?.restartJob ?? null;
+  const restart = useMemo<readonly ActionDescriptor[]>(() => [{
+    id: "restart", label: t("overview.restart"), placement: "toolbar", primary: true,
+    disabled: jobRun.active || jobRun.starting,
+    disabledReason: restartJob ? undefined : t("overview.restartUnavailable"),
+    run: async () => { if (restartJob) await jobRun.run(restartJob, true); },
+  }], [jobRun, restartJob, t]);
+  const loading = result.fetching && !snapshot;
+  const error = result.error ?? jobRun.error;
 
-  return (
-    <OperatorSection
-      title={t("section.operator.overview.title")}
-      loading={result.fetching && !snapshot}
-      error={result.error ?? jobRun.error}
-      loadingMessage={t("overview.loading")}
-      loadingContent={<OverviewLoading />}
-    >
-      <div className="flex justify-end">
-        <Button
-          disabled={!connection?.restartJob || jobRun.active || jobRun.starting}
-          title={!connection?.restartJob ? t("overview.restartUnavailable") : undefined}
-          onClick={() => connection?.restartJob && void jobRun.run(connection.restartJob, true)}
-          variant="secondary"
-        >
-          {t("overview.restart")}
-        </Button>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("overview.stack.title")}</CardTitle>
-          </CardHeader>
-          <CardContent className={cn(textRoleVariants({ role: "description" }), "flex flex-col gap-2")}>
-            {stack ? (
-              <>
-                <p>{stack.name}</p>
-                <p className="text-fg-muted">{stack.root}</p>
-              </>
-            ) : (
-              <p className="text-fg-muted">{t("overview.stack.empty")}</p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("overview.health.title")}</CardTitle>
-          </CardHeader>
-          <CardContent className={cn(textRoleVariants({ role: "description" }), "flex flex-col gap-2")}>
-            {health ? (
-              <>
-                <StateTag state={health.status} />
-                {health.service ? (
-                  <p>
-                    {health.readinessUnavailable
-                      ? t("overview.health.readinessUnavailable", { service: health.service })
-                      : t("overview.health.serviceState", { service: health.service, state: health.detail ?? "" })}
-                  </p>
-                ) : null}
-              </>
-            ) : (
-              <p className="text-fg-muted">{t("overview.health.empty")}</p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      <MetricStrip density="prominent" className="grid-cols-2 sm:grid-cols-4" metrics={metrics} />
-    </OperatorSection>
-  );
-}
-
-function OverviewLoading(): ReactNode {
   return (
     <>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {Array.from({ length: 2 }, (_, index) => (
-          <Card key={index}>
-            <CardHeader>
-              <Skeleton shape="text" size="md" className="w-24" />
-            </CardHeader>
-            <CardContent className="grid gap-2">
-              <Skeleton shape="text" size="sm" className="w-2/3" />
-              <Skeleton shape="text" size="sm" className="w-5/6" />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {Array.from({ length: 4 }, (_, index) => (
-          <Card key={index} asChild className="px-4 py-3 shadow-none" density="sm">
-            <div aria-hidden="true">
-              <Skeleton shape="text" size="sm" className="mb-3 w-20" />
-              <Skeleton shape="text" size="lg" className="w-10" />
-            </div>
-          </Card>
-        ))}
+      <CommandBand verbs={<RecordActionBar record={(stack ?? {}) as Row} actions={restart} menuPlacement="leading" />} />
+      <div className="flex min-h-0 flex-1 flex-col bg-canvas">
+        <RecordHeader density="compact" title={t("section.operator.overview.title")} meta={stack?.name} />
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-3">
+          {error ? <ErrorBanner title={t("overview.error")} description={error.message} /> : null}
+          {loading ? <MetricStrip loading loadingMessage={t("overview.loading")} density="prominent" className="grid-cols-2 sm:grid-cols-4" /> : (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <DetailSection
+                  title={t("overview.stack.title")}
+                  rows={stack ? [[t("overview.stack.name"), stack.name], [t("overview.stack.root"), stack.root]] : [[t("overview.stack.title"), t("overview.stack.empty")]]}
+                />
+                <DetailSection
+                  title={t("overview.health.title")}
+                  rows={health ? [
+                    [t("overview.health.status"), <StatusBadge value={health.status} />],
+                    ...(health.service ? [[t("overview.health.service"), health.readinessUnavailable
+                      ? t("overview.health.readinessUnavailable", { service: health.service })
+                      : t("overview.health.serviceState", { service: health.service, state: health.detail ?? "" })] as const] : []),
+                  ] : [[t("overview.health.status"), t("overview.health.empty")]]}
+                />
+              </div>
+              <MetricStrip density="prominent" className="grid-cols-2 sm:grid-cols-4" metrics={metrics} />
+            </>
+          )}
+        </div>
       </div>
     </>
   );

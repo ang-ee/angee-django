@@ -30,12 +30,8 @@ vi.mock("@angee/ui", async (importOriginal) => {
   };
 });
 
-// Messaging owns the agenda pane; the page only composes it.
-vi.mock("@angee/messaging", () => ({
-  ActivityAgendaPane: () => <section aria-label="Activities due" data-testid="agenda-pane" />,
-}));
-
-vi.mock("../task-actions", () => ({
+vi.mock("../task-actions", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../task-actions")>(),
   useTaskRowActions: () => mocks.rowActions,
 }));
 
@@ -87,21 +83,10 @@ describe("MyWorkPage", () => {
       .toEqual(["title", "project.title", "priority", "due_date"]);
   });
 
-  test("publishes messaging's agenda pane into the shell's primary (left) pane", () => {
+  test("publishes nothing into the shell's primary pane", () => {
     render(harness());
 
-    const primary = screen.getByTestId("shell-primary");
-    expect(within(primary).getByRole("region", { name: "Activities due" })).toBeTruthy();
-    expect(within(screen.getByTestId("page-content")).queryByTestId("agenda-pane")).toBeNull();
-  });
-
-  test("clears the primary pane when the page leaves", () => {
-    const { rerender } = render(harness());
-    expect(within(screen.getByTestId("shell-primary")).getByTestId("agenda-pane")).toBeTruthy();
-
-    rerender(harness(false));
-
-    expect(within(screen.getByTestId("shell-primary")).queryByTestId("agenda-pane")).toBeNull();
+    expect(within(screen.getByTestId("shell-primary")).queryByRole("region")).toBeNull();
   });
 
   test("an anonymous session lists no tasks", () => {

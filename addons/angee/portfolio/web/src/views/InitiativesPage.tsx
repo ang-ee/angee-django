@@ -1,6 +1,5 @@
 import {
   Column,
-  DrawerResourceList,
   Facet,
   Field,
   Form,
@@ -8,14 +7,11 @@ import {
   List,
   ResourceList,
   useEnumOptions,
-  type RecordPanelContext,
-  type RecordTabDescriptor,
-  type StringIdRow,
 } from "@angee/ui";
 import * as React from "react";
 
 import { usePortfolioT } from "../i18n";
-import { INITIATIVE_MODEL, INITIATIVE_PROJECT_MODEL } from "../resources";
+import { INITIATIVE_MODEL } from "../resources";
 
 /** Initiative hierarchy rendered as a parent-grouped tree-compatible list. */
 export function InitiativesPage(): React.ReactElement {
@@ -26,23 +22,11 @@ export function InitiativesPage(): React.ReactElement {
     INITIATIVE_MODEL,
     "target_date_resolution",
   );
-  const recordTabs = React.useMemo<readonly RecordTabDescriptor[]>(
-    () => [
-      {
-        id: "projects",
-        label: t("initiative.tabs.projects"),
-        render: (context) => <InitiativeProjectsTab {...context} />,
-      },
-    ],
-    [t],
-  );
-
   return (
     <ResourceList
       resource={INITIATIVE_MODEL}
       placement="inline"
       routed
-      recordTabs={recordTabs}
     >
       <List
         resource={INITIATIVE_MODEL}
@@ -58,7 +42,7 @@ export function InitiativesPage(): React.ReactElement {
         <Column field="target_date" />
         <Column field="priority" />
       </List>
-      <Form resource={INITIATIVE_MODEL}>
+      <Form resource={INITIATIVE_MODEL} eyebrow={t("initiative.eyebrow")}>
         <Field name="name" title />
         <Field name="status" widget="statusbar" status options={statusOptions} />
         <Group label={t("initiative.group.identity")} columns={2}>
@@ -79,32 +63,3 @@ export function InitiativesPage(): React.ReactElement {
   );
 }
 
-function InitiativeProjectsTab({
-  recordId,
-}: RecordPanelContext): React.ReactElement {
-  const t = usePortfolioT();
-  return (
-    <DrawerResourceList
-      resource={INITIATIVE_PROJECT_MODEL}
-      createDefaults={{ initiative: recordId }}
-    >
-      <List<StringIdRow>
-        resource={INITIATIVE_PROJECT_MODEL}
-        baseFilter={{ initiative: { exact: recordId } }}
-        order={{ sort_order: "ASC" }}
-        emptyContent={t("initiative.empty.projects")}
-      >
-        <Column field="project" header={t("common.project")} />
-        <Column field="project.product" />
-        <Column field="project.status" widget="statusBadge" />
-        <Column field="project.health" widget="statusBadge" />
-        <Column field="sort_order" header={t("common.order")} />
-      </List>
-      <Form resource={INITIATIVE_PROJECT_MODEL}>
-        <Field name="project" title />
-        <Field name="initiative" readOnly />
-        <Field name="sort_order" label={t("common.order")} />
-      </Form>
-    </DrawerResourceList>
-  );
-}

@@ -65,7 +65,6 @@
 
   /* Accent — teal (AI / chatter highlight) */
   --t-50:   #effcf9;
-  --t-100:  #d3f7ee;
   --t-300:  #5eead4;
   --t-500:  #14b8a6;
   --t-600:  #0d9488;
@@ -120,13 +119,13 @@
   --text-on-rail-mut:  var(--n-475);
   --text-on-rail-hi:   var(--n-0);      /* hover/active on rail */
   --text-on-brand:     var(--n-0);
-  --text-link:         var(--b-600);
+  --text-link:         var(--brand-hover);   /* follows the theme's brand */
 
   /* Borders */
   --border-subtle:     var(--n-150);
   --border-default:    var(--n-200);
   --border-strong:     var(--n-300);
-  --border-focus:      var(--b-500);
+  --border-focus:      var(--brand);
   --border-on-rail:    var(--n-880);
 
   /* Brand */
@@ -171,7 +170,7 @@
   --pink-soft-text:    var(--pink-700);
 
   /* Data-series roles. Identity is always reinforced by labels/legends. */
-  --chart-1:           var(--b-600);
+  --chart-1:           var(--brand);
   --chart-2:           var(--t-600);
   --chart-3:           var(--blue-700);
   --chart-4:           var(--purple-700);
@@ -205,7 +204,7 @@
   --on-pink:       var(--n-0);
 
   /* Outline / surface border (ramp-300) */
-  --brand-line:    var(--b-300);
+  --brand-line:    color-mix(in oklab, var(--brand) 55%, var(--surface-sheet));
   --accent-line:   var(--t-300);
   --info-line:     var(--blue-300);
   --success-line:  var(--green-300);
@@ -215,7 +214,7 @@
   --pink-line:     var(--pink-300);
 
   /* Faint panel tint for the `surface` fill (palette over the sheet) */
-  --brand-tint:    color-mix(in oklab, var(--b-500) 6%, var(--surface-sheet));
+  --brand-tint:    color-mix(in oklab, var(--brand) 6%, var(--surface-sheet));
   --accent-tint:   color-mix(in oklab, var(--t-500) 6%, var(--surface-sheet));
   --info-tint:     color-mix(in oklab, var(--blue-500) 6%, var(--surface-sheet));
   --success-tint:  color-mix(in oklab, var(--green-500) 6%, var(--surface-sheet));
@@ -253,6 +252,9 @@
                       "Helvetica Neue", Arial, sans-serif;
   --font-family-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
+  /* Every step is bridged to a utility in index.css (text-2xs, text-12, text-13,
+     text-sm, text-15, text-base, text-lg, text-22, text-28, text-34) and public to
+     themes, so a theme can retune the whole scale. */
   --fs-11: 11px;  --lh-11: 16px;
   --fs-12: 12px;  --lh-12: 16px;
   --fs-13: 13px;  --lh-13: 20px;
@@ -270,20 +272,8 @@
   --fw-bold:     700;
 
   /* -------------------------------------------------------------------------
-     Spacing (4px base) and radii
+     Radii (spacing is Tailwind's 4px scale; no parallel token ladder)
      ------------------------------------------------------------------------- */
-  --sp-0:  0;
-  --sp-1:  4px;
-  --sp-2:  8px;
-  --sp-3:  12px;
-  --sp-4:  16px;
-  --sp-5:  20px;
-  --sp-6:  24px;
-  --sp-8:  32px;
-  --sp-10: 40px;
-  --sp-12: 48px;
-  --sp-16: 64px;
-
   --r-2: 2px;
   --r-4: 4px;
   --r-6: 6px;
@@ -299,7 +289,7 @@
   --topbar-h:      42px;
   --breadcrumbbar-h: 28px;
   --controlpanel-h:48px;
-  --chatter-w:     332px;
+  --control-h-xs:  28px;   /* pane controls: tabs, toggles, pane toolbar buttons, tree rows */
   --control-h-sm:  26px;
   --control-h-md:  30px;
   --control-h-lg:  36px;
@@ -338,13 +328,11 @@
   --text-inverse:      var(--n-900);
   --text-on-rail:      var(--n-175);
   --text-on-rail-mut:  var(--n-475);
-  --text-link:         var(--b-300);
 
   --border-subtle:     var(--n-825);
   --border-default:    var(--n-775);
   --border-strong:     var(--n-680);
 
-  --chart-1:           var(--b-300);
   --chart-2:           var(--t-300);
   --chart-3:           var(--blue-300);
   --chart-4:           var(--purple-300);
@@ -388,7 +376,7 @@
   /* Two-axis fills — dark overrides. Solids keep their vivid ramp-500 (like
      --danger); only the outline/surface border and the surface tint need a
      theme-aware, translucent value over the darker sheet. */
-  --brand-line:    color-mix(in oklab, var(--b-400) 40%, transparent);
+  --brand-line:    color-mix(in oklab, var(--brand) 40%, transparent);
   --accent-line:   color-mix(in oklab, var(--t-500) 40%, transparent);
   --info-line:     color-mix(in oklab, var(--blue-500) 40%, transparent);
   --success-line:  color-mix(in oklab, var(--green-500) 40%, transparent);
@@ -397,7 +385,7 @@
   --purple-line:   color-mix(in oklab, var(--purple-500) 40%, transparent);
   --pink-line:     color-mix(in oklab, var(--pink-500) 40%, transparent);
 
-  --brand-tint:    color-mix(in oklab, var(--b-400) 12%, var(--surface-sheet));
+  --brand-tint:    color-mix(in oklab, var(--brand) 12%, var(--surface-sheet));
   --accent-tint:   color-mix(in oklab, var(--t-500) 12%, var(--surface-sheet));
   --info-tint:     color-mix(in oklab, var(--blue-500) 12%, var(--surface-sheet));
   --success-tint:  color-mix(in oklab, var(--green-500) 12%, var(--surface-sheet));

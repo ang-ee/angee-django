@@ -14,7 +14,8 @@ const pageMocks = vi.hoisted(() => ({
   setStarred: vi.fn(async () => ({})),
 }));
 
-vi.mock("@angee/ui", () => ({
+vi.mock("@angee/ui", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@angee/ui")>(),
   createNamespaceT: () => () => (key: string) => key,
   Action: () => { pageMocks.actions += 1; return null; },
   Alert: ({ children }: { children?: React.ReactNode }) => <div role="alert">{children}</div>,
@@ -59,20 +60,26 @@ vi.mock("@angee/ui", () => ({
   RelativeTime: ({ value }: { value: string }) => <time>{value}</time>,
   registerForm: (resource: string, Component: React.ComponentType<Record<string, unknown>>) => ({ resource, Component }),
   useTrashActions: () => [{ id: "trash", label: "Move to trash" }, { id: "restore", label: "Restore" }],
+  useResourceView: () => ({ state: { filter: {} }, baseFilter: {} }),
+  useToast: () => ({ danger: vi.fn() }),
 }));
 
-vi.mock("@angee/metadata", () => ({
+vi.mock("@angee/metadata", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@angee/metadata")>(),
   useModelMetadata: () => null,
+  useResourceInvalidates: () => [],
 }));
 
-const sender = { id: "hdl-1", display_name: "Billing Desk", value: "billing@example.test", party_link_confirmed: false, party: null };
+const sender = vi.hoisted(() => ({ id: "hdl-1", display_name: "Billing Desk", value: "billing@example.test", party_link_confirmed: false, party: null, avatar: null }));
 
 vi.mock("@angee/parties", () => ({
   senderDisplayName: (sender: { display_name?: string; value?: string } | null, fallback = "") =>
     sender?.display_name || sender?.value || fallback,
+  senderAvatarUrl: () => undefined,
 }));
 
-vi.mock("@angee/refine", () => ({
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@angee/refine")>(),
   useAuthoredQuery: () => ({
     data: { messages: [{
       id: "msg-1",
@@ -151,11 +158,11 @@ describe("MessagesPage", () => {
     }
   });
 
-  test("ThreadsPage selects the schema-owned channel kind without a vendor relation", () => {
+  test("ThreadsPage shows the channel by its own label without a vendor relation", () => {
     render(<ThreadsPage />);
     expect(pageMocks.resourceProps?.resource).toBe("messaging.Thread");
-    const channelColumn = pageMocks.columns.find((column) => column.header === "threads.channelType");
-    expect(channelColumn?.field).toBe("channel.kind");
+    const channelColumn = pageMocks.columns.find((column) => column.header === "threads.channel");
+    expect(channelColumn?.field).toBe("channel");
     expect(pageMocks.columns.some((column) => column.field.startsWith("channel.vendor"))).toBe(false);
   });
 
@@ -163,7 +170,7 @@ describe("MessagesPage", () => {
     render(<messageForm.Component resource="messaging.Message" id="msg-1" readOnly />);
 
     expect(pageMocks.fields).toEqual(expect.arrayContaining([
-      "title", "status", "platform", "direction", "external_id",
+      "title", "status", "platform", "direction",
     ]));
     // The reader shows the sender and the date, so the envelope does not repeat them.
     expect(pageMocks.fields).not.toContain("sender");

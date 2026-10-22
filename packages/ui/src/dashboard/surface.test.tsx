@@ -8,7 +8,7 @@ import { BUILTIN_DASHBOARD_WIDGET_KINDS } from "./kinds";
 import { DashboardSurface, visibleDashboardSnapshot } from "./surface";
 import { AppRuntimeProvider } from "../runtime/runtime";
 import { createRouteHref } from "../runtime/route-href";
-import type { ReactElement, ReactNode } from "react";
+import type { ReactElement } from "react";
 
 const state = vi.hoisted(() => ({
   allowed: [false], loading: false, error: null as Error | null,
@@ -22,7 +22,6 @@ vi.mock("../runtime/runtime", async (importOriginal) => ({
   ...await importOriginal<typeof import("../runtime/runtime")>(),
   useDashboardRegistry: () => registry,
 }));
-vi.mock("../page/PageHeader", () => ({ PageHeader: ({ actions }: { actions?: ReactNode }) => <header><h1>Dashboard</h1>{actions}</header> }));
 vi.mock("../views/form/use-unsaved-changes-navigation-guard", () => ({
   useUnsavedChangesNavigationGuard: () => {},
 }));
@@ -54,14 +53,14 @@ beforeEach(() => {
   state.loading = false;
   state.error = null;
   state.count = null;
-  loadState = { status: "absent", capabilities: { canEdit: false, canReset: false, canArchive: false } };
+  loadState = { status: "absent", capabilities: { canEdit: false, canReset: false, canTrash: false } };
   registry = {
     definitions: { overview: definition }, resourceDefaults: {},
     widgetKinds: Object.fromEntries(BUILTIN_DASHBOARD_WIDGET_KINDS.map((kind) => [kind.id, kind])),
     store: {
       useDashboard: () => ({
         state: loadState, reload: unused, save: unused, reset: unused,
-        createPersonal: unused, duplicate: unused, archive: unused,
+        createPersonal: unused, duplicate: unused,
       }),
       useCatalogue: () => ({ summaries: [], loading: false, error: null, refresh: () => {}, createPersonal: unused }),
       useWidgetVisibility: () => ({ allowed: state.allowed, loading: state.loading, error: state.error }),
@@ -161,11 +160,28 @@ test("a full-view action composes the outward link affordance", () => {
   expect(link.querySelector(".glyph")).toBeTruthy();
 });
 
+test("a hosted full-view link retains its preset and page scope", () => {
+  const linked: WidgetSpec = { ...widget, id: "inbox", visibility: undefined, kind: "resourceView",
+    data: { shape: "resourceView", preset: "tasks.inbox" }, options: { fullViewRoute: "tasks.list" } };
+  const filter = { company: { exact: "company-a" }, assessment: { exact: "risk" } };
+  render(<AppRuntimeProvider runtime={{
+    routeHref: createRouteHref([{ name: "tasks.list", path: "/tasks" }]),
+    resourceViews: { "tasks.inbox": { id: "tasks.inbox", label: "Inbox", resource: "projects.Task" } },
+  }}><DashboardSurface target={{ scope: "addon", key: "overview" }}
+    definition={{ ...definition, widgets: [linked] }} pageScope={{ resource: "projects.Task", filter }} />
+  </AppRuntimeProvider>);
+  const href = screen.getByRole("link", { name: "Open Incoming requests in full view" }).getAttribute("href")!;
+  const url = new URL(href, "https://example.test");
+  expect(url.pathname).toBe("/tasks");
+  expect(url.searchParams.get("preset")).toBe("tasks.inbox");
+  expect(JSON.parse(url.searchParams.get("filter")!)).toEqual(filter);
+});
+
 test("absent dashboards use the server edit answer and declaration can turn editing off", () => {
   renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }} />);
   expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
   cleanup();
-  loadState = { status: "absent", capabilities: { canEdit: true, canReset: false, canArchive: false } };
+  loadState = { status: "absent", capabilities: { canEdit: true, canReset: false, canTrash: false } };
   renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }} />);
   expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
   cleanup();
@@ -175,7 +191,7 @@ test("absent dashboards use the server edit answer and declaration can turn edit
 
 test("a changed declared revision replaces an older stored layout and still honors server capabilities", () => {
   loadState = {
-    status: "ready", capabilities: { canEdit: false, canReset: true, canArchive: false },
+    status: "ready", capabilities: { canEdit: false, canReset: true, canTrash: false },
     snapshot: { schemaVersion: 1, columns: 12, widgets: [{ ...widget, id: "stale", title: "Old widget", visibility: undefined }] },
     persistedId: "1", revision: 3, declarationRevision: "old", name: "Saved", description: "",
   };
@@ -189,7 +205,7 @@ test("a changed declared revision replaces an older stored layout and still hono
 test("the visible layout is the source for duplication when a declaration advances", () => {
   const stale = { schemaVersion: 1 as const, columns: 12, widgets: [{ ...widget, id: "stale" }] };
   const ready: Extract<DashboardLoadState, { status: "ready" }> = {
-    status: "ready", capabilities: { canEdit: true, canReset: true, canArchive: false },
+    status: "ready", capabilities: { canEdit: true, canReset: true, canTrash: false },
     snapshot: stale, persistedId: "1", revision: 3, declarationRevision: "old", name: "Saved",
   };
   const target = { scope: "addon" as const, key: "overview" };
@@ -206,7 +222,7 @@ test("a statistic uses its loaded value in the heading and body", () => {
   renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }}
     definition={{ ...definition, widgets: [stat] }} />);
   const article = screen.getByRole("heading", { name: "Total" }).closest("article")!;
-  expect(article.querySelector("header")?.textContent).toContain("Total· 5");
+  expect(within(article).getByRole("heading", { name: "Total" }).parentElement?.textContent).toContain("Total· 5");
   expect(article.querySelector("dd")?.textContent).toBe("0");
   expect(article.querySelector("number-flow-react")).toBeNull();
 });
@@ -214,7 +230,7 @@ test("a statistic uses its loaded value in the heading and body", () => {
 test("an undeclared fallback does not replace a personal saved layout", () => {
   const saved = { schemaVersion: 1 as const, columns: 12, widgets: [{ ...widget, id: "saved", title: "Saved widget", visibility: undefined }] };
   loadState = {
-    status: "ready", capabilities: { canEdit: false, canReset: false, canArchive: false },
+    status: "ready", capabilities: { canEdit: false, canReset: false, canTrash: false },
     snapshot: saved, persistedId: "1", revision: 2, declarationRevision: "", name: "Personal",
   };
   renderDashboard(<DashboardSurface target={{ scope: "personal", id: "1" }} fallbackSnapshot={{
@@ -222,4 +238,30 @@ test("an undeclared fallback does not replace a personal saved layout", () => {
   }} />);
   expect(screen.getByRole("heading", { name: "Saved widget" })).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "Fallback widget" })).toBeNull();
+});
+
+
+test("dashboard pages compose the native display header with subtitle and actions", () => {
+  renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }}
+    headerDensity="comfortable" headingLevel={1} subtitle="Understand what needs attention."
+    headerActions={<a href="/new">Add records</a>} />);
+  expect(screen.getByRole("heading", { level: 1, name: "Overview" })).toBeTruthy();
+  expect(screen.getByText("Understand what needs attention.")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Add records" }).getAttribute("href")).toBe("/new");
+});
+
+
+test("summary and grid share the native page body scroller below the fixed header", () => {
+  renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }}
+    toolbar={<div data-testid="summary">Summary metrics</div>} />);
+  const body = screen.getByTestId("summary").parentElement!;
+  expect(body.className).toContain("overflow-auto");
+  expect(body.className).toContain("p-0");
+  expect(body.contains(screen.getByRole("heading", { name: "Overview" }))).toBe(false);
+  const widget = screen.getByRole("heading", { name: "Shared work" }).closest("article")!;
+  expect(body.contains(widget)).toBe(true);
+  const layout = widget.parentElement!.parentElement!;
+  expect(layout.className).toContain("p-4");
+  expect(layout.className).not.toContain("overflow-auto");
+  expect(layout.className).not.toContain("flex-1");
 });

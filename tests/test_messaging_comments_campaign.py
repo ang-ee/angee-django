@@ -6,7 +6,7 @@ import pytest
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.messaging.backends import ParsedThread
-from angee.messaging.testing.models import Handle, Message, Part, ThreadAttachment, ThreadNotification, TrackingValue
+from angee.messaging.testing.models import Handle, Message, Part, ThreadAttachment, ThreadNotification
 from tests.chatterdemo.models import ChatterDoc
 from tests.messaging_campaign import comment_record as comment_record
 from tests.messaging_campaign import make_user
@@ -15,50 +15,45 @@ from tests.test_messaging import channel as channel
 
 
 @pytest.mark.parametrize("kind", list(Message.MessageKind))
-@pytest.mark.parametrize("tracked", [False, True])
-def test_only_untracked_comments_can_be_deleted_through_projection_and_locked_owner(comment_record, kind, tracked):
+def test_only_comments_can_be_deleted_through_projection_and_locked_owner(comment_record, kind):
     case = comment_record
     with system_context(reason="test.comments.kind"):
         attachment = ThreadAttachment.objects.ensure_for_record(case.record)
         message = Message.objects.create(thread=attachment.thread, message_type=kind,
                                          direction="internal", created_by=case.author,
                                          sender=Handle.objects.for_user(case.author))
-        if tracked:
-            TrackingValue.objects.create(message=message, field_name="status")
-    allowed = kind == Message.MessageKind.COMMENT and not tracked
+    allowed = kind == Message.MessageKind.COMMENT
     with actor_context(case.writer):
         assert message.can_delete(post_access=True, moderate_access=True, actor_id=case.writer.pk) is allowed
         if allowed:
             case.record.message_unlink(message)
         else:
-            with pytest.raises(ValueError, match="comment|tracking"):
+            with pytest.raises(ValueError, match="comment"):
                 case.record.message_unlink(message)
             # The manager repeats the invariant under its row lock.
-            with pytest.raises(ValueError, match="comment|tracking"):
+            with pytest.raises(ValueError, match="comment"):
                 Message.objects.unlink_from_thread(message, thread=attachment.thread)
     assert Message._base_manager.filter(pk=message.pk).exists() is not allowed
 
 
 @pytest.mark.parametrize("verb", ["edit", "delete"])
-def test_comment_writes_refresh_stale_tracking_projection_under_lock(comment_record, verb):
-    """Tracking added after a list read still blocks the owning mutation."""
+def test_comment_writes_refresh_stale_message_kind_under_lock(comment_record, verb):
+    """A retained kind assigned after a list read still blocks the owning mutation."""
 
     case = comment_record
     with actor_context(case.author):
-        message = case.record.message_post("Before tracking")
-    with system_context(reason="test.comments.stale_tracking"):
-        message = Message.objects.annotate(
-            _has_tracking_values=Message.has_tracking_values_expression(),
-        ).get(pk=message.pk)
+        message = case.record.message_post("Before retained kind")
+    with system_context(reason="test.comments.stale_kind"):
+        message = Message.objects.get(pk=message.pk)
         assert message.content_edit_error() is None
         assert message.delete_error() is None
-        TrackingValue.objects.create(message=message, field_name="status")
-    with actor_context(case.writer), pytest.raises(ValueError, match="tracking values"):
+        Message._base_manager.filter(pk=message.pk).update(message_type="notification")
+    with actor_context(case.writer), pytest.raises(ValueError, match="Only comment messages"):
         if verb == "edit":
             case.record.message_update_content(message, body="Must be refused")
         else:
             case.record.message_unlink(message)
-    assert Message._base_manager.get(pk=message.pk).preview == "Before tracking"
+    assert Message._base_manager.get(pk=message.pk).preview == "Before retained kind"
 
 
 @pytest.mark.parametrize("seat", ["author", "peer", "writer", "outsider"])
@@ -187,17 +182,17 @@ def test_webform_accessor_keeps_claimed_email_unverified_and_returns_a_copy():
 
 
 @pytest.mark.parametrize("operation", ["edit", "delete"])
-def test_record_moderator_cannot_change_comment_with_tracking_hidden_from_generic_scope(comment_record, operation):
+def test_record_moderator_cannot_change_retained_notification_hidden_from_generic_scope(comment_record, operation):
     case = comment_record
-    with system_context(reason="test.comments.tracking-retention"):
+    with system_context(reason="test.comments.notification-retention"):
         attachment = ThreadAttachment.objects.ensure_for_record(case.record)
         message = Message.objects.create(thread=attachment.thread, message_type="comment",
                                          direction="internal", created_by=case.author)
-        TrackingValue.objects.create(message=message, field_name="status")
+        Message._base_manager.filter(pk=message.pk).update(message_type="notification")
     with actor_context(case.writer):
         assert case.record.can_moderate()
         assert not message.has_access("read")
-        with pytest.raises(ValueError, match="tracking"):
+        with pytest.raises(ValueError, match="Only comment messages"):
             if operation == "edit":
                 Message.objects.update_content(message, body="Tampered", edited_by_id=case.writer.pk)
             else:

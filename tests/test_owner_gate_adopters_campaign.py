@@ -1,4 +1,4 @@
-"""Every ownership adopter gates raw owner writes, including the queue parent."""
+"""Every ownership adopter gates raw owner writes, including the queue and person parents."""
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,11 +6,14 @@ from types import SimpleNamespace
 import pytest
 from django.apps import apps
 from rebac import PermissionDenied, actor_context, system_context
+from rebac.roles import grant as grant_role
 
-from angee.base.checks import check_ownership
-from angee.messaging.testing.models import Person, Thread
+from angee.agents.testing.models import Agent
+from angee.checks import check_ownership
+from angee.messaging.testing.models import Folder, Party, Person, Thread
 from angee.projects.testing.models import Project, Queue, Task
 from angee.spaces.testing.models import Group, Membership
+from angee.workflows.testing.models import Workflow
 from tests.conftest import Backend, Drive, File, Vault
 from tests.messaging_campaign import grant
 from tests.t3_campaign import campaign_access as campaign_access
@@ -18,7 +21,9 @@ from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema
 
 
-@pytest.fixture(params=(Vault, Thread, Group, Queue, Project, Task, Drive, File))
+@pytest.fixture(
+    params=(Vault, Thread, Group, Queue, Project, Task, Drive, File, Agent, Workflow, Party, Person, Folder)
+)
 def owned_record(request, campaign_access, campaign_user):
     owner, writer, replacement = (campaign_user(role) for role in ("owner", "writer", "replacement"))
     model = request.param
@@ -39,10 +44,14 @@ def owned_record(request, campaign_access, campaign_user):
             )
         else:
             values = {"owner": owner, "created_by": owner}
-            if model in (Vault, Group, Queue):
+            if model in (Vault, Group, Queue, Agent, Workflow, Folder):
                 values["name"] = "Owned row"
+            if model in (Party, Person):
+                values["display_name"] = "Owned row"
             if model is Queue:
                 values["key"] = "GATE"
+            if model is Workflow:
+                values["key"] = "owner-gate"
             if model in (Task, Project):
                 values["title"] = "Owned row"
             row = model.objects.create(**values)
@@ -94,6 +103,20 @@ def test_transfer_uses_owner_authority_and_preserves_attribution(owned_record):
     assert persisted.owner_id is None and persisted.created_by_id == author
 
 
+def test_an_agent_installed_without_a_user_is_claimed_only_through_transfer(campaign_access, campaign_user):
+    """Install-time loads have no acting user; a platform administrator claims the agent afterwards."""
+    admin, stranger = campaign_user("admin"), campaign_user("stranger")
+    with system_context(reason="tests.t3.agent_install"):
+        grant_role(actor=admin, role="angee/role:admin")
+        agent = Agent.objects.create(name="Installed agent")
+    assert agent.owner_id is None and agent.created_by_id is None
+    with actor_context(stranger), pytest.raises(PermissionDenied):
+        Agent._base_manager.get(pk=agent.pk).transfer_ownership(stranger)
+    with actor_context(admin):
+        Agent._base_manager.get(pk=agent.pk).transfer_ownership(admin)
+    assert Agent._base_manager.get(pk=agent.pk).owner_id == admin.pk
+
+
 @pytest.mark.parametrize("mutation", ("missing", "row_write", "widened"))
 def test_e027_names_the_real_adopter_and_expected_transfer_gate(owned_record, tmp_path, monkeypatch, mutation):
     row, _, _, _ = owned_record
@@ -104,7 +127,7 @@ def test_e027_names_the_real_adopter_and_expected_transfer_gate(owned_record, tm
     # No inline JSON occurs after the field gate; delimit on a standalone closing brace.
     end = original.index("\n}", start)
     definition = original[start:end]
-    gate = "group->transfer" if model is Queue else "transfer"
+    gate = {Queue: "group->transfer", Person: "party->transfer"}.get(model, "transfer")
     old = f"permission write__owner = {gate}"
     assert old in definition
     new = {

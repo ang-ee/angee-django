@@ -4,13 +4,15 @@
 // data, the mutations, and any streaming runtime around these. Tokens + `tone` follow
 // the base design system; copy routes through `useUiT`.
 
-import { useEffect, useId, useRef, useState, type HTMLAttributes, type ReactElement, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type HTMLAttributes, type ReactElement, type ReactNode } from "react";
 
 import { Glyph } from "../../chrome/Glyph";
-import { RelativeTime } from "../../fragments/RelativeTime";
+import { AbsoluteTime } from "../../fragments/AbsoluteTime";
 import { useUiT } from "../../i18n";
 import { cn } from "../../lib/cn";
+import { formatNumber } from "../../lib/format-number";
 import { formatSize, isImageMime, normaliseMime } from "../../preview/model";
+import { formatDayLabel, type DateFormatValue } from "../../widgets/date-format";
 import { Chip, type ChipTone } from "../../ui/chip";
 import { Kbd } from "../../ui/kbd";
 import { textRoleVariants } from "../../ui/text";
@@ -36,7 +38,9 @@ export interface MessageFeedProps extends HTMLAttributes<HTMLUListElement> {
  *  Deliberately non-virtualized: a record chatter thread is bounded (≤50 messages),
  *  so a plain list is correct and cheaper than a virtualizer. An unbounded surface
  *  (a channel conversation transcript) must wire `useVirtualizer` instead — the
- *  `@tanstack/react-virtual` owner — rather than reaching for this feed. */
+ *  `@tanstack/react-virtual` owner — rather than reaching for this feed.
+ * @kind fragment
+ */
 export function MessageFeed({ label, busy, className, children, ...props }: MessageFeedProps): ReactElement {
   return (
     <ul
@@ -50,21 +54,25 @@ export function MessageFeed({ label, busy, className, children, ...props }: Mess
   );
 }
 
-export interface MessageDaySeparatorProps extends HTMLAttributes<HTMLElement> {
+export interface MessageDaySeparatorProps extends Omit<HTMLAttributes<HTMLElement>, "children"> {
   /** Use div within a virtualized message row; feeds default to a list item. */
   as?: "li" | "div";
-  /** The day label (e.g. "Today", "12 May"). The consumer owns the date formatting. */
-  children: ReactNode;
+  /** The day the bucket holds; the separator labels it through `formatDayLabel`. */
+  date: DateFormatValue;
+  /** The calendar zone that decides the day, when the feed is read in one. */
+  timeZone?: string;
 }
 
 /** An optional day-group separator row: a centered, muted label dividing the feed into
- *  day buckets. Pure presentation — the consumer decides where the day boundaries fall
- *  and formats the label. */
-export function MessageDaySeparator({ children, className, as: Component = "li", ...props }: MessageDaySeparatorProps): ReactElement {
+ *  day buckets. The consumer decides where the day boundaries fall; the label is the
+ *  shared day label (Today, Yesterday, a weekday, then the date).
+ * @kind fragment
+ */
+export function MessageDaySeparator({ date, timeZone, className, as: Component = "li", ...props }: MessageDaySeparatorProps): ReactElement {
   return (
     <Component className={cn("flex items-center gap-2 py-1", className)} {...props}>
       <span className="h-px flex-1 bg-border-subtle" aria-hidden />
-      <span className={cn(textRoleVariants({ role: "caption" }), "shrink-0")}>{children}</span>
+      <span className={cn(textRoleVariants({ role: "caption" }), "shrink-0")}>{formatDayLabel(date, { timeZone })}</span>
       <span className="h-px flex-1 bg-border-subtle" aria-hidden />
     </Component>
   );
@@ -79,15 +87,15 @@ export interface MessageRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "ti
   avatar?: ReactNode;
   /** The author name / handle. */
   author?: ReactNode;
-  /** The message timestamp — rendered as a `RelativeTime` in the row header. */
+  /** The message timestamp — rendered absolutely (the clock time, full stamp as tooltip) in the row header. */
   timestamp?: Date | string | null;
+  /** Calendar time zone for the timestamp label. */
+  timeZone?: string;
   /** Inline meta beside the timestamp (e.g. an "edited" marker). */
   meta?: ReactNode;
   /** A direction/channel affordance (e.g. a "Email · Inbound" tag) for interleaved
    *  transport messages, rendered in the header row. */
   channel?: ReactNode;
-  /** A tracking-values table slot (a field-change `dl`/table for audit messages). */
-  tracking?: ReactNode;
   /** An attachments slot (download chips / thumbnails). */
   attachments?: ReactNode;
   /** A reactions slot — compose `ReactionBar`. */
@@ -99,17 +107,19 @@ export interface MessageRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "ti
 }
 
 /** One feed message: a leading avatar column and a content column carrying the author,
- *  an optional channel/direction affordance, a `RelativeTime`, the body, and the
- *  tracking / attachments / reactions / actions slots. The row is a `group`, so a
+ *  an optional channel/direction affordance, an `AbsoluteTime`, the body, and the
+ *  attachments / reactions / actions slots. The row is a `group`, so a
  *  `MessageActions` slot reveals on hover/focus. Pure presentation — every slot is
- *  composed by the consumer. */
+ *  composed by the consumer.
+ * @kind fragment
+ */
 export function MessageRow({
   avatar,
   author,
   timestamp,
+  timeZone,
   meta,
   channel,
-  tracking,
   attachments,
   reactions,
   actions,
@@ -126,13 +136,12 @@ export function MessageRow({
             {author ? <span className="text-13 font-medium text-fg">{author}</span> : null}
             {channel}
             {timestamp ? (
-              <RelativeTime value={timestamp} className={textRoleVariants({ role: "caption" })} />
+              <AbsoluteTime value={timestamp} timeZone={timeZone} className={textRoleVariants({ role: "caption" })} />
             ) : null}
             {meta ? <span className={textRoleVariants({ role: "caption" })}>{meta}</span> : null}
           </div>
         ) : null}
         {children ? <div className="mt-0.5 whitespace-pre-wrap text-13 leading-relaxed text-fg">{children}</div> : null}
-        {tracking ? <div className="mt-2">{tracking}</div> : null}
         {attachments ? <div className="mt-2 space-y-1">{attachments}</div> : null}
         {reactions ? <div className="mt-2">{reactions}</div> : null}
         {actions}
@@ -186,13 +195,18 @@ export interface MessagePartsViewProps extends Omit<HTMLAttributes<HTMLDivElemen
   renderPartActions?: (part: MessagePart) => ReactNode;
   /** Reveal and scroll an addressed part, including folded quoted content. */
   activePartId?: string | null;
+  /** Opens a file part in the consumer's preview. Without it, an attachment chip
+   *  opens the file URL in a new tab, where the server's disposition decides
+   *  whether the browser shows the file or downloads it. */
   onPreviewFile?: (part: MessagePart) => void;
 }
 
 /** Renders a message's ordered MIME/JMAP part list: title/body/quote/signature text
  *  plus inline images and attachment chips. Presentation only — consumers pass the
  *  already ordered parts and a file-URL resolver; no transport or GraphQL detail lives
- *  here. */
+ *  here.
+ * @kind fragment
+ */
 export function MessagePartsView({
   parts,
   resolveFileUrl = defaultMessagePartFileUrl,
@@ -223,9 +237,14 @@ export function MessagePartsView({
   );
 }
 
-/** MIME multipart/alternative children are ordered from least to most faithful.
- * Render only the last representation this view supports, while retaining files
- * and every part outside an alternative container. */
+const TEXT_BODY_ROLES = new Set(["TITLE", "BODY", "QUOTED", "SIGNATURE"]);
+
+/** One body, rendered once. MIME multipart/alternative children are ordered from least
+ * to most faithful: only the last representation this view supports renders. An ingest
+ * that stores the plain text as paragraph parts beside the HTML body is the same case
+ * with a different parent: when an HTML body is present, its plain-text siblings
+ * (title, body, quote, signature) are the lesser representation and stay hidden; files
+ * and every non-text part keep rendering. */
 function preferredMessageParts(parts: readonly MessagePart[]): readonly MessagePart[] {
   const preferredByParent = new Map<string, MessagePart>();
   for (const part of parts) {
@@ -235,11 +254,16 @@ function preferredMessageParts(parts: readonly MessagePart[]): readonly MessageP
     const mime = normaliseMime(part.type);
     if (mime === "text/plain" || mime === "text/html") preferredByParent.set(parentId, part);
   }
-  if (preferredByParent.size === 0) return parts;
+  const hasHtmlBody = parts.some((part) =>
+    normaliseMime(part.type) === "text/html" && (part.fragment?.text ?? "").trim() !== ""
+      && !part.file && TEXT_BODY_ROLES.has(normalisePartValue(part.role) || "BODY"));
   return parts.filter((part) => {
-    const parentId = part.parent?.id;
-    if (!parentId || !preferredByParent.has(parentId) || !(part.fragment?.text ?? "").trim()) return true;
+    const text = (part.fragment?.text ?? "").trim();
     const mime = normaliseMime(part.type);
+    if (hasHtmlBody && mime === "text/plain" && text && !part.file
+      && TEXT_BODY_ROLES.has(normalisePartValue(part.role) || "BODY")) return false;
+    const parentId = part.parent?.id;
+    if (!parentId || !preferredByParent.has(parentId) || !text) return true;
     return (mime !== "text/plain" && mime !== "text/html") || preferredByParent.get(parentId) === part;
   });
 }
@@ -260,7 +284,7 @@ interface MessagePartItemProps {
 function MessagePartItem({ part, allParts, resolveFileUrl, actions, active, onPreviewFile }: MessagePartItemProps): ReactElement | null {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current?.scrollIntoView?.({ block: "center" }); }, [active]);
-  return <div ref={ref} data-part-id={part.id} className={cn("space-y-1", active && "rounded-6 bg-brand-soft p-2 ring-1 ring-brand/30")}>
+  return <div ref={ref} data-part-id={part.id} className={cn("space-y-1", active && "selected rounded-6 p-2 ring-1 ring-brand/30")}>
     <MessagePartContent part={part} allParts={allParts} resolveFileUrl={resolveFileUrl} active={active} onPreviewFile={onPreviewFile} />
     {actions}
   </div>;
@@ -284,7 +308,7 @@ function MessagePartContent({ part, allParts, resolveFileUrl, active, onPreviewF
   if (role === "TITLE") {
     return (
       <div className="space-y-1">
-        {hasText ? <h3 className="text-14 font-semibold leading-snug text-current">{text}</h3> : null}
+        {hasText ? <h3 className="text-sm font-semibold leading-snug text-current">{text}</h3> : null}
         {fileNode}
       </div>
     );
@@ -321,15 +345,16 @@ function QuotedMessagePart({ content, file, active }: QuotedMessagePartProps): R
   if (!content && !file) return null;
   return (
     <div className="space-y-1">
-      <button
-        type="button"
+      <Chip
+        tone="inherit"
+        size="md"
         aria-expanded={open}
         aria-controls={contentId}
         onClick={() => setOpen((current) => !current)}
-        className="inline-flex h-6 items-center rounded-full border border-current/20 px-2 text-2xs font-medium text-current opacity-75 outline-none transition-opacity hover:opacity-100 focus-visible:focus-ring"
+        className="opacity-75 hover:opacity-100"
       >
         {open ? t("message.parts.hideQuoted") : t("message.parts.showQuoted")}
-      </button>
+      </Chip>
       {open ? (
         <blockquote id={contentId} className="space-y-1 border-l-2 border-current pl-3 text-current opacity-75">
           {content}
@@ -425,7 +450,7 @@ function renderMessagePartFile(
   if (onPreviewFile) return <button type="button" className="inline-flex max-w-full rounded-6 focus-visible:focus-ring" onClick={() => onPreviewFile(part)}>{chip}</button>;
   if (!url) return chip;
   return (
-    <a href={url} download={file.filename ?? undefined} className="inline-flex max-w-full align-middle">
+    <a href={url} target="_blank" rel="noreferrer" className="inline-flex max-w-full align-middle">
       {chip}
     </a>
   );
@@ -494,9 +519,10 @@ export interface ReactionGroupCopy {
 
 /**
  * Projects transport reaction groups into the presentational `ReactionBar`
- * contract. The caller supplies translated copy formatters so the shared owner
- * keeps the name/no-name grammar while every product routes wording through its
- * own statically discoverable i18n keys.
+ * contract with the copy the caller supplies; `useReactionGroups` is the rendered
+ * surface's entry and supplies the design system's own copy.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function reactionsFromGroups(
   groups: readonly ReactionGroup[],
@@ -514,7 +540,7 @@ export function reactionsFromGroups(
         names.length === 0
           ? copy.count({
               reaction: group.reaction,
-              count: group.count.toLocaleString(),
+              count: formatNumber(group.count),
             })
           : copy.named({
               reaction: group.reaction,
@@ -522,6 +548,20 @@ export function reactionsFromGroups(
             }),
     };
   });
+}
+
+/**
+ * The reaction groups of one message as `ReactionBar` reactions, titled with the
+ * shared copy ("👍 reaction, 2" / "👍 by Ada, Grace"): the one owner of that grammar.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function useReactionGroups(groups: readonly ReactionGroup[]): Reaction[] {
+  const t = useUiT();
+  return useMemo(() => reactionsFromGroups(groups, {
+    count: (values) => t("message.reaction.groupCount", values),
+    named: (values) => t("message.reaction.groupNamed", values),
+  }), [groups, t]);
 }
 
 interface ReactionPillProps {
@@ -546,23 +586,19 @@ function ReactionPill({ reaction, count, active, title, disabled, onToggle }: Re
       ? t("message.reaction.pill", { reaction })
       : t("message.reaction.pillCount", { reaction, count });
   return (
-    <button
-      type="button"
+    <Chip
+      size="md"
+      tone="muted"
+      variant="surface"
+      pressed={Boolean(active)}
       disabled={disabled || !onToggle}
       title={title}
-      aria-pressed={active}
       aria-label={label}
       onClick={onToggle ? () => onToggle(reaction) : undefined}
-      className={cn(
-        "inline-flex h-7 items-center gap-1 rounded-full border px-2 text-12 outline-none transition-colors focus-visible:focus-ring disabled:opacity-60",
-        active
-          ? "border-brand bg-brand-soft text-brand-soft-text"
-          : "border-border-subtle bg-sheet-2 text-fg-muted hover:bg-inset hover:text-fg",
-      )}
     >
       <span aria-hidden="true">{reaction}</span>
-      {count === undefined ? null : <span aria-hidden="true">{count.toLocaleString()}</span>}
-    </button>
+      {count === undefined ? null : <span aria-hidden="true">{formatNumber(count)}</span>}
+    </Chip>
   );
 }
 
@@ -581,7 +617,9 @@ export interface ReactionBarProps {
 /** The reaction pills under a message: one toggle button per reaction group. Each pill
  *  carries an accessible name (`"👍 reaction, 3"`) so the glyph + count read correctly to
  *  assistive tech, and `aria-pressed` reflects the current user's own reaction. Pure
- *  presentation — the consumer owns the reaction mutation via `onToggle`. */
+ *  presentation — the consumer owns the reaction mutation via `onToggle`.
+ * @kind fragment
+ */
 export function ReactionBar({ reactions, onToggle, busy, label, className }: ReactionBarProps): ReactElement | null {
   if (reactions.length === 0) return null;
   return (
@@ -619,7 +657,9 @@ export interface ReactionPickerProps {
  *  one per offered emoji, each toggling the current user's reaction. Shares `ReactionPill`
  *  so the pill markup and the accessible-name convention never diverge from the bar — the
  *  consumer no longer hand-rolls a divergent pill. Pure presentation; the consumer owns the
- *  reaction mutation via `onToggle`. */
+ *  reaction mutation via `onToggle`.
+ * @kind fragment
+ */
 export function ReactionPicker({
   options,
   active,
@@ -658,7 +698,9 @@ export interface MessageActionsProps extends Omit<HTMLAttributes<HTMLDivElement>
 /** A presentational action row under a message (copy, reply, edit, …). Reveals on
  *  hover/focus of the enclosing `group` message and aligns per `align`. Transport-
  *  agnostic: the consumer composes plain buttons or a binding's action controls inside
- *  it. */
+ *  it.
+ * @kind fragment
+ */
 export function MessageActions({ align = "start", className, children, ...props }: MessageActionsProps): ReactElement {
   return (
     <div
@@ -691,7 +733,9 @@ export interface MessageComposerProps extends HTMLAttributes<HTMLDivElement> {
 
 /** Composer frame: an optional attachment chip row, then an input slot (a textarea, or a
  *  binding's input primitive), above a footer row carrying the hint and the send/cancel
- *  actions. */
+ *  actions.
+ * @kind fragment
+ */
 export function MessageComposer({
   input,
   actions,
@@ -725,7 +769,9 @@ export interface MessageComposerHintProps {
 }
 
 /** The keyboard-shortcut affordance under a composer; defaults to "⏎ send · ⇧⏎ newline".
- *  Pure presentation — the real keybindings live with the input the composer renders. */
+ *  Pure presentation — the real keybindings live with the input the composer renders.
+ * @owner MessageComposer
+ */
 export function MessageComposerHint({ children, className, submitKey = "enter" }: MessageComposerHintProps): ReactElement {
   const t = useUiT();
   const modEnter = submitKey === "mod-enter";
@@ -747,7 +793,9 @@ export function MessageComposerHint({ children, className, submitKey = "enter" }
 }
 
 /** The shared textarea class for a message composer input — lets a consumer style a
- *  binding's input primitive like the default `<Textarea>`. */
+ *  binding's input primitive like the default `<Textarea>`.
+ * @kind token
+ */
 export const messageComposerInputClassName = textareaVariants({ size: "md", resize: "none" });
 
 export interface MessageAttachmentChipProps {
@@ -766,7 +814,9 @@ export interface MessageAttachmentChipProps {
 /** A composer attachment chip: a leading icon, a truncated label, and an optional remove
  *  control. Presentation only — the consumer supplies the icon glyph and wires the remove
  *  binding (or a plain button) into the `remove` slot; an `onClick` makes the label a
- *  button (the view-record chip uses it to open an inspector). */
+ *  button (the view-record chip uses it to open an inspector).
+ * @kind fragment
+ */
 export function MessageAttachmentChip({
   icon,
   children,

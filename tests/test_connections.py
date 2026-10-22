@@ -13,15 +13,14 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import IntegrityError, connection, connections, transaction
-from django.test.utils import CaptureQueriesContext, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from rebac import system_context, to_object_ref, to_subject_ref
-from rebac.models import active_relationship_model
+from rebac import actor_context, system_context
 
 from angee.integrate.credentials import CredentialKind, StaticTokenCredentialHandler
 from angee.integrate.models import AccountStatus
 from angee.integrate.oauth.client import OAuthClientProtocol
-from angee.integrate.oauth.errors import TOKEN_EXCHANGE_FAILED, OAuthFlowError
+from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, TOKEN_EXCHANGE_FAILED, OAuthFlowError
 from tests.conftest import (
     Credential,
     ExternalAccount,
@@ -171,6 +170,7 @@ def test_oauth_protocol_discovers_missing_authorize_endpoint() -> None:
         state="state-token",
         redirect_uri="https://app.example/callback",
         scopes=("profile",),
+        code_challenge="challenge",
     )
 
     parsed = parse.urlsplit(url)
@@ -179,6 +179,25 @@ def test_oauth_protocol_discovers_missing_authorize_endpoint() -> None:
         "https://provider.example/oauth/authorize"
     )
     assert dict(parse.parse_qsl(parsed.query))["client_id"] == "client-id"
+
+
+def test_authorization_flow_needs_pkce_or_a_client_secret() -> None:
+    """With neither, nothing authenticates the code exchange: refuse before the redirect."""
+
+    endpoints = {
+        "slug": "provider", "display_name": "Provider", "client_id": "client-id",
+        "authorize_endpoint": "https://provider.example/oauth/authorize",
+        "token_endpoint": "https://provider.example/oauth/token",
+    }
+    flow = {"state": "state-token", "redirect_uri": "https://app.example/callback", "scopes": ("profile",)}
+    for refused in (OAuthClient(**endpoints, supports_pkce=False), OAuthClient(**endpoints)):
+        with pytest.raises(OAuthFlowError) as error:
+            OAuthClientProtocol(refused).authorize_url(**flow)
+        assert error.value.code == CLIENT_NOT_CONFIGURED
+    public = OAuthClientProtocol(OAuthClient(**endpoints)).authorize_url(**flow, code_challenge="challenge")
+    assert dict(parse.parse_qsl(parse.urlsplit(public).query))["code_challenge"] == "challenge"
+    confidential = OAuthClient(**endpoints, supports_pkce=False, client_secret="secret")
+    assert "code_challenge" not in OAuthClientProtocol(confidential).authorize_url(**flow)
 
 
 def test_oauth_client_claim_accessors_support_dotted_paths() -> None:
@@ -251,7 +270,7 @@ def test_connection_managers_are_idempotent_and_delegate_static_token_material()
         assert second_account.identity_claims == {"sub": "ext-123"}
         assert second_account.status == AccountStatus.REVOKED
         assert second_account.last_error == "needs review"
-        assert _owner_tuple_exists(user, second_account)
+        assert second_account.owner_id == user.pk
 
         expires_at = timezone.now() + timedelta(hours=1)
         first_credential = Credential.objects.upsert_for_user(
@@ -271,7 +290,6 @@ def test_connection_managers_are_idempotent_and_delegate_static_token_material()
 
         assert second_credential.pk == first_credential.pk
         assert Credential.objects.count() == 1
-        assert not _owner_tuple_exists(user, second_credential)
         assert Credential.objects.with_actor(user).filter(pk=second_credential.pk).exists()
         assert not Credential.objects.with_actor(other_user).filter(pk=second_credential.pk).exists()
 
@@ -329,8 +347,7 @@ def test_connection_managers_authorize_their_own_writes() -> None:
 
     assert account.pk is not None
     assert credential.pk is not None
-    assert _owner_tuple_exists(user, account)
-    assert not _owner_tuple_exists(user, credential)
+    assert account.owner_id == user.pk
     assert Credential.objects.with_actor(user).filter(pk=credential.pk).exists()
 
 
@@ -470,32 +487,28 @@ def test_oauth_credential_requires_a_provider_at_the_database() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")
-def test_external_account_owner_lookup_uses_active_relationship_storage() -> None:
-    """owner_for() works with REBAC's registry-backed relationship model."""
+def test_link_owns_only_the_named_user_and_claims_an_unowned_identity() -> None:
+    """Linking never implies the acting user; a named user claims only an unowned account."""
 
-    user = get_user_model().objects.create_user(
-        username="registry-owner",
-        email="registry@example.com",
-    )
+    user_model = get_user_model()
+    actor = user_model.objects.create_user(username="link-actor", email="actor@example.com")
+    user = user_model.objects.create_user(username="link-owner", email="owner@example.com")
+    other = user_model.objects.create_user(username="link-other", email="other@example.com")
     call_command("rebac", "sync", verbosity=0)
     with system_context(reason="test setup"):
         oauth_client = OAuthClient.objects.create(
-            slug="registry",
-            display_name="Registry prod",
-            client_id="registry-client",
+            slug="claim",
+            display_name="Claim prod",
+            client_id="claim-client",
             client_secret="secret",
         )
 
-    account = ExternalAccount.objects.link(
-        oauth_client,
-        "registry-sub",
-        owner=user,
-        email="registry@example.com",
-    )
+    with actor_context(actor):
+        account = ExternalAccount.objects.link(oauth_client, "claim-sub")
+    assert account.created_by_id == actor.pk and account.owner_id is None
 
-    assert _owner_tuple_exists(user, account)
-    assert ExternalAccount.objects.owner_for(account) == user
+    assert ExternalAccount.objects.link(oauth_client, "claim-sub", owner=user).owner_id == user.pk
+    assert ExternalAccount.objects.link(oauth_client, "claim-sub", owner=other).owner_id == user.pk
 
 
 @pytest.mark.django_db(transaction=True)
@@ -903,22 +916,3 @@ def _expiring_oauth_credential(user: Any, *, slug: str, material: dict[str, Any]
         )
         credential.refresh_from_db()
     return credential
-
-
-def _owner_tuple_exists(owner: Any, resource: Any) -> bool:
-    """Return whether ``owner`` has the stored owner relation on ``resource``."""
-
-    owner_ref = to_subject_ref(owner)
-    resource_ref = to_object_ref(resource)
-    return (
-        active_relationship_model()
-        .objects.filter(
-            resource_type=resource_ref.resource_type,
-            resource_id=resource_ref.resource_id,
-            relation="owner",
-            subject_type=owner_ref.subject_type,
-            subject_id=owner_ref.subject_id,
-            optional_subject_relation=owner_ref.optional_relation,
-        )
-        .exists()
-    )

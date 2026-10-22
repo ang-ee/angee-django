@@ -53,26 +53,28 @@ def test_record_read_reaches_only_chatter_and_compiles_dependents(messaging_acce
 
     with system_context(reason="tests.messaging.record_arm"):
         users = [apps.get_model("iam", "User").objects.create_user(username=f"record-arm-{i}") for i in range(5)]
-        reader, writer, owner, outsider, other_reader = users
+        reader, writer, manager, outsider, other_reader = users
         record = ChatterDoc.objects.create(title="Record A")
         other = ChatterDoc.objects.create(title="Record B")
         write_relationships([
             RelationshipTuple(to_object_ref(record), role, to_subject_ref(actor))
-            for role, actor in (("reader", reader), ("writer", writer), ("owner", owner))
+            for role, actor in (("reader", reader), ("writer", writer), ("manager", manager))
         ] + [RelationshipTuple(to_object_ref(other), "reader", to_subject_ref(other_reader))])
-        attachment = ThreadAttachment.objects.for_record(record)
+        # A record's creation is a history line, not a message: the chatter thread, its
+        # attachment and the first message exist from the record's first use.
         chatter = record.message_thread()
+        attachment = ThreadAttachment.objects.for_record(record)
         other_chatter = other.message_thread()
         source = Thread.objects.create()
         ThreadAttachment.objects.create(
             thread=source, content_type_id=attachment.content_type_id, object_id=record.pk, role="source",
         )
         unattached = Thread.objects.create()
-        message = Message._base_manager.filter(thread=chatter).first()
+        message = record.message_log("A note on record A")
 
     for actor in (*users, AnonymousUser()):
         subject = to_subject_ref(actor)
-        expected = actor in (reader, writer, owner)
+        expected = actor in (reader, writer, manager)
         for row, readable in (
             (chatter, expected), (other_chatter, actor == other_reader), (source, False), (unattached, False),
             (attachment, expected), (message, expected),
@@ -92,7 +94,7 @@ def test_record_read_reaches_only_chatter_and_compiles_dependents(messaging_acce
         assert scoped.filter(pk=chatter.pk).exists()
         assert not scoped.filter(pk=source.pk).exists()
         # These paths include attachment -> thread -> task -> project -> group.
-        for name in ("ThreadFollower", "ThreadNotification", "ThreadActivity", "Part", "Reaction"):
+        for name in ("ThreadFollower", "ThreadNotification", "Part", "Reaction"):
             model = apps.get_model("messaging", name)
             sql = model.objects.with_actor(reader).scoped().query.sql_with_params()[0]
             assert "SELECT" in sql, (messaging_access_schema, name)

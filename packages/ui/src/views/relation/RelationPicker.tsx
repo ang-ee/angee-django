@@ -121,6 +121,7 @@ export interface RelationPickerProps extends Pick<RelationFieldProps, "presentat
  * name, an authored create action can expose that same form directly, the pencil
  * edits the selected record, and the arrow opens its detail page — all without
  * leaving the parent surface.
+ * @kind surface
  */
 export function RelationPicker({
   controlRef,

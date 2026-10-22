@@ -16,6 +16,9 @@ import {
 
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const splitPanesVariants = tv({
   slots: {
     group: "min-h-0 min-w-0 flex-1 overflow-hidden",
@@ -76,6 +79,10 @@ export type SplitPanesProps = Omit<
 // persistence is simply skipped when no browser storage is reachable. Exported
 // as the one owner of that guard so other layout state (the drawer open/closed
 // flags) reaches localStorage the same way.
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function layoutStorage(): Storage | null {
   if (typeof window === "undefined") return null;
   try {
@@ -108,15 +115,24 @@ function PersistentGroup({
     storage,
     ...(panelIds != null ? { panelIds } : {}),
   });
+  // A layout with a collapsed pane is a moment's state (a page folded the aside, a drag hit
+  // the edge), never the remembered one: the stored layout always reopens every pane.
+  const remember = React.useCallback<NonNullable<ResizableGroupProps["onLayoutChanged"]>>((...args) => {
+    if (Object.values(args[0]).some((size) => size === 0)) return;
+    onLayoutChanged(...args);
+  }, [onLayoutChanged]);
   return (
     <ResizableGroup
       defaultLayout={defaultLayout}
-      onLayoutChanged={persistLayout ? onLayoutChanged : undefined}
+      onLayoutChanged={persistLayout ? remember : undefined}
       {...groupProps}
     />
   );
 }
 
+/**
+ * @owner SplitPane
+ */
 export const SplitPanes = React.forwardRef<HTMLDivElement, SplitPanesProps>(
   function SplitPanes(
     {
@@ -177,6 +193,9 @@ function asPercent(
   return typeof size === "number" ? `${size}` : size;
 }
 
+/**
+ * @kind primitive
+ */
 export const SplitPane = React.forwardRef<HTMLDivElement, SplitPaneProps>(
   function SplitPane(
     { className, defaultSize, minSize, maxSize, collapsedSize, ...props },
@@ -207,6 +226,9 @@ export type SplitPaneHandleProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner SplitPane
+ */
 export const SplitPaneHandle = React.forwardRef<
   HTMLDivElement,
   SplitPaneHandleProps
@@ -265,6 +287,7 @@ export type CollapsiblePane = {
  * a reactive `collapsed` flag, since `isCollapsed()` is non-reactive. Spread
  * `panelRef` and `onResize` onto a `<SplitPane collapsible>`; read `collapsed`
  * and call `toggle()`/`collapse()`/`expand()` from a sibling control.
+ * @owner SplitPanes
  */
 export function useCollapsiblePane(
   opts?: UseCollapsiblePaneOptions,

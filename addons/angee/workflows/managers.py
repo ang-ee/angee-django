@@ -3,42 +3,60 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
-from typing import Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
-from django.db import IntegrityError, OperationalError, connection, transaction
-from django.db.models import Count, Exists, F, Max, OuterRef, Q, Sum, Value, Window
+from django.db import DatabaseError, IntegrityError, OperationalError, connection, transaction
+from django.db.models import NOT_PROVIDED, Count, Exists, F, Max, OuterRef, Q, QuerySet, Sum, Value, Window
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now, RowNumber
 from pydantic import Field, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import actor_context, generic_target, system_context, to_subject_ref
+from rebac.errors import MissingActorError, NoActorResolvedError
 
-from angee.base.actors import actor_user_id
-from angee.base.evidence import EvidenceReference, readable_records
-from angee.base.fields import ModelLabelField
-from angee.base.identity import public_id_of
-from angee.base.mixins import AppendOnlyQuerySet, StaleRevisionError, require_revision
-from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
-from angee.base.serialization import canonical_json_sha256, strip_null_bytes
+from angee.actors import actor_user_id
+from angee.evidence import EvidenceReference, readable_records
+from angee.fields import ModelLabelField
 from angee.graphql.events import ChangeRelatedRecord
-from angee.graphql.publishing import publish_change
+from angee.graphql.publishing import changes_muted, mute_changes, publish_change
+from angee.identity import public_id_of
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
-from angee.workflows.definition import MAP_BODY_SUFFIX, Body, Definition, DefinitionInvalid, Issue
+from angee.models import (
+    AngeeManager,
+    AngeeQuerySet,
+    AppendOnlyQuerySet,
+    StaleRevisionError,
+    require_revision,
+    row_lock_paths,
+)
+from angee.models.query import by_key
+from angee.serialization import canonical_json_sha256, strip_null_bytes
+from angee.signals import bulk_updated
+from angee.workflows.definition import (
+    MAP_BODY_SUFFIX,
+    Body,
+    Definition,
+    DefinitionInvalid,
+    Issue,
+    SourcedWorkflowExtension,
+)
+from angee.workflows.signals import run_stopping
 from angee.workflows.states import (
     CANCELED_OUTCOME,
+    INTERRUPTED_OUTCOME,
     AttemptResult,
+    NodeKey,
     RunOrigin,
     RunRelation,
     RunStatus,
@@ -49,11 +67,15 @@ from angee.workflows.steps import StepMode, Superseded
 from angee.workflows.subjects import RunSubject
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 
+if TYPE_CHECKING:
+    from angee.workflows.models import StepAttempt, StepRecord, StepRun, StepWatch, Workflow, WorkflowRun
+
 logger = logging.getLogger(__name__)
 RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
 PRUNE_BATCH_LIMIT = 25
 """Prune examines at most 25 roots per tick; blocked roots retry after one day."""
 _held_runs: ContextVar[set[int] | None] = ContextVar("workflows_held_runs", default=None)
+_BLOCK_ACTION: TypeAdapter[NodeKey] = TypeAdapter(NodeKey)
 
 
 def _sqlstate(error: Exception) -> str | None:
@@ -123,22 +145,39 @@ _CONFIGURATIONS: TypeAdapter[list[StepConfiguration]] = TypeAdapter(
 )
 
 
-class WorkflowManager(AngeeManager):
+class WorkflowManager[T: Workflow](AngeeManager[T]):
     """Own the editable document and the immutable publication sequence."""
 
     def _resolved_document(self, draft: Any, actor: Any) -> tuple[Any, list[Issue]]:
-        """Snapshot each awaited contract through the author's workflow read scope."""
+        """Snapshot awaited contracts and config references through the publishing actor."""
         try:
             definition = Definition.model_validate(draft)
         except PydanticValidationError:
             return draft, []
         issues = self._resolve_awaits(list(definition.declarations()), actor)
-        return definition.model_dump(mode="json", by_alias=True), issues
+        document = definition.model_dump(mode="json", by_alias=True)
+        for key, path, relation, item in definition.config_references():
+            try:
+                with actor_context(actor) if actor is not None else nullcontext():
+                    resolved = apps.get_model("resources", "Resource").objects.resolve_config_reference(
+                        item, relation=relation,
+                    )
+                # Relation paths index both objects (str) and arrays (int).
+                parent: Any = document
+                for part in path[:-1]:
+                    parent = parent[part]
+                parent[path[-1]] = resolved
+            except (
+                ValueError, LookupError, ValidationError, ImproperlyConfigured,
+                PermissionDenied, MissingActorError, NoActorResolvedError,
+            ) as error:
+                issues.append(Issue(node=key, path=list(path), code="config_reference", message=str(error)))
+        return document, issues
 
     def _resolve_awaits(self, declarations: list[tuple[str, Body, list[str | int]]], actor: Any) -> list[Issue]:
         """Resolve all awaited contracts in one read-scoped query, with per-node failures."""
         issues: list[Issue] = []
-        readable = read_scoped_queryset(self.model, actor) if actor is not None else system_queryset(self.model)
+        readable = self.model.objects.with_actor(actor) if actor is not None else self.model.system_queryset()
         awaited = [(key, node, path) for key, node, path in declarations if node.step == "await_run"]
         expects_keys = {
             expects for _, node, _ in awaited
@@ -155,7 +194,7 @@ class WorkflowManager(AngeeManager):
             if not isinstance(expects, str) or not expects:
                 continue
             expected = expected_by_key.get(expects)
-            if expected is None:
+            if expected is None or expected.published is None:
                 issues.append(Issue(
                     node=key, path=[*path, "config", "expects"], code="expected_workflow",
                     message=f"Expected workflow {expects!r} must be readable and published.",
@@ -193,7 +232,7 @@ class WorkflowManager(AngeeManager):
 
     def _published_dependents(self, workflow: Any, actor: Any) -> tuple[str, ...]:
         """Name readable published parents whose frozen contract names this workflow."""
-        readable = read_scoped_queryset(self.model, actor) if actor is not None else system_queryset(self.model)
+        readable = self.model.objects.with_actor(actor) if actor is not None else self.model.system_queryset()
         parents = readable.exclude(pk=workflow.pk).filter(published__isnull=False).values_list(
             "key", "published__document",
         )
@@ -222,11 +261,12 @@ class WorkflowManager(AngeeManager):
         with transaction.atomic():
             with system_context(reason="workflows.save_identity locate target"):
                 workflow = self.filter(key=key).first()
-            actor = (workflow or self.model()).require_access("write" if workflow else "create", actor)
+            identity = {"name": name, "description": description, "subject_model": subject_model}
+            # A new workflow asks create about the row get_or_create would insert, the candidate its save checks.
+            candidate = workflow or self.model(key=key, **identity)
+            actor = candidate.require_access("write" if workflow else "create", actor)
             with actor_context(actor) if actor is not None else nullcontext():
-                workflow, _ = self.get_or_create(
-                    key=key, defaults={"name": name, "description": description, "subject_model": subject_model},
-                )
+                workflow, _ = self.get_or_create(key=key, defaults=identity)
                 workflow.require_access("write", actor)
                 workflow = self.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
                 if workflow.subject_model != subject_model and workflow.versions.exists():
@@ -243,7 +283,7 @@ class WorkflowManager(AngeeManager):
         *,
         draft: Any,
         expected_revision: int,
-        node_keys: dict[str, str] | None = None,
+        node_keys: object = None,
         layout: Any = None,
         actor: Any = None,
     ) -> DraftSave:
@@ -269,15 +309,39 @@ class WorkflowManager(AngeeManager):
                 raise StaleRevisionError(expected_revision, current)
         return DraftSave(expected_revision + 1, issues)
 
-    def publish(self, workflow: Any, *, expected_revision: int, actor: Any = None) -> PublishResult:
-        """Publish a frozen document and report readable dependents to republish."""
+    def publish(
+        self,
+        workflow: Any,
+        *,
+        expected_revision: int,
+        actor: Any = None,
+        extensions: Sequence[SourcedWorkflowExtension] | None = None,
+    ) -> PublishResult:
+        """Publish as a user, or install without an actor; report readable dependents."""
 
         actor = workflow.require_access("write", actor)
+        publisher_id = actor_user_id(to_subject_ref(actor)) if actor is not None else None
+        if actor is not None and publisher_id is None:
+            raise ValidationError("Workflow publication requires a user-backed actor.")
         with transaction.atomic():
             with system_context(reason="workflows.publish"):
                 current = self.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
             require_revision(expected=expected_revision, current=current.draft_revision, minimum=0)
-            resolved, resolution_issues = self._resolved_document(current.draft, actor)
+            published = current.published
+            if extensions is None:
+                extensions = (
+                    published.definition.retained_extensions()
+                    if published is not None
+                    else ()
+                )
+            source = current.draft
+            try:
+                source = Definition.model_validate(source).with_extensions(extensions).model_dump(
+                    mode="json", by_alias=True,
+                )
+            except PydanticValidationError:
+                pass
+            resolved, resolution_issues = self._resolved_document(source, actor)
             definition, issues = Definition.check(resolved, subject_model=current.subject_model)
             issues.extend(resolution_issues)
             if issues:
@@ -285,8 +349,8 @@ class WorkflowManager(AngeeManager):
             assert definition is not None
             document = definition.published_document()
             digest = canonical_json_sha256(document)
-            if current.published_id and current.published.content_hash == digest:
-                version = current.published
+            if published is not None and published.content_hash == digest:
+                version = published
             else:
                 with system_context(reason="workflows.publish"):
                     number = current.versions.aggregate(number=Max("number"))["number"] or 0
@@ -294,7 +358,7 @@ class WorkflowManager(AngeeManager):
                         number=number + 1,
                         document=document,
                         content_hash=digest,
-                        published_by_id=actor_user_id(to_subject_ref(actor)) if actor is not None else None,
+                        published_by_id=publisher_id,
                     )
                     self.filter(pk=current.pk).update(published=version, updated_at=Now())
             return PublishResult(version, self._published_dependents(current, actor))
@@ -310,6 +374,7 @@ class WorkflowManager(AngeeManager):
         publish: bool = True,
         layout: Any = None,
         actor: Any = None,
+        extensions: Sequence[SourcedWorkflowExtension] | None = (),
     ) -> Any:
         """Install a resource document through the same draft and publish verbs."""
 
@@ -329,44 +394,56 @@ class WorkflowManager(AngeeManager):
                 actor=actor,
             )
             if publish:
-                self.publish(workflow, expected_revision=saved.revision, actor=actor)
+                self.publish(
+                    workflow,
+                    expected_revision=saved.revision,
+                    actor=actor,
+                    extensions=extensions,
+                )
+            elif extensions:
+                Definition.model_validate(draft).with_extensions(extensions)
             workflow.refresh_from_db()
             return workflow
 
 
-class WorkflowRunQuerySet(AngeeQuerySet):
+class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
     """Own run locks and the delivery obligation every lock holder acquires."""
 
     def for_subject(self, record: Any) -> Any:
         """Select the canonical subject without changing this queryset's read scope."""
-        return self.filter(**generic_target(record).lookups(self.model, "subject"))
+        return self.filter(self.model.record_filter(record))
 
     def about(self, records: Any, *, operations: tuple[str, ...] | None = None, ancestors: bool = True,
               limit: int | None = None) -> Any:
         """Runs that worked on readable records and all readable ancestors, oldest first."""
         if not isinstance(records, (list, tuple)):
             records = (records,)
-        subjects = Q(pk__in=[])
+        subject_filter = Q(pk__in=[])
         targets = Q(pk__in=[])
         evidence_model = apps.get_model("workflows", "StepRecord")
         for record in records:
-            target = generic_target(record)
-            targets |= Q(**target.lookups(evidence_model, "record"))
-            subjects |= Q(**target.lookups(self.model, "subject"))
-        links = system_queryset(evidence_model).filter(targets)
+            targets |= evidence_model.record_filter(record)
+            subject_filter |= self.model.record_filter(record)
+        links = evidence_model.system_queryset().filter(targets)
         if operations is not None:
             links = links.filter(operation__in=operations)
-        subjects = self.filter(subjects)
+        subjects: QuerySet[WorkflowRun, Mapping[str, object]] = self.filter(subject_filter).values("pk")
+        link_runs = links.values("run_id")
         if limit is not None:
-            subjects = subjects.annotate(_rank=Window(RowNumber(),
+            subjects = self.filter(subject_filter).alias(_rank=Window(RowNumber(),
                 partition_by=["subject_content_type_id", "subject_object_id"], order_by=["-created_at", "-pk"])
-            ).filter(_rank__lte=limit)
-            links = links.values("content_type_id", "object_id", "run_id").annotate(
+            ).filter(_rank__lte=limit).values("pk")
+            link_runs = links.values("content_type_id", "object_id", "run_id").annotate(
                 _created=Max("run__created_at"),
             ).annotate(_rank=Window(RowNumber(), partition_by=["content_type_id", "object_id"],
-                                   order_by=[F("_created").desc(), F("run_id").desc()])).filter(_rank__lte=limit)
+                                   order_by=[F("_created").desc(), F("run_id").desc()])
+            ).filter(_rank__lte=limit).values("run_id")
+        if not ancestors:
+            return self.filter(Q(pk__in=subjects) | Q(pk__in=link_runs)).order_by(
+                "created_at", "pk",
+            ).distinct()
         ids = set(subjects.values_list("pk", flat=True))
-        ids.update(self.filter(pk__in=links.values("run_id")).values_list("pk", flat=True))
+        ids.update(self.filter(pk__in=link_runs).values_list("pk", flat=True))
         frontier = ids.copy() if ancestors else set()
         while frontier:
             parents = set(self.filter(pk__in=frontier).exclude(parent_step=None)
@@ -374,6 +451,48 @@ class WorkflowRunQuerySet(AngeeQuerySet):
             frontier = set(self.filter(pk__in=parents).values_list("pk", flat=True)) - ids
             ids.update(frontier)
         return self.filter(pk__in=ids).order_by("created_at", "pk").distinct()
+
+    def working_on(self, record: Any) -> Any:
+        """Unfinished runs whose subject is ``record`` or that created or changed it.
+
+        Deleting the record cancels these; their own ancestors are not included.
+        """
+        return self.exclude(status__in=RunStatus.terminal_values()).about(
+            record, operations=("created", "changed"), ancestors=False,
+        )
+
+    def blocking(self, record: Any, action: str) -> Any:
+        """Return open runs whose pinned definition blocks an action on ``record``."""
+
+        try:
+            action = _BLOCK_ACTION.validate_python(action, strict=True)
+        except PydanticValidationError as error:
+            raise ValidationError({"action": "A workflow action must be a stable lowercase identifier."}) from error
+        target = generic_target(record)
+        model = target.content_type.model_class()
+        if model is None:
+            raise ValidationError("The blocked record model is no longer installed.")
+        token = f"{model._meta.label}:{action}"
+        # A block is policy: it holds whether or not the caller may read the run (an import's
+        # run belongs to the workflow's service user, not to the clerk posting the bill), so the
+        # open runs and their pinned definitions are read under the policy's own system scope.
+        version_model = apps.get_model("workflows", "WorkflowVersion")
+        with system_context(reason="workflows.blocking_policy"):
+            runs = (
+                self.model.objects.system_context(reason="workflows.blocking_policy")
+                .exclude(status__in=RunStatus.terminal_values())
+                .about(record, ancestors=False)
+            )
+            version_ids = set(runs.order_by().values_list("version_id", flat=True))
+            blocked = [
+                version_id
+                for version_id, document in version_model.system_queryset().filter(pk__in=version_ids)
+                .values_list("pk", "document")
+                if token in Definition.model_validate(document).blocks
+            ]
+            return self.model.system_queryset().filter(
+                pk__in=list(runs.filter(version_id__in=blocked).order_by().values_list("pk", flat=True)),
+            )
 
     @contextmanager
     def hold(self, run_id: int, *, skip_locked: bool = False, timeout: timedelta | None = None) -> Iterator[Any]:
@@ -443,7 +562,7 @@ class WorkflowRunQuerySet(AngeeQuerySet):
         )
 
 
-class StepRecordQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
+class StepRecordQuerySet[T: StepRecord](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
     """Keep retained admission references immutable until their run is pruned."""
 
     def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
@@ -459,7 +578,10 @@ class StepRecordQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
 StepRecordManager = AngeeManager.from_queryset(StepRecordQuerySet)
 
 
-class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # type: ignore[misc]
+_WorkflowRunManagerBase = AngeeManager.from_queryset(WorkflowRunQuerySet)
+
+
+class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
     """Own run admission, cancellation and retained row updates under the run lock."""
 
     def start(
@@ -503,8 +625,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             workflow.refresh_from_db()
             workflow.validate_subject(subject)
             target = generic_target(subject) if subject is not None else None
+            principal_id = actor_user_id(to_subject_ref(actor))
             identity = dict(
-                run_as_id=actor_user_id(to_subject_ref(actor)),
+                run_as_id=principal_id,
                 subject_content_type_id=target.content_type.pk if target is not None else None,
                 subject_object_id=target.object_id if target is not None else None,
                 parent_step_id=parent_step.pk if parent_step is not None else None,
@@ -532,17 +655,17 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             version = version or workflow.published
             if version is None or version.workflow_id != workflow.pk:
                 raise ValidationError("A published version of this workflow is required.")
-            principal_workflow = system_queryset(apps.get_model("workflows", "Workflow")).filter(
-                user_id=identity["run_as_id"],
-            ).first()
-            if principal_workflow is not None and version.published_by_id is not None:
-                publisher = version.published_by
-                granted = system_queryset(apps.get_model("workflows", "Trigger")).filter(
+            principal_workflow = (
+                apps.get_model("workflows", "Workflow").system_queryset().filter(user_id=principal_id).first()
+                if principal_id is not None else None
+            )
+            if principal_workflow is not None:
+                granted = apps.get_model("workflows", "Trigger").system_queryset().filter(
                     workflow=principal_workflow, enabled=True,
                 ).order_by("pk").values_list("granted_targets", flat=True)
-                for values in granted:
-                    for value in values:
-                        TriggerGrantTarget.from_stored(value).require_publisher_access(publisher, version)
+                version.require_publisher_access(
+                    TriggerGrantTarget.from_stored(value) for values in granted for value in values
+                )
             normalized = version.definition.validate_input(payload)
             references = list(version.definition.input_evidence(normalized))
             if subject is not None:
@@ -579,8 +702,8 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         model = run.subject_model_class
         if model is None or not issubclass(model, RunSubject):
             return None
-        subject = lock_if_supported(
-            system_queryset(model).filter(pk=run.subject_object_id), no_key=True,
+        subject = model._default_manager.filter(pk=run.subject_object_id).select_for_update(
+            no_key=True, of=row_lock_paths(model),
         ).first()
         if subject is None and required:
             raise ValidationError("The workflow run subject no longer exists.")
@@ -594,6 +717,13 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             finished_at=Now() if status in RunStatus.terminal_values() else None, updated_at=Now(),
         )
         if status in RunStatus.terminal_values() and not run.is_terminal:
+            # The sender owns this savepoint: a receiver that poisons the
+            # transaction rolls back its cleanup, never the terminal write.
+            try:
+                with transaction.atomic():
+                    run_stopping.send_robust(sender=self.model, run=run)
+            except DatabaseError:
+                logger.exception("Workflow run cleanup left the transaction unusable; its cleanup was rolled back.")
             decisions = apps.get_model("decisions", "Decision").objects
             with system_context(reason="workflows.terminal.withdraw"):
                 for decision in decisions.filter(requesting_steps__run=run).open().order_by("pk"):
@@ -606,6 +736,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 
                 transaction.on_commit(cancel_children, robust=True)
             enqueue_task("workflows.wake_run", kwargs={"run_id": run.pk}, robust=True)
+        with _record_failure("run change publication"):
+            run.refresh_from_db()
+            publish_change(run, action="update", update_fields=None)
 
     def cancel_abandoned(self, run_id: int) -> None:
         """Close unawaited owned children after the parent's terminal write commits."""
@@ -619,25 +752,48 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 with self.hold_owned(child_id) as children:
                     self._cancel_locked(children, actor=parent.run_as)
 
+    def reap_interrupted(self) -> int:
+        """Settle runs left running across a process restart and close their work."""
+
+        interrupted = 0
+        with system_context(reason="workflows.reap_interrupted"):
+            candidates = list(self.filter(status=RunStatus.RUNNING).order_by("-pk").values_list("pk", flat=True))
+            for run_id in candidates:
+                with self.hold(run_id, skip_locked=True) as run:
+                    if run is None or run.status != RunStatus.RUNNING:
+                        continue
+                    self._write_state(
+                        run,
+                        status=str(RunStatus.INTERRUPTED),
+                        outcome=INTERRUPTED_OUTCOME,
+                        output={},
+                        actor=run.run_as,
+                    )
+                    run.step_runs.cancel_open()
+                    interrupted += 1
+        return interrupted
+
     def _cancel_locked(self, runs: list[Any], *, actor: Any) -> Cancellation:
         """Cancel open rows in an already-held tree without rewriting terminal facts."""
         steps = children = 0
         canceled = bool(runs and not runs[0].is_terminal)
         for index, run in enumerate(runs):
-            if run.stopped_at is None and (not run.is_terminal or run.status == RunStatus.FAILED):
+            stopped = run.stopped_at is None and (not run.is_terminal or run.status == RunStatus.FAILED)
+            if stopped:
                 self.filter(pk=run.pk).update(stopped_at=Now(), updated_at=Now())
                 run.refresh_from_db(fields=["stopped_at"])
-                publish_change(run, action="update", update_fields=["stopped_at"])
-            changed = run.step_runs.cancel_open()
-            steps += changed
-            if not run.is_terminal:
+            transitioning = not run.is_terminal
+            if transitioning:
                 children += bool(index)
                 self._write_state(run, status=str(RunStatus.CANCELED), outcome=CANCELED_OUTCOME,
                                   output={}, actor=actor)
-                changed = 1
-            if changed:
-                run.refresh_from_db()
-                publish_change(run, action="update", update_fields=None)
+            # Cleanup locks sessions and turns before cancel_open deletes their watches.
+            changed = run.step_runs.cancel_open()
+            steps += changed
+            if not transitioning and (changed or stopped):
+                with _record_failure("run change publication"):
+                    run.refresh_from_db()
+                    publish_change(run, action="update", update_fields=None)
         return Cancellation(canceled, steps, children)
 
     def cancel_on_commit(self, run: Any, actor: Any) -> None:
@@ -656,7 +812,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
     def cancel(self, run: Any, *, actor: Any = None, timeout: timedelta | None = timedelta(seconds=5)) -> Cancellation:
         """Cancel open rows after DATABASE work releases its lock, retaining terminal run facts."""
 
-        if not system_queryset(self.model).filter(pk=run.pk).exists():
+        if not self.model.system_queryset().filter(pk=run.pk).exists():
             return Cancellation(False, 0)
         actor = run.require_access("write", actor)
         try:
@@ -677,7 +833,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     raise ValidationError("Only terminal runs can be reprocessed.")
                 workflow = retained.version.workflow
                 model = retained.subject_model_class
-                subject = system_queryset(model).get(pk=retained.subject_object_id) if model is not None else None
+                subject = model.system_queryset().get(pk=retained.subject_object_id) if model is not None else None
             return self.start(workflow, actor=actor, subject=subject, input=retained.input, reprocess_of=retained)
 
     def reopen(self, run: Any) -> None:
@@ -685,7 +841,6 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         if (subject := self._lock_subject(run)) is not None:
             subject.admit_run(run)
         self._write_state(run, status=str(RunStatus.RUNNING), outcome="", output={})
-        run.refresh_from_db()
         from angee.workflows.runner import runner
 
         runner.advance(run)
@@ -729,7 +884,19 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         return count
 
 
-class StepWatchManager(AngeeManager):
+def unfinished_run_merge_guard(record: Any) -> str | None:
+    """Refuse merging away a record an unfinished run works on (an ``ANGEE_MERGE_GUARDS`` entry).
+
+    Retiring the merged record would cancel those runs while their watches move to
+    the record that is kept.
+    """
+    with system_context(reason="workflows.unfinished_run_merge_guard"):
+        if not apps.get_model("workflows", "WorkflowRun").objects.working_on(record).exists():
+            return None
+    return f"Workflow runs still working on {record} must finish or be canceled first."
+
+
+class StepWatchManager[T: StepWatch](AngeeManager[T]):
     """Own transactional observation, durable change capture and wait admission."""
 
     def register(self, step_run: Any, records: tuple[Any, ...], *, actor: Any) -> None:
@@ -741,17 +908,20 @@ class StepWatchManager(AngeeManager):
         """
         targets = {}
         for record in records:
-            TriggerSource.check_watch_model(type(record))
+            TriggerSource.check_model(type(record))
             if record.pk is None:
                 raise PermissionDenied("Read access to a saved watched record is required.")
             target = generic_target(record)
             targets[(target.content_type.pk, target.object_id)] = target
         with system_context(reason="workflows.watch_register"):
             for _, target in sorted(targets.items()):
-                rows = system_queryset(target.content_type.model_class()).filter(pk=target.object_id)
-                lock_if_supported(rows, no_key=True).get()
+                model = target.content_type.model_class()
+                assert model is not None
+                model._default_manager.filter(pk=target.object_id).select_for_update(
+                    no_key=True, of=row_lock_paths(model),
+                ).get()
             for record in records:
-                readable = read_scoped_queryset(type(record), actor)
+                readable = type(record).objects.with_actor(actor)
                 if not readable.filter(pk=record.pk).exists():
                     raise PermissionDenied("Read access to a saved watched record is required.")
             for target in targets.values():
@@ -767,16 +937,40 @@ class StepWatchManager(AngeeManager):
         return cast(WaitingKind, WaitingKind.TIME)
 
     def record_change(self, record: Any) -> None:
-        """Mark committed observation obligations while shared dispatch holds the record lock."""
-        target = generic_target(record)
-        with system_context(reason="workflows.watch_capture"):
-            if self.filter(**target.lookups(self.model, "record")).update(pending=True):
-                payload = {"content_type_id": target.content_type.pk, "object_id": target.object_id}
-                enqueue_task("workflows.wake_records", kwargs=payload, robust=True)
+        """Capture under the record lock, isolating failure from the source write."""
+        try:
+            try:
+                target = generic_target(record)
+            except ValueError:
+                return  # Unsaved or untyped records cannot have watches.
+            with transaction.atomic(), system_context(reason="workflows.watch_capture"):
+                model = target.content_type.model_class()
+                assert model is not None
+                rows = model._default_manager.filter(pk=target.object_id)
+                if rows.select_for_update(no_key=True, of=row_lock_paths(model)).first() is None:
+                    return
+                if self.filter(**target.lookups(self.model, "record")).update(pending=True):
+                    payload = {"content_type_id": target.content_type.pk, "object_id": target.object_id}
+                    enqueue_task("workflows.wake_records", kwargs=payload, robust=True)
+        except Exception:
+            logger.exception("Workflow watch capture failed.")
 
 
-class StepRunQuerySet(AngeeQuerySet):
+class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
     """Own conditional step transitions and database-clock candidate scopes."""
+
+    def _write_transition(self, **values: Any) -> int:
+        """Publish affected targets after a conditional state write, retaining its fence."""
+
+        with transaction.atomic(using=self.db):
+            keys = list(self.lock_if_supported().order_by("pk").values_list("pk", flat=True))
+            changed = sum(batch.update(**values) for batch in by_key(self, keys))
+            if changed and not changes_muted():
+                rows = self.model._base_manager.using(self.db).defer("input", "output", "state", "notes")
+                for batch in by_key(rows, keys):
+                    bulk_updated.send_robust(sender=self.model, instances=tuple(batch),
+                                            update_fields=frozenset(values), using=self.db)
+            return changed
 
     def nodes(self) -> Any:
         """Read declared nodes with bounded map progress, excluding item rows."""
@@ -846,6 +1040,7 @@ class StepRunQuerySet(AngeeQuerySet):
         )
         deadline = timedelta(seconds=settings.CELERY_TASK_TIME_LIMIT)
         until = attempt.started_at + deadline
+        running = False
         try:
             with transaction.atomic():
                 step = step_run.step
@@ -856,21 +1051,28 @@ class StepRunQuerySet(AngeeQuerySet):
                     step_run.node_key, step_run.run.input, step_run.run.step_runs.all(),
                     map_index=step_run.map_index,
                 )
-                self.filter(pk=step_run.pk).update(input=step_run.input)
+                self.filter(pk=step_run.pk).to_running(deadline, until=until, input=step_run.input)
+            running = True
         finally:
-            self.filter(pk=step_run.pk).to_running(deadline, until=until)
+            # Failed input preparation rolls back before this durable fence,
+            # allowing the caller to retain the attempt's failure.
+            if not running:
+                self.filter(pk=step_run.pk).to_running(deadline, until=until)
             step_run.refresh_from_db(fields=[
                 "status", "deadline_at", "waiting_kind", "wake_at", "wait_reason", "dispatches",
                 "retry_acknowledged_by_id",
             ])
         return attempt
 
-    def to_running(self, timeout: timedelta, *, until: datetime) -> int:
-        """Finish a claim with one deadline write after class/input resolution."""
-        return self.filter(status=StepRunStatus.READY).update(
-            **(self._cleared_wait() | {"deadline_at": Least(Now() + timeout, until)}),
-            status=StepRunStatus.RUNNING, dispatches=0, retry_acknowledged_by_id=None,
-        )
+    def to_running(self, timeout: timedelta, *, until: datetime, input: Any = NOT_PROVIDED) -> int:
+        """Persist the running fence and, when prepared, its input in one write."""
+        values = self._cleared_wait() | {
+            "deadline_at": Least(Now() + timeout, until), "status": StepRunStatus.RUNNING,
+            "dispatches": 0, "retry_acknowledged_by_id": None,
+        }
+        if input is not NOT_PROVIDED:
+            values["input"] = input
+        return self.filter(status=StepRunStatus.READY).update(**values)
 
     def extend_deadline(self, timeout: timedelta, *, until: datetime) -> int:
         """Extend a fenced claim from database time within the worker's IO budget."""
@@ -894,7 +1096,8 @@ class StepRunQuerySet(AngeeQuerySet):
 
     def _record_settlement(self, step_run: Any, attempt: Any) -> None:
         """Persist one eligible claim and close its attempt through shared policy."""
-        changed = attempt.settlement.transition(self, step_run, attempt)
+        with mute_changes():
+            changed = attempt.settlement.transition(self, step_run, attempt)
         if changed != 1:
             raise Superseded
         if not attempt.settlement.keeps_watches:
@@ -903,7 +1106,9 @@ class StepRunQuerySet(AngeeQuerySet):
             attempt.result, attempt.diagnostic_error or attempt.error, attempt.stacktrace,
         ) != 1:
             raise Superseded
-        publish_change(step_run, action="update", update_fields=None)
+        current = self.model._base_manager.using(self.db).defer("input", "output", "state", "notes").get(pk=step_run.pk)
+        bulk_updated.send_robust(sender=self.model, instances=(current,),
+                                update_fields=frozenset(("status", "decision_id")), using=self.db)
 
     def to_waiting(
         self, *, until: Any = None, state: Any = None, retries: int | None = None,
@@ -912,7 +1117,7 @@ class StepRunQuerySet(AngeeQuerySet):
         """Park running rows, preserving retries unless a failure consumed one."""
         if kind == WaitingKind.ERROR and not reason:
             raise ValueError("An operator wait requires its reason.")
-        return self.filter(status__in=(StepRunStatus.RUNNING, StepRunStatus.READY)).update(
+        return self.filter(status__in=(StepRunStatus.RUNNING, StepRunStatus.READY))._write_transition(
             **(self._cleared_wait() | {
                 "waiting_kind": kind, "wake_at": until, "wait_reason": reason if kind == WaitingKind.ERROR else "",
             }),
@@ -926,7 +1131,9 @@ class StepRunQuerySet(AngeeQuerySet):
         acknowledged_by_id: Any = None, next_page: bool = False, reset_dispatches: bool = False,
     ) -> int:
         """Wake waiting rows and clear wait/deadline state; delivery is commit-owned."""
-        return self.filter(status__in=(StepRunStatus.WAITING, StepRunStatus.FAILED, StepRunStatus.RUNNING)).update(
+        return self.filter(
+            status__in=(StepRunStatus.WAITING, StepRunStatus.FAILED, StepRunStatus.RUNNING),
+        )._write_transition(
             **self._cleared_wait(), status=StepRunStatus.READY, dispatched_at=Now(),
             state=F("state") if state is None else state, retries=0 if reset_retries else F("retries"),
             outcome="", output={}, retry_acknowledged_by_id=acknowledged_by_id,
@@ -938,10 +1145,10 @@ class StepRunQuerySet(AngeeQuerySet):
         """Cancel open steps while leaving their questions and answers intact."""
         opened = self.exclude(status__in=StepRunStatus.terminal_values())
         list(opened.order_by("pk").lock_if_supported(no_key=True).values_list("pk", flat=True))
-        attempts = self.model._meta.get_field("attempts").related_model
+        attempts = apps.get_model("workflows", "StepAttempt")
         attempts.objects.filter(step_run__in=opened).close(AttemptResult.SUPERSEDED)
         apps.get_model("workflows", "StepWatch").objects.filter(step_run__in=opened).delete()
-        return opened.update(
+        return opened._write_transition(
             **self._cleared_wait(),
             status=StepRunStatus.CANCELED,
         )
@@ -954,14 +1161,14 @@ class StepRunQuerySet(AngeeQuerySet):
     def changed_records(self, *, content_type_id: int | None = None, object_id: Any = None) -> Any:
         """Select each live waiter once, even when several watched records changed."""
         watches = apps.get_model("workflows", "StepWatch")
-        pending = system_queryset(watches).filter(step_run_id=OuterRef("pk"), pending=True)
+        pending = watches.system_queryset().filter(step_run_id=OuterRef("pk"), pending=True)
         if content_type_id is not None:
             pending = pending.filter(content_type_id=content_type_id, object_id=object_id)
         return self.filter(Exists(pending), status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RECORD)
 
     def answered_decisions(self) -> Any:
         """Wake an answered step without joining its question into the row lock."""
-        answered = system_queryset(apps.get_model("decisions", "Decision")).filter(
+        answered = apps.get_model("decisions", "Decision").system_queryset().filter(
             pk=OuterRef("decision_id"),
         ).exclude(verdict__isnull=True)
         return self.filter(
@@ -984,7 +1191,7 @@ class StepRunQuerySet(AngeeQuerySet):
         return self.filter(status=StepRunStatus.RUNNING, deadline_at__lt=Now())
 
 
-class StepAttemptQuerySet(AngeeQuerySet):
+class StepAttemptQuerySet[T: StepAttempt](AngeeQuerySet[T]):
     """Own the one-way closure of an execution attempt."""
 
     def close(self, result: str, error: str = "", stacktrace: str = "") -> int:
@@ -1016,7 +1223,10 @@ def _database_timeout(timeout: timedelta, *, setting: str = "statement_timeout")
                 cursor.execute("SELECT set_config(%s, %s, true)", [setting, previous])
 
 
-class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: ignore[misc]
+_StepRunManagerBase = AngeeManager.from_queryset(StepRunQuerySet)
+
+
+class StepRunManager[T: StepRun](_StepRunManagerBase[T]):
     """Own step row updates and operator retry under the run lock."""
 
     @cached_property

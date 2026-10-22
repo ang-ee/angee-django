@@ -25,6 +25,14 @@
       "import": "./src/index.ts"
     },
     "./styles.css": "./src/styles/index.css",
+    "./catalog": {
+      "types": "./src/catalog.ts",
+      "import": "./src/catalog.ts"
+    },
+    "./tokens": {
+      "types": "./src/token-names.ts",
+      "import": "./src/token-names.ts"
+    },
     "./dashboard": {
       "types": "./src/dashboard/index.ts",
       "import": "./src/dashboard/index.ts"
@@ -381,10 +389,6 @@
       "types": "./src/views/form/json-schema.ts",
       "import": "./src/views/form/json-schema.ts"
     },
-    "./data/revisions": {
-      "types": "./src/data/revisions.ts",
-      "import": "./src/data/revisions.ts"
-    },
     "./data/errors": {
       "types": "./src/data/errors.ts",
       "import": "./src/data/errors.ts"
@@ -404,6 +408,14 @@
         "default": "./dist/index.js"
       },
       "./styles.css": "./dist/styles/index.css",
+      "./catalog": {
+        "types": "./dist/catalog.d.ts",
+        "default": "./dist/catalog.js"
+      },
+      "./tokens": {
+        "types": "./dist/token-names.d.ts",
+        "default": "./dist/token-names.js"
+      },
       "./dashboard": {
         "types": "./dist/dashboard/index.d.ts",
         "default": "./dist/dashboard/index.js"
@@ -751,10 +763,6 @@
       "./views/json-schema": {
         "types": "./dist/views/form/json-schema.d.ts",
         "default": "./dist/views/form/json-schema.js"
-      },
-      "./data/revisions": {
-        "types": "./dist/data/revisions.d.ts",
-        "default": "./dist/data/revisions.js"
       },
       "./data/errors": {
         "types": "./dist/data/errors.d.ts",

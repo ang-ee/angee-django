@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import dataclasses
 import re
+from datetime import date
+from decimal import Decimal
 
 import pytest
 import strawberry
@@ -190,6 +192,49 @@ def test_resource_metadata_projects_validated_record_search_fields() -> None:
     assert metadata.record_search_fields == ("friendly_label",)
     assert search_filter is not None
     assert "iContains" in search_filter.operators
+
+
+def test_resource_metadata_projects_validated_context_fields() -> None:
+    """Header facts retain final GraphQL aliases and declaration order."""
+
+    @strawberry.type(name="ContextProbe")
+    class ContextProbeType:
+        id: strawberry.ID
+        amount: Decimal
+        due_on: date = strawberry.field(name="dueOn")
+
+    metadata = _finalize_data_resource(
+        model=None,
+        model_label="platform.context_probe",
+        node_type=ContextProbeType,
+        roots=DataResourceRoots(list_name="context_probes"),
+        type_names=DataResourceTypeNames(query="context_probes_Query"),
+        capabilities=("list",),
+        public_id_field="id",
+        context_fields=("amount", "due_on"),
+    )
+
+    assert metadata.context_fields == ("amount", "dueOn")
+
+
+def test_resource_metadata_rejects_unknown_context_fields() -> None:
+    """A header fact must be readable from the final node projection."""
+
+    @strawberry.type(name="InvalidContextProbe")
+    class InvalidContextProbeType:
+        id: strawberry.ID
+
+    with pytest.raises(ImproperlyConfigured, match="unreadable context_fields.*missing"):
+        _finalize_data_resource(
+            model=None,
+            model_label="platform.invalid_context_probe",
+            node_type=InvalidContextProbeType,
+            roots=DataResourceRoots(list_name="invalid_context_probes"),
+            type_names=DataResourceTypeNames(query="invalid_context_probes_Query"),
+            capabilities=("list",),
+            public_id_field="id",
+            context_fields=("missing",),
+        )
 
 
 def test_resource_metadata_rejects_invalid_record_search_fields() -> None:

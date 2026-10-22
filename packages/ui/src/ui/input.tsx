@@ -3,7 +3,6 @@ import * as React from "react";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
-import { useDebouncedText } from "../lib/use-debounced-text";
 import { tv, type VariantProps } from "../lib/variants";
 import {
   WIDGET_CONTROL_DATA_READONLY_CLASS,
@@ -12,12 +11,15 @@ import {
   widgetControlPresentationProps,
 } from "./widget-control";
 
+/**
+ * @kind token
+ */
 export const inputVariants = tv({
   extend: widgetControlSurfaceVariants,
   base: "w-full text-fg placeholder:text-fg-subtle",
   variants: {
     size: {
-      sm: "h-btn-sm px-2 text-xs",
+      sm: "h-btn-sm px-2 text-12",
       md: "h-input-h px-2 text-13",
       lg: "h-input-h-lg px-3 text-sm",
     },
@@ -27,7 +29,9 @@ export const inputVariants = tv({
   },
 });
 
-/** One input-shaped box holding a value's chips and the draft input, wrapping as it fills. */
+/** One input-shaped box holding a value's chips and the draft input, wrapping as it fills.
+ * @kind token
+ */
 export const chipInputVariants = tv({
   extend: inputVariants,
   base: "flex flex-wrap items-center gap-1 py-1",
@@ -48,6 +52,9 @@ export const chipInputVariants = tv({
 // search-specific surface, the data-attribute read-only path, and the read-only
 // input cursor. `invalid` stays as an inert pass-through so the prop type still
 // resolves (its class payload comes from the composed owner call).
+/**
+ * @kind token
+ */
 export const searchInputVariants = tv({
   slots: {
     root:
@@ -62,9 +69,9 @@ export const searchInputVariants = tv({
   variants: {
     size: {
       sm: {
-        root: "h-btn-sm gap-1.5 pl-2 pr-1 text-xs",
+        root: "h-btn-sm gap-1.5 pl-2 pr-1 text-12",
         icon: "size-3",
-        input: "h-btn-sm text-xs",
+        input: "h-btn-sm text-12",
         clear: "size-5",
         clearIcon: "size-3",
       },
@@ -109,8 +116,6 @@ type InputRecipeProps = VariantProps<typeof inputVariants>;
 type SearchInputRecipeProps = VariantProps<typeof searchInputVariants>;
 
 export type InputSize = NonNullable<InputRecipeProps["size"]>;
-export type SearchInputSize = NonNullable<SearchInputRecipeProps["size"]>;
-export type SearchInputSurface = NonNullable<SearchInputRecipeProps["surface"]>;
 
 export type InputProps = Omit<
   React.InputHTMLAttributes<HTMLInputElement>,
@@ -120,6 +125,9 @@ export type InputProps = Omit<
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Input(
   {
     size = "md",
@@ -148,27 +156,6 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Inp
 
 Input.displayName = "Input";
 
-export interface DebouncedSearchInputProps extends Omit<SearchInputProps, "value" | "onChange" | "onClear"> {
-  value: string;
-  onValueChange: (value: string) => void;
-}
-
-/** SearchInput with the same commit/blur/Enter behavior as ResourceToolbar. */
-export function DebouncedSearchInput({ value, onValueChange, onBlur, onKeyDown, ...props }: DebouncedSearchInputProps) {
-  const { draft, setDraft, commit } = useDebouncedText(value, onValueChange);
-  return <SearchInput {...props} value={draft}
-    onChange={event => { setDraft(event.target.value); commit(event.target.value); }}
-    onClear={() => { setDraft(""); commit(""); commit.flush(); }}
-    onBlur={event => { commit(event.currentTarget.value); commit.flush(); onBlur?.(event); }}
-    onKeyDown={event => { if (event.key === "Enter") { commit(event.currentTarget.value); commit.flush(); } onKeyDown?.(event); }} />;
-}
-
-export type TextInputProps = InputProps;
-
-export function TextInput(props: TextInputProps): React.ReactElement {
-  return <Input {...props} />;
-}
-
 export type SearchInputProps = Omit<
   React.InputHTMLAttributes<HTMLInputElement>,
   "className" | "color" | "size" | "type"
@@ -180,6 +167,9 @@ export type SearchInputProps = Omit<
     onClear?: () => void;
   };
 
+/**
+ * @kind primitive
+ */
 export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
   function SearchInput(
     {

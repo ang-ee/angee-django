@@ -21,7 +21,7 @@ import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
 import { CORE_CONTAINERS } from "../core-containers";
-import { setThemePreference, storedThemePreference } from "@angee/ui/lib/theme";
+import { setColorSchemePreference, storedColorSchemePreference } from "@angee/ui/lib/color-scheme";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
 import { ConsoleLayout } from "@angee/ui/layouts/ConsoleLayout";
 import { ControlBand } from "@angee/ui/layouts/ControlBand";
@@ -273,7 +273,7 @@ describe("ConsoleLayout", () => {
   afterEach(() => {
     cleanup();
     largeViewport = true;
-    setThemePreference("system");
+    setColorSchemePreference("system");
     document.documentElement.removeAttribute("data-theme");
   });
 
@@ -577,7 +577,7 @@ describe("ConsoleLayout", () => {
     }));
 
     expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(storedThemePreference()).toBe("dark");
+    expect(storedColorSchemePreference()).toBe("dark");
     fireEvent.click(screen.getByRole("button", { name: "User menu" }));
     expect(await screen.findByRole("menuitem", { name: "Switch to light mode" }))
       .toBeTruthy();

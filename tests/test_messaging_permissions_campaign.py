@@ -21,11 +21,9 @@ from angee.messaging.testing.models import (
     Party,
     Reaction,
     Thread,
-    ThreadActivity,
     ThreadAttachment,
     ThreadFollower,
     ThreadNotification,
-    TrackingValue,
 )
 from tests.conftest import Vendor
 from tests.messaging_campaign import grant, make_user
@@ -75,10 +73,10 @@ def test_owner_column_uses_transfer_gate_when_declared_on_the_base(composed_tabl
 
 
 @pytest.mark.parametrize("label", [
-    "thread", "message", "thread_attachment", "thread_follower", "thread_activity", "thread_notification",
-    "part", "tracking_value", "message_edge", "participant", "reaction", "message_star",
+    "thread", "message", "thread_attachment", "thread_follower", "thread_notification",
+    "part", "message_edge", "participant", "reaction", "message_star",
 ])
-def test_dependents_inherit_parent_permissions_without_creator_access(activity_catalog, messaging_access_schema, label):
+def test_dependents_inherit_parent_permissions_without_creator_access(messaging_access_schema, label):
     owner, poster, reader, author, recipient = (
         make_user(name) for name in ("root-owner", "poster", "reader", "attributed-author", "recipient")
     )
@@ -96,14 +94,10 @@ def test_dependents_inherit_parent_permissions_without_creator_access(activity_c
             "message": message,
             "thread_attachment": attachment,
             "thread_follower": ThreadFollower.objects.create(thread=thread, party=party, created_by=author),
-            "thread_activity": ThreadActivity.objects.create(
-                thread=thread, attachment=attachment, user=recipient, created_by=author,
-            ),
             "thread_notification": ThreadNotification.objects.create(
                 thread=thread, message=message, user=recipient, created_by=author,
             ),
             "part": Part.objects.create(message=message, position=0, created_by=author),
-            "tracking_value": TrackingValue.objects.create(message=message, field_name="status", created_by=author),
             "message_edge": MessageEdge.objects.create(src=message, dst=other, kind="quote", created_by=author),
             "participant": Participant.objects.create(thread=thread, message=message, handle=handle, created_by=author),
             "reaction": Reaction.objects.create(message=message, handle=handle, reaction="ok", created_by=author),
@@ -126,7 +120,7 @@ def test_dependents_inherit_parent_permissions_without_creator_access(activity_c
         assert_access(row, reader, "delete", False)
         assert_access(row, owner, "delete", not recipient_only)
         assert_access(row, poster, "delete", label in {
-            "thread_attachment", "thread_follower", "thread_activity", "tracking_value",
+            "thread_attachment", "thread_follower",
         })
     if label != "thread":
         with pytest.raises(FieldDoesNotExist):
@@ -226,8 +220,8 @@ def test_participant_mutation_follows_message_or_thread_membership_only(composed
 def test_every_messaging_permission_compiles_without_enumeration(spaces_tables, messaging_access_schema,
                                                               django_assert_num_queries):
     reader = make_user("sql-reader")
-    models = (Thread, Message, ThreadAttachment, ThreadFollower, ThreadActivity, ThreadNotification,
-              Part, TrackingValue, MessageEdge, Participant, Reaction, MessageStar)
+    models = (Thread, Message, ThreadAttachment, ThreadFollower, ThreadNotification,
+              Part, MessageEdge, Participant, Reaction, MessageStar)
     # Generic record arms resolve Django content types during SQL rendering.
     # Warm that native metadata cache as well as REBAC's schema before measuring.
     ContentType.objects.get_for_models(*apps.get_models())

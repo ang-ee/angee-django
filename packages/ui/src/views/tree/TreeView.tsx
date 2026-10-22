@@ -56,9 +56,23 @@ export interface TreeViewProps<
   onNodeDrop?: (nodeId: string, payload: DndPayload, row: TRow) => void;
   /** Empty-state content shown when there are no nodes. */
   emptyContent?: ListEmptyContent;
+  /**
+   * An editable row shown in the tree where a new node will go: first under
+   * `parentId`, or first at the root when `parentId` is null. It is not a row of
+   * the data and cannot be selected; the caller renders the field.
+   */
+  insertion?: { parentId: string | null; node: ReactNode } | null;
   className?: string;
 }
 
+/** The synthetic id of the insertion row; never a data row's id.
+ * @owner TreeView
+ */
+export const TREE_INSERTION_ID = "__tree-insertion__";
+
+/**
+ * @kind surface
+ */
 export function TreeView<TRow extends Record<string, unknown>>({
   rows = [],
   parent = "parentId" as keyof TRow & string,
@@ -77,6 +91,7 @@ export function TreeView<TRow extends Record<string, unknown>>({
   canDropOnNode,
   onNodeDrop,
   emptyContent,
+  insertion = null,
   className,
 }: TreeViewProps<TRow>): ReactElement {
   const t = useUiT();
@@ -99,10 +114,14 @@ export function TreeView<TRow extends Record<string, unknown>>({
       }),
     [rows, parent, label, badge, rowKey, icon, hasChildren, loading, renderRow],
   );
+  const nodesWithInsertion = useMemo(
+    () => (insertion ? withInsertion(nodes, insertion.parentId, insertion.node) : nodes),
+    [nodes, insertion],
+  );
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const droppable = onNodeDrop != null;
 
-  if (nodes.length === 0) {
+  if (nodesWithInsertion.length === 0) {
     return (
       <ListEmpty className={cn("min-h-0 p-8", className)}>{resolvedEmptyContent}</ListEmpty>
     );
@@ -110,7 +129,7 @@ export function TreeView<TRow extends Record<string, unknown>>({
 
   return (
     <Tree
-      nodes={nodes}
+      nodes={nodesWithInsertion}
       selectedId={selectedId}
       onExpand={onExpand}
       className={className}
@@ -173,6 +192,31 @@ export function TreeView<TRow extends Record<string, unknown>>({
       }
     />
   );
+}
+
+/** Place the insertion row first under its parent (or first at the root), expanding the parent. */
+function withInsertion(nodes: TreeNode[], parentId: string | null, node: ReactNode): TreeNode[] {
+  // The row is a form, not a node: its keys and clicks stay with the field, so Enter
+  // submits the title instead of selecting the row and arrows edit instead of moving.
+  const label = (
+    <div className="contents" onKeyDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+      {node}
+    </div>
+  );
+  const row: TreeNode = { id: TREE_INSERTION_ID, label, children: [] };
+  if (parentId === null) return [row, ...nodes];
+  let placed = false;
+  const visit = (list: TreeNode[]): TreeNode[] =>
+    list.map((item) => {
+      const children = item.children ?? [];
+      if (item.id === parentId) {
+        placed = true;
+        return { ...item, hasChildren: true, children: [row, ...children] };
+      }
+      return children.length ? { ...item, children: visit([...children]) } : item;
+    });
+  const result = visit(nodes);
+  return placed ? result : [row, ...nodes];
 }
 
 function buildTree<TRow extends Record<string, unknown>>(

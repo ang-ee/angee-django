@@ -8,7 +8,6 @@ import pytest
 from django.db import close_old_connections, connection, connections, reset_queries
 from django.test.utils import CaptureQueriesContext
 
-from angee.base.scoping import system_queryset
 from angee.workflows.runner import runner
 from angee.workflows.steps import StepMode
 from angee.workflows.testing.drivers import run_until
@@ -68,8 +67,8 @@ def test_concurrent_items_plan_next_rows_and_settle_parent_once(execution, map_s
     run.refresh_from_db()
     assert run.status == "succeeded"
     assert [item["index"] for item in run.output] == list(range(total))
-    assert system_queryset(StepAttempt).filter(step_run=mapped).count() == 2
-    assert system_queryset(StepAttempt).filter(step_run__run=run, step_run__node_key="items.body").count() == total
+    assert StepAttempt.system_queryset().filter(step_run=mapped).count() == 2
+    assert StepAttempt.system_queryset().filter(step_run__run=run, step_run__node_key="items.body").count() == total
 
 
 def test_cancel_racing_last_item_fences_its_late_result(execution, map_steps, register_step):
@@ -104,7 +103,7 @@ def test_cancel_racing_last_item_fences_its_late_result(execution, map_steps, re
     item.refresh_from_db()
     assert run.status == mapped.status == item.status == "canceled"
     assert item.output == {} and mapped.output == {}
-    assert system_queryset(StepAttempt).get(step_run=item).result == "superseded"
+    assert StepAttempt.system_queryset().get(step_run=item).result == "superseded"
     assert not any(runner.tick().values())
 
 

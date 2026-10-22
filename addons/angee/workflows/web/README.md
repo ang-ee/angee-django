@@ -32,15 +32,17 @@ The **Run workflow** record verb contributes a `form#actions-menu` submenu of
 published, startable definitions and sends `start_workflow_run`. Required inputs
 compose the shared schema action dialog; success refreshes the record's timeline.
 
-Workflows contributes the waiting run as a `decisions#origin` child. Records gain
-one timeline chatter tab (`record#aside/workflows.timeline`). `RecordTimeline`
+Workflows contributes the waiting run as a `decisions#origin` child, run lines
+through `timeline#kinds/workflows.run`, and the one-run drill-in at `record#aside/workflows.run`.
+`RecordTimeline`
 accepts `record: {model, id} | readonly {model, id}[]`. It shows the trigger, done
 steps, inline decisions, error/run holds and the certain future steps, with other
 future branches in one may-also line. Long routine history folds while waiting.
 References use the native record peek. Open field marks reveal and highlight the
-same card beside the form. The set view groups open questions and held runs by
-record or question. `useRecordTimelinePane({record, side: "left" | "right"})`
-chooses the existing primary-pane or chatter host.
+same card in the run drill-in. The set view groups open questions and held runs
+by record or question. The shared timeline owns record-aside chronology and
+attention; collection hosts choose placement when composing `RecordTimeline`
+over several records.
 Timeline retry shares the step drawer's action descriptors and typed
 acknowledgement when an external effect could repeat.
 Routed `ResourceList` declarations own collection state, filters, grouping, paging

@@ -1,25 +1,12 @@
-import { useRef, type ReactElement, type ReactNode } from "react";
+import type { ReactElement } from "react";
 
 import type { ResourceFilter } from "@angee/metadata";
-import {
-  Badge,
-  Button,
-  Column,
-  Glyph,
-  List,
-  UploadDropTarget,
-  formatSize,
-  useStatusTone,
-  useRuntimeViewAs,
-  type ListProps,
-  type ResourceListSnapshot,
-} from "@angee/ui";
+import { Column, Glyph, List, UploadDropTarget, formatSize, type ListProps, type ResourceListSnapshot } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
-import { fileDragPayload, type StorageFileRow } from "../data/file-rows";
+import { fileDragPayload, useFileTypeLabel, type StorageFileRow } from "../data/file-rows";
 import type { StorageUpload, UploadTarget } from "../data/use-upload";
 import { fileGalleryCard } from "./file-columns";
-import { fileStageLabel, formatDate } from "../lib/file-display";
 import { StorageUploadTasks } from "./StorageUploadTasks";
 
 export interface FileBrowserContentProps {
@@ -27,7 +14,7 @@ export interface FileBrowserContentProps {
   /** Detail route for a clicked row — the list renders each row as a link. */
   rowHref: ListProps<StorageFileRow>["rowHref"];
   /** Bulk actions rendered in the selection bar when files are selected. */
-  bulkActions: (selectedIds: ReadonlySet<string>, clear: () => void) => ReactNode;
+  bulkActions: ListProps<StorageFileRow>["bulkActions"];
   onListStateChange: (state: ResourceListSnapshot<StorageFileRow>) => void;
   uploads: StorageUpload;
   uploadTarget: UploadTarget;
@@ -59,14 +46,11 @@ export function FileBrowserContent({
   uploadTarget,
   canUpload,
 }: FileBrowserContentProps): ReactElement {
-  const preview = useRuntimeViewAs();
-  const previewBlocked = Boolean(preview.viewAs || preview.pending);
   const t = useStorageT();
-  const statusTone = useStatusTone();
-  const inputRef = useRef<HTMLInputElement>(null);
+  const fileTypeLabel = useFileTypeLabel();
 
-  function startUpload(files: FileList | readonly File[] | null): void {
-    if (previewBlocked || !canUpload || !files || files.length === 0) return;
+  function startUpload(files: readonly File[]): void {
+    if (!canUpload || files.length === 0) return;
     uploads.upload(Array.from(files), uploadTarget);
   }
 
@@ -80,21 +64,8 @@ export function FileBrowserContent({
       draggableRow={fileDragPayload}
       renderCard={fileGalleryCard}
       onListStateChange={onListStateChange}
+      // Upload is the navigator's New ▾ verb; the list keeps the drop target and the empty hint.
       emptyContent={canUpload ? t("list.emptyUpload") : t("list.empty")}
-      toolbarActions={
-        canUpload ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            disabled={previewBlocked}
-            onClick={() => inputRef.current?.click()}
-          >
-            <Glyph name="attachment" />
-            {t("upload.button")}
-          </Button>
-        ) : undefined
-      }
     >
       <Column<StorageFileRow>
         field="title"
@@ -116,18 +87,12 @@ export function FileBrowserContent({
       <Column<StorageFileRow>
         field="mime_type.label"
         header={t("column.type")}
-        render={(row) =>
-          row.mime_type?.label || row.mime_type?.mime_type || "—"
-        }
+        render={(row) => fileTypeLabel(row)}
       />
       <Column<StorageFileRow>
         field="upload_state"
         header={t("column.stage")}
-        render={(row) => (
-          <Badge tone={statusTone(row.upload_state, undefined, { unknownTone: "neutral" })}>
-            {fileStageLabel(row.upload_state, t)}
-          </Badge>
-        )}
+        widget="statusBadge"
       />
       <Column<StorageFileRow>
         field="visibility"
@@ -139,7 +104,7 @@ export function FileBrowserContent({
         header={t("column.size")}
         align="right"
         render={(row) => (
-          <span className="tabular-nums text-fg-muted">
+          <span className="whitespace-nowrap tabular-nums text-fg-muted">
             {formatSize(row.size_bytes)}
           </span>
         )}
@@ -149,27 +114,16 @@ export function FileBrowserContent({
         header={t("column.count")}
         aggregate="count"
         align="right"
-        render={() => <span className="text-fg-muted">1</span>}
+        // The count means something on a group footer only; a row's own "1" is noise.
+        render={() => null}
       />
       <Column<StorageFileRow>
         field="created_by_label"
         header={t("column.author")}
-        render={(row) => row.created_by_label || "—"}
+        widget="userRef"
       />
-      <Column<StorageFileRow>
-        field="created_at"
-        header={t("column.created")}
-        render={(row) => (
-          <span className="text-fg-muted">{formatDate(row.created_at)}</span>
-        )}
-      />
-      <Column<StorageFileRow>
-        field="updated_at"
-        header={t("column.modified")}
-        render={(row) => (
-          <span className="text-fg-muted">{formatDate(row.updated_at)}</span>
-        )}
-      />
+      <Column<StorageFileRow> field="created_at" header={t("column.created")} widget="date" />
+      <Column<StorageFileRow> field="updated_at" header={t("column.modified")} widget="date" />
       <Column<StorageFileRow> field="tags" hiddenByDefault />
     </List>
   );
@@ -187,17 +141,6 @@ export function FileBrowserContent({
       <div className="min-h-0 flex-1">
         {list}
       </div>
-      <input
-        ref={inputRef}
-        type="file"
-        disabled={previewBlocked}
-        multiple
-        className="hidden"
-        onChange={(event) => {
-          startUpload(event.target.files);
-          event.target.value = "";
-        }}
-      />
     </UploadDropTarget>
   );
 }

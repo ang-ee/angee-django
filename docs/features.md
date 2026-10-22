@@ -40,7 +40,7 @@ actually unique to your product.
   abstract addons into one running app: concrete Django models, one GraphQL
   schema, one permission schema, typed TS.
 - **Data modeling** — abstract models with opaque `sqid` IDs and a `StateField`,
-  plus drop-in mixins for timestamps, audit, history, revisions, archiving, and
+  plus drop-in mixins for timestamps, audit, history, archiving, and
   tagging; `EncryptedField` for secrets at rest.
 - **Permissions (REBAC)** — Zanzibar-shape authorization via `django-zed-rebac`:
   reads scope through the manager, writes check the instance; each addon ships a
@@ -108,6 +108,20 @@ actually unique to your product.
   composed GraphQL schema when the server starts; the documents are not persisted.
 - **Agentic resource planning** *(Planned)* — consumer-owned capabilities composed
   over shared primitives such as `money`, `sequence`, and `uom`.
+
+### Extending workflow graphs
+
+A base workflow may expose named insertion points in its definition, for example
+`points: {after_review: {after: review}}`. A consumer addon contributes a graph
+fragment from an install resource declared with kind
+`workflows.workflowextension`; each row names `extends`, `at`, `nodes`, optional
+`edges` or `bindings`, and an optional integer `sequence`. Provisioning orders
+fragments by composed addon order and then `sequence`, publishes the composed
+version, and leaves the base draft unchanged. The base resource fingerprint
+includes the contributions, so changing either side republishes. Unknown points
+and duplicate node keys stop the load. [`Definition`](../addons/angee/workflows/definition.py) owns
+the graph splice and [`WorkflowExtensionResourceKind`](../addons/angee/workflows/resources.py)
+owns the composer-time declaration seam; serving code has no extension registry.
 
 ## How you build & ship
 

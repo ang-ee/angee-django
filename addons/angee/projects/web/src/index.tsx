@@ -7,6 +7,7 @@ import { Briefcase, ClipboardCheck, Kanban, ListChecks } from "lucide-react";
 import { enProjectsMessages } from "./i18n";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
 import { ProjectPhaseControl } from "./project-phase";
+import { RecordTasksPane } from "./RecordTasksPane";
 
 export {
   MILESTONE_MODEL,
@@ -92,6 +93,23 @@ const projects = defineBaseAddon({
   menus: projectsMenu,
   i18n: { projects: enProjectsMessages },
   widgets: { "projects.phase": { read: ProjectPhaseControl, edit: ProjectPhaseControl } },
+  containers: {
+    // A task's line on the Timeline opens the Tasks tab.
+    "timeline#kinds": {
+      "projects.task": { content: { label: "Tasks", icon: "project-task", tone: "info", verb: "Open in Tasks", target: { tab: "projects.tasks", focus: "task" } } },
+    },
+    // The direct subject declaration determines which records take tasks.
+    "record#aside": {
+      "projects.tasks": {
+        sequence: 20,
+        content: {
+          when: (context) => context.route?.recordEdges?.includes(TASK_MODEL) ?? false,
+          label: "Tasks", icon: "project-task",
+          render: (context) => <RecordTasksPane context={context} />,
+        },
+      },
+    },
+  },
   icons: {
     projects: Briefcase,
     "project-task": ListChecks,

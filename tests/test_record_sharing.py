@@ -12,11 +12,11 @@ from rebac.resources import model_for_resource_type
 from rebac.schema.parser import parse_zed
 
 from angee.agents.models import Agent as AbstractAgent
-from angee.base import models as base_models
-from angee.base.identity import public_id_for
 from angee.graphql import sharing
 from angee.graphql.data import metadata
 from angee.graphql.sharing import RecordAccessType
+from angee.identity import public_id_for
+from angee.models import base as base_models
 from angee.projects.models import Task
 from angee.projects.testing.models import Project
 from angee.storage.models import Drive
@@ -113,7 +113,7 @@ def test_group_access_projects_canonical_subject_identity() -> None:
 def test_share_declarations() -> None:
     """Each model advertises only its declared, permission-gated sharing relations."""
 
-    assert AbstractAgent.get_rebac_grantable() == {"reader": "share", "editor": "share"}
+    assert AbstractAgent.get_rebac_grantable() == {"reader": "share", "editor": "share", "caller": "share_call"}
     assert Task.get_rebac_grantable() == {"reader": "share", "editor": "share"}
     assert Drive.get_rebac_grantable() == {"editor": "share", "viewer": "share"}
     assert Workflow.get_rebac_grantable() == {

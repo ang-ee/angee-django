@@ -113,10 +113,10 @@ def declared_schema_path(app_config: AppConfig) -> Path | None:
         # declaration before a derived merged path is assigned to the same seam.
         if (
             "_angee_rebac_schema_effective" not in app_config.__dict__
-            or getattr(app_config, "rebac_schema", None) != app_config._angee_rebac_schema_effective
+            or getattr(app_config, "rebac_schema", None) != getattr(app_config, "_angee_rebac_schema_effective")
         ):
-            app_config._angee_rebac_schema_source = resolve_schema_path(app_config)
-        return app_config._angee_rebac_schema_source
+            setattr(app_config, "_angee_rebac_schema_source", resolve_schema_path(app_config))
+        return getattr(app_config, "_angee_rebac_schema_source")
 
     path = Path(app_config.path) / (manifest.permissions or "permissions.zed")
     configured = getattr(app_config, "rebac_schema", None)
@@ -399,5 +399,5 @@ def apply_schema_paths(
             effective = str(source.resolve()) if source is not None else None
         else:
             continue
-        app_config.rebac_schema = effective
-        app_config._angee_rebac_schema_effective = effective
+        setattr(app_config, "rebac_schema", effective)
+        setattr(app_config, "_angee_rebac_schema_effective", effective)

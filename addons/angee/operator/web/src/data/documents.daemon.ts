@@ -20,6 +20,9 @@ export const OperatorServiceStateFields = graphql(`
     name
     runtime
     status
+    outcome
+    exitCode
+    restarts
     health
   }
 `);
@@ -31,6 +34,7 @@ export const OperatorWorkspaceRefFields = graphql(`
     path
     template
     processComposePort
+    playwrightMcpUrl
     ttl
     ttlExpiresAt
   }
@@ -66,7 +70,6 @@ export const OperatorWorkspaceStatusFields = graphql(`
     exists
     state
     error
-    innerError
     template
     processComposePort
     ttl
@@ -90,9 +93,11 @@ export const OperatorSourceStateFields = graphql(`
     ref
     currentRef
     dirty
+    upstream
     ahead
     behind
     pushed
+    error
   }
 `);
 
@@ -302,14 +307,6 @@ export const SERVICE_DESTROY_MUTATION = graphql(`
   }
 `);
 
-export const SERVICE_UP_MUTATION = graphql(`
-  mutation OperatorServiceUp($name: String!) {
-    serviceUp(name: $name) {
-      ...OperatorMutationResultFields
-    }
-  }
-`);
-
 // Service logs stream over the structured `/services/{name}/logs/stream`
 // WebSocket (see useServiceLogStream), not GraphQL — exact per-service framing.
 
@@ -380,21 +377,6 @@ export const WORKSPACE_SYNC_BASE_MUTATION = graphql(`
     workspaceSyncBase(name: $name, method: $method) {
       ...OperatorSourceStateFields
     }
-  }
-`);
-
-// The recent log buffer (history) for first paint of the workspace detail logs.
-export const WORKSPACE_LOGS_QUERY = graphql(`
-  query OperatorWorkspaceLogHistory($name: String!, $limit: Int) {
-    workspaceLogs(name: $name, limit: $limit)
-  }
-`);
-
-// The live log tail. Each emission is one log line; the detail view accumulates
-// them past the history (mirrors the service log stream).
-export const WORKSPACE_LOGS_SUBSCRIPTION = graphql(`
-  subscription OperatorWorkspaceLogStream($name: String!) {
-    onWorkspaceLogs(name: $name)
   }
 `);
 
@@ -497,12 +479,6 @@ export const JOB_RUN_PREVIEW_QUERY = graphql(`
 export const LATEST_JOB_RUN_QUERY = graphql(`
   query OperatorLatestJobRun {
     latestJobRun { ...OperatorJobRunOperationFields }
-  }
-`);
-
-export const JOB_RUN_OPERATION_QUERY = graphql(`
-  query OperatorJobRunOperation($id: ID!) {
-    jobRunOperation(id: $id) { ...OperatorJobRunOperationFields }
   }
 `);
 

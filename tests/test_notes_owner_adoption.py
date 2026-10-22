@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
+
 
 def test_composed_notes_preserve_attribution_across_ownership_transfer(tmp_path):
     root = Path(__file__).resolve().parents[1]
@@ -18,7 +20,7 @@ def test_composed_notes_preserve_attribution_across_ownership_transfer(tmp_path)
             "--runtime-dir", str(tmp_path / "runtime"), "--action", "tests",
             "--test-label", "tests.notes_ownership_cases", "--output", str(report),
         ],
-        cwd=root, env=env, capture_output=True, text=True, timeout=180, check=False,
+        cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT, check=False,
     )
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
     assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}

@@ -1,6 +1,6 @@
 // Additive REBAC extension — contributes to a definition owned by another addon.
 // @rebac_package: extcontrib
-// @rebac_schema_revision: 6
+// @rebac_schema_revision: 7
 
 // `scopedemo/doc` is owned by `tests.scopedemo`; this fragment contributes a
 // `reviewer` relation and unions it into the `read` arm without editing the
@@ -16,7 +16,7 @@ definition scopedemo/doc {
 definition messaging/thread {
     relation chatter_record: chatterdemo/doc // rebac:field={"path":"attachments__chatterdemo_chatterdoc","filters":{"attachments__role":"chatter"}}
 
-    permission read = chatter_record->read
+    permission read_granted = chatter_record->read
 }
 
 // Account actions follow the bound team's live roster. Preview authority stays
@@ -71,9 +71,16 @@ definition knowledge/record_binding {
     permission target_write = record_vault->write + mti_parent->write
 }
 
-// The gated chatter demo record retains source conversations under its writers.
+// The gated chatter demo record retains source conversations under its writers
+// and takes record tasks under its readers and writers.
 definition messaging/thread_attachment {
     relation chatter_doc: chatterdemo/doc // rebac:field=target
 
     permission target_write = chatter_doc->write
+}
+
+definition projects/task {
+    relation subject_chatter_doc: chatterdemo/doc // rebac:field=subject
+    permission subject_read = subject_chatter_doc->read
+    permission subject_write = subject_chatter_doc->write
 }

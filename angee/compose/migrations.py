@@ -6,7 +6,7 @@ import hashlib
 import importlib
 import json
 import logging
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -15,30 +15,39 @@ from typing import Any, cast
 from django.apps import AppConfig, apps
 from django.apps.registry import Apps
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.management.base import CommandError
 from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router
-from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.migrations import Migration
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.loader import MigrationLoader
-from django.db.migrations.operations.base import Operation
-from django.db.migrations.operations.fields import FieldOperation, RemoveField
-from django.db.migrations.operations.models import DeleteModel, IndexOperation, ModelOperation
-from django.db.migrations.operations.special import SeparateDatabaseAndState
+from django.db.migrations.operations.fields import RemoveField
+from django.db.migrations.operations.models import DeleteModel
 from django.db.migrations.state import ProjectState
 from django.db.models.expressions import DatabaseDefault
 
-from angee.addons import addon_manifest, available_addons, resolve_app_config
-from angee.compose.history import HistoricalRuntimeConfig, historical_labels
+from angee.addons import addon_manifest
 from angee.fs import write_atomic
 
 MATERIALIZED_FOOTER = "# ANGEE MATERIALIZED MIGRATION - DO NOT EDIT"
-ORIGIN_ATTR = "angee_origin"
 SOURCE_SHA256_ATTR = "angee_source_sha256"
-BASELINE_ATTR = "angee_fresh_baseline"
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduledMigration:
+    """One addon declaration the round loop found applicable, with the round it lands in."""
+
+    round: int
+    origin: str
+    addon: AppConfig
+    declaration: Mapping[str, Any]
+    module: ModuleType
+    migration_class: type[Migration]
+    source_path: Path
+    source: str
+    source_sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +80,18 @@ class RuntimeMigrations:
         self.runtime_dir = runtime_dir
         self.labels = frozenset(labels)
 
+    def schedule(self, state: ProjectState, *, only: Iterable[str]) -> tuple[ScheduledMigration, ...]:
+        """Schedule the ``only`` origins from ``state`` as :meth:`plan` does, without a migration graph.
+
+        Each named declaration lands in the first round whose starting state its guard
+        accepts; one that never becomes applicable is left out, and an origin no
+        addon declares fails. Callers use this to inspect one current declaration
+        batch's round ordering before materialization.
+        """
+
+        scheduled, _skipped, _state = self._schedule(state, {}, only=frozenset(only))
+        return scheduled
+
     def plan(
         self,
         *,
@@ -85,12 +106,108 @@ class RuntimeMigrations:
 
         loader = MigrationLoader(None, ignore_no_migrations=True)
         existing = self._existing_migrations(loader)
-        state = loader.project_state()
+        scheduled, skipped, state = self._schedule(loader.project_state(), existing)
         plans: list[RuntimeMigrationPlan] = []
         next_numbers: dict[str, int] = {}
         leaves: dict[str, tuple[str, str] | None] = {}
-        declared_origins: set[str] = set()
+        for entry in scheduled:
+            origin, declaration, migration_class = entry.origin, entry.declaration, entry.migration_class
+            if declaration["app_label"] not in next_numbers:
+                next_numbers[declaration["app_label"]] = self._next_number(loader, declaration["app_label"])
+                leaves[declaration["app_label"]] = self._target_leaf(
+                    loader,
+                    declaration["app_label"],
+                    origin=origin,
+                )
+            number = next_numbers[declaration["app_label"]]
+            next_numbers[declaration["app_label"]] += 1
+            name = f"{number:04d}_{declaration['name']}"
+            node = (declaration["app_label"], name)
+            target_leaf = leaves[declaration["app_label"]]
+            dependencies, latest_dependencies = self._resolve_dependencies(
+                loader,
+                migration_class.dependencies,
+                current_app=declaration["app_label"],
+                origin=origin,
+            )
+            if entry.round:
+                deferred_dependencies = tuple(
+                    node
+                    for label, node in leaves.items()
+                    if label != declaration["app_label"] and node is not None and node not in dependencies
+                )
+                dependencies += deferred_dependencies
+            if target_leaf is not None and target_leaf not in dependencies:
+                dependencies += (target_leaf,)
+            output_path = self.runtime_dir / declaration["app_label"] / "migrations" / f"{name}.py"
+            if output_path.exists():
+                raise RuntimeError(f"{origin}: output migration already exists at {output_path}")
+            plan = RuntimeMigrationPlan(
+                origin=origin,
+                app_label=declaration["app_label"],
+                name=name,
+                source_path=entry.source_path,
+                source=entry.source,
+                output_path=output_path,
+                source_sha256=entry.source_sha256,
+                dependencies=dependencies,
+                latest_dependencies=latest_dependencies,
+                migration_class=migration_class,
+            )
+            migration = migration_class(name, declaration["app_label"])
+            # Django's constructor owns a mutable instance copy of the class declaration.
+            cast(list[tuple[str, str]], migration.dependencies)[:] = dependencies
+            try:
+                loader.graph.add_node(node, migration)
+                for dependency in dependencies:
+                    loader.graph.add_dependency(migration, node, dependency)
+                for run_before in self._resolve_run_before(
+                    loader,
+                    migration.run_before,
+                    current_app=declaration["app_label"],
+                    origin=origin,
+                ):
+                    loader.graph.add_dependency(migration, run_before, node)
+                loader.graph.validate_consistency()
+                loader.graph.ensure_not_cyclic()
+            except Exception as error:
+                raise RuntimeError(f"{origin}: migration graph is invalid") from error
+            leaves[declaration["app_label"]] = node
+            plans.append(plan)
 
+        skipped_origins = []
+        for addon, declaration in skipped:
+            origin = f"{addon.name}:{declaration['name']}"
+            skipped_origins.append(origin)
+            if not defer_drop_check:
+                logger.warning(
+                    "%s (app label %s): runtime migration never became applicable; skipped",
+                    origin,
+                    declaration["app_label"],
+                )
+        if apps is not None and not defer_drop_check:
+            self._check_autodetected_drops(loader, state, ProjectState.from_apps(apps), skipped_origins)
+
+        return tuple(plans)
+
+    def _schedule(
+        self,
+        state: ProjectState,
+        existing: Mapping[str, tuple[tuple[str, str], Migration, Path]],
+        *,
+        only: frozenset[str] | None = None,
+    ) -> tuple[tuple[ScheduledMigration, ...], tuple[tuple[AppConfig, Mapping[str, Any]], ...], ProjectState]:
+        """Run the round loop: guards see the state their round starts from.
+
+        Returns the applicable declarations in order with their round, the ones that
+        never became applicable, and the state after the scheduled ones. A declaration
+        already materialized in ``existing`` is verified and left to that history; with
+        ``only``, every other declaration is left out. Source, digest, guard and state
+        errors raise here, before :meth:`plan` attaches the scheduled declarations to the
+        graph, so when several exist those come first.
+        """
+
+        declared_origins: set[str] = set()
         declarations: list[tuple[AppConfig, Mapping[str, Any]]] = []
         for addon, entries in self._migration_declarations():
             for declaration in entries:
@@ -99,8 +216,12 @@ class RuntimeMigrations:
                     raise RuntimeError(f"duplicate addon runtime migration origin {origin}")
                 declared_origins.add(origin)
                 self._validate_declaration(declaration, origin)
-                declarations.append((addon, declaration))
+                if only is None or origin in only:
+                    declarations.append((addon, declaration))
+        if only is not None and (undeclared := sorted(only - declared_origins)):
+            raise RuntimeError(f"no addon declares runtime migration origins {', '.join(undeclared)}")
 
+        scheduled: list[ScheduledMigration] = []
         pending = declarations
         round_number = 0
         while pending:
@@ -116,7 +237,6 @@ class RuntimeMigrations:
                 source_path = self._source_path(module, origin)
                 source_bytes = source_path.read_bytes()
                 source_sha256 = hashlib.sha256(source_bytes).hexdigest()
-                source = source_bytes.decode("utf-8")
                 materialized = existing.get(origin)
                 if materialized is not None:
                     node, migration, _ = materialized
@@ -125,11 +245,7 @@ class RuntimeMigrations:
                             f"{origin}: materialized target {node[0]!r} differs from "
                             f"declared target {declaration['app_label']!r}"
                         )
-                    accepted_source_digests = {
-                        source_sha256,
-                        *declaration.get("compatible_source_sha256", ()),
-                    }
-                    if getattr(migration, SOURCE_SHA256_ATTR, None) not in accepted_source_digests:
+                    if getattr(migration, SOURCE_SHA256_ATTR, None) != source_sha256:
                         raise RuntimeError(f"{origin}: source digest changed after materialization")
                     continue
                 applies = getattr(module, "applies", None)
@@ -144,93 +260,30 @@ class RuntimeMigrations:
                 if not applicable:
                     remaining.append((addon, declaration))
                     continue
-
-                if declaration["app_label"] not in next_numbers:
-                    next_numbers[declaration["app_label"]] = self._next_number(loader, declaration["app_label"])
-                    leaves[declaration["app_label"]] = self._target_leaf(
-                        loader,
-                        declaration["app_label"],
-                        origin=origin,
-                    )
-                number = next_numbers[declaration["app_label"]]
-                next_numbers[declaration["app_label"]] += 1
-                name = f"{number:04d}_{declaration['name']}"
-                node = (declaration["app_label"], name)
-                target_leaf = leaves[declaration["app_label"]]
-                dependencies, latest_dependencies = self._resolve_dependencies(
-                    loader,
-                    migration_class.dependencies,
-                    current_app=declaration["app_label"],
-                    origin=origin,
-                )
-                if round_number:
-                    deferred_dependencies = tuple(
-                        node
-                        for label, node in leaves.items()
-                        if label != declaration["app_label"] and node is not None and node not in dependencies
-                    )
-                    dependencies += deferred_dependencies
-                if target_leaf is not None and target_leaf not in dependencies:
-                    dependencies += (target_leaf,)
-                output_path = self.runtime_dir / declaration["app_label"] / "migrations" / f"{name}.py"
-                if output_path.exists():
-                    raise RuntimeError(f"{origin}: output migration already exists at {output_path}")
-                plan = RuntimeMigrationPlan(
-                    origin=origin,
-                    app_label=declaration["app_label"],
-                    name=name,
-                    source_path=source_path,
-                    source=source,
-                    output_path=output_path,
-                    source_sha256=source_sha256,
-                    dependencies=dependencies,
-                    latest_dependencies=latest_dependencies,
-                    migration_class=migration_class,
-                )
-                migration = migration_class(name, declaration["app_label"])
-                migration.dependencies = list(dependencies)
                 try:
-                    loader.graph.add_node(node, migration)
-                    for dependency in dependencies:
-                        loader.graph.add_dependency(migration, node, dependency)
-                    for run_before in self._resolve_run_before(
-                        loader,
-                        migration.run_before,
-                        current_app=declaration["app_label"],
-                        origin=origin,
-                    ):
-                        loader.graph.add_dependency(migration, run_before, node)
-                    loader.graph.validate_consistency()
-                    loader.graph.ensure_not_cyclic()
-                except Exception as error:
-                    raise RuntimeError(f"{origin}: migration graph is invalid") from error
-                try:
-                    state = migration.mutate_state(state)
+                    state = migration_class(declaration["name"], declaration["app_label"]).mutate_state(state)
                 except Exception as error:
                     raise RuntimeError(f"{origin}: migration state transition is invalid") from error
-                leaves[declaration["app_label"]] = node
-                plans.append(plan)
+                scheduled.append(
+                    ScheduledMigration(
+                        round=round_number,
+                        origin=origin,
+                        addon=addon,
+                        declaration=declaration,
+                        module=module,
+                        migration_class=migration_class,
+                        source_path=source_path,
+                        source=source_bytes.decode("utf-8"),
+                        source_sha256=source_sha256,
+                    )
+                )
                 progressed = True
 
             pending = remaining
             if not progressed:
                 break
             round_number += 1
-
-        skipped_origins = []
-        for addon, declaration in pending:
-            origin = f"{addon.name}:{declaration['name']}"
-            skipped_origins.append(origin)
-            if not defer_drop_check:
-                logger.warning(
-                    "%s (app label %s): runtime migration never became applicable; skipped",
-                    origin,
-                    declaration["app_label"],
-                )
-        if apps is not None and not defer_drop_check:
-            self._check_autodetected_drops(loader, state, ProjectState.from_apps(apps), skipped_origins)
-
-        return tuple(plans)
+        return tuple(scheduled), tuple(pending), state
 
     def check(self) -> None:
         """Raise when an applicable addon migration has not been materialized."""
@@ -389,7 +442,7 @@ class RuntimeMigrations:
     ) -> dict[str, tuple[tuple[str, str], Migration, Path]]:
         existing: dict[str, tuple[tuple[str, str], Migration, Path]] = {}
         for node, migration in loader.disk_migrations.items():
-            origin = getattr(migration, ORIGIN_ATTR, None)
+            origin = getattr(migration, "angee_origin", None)
             if origin is None:
                 continue
             if not isinstance(origin, str) or not origin:
@@ -406,30 +459,10 @@ class RuntimeMigrations:
                 raise RuntimeError(f"{origin}: cannot read materialized migration {path}") from error
             if not marker:
                 raise RuntimeError(f"{origin}: materialized migration footer is missing")
-            if getattr(migration, BASELINE_ATTR, False):
-                valid_body = body == self._baseline_body(tuple(migration.dependencies)).encode()
-            else:
-                valid_body = hashlib.sha256(body).hexdigest() == digest
-            if not valid_body:
+            if hashlib.sha256(body).hexdigest() != digest:
                 raise RuntimeError(f"{origin}: materialized body digest changed")
             existing[origin] = (node, migration, path)
         return existing
-
-    @staticmethod
-    def _baseline_body(dependencies: tuple[tuple[str, str], ...]) -> str:
-        """Render the frozen retired format solely to validate existing history."""
-
-        rendered = ",\n".join(
-            f"        ({json.dumps(label)}, {json.dumps(name)})"
-            for label, name in dependencies
-        )
-        return (
-            '"""Fresh-history baseline for one released addon migration."""\n\n'
-            "from django.db import migrations\n\n\n"
-            "class Migration(migrations.Migration):\n"
-            f"    dependencies = [\n{rendered}\n    ]\n"
-            "    operations = []\n"
-        )
 
     @staticmethod
     def _dependency_node(raw: object, *, origin: str, kind: str) -> tuple[str, str]:
@@ -458,58 +491,19 @@ class RuntimeMigrations:
             for key in ("name", "app_label", "module"):
                 if not isinstance(declaration.get(key), str) or not declaration[key]:
                     raise RuntimeError(f"{addon.name}: migrations[{index}] requires string {key}")
-            for flag in ("uninstalled_only", "retained_only"):
-                if not isinstance(declaration.get(flag, False), bool):
-                    raise RuntimeError(f"{addon.name}: migrations[{index}] {flag} must be a boolean")
-            if declaration.get("uninstalled_only", False) and declaration.get("retained_only", False):
-                raise RuntimeError(
-                    f"{addon.name}: migrations[{index}] uninstalled_only and retained_only are exclusive"
-                )
             yield declaration
 
     def _migration_declarations(self) -> Iterator[tuple[AppConfig, tuple[Mapping[str, Any], ...]]]:
-        """Read opted-in cutovers without enabling an uninstalled addon's capabilities."""
+        """Read installed addons' declared data transitions."""
 
-        installed = {addon.name for addon in self.addons}
-        retained = set(historical_labels(self.runtime_dir))
         for addon in self.addons:
-            # A retained_only retirement targets a label its installed addon no
-            # longer composes; a database without that label's history has nothing
-            # to retire, so the declaration does not exist there.
-            yield addon, tuple(
-                entry for entry in self._declarations(addon)
-                if not entry.get("uninstalled_only", False)
-                and (not entry.get("retained_only", False) or entry["app_label"] in retained)
-            )
-        directories = tuple(Path(path) for path in getattr(settings, "ANGEE_ADDON_DIRS", ()))
-        for name, (manifest, _) in available_addons(directories).items():
-            if name in installed or not any(
-                entry.get("uninstalled_only") is True and entry.get("app_label") in retained
-                for entry in manifest.migrations
-            ):
-                continue
-            addon = resolve_app_config(name, expected_name=name)
-            if addon is None:
-                raise RuntimeError(f"Cannot resolve uninstalled migration owner {name!r}")
-            yield addon, tuple(
-                entry for entry in self._declarations(addon)
-                if entry.get("uninstalled_only", False) and entry["app_label"] in retained
-            )
+            yield addon, tuple(self._declarations(addon))
 
     def _validate_declaration(self, declaration: Mapping[str, Any], origin: str) -> None:
         if declaration["app_label"] not in self.labels:
             raise RuntimeError(f"{origin}: unknown runtime migration target {declaration['app_label']!r}")
         if not declaration["name"].isidentifier() or not declaration["name"].islower():
             raise RuntimeError(f"{origin}: migration name must be a lower-case Python identifier")
-        compatible = declaration.get("compatible_source_sha256", [])
-        if not isinstance(compatible, list) or any(
-            not isinstance(digest, str) or len(digest) != 64
-            or any(character not in "0123456789abcdef" for character in digest)
-            for digest in compatible
-        ):
-            raise RuntimeError(
-                f"{origin}: compatible_source_sha256 must be a list of lowercase SHA-256 digests"
-            )
 
     @staticmethod
     def _source_module(addon: AppConfig, declaration: Mapping[str, Any], origin: str) -> ModuleType:
@@ -578,35 +572,8 @@ class RuntimeMigrations:
         return "".join(lines)
 
 
-class RetiredTableOperation(SeparateDatabaseAndState):
-    """Advance retired state even when earlier runtimes removed its table.
-
-    Check the execution connection, so one generated migration works across
-    databases with different retained schemas. Django owns the wrapped operation
-    and its reversal, which restores the historical schema normally.
-    """
-
-    def __init__(self, table: str, operation: Operation) -> None:
-        self.table = table
-        self.operation = operation
-        super().__init__(database_operations=[operation], state_operations=[operation])
-
-    def deconstruct(self) -> tuple[str, list[Any], dict[str, Any]]:
-        return self.__class__.__qualname__, [], {"table": self.table, "operation": self.operation}
-
-    def database_forwards(
-        self, app_label: str, schema_editor: BaseDatabaseSchemaEditor,
-        from_state: ProjectState, to_state: ProjectState,
-    ) -> None:
-        if self.table in schema_editor.connection.introspection.table_names():
-            super().database_forwards(app_label, schema_editor, from_state, to_state)
-
-    def describe(self) -> str:
-        return f"{self.operation.describe()} if table {self.table} exists"
-
-
 class DropGuardAutodetector(MigrationAutodetector):
-    """Django's autodetector, refusing to drop a column that still holds data.
+    """Django's autodetector, refusing to drop a column or table that still holds data.
 
     ``makemigrations`` detects changes before writing, so a refusal leaves no
     migration file behind; ``migrate`` shares the autodetector, so its pending
@@ -619,14 +586,14 @@ class DropGuardAutodetector(MigrationAutodetector):
     through model and a generated column store nothing of their own. Every
     database that may receive the migration, selected like Django's history
     consistency check, must prove the column empty; an unreachable or
-    unconfigured database cannot, so the drop is refused.
+    unconfigured database cannot, so the drop is refused. A deleted model's table
+    holds data when it has a row, under the same proof; an addon that names the model
+    under ``retired_models`` in its
+    addon.toml ``[resources]`` vouches for the rows its own resource files seeded,
+    which retire with the model.
 
     A reviewed drop is an addon runtime migration: ``angee build`` materializes it
     into the history first, so its removal is never autodetected here.
-
-    For migration-only historical labels, generated table operations retain
-    Django's state transitions but skip database work when the table is absent.
-    Already-recorded retirements produce no new state diff or migration name.
     """
 
     def changes(
@@ -636,7 +603,7 @@ class DropGuardAutodetector(MigrationAutodetector):
         convert_apps: set[str] | None = None,
         migration_name: str | None = None,
     ) -> dict[str, list[Migration]]:
-        """Return Django's changes, or refuse when a removed column holds data."""
+        """Return Django's changes, or refuse when a removed column or table holds data."""
 
         changes = super().changes(graph, trim_to_apps, convert_apps, migration_name)
         refusals = [
@@ -655,26 +622,23 @@ class DropGuardAutodetector(MigrationAutodetector):
                 "Declare a cutover migration that preserves or retires this data and removes the field "
                 "in an installed addon's addon.toml [[migrations]], then run `angee build` before makemigrations."
             )
-        retired_labels = {
-            config.label for config in apps.get_app_configs()
-            if isinstance(config, HistoricalRuntimeConfig)
-        }
-        for app_label in sorted(retired_labels & changes.keys()):
-            for migration in changes[app_label]:
-                for index, operation in enumerate(migration.operations):
-                    if isinstance(operation, ModelOperation):
-                        model_name = operation.name
-                    elif isinstance(operation, (FieldOperation, IndexOperation)):
-                        model_name = operation.model_name
-                    else:
-                        continue
-                    model = self.from_state.apps.get_model(app_label, model_name)
-                    table = model._meta.db_table
-                    if isinstance(operation, RemoveField):
-                        field = model._meta.get_field(operation.name)
-                        if field.many_to_many and field.remote_field.through._meta.auto_created:
-                            table = field.remote_field.through._meta.db_table
-                    migration.operations[index] = RetiredTableOperation(table, operation)
+        refusals = [
+            refusal
+            for app_label, app_migrations in sorted(changes.items())
+            for migration in app_migrations
+            for operation in migration.operations
+            if isinstance(operation, DeleteModel)
+            for refusal in self._populated_table(app_label, operation)
+        ]
+        if refusals:
+            raise CommandError(
+                "unsafe autodetected table drop: " + "; ".join(refusals)
+                + ". A deleted model's table is dropped automatically only when every database that may "
+                "receive the migration proves it holds nothing but rows its retiring addon's resource files seeded "
+                "(addon.toml [resources] retired_models). Declare a cutover "
+                "migration that preserves or retires its rows and deletes the model in an installed addon's "
+                "addon.toml [[migrations]], then run `angee build` before makemigrations."
+            )
         return changes
 
     def _populated(self, app_label: str, operation: RemoveField) -> Iterator[str]:
@@ -697,8 +661,31 @@ class DropGuardAutodetector(MigrationAutodetector):
             table, column = model._meta.db_table, field.column
         else:
             return
+        yield from self._holding(model, lambda alias: rows, f"{model._meta.label_lower}.{field.name}", table, column)
+
+    def _populated_table(self, app_label: str, operation: DeleteModel) -> Iterator[str]:
+        """Describe each target database where the deleted model's table holds unseeded rows."""
+
+        model = self.from_state.apps.get_model(app_label, operation.name)
+        if model._meta.proxy or not model._meta.managed or model._meta.swapped:
+            return
+
+        def unseeded(alias: str) -> Any:
+            return model._base_manager.exclude(pk__in=_seeded_primary_keys(model, alias))
+
+        yield from self._holding(model, unseeded, model._meta.label_lower, model._meta.db_table, None)
+
+    @staticmethod
+    def _holding(
+        model: type[Any], rows_for: Callable[[str], Any], name: str, table: str, column: str | None,
+    ) -> Iterator[str]:
+        """Describe each database that may receive ``model``'s migration where its ``rows_for`` exist.
+
+        Like Django's history consistency check, a host without routers proves
+        only ``default``.
+        """
+
         storage = f"table {table}" if column is None else f"column {table}.{column}"
-        name = f"{model._meta.label_lower}.{field.name}"
         aliases = connections if settings.DATABASE_ROUTERS else [DEFAULT_DB_ALIAS]
         for alias in sorted(aliases):
             if not router.allow_migrate_model(alias, model):
@@ -711,9 +698,36 @@ class DropGuardAutodetector(MigrationAutodetector):
                         column is None
                         or column in {info.name for info in introspection.get_table_description(cursor, table)}
                     )
-                count = rows.using(alias).count() if present else 0
+                count = rows_for(alias).using(alias).count() if present else 0
             except (DatabaseError, ImproperlyConfigured) as error:
                 yield f"{name}: cannot prove {storage} empty on database {alias!r} ({error})"
                 continue
             if count:
                 yield f"{name}: {storage} holds data in {count} row(s) on database {alias!r}"
+
+
+def _seeded_primary_keys(model: type[Any], alias: str) -> set[Any]:
+    """Return the keys of ``model``'s rows its retiring addon's resource files seeded on ``alias``.
+
+    The resource ledger (``angee.resources``) owns which rows those are: an addon
+    that removes a model names it under ``retired_models`` in its addon.toml
+    ``[resources]``, and only its own seeded rows retire with the model; rows other
+    addons seeded, and models no addon names, still count as data. A key the
+    model's primary key cannot hold is not a seeded row of it.
+    """
+
+    try:
+        ledger = apps.get_model("resources", "Resource")
+    except LookupError:
+        return set()
+    try:
+        candidates = ledger.objects.using(alias).retired_seed_keys(model._meta.label)
+    except DatabaseError:
+        return set()
+    keys = set()
+    for candidate in candidates:
+        try:
+            keys.add(model._meta.pk.to_python(candidate))
+        except ValidationError:
+            continue
+    return keys

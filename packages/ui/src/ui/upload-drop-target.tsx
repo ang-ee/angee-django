@@ -16,6 +16,7 @@ export interface UploadDropTargetProps
  * A native browser file-drop surface. It owns the drag enter/leave depth,
  * `DataTransfer.files` filtering, copy drop effect, and overlay state; callers
  * own upload transport and copy.
+ * @kind primitive
  */
 export const UploadDropTarget = React.forwardRef<
   HTMLDivElement,

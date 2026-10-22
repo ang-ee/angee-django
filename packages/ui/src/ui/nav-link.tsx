@@ -6,6 +6,9 @@ import { useRender, type UseRenderRenderProp } from "../lib/slot";
 import { tv, type VariantProps } from "../lib/variants";
 import { cardVariants } from "./card";
 
+/**
+ * @kind token
+ */
 export const navLinkVariants = tv({
   base: "outline-none transition-colors focus-visible:focus-ring",
   variants: {
@@ -48,8 +51,6 @@ export type NavLinkRecipeProps = VariantProps<typeof navLinkVariants>;
 
 export type NavLinkAffordance = NonNullable<NavLinkRecipeProps["affordance"]>;
 
-export type NavLinkVariant = NonNullable<NavLinkRecipeProps["variant"]>;
-
 export type NavLinkState = {
   active: boolean;
   disabled: boolean;
@@ -85,6 +86,9 @@ export type NavLinkProps = Omit<
     to?: string;
   } & NavLinkTarget;
 
+/**
+ * @kind primitive
+ */
 export const NavLink = React.forwardRef<HTMLElement, NavLinkProps>(
   function NavLink(
     {

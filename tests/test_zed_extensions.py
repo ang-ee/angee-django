@@ -345,7 +345,7 @@ def test_render_retains_authored_metadata_and_directives():
 
 
 def test_effective_source_rewrites_do_not_leave_stale_field_gates(tmp_path, monkeypatch):
-    from angee.base.permissions import effective_rebac_definition
+    from angee.permissions import effective_rebac_definition
     from tests.scopedemo.models import Scope
 
     config = apps.get_app_config(Scope._meta.app_label)

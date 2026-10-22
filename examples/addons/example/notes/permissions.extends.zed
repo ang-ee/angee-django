@@ -1,11 +1,40 @@
 // Notes-owned record arms contributed to upstream edge definitions.
 // @rebac_package: notes
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 3
 
-// A note carries source conversations under its writers: the thread attachment
-// edge reaches the note through its GenericForeignKey.
+definition storage/file_attachment {
+    relation note: notes/note // rebac:field=target
+
+    permission target_write = note->write
+}
+
+// Record-scoped uploads follow the note; private and inherited files keep their
+// own access when attached.
+definition storage/file {
+    relation note_record: notes/note // rebac:field={"path":"attachments__note","filters":{"visibility":"record"}}
+
+    permission read = note_record->read
+    permission write = note_record->write
+}
+
+definition knowledge/record_binding {
+    relation note: notes/note // rebac:field=target
+
+    permission target_read = note->read
+    permission target_write = note->write
+}
+
+// A note carries source conversations under its writers, and record tasks under
+// its readers and writers: the thread attachment edge reaches the note through
+// its GenericForeignKey.
 definition messaging/thread_attachment {
     relation note: notes/note // rebac:field=target
 
     permission target_write = note->write
+}
+
+definition projects/task {
+    relation subject_note: notes/note // rebac:field=subject
+    permission subject_read = subject_note->read
+    permission subject_write = subject_note->write
 }

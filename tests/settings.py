@@ -32,11 +32,12 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "axes",
     "rebac",
-    "reversion",
     "simple_history",
     "tests.settings.BareComposeConfig",
-    "angee.base",
+    "angee",
+    "angee.provenance",
     "tests.settings.BareGraphQLConfig",
+    "angee.timeline",
     "django_celery_beat",
     "angee.jobs",
     "angee.resources",
@@ -92,6 +93,7 @@ INSTALLED_APPS = [
     "angee.parties_integrate_carddav",
     "angee.platform_integrate_operator",
     "angee.resources.testing",
+    "angee.provenance.testing",
     "angee.integrate.testing",
     "angee.workflows.testing",
     "tests.linesdemo",
@@ -100,6 +102,7 @@ INSTALLED_APPS = [
     "tests.extcontrib.apps.ExtContribConfig",
     "tests.mtidemo",
     "tests.hierdemo",
+    "tests.recordrefdemo",
     "tests",
 ]
 # Checkout- and process-local so concurrent pytest runs never share one SQLite
@@ -136,3 +139,9 @@ ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE = True
 ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
 
 AutoConfig.apply_installed(globals(), environment=False)
+CELERY_BROKER_URL = "memory://"
+globals()["ANGEE_IMPL_REGISTRIES"].append("tests.integrate_fixtures.ConnectionAdapter")
+ANGEE_TEST_CONNECTION_CLASSES = {
+    "connection": "tests.integrate_fixtures.ConnectionAdapter",
+    "live": "tests.integrate_fixtures.LiveConnectionAdapter",
+}

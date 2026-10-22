@@ -1,11 +1,12 @@
 """Workflow publication and admission contracts."""
 
 import pytest
+from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from django.db import models
 from pydantic import BaseModel, Field
+from rebac import SubjectRef, actor_context
 
-from angee.base.scoping import system_queryset
 from angee.workflows.definition import DefinitionInvalid
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow
@@ -66,6 +67,21 @@ class WorkflowEcho(Echo):
     subject = "workflows.workflow"
 
 
+def test_non_user_editor_cannot_create_a_system_installed_publication(execution):
+    actor, _sent = execution
+    workflow = load_workflow(document("entry"), key="group-publication", actor=actor, publish=False)
+    with actor_context(actor):
+        group = Group.objects.create(name="Workflow publishing editors")
+        publisher = SubjectRef.of("auth/group", str(group.pk), "member")
+        workflow.with_actor(actor).grant_record_access("editor", publisher)
+    assert workflow.with_actor(publisher).has_access("write")
+    with pytest.raises(ValidationError, match="user-backed actor"):
+        Workflow.objects.publish(workflow, expected_revision=workflow.draft_revision, actor=publisher)
+    assert not WorkflowVersion.system_queryset().filter(workflow=workflow).exists()
+    workflow.refresh_from_db()
+    assert workflow.published_id is None
+
+
 def test_request_key_replays_original_admission_after_publication(execution, register_step):
     """A stronger current input contract never invalidates a keyed earlier start."""
     actor, _ = execution
@@ -81,7 +97,7 @@ def test_request_key_replays_original_admission_after_publication(execution, reg
     assert not saved.issues
     version = Workflow.objects.publish(
         workflow,
-        expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+        expected_revision=Workflow.system_queryset().values_list("draft_revision", flat=True).get(pk=workflow.pk),
         actor=actor,
     ).version
     assert version.pk != original.version_id
@@ -89,7 +105,7 @@ def test_request_key_replays_original_admission_after_publication(execution, reg
     assert replay.pk == original.pk
     assert replay.version_id == original.version_id
     assert replay.input == {"value": 1}
-    assert system_queryset(WorkflowRun).filter(request_key="test:original").count() == 1
+    assert WorkflowRun.system_queryset().filter(request_key="test:original").count() == 1
     with pytest.raises(ValidationError):
         WorkflowRun.objects.start(workflow, actor=actor, input={"value": 1})
 
@@ -108,7 +124,7 @@ def test_publication_rejects_empty_target_lists(execution, outcome):
     with pytest.raises(DefinitionInvalid) as caught:
         Workflow.objects.publish(
             workflow,
-            expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+            expected_revision=Workflow.system_queryset().values_list("draft_revision", flat=True).get(pk=workflow.pk),
             actor=actor,
         )
     assert any(
@@ -117,7 +133,7 @@ def test_publication_rejects_empty_target_lists(execution, outcome):
         and "at least one target" in issue.message
         for issue in caught.value.issues
     )
-    assert not system_queryset(WorkflowVersion).exists()
+    assert not WorkflowVersion.system_queryset().exists()
 
 
 def test_result_projection_rejects_nonproducer_whole_object_at_publish(execution):
@@ -139,7 +155,7 @@ def test_result_projection_rejects_nonproducer_whole_object_at_publish(execution
             key="missing_result", actor=actor,
         )
     assert caught.value.issues
-    assert not system_queryset(WorkflowVersion).exists()
+    assert not WorkflowVersion.system_queryset().exists()
 
 
 @pytest.mark.parametrize("source", ["entry", "input"])
@@ -161,7 +177,7 @@ def test_whole_result_rejections_block_publication(execution, register_step, sou
     with pytest.raises(DefinitionInvalid) as caught:
         load_workflow(draft, key="invalid_whole_result", actor=actor)
     assert any(issue.path == ["results", 0, "output"] and reason in issue.message for issue in caught.value.issues)
-    assert not system_queryset(WorkflowVersion).exists()
+    assert not WorkflowVersion.system_queryset().exists()
 
 
 @pytest.mark.parametrize("operation", ["install", "draft"])
@@ -177,7 +193,7 @@ def test_subject_identity_is_immutable_once_a_version_exists(execution, register
         draft=document("entry", step="vault_echo"),
         actor=actor,
     )
-    original = system_queryset(WorkflowVersion).get(pk=workflow.published_id)
+    original = WorkflowVersion.system_queryset().get(pk=workflow.published_id)
     assert original.definition.issues(subject_model="knowledge.vault") == []
     if operation == "install":
         with pytest.raises(ValidationError, match="subject model cannot change"):
@@ -200,13 +216,13 @@ def test_subject_identity_is_immutable_once_a_version_exists(execution, register
         with pytest.raises(DefinitionInvalid) as caught:
             Workflow.objects.publish(
                 workflow,
-                expected_revision=system_queryset(Workflow)
+                expected_revision=Workflow.system_queryset()
                 .values_list("draft_revision", flat=True)
                 .get(pk=workflow.pk),
                 actor=actor,
             )
         assert any(issue.code == "subject" for issue in caught.value.issues)
-    retained = system_queryset(Workflow).get(pk=workflow.pk)
+    retained = Workflow.system_queryset().get(pk=workflow.pk)
     assert retained.subject_model == "knowledge.Vault" and retained.published_id == original.pk
     with pytest.raises(ValidationError, match="subject"):
         WorkflowRun.objects.start(retained, actor=actor, subject=retained, version=original)
@@ -215,8 +231,8 @@ def test_subject_identity_is_immutable_once_a_version_exists(execution, register
 def test_published_version_rejects_instance_deletion_and_protects_author(execution):
     actor, _ = execution
     workflow = load_workflow(document("entry"), key="protected-publication", actor=actor)
-    version = system_queryset(WorkflowVersion).get(pk=workflow.published_id)
+    version = WorkflowVersion.system_queryset().get(pk=workflow.published_id)
     assert WorkflowVersion._meta.get_field("published_by").remote_field.on_delete is models.PROTECT
     with pytest.raises(ValidationError, match="cannot be deleted"):
         version.delete()
-    assert system_queryset(WorkflowVersion).filter(pk=version.pk).exists()
+    assert WorkflowVersion.system_queryset().filter(pk=version.pk).exists()

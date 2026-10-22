@@ -1,31 +1,25 @@
 import { useAuthoredQuery, type MessageVars } from "@angee/refine";
-import { Alert, Badge, Code, GraphView, InlineEmpty, LoadingPanel, PageAside, PrimaryPanePublisher, RailPanel, SearchInput, TreeView, barVariants, cn, routeSearchParam, textRoleVariants, titleCase, updateRouteSearch, useChatterContent, useRouteSearch, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
+import { Code, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, OverflowChipList, PaneLabel, PaneRow, PaneRows, PaneToolbar, PaneToolbarHost, PrimaryPanePublisher, RecordHeader, SearchInput, TreeView, routeSearchParam, titleCase, updateRouteSearch, useChatterContent, useRouteSearch, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
-import { type ReactElement, type ReactNode, useCallback, useEffect, useMemo, useState, } from "react";
+import { type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
 
-import {
-  IamRebacSchema,
-  type IAMPermissionSchema,
-  type IAMRelationSchema,
-  type IAMResourceSchema,
-} from "../documents";
+import { IamRebacSchema, type IAMResourceSchema } from "../documents";
 import { resourceLabel } from "../identity-labels";
 import { useIamT } from "../i18n";
 
 type SchemaNodeKind = "resource" | "relation" | "permission";
 type SchemaEdgeKind = "contains" | "computed";
 
-interface SchemaNodeMeta extends Record<string, unknown> {
-  resource_type: string;
-}
-
-type SchemaGraphNode = GraphViewNode<SchemaNodeKind, SchemaNodeMeta>;
+type SchemaGraphNode = GraphViewNode<SchemaNodeKind>;
 type SchemaGraphEdge = GraphViewEdge<SchemaEdgeKind>;
 
 interface SchemaGraph {
   nodes: SchemaGraphNode[];
   edges: SchemaGraphEdge[];
 }
+
+/** A resource type as a navigator row: its schema plus the member count the tree shows. */
+type ResourceTypeRow = IAMResourceSchema & { label: string; count: number };
 
 const SCHEMA_NODE_STYLES: Record<SchemaNodeKind, GraphViewNodeStyle> = {
   resource: {
@@ -64,6 +58,11 @@ const SCHEMA_EDGE_STYLES: Record<SchemaEdgeKind, GraphViewEdgeStyle> = {
 /** A translator bound to the `iam` namespace, threaded into non-component helpers. */
 type Translate = (key: string, vars?: MessageVars) => string;
 
+/**
+ * The REBAC schema explorer: the resource-type navigator in the primary pane,
+ * the selected type's permission graph as the subject, and its relations and
+ * permissions as the aside's Inspector tab.
+ */
 export function SchemaPage(): ReactElement {
   const t = useIamT();
   const query = useAuthoredQuery(IamRebacSchema);
@@ -92,80 +91,53 @@ export function SchemaPage(): ReactElement {
 
   useEffect(() => {
     if (visibleResources.length === 0) return;
-    if (
-      !visibleResources.some(
-        (resource) => resource.resource_type === selectedResourceType,
-      )
-    ) {
+    if (!visibleResources.some((resource) => resource.resource_type === selectedResourceType)) {
       selectResource(visibleResources[0]?.resource_type ?? "", true);
     }
   }, [selectResource, selectedResourceType, visibleResources]);
 
   const selectedResource =
-    visibleResources.find(
-      (resource) => resource.resource_type === selectedResourceType,
-    )
+    visibleResources.find((resource) => resource.resource_type === selectedResourceType)
     ?? visibleResources[0]
     ?? null;
 
   // The query has no data yet (error or first load): the page renders only its
   // own state surface and publishes nothing, so the shell falls back to its own
-  // primary/secondary content — mirroring the pre-shell Workbench, which the
-  // early returns replaced wholesale.
+  // primary/secondary content.
   const ready = !query.error && !(query.isFetching && resources.length === 0);
 
-  // Primary (left explorer) pane: the resource-type navigator.
   const explorer = useMemo(
-    () =>
-      ready ? (
-        <ResourceTypeList
-          resources={visibleResources}
-          search={search}
-          selectedResource={selectedResource}
-          onSearchChange={setSearch}
-          onSelect={selectResource}
-        />
-      ) : null,
-    [
-      ready,
-      visibleResources,
-      search,
-      selectedResource,
-      selectResource,
-    ],
+    () => ready ? (
+      <ResourceTypeNavigator
+        resources={visibleResources}
+        search={search}
+        selectedResource={selectedResource}
+        onSearchChange={setSearch}
+        onSelect={selectResource}
+      />
+    ) : null,
+    [ready, visibleResources, search, selectedResource, selectResource],
   );
-  // Secondary (Chatter) pane: an additive "inspector" tab alongside the shell
-  // defaults (agent/comments/activity).
+  // The Inspector: an additive aside tab beside the shell defaults.
   const inspectorTab = useMemo<readonly ChatterTab[]>(
-    () => [
-      {
-        id: "inspector",
-        label: t("schema.inspector"),
-        icon: "info",
-        children: (
-          <PageAside collapse="never" gutter="compact" className="h-full w-full border-l-0 bg-sheet-1">
-            <RailPanel title={t("schema.inspector")} empty={t("schema.noMatches")}>
-              {selectedResource ? <SchemaInspector resource={selectedResource} /> : null}
-            </RailPanel>
-          </PageAside>
-        ),
-      },
-    ],
+    () => [{
+      id: "inspector",
+      label: t("schema.inspector"),
+      icon: "info",
+      children: selectedResource
+        ? <SchemaInspector resource={selectedResource} />
+        : <InlineEmpty label={t("schema.noMatches")} />,
+    }],
     [t, selectedResource],
   );
-  const chatter = useMemo(
-    () => (ready ? { tabs: inspectorTab } : null),
-    [ready, inspectorTab],
-  );
+  const chatter = useMemo(() => (ready ? { tabs: inspectorTab } : null), [ready, inspectorTab]);
   useChatterContent(chatter);
 
   if (query.error) {
     return (
       <>
         <PrimaryPanePublisher node={explorer} />
-        <Alert tone="danger" title={t("schema.unavailable")}>
-          {query.error.message}
-        </Alert>
+        <ErrorBanner title={t("schema.unavailable")} description={query.error.message} />
       </>
     );
   }
@@ -182,16 +154,13 @@ export function SchemaPage(): ReactElement {
   return (
     <>
       <PrimaryPanePublisher node={explorer} />
-      <SchemaGraphCanvas
-        resources={visibleResources}
-        selectedResource={selectedResource}
-        onSelect={selectResource}
-      />
+      <SchemaSubject resource={selectedResource} />
     </>
   );
 }
 
-function ResourceTypeList({
+/** The navigator pane: a filter in the pane toolbar over the resource-type tree. */
+function ResourceTypeNavigator({
   resources,
   search,
   selectedResource,
@@ -205,258 +174,126 @@ function ResourceTypeList({
   onSelect: (resource_type: string) => void;
 }): ReactElement {
   const t = useIamT();
+  const rows = useMemo<readonly ResourceTypeRow[]>(
+    () => resources.map((resource) => ({
+      ...resource,
+      label: resourceLabel(resource.resource_type),
+      count: resource.relations.length + resource.permissions.length,
+    })),
+    [resources],
+  );
   return (
-    <section
-      role="navigation"
-      aria-label={t("schema.resourceTypesLabel")}
-      className="flex h-full min-h-0 min-w-0 flex-col"
-    >
-      <div className="border-b border-border-subtle p-3">
-        <SearchInput
-          value={search}
-          placeholder={t("schema.searchPlaceholder")}
-          onChange={(event) => onSearchChange(event.currentTarget.value)}
-          onClear={() => onSearchChange("")}
-        />
-      </div>
-      <TreeView<IAMResourceSchema>
-        rows={resources}
+    <PaneToolbarHost role="navigation" aria-label={t("schema.resourceTypesLabel")}>
+      <PaneToolbar
+        search={
+          <SearchInput
+            value={search}
+            placeholder={t("schema.searchPlaceholder")}
+            onChange={(event) => onSearchChange(event.currentTarget.value)}
+            onClear={() => onSearchChange("")}
+          />
+        }
+      />
+      <TreeView<ResourceTypeRow>
+        rows={rows}
         rowKey="resource_type"
-        label="resource_type"
+        label="label"
+        badge="count"
         selectedId={selectedResource?.resource_type}
         onSelect={(resource) => onSelect(resource.resource_type)}
         emptyContent={t("schema.noMatches")}
         className="min-h-0 flex-1 overflow-auto p-2"
-        renderRow={(resource) => (
-          <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
-            <span className="min-w-0">
-              <span className="block truncate text-13 font-medium">
-                {resourceLabel(resource.resource_type)}
-              </span>
-              <Code truncate tone="muted">{resource.resource_type}</Code>
-            </span>
-            <Badge>{resource.relations.length + resource.permissions.length}</Badge>
-          </span>
-        )}
       />
-    </section>
+    </PaneToolbarHost>
   );
 }
 
-function SchemaGraphCanvas({
-  resources,
-  selectedResource,
-  onSelect,
-}: {
-  resources: readonly IAMResourceSchema[];
-  selectedResource: IAMResourceSchema | null;
-  onSelect: (resource_type: string) => void;
-}): ReactElement {
+/**
+ * The subject: the selected resource type's permission graph under its record
+ * header. Every schema edge stays inside one resource type, so each type is its
+ * own graph; the navigator chooses which one to lay out.
+ */
+function SchemaSubject({ resource }: { resource: IAMResourceSchema | null }): ReactElement {
   const t = useIamT();
-  const graph = useMemo(
-    () => buildSchemaGraph(resources, selectedResource?.resource_type ?? "", t),
-    [resources, selectedResource?.resource_type, t],
-  );
+  const graph = useMemo(() => (resource ? buildSchemaGraph(resource, t) : null), [resource, t]);
 
-  if (resources.length === 0) {
-    return (
-      <section className={cn(textRoleVariants({ role: "meta" }), "flex h-full min-h-0 p-6")}>
-        {t("schema.noMatches")}
-      </section>
-    );
+  if (!resource || !graph) {
+    return <InlineEmpty label={t("schema.noMatches")} className="p-6" />;
   }
 
   return (
-    <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      <header className={barVariants({ edge: "bottom", pad: "compactTall", align: "start", justify: "between", gap: 3 })}>
-        <div className="min-w-0">
-          <h2 className={cn("m-0", textRoleVariants({ role: "title", truncate: true }))}>
-            {t("schema.permissionGraph")}
-          </h2>
-          {selectedResource ? (
-            <Code className="mt-1" truncate tone="muted">
-              {selectedResource.resource_type}
-            </Code>
-          ) : null}
-        </div>
-        <Badge tone="info">
-          {t("schema.nodeCount", { count: graph.nodes.length })}
-        </Badge>
-      </header>
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+      <RecordHeader
+        density="compact"
+        crumbs={t("schema.permissionGraph")}
+        title={resourceLabel(resource.resource_type)}
+        meta={<><Code truncate tone="muted">{resource.resource_type}</Code><span>{t("schema.nodeCount", { count: graph.nodes.length })}</span></>}
+      />
       <GraphView
         nodes={graph.nodes}
         edges={graph.edges}
         nodeStyles={SCHEMA_NODE_STYLES}
         edgeStyles={SCHEMA_EDGE_STYLES}
         className="min-h-0 flex-1"
-        onNodeClick={(node) => {
-          if (node.meta?.resource_type) onSelect(node.meta.resource_type);
-        }}
       />
-    </section>
+    </div>
   );
 }
 
-function SchemaInspector({
-  resource,
-}: {
-  resource: IAMResourceSchema | null;
-}): ReactElement {
-  const t = useIamT();
-  if (!resource) {
-    return (
-      <section className={cn(textRoleVariants({ role: "meta" }), "flex h-full min-h-0 p-6")}>
-        {t("schema.noneSelected")}
-      </section>
-    );
-  }
-
-  return (
-    <aside className="flex h-full min-h-0 min-w-0 flex-col">
-      <header className={barVariants({ edge: "bottom", pad: "compactTall", align: "start" })}>
-        <div className="min-w-0">
-          <h2 className={cn("m-0", textRoleVariants({ role: "title", truncate: true }))}>
-            {resourceLabel(resource.resource_type)}
-          </h2>
-          <Code className="mt-1" truncate tone="muted">
-            {resource.resource_type}
-          </Code>
-        </div>
-      </header>
-      <div className="grid min-h-0 flex-1 content-start gap-5 overflow-auto p-4">
-        <RelationList relations={resource.relations} />
-        <PermissionList permissions={resource.permissions} />
-      </div>
-    </aside>
-  );
-}
-
-function RelationList({
-  relations,
-}: {
-  relations: readonly IAMRelationSchema[];
-}): ReactElement {
+/** The Inspector pane: the selected type's relations and permissions as pane rows. */
+function SchemaInspector({ resource }: { resource: IAMResourceSchema }): ReactElement {
   const t = useIamT();
   return (
-    <InspectorSection count={relations.length} title={t("schema.relations")}>
-      {relations.length > 0 ? (
-        relations.map((relation) => (
-          <InspectorRow
+    <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
+      <PaneRows>
+        <PaneLabel>{resourceLabel(resource.resource_type)}</PaneLabel>
+        <PaneLabel count={resource.relations.length}>{t("schema.relations")}</PaneLabel>
+        {resource.relations.length > 0 ? resource.relations.map((relation) => (
+          <PaneRow
             key={relation.name}
-            code={relation.name}
+            icon="link"
             title={titleCase(relation.name)}
-          >
-            <ChipList
-              values={relation.allowed_subject_types}
-              empty={t("schema.noSubjects")}
-            />
-          </InspectorRow>
-        ))
-      ) : (
-        <InlineEmpty label={t("schema.noRelations")} />
-      )}
-    </InspectorSection>
-  );
-}
-
-function PermissionList({
-  permissions,
-}: {
-  permissions: readonly IAMPermissionSchema[];
-}): ReactElement {
-  const t = useIamT();
-  return (
-    <InspectorSection count={permissions.length} title={t("schema.permissions")}>
-      {permissions.length > 0 ? (
-        permissions.map((permission) => (
-          <InspectorRow
+            detail={<Code truncate tone="muted">{relation.name}</Code>}
+            sub={<SchemaChips values={relation.allowed_subject_types} empty={t("schema.noSubjects")} />}
+          />
+        )) : <InlineEmpty label={t("schema.noRelations")} />}
+        <PaneLabel count={resource.permissions.length}>{t("schema.permissions")}</PaneLabel>
+        {resource.permissions.length > 0 ? resource.permissions.map((permission) => (
+          <PaneRow
             key={permission.name}
-            code={permission.name}
+            icon="auth"
             title={titleCase(permission.name)}
-          >
-            <ChipList
-              values={permission.conditions.map((condition) => condition.name)}
-              empty={t("schema.noConditions")}
-            />
-          </InspectorRow>
-        ))
-      ) : (
-        <InlineEmpty label={t("schema.noPermissions")} />
-      )}
-    </InspectorSection>
-  );
-}
-
-function InspectorSection({
-  children,
-  count,
-  title,
-}: {
-  children: ReactNode;
-  count: number;
-  title: string;
-}): ReactElement {
-  return (
-    <section className="min-w-0">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <h3 className="m-0 text-13 font-semibold text-fg">{title}</h3>
-        <Badge>{count}</Badge>
-      </div>
-      <div className="grid gap-2">{children}</div>
-    </section>
-  );
-}
-
-function InspectorRow({
-  children,
-  code,
-  title,
-}: {
-  children: ReactNode;
-  code: string;
-  title: string;
-}): ReactElement {
-  return (
-    <div className="min-w-0 rounded-6 border border-border-subtle bg-sheet-2 p-3">
-      <div className="mb-2 min-w-0">
-        <div className="truncate text-13 font-medium text-fg">{title}</div>
-        <Code truncate tone="muted">
-          {code}
-        </Code>
-      </div>
-      {children}
+            detail={<Code truncate tone="muted">{permission.name}</Code>}
+            sub={<SchemaChips values={permission.conditions.map((condition) => condition.name)} empty={t("schema.noConditions")} />}
+          />
+        )) : <InlineEmpty label={t("schema.noPermissions")} />}
+      </PaneRows>
     </div>
   );
 }
 
-function ChipList({
-  values,
-  empty,
-}: {
-  values: readonly string[];
-  empty: string;
-}): ReactElement {
-  if (values.length === 0) {
-    return <span className={textRoleVariants({ role: "meta" })}>{empty}</span>;
-  }
-  return (
-    <div className="flex min-w-0 flex-wrap gap-1">
-      {values.map((value) => (
-        <Badge key={value} tone="neutral">
-          {value}
-        </Badge>
-      ))}
-    </div>
-  );
+function SchemaChips({ values, empty }: { values: readonly string[]; empty: string }): ReactElement {
+  if (values.length === 0) return <>{empty}</>;
+  return <OverflowChipList items={values.map((value) => ({ id: value, label: value }))} />;
 }
 
 function buildSchemaGraph(
-  resources: readonly IAMResourceSchema[],
-  selectedResourceType: string,
+  resource: IAMResourceSchema,
   t: Translate,
 ): SchemaGraph {
-  const nodes: SchemaGraphNode[] = [];
+  const resource_id = resourceNodeId(resource.resource_type);
+  const nodes: SchemaGraphNode[] = [{
+    id: resource_id,
+    kind: "resource",
+    title: resourceLabel(resource.resource_type),
+    code: resource.resource_type,
+    detail: t("schema.resourceDetail", {
+      relations: resource.relations.length,
+      permissions: resource.permissions.length,
+    }),
+  }];
   const edges: SchemaGraphEdge[] = [];
+  const relationIds = new Map<string, string>();
   const computedEdges = new Map<
     string,
     {
@@ -467,88 +304,59 @@ function buildSchemaGraph(
     }
   >();
 
-  for (const resource of resources) {
-    const resource_id = resourceNodeId(resource.resource_type);
-    const relationIds = new Map<string, string>();
-    const selected = resource.resource_type === selectedResourceType;
-
-    nodes.push(
-      schemaNode({
-        id: resource_id,
-        kind: "resource",
-        resource_type: resource.resource_type,
-        selected,
-        title: resourceLabel(resource.resource_type),
-        code: resource.resource_type,
-        detail: t("schema.resourceDetail", {
-          relations: resource.relations.length,
-          permissions: resource.permissions.length,
-        }),
+  for (const relation of resource.relations) {
+    const relationId = relationNodeId(resource.resource_type, relation.name);
+    relationIds.set(relation.name, relationId);
+    nodes.push({
+      id: relationId,
+      kind: "relation",
+      title: titleCase(relation.name),
+      code: relation.name,
+      detail: t("schema.subjectCount", {
+        count: relation.allowed_subject_types.length,
       }),
+    });
+    edges.push({
+      id: `contains:${resource.resource_type}:${relation.name}`,
+      source: resource_id,
+      target: relationId,
+      kind: "contains",
+      label: t("schema.edge.contains"),
+    });
+  }
+
+  for (const permission of resource.permissions) {
+    const permissionId = permissionNodeId(
+      resource.resource_type,
+      permission.name,
     );
+    nodes.push({
+      id: permissionId,
+      kind: "permission",
+      title: titleCase(permission.name),
+      code: permission.name,
+      detail: t("schema.conditionCount", {
+        count: permission.conditions.length,
+      }),
+    });
 
-    for (const relation of resource.relations) {
-      const relationId = relationNodeId(resource.resource_type, relation.name);
-      relationIds.set(relation.name, relationId);
-      nodes.push(
-        schemaNode({
-          id: relationId,
-          kind: "relation",
-          resource_type: resource.resource_type,
-          selected,
-          title: titleCase(relation.name),
-          code: relation.name,
-          detail: t("schema.subjectCount", {
-            count: relation.allowed_subject_types.length,
-          }),
-        }),
-      );
-      edges.push({
-        id: `contains:${resource.resource_type}:${relation.name}`,
-        source: resource_id,
-        target: relationId,
-        kind: "contains",
-        label: t("schema.edge.contains"),
-      });
-    }
-
-    for (const permission of resource.permissions) {
-      const permissionId = permissionNodeId(
-        resource.resource_type,
-        permission.name,
-      );
-      nodes.push(
-        schemaNode({
-          id: permissionId,
-          kind: "permission",
-          resource_type: resource.resource_type,
-          selected,
-          title: titleCase(permission.name),
-          code: permission.name,
-          detail: t("schema.conditionCount", {
-            count: permission.conditions.length,
-          }),
-        }),
-      );
-
-      for (const condition of permission.conditions) {
-        const relationName = conditionRelationName(condition.name, relationIds);
-        if (!relationName) continue;
-        const relationId = relationIds.get(relationName);
-        if (!relationId) continue;
-        const edgeKey = `${relationId}\u0000${permissionId}`;
-        const existingEdge = computedEdges.get(edgeKey);
-        if (existingEdge) {
-          existingEdge.labels.push(condition.name);
-          continue;
-        }
-        computedEdges.set(edgeKey, {
-          id: `computed:${resource.resource_type}:${relationName}:${permission.name}`,
-          source: relationId,
-          target: permissionId,
-          labels: [condition.name],
-        });
+    for (const condition of permission.conditions) {
+      const relationName = conditionRelationName(condition.name, relationIds);
+      if (!relationName) continue;
+      const relationId = relationIds.get(relationName);
+      if (!relationId) continue;
+      const edgeKey = `${relationId}\u0000${permissionId}`;
+      const existingEdge = computedEdges.get(edgeKey);
+      if (existingEdge) {
+        existingEdge.labels.push(condition.name);
+        continue;
       }
+      computedEdges.set(edgeKey, {
+        id: `computed:${resource.resource_type}:${relationName}:${permission.name}`,
+        source: relationId,
+        target: permissionId,
+        labels: [condition.name],
+      });
     }
   }
 
@@ -563,36 +371,6 @@ function buildSchemaGraph(
   }
 
   return { nodes, edges };
-}
-
-function schemaNode({
-  id,
-  kind,
-  resource_type,
-  selected,
-  title,
-  code,
-  detail,
-}: {
-  id: string;
-  kind: SchemaNodeKind;
-  resource_type: string;
-  selected: boolean;
-  title: string;
-  code: string;
-  detail: ReactNode;
-}): SchemaGraphNode {
-  return {
-    id,
-    kind,
-    title,
-    code,
-    detail,
-    selected,
-    meta: {
-      resource_type,
-    },
-  };
 }
 
 function conditionRelationName(

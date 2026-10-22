@@ -1,4 +1,5 @@
-import { routeSearchParam, type DndPayload } from "@angee/ui";
+import { useCallback } from "react";
+import { displayMime, routeSearchParam, useMimeLabel, type DndPayload } from "@angee/ui";
 
 import type { StorageFile, StorageFolder } from "./documents";
 
@@ -166,4 +167,14 @@ export function folderTreeRows(
     });
   }
   return rows;
+}
+
+/** A file's type as the user reads it: the registered label, else the shared human
+ * label of the mime the preview model derives from the declared type or the extension. */
+export function useFileTypeLabel(): (row: Pick<StorageFileRow, "filename" | "mime_type">) => string {
+  const mimeLabel = useMimeLabel();
+  return useCallback(
+    (row) => row.mime_type?.label || mimeLabel(displayMime({ url: "", name: row.filename, mime: row.mime_type?.mime_type })),
+    [mimeLabel],
+  );
 }

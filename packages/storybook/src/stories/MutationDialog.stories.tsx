@@ -60,7 +60,7 @@ function MutationDialogDemo(): React.ReactElement {
     <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets }}>
       <div className="grid gap-4">
         {submitted ? (
-          <pre className="max-w-md rounded-6 bg-inset p-3 text-xs">
+          <pre className="max-w-md rounded-6 bg-inset p-3 text-12">
             {JSON.stringify(submitted, null, 2)}
           </pre>
         ) : null}

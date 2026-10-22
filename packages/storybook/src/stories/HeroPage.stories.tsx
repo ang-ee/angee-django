@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, Card, FieldRow, FormGrid, HeroPage, Input } from "@angee/ui";
+import { Button, Card, FieldControl, FieldLabel, FieldRoot, FormGrid, HeroPage } from "@angee/ui";
 
 const meta = {
   title: "Layouts/HeroPage",
@@ -24,12 +24,14 @@ export const CenteredCard: Story = {
               </p>
             </header>
             <FormGrid columns="one">
-              <FieldRow label="Email" required>
-                <Input type="email" placeholder="you@example.com" />
-              </FieldRow>
-              <FieldRow label="Password" required>
-                <Input type="password" placeholder="••••••••" />
-              </FieldRow>
+              <FieldRoot>
+                <FieldLabel required>Email</FieldLabel>
+                <FieldControl type="email" placeholder="you@example.com" />
+              </FieldRoot>
+              <FieldRoot>
+                <FieldLabel required>Password</FieldLabel>
+                <FieldControl type="password" placeholder="••••••••" />
+              </FieldRoot>
             </FormGrid>
             <Button variant="primary" className="w-full">
               Continue

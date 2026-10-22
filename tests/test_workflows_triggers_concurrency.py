@@ -8,7 +8,6 @@ from django.db import connection, transaction
 from rebac import RelationshipTuple, actor_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.models import active_relationship_model
 
-from angee.base.scoping import system_queryset
 from angee.workflows.testing.drivers import trigger_source
 from angee.workflows.testing.models import Trigger, TriggerEvent, WorkflowRun
 from tests.conftest import Vault, create_user, vault_for
@@ -36,7 +35,7 @@ def test_two_saves_racing_admission_retain_one_ledger_and_run(trigger_setup, mon
     actor, _, record, trigger = trigger_setup
     Trigger.objects.enable(trigger, actor=actor)
     capture(record)
-    event = system_queryset(TriggerEvent).get()
+    event = TriggerEvent.system_queryset().get()
     entered, release = Event(), Event()
 
     def pause(self, record, *, actor):
@@ -67,8 +66,8 @@ def test_two_saves_racing_admission_retain_one_ledger_and_run(trigger_setup, mon
         first.result(timeout=10)
         second.result(timeout=10)
     assert Trigger.objects.drain() == 0
-    assert system_queryset(TriggerEvent).count() == 1
-    run = system_queryset(WorkflowRun).get()
+    assert TriggerEvent.system_queryset().count() == 1
+    run = WorkflowRun.system_queryset().get()
     assert run.request_key == f"trigger:{trigger.sqid}:{record.sqid}"
     event.refresh_from_db()
     assert event.admitted_at and event.started_run.pk == run.pk
@@ -88,7 +87,7 @@ def test_reentrant_capture_does_not_lock_other_triggers(trigger_setup, monkeypat
     grant_principal_record_write(record, workflow)
     grant_principal_record_write(other, workflow)
     capture(record)
-    event = system_queryset(TriggerEvent).get(trigger=higher, record_object_id=record.pk)
+    event = TriggerEvent.system_queryset().get(trigger=higher, record_object_id=record.pk)
     entered, release_hook, captured, release_writer = Event(), Event(), Event(), Event()
 
     def write(self, record, *, actor):
@@ -119,10 +118,10 @@ def test_reentrant_capture_does_not_lock_other_triggers(trigger_setup, monkeypat
                 release_hook.set()
                 release_writer.set()
             saved.result(timeout=10)
-        assert system_queryset(TriggerEvent).count() == 4
+        assert TriggerEvent.system_queryset().count() == 4
         assert Trigger.objects.drain() == 3
         assert Trigger.objects.drain() == 0
-        assert system_queryset(WorkflowRun).count() == 4
+        assert WorkflowRun.system_queryset().count() == 4
         assert "Workflow trigger capture failed" not in caplog.text
 
 
@@ -132,7 +131,7 @@ def test_domain_hook_write_and_concurrent_save_share_record_first_lock_order(tri
     Trigger.objects.enable(trigger, actor=actor)
     grant_principal_record_write(record, workflow)
     capture(record)
-    event = system_queryset(TriggerEvent).get()
+    event = TriggerEvent.system_queryset().get()
     entered, release = Event(), Event()
 
     def write(self, record, *, actor):
@@ -166,7 +165,7 @@ def test_domain_hook_write_and_concurrent_save_share_record_first_lock_order(tri
     assert record.name == "Saved afterward"
     event.refresh_from_db()
     assert event.admitted_at and not event.rejection
-    assert event.started_run.pk == system_queryset(WorkflowRun).get().pk
+    assert event.started_run.pk == WorkflowRun.system_queryset().get().pk
 
 
 def test_admission_holds_its_grant_while_other_triggers_enable(trigger_setup, monkeypatch):
@@ -174,7 +173,7 @@ def test_admission_holds_its_grant_while_other_triggers_enable(trigger_setup, mo
     actor, workflow, record, trigger = trigger_setup
     Trigger.objects.enable(trigger, actor=actor)
     capture(record)
-    event = system_queryset(TriggerEvent).get(trigger=trigger)
+    event = TriggerEvent.system_queryset().get(trigger=trigger)
     entered, release = Event(), Event()
     grant = active_relationship_model().objects.filter(
         resource_type="knowledge/role", resource_id="vault_viewer", relation="member",

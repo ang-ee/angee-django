@@ -69,11 +69,15 @@ class _EmbeddedMessageBudget:
     remaining_bytes: int = EMBEDDED_MESSAGE_MAX_BYTES
 
 # mail-parser-reply owns plain-text segmentation (docs/stack.md): reply
-# boundaries at attribution headers, signature and disclaimer detection. The
-# language set covers what the previous hand-rolled attribution heuristic
-# matched (en/fr/de/es/it) so non-English "On …, X wrote:" headers keep
-# classifying as reply boundaries.
-_REPLY_PARSER = EmailReplyParser(languages=["en", "fr", "de", "es", "it"])
+# boundaries at attribution headers, signature and disclaimer detection. A missed
+# forward header leaves the forwarded mail in the sender's signature, quoted
+# numbers and all, so Czech and Dutch join the original five. The library's other
+# languages misread English: Danish signature openers ("Tak", "Kh") and Swedish
+# "/word" match ordinary body lines without a word boundary, and a single Polish
+# header line ("Do:", "Data:") splits a reply. Czech and Dutch need two header lines
+# in a row ("Van: …" then "Cc: …"), which English prose rarely writes; when it does, the
+# signature lands in the quoted part and is missed, never mined from the wrong text.
+_REPLY_PARSER = EmailReplyParser(languages=["cs", "de", "en", "es", "fr", "it", "nl"])
 
 # Envelope roles mapped from the address headers that carry them.
 _RECIPIENT_HEADERS = (("To", "to"), ("Cc", "cc"), ("Bcc", "bcc"))
@@ -83,13 +87,10 @@ _RECIPIENT_HEADERS = (("To", "to"), ("Cc", "cc"), ("Bcc", "bcc"))
 # better owner (addresses → Participant, Message-ID/References → identity/threading,
 # Subject → the TITLE part, Date → sent_at, Content-* → the part tree) or is
 # transport diagnostics that stay in the lossless ``metadata["headers"]`` envelope.
-_RETAINED_HEADERS = (
-    "list-id",
-    "list-unsubscribe",
-    "reply-to",
-    "auto-submitted",
-    "precedence",
-)
+# They are emitted in this order, which the ingest sync hash covers: reordering
+# rebuilds every stored message's parts. They include every header
+# ``angee.messaging.managers.AUTOMATED_MAIL_HEADERS`` reads; a test holds that.
+_RETAINED_HEADERS = ("list-id", "list-unsubscribe", "reply-to", "auto-submitted", "precedence")
 
 
 def parse_message(
@@ -217,7 +218,9 @@ def split_plain_text(text: str) -> list[tuple[str, str]]:
     ``body`` paragraphs from the newest reply, ``quoted`` paragraphs for older
     replies and marker-quoted runs (attribution line included, markers stripped
     to any depth, so the text content-addresses to the original body's
-    fragments), and ``signature`` for signatures and disclaimers alike.
+    fragments), and ``signature`` for the sender's signatures and disclaimers
+    alike. An older reply's signature belongs to its quoted author, so it is
+    ``quoted`` (see :func:`_tail_role`).
     Paragraphs are blank-line separated; document order is preserved so the
     first body paragraph stays the preview.
     """
@@ -236,9 +239,11 @@ def split_plain_text(text: str) -> list[tuple[str, str]]:
         segments.extend(_body_segments(reply.body, quoted=index > 0))
         signature = _signature_text(reply.signatures or "", reply.disclaimers)
         if signature:
-            segments.append(("signature", signature))
+            segments.append((_tail_role(reply.signatures, body=reply.body, newest=index == 0), signature))
         segments.extend(
-            ("signature", _strip_quote_markers(disclaimer)) for disclaimer in reply.disclaimers if disclaimer.strip()
+            (_tail_role(disclaimer, body=reply.body, newest=index == 0), _strip_quote_markers(disclaimer))
+            for disclaimer in reply.disclaimers
+            if disclaimer.strip()
         )
     return segments
 
@@ -607,25 +612,6 @@ def _unsupported_message_part(message: MIMEPart) -> ParsedPart:
     )
 
 
-def expand_embedded_message(raw: bytes) -> ParsedPart | None:
-    """Parse retained RFC 5322 envelope bytes into one bounded evidence subtree.
-
-    The result is the single subtree to append beneath the existing raw
-    ``message/rfc822`` Part. ``None`` leaves that parent intact when the bytes are
-    empty, malformed, or exceed the embedded expansion budget.
-    """
-
-    if not raw or len(raw) > EMBEDDED_MESSAGE_MAX_BYTES:
-        return None
-    try:
-        embedded = cast(EmailMessage, message_from_bytes(raw, policy=email_policy.default))
-    except Exception:  # noqa: BLE001 — the retained parent remains the evidence.
-        return None
-    return _expand_embedded_message(
-        embedded, raw=raw, depth=0, budget=_EmbeddedMessageBudget(),
-    )
-
-
 def _expand_embedded_message(
     embedded: MIMEPart | None,
     *,
@@ -780,6 +766,21 @@ def _body_segments(body: str, *, quoted: bool) -> list[tuple[str, str]]:
         run_lines.append(line)
     flush()
     return segments
+
+
+def _tail_role(tail: str, *, body: str, newest: bool) -> str:
+    """Return the role of one reply's signature or disclaimer text.
+
+    The newest reply's tail is the sender's. An older reply's tail belongs to the
+    quoted author: below an Outlook-style quote nothing carries markers, and a
+    ``>``-quoted reply quotes its signature too. Only an unmarked tail below a
+    ``>``-quoted reply is the sender's own signature placed after a bottom quote.
+    """
+
+    def marked(text: str) -> bool:
+        return any(_QUOTE_MARKER_RE.match(line) for line in text.split("\n"))
+
+    return "signature" if newest or (marked(body) and not marked(tail)) else "quoted"
 
 
 def _strip_quote_markers(text: str) -> str:

@@ -1,5 +1,5 @@
 import { useAuthoredQuery } from "@angee/refine";
-import { EmptyState, ErrorBanner, PreviewPane, Skeleton, SkeletonStatus, routeSearchParam, type RecordPeekReference } from "@angee/ui";
+import { EmptyState, ErrorBanner, PreviewPane, Skeleton, SkeletonStatus, routeSearchParam } from "@angee/ui";
 import type { ReactElement } from "react";
 
 import { StorageFileById, type StorageFile } from "../data/documents";
@@ -7,19 +7,6 @@ import { useStorageT } from "../i18n";
 
 /** Portable detail key; its value binds the requested page to one exact File. */
 export const FILE_PREVIEW_PAGE_PARAM = "previewPage";
-
-export function filePreviewReference(id: string, oneBasedPage?: number | null): RecordPeekReference {
-  const page = validPreviewPage(oneBasedPage);
-  return {
-    model: "storage.File",
-    id,
-    tab: "preview",
-    ...(page === null ? {} : {
-      page,
-      search: { [FILE_PREVIEW_PAGE_PARAM]: `${id}:${page}` },
-    }),
-  };
-}
 
 export function filePreviewPageFromSearch(
   search: Readonly<Record<string, unknown>>,
@@ -51,10 +38,6 @@ export function FileRecordPreview({ id, page }: { id: string; page?: number | nu
   if (!file) return query.isFetching ? <SkeletonStatus label={t("loadingFile")} className="space-y-3 p-3">
     <Skeleton className="h-6 w-2/3" /><Skeleton className="h-40" />
   </SkeletonStatus> : <EmptyState icon="file" title={t("file.notFoundTitle")} />;
-  return <div className="flex h-full min-h-0 flex-col">
-    <div className="shrink-0 border-b border-border-subtle px-3 py-2 text-xs text-fg-muted">
-      <p className="truncate" title={file.filename}>{file.title || file.filename}</p>
-    </div>
-    <div className="min-h-0 flex-1"><FilePreview file={file} page={page} /></div>
-  </div>;
+  // The record page's header already names the file; the tab is the preview alone.
+  return <FilePreview file={file} page={page} />;
 }

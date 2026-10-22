@@ -19,9 +19,9 @@ import { cn } from "../lib/cn";
  * provider (drawers, settings shells) register there, not here, and never
  * affect the page's count.
  *
- * `ControlBand` and `Statusline` are the two instances; they differ only in the
- * wrapper element and its flush styling, so the context/provider/portal logic
- * lives here once.
+ * `ControlBand`, the `PaneToolbar` band and `Statusline` are the instances; they
+ * differ only in the wrapper element and its flush styling, so the
+ * context/provider/portal logic lives here once.
  */
 export interface LayoutBand {
   Provider: (props: {
@@ -73,7 +73,8 @@ interface BandContextValue {
 }
 
 export function createLayoutBand(
-  element: "div" | "footer",
+  /** The band's element: an intrinsic tag, or a component forwarding `ref` and `className` (a `Toolbar`). */
+  element: React.ElementType,
   baseClassName: string,
 ): LayoutBand {
   const BandContext = React.createContext<BandContextValue | undefined>(

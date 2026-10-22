@@ -69,7 +69,6 @@ const RootsSchema = v.objectWithRest({
   save: OptionalString,
   delete: OptionalString,
   deletePreview: OptionalString,
-  revisions: OptionalString,
   changes: OptionalString,
 }, OptionalString);
 const TypeNamesSchema = v.objectWithRest({
@@ -86,7 +85,6 @@ const TypeNamesSchema = v.objectWithRest({
   createInput: OptionalString,
   updateInput: OptionalString,
   deletePayload: OptionalString,
-  revision: OptionalString,
 }, OptionalString);
 const SubjectTypeSchema = v.looseObject({
   type: v.string(),
@@ -112,11 +110,17 @@ const ResourceSchema = v.looseObject({
   concreteKinds: v.optional(Strings),
   /** Model labels of the polymorphic edges whose schema declares this type a target, sorted: what its records can carry. */
   recordEdges: v.optional(Strings),
+  /** Whether the shared `merge_records` verb serves this resource: its model composes `MergeableMixin`. */
+  mergeable: v.optional(v.boolean()),
+  /** Whether the provenance `history` surface serves this resource: its model keeps native history. */
+  history: v.optional(v.boolean()),
   roots: RootsSchema,
   typeNames: TypeNamesSchema,
   rowModel: v.optional(v.picklist(["client", "server"])),
   recordRepresentation: OptionalString,
   recordSearchFields: v.optional(Strings),
+  /** Fields rendered with their native widgets in the record-header facts line. */
+  contextFields: v.optional(Strings),
   subtitle: v.nullish(SubtitleSchema),
   implFields: v.optional(Strings),
   capabilities: Strings,

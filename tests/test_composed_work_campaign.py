@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
+
 
 def test_composed_work_contracts(tmp_path):
     root = Path(__file__).resolve().parents[1]
@@ -16,7 +18,7 @@ def test_composed_work_contracts(tmp_path):
         [sys.executable, str(root / "tests/composed_host.py"), "--runtime-dir", str(tmp_path / "runtime"),
          "--app", "angee.work", "--app", "angee.mcp", "--no-examples", "--action", "tests",
          "--test-label", "tests.native_work_campaign", "--output", str(report)],
-        cwd=root, env=env, capture_output=True, text=True, timeout=180, check=False,
+        cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT, check=False,
     )
     assert result.returncode == 0, f"composed work campaign failed:\n{result.stdout}\n{result.stderr}"
     assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}

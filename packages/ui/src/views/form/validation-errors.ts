@@ -29,12 +29,18 @@ export type FormSubmitResult<TData> =
   | { status: "invalid"; issues: ValidationErrors }
   | { status: "conflict"; message: string; field?: string };
 
-/** Decode a wire action response through the transport owner. */
+/** Decode a wire action response through the transport owner.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function actionFormSubmitResult(data: unknown, root: string): FormSubmitResult<ActionOutcome> {
   return actionOutcomeSubmitResult(extractActionOutcome(data, root));
 }
 
-/** Adapt an already normalized action outcome without decoding it again. */
+/** Adapt an already normalized action outcome without decoding it again.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function actionOutcomeSubmitResult(outcome: ActionOutcome | null | undefined): FormSubmitResult<ActionOutcome> {
   return outcome?.ok
     ? { status: "ok", data: outcome, message: outcome.message }
@@ -44,16 +50,26 @@ export function actionOutcomeSubmitResult(outcome: ActionOutcome | null | undefi
       });
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function invalidFormSubmit(issues: ValidationErrors): Extract<FormSubmitResult<never>, { status: "invalid" }> {
   return { status: "invalid", issues };
 }
 
-/** Missing mutation data cannot acknowledge a saved form. */
+/** Missing mutation data cannot acknowledge a saved form.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function savedFormSubmitResult<TData>(data: TData | null | undefined, missingMessage: string): FormSubmitResult<TData> {
   return data == null ? formSubmitError(missingMessage) : { status: "ok", data };
 }
 
-/** Decode a transport failure; contract violations remain developer errors. */
+/** Decode a transport failure; contract violations remain developer errors.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function formSubmitError(cause: unknown, fallback?: string): Exclude<FormSubmitResult<never>, { status: "ok" }> {
   if (cause instanceof FormSubmitContractError) throw cause;
   if (publicGraphQLErrorsFromUnknown(cause).some((item) =>
@@ -74,7 +90,10 @@ function assertNeverResult(_result: never): never {
   throw new FormSubmitContractError();
 }
 
-/** Narrow one submit result and bind its issues to RHF; malformed results fail loudly. */
+/** Narrow one submit result and bind its issues to RHF; malformed results fail loudly.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function applyFormErrors<TValues extends FieldValues, TData>(
   form: Pick<UseFormReturn<TValues>, "setError">,
   result: FormSubmitResult<TData>,
@@ -132,6 +151,8 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
 /**
  * Project `<field>.<row index>.<child field>` errors into the row-indexed
  * validation contract consumed by editable line cells.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function lineRowErrorsFromDottedPaths(
   errors: DottedPathFieldErrorMap,
@@ -164,6 +185,8 @@ export function lineRowErrorsFromDottedPaths(
  * The GraphQL runtime surfaces Django model-validation failures as structured
  * extensions; the base form binds field messages and shows the rest at form
  * level.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function validationErrorsFromError(error: unknown, fallback = "Could not save record."): ValidationErrors {
   const fieldErrors: Record<string, string[]> = {};
@@ -198,7 +221,10 @@ export function validationErrorsFromError(error: unknown, fallback = "Could not 
   return { fieldErrors, formErrors };
 }
 
-/** Parse an opaque JSON scalar as a field-to-messages validation map. */
+/** Parse an opaque JSON scalar as a field-to-messages validation map.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function validationErrorMap(
   value: unknown,
 ): Record<string, string[]> | null {
@@ -208,7 +234,10 @@ export function validationErrorMap(
   );
 }
 
-/** Format an opaque field-to-messages validation map for a summary surface. */
+/** Format an opaque field-to-messages validation map for a summary surface.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function validationErrorMessages(value: unknown): string[] {
   const errors = validationErrorMap(value);
   if (!errors) return [];
@@ -222,6 +251,8 @@ export function validationErrorMessages(value: unknown): string[] {
  * {@link useDottedPathFieldErrors} or `fieldErrorMessages` to one nested dotted
  * path. Exact messages lose their path prefix; deeper descendants retain it
  * for another nested owner. Matching keeps the owner's exact-or-dot-boundary rule.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function messagesForDottedPath(
   messages: readonly string[],
@@ -241,6 +272,8 @@ export function messagesForDottedPath(
  * Direct messages from a scoped list returned by `fieldErrorMessages` or
  * {@link useDottedPathFieldErrors}: exact-path messages are bare, while dotted
  * descendants retain their prefixes and are excluded here.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function directDottedPathMessages(
   messages: readonly string[],
@@ -255,6 +288,8 @@ export function directDottedPathMessages(
  * paths. A field binds its exact key and descendants, editing it clears the
  * same boundary, and keys belonging to no rendered field fold into one form
  * summary.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function useDottedPathFieldErrors(
   fieldNames: readonly string[] = EMPTY_FIELD_NAMES,

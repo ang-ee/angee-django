@@ -21,17 +21,17 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Prefetch
 from django.utils import timezone
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
-from rebac import MissingActorError, PermissionDenied, system_context
+from rebac import PermissionDenied, check_new, system_context, to_subject_ref
+from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
-from angee.base.errors import exception_text
-from angee.base.identity import public_id_of
+from angee.errors import exception_text
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
@@ -39,6 +39,7 @@ from angee.graphql.actions import (
     authorized_action_target,
     resolve_action_target,
 )
+from angee.graphql.capabilities import PermissionsExtension, held_permissions
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
@@ -46,12 +47,12 @@ from angee.graphql.data import (
     public_pk_decoder,
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
-from angee.graphql.ids import PublicID
+from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.impl import ImplChoice, can_read_impl_choices
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.graphql.writes import instance_for_write, write_queryset
+from angee.graphql.writes import instance_for_write
 from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
@@ -59,15 +60,18 @@ from angee.iam.permissions import is_platform_admin
 from angee.iam.permissions import request_from_info as _request
 from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
+from angee.identity import public_id_of
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
+from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle
 from angee.integrate.oauth import flow, state
-from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
+from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, PROVIDER_UNAVAILABLE, OAuthFlowError
+from angee.integrate.oauth.registrations import OAuthRegistrationExtension
 from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.registry import models_with
-from angee.integrate.states import ConflictKeep
+from angee.integrate.states import ConflictKeep, SyncFailure, SyncFailureKind, SyncFailureStatus
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +83,12 @@ Credential = apps.get_model("integrate", "Credential")
 WebhookSubscription = apps.get_model("integrate", "WebhookSubscription")
 SyncStream = apps.get_model("integrate", "SyncStream")
 RecordLink = apps.get_model("integrate", "RecordLink")
-RecordRevision = apps.get_model("integrate", "RecordRevision")
-SyncDiscrepancy = apps.get_model("integrate", "SyncDiscrepancy")
 User = get_user_model()
+_OPEN_FAILURE_LINKS = Prefetch(
+    "links",
+    queryset=RecordLink.objects.with_open_failures(),
+    to_attr="open_failure_links",
+)
 
 
 @strawberry.type
@@ -126,9 +133,15 @@ class ConsoleIntegrationCapabilitiesQuery:
             mode = model.integration_create_mode
             if mode is None:
                 continue
-            try:
-                model.objects.check_create()
-            except MissingActorError, PermissionDenied:
+            resource_type = model_resource_type(model)
+            if (
+                resource_type is None
+                or not check_new(
+                    subject=to_subject_ref(_session_user(info)),
+                    action="create",
+                    resource_type=resource_type,
+                ).allowed
+            ):
                 continue
             capabilities.append(
                 IntegrationCapability(
@@ -727,25 +740,29 @@ def apply_integration_patch_fields(
     Lifecycle is guarded by ``Integration.set_lifecycle()``, which eagerly saves
     through the transition hook. It is therefore deliberately omitted from the
     returned set so child update callers do not re-emit the state write.
+    Credential attachment, lifecycle transitions and ``transfer_ownership`` save
+    eagerly, before unsaved patch values are set; a null owner clears it.
     """
 
     provided: set[str] = set()
+    if data.credential is not strawberry.UNSET:
+        credential = (
+            None
+            if data.credential is None
+            else resolve_action_target(Credential, data.credential, reason=f"{reason}.credential")
+        )
+        target.attach_credential(credential)
+    if data.lifecycle is not strawberry.UNSET and (data.lifecycle is not None or not ignore_null_lifecycle):
+        lifecycle = IntegrationLifecycle.from_value(data.lifecycle)
+        target.set_lifecycle(lifecycle)
+    if data.owner is not strawberry.UNSET:
+        target.transfer_ownership(None if data.owner is None else _user_from_public_id(data.owner))
     if hasattr(data, "display_name") and data.display_name is not strawberry.UNSET:
         target.display_name = data.display_name or ""
         provided.add("display_name")
     if data.vendor is not strawberry.UNSET:
         target.vendor = resolve_action_target(Vendor, data.vendor, reason=f"{reason}.vendor")
         provided.add("vendor")
-    if data.owner is not strawberry.UNSET:
-        target.owner = _user_from_public_id(data.owner)
-        provided.add("owner")
-    if data.credential is not strawberry.UNSET:
-        target.credential = (
-            None
-            if data.credential is None
-            else resolve_action_target(Credential, data.credential, reason=f"{reason}.credential")
-        )
-        provided.add("credential")
     if data.account is not strawberry.UNSET:
         target.account = (
             None
@@ -753,8 +770,6 @@ def apply_integration_patch_fields(
             else resolve_action_target(ExternalAccount, data.account, reason=f"{reason}.account")
         )
         provided.add("account")
-    if data.lifecycle is not strawberry.UNSET and (data.lifecycle is not None or not ignore_null_lifecycle):
-        target.set_lifecycle(IntegrationLifecycle.from_value(data.lifecycle))
     return provided
 
 
@@ -807,7 +822,8 @@ def _attach_completed_integration(info: strawberry.Info, integration_sqid: str, 
         target = _concrete_integration_target(info, user, child._meta.label, PublicID(public_id_of(child)))
     except (PermissionDenied, ValueError) as error:
         raise OAuthFlowError(INVALID_STATE, 400) from error
-    target.attach_credential(credential)
+    if credential.pk != target.credential_id or target.lifecycle == IntegrationLifecycle.DISCONNECTED:
+        target.attach_credential(credential)
 
 
 def connect_integration_target(
@@ -821,8 +837,13 @@ def connect_integration_target(
     """Attach the user's live credential to an integration-like MTI row or start OAuth."""
 
     user = _session_user(info)
-    if integration.owner_id != user.pk:
-        raise PermissionDenied("Integration does not belong to the current user.")
+    integration.require_connect(user)
+    if oauth_client.configuration_state != "ready":
+        raise OAuthFlowError(
+            CLIENT_NOT_CONFIGURED,
+            400,
+            f"OAuth client is not fully configured ({oauth_client.configuration_state}).",
+        )
     credential = Credential.objects.live_oauth_for_user(user, oauth_client)
     if credential is not None:
         if credential.user_id != user.pk:
@@ -831,12 +852,6 @@ def connect_integration_target(
         return ConnectIntegrationResult(integration=cast("ConnectedIntegrationType", integration), attached=True)
     if not redirect_uri:
         raise OAuthFlowError("redirect_uri_required", 400, "OAuth redirect URI is required.")
-    if oauth_client.configuration_state != "ready":
-        raise OAuthFlowError(
-            CLIENT_NOT_CONFIGURED,
-            400,
-            f"OAuth client is not fully configured ({oauth_client.configuration_state}).",
-        )
     request = _request(info)
     started = flow.start(
         request,
@@ -886,9 +901,7 @@ class ConnectionMutation:
         user = _session_user(info)
         try:
             integration = _concrete_integration_target(info, user, resource, id)
-            oauth_client = integration.capability_impl.connect_oauth_client(
-                capfirst(str(integration._meta.verbose_name))
-            )
+            oauth_client = integration.connect_oauth_client(capfirst(str(integration._meta.verbose_name)))
             return connect_integration_target(
                 info, integration, oauth_client, redirect_uri=redirect_uri, next_path=next
             )
@@ -932,7 +945,7 @@ class ConnectionMutation:
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def discover_oauth_endpoints(self, id: PublicID) -> ActionResult:
-        """Fetch the provider's discovery document and fill this client's blank endpoints.
+        """Fetch OIDC metadata and fill this client's blank endpoints.
 
         The resolved authorize/token/userinfo endpoints (and any composed extension
         endpoints, e.g. OIDC issuer/JWKS) are persisted on the OAuth client row, so
@@ -945,13 +958,13 @@ class ConnectionMutation:
             reason="integrate.graphql.discover_oauth_endpoints",
         ) as oauth_client:
             if not str(getattr(oauth_client, "discovery_url", "") or ""):
-                return ActionResult(ok=False, message="Set a discovery URL first.")
+                return ActionResult(ok=False, message="Set an OIDC metadata discovery URL first.")
             try:
                 discovery = oauth_client.discover_endpoints()
             except OAuthFlowError as error:
                 return ActionResult(ok=False, message=error.public_message)
             except Exception:  # noqa: BLE001 — provider diagnostics stay outside the action payload.
-                return ActionResult(ok=False, message="Provider discovery failed.")
+                return ActionResult(ok=False, message="OIDC metadata discovery failed.")
             oauth_client.save()
         issuer = discovery.get("issuer") if isinstance(discovery, dict) else None
         return ActionResult(ok=True, message=f"Discovered endpoints for {issuer or 'provider'}.")
@@ -975,7 +988,14 @@ class ConnectionMutation:
             )
             _attach_completed_integration(info, result.integration_id, result.user, result.credential)
         except OAuthFlowError as error:
+            if error.transient:
+                error = OAuthFlowError(PROVIDER_UNAVAILABLE, 503)
             return ConnectAccountResult(error=error.public_message, error_code=error.code)
+        except IntegrationError as error:
+            if error.transient:
+                outage = OAuthFlowError(PROVIDER_UNAVAILABLE, 503)
+                return ConnectAccountResult(error=outage.public_message, error_code=outage.code)
+            return ConnectAccountResult(error=error.public_message, error_code="connection_refused")
         return ConnectAccountResult(
             account=cast(ConnectedExternalAccountType, result.account),
             credential=cast(ConnectedCredentialType, result.credential),
@@ -990,8 +1010,9 @@ class ConnectionMutation:
         info: strawberry.Info,
         external_account_sqid: str,
     ) -> UnlinkAccountResult:
-        """Remove this session user's credential link to an external account.
+        """Remove this session user's credential link to an external account and release it.
 
+        The verb authorizes the release: only the session user's own ownership is cleared.
         ``Credential.check_disconnect()`` validates the model invariant before
         deletion. The login addon's model contribution vetoes removing a user's
         last sign-in account by raising a coded :class:`ValidationError`, surfaced here
@@ -1008,10 +1029,10 @@ class ConnectionMutation:
                 )
             if credential is None:
                 return UnlinkAccountResult(ok=False)
-            external_account = credential.external_account
+            assert credential.external_account_id is not None
             with system_context(reason="integrate.graphql.disconnect_account"), transaction.atomic():
                 Credential.objects.prepare_disconnect(credential)
-                ExternalAccount.objects.revoke_owner(external_account, user)
+                ExternalAccount.objects.filter(pk=credential.external_account_id).release(user)
                 deleted, _details = Credential.objects.filter(pk=credential.pk).with_action("delete").delete()
             return UnlinkAccountResult(ok=deleted > 0)
         except ValidationError as error:
@@ -1041,22 +1062,15 @@ class IntegrateExternalAccountMutation:
 
     @strawberry.mutation(name="delete_external_account", permission_classes=_ADMIN_PERMISSION_CLASSES)
     def delete_external_account(self, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Revoke the owner grant, then delete the account (owner is a REBAC tuple)."""
+        """Delete the account; its ownership is a column and leaves with the row."""
 
-        def revoke(account: Any) -> None:
-            owner = ExternalAccount.objects.owner_for(account)
-            if owner is not None:
-                ExternalAccount.objects.revoke_owner(account, owner)
-
-        with transaction.atomic():
-            return delete_by_public_id(
-                ExternalAccount,
-                str(id),
-                reason="integrate.graphql.external_account.delete",
-                confirm=confirm,
-                before_delete=revoke,
-                queryset=write_queryset(ExternalAccount),
-            )
+        return delete_by_public_id(
+            ExternalAccount,
+            str(id),
+            reason="integrate.graphql.external_account.delete",
+            confirm=confirm,
+            queryset=ExternalAccount.objects.for_write(),
+        )
 
 
 @strawberry.type
@@ -1131,7 +1145,7 @@ class IntegrateCredentialMutation:
                 reason="integrate.graphql.credential.delete",
                 confirm=confirm,
                 before_delete=prepare_delete,
-                queryset=write_queryset(Credential),
+                queryset=Credential.objects.for_write(),
             )
 
 
@@ -1162,8 +1176,130 @@ class VendorType(AngeeNode):
     updated_at: auto
 
 
+def _credential_projection(name: str, info: Any) -> Any:
+    return Integration.credential_projection_expressions()[f"_connection_{name}"]
+
+
+def _oauth_projection(name: str, info: Any) -> Any:
+    return Integration.oauth_projection_expressions()[name]
+
+
+def _connection_credential(info: Any) -> Prefetch:
+    """Batch the credential owner's current facts without projecting its secrets."""
+
+    del info
+    return Prefetch(
+        "credential",
+        queryset=Credential.objects.connection_health(),
+        to_attr="_connection_credential",
+    )
+
+
 @strawberry.type
-class IntegrationLabelMixin:
+class IntegrationConnectionMixin:
+    """Connection admissions consume batched authority and credential-owned health."""
+
+    @strawberry_django.field(
+        only=["owner_id", "vendor_id", "concrete_type_id", "credential_id"],
+        extensions=[PermissionsExtension(("write",))],
+        prefetch_related=[_connection_credential],
+        annotate={
+            **{name: partial(_oauth_projection, name) for name in ("_connection_vendor_slug", "_connection_impl_key")},
+        },
+    )
+    def can_connect(self) -> bool:
+        """Project the model's owner-scoped OAuth Connect admission."""
+
+        return bool(cast(Any, self).can_connect(write_access="write" in held_permissions(cast(Any, self), ("write",))))
+
+    @strawberry_django.field(
+        only=[
+            "owner_id",
+            "lifecycle",
+            "credential_id",
+            "discovery_retry_at",
+            "discovery_generation",
+            "discovery_completed_at",
+        ],
+        extensions=[PermissionsExtension(("resume",), model=Integration)],
+        prefetch_related=[_connection_credential],
+    )
+    def can_resume(self) -> bool:
+        """Project the model's admission to resume its current grant."""
+
+        return bool(cast(Any, self).can_resume())
+
+    @strawberry_django.field(
+        only=[
+            "owner_id",
+            "lifecycle",
+            "credential_id",
+            "discovery_retry_at",
+            "discovery_generation",
+            "discovery_completed_at",
+        ],
+        extensions=[PermissionsExtension(("retry_discovery",), model=Integration)],
+        prefetch_related=[_connection_credential],
+    )
+    def can_retry_discovery(self) -> bool:
+        """Project the model's admission to retry settled discovery."""
+
+        return bool(cast(Any, self).can_retry_discovery())
+
+    @strawberry_django.field(
+        only=["credential_id"],
+        extensions=[PermissionsExtension(("write",))],
+        annotate={
+            f"_connection_{name}": partial(_credential_projection, name)
+            for name in ("status", "expires_at", "last_refresh_status")
+        },
+    )
+    def credential_status(self) -> str | None:
+        """Credential health is visible only to actors who may write this integration."""
+
+        if "write" not in held_permissions(cast(Any, self), ("write",)):
+            return None
+        return str(cast(Any, self).credential_status)
+
+    @strawberry_django.field(
+        only=["credential_id"],
+        extensions=[PermissionsExtension(("write",))],
+        prefetch_related=[_connection_credential],
+    )
+    def is_reconnect_required(self) -> bool | None:
+        """Project consent health only to actors who may write this integration."""
+
+        if "write" not in held_permissions(cast(Any, self), ("write",)):
+            return None
+        return bool(cast(Any, self).is_reconnect_required)
+
+    @strawberry_django.field(only=["discovery_retry_at"])
+    def discovery_pending(self) -> bool:
+        return bool(cast(Any, self).discovery_pending)
+
+    @strawberry_django.field(only=["discovery_retry_at", "discovery_generation", "discovery_completed_at"])
+    def discovery_ready(self) -> bool:
+        return bool(cast(Any, self).discovery_ready)
+
+
+@strawberry.type
+class IntegrationOAuthMixin:
+    """Registration readiness for capabilities with a declared implementation."""
+
+    @strawberry_django.field(
+        only=["vendor_id", "concrete_type_id"],
+        annotate={
+            name: partial(_oauth_projection, name) for name in ("_connection_vendor_slug", "_connection_impl_key")
+        },
+    )
+    def is_oauth_connectable(self) -> bool:
+        """Read public registration readiness without resolving protected relations."""
+
+        return bool(cast(Any, self).is_oauth_connectable())
+
+
+@strawberry.type
+class IntegrationLabelMixin(IntegrationConnectionMixin):
     """Project Integration identity, credential health and saved-stream visibility.
 
     Compose alongside the node base, e.g. ``class ChannelType(IntegrationLabelMixin,
@@ -1186,12 +1322,6 @@ class IntegrationLabelMixin:
         concrete_type_id = cast(Any, self).concrete_type_id
         model = ContentType.objects.get_for_id(concrete_type_id).model_class() if concrete_type_id else Integration
         return capfirst(str(model._meta.verbose_name)) if model is not None else "Integration"
-
-    @strawberry_django.field(only=["credential__status"])
-    def credential_status(self) -> str:
-        """Return the attached credential's status, or ``""`` when none is attached."""
-
-        return str(cast(Any, self).credential_status)
 
     @strawberry_django.field(annotate=Count("sync_streams", distinct=True))
     def stream_count(self) -> int:
@@ -1218,7 +1348,7 @@ class BridgeSyncStatusMixin:
 
 
 @strawberry.type
-class BridgeTypeMixin(IntegrationLabelMixin, BridgeSyncStatusMixin):
+class BridgeTypeMixin(IntegrationLabelMixin, IntegrationOAuthMixin, BridgeSyncStatusMixin):
     """Project the persisted fields shared by every ``Bridge`` child type."""
 
     owner: UserType | None
@@ -1319,7 +1449,7 @@ class WebhookSubscriptionType(AngeeNode):
     OAuthClient's revealed ``client_secret``, a webhook secret is never read back.
     """
 
-    owner: UserType
+    owner: UserType | None
     integration_filter: IntegrationType | None
     target_url: auto
     event_kinds: JSON
@@ -1346,6 +1476,25 @@ _VENDOR_RESOURCE = hasura_model_resource(
 )
 
 
+strawberry.enum(cast(Any, SyncFailureKind))
+strawberry.enum(cast(Any, SyncFailureStatus))
+
+
+@strawberry.experimental.pydantic.type(model=SyncFailure, all_fields=True)
+class SyncFailureType:
+    """A failure inherits its stream/link's read and write permissions."""
+
+    details: JSON
+
+    @strawberry.field
+    def slot(self) -> int | None:
+        return cast(SyncFailure, cast(Any, self)._original_model).slot
+
+    @strawberry.field
+    def is_open(self) -> bool:
+        return cast(SyncFailure, cast(Any, self)._original_model).is_open
+
+
 @strawberry_django.type(SyncStream)
 class SyncStreamType(AngeeNode):
     """Read-only inspection of a bridge partition's retained epoch."""
@@ -1356,8 +1505,11 @@ class SyncStreamType(AngeeNode):
     partition: auto
     kind: auto
     direction: auto
+    snapshot: auto
+    authoritative: auto
     generation: auto
     phase: auto
+    state: auto
     cursor: JSON = strawberry_django.field(metadata={"angee_widget": "angee.integrate.integrationSyncCursor"})
     cursor_expires_at: auto
     resync_required: auto
@@ -1368,20 +1520,25 @@ class SyncStreamType(AngeeNode):
     updated_at: auto
 
     @strawberry_django.field(
-        annotate=Count(
-            "discrepancies",
-            filter=Q(discrepancies__is_open=True),
-            distinct=True,
-        )
+        only=["inbound"],
+        prefetch_related=[_OPEN_FAILURE_LINKS],
     )
-    def open_discrepancy_count(self) -> int:
-        """Count unresolved quarantine, including requested retries, in the row query."""
+    def open_failure_count(self) -> int:
+        """Count retained inbound/outbox failures using the batched related rows."""
+        return len(cast(Any, self).sync_failures(open_only=True))
 
-        return cast(int, cast(Any, self).open_discrepancy_count)
+    @strawberry_django.field(
+        only=["inbound"],
+        prefetch_related=[_OPEN_FAILURE_LINKS],
+    )
+    def failures(self, open_only: bool = True) -> list[SyncFailureType]:
+        return [
+            cast(Any, SyncFailureType).from_pydantic(row) for row in cast(Any, self).sync_failures(open_only=open_only)
+        ]
 
     @strawberry_django.field(annotate=Count("links", distinct=True))
     def link_count(self) -> int:
-        """Count replica identities without multiplying the discrepancy join."""
+        """Count replica identities without multiplying the failure join."""
 
         return cast(int, cast(Any, self).link_count)
 
@@ -1395,8 +1552,11 @@ class RecordLinkType(AngeeNode):
     external_key: auto
     status: auto
     remote_version: auto
-    remote_base_hash: auto
-    local_base_hash: auto
+    source_hash: auto
+    applied_at: auto
+    pinned: auto
+    outbox_state: auto
+    outbox_retry_at: auto
     origin: auto
     last_seen_at: auto
     last_verified_generation: auto
@@ -1405,6 +1565,17 @@ class RecordLinkType(AngeeNode):
     tombstoned_at: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["stream_id", "external_key"], select_related=["stream__integration"])
+    def source_url(self) -> str | None:
+        """Return the selected connector's provider URL for this remote identity."""
+
+        integration = cast(Any, self).stream.integration.concrete_capability()
+        return cast(str | None, integration.source_url(self))
+
+    @strawberry_django.field(only=["stream_id", "inbound", "outbox_last_error"], select_related=["stream"])
+    def failures(self, open_only: bool = True) -> list[SyncFailureType]:
+        return [cast(Any, SyncFailureType).from_pydantic(row) for row in cast(Any, self).failures(open_only=open_only)]
 
     @strawberry_django.field(only=["target_content_type_id", "target_object_id"])
     def model_label(self) -> str:
@@ -1419,41 +1590,6 @@ class RecordLinkType(AngeeNode):
         return PublicID(cast(Any, self).record_public_id)
 
 
-@strawberry_django.type(RecordRevision)
-class RecordRevisionType(AngeeNode):
-    """Read-only immutable observed and applied revision."""
-
-    link: RecordLinkType
-    number: auto
-    source_payload: JSON
-    source_hash: auto
-    mapping_version: auto
-    mapped_payload: JSON
-    dependency_digest: auto
-    applied_at: auto
-    created_at: auto
-
-
-@strawberry_django.type(SyncDiscrepancy)
-class SyncDiscrepancyType(AngeeNode):
-    """Read-only record quarantine; operator transitions use manager-backed actions."""
-
-    stream: SyncStreamType
-    link: RecordLinkType | None
-    kind: auto
-    code: auto
-    source_hash: auto
-    mapping_version: auto
-    details: JSON
-    status: auto
-    is_open: auto
-    attempts: auto
-    retry_at: auto
-    resolved_at: auto
-    created_at: auto
-    updated_at: auto
-
-
 _SYNC_STREAM_RESOURCE = hasura_model_resource(
     SyncStreamType,
     model=SyncStream,
@@ -1465,7 +1601,10 @@ _SYNC_STREAM_RESOURCE = hasura_model_resource(
         "partition",
         "kind",
         "direction",
+        "snapshot",
+        "authoritative",
         "phase",
+        "state",
         "generation",
         "resync_required",
         "last_advanced_at",
@@ -1476,13 +1615,26 @@ _SYNC_STREAM_RESOURCE = hasura_model_resource(
         "partition",
         "kind",
         "direction",
+        "snapshot",
+        "authoritative",
         "phase",
+        "state",
         "generation",
         "last_advanced_at",
         "last_reconciled_at",
     ],
     aggregatable=["id"],
-    groupable=["key", "partition", "kind", "direction", "phase", "resync_required"],
+    groupable=[
+        "key",
+        "partition",
+        "kind",
+        "direction",
+        "snapshot",
+        "authoritative",
+        "phase",
+        "state",
+        "resync_required",
+    ],
     insert=False,
     update=False,
     delete=False,
@@ -1502,82 +1654,89 @@ _RECORD_LINK_RESOURCE = hasura_model_resource(
         "remote_version",
         "last_seen_at",
     ],
-    sortable=["external_key", "last_seen_at", "status", "origin", "remote_version"],
+    sortable=["external_key", "last_seen_at", "status", "origin", "remote_version", "updated_at"],
     aggregatable=["id"],
     groupable=["status", "origin"],
     insert=False,
     update=False,
     delete=False,
     field_id_decode={"stream": public_pk_decoder(SyncStream)},
+    record_ref_filters=("model_label", "record_id"),
+    record_ref_requires_read=True,
 )
-_RECORD_REVISION_RESOURCE = hasura_model_resource(
-    RecordRevisionType,
-    model=RecordRevision,
-    name="record_revisions",
-    filterable=["id", "link", "number", "source_hash", "mapping_version"],
-    sortable=["number", "applied_at"],
-    aggregatable=["id"],
-    insert=False,
-    update=False,
-    delete=False,
-    field_id_decode={"link": public_pk_decoder(RecordLink)},
-)
-_SYNC_DISCREPANCY_RESOURCE = hasura_model_resource(
-    SyncDiscrepancyType,
-    model=SyncDiscrepancy,
-    name="sync_discrepancies",
-    filterable=[
-        "id",
-        "stream",
-        "stream__integration",
-        "link",
-        "kind",
-        "code",
-        "status",
-        "is_open",
-        "retry_at",
-        "created_at",
-    ],
-    sortable=["kind", "status", "retry_at", "created_at"],
-    aggregatable=["id"],
-    groupable=["kind", "code", "status"],
-    insert=False,
-    update=False,
-    delete=False,
-    field_id_decode={"stream": public_pk_decoder(SyncStream), "link": public_pk_decoder(RecordLink)},
-)
-
-
 strawberry.enum(cast(Any, ConflictKeep))
+
+
+def _authorized_failure(
+    info: strawberry.Info,
+    stream: PublicID,
+    link: PublicID | None,
+    slot: int | None,
+) -> SyncFailure:
+    """Authorize typed owners; the model interprets the selected retained slot."""
+    epoch = authorized_action_target(info, SyncStream, stream, "write")
+    owner: SyncStateMixin = epoch
+    if link is not None:
+        linked = authorized_action_target(info, RecordLink, link, "write")
+        if linked.stream_id != epoch.pk:
+            raise ValidationError("The failure link does not belong to the selected stream.")
+        owner = linked
+    for failure in owner.failures():
+        if failure.slot == slot:
+            return failure
+    raise ValidationError("The retained sync failure no longer exists.")
 
 
 @strawberry.type
 class SyncRecordActionMutation:
     """Admin-gated operational transitions on the bridge-owned record protocol."""
 
-    @strawberry.mutation(name="resolveSyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not resolve the discrepancy.")
-    def resolve_sync_discrepancy(
-        self, info: strawberry.Info, id: PublicID, keep: ConflictKeep | None = None
+    @strawberry.mutation(name="resolveSyncFailure", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Could not resolve the failure.")
+    def resolve_sync_failure(
+        self,
+        info: strawberry.Info,
+        stream: PublicID,
+        link: PublicID | None = None,
+        slot: int | None = None,
+        keep: ConflictKeep | None = None,
     ) -> ActionResult:
-        """Dispatch resolution through the discrepancy manager after row authorization."""
+        """Dispatch resolution through retained state after owner authorization."""
 
-        discrepancy = authorized_action_target(info, SyncDiscrepancy, id, "write")
-        manager = SyncDiscrepancy.objects
+        failure = _authorized_failure(info, stream, link, slot)
         if keep is None:
-            manager.resolve(discrepancy)
+            failure.resolve()
         else:
-            manager.resolve_conflict(discrepancy, keep=keep)
-        return ActionResult(ok=True, message=_("Discrepancy resolved."))
+            failure.resolve_conflict(keep=keep)
+        return ActionResult(ok=True, message=_("Failure resolved."))
 
-    @strawberry.mutation(name="retrySyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not retry the discrepancy.")
-    def retry_sync_discrepancy(self, info: strawberry.Info, id: PublicID) -> ActionResult:
-        """Make quarantine due now through its retained-history owner."""
+    @strawberry.mutation(name="retrySyncFailure", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Could not retry the failure.")
+    def retry_sync_failure(
+        self,
+        info: strawberry.Info,
+        stream: PublicID,
+        link: PublicID | None = None,
+        slot: int | None = None,
+    ) -> ActionResult:
+        """Make quarantine due now through its retained-state owner."""
 
-        discrepancy = authorized_action_target(info, SyncDiscrepancy, id, "write")
-        SyncDiscrepancy.objects.retry(discrepancy)
-        return ActionResult(ok=True, message=_("Discrepancy retry requested."))
+        _authorized_failure(info, stream, link, slot).retry()
+        return ActionResult(ok=True, message=_("Failure retry requested."))
+
+    @strawberry.mutation(name="pinRecordLink", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Could not pin the record link.")
+    def pin_record_link(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Withhold automatic sync through the authorized link owner."""
+        authorized_action_target(info, RecordLink, id, "write").pin()
+        return ActionResult(ok=True, message=_("Record link pinned."))
+
+    @strawberry.mutation(name="unpinRecordLink", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Could not unpin the record link.")
+    def unpin_record_link(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Resume automatic sync through the authorized link owner."""
+        authorized_action_target(info, RecordLink, id, "write").unpin()
+        return ActionResult(ok=True, message=_("Record link unpinned."))
 
     @strawberry.mutation(name="resyncSyncStream", permission_classes=_ADMIN_PERMISSION_CLASSES)
     @action_guard("Could not request a stream resync.")
@@ -1587,6 +1746,41 @@ class SyncRecordActionMutation:
         stream = authorized_action_target(info, SyncStream, id, "write")
         SyncStream.objects.request_resync(stream)
         return ActionResult(ok=True, message=_("Stream resync requested."))
+
+
+class IntegrationWriteBackend(AngeeHasuraWriteBackend):
+    """Compose native patch authorization with model-owned credential attachment."""
+
+    def update(
+        self,
+        info: strawberry.Info,
+        pk: str,
+        data: dict[str, Any],
+        *,
+        expected_revision: int | None = None,
+    ) -> Any:
+        fields = dict(data)
+        credential_id = fields.pop("credential", strawberry.UNSET)
+        with transaction.atomic():
+            target = require_instance_for_id(self.model, pk, queryset=self.write_target_queryset())
+            target.require_access("write", _session_user(info))
+            # Native patching locks the addressed model. Acquire the final child
+            # first so parent-addressed patches share the bridge worker order.
+            with system_context(reason="integrate.graphql.patch.lock"):
+                target.lock_capability()
+            instance = super().update(info, pk, fields, expected_revision=expected_revision)
+            if credential_id is not strawberry.UNSET:
+                credential = (
+                    None
+                    if credential_id is None
+                    else require_instance_for_id(
+                        Credential,
+                        credential_id,
+                        queryset=Credential.objects.for_write(),
+                    )
+                )
+                instance.attach_credential(credential)
+            return instance
 
 
 _INTEGRATION_RESOURCE = hasura_model_resource(
@@ -1612,18 +1806,17 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
         "lifecycle",
         "runtime_status",
     ],
-    updatable=["vendor", "credential", "account", "owner"],
+    updatable=["vendor", "credential", "account"],
     insert=False,
     field_id_decode={
         "vendor": public_pk_decoder(Vendor),
-        "owner": public_pk_decoder(User),
         "credential": public_pk_decoder(Credential),
         "account": public_pk_decoder(ExternalAccount),
     },
     get_queryset=partial(IntegrationType.get_queryset, Integration.objects),
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=IntegrationWriteBackend(
         Integration,
-        public_id_fields=("vendor", "owner", "credential", "account"),
+        public_id_fields=("vendor", "credential", "account"),
     ),
 )
 _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(
@@ -1649,7 +1842,7 @@ _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(
     ],
     aggregatable=["id", "consecutive_failures"],
     groupable=["enabled", "last_delivery_status"],
-    insertable=["owner", "target_url", "secret", "event_kinds", "impl_app_filter", "integration_filter", "enabled"],
+    insertable=["target_url", "secret", "event_kinds", "impl_app_filter", "integration_filter", "enabled"],
     updatable=["target_url", "secret", "event_kinds", "impl_app_filter", "integration_filter", "enabled"],
     field_id_decode={
         "owner": public_pk_decoder(User),
@@ -1657,7 +1850,7 @@ _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(
     },
     write_backend=AngeeHasuraWriteBackend(
         WebhookSubscription,
-        public_id_fields=("owner", "integration_filter"),
+        public_id_fields=("integration_filter",),
     ),
 )
 
@@ -1701,18 +1894,22 @@ class IntegrationCredentialMutation:
 class IntegrationActionMutation:
     """Operational actions on an integration (sync, connection test)."""
 
-    # Follow-up: surface these declared lifecycle actions as console row buttons
-    # once the action metadata registry lands.
+    @strawberry.mutation
+    @action_guard("Could not retry connection discovery.")
+    def retry_discovery(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Retry discovery through the integration's bounded handshake owner."""
+
+        integration = authorized_action_target(info, Integration, id, "retry_discovery")
+        integration.retry_discovery()
+        return ActionResult(ok=True, message="Connection discovery requested.")
+
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def mark_integration_connected(self, id: PublicID) -> ActionResult:
+    @action_guard("Could not resume integration.")
+    def mark_integration_connected(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Move an integration to CONNECTED through its guarded transition."""
 
-        with action_target(
-            Integration,
-            id,
-            reason="integrate.graphql.mark_integration_connected",
-        ) as integration:
-            integration.connect()
+        integration = authorized_action_target(info, Integration, id, "write")
+        integration.resume()
         return ActionResult(ok=True, message="Connected integration.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -1808,12 +2005,9 @@ class WebhookActionMutation:
 _CONSOLE_TYPES: list[object] = [
     SyncStreamType,
     RecordLinkType,
-    RecordRevisionType,
-    SyncDiscrepancyType,
+    SyncFailureType,
     *_SYNC_STREAM_RESOURCE.types,
     *_RECORD_LINK_RESOURCE.types,
-    *_RECORD_REVISION_RESOURCE.types,
-    *_SYNC_DISCREPANCY_RESOURCE.types,
     OAuthClientType,
     CredentialOAuthClientType,
     ExternalAccountType,
@@ -1840,6 +2034,7 @@ _CONSOLE_TYPES: list[object] = [
 
 schemas = {
     "public": {
+        "extensions": [OAuthRegistrationExtension],
         "query": [IntegrateConnectionsQuery],
         "mutation": [ConnectionMutation, IntegrationCredentialMutation],
         "types": [
@@ -1856,6 +2051,7 @@ schemas = {
         ],
     },
     "console": {
+        "extensions": [OAuthRegistrationExtension],
         # Concrete impl-picker lookups (VcsBridge.backend_class /
         # OAuthClient.provider_type) live here; a generic framework query contributed
         # where its models do.
@@ -1870,8 +2066,6 @@ schemas = {
             _WEBHOOK_SUBSCRIPTION_RESOURCE.query,
             _SYNC_STREAM_RESOURCE.query,
             _RECORD_LINK_RESOURCE.query,
-            _RECORD_REVISION_RESOURCE.query,
-            _SYNC_DISCREPANCY_RESOURCE.query,
         ],
         "mutation": [
             _OAUTH_CLIENT_RESOURCE.mutation,

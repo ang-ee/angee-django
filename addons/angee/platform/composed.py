@@ -12,11 +12,11 @@ from typing import Any
 
 from django.apps import AppConfig, apps
 from django.db import connections, router
-from django.db.models import Model
+from django.db.models import Field, Model
 from pydantic import BaseModel, PrivateAttr
 
 from angee.addons import is_angee_addon
-from angee.base.impl import ImplChoice, ImplClassField
+from angee.impl import ImplChoice, ImplClassField
 
 
 class PlatformFieldRow(BaseModel):
@@ -31,10 +31,10 @@ class PlatformFieldRow(BaseModel):
     model: str
     addon: str
 
-    _field: Any = PrivateAttr()
+    _field: Field[Any, Any] = PrivateAttr()
 
     @classmethod
-    def from_field(cls, model: type[Model], field: Any) -> PlatformFieldRow:
+    def from_field(cls, model: type[Model], field: Field[Any, Any]) -> PlatformFieldRow:
         """Project a native Django field while retaining its request-local reference."""
 
         related = field.related_model if field.is_relation else None
@@ -80,7 +80,7 @@ class PlatformModelRow(BaseModel):
     depends_on: list[str]
 
     _model: type[Model] = PrivateAttr()
-    _native_fields: tuple[Any, ...] = PrivateAttr()
+    _native_fields: tuple[Field[Any, Any], ...] = PrivateAttr()
     _field_rows: tuple[PlatformFieldRow, ...] | None = PrivateAttr(default=None)
 
     @classmethod
@@ -89,11 +89,13 @@ class PlatformModelRow(BaseModel):
 
         fields = tuple(own_fields(model))
         relations = [field for field in fields if field.is_relation]
+        model_name = model._meta.model_name
+        assert model_name is not None, "Django must bind model options before projecting a model."
         row = cls(
             id=model._meta.label_lower,
             label=model._meta.label_lower,
             app_label=model._meta.app_label,
-            model_name=model._meta.model_name,
+            model_name=model_name,
             verbose_name=str(model._meta.verbose_name),
             db_table=model._meta.db_table,
             addon_id=config.name,
@@ -253,7 +255,7 @@ def data_models(config: AppConfig) -> list[type[Model]]:
     ]
 
 
-def own_fields(model: type[Model]) -> list:
+def own_fields(model: type[Model]) -> list[Field[Any, Any]]:
     """Return a model's own concrete columns plus declared many-to-many fields."""
 
     return [*model._meta.fields, *model._meta.many_to_many]
@@ -269,6 +271,7 @@ def contributed_fields(config: AppConfig) -> list[ContributedFieldRow]:
                 if addon_id != config.name:
                     continue
                 field = model._meta.get_field(field_name)
+                assert isinstance(field, Field), "Contributed field origins must name forward fields."
                 rows.append(
                     ContributedFieldRow(
                         addon_id=addon_id,
@@ -331,9 +334,9 @@ def _implementation_addon(implementation: type, configs: list[AppConfig]) -> App
     candidates = [
         config
         for config in configs
-        if module_name == config.module.__name__ or module_name.startswith(f"{config.module.__name__}.")
+        if module_name == config.name or module_name.startswith(f"{config.name}.")
     ]
-    return max(candidates, key=lambda config: len(config.module.__name__), default=None)
+    return max(candidates, key=lambda config: len(config.name), default=None)
 
 
 def implementation_rows() -> list[PlatformImplementationRow]:

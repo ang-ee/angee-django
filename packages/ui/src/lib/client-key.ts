@@ -2,6 +2,8 @@
  * Mint an opaque client request identity in secure and non-secure browser contexts.
  * Callers retain the returned value across retries; the server remains the durable
  * idempotency owner.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function createClientKey(prefix = "request"): string {
   const crypto = globalThis.crypto;

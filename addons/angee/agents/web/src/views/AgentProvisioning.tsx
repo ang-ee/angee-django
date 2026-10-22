@@ -11,7 +11,7 @@ import {
   refineResourceName, } from "@angee/metadata";
 import {
   useModelMetadata, } from "@angee/metadata";
-import { Skeleton, SkeletonStatus, textRoleVariants } from "@angee/ui";
+import { ErrorBanner, LoadingPanel, textRoleVariants } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
 import { agentInstanceKind, agentLifecycle, agentRuntime, booleanField, stringField, type AgentInstanceKind } from "./agent-record";
@@ -96,13 +96,7 @@ export function AgentProvisioning({
     <div className="flex flex-col gap-5">
       {!agent ? (
         fetching ? (
-          <SkeletonStatus
-            label={t("provisioning.loading")}
-            className="grid max-w-md gap-2"
-          >
-            <Skeleton className="h-4 w-40" />
-            <Skeleton className="h-3 w-full" />
-          </SkeletonStatus>
+          <LoadingPanel message={t("provisioning.loading")} density="inline" />
         ) : (
           <p className={textRoleVariants({ role: "meta" })}>
             {t("provisioning.saveFirst")}
@@ -110,9 +104,7 @@ export function AgentProvisioning({
         )
       ) : (
         <>
-          {agent.last_error ? (
-            <p className="text-13 text-danger-text">{String(agent.last_error)}</p>
-          ) : null}
+          {agent.last_error ? <ErrorBanner description={String(agent.last_error)} /> : null}
           {conflictName && conflictKind ? (
             <OperatorTransportProvider>
               <ConflictingInstance kind={conflictKind} name={conflictName} pane={pane} />
@@ -166,7 +158,7 @@ function ConflictingInstance({
   const t = useAgentsT();
   return (
     <section className="flex flex-col gap-4">
-      <p className="text-13 text-fg">{t(`provisioning.conflict.${kind}`, { name })}</p>
+      <p className={textRoleVariants({ role: "description" })}>{t(`provisioning.conflict.${kind}`, { name })}</p>
       {kind === "workspace" && pane === "workspace" ? <ConflictingWorkspace name={name} /> : null}
       {kind === "service" && pane === "service" ? (
         <ServiceLogs name={name} title={t("provisioning.conflictLogs")} />
@@ -180,7 +172,7 @@ function ConflictingWorkspace({ name }: { name: string }): React.ReactElement {
   const { status, error } = useWorkspaceStatus(name);
   return (
     <>
-      {error ? <p className="text-13 text-danger-text">{error.message}</p> : null}
+      {error ? <ErrorBanner description={error.message} /> : null}
       <WorkspaceSources
         emptyContent={t("provisioning.workspaceSourcesEmpty")}
         sources={status?.sources ?? []}
@@ -234,11 +226,11 @@ function WorkspaceRuntimeView({
 }): React.ReactElement {
   const t = useAgentsT();
   const sources = status?.sources ?? [];
-  const workspaceError = status?.error ?? status?.innerError ?? "";
+  const workspaceError = status?.error ?? "";
 
   return (
     <div className="flex flex-col gap-4">
-      {error ? <p className="text-13 text-danger-text">{error}</p> : null}
+      {error ? <ErrorBanner description={error} /> : null}
       {workspace ? (
         <WorkspaceRow
           emptyContent={t("provisioning.activityWaiting")}
@@ -251,9 +243,7 @@ function WorkspaceRuntimeView({
             : t("provisioning.none")}
         </p>
       )}
-      {workspaceError ? (
-        <p className="text-13 text-danger-text">{workspaceError}</p>
-      ) : null}
+      {workspaceError ? <ErrorBanner description={workspaceError} /> : null}
       <WorkspaceSources
         emptyContent={t("provisioning.workspaceSourcesEmpty")}
         sources={sources}
@@ -276,7 +266,7 @@ function ServiceRuntimeView({
 
   return (
     <div className="flex flex-col gap-4">
-      {error ? <p className="text-13 text-danger-text">{error}</p> : null}
+      {error ? <ErrorBanner description={error} /> : null}
       {service ? (
         <>
           <ServiceRow

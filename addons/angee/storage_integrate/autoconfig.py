@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
-SETTINGS = {
+from typing import TypedDict
+
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "ANGEE_IMPL_REGISTRIES:append": list[str],
+        "ANGEE_STORAGE_MOUNT_BACKEND_CLASSES": dict[str, str],
+        "ANGEE_STORAGE_BACKEND_CLASSES.local_folder": str,
+    },
+)
+
+SETTINGS: _Settings = {
     "ANGEE_IMPL_REGISTRIES:append": ["angee.storage_integrate.mounts.MountBackend"],
     "ANGEE_STORAGE_MOUNT_BACKEND_CLASSES": {
         "local_folder": "angee.storage_integrate.mounts.LocalFolderMountBackend",

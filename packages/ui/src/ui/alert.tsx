@@ -6,6 +6,9 @@ import { cn } from "../lib/cn";
 import { INTENT_GLYPHS, toneClass, type FeedbackIntent, type Fill } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const alertVariants = tv({
   slots: {
     root: "flex gap-3 border text-13",
@@ -49,6 +52,9 @@ export type AlertProps = Omit<
     variant?: Fill;
   };
 
+/**
+ * @kind primitive
+ */
 export const Alert = React.forwardRef<HTMLDivElement, AlertProps>(
   function Alert(
     {
@@ -95,6 +101,9 @@ export type AlertTitleProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner Alert
+ */
 export const AlertTitle = React.forwardRef<HTMLDivElement, AlertTitleProps>(
   function AlertTitle({ className, ...props }, ref) {
     const styles = alertVariants();
@@ -110,6 +119,9 @@ export type AlertDescriptionProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner Alert
+ */
 export const AlertDescription = React.forwardRef<
   HTMLDivElement,
   AlertDescriptionProps
@@ -126,6 +138,9 @@ export type BannerProps = AlertProps & {
   onDismiss?: () => void;
 };
 
+/**
+ * @kind primitive
+ */
 export function Banner({
   actions,
   dismissLabel,

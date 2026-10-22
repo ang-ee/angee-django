@@ -19,15 +19,23 @@ from rebac.schema import parse_zed
 from strawberry import auto
 
 import tests.test_messaging  # noqa: F401 -- register related models before native database setup
-from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin
-from angee.base.models import AngeeDataModel
-from angee.base.stages import Stage as OrderedStage
-from angee.base.stages import StagedModelMixin
+from angee.fields import StateField
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
+    AuditMixin,
+    MergeableMixin,
+    MergeableQuerySet,
+    StagedModelMixin,
+    TrashMixin,
+    TrashQuerySet,
+)
+from angee.models import Stage as OrderedStage
 from angee.projects.models import Task as AbstractTask
 from angee.projects.testing.models import Queue, Stage, Task
 from angee.testing.permissions import install_permission_schema
@@ -72,7 +80,7 @@ class RoutingPipelineStage(OrderedStage):
         app_label = "tests"
 
 
-class RoutingStageRecord(StagedModelMixin, models.Model):
+class RoutingStageRecord(StagedModelMixin[RoutingPipelineStage], models.Model):
     """A record whose stage and container IDs can both be deferred."""
 
     stage_container_field_name = "container"
@@ -108,15 +116,30 @@ class CreateTaskHost(models.Model):
     """The projects Task hand-verb contract the work donor extends through ``super()``."""
 
     hand_actions = AbstractTask.__dict__["hand_actions"]
-    action_blockers = AbstractTask.__dict__["action_blockers"]
     validate_action = AbstractTask.validate_action
+    # A task merges under write on each duplicate and keeps it as a redirect.
+    MERGED_PERMISSION = AbstractTask.MERGED_PERMISSION
+    retains_merged = AbstractTask.retains_merged
+
+    @classmethod
+    def action_blockers(cls, action: str) -> tuple[tuple[models.Q, Any], ...]:
+        """A stand-in task is about no record, so no record-task blocker applies."""
+
+        return ()
+
+    def post_completion(self, feedback: str = "") -> None:
+        """A stand-in task is about no record, so its completion posts nothing."""
 
     class Meta:
         abstract = True
 
 
-class CreateTask(TaskWork, CreateTaskHost, AuditMixin, AngeeDataModel):
-    """Native Work donor over the lifecycle columns it projects."""
+class CreateTaskQuerySet(MergeableQuerySet[Any], TrashQuerySet[Any], AngeeQuerySet[Any]):
+    """The stand-in task's operational scopes: canonical rows and the trash."""
+
+
+class CreateTask(TaskWork, CreateTaskHost, MergeableMixin, TrashMixin, AuditMixin, AngeeDataModel):
+    """Native Work donor over the lifecycle columns it projects; duplicates are retained merges, removal is trash."""
 
     sqid_prefix = "ctk_"
     TaskStatus = AbstractTask.TaskStatus
@@ -137,6 +160,8 @@ class CreateTask(TaskWork, CreateTaskHost, AuditMixin, AngeeDataModel):
     hasura_groupable_fields = ()
     hasura_insertable_fields = ()
     hasura_updatable_fields = ()
+    # A trash owner's default manager carries the trash row scopes (angee.E036).
+    objects = AngeeManager.from_queryset(CreateTaskQuerySet)()
 
     class Meta:
         app_label = "scopedemo"

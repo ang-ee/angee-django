@@ -41,6 +41,26 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Python types | `uv run --locked python -m mypy angee addons` |
 | Dead-code review | `uv run --locked python -m vulture` |
 
+The consumer CI lane uses the same framework mypy policy and
+[`tests.typing_settings`](../tests/typing_settings.py), with its existing
+[`tests.typing_host`](../tests/typing_host.py) projection of native history
+models. An explicit `ANGEE_PROJECT_DIR` reads the project's declared app roots
+and addon directories through `ProjectContract.load`; the typing host retains
+only those composition inputs and uses SQLite in memory, a synthetic secret,
+and `<project>/.mypy_cache/typing_runtime`. Without that explicit project, the
+host checks the full framework composition as before. The CI target is the
+consumer's entire `addons` directory, including optional addons when their
+declared composition is checked; it does not select only recently changed files.
+
+Digest-pinned `runtime_migrations` are historical executable artifacts, so native
+mypy recursive discovery excludes their bodies, matching the Ruff source
+boundary. Imports from migration-integrity tests use `follow_imports = "silent"`:
+their exported types remain available and caller errors remain visible. Do not
+edit applied migration digests for checker diagnostics. The
+[runtime-migration integrity tests](../tests/test_runtime_migrations.py) retain
+their execution and immutability coverage. Generated `typing_runtime` model
+declarations remain followed because they are required typing inputs.
+
 [`tests/test_layering.py`](../tests/test_layering.py) guards framework import
 boundaries and optional state-field declarations. See the
 [Database routing rule](backend/guidelines.md#rules) for persistence checks.
@@ -54,13 +74,20 @@ test-harness and composed-consumer contracts, plus decision
 also covers [review waiters](../tests/test_workflows_review.py), their
 [locking races](../tests/test_workflows_review_concurrency.py),
 [execution links](../tests/test_workflows_review_graphql.py), and
-[inbox predicates](../tests/test_decisions_inbox.py), plus the
+[inbox predicates](../tests/test_decisions_inbox.py),
+[committed timeline waits and inherited record feeds](../tests/test_timeline_workflows.py), plus the
 [agent session loop](../tests/test_agent_sessions.py) and its
-[locking races](../tests/test_agent_sessions_concurrency.py). The selection
+[locking races](../tests/test_agent_sessions_concurrency.py), plus
+[connection discovery races](../tests/test_integrate_discovery_concurrency.py),
+[cross-addon reply and inbound joins](../tests/test_framework_integration.py),
+[delivery contracts](../tests/test_messaging_delivery.py) with PostgreSQL
+[sweep, claim-fence and held-action races](../tests/test_messaging_delivery_concurrency.py), and the
+[comment reply workflow and scheduling races](../tests/test_workflows_posts.py). The selection
 runs with four xdist workers grouped by file, `--nomigrations`, a JUnit report,
 and a zero-skip gate. Pytest-django creates a separate PostgreSQL test database
 for each worker. The composed-host subprocess tests use Django's test runner to
-create separate worker-named secondary test databases. The full
+create separate worker-named secondary test databases; every caller bounds the
+subprocess with the one hang limit in [`composed_host.py`](../tests/composed_host.py). The full
 suite runs on SQLite with migrations enabled and `DATABASE_URL` unset; do not
 apply the PostgreSQL lane's settings to the full suite. PostgreSQL-only modules
 skip explicitly on SQLite. Report those skips separately from the PostgreSQL
@@ -87,8 +114,15 @@ through imports in the root conftest before database setup. The framework-generi
 [`composed_tables`](../angee/testing/fixtures.py) fixture uses native transactional
 isolation and synchronizes REBAC after each flush; use the native `db` fixture
 when a test needs neither transaction behavior nor permission synchronization.
-Verify adopting modules individually as well as in the full suite so collection
-order cannot hide missing models.
+Composed hosts also install their schema during native database setup. Register
+`angee.testing.fixtures` through the root conftest's `pytest_plugins`; a runner
+that loads it explicitly must pass `-p django -p angee.testing.fixtures` in that
+order so pytest-django cannot shadow the shared `django_db_setup` override.
+A test that reaches a statement source needs the install-tier `provenance.Rule`
+principals parties declares: list
+[`angee.parties.testing.fixtures`](../addons/angee/parties/testing/fixtures.py) in
+`pytest_plugins` and request its `statement_sources` fixture (the framework's own
+hosts load them after every REBAC sync).
 
 Workflow tests reach execution states through the shared `load_workflow`,
 `start_run`, `run_until`, `decide` and `run_factory(...).at(...)` drivers. These compose
@@ -130,9 +164,9 @@ They are distinct lifecycle operations, not a mandatory sequence for every task:
 |---|---|---|
 | Prepare the complete runtime | `uv run manage.py angee provision` | Builds, then runs the remaining preparation in one fresh process; the [command owner](../angee/compose/management/commands/angee.py) defines ordering and options |
 | Build composed runtime | `uv run manage.py angee build` | Updates generated runtime, prunes obsolete generated sources, updates host dependency declarations and materializes pending addon migrations |
-| Clean generated runtime | `uv run manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves migration directories and reports those belonging to removed labels |
-| Check composition drift | `uv run --locked manage.py angee build --check` | Checks composer-owned artifacts/dependency projection/migration history; Django bootstrap can repair runtime sources before dispatch |
-| Author schema migrations | `uv run manage.py makemigrations <app-labels>` | After composition; preserves existing migration history |
+| Clean generated runtime | `uv run manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves current migration directories |
+| Check composition drift | `uv run --locked manage.py angee build --check` | Checks composer-owned artifacts, dependency projection, and addon declarations; Django bootstrap can repair runtime sources before dispatch |
+| Author schema migrations | `uv run manage.py makemigrations <app-labels>` | After composition |
 | Apply migrations | `uv run manage.py migrate` | Operates on the selected stack database |
 | Sync permissions | `uv run manage.py rebac sync` | After migrations when permissions change |
 | Load declared resource data | `uv run manage.py resources load` | After migrations when resource data changes |
@@ -141,8 +175,7 @@ They are distinct lifecycle operations, not a mandatory sequence for every task:
 | Check GraphQL SDL | `uv run --locked manage.py schema --check` | Separate from the composer drift check |
 
 Run only lifecycle steps needed for the change and within the user's authorized
-scope. See [migration policy](backend/guidelines.md) before changing applied
-history. A rebuild is not permission to delete migrations or reset a database.
+scope.
 For containerized stacks, use the declared service/job environment; a host shell
 without the runtime dependencies cannot run these commands directly.
 
@@ -171,6 +204,12 @@ when a separate suite exercises real provider integration; compose the existing
 of copying provider setup. These names share the same Vitest discovery and
 focused-file selection convention.
 
+Waiting queries (`findBy*`, `waitFor`) share one limit, set in the published
+[Vitest setup](../packages/app/config/vitest-setup.ts) to cover a runner's cold
+first render. Do not pass a per-test timeout for a slow render: split a wait that
+covers several reads into one wait per read, or raise the shared value with
+measurements.
+
 | Scope | Working directory | Command |
 |---|---|---|
 | Focused package test/typecheck/build | Framework source root | `pnpm --config.verify-deps-before-run=false --fail-if-no-match --filter <package-name> run <script>` |
@@ -179,9 +218,19 @@ focused-file selection convention.
 | Published package builds | Framework source root | `pnpm --config.verify-deps-before-run=false --fail-if-no-match -r --filter './packages/**' --filter '!@angee/storybook' run build` |
 | Distribution import checks | Framework source root, after builds | `node packages/scripts/check-dist-imports.mjs` |
 | UI export checks | Framework source root, after builds | `node packages/ui/scripts/check-views-exports.mjs` |
-| Package/exports architecture | Framework source root | `pnpm --config.verify-deps-before-run=false --fail-if-no-match --filter @angee/app exec vitest run src/architecture-guardrails.test.ts` |
+| Package/exports architecture and the UX component ontology guard (addons compose `@angee/ui` owners: no raw elements, lucide renders, deleted classes or owners, locale bypasses, local recipes or tone maps; covers `../angee-arp` and `../angee-phrogg` when materialized) | Framework source root | `pnpm --config.verify-deps-before-run=false --fail-if-no-match --filter @angee/app exec vitest run src/architecture-guardrails.test.ts` |
+| Design-system catalog and token-name drift | Stack root | `pnpm --config.verify-deps-before-run=false --filter @angee/storybook --fail-if-no-match run catalog:check` |
+| Composition report kinds, route instances and ordering | Stack root | `pnpm --config.verify-deps-before-run=false --filter @angee/storybook --fail-if-no-match run composition:check` |
 | All composed fragment types | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false --dir web run typecheck` |
 | All composed fragment tests | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false -r run test` |
+
+After changing export annotations, story owners or token CSS, regenerate with
+`pnpm --config.verify-deps-before-run=false --filter @angee/storybook --fail-if-no-match run catalog:generate`
+from the stack root. Then reconcile the composition snapshot with
+`pnpm --config.verify-deps-before-run=false --filter @angee/storybook --fail-if-no-match exec node scripts/composition-report.mjs`.
+The UI catalog test exercises the generator's drift-check CLI; Storybook's
+`catalog:check` also verifies specimen reachability, guideline story links and
+the token deletion findings.
 
 The framework root has no generic `build` script. Package-filtered builds and the
 distribution checks above are the handoff path for published surfaces. A package
@@ -215,12 +264,27 @@ database, and these commands do not create one.
 [reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
 pushes to `main`. The current tiers are:
 
-- **SQLite:** the full framework Python suite once, with `-n auto --dist loadfile`
-  and the 25 slowest test durations, with migrations enabled and `DATABASE_URL`
-  unset. Structural tests remain part of this suite.
-- **PostgreSQL:** the named workflow, decision and agent session selection runs with
-  `-n 4 --dist loadfile --nomigrations`, writes JUnit output, and checks that it
-  did not skip tests.
+- **Python quality:** Ruff over the source tree and mypy over core and addons,
+  using the locked framework environment.
+- **SQLite:** the full framework Python suite once, as six shards that
+  pytest-split cuts into contiguous chunks of equal stored time from the
+  committed [durations](../.test_durations), so each test file stays in one or two
+  shards. Each shard runs
+  `-n auto --dist loadfile` with a 40-minute limit and prints its 25 slowest test
+  durations, with migrations enabled and `DATABASE_URL` unset. Structural tests
+  remain part of this suite. Per-file scheduling keeps a file on one worker, so the
+  heaviest files (the proposals access, owner-gate adopters and agents GraphQL
+  campaigns, about 700 stored seconds each) set a floor near 25 minutes on CI.
+  Their cost is per-test fixture setup, a `rebac sync` before every test; making
+  that setup cheaper is how the limit comes down.
+- **PostgreSQL:** in three shards of its own beside the SQLite ones, split the
+  same way and with the same limit, the named workflow, decision and agent session
+  selection runs with `-n 4 --dist loadfile --nomigrations` and prints its 25
+  slowest test durations; each shard writes JUnit output and checks that it did
+  not skip tests. Its server runs with `max_locks_per_transaction = 256`, since
+  each worker creates every table in one transaction. The `uv` job passes only
+  when Python quality and every shard of both test suites pass, so callers keep
+  one check name.
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents
@@ -228,13 +292,61 @@ pushes to `main`. The current tiers are:
   composed-host tests create their own temporary hosts in the SQLite suite; the
   stack job does not repeat that framework suite.
 
+A test missing from the durations still runs: pytest-split gives it the average
+duration and places it in exactly one shard. Refresh the file when a shard nears
+its limit or its balance drifts (the shards' printed estimates against their wall
+times): run `uv run pytest -q -n 4 --dist loadfile --store-durations` in the
+framework checkout and commit `.test_durations`. Ties in the assignment fall back
+to collection order, so an opt-in `-p randomly` run must give every shard one
+shared `--randomly-seed`.
+
 Separate structural and downstream tiers are not implemented. Separate workflows
 enforce private-path exclusion and other repository policies. Executable jobs in
 the reusable workflow own timeouts; GitHub's reusable-workflow caller syntax does
 not accept `timeout-minutes`.
 
+Consumer repositories call the same stack job with `uv-enabled: false`,
+`pnpm-enabled: false`, and `stack-enabled: true`. Their caller owns the explicit
+`consumer-sources` (repository, sibling slot path, ref), `consumer-roots`,
+`consumer-path`, `consumer-tests`, and optional `consumer-pytest-plugins` inputs. The caller revision replaces its
+source ref; dependency revisions remain explicit. This lane renders a separate
+host, resolves native manifest dependencies, composes/provisions it, runs Ruff
+with the consumer's inherited framework policy, and collects its full declared
+Python paths with `python_files=test*.py` on PostgreSQL, using four native
+pytest-xdist workers with `--dist worksteal`. Scheduling individual tests lets
+long consumer intake modules use every worker. Each worker loads the configured
+host through `angee.compose.settings`; pytest-django owns its separate test
+database. Shared test plugins must defer
+model imports until Django's app registry is populated. Check tools come from
+the framework lockfile. Host SDL/codegen precede typecheck/test of that consumer's
+web fragments; the framework and other consumers have their own caller lanes.
+The optional `ADDON_SOURCES_TOKEN` secret must read every private source declared
+by a caller; the default GitHub token only reads the calling repository. Configure
+that secret in each consumer repository before expecting private cross-repository
+checkout to pass. `BRIDGES_TOKEN` retains its separate full-profile purpose.
+
 Browser e2e is manual; neither `pnpm -r test` nor the current GitHub workflows run
-it. Python lint, mypy, and vulture are prescribed local checks but are not jobs in
-that reusable workflow. State local evidence and CI evidence separately. When
+it. Vulture remains a prescribed local review, outside CI.
+State local evidence and CI evidence separately. When
 changing CI, reconcile this section and link to the actual job instead of
 promising planned coverage as though it already exists.
+
+### Consumer CI Publication
+
+Consumer callers use `main` for the reusable workflow, framework checkout, and
+source dependencies. The caller's own source always uses its exact `github.sha`;
+its declared source ref is replaced by that revision. Workspace branches do not
+define the durable CI dependency contract.
+
+Publish in dependency order:
+
+1. Publish required upstream fixes and record their versions or immutable Git
+   revisions in the framework dependency declarations and lockfile.
+2. Land the framework's reusable workflow and required composition changes on
+   `main` before publishing consumer callers that use the new inputs.
+3. Land source dependency changes on their `main` branches before publishing
+   dependent consumer callers. A caller tests its own review revision against
+   those already-landed dependencies.
+
+Local source checks do not establish that this publication chain or a remote CI
+run has completed.

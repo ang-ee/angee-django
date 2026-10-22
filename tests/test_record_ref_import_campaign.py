@@ -4,13 +4,10 @@ from pathlib import Path
 
 import pytest
 import tablib
-from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.db import models
 from import_export.results import RowResult
 from rebac import system_context
 
-from angee.base.refs import RecordRefMixin
 from angee.integrate.models import RecordLink
 from angee.money.models import CurrencyRate
 from angee.resources.entries import ResourceEntry
@@ -19,8 +16,8 @@ from angee.resources.testing.models import Resource
 from angee.workflows.models import WorkflowRun
 from tests.conftest import Page, RecordBinding, Vault, make_addon
 from tests.mtidemo.models import MtiChild, MtiParent
-from tests.tables import model_tables
-from tests.test_record_refs import (
+from tests.recordrefdemo.models import (
+    CustomColumnEdge,
     RecordRefNullableEdge,
     RecordRefSubjectEdge,
     RecordRefTargetEdge,
@@ -28,18 +25,6 @@ from tests.test_record_refs import (
 from tests.test_record_refs import (
     record_ref_tables as record_ref_tables,
 )
-
-
-class CustomColumnEdge(RecordRefMixin, models.Model):
-    """An alternate column adopter also requires native string-id conversion."""
-
-    target_ct = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.CASCADE)
-    target_id = models.CharField(max_length=64, null=True, blank=True)
-    target = GenericForeignKey("target_ct", "target_id")
-
-    class Meta:
-        app_label = "auth"
-        db_table = "test_record_ref_custom_columns"
 
 
 @pytest.fixture
@@ -61,8 +46,7 @@ def import_reference(composed_tables, record_ref_tables, tmp_path):
             addon_aliases={"reference_import": addon.name},
         )
 
-    with model_tables((CustomColumnEdge,)):
-        yield resource
+    yield resource
 
 
 def _import(resource, headers, *rows, **kwargs):

@@ -4,7 +4,7 @@ import type { DocumentType } from "@angee/gql/console";
 import { holdsPermission } from "@angee/metadata";
 import {
   Action,
-  Button,
+  ActionTrigger,
   ChipList,
   Column,
   EmptyState,
@@ -15,8 +15,8 @@ import {
   ListView,
   MutationDialog,
   mutationDialogValueCodecs,
+  PaneToolbarHost,
   ResourceList,
-  Glyph,
   defineRowAction,
   rowIdVariables,
   type ListColumn,
@@ -74,7 +74,7 @@ function threadColumns(
       header: t("group.threads.title"),
       render: (thread) => (
         <span className="block min-w-0 truncate">
-          {thread.title?.text || thread.id}
+          {thread.title?.text || t("group.threads.untitled")}
         </span>
       ),
     },
@@ -83,7 +83,7 @@ function threadColumns(
       header: t("group.threads.audience"),
       render: (thread) => <ChipList items={(thread.groups ?? []).map((group, index) => ({
         id: group?.id ?? `${group?.name ?? "unknown"}:${index}`,
-        label: group?.name || group?.id || t("group.threads.unknownAudience"),
+        label: group?.name || t("group.threads.unknownAudience"),
       }))} />,
     },
     { field: "message_count", header: t("group.threads.messages") },
@@ -93,7 +93,6 @@ function threadColumns(
 
 export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.ReactElement {
   const t = useSpacesT();
-  const [addOpen, setAddOpen] = React.useState(false);
   const [roleRow, setRoleRow] = React.useState<MembershipRow | null>(null);
   const [notificationRow, setNotificationRow] = React.useState<MembershipRow | null>(null);
   const [add, addState] = useAuthoredResourceMutation(AddSpaceMembership, {
@@ -160,7 +159,6 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
       { field: "party.display_name", header: t("group.roster.party") },
       { field: "role", header: t("group.roster.role") },
       { field: "is_confirmed" },
-      { field: "source" },
       { field: "created_at" },
     ],
     [t],
@@ -220,7 +218,7 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
         resource="spaces.Membership"
         presentation="embedded"
         fields={[
-          "id", "party.display_name", "role", "is_confirmed", "source", "created_at",
+          "id", "party.display_name", "role", "is_confirmed", "created_at",
           "permissions", "notification_policy", "subtype_keys",
         ]}
         baseFilter={{ group: { exact: recordId } }}
@@ -228,34 +226,29 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
         rowActions={rowActions}
         toolbarActions={
           addRoleOptions.length > 0 && (
-            <Button type="button" variant="primary" size="sm" disabled={busy} onClick={() => setAddOpen(true)}>
-              <Glyph decorative name="plus" />
-              {t("group.roster.add")}
-            </Button>
+            <MutationDialog
+              trigger={<ActionTrigger variant="primary" glyph="plus" disabled={busy}>{t("group.roster.add")}</ActionTrigger>}
+              title={t("group.roster.add")}
+              fields={addFields}
+              initialValues={{
+                role: addRoleOptions.find((option) => option.value === "MEMBER")?.value ?? addRoleOptions[0]?.value,
+              }}
+              submitLabel={t("group.roster.add")}
+              submittingLabel={t("group.roster.adding")}
+              errorFallback={t("group.roster.addError")}
+              parseValues={parseAddMembershipValues}
+              onSubmit={async (values) => ({
+                status: "ok",
+                data: await add({
+                  group: recordId,
+                  party: values.party,
+                  role: values.role,
+                }),
+              })}
+            />
           )
         }
         emptyContent={t("group.roster.empty")}
-      />
-      <MutationDialog
-        open={addOpen && addRoleOptions.length > 0}
-        onOpenChange={setAddOpen}
-        title={t("group.roster.add")}
-        fields={addFields}
-        initialValues={{
-          role: addRoleOptions.find((option) => option.value === "MEMBER")?.value ?? addRoleOptions[0]?.value,
-        }}
-        submitLabel={t("group.roster.add")}
-        submittingLabel={t("group.roster.adding")}
-        errorFallback={t("group.roster.addError")}
-        parseValues={parseAddMembershipValues}
-        onSubmit={async (values) => ({
-          status: "ok",
-          data: await add({
-            group: recordId,
-            party: values.party,
-            role: values.role,
-          }),
-        })}
       />
       <MutationDialog
         open={roleRow !== null}
@@ -343,7 +336,7 @@ export function GroupThreadsTab({ recordId }: RecordPanelContext): React.ReactEl
       scope="local"
       placement="split"
       splitLayout={{ primarySize: 38, contentMinSize: 40, stackBelow: 720 }}
-      className="min-h-[32rem] overflow-hidden rounded-6 border border-border-subtle"
+      className="min-h-96 overflow-hidden rounded-6 border border-border-subtle"
       hideCreate
       recordId={selectedThreadId}
       onSelect={(threadId) => {
@@ -357,18 +350,12 @@ export function GroupThreadsTab({ recordId }: RecordPanelContext): React.ReactEl
       columns={columns}
       emptyContent={t("group.threads.empty")}
       renderRecord={({ recordId: threadId }) =>
-        <div className="h-full min-h-0 bg-canvas p-3">
-          {threadId ? (
-            <ThreadTranscript threadId={threadId} />
-          ) : (
-            <EmptyState
-              fill
-              icon="comments"
-              title={t("group.threads.empty")}
-              className="min-h-full"
-            />
-          )}
-        </div>
+        threadId ? (
+          // The transcript's controls publish into this pane's own toolbar row.
+          <PaneToolbarHost><ThreadTranscript threadId={threadId} /></PaneToolbarHost>
+        ) : (
+          <EmptyState fill icon="comments" title={t("group.threads.empty")} />
+        )
       }
     />
   );

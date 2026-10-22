@@ -2,9 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from typing import TypedDict
+
 from angee.integrate.constants import ENSURE_SESSIONS_TASK, RECONCILER_INTERVAL
 
-SETTINGS = {
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "ANGEE_IMPL_REGISTRIES:append": list[str],
+        "CELERY_BEAT_SCHEDULE:append": dict[str, dict[str, object]],
+        "ANGEE_INTEGRATE_OAUTH_CLIENTS": Sequence[Mapping[str, object]] | Mapping[str, Mapping[str, object]],
+        "ANGEE_INTEGRATE_OAUTH_STATE_TTL": int,
+        "ANGEE_OAUTH_PROVIDER_TYPE_CLASSES": dict[str, str],
+        "ANGEE_RESOURCE_SOURCE_CLASSES.url": str,
+    },
+)
+
+SETTINGS: _Settings = {
     "ANGEE_IMPL_REGISTRIES:append": ["angee.integrate.oauth.providers.OAuthProviderType"],
     "CELERY_BEAT_SCHEDULE:append": {
         "integrate.sync_due_bridges": {

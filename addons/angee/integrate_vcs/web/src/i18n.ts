@@ -21,6 +21,7 @@ export const enIntegrateVcsMessages: Record<string, string> = {
   "templateSources.title": "Template sources",
   "templateSources.pointer": "Pointer",
   "templateSources.sync": "Sync templates",
+  "templateSources.kind.template": "Template",
   "addRepo.title": "Add repository",
   "addRepo.description": "Pick a VCS bridge, then type to find a repository to inventory.",
   "addRepo.integrationLabel": "VCS bridge",
@@ -36,6 +37,7 @@ export const enIntegrateVcsMessages: Record<string, string> = {
   "addRepo.retry": "Retry",
   "addRepo.noMatches": "No matching repositories.",
   "addRepo.added": "Added",
+  "addRepo.pick": "Add",
 };
 
 export const useIntegrateVcsT = createNamespaceT("integrate_vcs", enIntegrateVcsMessages);

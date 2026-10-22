@@ -1,4 +1,4 @@
-import { senderDisplayName } from "@angee/parties";
+import { senderAvatarUrl, senderDisplayName } from "@angee/parties";
 import { IntegrationSyncColumns } from "@angee/integrate";
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
@@ -17,7 +17,7 @@ import {
   ResourceList,
   avatarInitials,
   errorMessage,
-  reactionsFromGroups,
+  useReactionGroups,
   type ListColumn,
   type RecordPanelContext,
   type RecordTabDescriptor,
@@ -31,7 +31,6 @@ import {
 } from "./documents";
 import { feedForm } from "./FeedForm";
 import { usePostsT, type PostsT } from "./i18n";
-import { postsReactionCopy } from "./reaction-copy";
 
 const FEED_MODEL = "posts.Feed";
 const FEED_FOLLOW_MODEL = "posts.FeedFollow";
@@ -71,7 +70,6 @@ function FeedPostsTab({ recordId }: RecordPanelContext): React.ReactElement {
       aria-describedby={undefined}
       busy={query.isFetching}
       label={t("feed.postsLabel")}
-      className="rounded-6 border border-border-subtle bg-sheet p-4"
     >
       {messages.map((message) => (
         <FeedPostRow key={message.id} message={message} t={t} />
@@ -89,10 +87,7 @@ function FeedPostRow({
 }): React.ReactElement {
   const author = senderDisplayName(message.sender, t("post.author"));
   const timestamp = message.sent_at ?? message.created_at;
-  const reactions = reactionsFromGroups(
-    message.reaction_groups,
-    postsReactionCopy(t),
-  );
+  const reactions = useReactionGroups(message.reaction_groups);
   const body = hasRenderableParts(message) ? (
     <MessagePartsView parts={message.parts} />
   ) : (
@@ -101,7 +96,7 @@ function FeedPostRow({
 
   return (
     <MessageRow
-      avatar={<Avatar initials={avatarInitials(author)} size="sm" />}
+      avatar={<Avatar src={senderAvatarUrl(message.sender)} initials={avatarInitials(author)} size="sm" />}
       author={author}
       timestamp={timestamp}
       reactions={

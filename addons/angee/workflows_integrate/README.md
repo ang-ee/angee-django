@@ -20,20 +20,41 @@ Success sums completed stream-stage outputs, including mapped partitions.
 
 [`StreamStage`](steps.py) (`integrate_stream`) applies one bounded page per IO
 attempt, checkpoints acknowledged counts through `next_page`, and resumes from
-the cursor that integrate committed with the page. Fan out partitions with the
+the cursor that integrate committed with the page. A stage run is one drain of
+its partition: its first page opens the stream against the adapter's current
+declaration and later pages resume it, so the adapter's `streams()` runs once per
+mapped partition per cycle. An adapter synced through a cycle therefore declares
+from local state, without transport; the live declaration cannot go stale inside a
+run. The first adapter that must discover its partitions remotely needs the
+enumerating step to hand each stage its definition instead. Fan out partitions with the
 native workflow `map`. The shared `PageResult` continuation guard rejects stalled
 pages and repeated baseline resets; checkpoints retain its digest and reset count,
 never a second cursor. No bridge-reference input or separate dispatch setting is
 needed: steps resolve `ctx.subject` through the engine's declared subject owner.
 
+All bounded adapter IO composes [`bridge_io`](steps.py), including consumer
+preflight and inventory stages. For `BridgeImpl.sync_parallelism = 1`, it holds
+the existing bridge sync/webhook advisory lock through the operation. Another
+partition or run waits in the native time-wait state with its checkpoint and
+retry count unchanged, before beginning an external effect. Native map fan-out
+still owns admission; this seam guarantees serialization for the exact-one cap,
+not arbitrary workflow concurrency limits above one.
+
+Cycles pull only. No stage pushes local changes or retries a refused write, and
+the rescan leaves refused writes to the push, so `StreamStage` and the coverage
+steps refuse a partition that writes back instead of waiting on a refusal that
+nothing would retry. A two-way stream syncs through integrate's own runner.
+
 Coverage uses two steps with the same explicit partition set. `integrate_rescan`
-performs bounded rescan/baseline recovery per partition and waits on a deadline
-while discrepancies remain. `integrate_conflicts` asks one decision per conflict;
-its continuation checks current discrepancy truth. Unresolved discrepancies fail
-the step; after a direct domain resolution, operator retry consumes the retained
-answers without asking again. Resolving a conflict belongs to the discrepancy owner; a
-review answer only asks to recheck it. Put conflict review before the rescan wait
-or on a parallel graph branch so an unresolved conflict can reach review.
+performs bounded rescan/baseline recovery per partition and waits, one
+`reconcile_seconds` interval at a time, while a failure it retries is due within
+that interval. A failure that backs off further, or waits on a conflict, stays on
+its link for a later cycle: the step finishes and reports it, so a permanent
+refusal never holds the bridge's one active cycle. `integrate_conflicts` asks one
+decision per conflict; its continuation checks current failure truth. Unresolved
+failures fail the step; after a direct domain resolution, operator retry consumes
+the retained answers without asking again. Resolving a conflict belongs to the
+failure owner; a review answer only asks to recheck it.
 
 Counts describe acknowledged page results. A page committed just before a worker
 loses its lease is not replayed, but its unacknowledged count is absent from the

@@ -40,6 +40,7 @@ export interface DatePopoverProps {
  * the trigger/popover/calendar chrome the `date` and `datetime` widgets both
  * used; each widget keeps its own value formatting (`onSelectDate`) and footer
  * (clear / time input).
+ * @kind surface
  */
 export function DatePopover({
   selected,

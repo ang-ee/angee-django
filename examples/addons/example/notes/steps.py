@@ -8,8 +8,8 @@ from typing import Any
 from django.apps import apps
 from pydantic import BaseModel
 
-from angee.base.evidence import FactAuthority
 from angee.decisions.contracts import DecisionContext, DecisionFact, DecisionProposal, DecisionRequest
+from angee.evidence import FactAuthority
 from angee.workflows.awaits import AwaitRunInput
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.maps import MapItem

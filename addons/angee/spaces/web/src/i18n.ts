@@ -26,6 +26,7 @@ export const enSpacesMessages: Record<string, string> = {
   "group.roster.saveNotifications": "Save preferences",
   "group.roster.notificationsError": "Could not change notification preferences.",
   "group.threads.title": "Conversation",
+  "group.threads.untitled": "Untitled conversation",
   "group.threads.audience": "Audience",
   "group.threads.unknownAudience": "Unknown space",
   "group.threads.messages": "Messages",

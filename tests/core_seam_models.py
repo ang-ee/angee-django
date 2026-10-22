@@ -8,8 +8,8 @@ from rebac import to_subject_ref
 from rebac.backends import backend, reset_backend
 from rebac.schema import parse_zed
 
-from angee.base.errors import RecordAccessSubjectRefused
-from angee.base.stages import Stage
+from angee.errors import RecordAccessSubjectRefused
+from angee.models import Stage
 from angee.testing.permissions import install_permission_schema
 from tests.conftest import Vault
 from tests.core_persistence import OwnedRow
@@ -26,6 +26,7 @@ class SubjectGuardedRow(OwnedRow):
     class Meta:
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/subject_guarded_row"
+        base_manager_name = "_angee_base"
 
     def validate_record_access_subject(self, relation, subject):
         super().validate_record_access_subject(relation, subject)
@@ -41,6 +42,7 @@ class SubjectGuardedLeaf(SubjectGuardedRow):
     class Meta:
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/subject_guarded_leaf"
+        base_manager_name = "_angee_base"
 
 
 class ConstrainedVaultChild(Vault):
@@ -51,6 +53,7 @@ class ConstrainedVaultChild(Vault):
     class Meta:
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/constrained_vault_child"
+        base_manager_name = "_angee_base"
 
 
 class FallbackContainer(models.Model):
@@ -99,9 +102,16 @@ definition scopedemo/subject_guarded_leaf {
 @pytest.fixture
 def subject_tables(ownership_tables):
     active = backend()
-    install_permission_schema(replace(active.schema(), definitions=[
-        *active.schema().definitions, *parse_zed(SUBJECT_SCHEMA).definitions,
-    ]), active=active)
+    install_permission_schema(
+        replace(
+            active.schema(),
+            definitions=[
+                *active.schema().definitions,
+                *parse_zed(SUBJECT_SCHEMA).definitions,
+            ],
+        ),
+        active=active,
+    )
 
 
 @pytest.fixture

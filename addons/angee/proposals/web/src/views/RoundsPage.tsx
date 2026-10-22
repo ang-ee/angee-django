@@ -1,6 +1,5 @@
 import {
   Column,
-  DrawerResourceList,
   Field,
   Form,
   Group,
@@ -9,24 +8,14 @@ import {
   useEnumOptions,
   useRouteHref,
   useRouteRecordId,
-  type RecordPanelContext,
   type RecordSmartButtonDescriptor,
-  type RecordTabDescriptor,
-  type StringIdRow,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
 import { useProposalsT } from "../i18n";
-import {
-  useProposalFormDeclaration,
-  writeEnumOptions,
-} from "../proposal-form";
-import { PROPOSAL_MODEL, ROUND_MODEL, TOPIC_MODEL } from "../resources";
-
-interface ProposalShellRow extends StringIdRow {
-  state?: unknown;
-}
+import { writeEnumOptions } from "../proposal-form";
+import { ROUND_MODEL } from "../resources";
 
 /** Round collection and ceremony record: overview, topic editor, and shells. */
 export function RoundsPage(): React.ReactElement {
@@ -36,23 +25,6 @@ export function RoundsPage(): React.ReactElement {
   const recordId = useRouteRecordId();
   const openingPolicyOptions = writeEnumOptions(
     useEnumOptions(ROUND_MODEL, "opening_policy"),
-  );
-  const recordTabs = React.useMemo<readonly RecordTabDescriptor[]>(
-    () => [
-      {
-        id: "topics",
-        label: t("round.tabs.topics"),
-        icon: "proposals-response",
-        render: (context) => <RoundTopicsPanel {...context} />,
-      },
-      {
-        id: "proposals",
-        label: t("round.tabs.proposals"),
-        icon: "proposals-round",
-        render: (context) => <RoundProposalsPanel {...context} />,
-      },
-    ],
-    [t],
   );
   const smartButtons = React.useMemo<readonly RecordSmartButtonDescriptor[]>(
     () => [
@@ -78,7 +50,6 @@ export function RoundsPage(): React.ReactElement {
       resource={ROUND_MODEL}
       placement="inline"
       routed
-      recordTabs={recordTabs}
       recordSmartButtons={smartButtons}
     >
       <List resource={ROUND_MODEL} defaultGroup={{ field: "status" }} order={{ submission_deadline: "ASC" }}>
@@ -90,7 +61,7 @@ export function RoundsPage(): React.ReactElement {
         <Column field="last_call_at" />
         <Column field="submission_deadline" />
       </List>
-      <Form resource={ROUND_MODEL}>
+      <Form resource={ROUND_MODEL} eyebrow={t("round.eyebrow")}>
         <Field name="permissions" hidden readOnly />
         <Field name="revision" hidden readOnly />
         <Field name="name" title />
@@ -144,58 +115,3 @@ export function RoundsPage(): React.ReactElement {
   );
 }
 
-function RoundTopicsPanel({ recordId }: RecordPanelContext): React.ReactElement {
-  const t = useProposalsT();
-  return (
-    <DrawerResourceList
-      resource={TOPIC_MODEL}
-      baseFilter={{ round: { exact: recordId } }}
-      createDefaults={{ round: recordId }}
-    >
-      <List resource={TOPIC_MODEL} order={{ sort_order: "ASC" }} emptyContent={t("round.topics.empty")}>
-        <Column field="sort_order" />
-        <Column field="name" header={t("common.name")} />
-        <Column field="key" />
-        <Column field="hint" widget="markdown.preview" />
-      </List>
-      <Form resource={TOPIC_MODEL}>
-        <Field name="name" title />
-        <Group columns={2}>
-          <Field name="round" readOnly />
-          <Field name="key" createOnly />
-          <Field name="sort_order" />
-        </Group>
-        <Field name="hint" widget="markdown.editor" body />
-      </Form>
-    </DrawerResourceList>
-  );
-}
-
-function RoundProposalsPanel({ recordId }: RecordPanelContext): React.ReactElement {
-  const t = useProposalsT();
-  const routeHref = useRouteHref();
-  const form = useProposalFormDeclaration();
-  return (
-    <DrawerResourceList
-      resource={PROPOSAL_MODEL}
-      presentation="embedded"
-      baseFilter={{ round: { exact: recordId } }}
-      createDefaults={{ round: recordId }}
-    >
-      <List<ProposalShellRow>
-        resource={PROPOSAL_MODEL}
-        order={{ created_at: "ASC" }}
-        rowHref={(row) => routeHref("proposals.proposals.record", { id: row.id })}
-        emptyContent={t("round.proposals.empty")}
-      >
-        <Column field="display_name" />
-        <Column field="responder" header={t("common.responder")} />
-        <Column field="party" header={t("common.party")} />
-        <Column field="state" header={t("common.state")} widget="statusBadge" />
-        <Column field="submitted_at" />
-        <Column field="track" />
-      </List>
-      {form}
-    </DrawerResourceList>
-  );
-}

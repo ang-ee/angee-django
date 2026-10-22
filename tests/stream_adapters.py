@@ -1,8 +1,42 @@
 """In-memory stream rows for transport-only adapter tests; DB tests use the driver."""
 
 from collections import deque
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
+
+from angee.integrate.states import SyncFailure
+from angee.integrate.testing.models import RecordLink
+
+
+def applied_history() -> Any:
+    """Read application snapshots pinned by current or historical link states."""
+
+    return RecordLink.history.filter(
+        history_id__in=RecordLink.history.order_by()
+        .values("applied_base_id")
+        .union(RecordLink.system_queryset().order_by().values("applied_base_id"))
+    )
+
+
+def failure_state(failure: SyncFailure, **values: Any) -> SyncFailure:
+    """Reload retained evidence, optionally seeding a test's scheduling facts."""
+
+    owner = failure.link or failure.stream
+    owner.refresh_from_db()
+    if values:
+        state = owner.outbox_last_error if failure.slot is None else owner.inbound[failure.slot]
+        state.update(
+            {key: value.isoformat() if isinstance(value, datetime) else value for key, value in values.items()}
+        )
+        fields = ["inbound"]
+        if failure.slot is None:
+            fields = ["outbox_last_error"]
+            if "retry_at" in values:
+                owner.outbox_retry_at = values["retry_at"]
+                fields.append("outbox_retry_at")
+        owner.save(update_fields=fields)
+    return next(row for row in owner.failures() if row.slot == failure.slot)
 
 
 class AdapterPages:

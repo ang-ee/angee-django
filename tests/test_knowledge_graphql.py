@@ -6,12 +6,12 @@ import importlib
 from typing import Any
 
 import pytest
-from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 from rebac.roles import grant
 
+from angee.changesets import changeset_model
 from tests.conftest import (
     MarkdownPage,
     Page,
@@ -110,14 +110,14 @@ def test_anonymous_create_vault_is_denied_with_a_code(composed_tables: None) -> 
     assert result.errors[0].extensions["code"] == "PERMISSION_DENIED"
 
 
-def test_generated_vault_creation_key_replays_through_its_factory(composed_tables: None) -> None:
+def test_generated_vault_idempotency_replays_through_its_factory(composed_tables: None) -> None:
     """The custom factory retains shared replay and typed conflict projection."""
 
     actor = create_user("vault-replay")
     schema = _schema("public")
     mutation = """
         mutation Create($name: String!) {
-          insert_vaults_one(object: {name: $name}, client_creation_key: "vault-request") { id name }
+          insert_vaults_one(object: {name: $name}, idempotency_key: "vault-request") { id name }
         }
     """
     blank = execute_schema(schema, mutation.replace('"vault-request"', '""'), {"name": "Blank"}, user=actor)
@@ -129,7 +129,9 @@ def test_generated_vault_creation_key_replays_through_its_factory(composed_table
     assert conflict.errors is not None
     assert conflict.errors[0].extensions == {"code": "CREATION_KEY_CONFLICT"}
     with actor_context(actor):
-        vault = Vault.objects.get(client_creation_key="vault-request")
+        claim = changeset_model()._base_manager.get(key="vault-request")
+        vault = claim.created_row
+        assert isinstance(vault, Vault)
         assert vault.owner_id == vault.created_by_id == actor.pk
 
 
@@ -187,7 +189,8 @@ def test_detail_query_resolves_raw_sqid(composed_tables: None) -> None:
         )
     )
 
-    assert data["vaults_by_pk"] == {"id": str(vault.sqid), "name": "Node vault", "permissions": ["write"]}
+    # The owner removes their own vault (trash), so the projection names delete beside write.
+    assert data["vaults_by_pk"] == {"id": str(vault.sqid), "name": "Node vault", "permissions": ["delete", "write"]}
 
 
 def test_update_page_body_round_trip_and_stale_guard(composed_tables: None) -> None:
@@ -550,13 +553,12 @@ def test_knowledge_delete_preview_requires_delete_permission(
     assert type(target).objects.as_user(owner).filter(pk=target.pk).exists()
 
 
-def test_schema_exposes_revisions_and_subscriptions(composed_tables: None) -> None:
-    """The SDL carries the revision query and console change subscriptions."""
+def test_schema_exposes_subscriptions(composed_tables: None) -> None:
+    """The SDL carries console change subscriptions."""
 
     public_sdl = _schema("public").as_str()
     console_sdl = _schema("console").as_str()
 
-    assert "markdownPage_revisions(" in public_sdl
     assert "pageChanged" not in public_sdl
     assert "pageChanged" in console_sdl
     assert "markdownPageChanged" in console_sdl
@@ -596,8 +598,3 @@ def test_markdown_sidecar_preserves_its_native_relation() -> None:
     assert field.kind == "relation"
     assert field.relation_object
     assert resource.query.fields["markdown"].relation.model == "knowledge.MarkdownPage"
-
-
-def test_page_create_refuses_unsupported_creation_keys() -> None:
-    with pytest.raises(ValidationError, match="does not support creation keys"):
-        knowledge_schema.PageWriteBackend(Page).create(None, {}, client_creation_key="request")

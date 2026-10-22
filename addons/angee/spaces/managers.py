@@ -2,28 +2,33 @@
 
 from __future__ import annotations
 
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from rebac import PermissionDenied, SubjectRef, current_actor
+from rebac import PermissionDenied, SubjectRef, check_new, current_actor, to_subject_ref
+from rebac.errors import MissingActorError
+from rebac.resources import model_resource_type
 
-from angee.base.fields import enum_member_for
-from angee.base.mixins import HierarchyQuerySet
-from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.scoping import bind_actor
-from angee.parties.mixins import LinkSource
+from angee.fields import enum_member_for
+from angee.models import AngeeManager, AngeeQuerySet, HierarchyQuerySet
+
+if TYPE_CHECKING:
+    from angee.spaces.models import Group, Membership
 
 
-class GroupQuerySet(HierarchyQuerySet, AngeeQuerySet):
+class GroupQuerySet[GroupT: Group](HierarchyQuerySet[GroupT], AngeeQuerySet[GroupT]):
     """Group read scopes with hierarchy subtree and ancestor traversal."""
 
 
-class GroupManager(AngeeManager.from_queryset(GroupQuerySet)):  # type: ignore[misc]
-    """Manager for unscoped shared group trees."""
+_GroupManagerBase = AngeeManager.from_queryset(GroupQuerySet)
 
 
-class MembershipQuerySet(AngeeQuerySet):
+class GroupManager[GroupT: Group](_GroupManagerBase[GroupT]):
+    """Keep a stable import identity for shared group tree managers."""
+
+
+class MembershipQuerySet[MembershipT: Membership](AngeeQuerySet[MembershipT]):
     """Canonical roster selections shared by admission and the team audience."""
 
     def confirmed(self) -> Self:
@@ -32,16 +37,30 @@ class MembershipQuerySet(AngeeQuerySet):
         return self.filter(is_confirmed=True, is_dismissed=False)
 
 
-class MembershipManager(AngeeManager.from_queryset(MembershipQuerySet)):  # type: ignore[misc]
+_MembershipManagerBase = AngeeManager.from_queryset(MembershipQuerySet)
+
+
+class MembershipManager[MembershipT: Membership](_MembershipManagerBase[MembershipT]):
     """Own confirmed manual roster writes under the roster's role permissions."""
 
     def check_role_create(self, *, group: Any, role: Any) -> SubjectRef:
         """Check the selected role through the same REBAC preflight as admission."""
 
-        relationships = {"group": (group,)}
+        actor = current_actor()
+        resource_type = model_resource_type(self.model)
+        if actor is None:
+            raise MissingActorError(f"Creating {resource_type or self.model._meta.label_lower} requires an actor.")
+        relationships = {"group": (to_subject_ref(group),)}
         if role in (self.model.MembershipRole.MEMBER, self.model.MembershipRole.VIEWER):
-            relationships[f"{role.value}_of"] = (group,)
-        return self.check_create(relationships)
+            relationships[f"{role.value}_of"] = (to_subject_ref(group),)
+        if resource_type is None or not check_new(
+            subject=actor,
+            action="create",
+            resource_type=resource_type,
+            relationships=relationships,
+        ).allowed:
+            raise PermissionDenied(f"Denied: {actor} cannot create {resource_type or self.model._meta.label_lower}")
+        return actor
 
     def available_roles(self, *, group: Any) -> list[Any]:
         """Return roles the ambient actor may create on this group's roster."""
@@ -57,7 +76,7 @@ class MembershipManager(AngeeManager.from_queryset(MembershipQuerySet)):  # type
             roles.append(role)
         return roles
 
-    def add_confirmed(self, *, group: Any, party: Any, role: Any) -> Any:
+    def add_confirmed(self, *, group: Group, party: Any, role: Any) -> MembershipT:
         """Create or confirm one manual membership with the selected group role.
 
         Access follows the persisted row through live REBAC backing. Re-adding an
@@ -70,21 +89,16 @@ class MembershipManager(AngeeManager.from_queryset(MembershipQuerySet)):  # type
             raise ValidationError({"role": ["Select a valid membership role."]})
 
         with transaction.atomic():
-            memberships = (
-                self.get_queryset()
-                .lock_if_supported()
-                .filter(group=group, party=party)
-            )
+            memberships = self.get_queryset().lock_if_supported().filter(group=group, party=party)
             membership = memberships.first()
             if membership is not None:
                 if not membership.has_access("write"):
                     raise PermissionDenied("write access to this membership is required")
-                update_fields = ["confidence", "source", "is_confirmed", "is_dismissed", "updated_at"]
+                update_fields = ["confidence", "is_confirmed", "is_dismissed", "updated_at"]
                 if membership.role != role_member:
                     membership.role = role_member
                     update_fields.append("role")
                 membership.confidence = 1.0
-                membership.source = LinkSource.MANUAL
                 membership.is_confirmed = True
                 membership.is_dismissed = False
                 membership.save(update_fields=update_fields)
@@ -96,12 +110,12 @@ class MembershipManager(AngeeManager.from_queryset(MembershipQuerySet)):  # type
                 party=party,
                 role=role_member,
                 confidence=1.0,
-                source=LinkSource.MANUAL,
                 is_confirmed=True,
                 is_dismissed=False,
             )
             membership.full_clean(validate_unique=False, validate_constraints=False)
             membership.sudo(reason="spaces.membership.add_confirmed")
             membership.save()
-            bind_actor(membership, actor)
+            if actor is not None:
+                membership.with_actor(actor)
             return membership

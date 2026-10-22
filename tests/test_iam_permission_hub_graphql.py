@@ -442,6 +442,22 @@ def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
         .filter(username__startswith="hub-overview-target-")
         .order_by("username")
     )
+    # Installed principals (statement sources) carry their own grants; the test
+    # asserts what it adds on top of that seeded baseline.
+    seeded = _data(
+        _execute(
+            _schema("console"),
+            """
+            query {
+              iam_grants_aggregate { aggregate { count } }
+              iam_overview { grant_count relationship_count }
+            }
+            """,
+            user=admin,
+        )
+    )
+    seeded_grants = seeded["iam_grants_aggregate"]["aggregate"]["count"]
+    seeded_relationships = seeded["iam_overview"]["relationship_count"]
     grant(actor=targets[0], role="angee/role:auditor")
     grant(actor=targets[-1], role="angee/role:auditor")
     grant(actor=targets[-1], role="angee/role:admin")
@@ -490,11 +506,11 @@ def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
     assert len(data["users"]) == 1
     assert len(data["iam_grants"]) == 1
     assert data["users_aggregate"]["aggregate"]["count"] == 507
-    assert data["iam_grants_aggregate"]["aggregate"]["count"] == 4
+    assert data["iam_grants_aggregate"]["aggregate"]["count"] == seeded_grants + 3
     assert overview["user_count"] == 507
     assert overview["role_count"] == len(iam_roles.permission_hub_roles(limit=None))
-    assert overview["grant_count"] == 4
-    assert overview["relationship_count"] == 4
+    assert overview["grant_count"] == seeded_grants + 3
+    assert overview["relationship_count"] == seeded_relationships + 3
     assert overview["privileged_grant_count"] == 2
     assert overview["unassigned_user_count"] == 504
     angee_namespace = next(row for row in overview["namespaces"] if row["namespace"] == "angee")
@@ -515,7 +531,7 @@ def test_iam_overview_privileged_grants_on_registry_relationship_storage(
     """Privileged-grant filtering works on the FK-backed registry relationship store.
 
     Composed projects default to ``REBAC_LOCAL_BACKEND_STORAGE = "registry"``
-    (``angee.base`` autoconfig), where the denormalized relationship field names
+    (``angee`` autoconfig), where the denormalized relationship field names
     exist only through the storage mode's queryset kwargs translation — a filter
     built from Q objects bypasses it and fails live while the bare test settings
     (denormalized store) stay green.

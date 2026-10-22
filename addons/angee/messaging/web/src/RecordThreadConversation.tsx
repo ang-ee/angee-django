@@ -2,7 +2,9 @@ import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
 import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
-import { Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, RelativeTime, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, Skeleton, SkeletonStatus, Tag, Textarea, avatarInitials, cn, createClientKey, dateFromValue, errorMessage, formatDate, formatDateStorage, reactionsFromGroups, textRoleVariants, useRuntimeViewAs, useTrashPrompt, useUiT } from "@angee/ui";
+import {
+  Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, InlineTextAction, Input, LoadingPanel, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, AbsoluteTime, RemovableChip, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, avatarInitials, cn, createClientKey, errorMessage, textRoleVariants, useReactionGroups, useConfirm, useRuntimeViewAs, useTrashPrompt, useUiT,
+} from "@angee/ui";
 import {
   StorageUploadTasks,
   useStorageUpload,
@@ -12,9 +14,10 @@ import {
 } from "@angee/storage";
 import { useDebounce } from "use-debounce";
 import { userDisplayName } from "@angee/iam";
+import { senderDisplayName } from "@angee/parties";
 
 import { useMessagingT, type MessagingT } from "./i18n";
-import { messagingReactionCopy } from "./reaction-copy";
+import { StarButton } from "./StarButton";
 import { StreamComposer } from "./StreamComposer";
 import {
   DeleteRecordMessageDocument,
@@ -24,21 +27,21 @@ import {
   PostRecordMessageDocument,
   READ_MODELS,
   RecordRemovedMessagesDocument,
-  RecordThreadDocument,
   RestoreRecordMessageDocument,
   SetRecordMessageReactionDocument,
   SetRecordMessageStarredDocument,
   TrashRecordMessageDocument,
   UpdateRecordMessageDocument,
   type RecordMessageRow,
-  type RecordActivityRow,
   type RecordThreadPayload,
   type RecipientUserRow,
   type SuggestedRecipientRow,
 } from "./documents";
+import { useRecordThreadQuery } from "./useRecordThreadQuery";
 
 const RECIPIENT_MODELS = ["iam.User"] as const;
 const SEARCH_DEBOUNCE_MS = 300;
+const MESSAGE_PAGE_SIZE = 50;
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉"] as const;
 const FINISHED_UPLOAD_STATUSES = new Set<UploadTask["status"]>([
   "done",
@@ -70,6 +73,9 @@ export interface RecordThreadConversationChrome {
   markRead: () => Promise<void>;
   markReadPending: boolean;
   reportError: (message: string | null) => void;
+  /** The transcript's search, for a header that renders the control itself. */
+  search: string;
+  setSearch: (value: string) => void;
 }
 
 export interface RecordThreadConversationProps {
@@ -79,12 +85,17 @@ export interface RecordThreadConversationProps {
    *  followers/subtypes/mark-read strip here; a room supplies its own or omits it.
    *  The transcript + composer + mark-read + live-refetch are the same either way. */
   header?: (chrome: RecordThreadConversationChrome) => React.ReactNode;
-  /** Override the label used when an exchange was recorded on a later day. */
-  activityCopy?: { recordedOn: (day: string) => string };
+  /** Where the search control renders: inline above the feed (default), or by the header through `chrome.setSearch`. */
+  searchPlacement?: "inline" | "header";
+  /** Message types the chatter transcript narrows to (server values: `comment`, `notification`); empty lists all. */
+  messageTypes?: readonly string[];
+  /** Read the existing window around this public message id and focus its row. */
+  around?: string;
   /** Already translated consumer copy; omitted entries use messaging defaults. */
   composerCopy?: { audience?: string; help?: string };
   /** Per-app composer shortcut; Enter sends by default, or Ctrl/Cmd+Enter sends. */
   submitKey?: "enter" | "mod-enter";
+  messageLimit?: number;
   /** The stream is the same thread owner with quieter, declaration-driven chrome. */
   stream?: {
     /** Child items inherit their audience from the server-selected child row. */
@@ -98,7 +109,6 @@ export interface RecordThreadConversationProps {
     kindSwitch?: boolean;
     recipients?: boolean;
     attachments?: boolean;
-    activities?: boolean;
     messageTypes?: readonly string[];
     /** Explicit labels for message subtype keys; unlisted kinds have no pill. */
     kindLabels?: Readonly<Record<string, string>>;
@@ -107,7 +117,7 @@ export interface RecordThreadConversationProps {
 
 /** The reusable record-thread conversation: the message transcript + composer over
  *  a record's chatter thread (`record_thread`/`post_record_message`), live-refetched
- *  through the `READ_MODELS` invalidation set. Owns reading, posting, editing,
+ *  through `useRecordThreadQuery`. Owns reading, posting, editing,
  *  reactions, stars, mark-done, and mark-read for a `{modelLabel, recordId}`.
  *  The composer requires the record's projected post permission and stays
  *  read-only during view-as preview. The
@@ -120,9 +130,12 @@ export function RecordThreadConversation({
   modelLabel,
   recordId,
   header,
-  activityCopy,
+  searchPlacement = "inline",
+  messageTypes,
+  around,
   composerCopy,
   submitKey = "enter",
+  messageLimit = MESSAGE_PAGE_SIZE,
   stream,
 }: RecordThreadConversationProps): React.ReactElement {
   const t = useMessagingT();
@@ -138,15 +151,13 @@ export function RecordThreadConversation({
       modelLabel,
       recordId,
       search: activeSearch,
-      messageLimit: 50,
-      messageTypes: stream ? [...(stream.messageTypes ?? [])] : [],
+      messageLimit,
+      around,
+      messageTypes: stream ? [...(stream.messageTypes ?? [])] : [...(messageTypes ?? [])],
     }),
-    [modelLabel, recordId, activeSearch, stream?.messageTypes, Boolean(stream)],
+    [modelLabel, recordId, activeSearch, messageLimit, around, stream?.messageTypes, messageTypes, Boolean(stream)],
   );
-  const threadQuery = useAuthoredQuery(RecordThreadDocument, variables, {
-    enabled,
-    models: READ_MODELS,
-  });
+  const threadQuery = useRecordThreadQuery(variables);
   const threadPayload = threadQuery.data?.record_thread;
   const offeredKinds: readonly RecordMessagePostKind[] = threadPayload ? threadPayload.post_kinds ?? ["COMMENT", "NOTE"] : [];
   const canPost = Boolean(
@@ -206,7 +217,7 @@ export function RecordThreadConversation({
   const [replyToMessage, setReplyToMessage] = React.useState<RecordMessageRow | null>(null);
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const postAttempt = React.useRef<{ intent: string; clientCreationKey: string } | null>(null);
+  const postAttempt = React.useRef<{ intent: string; idempotencyKey: string } | null>(null);
 
   const recipientOptions = React.useMemo(
     () =>
@@ -226,11 +237,16 @@ export function RecordThreadConversation({
   const messageResultCount = threadPayload?.message_result_count ?? 0;
   // Messages arrive server-ordered (chronological ascending); render them verbatim.
   const messages = threadPayload?.messages ?? [];
-  const transcript = transcriptEntries(messages, (!stream || stream.activities) ? threadPayload?.activities ?? [] : []);
-  const activityTypes = new Map((threadPayload?.activity_types ?? []).map((type) => [type.key, type]));
+  const focusedMessageId = messages.find((message) => message.id === around)?.id;
+  const conversationRef = React.useCallback((element: HTMLDivElement | null) => {
+    if (focusedMessageId) {
+      element?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "center" });
+    }
+  }, [focusedMessageId]);
 
   // Drop local reply / editing state the moment its message leaves the feed (a
   // delete elsewhere, a filtered search) so we never edit or reply to a ghost row.
+  // An older page is a window, not the feed: browsing it for context keeps the intent.
   React.useEffect(() => {
     if (editingMessageId && !messages.some((message) => message.id === editingMessageId)) {
       setEditingMessageId(null);
@@ -373,10 +389,10 @@ export function RecordThreadConversation({
         // Retain identity after a failed response; an edited submission starts a new request.
         const intent = JSON.stringify(input);
         if (postAttempt.current?.intent !== intent) {
-          postAttempt.current = { intent, clientCreationKey: createClientKey("message") };
+          postAttempt.current = { intent, idempotencyKey: createClientKey("message") };
         }
         const attempt = postAttempt.current;
-        await postMessage({ ...input, clientCreationKey: attempt.clientCreationKey });
+        await postMessage({ ...input, idempotencyKey: attempt.idempotencyKey });
         if (postAttempt.current === attempt) postAttempt.current = null;
         setReplyToMessage(null);
         return true;
@@ -402,185 +418,113 @@ export function RecordThreadConversation({
     }
   }, [modelLabel, recordId, markReadMutation, t]);
 
-  if (threadQuery.isFetching && threadQuery.data === undefined) {
-    return <SkeletonStatus label={t("chatter.loading")}
-      className={cn("flex flex-col gap-4 p-3", stream ? "min-h-40" : "min-h-72")}>
-      {!stream ? <Skeleton className="h-9 w-full" /> : null}
-      {[0, 1, 2].map((index) => <div key={index} className="flex gap-3">
-        <Skeleton className="h-8 w-8 rounded-full" />
-        <div className="flex flex-1 flex-col gap-2"><Skeleton className="h-4 w-1/3" /><Skeleton className="h-10 w-3/4" /></div>
-      </div>)}
-    </SkeletonStatus>;
-  }
   // Any failure returns a state surface and NO composer — a `record_thread`
   // `NOT_FOUND` (unreadable/nonexistent record) or `BAD_RECORD` (undecodable
   // model/record) must never render a phantom room a non-member could post into.
   const errorCode = threadPayload?.error_code ?? null;
-  if (threadQuery.error || errorCode) {
-    return renderThreadError(errorCode, t);
-  }
 
   const chrome: RecordThreadConversationChrome = {
     payload: threadPayload,
     markRead: handleMarkRead,
     markReadPending: markReadState.fetching,
     reportError: setError,
+    search,
+    setSearch,
   };
+  const composer = canPost ? (
+    <ChatterComposer
+      t={t}
+      copy={composerCopy}
+      submitKey={submitKey}
+      readOnly={readOnly}
+      selectedPostKind={selectedPostKind ?? "COMMENT"}
+      offeredKinds={offeredKinds}
+      stream={stream ? { ...stream, audience: stream.audience ?? threadPayload?.audience_label ?? undefined } : undefined}
+      onPostKindChange={setPostKind}
+      replyToMessage={replyToMessage}
+      onClearReply={() => setReplyToMessage(null)}
+      recipientOptions={recipientOptions}
+      recipientsLoading={recipientUsersQuery.isFetching}
+      posting={postState.fetching}
+      onPost={handlePost}
+      onError={setError}
+    />
+  ) : null;
+  const errorBanner = <ErrorBanner description={error} dismissLabel={t("error.dismiss")}
+    onDismiss={() => setError(null)} />;
 
   return (
-    <div className={cn("flex flex-col gap-4", stream ? "min-h-0" : "min-h-72")}>
+    <div ref={conversationRef} className={cn("flex flex-col gap-4", stream ? "min-h-0" : "min-h-72")}>
+      {/* Search and notification controls survive a new query's loading state. */}
       {header?.(chrome)}
-      {(stream?.search ?? !stream) ? <SearchInput
-        value={search}
-        onChange={(event) => setSearch(event.currentTarget.value)}
-        onClear={() => setSearch("")}
-        placeholder={t("chatter.search")}
-        aria-label={t("chatter.search")}
-      /> : null}
-      {transcript.length > 0 ? (
-        <div className="space-y-3">
-          {activeSearch ? (
-            <div className={cn(textRoleVariants({ role: "caption" }), "px-1")}>
-              {t("chatter.results", { count: messageResultCount })}
-            </div>
-          ) : null}
-          <MessageFeed label={t("chatter.feedLabel")}>
-            {transcript.map((entry) => entry.kind === "activity" ? (
-              <CompletedActivityRow
-                key={`activity:${entry.activity.id}`}
-                activity={entry.activity}
-                type={activityTypes.get(entry.activity.activity_type)}
-                recordedOn={activityCopy?.recordedOn ?? ((day) => t("activity.recordedOn", { day }))}
-              />
-            ) : (
-              <MessageFeedRow
-                key={`message:${entry.message.id}`}
-                message={entry.message}
-                editing={editingMessageId === entry.message.id}
-                canReply={canPost}
-                readOnly={readOnly}
-                streamMode={streamMode}
-                streamVerb={stream?.verbs?.[entry.message.is_reply ? "reply" : "root"]}
-                streamKind={stream?.kindLabels?.[entry.message.subtype?.key ?? ""]}
-                audience={stream ? stream.audience ?? threadPayload?.audience_label ?? t("composer.audience") : undefined}
-                t={t}
-                onStartEdit={handleStartEdit}
-                onCancelEdit={handleCancelEdit}
-                onSaveEdit={handleSaveEdit}
-                onStartReply={handleStartReply}
-                onDelete={handleDeleteMessage}
-                onTrash={handleTrashMessage}
-                onToggleReaction={handleToggleReaction}
-                onToggleStarred={handleToggleStarred}
-                onMarkDone={handleMarkMessageDone}
-              />
-            ))}
-          </MessageFeed>
-        </div>
-      ) : (
-        <EmptyState
-          icon="comments"
-          title={activeSearch ? t("chatter.noMatchTitle") : t(stream ? "stream.empty" : "chatter.emptyTitle")}
-          description={
-            activeSearch ? t("chatter.noMatchHint") : t(stream ? "stream.emptyHint" : "chatter.emptyHint")
-          }
-          className="min-h-40 p-4"
-        />
-      )}
-      {threadPayload?.removed_message_count ? (
-        <RemovedMessages
-          modelLabel={modelLabel}
-          recordId={recordId}
-          count={threadPayload.removed_message_count}
-          readOnly={readOnly}
-          t={t}
-          onRestore={handleRestoreMessage}
-        />
-      ) : null}
-      {canPost ? (
-        <ChatterComposer
-          t={t}
-          copy={composerCopy}
-          submitKey={submitKey}
-          readOnly={readOnly}
-          selectedPostKind={selectedPostKind ?? "COMMENT"}
-          offeredKinds={offeredKinds}
-          stream={stream ? { ...stream, audience: stream.audience ?? threadPayload?.audience_label ?? undefined } : undefined}
-          onPostKindChange={setPostKind}
-          replyToMessage={replyToMessage}
-          onClearReply={() => setReplyToMessage(null)}
-          recipientOptions={recipientOptions}
-          recipientsLoading={recipientUsersQuery.isFetching}
-          posting={postState.fetching}
-          onPost={handlePost}
-          onError={setError}
-        />
-      ) : null}
-      {/* The shared danger banner announces via role="alert" and is dismissable —
-          `description={null}` renders nothing, so this is the "no error" state too. */}
-      <ErrorBanner
-        description={error}
-        dismissLabel={t("error.dismiss")}
-        onDismiss={() => setError(null)}
-      />
-    </div>
-  );
-}
-
-type TranscriptEntry =
-  | { kind: "message"; message: RecordMessageRow; day: string; at: string }
-  | { kind: "activity"; activity: RecordActivityRow; day: string; at: string };
-
-function transcriptEntries(
-  messages: readonly RecordMessageRow[],
-  activities: readonly RecordActivityRow[],
-): TranscriptEntry[] {
-  const messageEntries: TranscriptEntry[] = messages.map((message) => {
-    const at = message.sent_at ?? message.created_at;
-    return { kind: "message", message, at, day: formatDateStorage(dateFromValue(at)) ?? "" };
-  });
-  const activityEntries: TranscriptEntry[] = activities
-    .filter((activity) => activity.status === "DONE")
-    .map((activity) => ({
-      kind: "activity", activity, at: activity.completed_at ?? "",
-      day: activity.due_date ?? formatDateStorage(dateFromValue(activity.completed_at)) ?? "",
-    }));
-  const entries: TranscriptEntry[] = [];
-  let nextActivity = 0;
-  for (const messageEntry of messageEntries) {
-    while (nextActivity < activityEntries.length) {
-      const activityEntry = activityEntries[nextActivity]!;
-      const dayOrder = activityEntry.day.localeCompare(messageEntry.day);
-      if (dayOrder > 0 || (dayOrder === 0 &&
-        Date.parse(activityEntry.at) > Date.parse(messageEntry.at))) break;
-      entries.push(activityEntry);
-      nextActivity += 1;
-    }
-    entries.push(messageEntry);
-  }
-  entries.push(...activityEntries.slice(nextActivity));
-  return entries;
-}
-
-function CompletedActivityRow({ activity, type, recordedOn }: {
-  activity: RecordActivityRow;
-  type: { name: string; glyph: string } | undefined;
-  recordedOn: (day: string) => string;
-}): React.ReactElement {
-  const recordedDay = formatDateStorage(dateFromValue(activity.completed_at));
-  const occurredDay = activity.due_date ?? recordedDay;
-  return (
-    <MessageRow
-      avatar={<Glyph decorative name={type?.glyph || "activity"} fallbackName="activity" />}
-      author={activity.created_by ? userDisplayName(activity.created_by, "") : undefined}
-      channel={<span className="text-13 font-medium">{type?.name ?? activity.activity_type}</span>}
-      meta={<>
-        {occurredDay ? <time dateTime={occurredDay}>{formatDate(occurredDay)}</time> : null}
-        {recordedDay && recordedDay !== occurredDay ? <> · {recordedOn(formatDate(recordedDay))}</> : null}
+      {threadQuery.isFetching && threadQuery.data === undefined ? (
+        <LoadingPanel message={t("chatter.loading")} />
+      ) : threadQuery.error || errorCode ? renderThreadError(errorCode, t) : <>
+        {(stream ? Boolean(stream.search) : searchPlacement === "inline") ? <SearchInput
+          value={search}
+          onChange={(event) => setSearch(event.currentTarget.value)}
+          onClear={() => setSearch("")}
+          placeholder={t("chatter.search")}
+          aria-label={t("chatter.search")}
+        /> : null}
+        {messages.length > 0 ? (
+          <div className="space-y-3">
+            {activeSearch ? (
+              <div className={cn(textRoleVariants({ role: "caption" }), "px-1")}>
+                {t("chatter.results", { count: messageResultCount })}
+              </div>
+            ) : null}
+            <MessageFeed label={t("chatter.feedLabel")}>
+              {messages.map((message) => <MessageFeedRow
+                  key={`message:${message.id}`}
+                  message={message}
+                  focused={message.id === around}
+                  editing={editingMessageId === message.id}
+                  canReply={canPost}
+                  readOnly={readOnly}
+                  streamMode={streamMode}
+                  streamVerb={stream?.verbs?.[message.is_reply ? "reply" : "root"]}
+                  streamKind={stream?.kindLabels?.[message.subtype?.key ?? ""]}
+                  audience={stream ? stream.audience ?? threadPayload?.audience_label ?? t("composer.audience") : undefined}
+                  t={t}
+                  onStartEdit={handleStartEdit}
+                  onCancelEdit={handleCancelEdit}
+                  onSaveEdit={handleSaveEdit}
+                  onStartReply={handleStartReply}
+                  onDelete={handleDeleteMessage}
+                  onTrash={handleTrashMessage}
+                  onToggleReaction={handleToggleReaction}
+                  onToggleStarred={handleToggleStarred}
+                  onMarkDone={handleMarkMessageDone}
+                />)}
+            </MessageFeed>
+          </div>
+        ) : (
+          <EmptyState
+            icon="comments"
+            title={activeSearch ? t("chatter.noMatchTitle") : t(stream ? "stream.empty" : "chatter.emptyTitle")}
+            description={
+              activeSearch ? t("chatter.noMatchHint") : t(stream ? "stream.emptyHint" : "chatter.emptyHint")
+            }
+            className="min-h-40 p-4"
+          />
+        )}
+        {threadPayload?.removed_message_count ? (
+          <RemovedMessages
+            modelLabel={modelLabel}
+            recordId={recordId}
+            count={threadPayload.removed_message_count}
+            readOnly={readOnly}
+            t={t}
+            onRestore={handleRestoreMessage}
+          />
+        ) : null}
+        {composer}
+        {/* The shared danger banner announces via role="alert" and is dismissable —
+            `description={null}` renders nothing, so this is the "no error" state too. */}
+        {errorBanner}
       </>}
-    >
-      {activity.note || activity.summary}
-    </MessageRow>
+    </div>
   );
 }
 
@@ -735,19 +679,9 @@ function ChatterComposer({
     audience={stream?.audience}
     before={readOnly ? <Banner tone="warning">{uiT("viewAs.readOnly")}</Banner> : null}
     inputBefore={<>
-      {replyToMessage ? <div className="flex items-center gap-2 rounded-6 border border-border-subtle bg-surface px-2 py-1.5">
-        <Glyph decorative name="quote" className="shrink-0 text-fg-muted" />
-        <div className="min-w-0 flex-1">
-          <div className={cn(textRoleVariants({ role: "caption" }), "font-medium")}>
-            {t("message.replyingTo", { kind: replyKindLabel(replyToMessage, t) })}
-          </div>
-          <div className="truncate text-13 text-fg">
-            {replyToMessage.preview || editableMessageBody(replyToMessage)}
-          </div>
-        </div>
-        <Button type="button" variant="ghost" size="iconSm" aria-label={t("composer.cancelReply")}
-          disabled={disabled} onClick={onClearReply}><Glyph name="x" /></Button>
-      </div> : null}
+      {replyToMessage ? <ReplyQuote kind={replyKindLabel(replyToMessage, t)} t={t}
+        preview={replyToMessage.preview || editableMessageBody(replyToMessage)}
+        onClear={disabled ? undefined : onClearReply} /> : null}
       {showKindSwitch && offeredKinds.length > 1 ? <SegmentedControl<RecordMessagePostKind>
         disabled={disabled} value={selectedPostKind} onValueChange={handleKindChange}
         options={[
@@ -774,7 +708,7 @@ function ChatterComposer({
     onFiles={showAttachments ? handleFiles : undefined}
     after={<>
       {showAttachments && taskRows.length > 0 ? <StorageUploadTasks uploads={{ ...uploads, tasks: taskRows }} t={storageT} /> : null}
-      {showAttachments ? <input ref={fileInputRef} type="file" disabled={disabled} multiple className="hidden"
+      {showAttachments ? <Input ref={fileInputRef} type="file" disabled={disabled} multiple className="hidden"
         onChange={(event) => { handleFiles(event.target.files); event.target.value = ""; }} /> : null}
       {!stream ? <p className={textRoleVariants({ role: "caption" })}>{copy?.help ?? t("composer.help")}</p> : null}
     </>} />;
@@ -825,7 +759,7 @@ function ComposerRecipients({
           }}
         />
         {selected.length > 0 ? (
-          <FieldRoot className="inline-flex h-8 items-center gap-1.5 rounded-6 border border-border-subtle px-2 text-12 text-fg-muted">
+          <FieldRoot className="inline-flex items-center gap-1.5 rounded-6 border border-border-subtle px-2 py-1 text-12 text-fg-muted">
             <FieldRoot.Item>
             <Checkbox
               disabled={disabled}
@@ -843,28 +777,11 @@ function ComposerRecipients({
       {selected.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">
           {selected.map((option) => (
-            <Chip key={option.id} tone="neutral" size="md" className="gap-1.5">
-              <span className="min-w-0 max-w-40 truncate">{option.label}</span>
-              {option.follower ? (
-                <Tag tone="neutral" density="micro">
-                  {t("composer.follower")}
-                </Tag>
-              ) : null}
-              {option.suggested ? (
-                <Tag tone="info" density="micro">
-                  {option.reason || t("composer.suggested")}
-                </Tag>
-              ) : null}
-              <button
-                type="button"
-                aria-label={t("composer.removeRecipient", { name: option.label })}
-                disabled={disabled}
-                onClick={() => onRemove(option.id)}
-                className="shrink-0 text-fg-muted outline-none hover:text-fg focus-visible:focus-ring"
-              >
-                <Glyph name="x" className="size-3" />
-              </button>
-            </Chip>
+            <RemovableChip key={option.id} tone={option.suggested ? "info" : "neutral"} size="md"
+              removeLabel={option.label} onRemove={() => onRemove(option.id)}
+              title={option.suggested ? option.reason || t("composer.suggested") : option.follower ? t("composer.follower") : undefined}>
+              {option.label}
+            </RemovableChip>
           ))}
         </div>
       ) : null}
@@ -879,6 +796,7 @@ function ComposerRecipients({
 
 interface MessageFeedRowProps {
   message: RecordMessageRow;
+  focused: boolean;
   editing: boolean;
   canReply: boolean;
   readOnly: boolean;
@@ -900,6 +818,7 @@ interface MessageFeedRowProps {
 
 const MessageFeedRow = React.memo(function MessageFeedRow({
   message,
+  focused,
   editing,
   canReply,
   readOnly,
@@ -922,19 +841,12 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
   // The server resolves actor-readable identity; older payloads retain their
   // actor-scoped sender projection as a fallback.
   const author = message.is_self ? t("message.you") :
-    message.author_label || message.sender?.display_name || message.sender?.value || t("message.author");
-  const trackingValues = [...message.tracking_values].sort(
-    (left, right) =>
-      left.position - right.position || left.field_label.localeCompare(right.field_label),
-  );
+    message.author_label || senderDisplayName(message.sender, t("message.author"));
   const timestamp = message.sent_at ?? message.created_at;
   const subtypeDescription = message.subtype?.description || message.subtype?.name || "";
   const directionTag = directionLabel(message.direction, t);
   const edited = Boolean(message.edited_at || message.status === "EDITED");
-  const reactions = reactionsFromGroups(
-    message.reaction_groups,
-    messagingReactionCopy(t),
-  );
+  const reactions = useReactionGroups(message.reaction_groups);
   const activeReactions = message.reaction_groups
     .filter((group) => group.self_reacted)
     .map((group) => group.reaction);
@@ -942,15 +854,23 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
   if (editing) {
     return (
       <MessageRow
+        id={`message-${message.id}`}
+        aria-current={focused || undefined}
         avatar={<Avatar size="sm" initials={avatarInitials(author)} alt={author} />}
         author={author}
         className={streamMode && message.is_reply ? "ml-3 border-l-2 border-border-subtle pl-3" : undefined}
       >
-        <MessageEditor
-          initialBody={editableBody}
-          t={t}
+        <InlineTextAction
+          multiline
+          open
+          value={editableBody}
+          inputLabel={t("message.editLabel")}
+          submitLabel={t("message.save")}
+          cancelLabel={t("message.cancel")}
+          submitVariant="primary"
+          submitUnchanged
+          onSubmit={(body) => onSaveEdit(message.id, body)}
           onCancel={onCancelEdit}
-          onSave={(body) => onSaveEdit(message.id, body)}
         />
       </MessageRow>
     );
@@ -958,38 +878,21 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
 
   return (
     <MessageRow
+      id={`message-${message.id}`}
+      aria-current={focused || undefined}
       avatar={<Avatar size="sm" initials={avatarInitials(author)} alt={author} />}
       author={author}
       timestamp={timestamp}
       className={streamMode && message.is_reply ? "ml-3 border-l-2 border-border-subtle pl-3" : undefined}
       channel={streamMode ? <>
         {audience ? <Chip tone="neutral" size="md">{audience}</Chip> : null}
-        {streamKind ? <Tag tone="info" density="micro">{streamKind}</Tag> : null}
-      </> : directionTag ? <Tag tone="info" density="micro">{directionTag}</Tag> : undefined}
+        {streamKind ? <Chip tone="info">{streamKind}</Chip> : null}
+      </> : directionTag ? <Chip tone="info">{directionTag}</Chip> : undefined}
       meta={streamVerb || edited ? <>
         {streamVerb ? <span>{streamVerb}</span> : null}
         {edited ? <>{streamVerb ? " · " : null}{t("chatter.editedMeta")}
-          {message.edited_at ? <> <RelativeTime value={message.edited_at} /></> : null}</> : null}
+          {message.edited_at ? <> <AbsoluteTime value={message.edited_at} display="datetime" /></> : null}</> : null}
       </> : undefined}
-      tracking={
-        trackingValues.length > 0 ? (
-          <dl className="space-y-1 rounded-6 bg-surface-inset p-2">
-            {trackingValues.map((tracking) => (
-              <div
-                key={tracking.id}
-                className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-2 text-13"
-              >
-                <dt className="truncate font-medium text-fg-muted">{tracking.field_label}</dt>
-                <dd className="min-w-0 text-fg">
-                  <span className="text-fg-muted">{tracking.old_display || "—"}</span>
-                  <span aria-hidden="true"> → </span>
-                  <span>{tracking.new_display || "—"}</span>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        ) : undefined
-      }
       reactions={
         reactions.length > 0 ? (
           <ReactionBar
@@ -1025,17 +928,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
               <Glyph name="quote" />
             </Button>
           ) : null}
-          <Button
-            type="button"
-            variant="ghost"
-            size="iconSm"
-            aria-label={message.starred ? t("message.unstar") : t("message.star")}
-            aria-pressed={message.starred}
-            className={message.starred ? "text-warning-text" : undefined}
-            onClick={() => onToggleStarred(message)}
-          >
-            <Glyph name="star" />
-          </Button>
+          <StarButton starred={Boolean(message.starred)} onToggle={() => onToggleStarred(message)} />
           <ReactionPicker
             options={QUICK_REACTIONS}
             active={activeReactions}
@@ -1054,15 +947,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
             </Button>
           ) : null}
           {message.can_delete ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="iconSm"
-              aria-label={t("message.delete")}
-              onClick={() => onDelete(message)}
-            >
-              <Glyph name="trash" />
-            </Button>
+            <MessageDeleteButton t={t} onConfirmed={() => onDelete(message)} />
           ) : null}
           {message.can_trash && !readOnly ? (
             <MessageTrashButton t={t} onConfirmed={(reason) => onTrash(message, reason)} />
@@ -1071,12 +956,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
       }
     >
       {message.parent ? (
-        <div className="mb-2 rounded-6 border-l-2 border-border-subtle bg-surface px-2 py-1">
-          <div className={cn(textRoleVariants({ role: "caption" }), "font-medium")}>
-            {t("message.replyingTo", { kind: replyKindLabel(message.parent, t) })}
-          </div>
-          <div className="truncate text-13 text-fg-muted">{message.parent.preview}</div>
-        </div>
+        <ReplyQuote kind={replyKindLabel(message.parent, t)} preview={message.parent.preview} t={t} className="mb-2" />
       ) : null}
       {subtypeDescription && message.message_type !== "COMMENT" && !streamMode ? (
         <div className={cn(textRoleVariants({ role: "caption" }), "mb-1 font-medium")}>
@@ -1087,6 +967,25 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
     </MessageRow>
   );
 });
+
+/** The author's delete: a destructive verb confirms through the shared ceremony first. */
+function MessageDeleteButton({ t, onConfirmed }: { t: MessagingT; onConfirmed: () => void }): React.ReactElement {
+  const confirm = useConfirm();
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="iconSm"
+      aria-label={t("message.delete")}
+      onClick={() => {
+        void confirm({ title: t("message.deleteConfirm.title"), body: t("message.deleteConfirm.body"), confirm: t("message.delete"), danger: true })
+          .then((ok) => { if (ok) onConfirmed(); });
+      }}
+    >
+      <Glyph name="trash" />
+    </Button>
+  );
+}
 
 /** A moderator's remove control: the shared trash confirmation collects an optional reason. */
 function MessageTrashButton({ t, onConfirmed }: {
@@ -1146,44 +1045,27 @@ function RemovedMessages({ modelLabel, recordId, count, readOnly, t, onRestore }
   );
 }
 
-function MessageEditor({
-  initialBody,
-  t,
-  onCancel,
-  onSave,
-}: {
-  initialBody: string;
+/** The one "replying to" quote: above a reply in the feed, and in the composer while composing one. */
+function ReplyQuote({ kind, preview, onClear, className, t }: {
+  kind: string;
+  preview: React.ReactNode;
+  onClear?: () => void;
+  className?: string;
   t: MessagingT;
-  onCancel: () => void;
-  onSave: (body: string) => void;
 }): React.ReactElement {
-  const [body, setBody] = React.useState(initialBody);
   return (
-    <form
-      className="space-y-2"
-      onSubmit={(event) => {
-        event.preventDefault();
-        onSave(body);
-      }}
-    >
-      <Textarea
-        value={body}
-        onChange={(event) => setBody(event.currentTarget.value)}
-        rows={3}
-        resize="none"
-        aria-label={t("message.editLabel")}
-      />
-      <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-          <Glyph name="x" />
-          {t("message.cancel")}
-        </Button>
-        <Button type="submit" variant="primary" size="sm" disabled={body.trim() === ""}>
-          <Glyph name="check" />
-          {t("message.save")}
-        </Button>
+    <div className={cn("flex items-center gap-2 rounded-6 border-l-2 border-border-subtle bg-surface px-2 py-1", className)}>
+      <Glyph decorative name="quote" className="shrink-0 text-fg-muted" />
+      <div className="min-w-0 flex-1">
+        <div className={cn(textRoleVariants({ role: "caption" }), "font-medium")}>{t("message.replyingTo", { kind })}</div>
+        <div className="truncate text-13 text-fg-muted">{preview}</div>
       </div>
-    </form>
+      {onClear ? (
+        <Button type="button" variant="ghost" size="iconSm" aria-label={t("composer.cancelReply")} onClick={onClear}>
+          <Glyph name="x" />
+        </Button>
+      ) : null}
+    </div>
   );
 }
 
@@ -1204,7 +1086,6 @@ function normaliseMessagePartValue(value: string | null | undefined): string {
 
 function replyKindLabel(message: { message_type?: string | null }, t: MessagingT): string {
   if (message.message_type === "NOTIFICATION") return t("message.kindNote");
-  if (message.message_type === "AUTO_COMMENT") return t("message.kindUpdate");
   return t("message.kindMessage");
 }
 

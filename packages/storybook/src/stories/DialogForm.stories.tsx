@@ -1,6 +1,6 @@
 import * as React from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, DialogForm, FieldRow, Input, Textarea } from "@angee/ui";
+import { Button, DialogForm, FieldControl, FieldLabel, FieldRoot, Textarea } from "@angee/ui";
 
 const meta = {
   title: "Fragments/DialogForm",
@@ -40,15 +40,18 @@ function DialogFormDemo(): React.ReactElement {
         open={open}
         title="Create source"
       >
-        <FieldRow label="Name" required span="full">
-          <Input defaultValue="Production API" />
-        </FieldRow>
-        <FieldRow label="Endpoint" span="full">
-          <Input defaultValue="https://api.example.test/resources" />
-        </FieldRow>
-        <FieldRow label="Notes" span="full">
-          <Textarea defaultValue="Import contacts and account records." rows={3} />
-        </FieldRow>
+        <FieldRoot span="full">
+          <FieldLabel required>Name</FieldLabel>
+          <FieldControl defaultValue="Production API" />
+        </FieldRoot>
+        <FieldRoot span="full">
+          <FieldLabel>Endpoint</FieldLabel>
+          <FieldControl defaultValue="https://api.example.test/resources" />
+        </FieldRoot>
+        <FieldRoot span="full">
+          <FieldLabel>Notes</FieldLabel>
+          <FieldControl render={<Textarea defaultValue="Import contacts and account records." rows={3} />} />
+        </FieldRoot>
       </DialogForm>
     </>
   );

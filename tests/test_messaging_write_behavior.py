@@ -10,62 +10,44 @@ from unittest.mock import Mock
 
 import pytest
 from django.db import transaction
-from rebac import system_context
+from rebac import actor_context, system_context
 
 import tests.test_messaging  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.publishing import mute_changes
 from angee.messaging import delivery
-from angee.messaging.testing.models import Message, TrackingValue
+from angee.messaging.backends import DeliveryOutcome
+from angee.messaging.testing.models import Message
 from tests.test_messaging import channel as channel
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("tracked", [False, True])
-def test_content_edit_validation_reads_tracking(
+@pytest.mark.parametrize("kind", list(Message.MessageKind))
+def test_content_edit_validation_uses_retained_kind(
     composed_tables: None,
     django_assert_num_queries: Callable[..., AbstractContextManager[Any]],
-    tracked: bool,
+    kind: str,
 ) -> None:
-    """The edit and delete predicates consume the same SQL projection for free."""
-    with system_context(reason="messaging edit validation setup"), mute_changes():
-        message = Message.objects.create(direction=Message.Direction.INTERNAL, message_type=Message.MessageKind.COMMENT)
-        if tracked:
-            TrackingValue.objects.create(message_id=message.pk, field_name="status", field_label="Status")
-        message = Message.objects.annotate(
-            _has_tracking_values=Message.has_tracking_values_expression(),
-        ).get(pk=message.pk)
+    """The edit and delete predicates consume the row's owning kind without extra reads."""
+    message = Message(direction=Message.Direction.INTERNAL, message_type=kind)
     with django_assert_num_queries(0):
-        assert message.content_edit_error() == ("Messages with tracking values cannot be edited." if tracked else None)
-        assert message.delete_error() == ("Messages with tracking values cannot be deleted." if tracked else None)
+        assert (message.content_edit_error() is None) == (kind == Message.MessageKind.COMMENT)
+        assert (message.delete_error() is None) == (kind == Message.MessageKind.COMMENT)
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("prefetched", [False, True])
-def test_content_edit_validation_rechecks_tracking_after_prefetch(
-    composed_tables: None,
-    django_assert_num_queries: Callable[..., AbstractContextManager[Any]],
-    prefetched: bool,
-) -> None:
-    """Stale or actor-scoped prefetches cannot hide immutable tracking values."""
-    with system_context(reason="messaging prefetched tracking setup"), mute_changes():
-        message = Message.objects.create(
-            direction=Message.Direction.INTERNAL,
-            message_type=Message.MessageKind.COMMENT,
-        )
-        if prefetched:
-            message = Message.objects.prefetch_related("tracking_values").get(pk=message.pk)
-        TrackingValue.objects.create(message_id=message.pk, field_name="status", field_label="Status")
-    with system_context(reason="messaging prefetched tracking validation"):
-        # The system queryset audits its use, then checks the authoritative rows.
-        with django_assert_num_queries(2):
-            assert message.content_edit_error() == "Messages with tracking values cannot be edited."
+def test_notification_messages_remain_readonly(composed_tables: None) -> None:
+    """The retained notification kind, not obsolete payload metadata, owns edit policy."""
+    message = Message(direction="internal", message_type="notification")
+    assert message.content_edit_error() is not None
+    assert message.delete_error() is not None
+    assert message.trash_error() is not None
 
 
 @pytest.mark.django_db(transaction=True)
 def test_queued_delivery_waits_for_commit_and_persists_status(
     channel: Any, composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Queued delivery waits for commit and persists status."""
+    """Explicit retry admits FAILED delivery and dispatches only after commit."""
     with system_context(reason="messaging delivery setup"), mute_changes():
         message = Message.objects.create(
             channel_id=channel.pk,
@@ -81,7 +63,11 @@ def test_queued_delivery_waits_for_commit_and_persists_status(
     )
     channels = Mock()
     channels.sudo.return_value = channels
-    channels.get.return_value = SimpleNamespace(backend=SimpleNamespace(deliver=lambda message: True))
+    channels.get.return_value = SimpleNamespace(backend=SimpleNamespace(
+        deliver=lambda message: DeliveryOutcome(accepted=True),
+        delivery_lock=lambda: nullcontext(True),
+        close=lambda: None,
+    ))
     get_model = delivery.apps.get_model
 
     def delivery_model(app_label: str, model_name: str | None = None) -> Any:
@@ -89,15 +75,24 @@ def test_queued_delivery_waits_for_commit_and_persists_status(
             return SimpleNamespace(objects=channels)
         return get_model(app_label, model_name)
 
-    monkeypatch.setattr(delivery.apps, "get_model", delivery_model)
-    monkeypatch.setattr(delivery, "task_lock", lambda _key: nullcontext(True))
     with system_context(reason="messaging delivery"), mute_changes():
-        with transaction.atomic():
-            assert delivery.queue_message_delivery(message)
+        revision = message.revision
+        assert not delivery.queue_message_delivery(message)
+        message.refresh_from_db()
+        assert message.status == Message.MessageStatus.FAILED and message.revision == revision
+        assert message.delivery_claim is None and message.delivery_lease_until is None
+        assert payloads == []
+        with transaction.atomic(), actor_context(channel.owner):
+            message = message.retry_delivery(actor=channel.owner, expected_revision=revision)
+            assert message.status == Message.MessageStatus.QUEUED
+            assert message.acknowledged_by_id == channel.owner_id
+            assert message.local_metadata["delivery_attempts"] == 0
             assert payloads == []
         assert payloads == [
             {"model_label": message._meta.label_lower, "pk": message.pk, "external_id": message.external_id}
         ]
+        monkeypatch.setattr(delivery.apps, "get_model", delivery_model)
+        monkeypatch.setattr(delivery, "task_lock", lambda _key: nullcontext(True))
         outcome = delivery.run_message_delivery(**payloads[0])
         assert outcome["delivered"] is True
         channels.get.assert_called_once_with(pk=message.channel_id)

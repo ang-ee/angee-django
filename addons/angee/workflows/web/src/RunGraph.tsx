@@ -1,17 +1,12 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useAuthoredQuery } from "@angee/refine";
-import {
-  Badge, Button, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, MetaGrid, MetaSection, PageAside, RailPanel,
-  errorMessage, formatDateTime, optionLabel, routeSearchParam, updateRouteSearch, useAppRuntime, useChatter, useChatterContent,
-  useEnumOptions, useRouteSearch, useStatusTone, type GraphViewNode,
-} from "@angee/ui";
+import { Button, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, MetaGrid, MetaSection, RailPanel, StatusBadge, errorMessage, formatDateTime, routeSearchParam, updateRouteSearch, useAppRuntime, useChatter, useChatterContent, useEnumOptions, useRouteSearch, useStatusTone, type GraphViewNode } from "@angee/ui";
 import { RUN_MODEL, STEP_RUN_MODEL, WorkflowRunGraphDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 import { projectRunGraph, RUN_GRAPH_EDGE_STYLES, type RunGraphNode } from "./run-graph";
 import { StepRuns } from "./StepRuns";
 import { formatStepPage } from "./step-page";
-import { WORKFLOW_STEP_STATUS_TONES } from "./status-tones";
 
 export const RUN_GRAPH_INSPECTOR_TAB = "run-graph-inspector";
 
@@ -39,12 +34,10 @@ export function RunGraph({ runId, active = true }: { runId: string; active?: boo
   const selected = graph?.nodes.find((node) => node.key === selectedKey);
   const inspector = useMemo(() => active && graph ? { tabs: [{ id: RUN_GRAPH_INSPECTOR_TAB,
     label: t("run.graphInspector"), icon: "info", children:
-      <PageAside collapse="never" gutter="compact" className="h-full w-full border-l-0">
-        <RailPanel title={t("run.graphInspector")} empty={t("run.graphSelectNode")}>
-          {selected ? <RunNodeInspector key={`${runId}:${selected.key}`} runId={runId} node={selected}
-            detail={projected?.nodes.find((node) => node.id === selected.key)?.detail} /> : null}
-        </RailPanel>
-      </PageAside>,
+      <RailPanel title={t("run.graphInspector")} empty={t("run.graphSelectNode")}>
+        {selected ? <RunNodeInspector key={`${runId}:${selected.key}`} runId={runId} node={selected}
+          detail={projected?.nodes.find((node) => node.id === selected.key)?.detail} /> : null}
+      </RailPanel>,
   }] } : null, [active, graph, selected, projected, runId, t]);
   useChatterContent(inspector);
   const graphReady = graph != null;
@@ -76,15 +69,13 @@ function RunNodeInspector({ runId, node, detail }: {
   runId: string; node: RunGraphNode; detail: GraphViewNode["detail"];
 }) {
   const t = useWorkflowsT();
-  const resolveTone = useStatusTone();
   const statuses = useEnumOptions(STEP_RUN_MODEL, "status");
   const row = node.step_run;
   return <>
     <MetaSection title={node.label}>
       <MetaGrid rows={[
-        [t("run.graphKey"), node.key], [t("run.graphStep"), node.step_label],
-        [t("run.status"), <Badge tone={resolveTone(row?.status ?? "unreached", WORKFLOW_STEP_STATUS_TONES)}>
-          {row ? optionLabel(statuses, row.status) : t("run.graphPending")}</Badge>],
+        [t("run.graphStep"), node.step_label],
+        [t("run.status"), <StatusBadge value={row?.status ?? "unreached"} options={statuses}>{row ? undefined : t("run.graphPending")}</StatusBadge>],
         ...(detail ? [[t("run.graphProgress"), detail] as const] : []),
         ...(row ? [[t("step.attempts"), row.attempt], [t("step.page"), formatStepPage(row.page_index, t)],
           [t("step.created"), formatDateTime(row.created_at)], [t("step.updated"), formatDateTime(row.updated_at)],

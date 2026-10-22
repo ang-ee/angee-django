@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from django.apps import apps
 from django.conf import settings
@@ -11,7 +11,8 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.addons import available_addons
-from angee.base.models import AngeeManager, AngeeModel
+from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
+from angee.models import AngeeManager, AngeeModel
 from angee.platform_integrate_vcs.catalog import parse_addon_meta
 
 
@@ -24,8 +25,8 @@ class CatalogProvenance(models.Model):
     seen it in a repo; a ``REMOTE`` row always carries them.
     """
 
-    extends = "platform.Addon"
-    hasura_readable_fields = ("vcs_path",)
+    extends: ClassVar[str | None] = "platform.Addon"
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = ("vcs_path",)
 
     vcs_source = models.ForeignKey(
         "integrate_vcs.Source",
@@ -42,7 +43,7 @@ class CatalogProvenance(models.Model):
         abstract = True
 
 
-class AddonCatalogManager(AngeeManager):
+class AddonCatalogManager(AngeeManager, VcsOutputManager):
     """Owns the reconcile of marketplace rows from an addon ``Source``."""
 
     def sync_from_source(self, source: Any) -> int:
@@ -105,7 +106,7 @@ class AddonCatalogManager(AngeeManager):
         return len(descriptors)
 
 
-class AddonCatalog(AngeeModel):
+class AddonCatalog(VcsOutput, AngeeModel):
     """The ``addon`` source kind — discovers marketplace rows into ``platform.Addon``.
 
     A table-less binding (``managed = False``): its ``source_kind`` registers the

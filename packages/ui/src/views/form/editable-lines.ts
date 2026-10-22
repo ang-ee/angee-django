@@ -30,7 +30,10 @@ export interface LineDiffConfig {
   defaultValues: Readonly<Record<string, string | number | boolean | null>>;
 }
 
-/** Derive the diff config from a resource's editable-lines metadata. */
+/** Derive the diff config from a resource's editable-lines metadata.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function lineDiffConfig(lines: DataResourceLinesMetadata): LineDiffConfig {
   const fields = lines.fields ?? [];
   return {
@@ -78,7 +81,10 @@ export interface LineDiff {
   hasChanges: boolean;
 }
 
-/** Serialize one edited row into a `LineInput`, taking `position` from row order. */
+/** Serialize one edited row into a `LineInput`, taking `position` from row order.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function lineToInput(
   row: Row,
   index: number,
@@ -116,6 +122,8 @@ export function lineToInput(
  * Diff the current field-array rows against the loaded baseline rows. Both sides are
  * normalized line rows (scalars and relation ids), so the comparison is like-for-like;
  * relation values are compared by id so an untouched nested read matches a picked id.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function diffLines(
   baseline: readonly Row[],
@@ -171,6 +179,8 @@ export function sameObservedLines(
  * `position` (from the stored value, else row order). The diff serializer still emits
  * only declared editable fields, so carrying a display projection cannot widen writes.
  * Used to seed the composer and as the diff baseline, so an unedited save is a no-op.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function recordLinesToRows(
   lines: unknown,
@@ -180,7 +190,10 @@ export function recordLinesToRows(
   return lines.map((line, index) => rowFromLine(asRow(line), index, config));
 }
 
-/** A blank row for the composer's "add line" action, its `position` at the tail. */
+/** A blank row for the composer's "add line" action, its `position` at the tail.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function emptyLineRow(index: number, config: LineDiffConfig): Row {
   const row: Row = {};
   for (const name of config.fieldNames) {
@@ -207,7 +220,10 @@ export function lineLockedFields(row: Row | undefined, config: LineDiffConfig): 
   return Array.isArray(locked) ? locked.filter((name): name is string => typeof name === "string") : [];
 }
 
-/** Duplicate a row for the composer's "duplicate" action, dropping its identity and lock. */
+/** Duplicate a row for the composer's "duplicate" action, dropping its identity and lock.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function duplicateLineRow(row: Row, config: LineDiffConfig): Row {
   const { [config.idField]: _id, [CLIENT_LINE_KEY]: _clientKey, ...rest } = row;
   if (config.lockField) delete rest[config.lockField];

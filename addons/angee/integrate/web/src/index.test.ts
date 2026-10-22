@@ -4,13 +4,16 @@ import {
   MenuTree,
   resolveContainer,
   type BaseMenuItem,
+  type RelatedGroupContent,
   type ChromeMenuItem,
+  type ContainerChild,
 } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import integrate from "./index";
-import { INTEGRATION_MODEL } from "./IntegrationLifecycleActions";
+import { INTEGRATION_MODEL, INTEGRATION_RESUME_ACTION_ID } from "./IntegrationLifecycleActions";
 import { INTEGRATION_STREAMS_TAB_ID } from "./IntegrationStreams";
+import { RECORD_LINK_MODEL, RECORD_SOURCES_GROUP_ID } from "./RecordSourcesPane";
 
 const composed = composeAddons([integrate], { canonicalModelLabel: (model) => model }).containers;
 /** The child ids one form container resolves for a subtype record. */
@@ -178,15 +181,21 @@ describe("integrate addon manifest", () => {
     expect(childIds("form#actions-menu", subtype)).toEqual([
       "integrate.lifecycle.disconnect",
       "integrate.connection.test",
+      "integrate.connection.retryDiscovery",
     ]);
     // An unrelated model's form gets none of them.
     expect(childIds("form#actions", ["notes.Note"])).toEqual([]);
   });
 
+  test("projects model admission for inherited Resume without private form fields", () => {
+    const actions = resolveContainer(composed, "form#actions", { models: [INTEGRATION_MODEL, "messaging.Channel"] });
+    expect(actions.find(({ id }) => id === INTEGRATION_RESUME_ACTION_ID)?.requiredFields)
+      .toEqual(["can_resume"]);
+  });
+
   test("ships no Connect verb — a handshake belongs to the addon that owns the vendor", () => {
-    // `mark_integration_connected` is a credential-free flag flip, correct only
-    // as the inverse of a pause. Contributing it as Connect shadowed the real
-    // OAuth/CardDAV/WhatsApp handshakes, so it backs Resume and nothing else.
+    // The model-owned Resume repeats discovery for an existing connection.
+    // A vendor still owns the UX that selects a new account.
     const ids = ["form#actions", "form#actions-menu"].flatMap((address) => childIds(address, [INTEGRATION_MODEL]));
     expect(ids).not.toContain("integrate.lifecycle.connect");
     expect(integrate.i18n?.integrate?.["lifecycle.connect"]).toBeUndefined();
@@ -198,8 +207,16 @@ describe("integrate addon manifest", () => {
     expect(sections.map(({ id, address, impl }) => ({ id, address, impl }))).toEqual([
       { id: INTEGRATION_STREAMS_TAB_ID, address: `${INTEGRATION_MODEL}#sections`, impl: undefined },
     ]);
-    expect((integrate.routes ?? []).some((route) => /stream|discrepancy|record-link/.test(route.name)))
+    expect((integrate.routes ?? []).some((route) => /stream|failure|record-link/.test(route.name)))
       .toBe(false);
     expect(integrate.widgets?.["angee.integrate.integrationSyncCursor"]).toBeDefined();
+  });
+
+  test("contributes Sources for records that admit RecordLink edges", () => {
+    const source = (integrate.containers?.["related#groups"] as Record<string, ContainerChild<RelatedGroupContent>> | undefined)?.[RECORD_SOURCES_GROUP_ID];
+    expect(integrate.containers?.["record#aside"]).toBeUndefined();
+    expect(source).toMatchObject({ sequence: 70, content: { label: "Sources" } });
+    expect(source?.content.edge).toEqual({ model: RECORD_LINK_MODEL });
+    expect(source?.content.when).toBeUndefined();
   });
 });

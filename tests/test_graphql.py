@@ -27,6 +27,7 @@ from rebac import (
     PermissionDenied,
     RebacMixin,
     RelationshipTuple,
+    SubjectRef,
     system_context,
     to_object_ref,
     to_subject_ref,
@@ -39,15 +40,11 @@ from rebac.middleware import ActorMiddleware
 from strawberry.django.views import GraphQLView
 from strawberry.extensions import SchemaExtension
 
-from angee.base.fields import StateField
-from angee.base.mixins import RevisionMixin
-from angee.base.models import AngeeModel
-from angee.base.transitions import TransitionNotAllowed
+from angee.fields import StateField
 from angee.graphql import schema as schema_module
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.node import AngeeNode
-from angee.graphql.revisions import revisions
 from angee.graphql.schema import (
     DEFAULT_SCHEMA_NAME,
     SCHEMA_PART_KEYS,
@@ -56,7 +53,10 @@ from angee.graphql.schema import (
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.iam.permissions import session_user
+from angee.models import AngeeModel, TransitionNotAllowed
+from angee.permissions import require_rebac_queryset
 from tests.conftest import make_addon
+from tests.core_persistence import OwnedRow
 from tests.hierdemo.models import HierNode
 
 
@@ -215,46 +215,6 @@ class OptionalWorkflowItem(models.Model):
         app_label = "tests"
 
 
-class RevisionEntry(RevisionMixin, models.Model):
-    """Concrete model exposing versioned body snapshots in GraphQL tests."""
-
-    revisioned_fields = ("body",)
-
-    title = models.CharField(max_length=32)
-    body = models.TextField(blank=True, default="")
-
-    class Meta:
-        """Django model options for the revision query test model."""
-
-        app_label = "tests"
-
-
-class FieldGatedRevisionEntry(RevisionMixin, models.Model):
-    """Revisioned model with a field-gated value that must not be exposed."""
-
-    revisioned_fields = ("secret",)
-
-    secret = models.TextField(blank=True, default="")
-
-    class Meta:
-        """Django model options for the field-gated revision guard model."""
-
-        app_label = "tests"
-
-
-class RelatedRevisionEntry(RevisionMixin, models.Model):
-    """Revisioned model declaring a relation field, which cannot round-trip."""
-
-    revisioned_fields = ("owner",)
-
-    owner = models.ForeignKey(WorkflowItem, on_delete=models.CASCADE)
-
-    class Meta:
-        """Django model options for the relation guard test model."""
-
-        app_label = "tests"
-
-
 @strawberry.type
 class ThingType:
     """Plain surface reused across named schemas."""
@@ -317,7 +277,7 @@ class UnexpectedErrorQuery:
         )
 
 
-def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
+def test_hasura_write_backend_decodes_public_relations_through_write_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Relation public IDs in writes resolve through the actor-scoped write owner."""
@@ -326,8 +286,8 @@ def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
     related = SimpleNamespace(pk=7)
     calls: dict[str, Any] = {}
 
-    def fake_write_queryset(model: type[models.Model]) -> object:
-        calls["write_model"] = model
+    def fake_for_write() -> object:
+        calls["write_model"] = ManagedThing
         return sentinel_queryset
 
     def fake_require_instance_for_id(
@@ -339,7 +299,7 @@ def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
         calls["decode"] = (model, value, queryset)
         return related
 
-    monkeypatch.setattr(hasura_data, "write_queryset", fake_write_queryset)
+    monkeypatch.setattr(ManagedThing.objects, "for_write", fake_for_write)
     monkeypatch.setattr(hasura_data, "require_instance_for_id", fake_require_instance_for_id)
 
     backend = AngeeHasuraWriteBackend(GatedWriteThing, public_id_fields=("owner",))
@@ -427,28 +387,6 @@ class WorkflowItemType:
 
     state: strawberry.auto
     priority: strawberry.auto
-
-
-@strawberry_django.type(RevisionEntry)
-class RevisionEntryType:
-    """GraphQL type exposing a revision-tracked model."""
-
-    title: strawberry.auto
-    body: strawberry.auto
-
-
-@strawberry_django.type(FieldGatedRevisionEntry)
-class FieldGatedRevisionEntryType:
-    """GraphQL type exposing the field-gated revision guard model."""
-
-    secret: strawberry.auto
-
-
-@strawberry_django.type(RelatedRevisionEntry)
-class RelatedRevisionEntryType:
-    """GraphQL type exposing the relation revision guard model."""
-
-    owner: strawberry.auto
 
 
 def _parts(**buckets: list) -> dict[str, tuple]:
@@ -613,6 +551,7 @@ def test_type_extension_is_idempotent_across_collections() -> None:
 @strawberry_django.type(HierNode)
 class OptimizedExtensionNode:
     id: strawberry.auto
+    children: list["OptimizedExtensionNode"]
 
 
 @strawberry_django.type(HierNode, name="OptimizedExtensionNode", extend=True)
@@ -653,7 +592,7 @@ def test_type_extension_optimizer_hints_are_selected_and_batched(count: int, dja
     schema = schemas.build("console")
     public = schemas.build("public")
     assert "upper_name" not in public.as_str()
-    assert len(OptimizedExtensionNode.__strawberry_definition__.fields) == 1
+    assert len(OptimizedExtensionNode.__strawberry_definition__.fields) == 2
     with system_context(reason="test.graphql.extension_hints"):
         root = HierNode.objects.create(name="root")
         for _ in range(count):
@@ -674,6 +613,26 @@ def test_type_extension_optimizer_hints_are_selected_and_batched(count: int, dja
         assert result.data == {"nodes": [
             {"value": "BRANCH", "label": "branch", "parent_label": "root", "child_labels": ["leaf"]}
         ] * count}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("count", [1, 6])
+def test_nested_type_extension_optimizer_hints_are_batched(count: int, django_assert_num_queries: Any) -> None:
+    schemas = GraphQLSchemas([addon(
+        public={"query": [OptimizedExtensionQuery]},
+        console={"query": [OptimizedExtensionQuery], "type_extensions": [OptimizedExtensionFields]},
+    )])
+    schema = schemas.build("console")
+    assert "upper_name" not in schemas.build("public").as_str()
+    assert len(OptimizedExtensionNode.__strawberry_definition__.fields) == 2
+    with system_context(reason="test.graphql.nested_extension_hints"):
+        for _ in range(count):
+            branch = HierNode.objects.create(name="branch")
+            HierNode.objects.create(name="leaf", parent=branch)
+        with django_assert_num_queries(2):
+            result = schema.execute_sync("{ nodes { children { value: upper_name label } } }")
+        assert result.errors is None
+        assert result.data == {"nodes": [{"children": [{"value": "LEAF", "label": "leaf"}]}] * count}
 
 
 def test_type_extension_rejects_field_collision() -> None:
@@ -978,7 +937,7 @@ def test_graphql_identity_exports_public_node() -> None:
 
 
 def test_rebac_graphql_types_require_rebac_default_manager() -> None:
-    """GraphQL-exposed REBAC models fail fast without the library manager."""
+    """GraphQL-exposed REBAC models fail fast without the native query contract."""
 
     assert isinstance(ManagedThing._default_manager, RebacManager)
     GraphQLSchemas(
@@ -992,7 +951,7 @@ def test_rebac_graphql_types_require_rebac_default_manager() -> None:
         ]
     ).build("public")
 
-    with pytest.raises(ImproperlyConfigured, match="RebacManager"):
+    with pytest.raises(ImproperlyConfigured, match="RebacQuerySet"):
         GraphQLSchemas(
             [
                 addon(
@@ -1003,6 +962,17 @@ def test_rebac_graphql_types_require_rebac_default_manager() -> None:
                 )
             ]
         ).build("public")
+
+
+def test_rebac_query_contract_accepts_django_as_manager() -> None:
+    """A native queryset-generated manager retains its model and actor policy."""
+
+    assert not isinstance(OwnedRow._default_manager, RebacManager)
+    actor = SubjectRef("auth/user", "123")
+    rows = require_rebac_queryset(OwnedRow).with_actor(actor)
+    assert rows.model is OwnedRow
+    assert rows.actor() == actor
+    assert type(rows) is type(OwnedRow._default_manager.get_queryset())
 
 
 def test_choice_enum_value_descriptions_come_from_django_labels() -> None:
@@ -1074,72 +1044,6 @@ def test_nullable_state_auto_preserves_native_enum_across_schema_builds(
         for result in results:
             assert result.errors is None
             assert result.data == {"item": {"state": expected, "nullableState": expected}}
-
-
-def test_revisions_query_surface_exposes_revision_mixin_versions() -> None:
-    """A generated revision query replaces consumer-authored resolvers.
-
-    Asserts the emitted schema surface — the bounded query field and its
-    revisioned-field projection. The runtime data path (public id -> instance ->
-    newest-first projection) is covered end-to-end against the real, reversion-
-    registered notes.Note in the in-tree examples/e2e suite (notes-form-interactions
-    "the Activity tab renders the revision timeline"); reversion cannot resolve
-    a ContentType for a schema_editor-created throwaway model, so the version
-    round-trip is not exercised as a unit test.
-    """
-
-    surface = revisions(RevisionEntryType, name="revision_entry")
-    schema = GraphQLSchemas(
-        [
-            addon(
-                public={
-                    "query": [HelloQuery, surface],
-                    "types": [RevisionEntryType],
-                }
-            )
-        ]
-    ).build("public")
-
-    query_type = schema._schema.query_type
-    assert query_type is not None
-    field = query_type.fields["revision_entry_revisions"]
-    # Bounded surface: addressed by id, capped by a `first` argument.
-    assert set(field.args) == {"id", "first"}
-    projection = get_named_type(field.type)
-    assert isinstance(projection, GraphQLObjectType)
-    # Projects the model's revisioned field plus the revision metadata.
-    assert {"body", "created_at", "comment"} <= set(projection.fields)
-
-
-def test_revisions_rejects_field_gated_revision_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Schema build rejects revision snapshots hidden by field-level read rules."""
-
-    monkeypatch.setattr(
-        "angee.graphql.access.gated_read_fields",
-        lambda model: frozenset({"secret", "visible"}),
-    )
-
-    surface = revisions(FieldGatedRevisionEntryType, name="field_gated_revision_entry")
-    with pytest.raises(ImproperlyConfigured, match=r"revisioned_fields.*secret"):
-        GraphQLSchemas(
-            [
-                addon(
-                    public={
-                        "query": [HelloQuery, surface],
-                        "types": [FieldGatedRevisionEntryType],
-                    }
-                )
-            ]
-        ).build("public")
-
-
-def test_revisions_rejects_relation_revision_fields() -> None:
-    """Revision snapshots only expose concrete value fields."""
-
-    with pytest.raises(ImproperlyConfigured, match=r"relation field 'owner'"):
-        revisions(RelatedRevisionEntryType, name="related_revision_entry")
 
 
 def test_build_schema_includes_mutation_root() -> None:

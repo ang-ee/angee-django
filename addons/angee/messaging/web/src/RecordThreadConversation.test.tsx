@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, ModalsHost, ToastProvider } from "@angee/ui";
 
-import type { RecordActivityRow, RecordMessageRow, RecordThreadPayload } from "./documents";
+import type { RecordMessageRow, RecordThreadPayload } from "./documents";
 import type { RecordThreadConversationChrome } from "./RecordThreadConversation";
 
 const mocks = vi.hoisted(() => ({
@@ -98,24 +98,13 @@ function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
     sent_at: "2026-07-06T00:00:00Z",
     created_at: "2026-07-06T00:00:00Z",
     reaction_groups: [],
-    tracking_values: [],
     parts: [part("part-1", "Ping the room")],
     ...overrides,
   } as unknown as RecordMessageRow;
 }
 
-function activity(overrides: Partial<RecordActivityRow> = {}): RecordActivityRow {
-  return {
-    id: "activity_1", activity_type: "call", summary: "Exchange", note: "Exchange note",
-    due_date: "2026-07-06", completed_at: "2026-07-06T12:00:00Z", feedback: "",
-    status: "DONE", state: "done", user: null, created_by: null, ...overrides,
-  };
-}
-
 function threadPayload(
   messages: RecordMessageRow[],
-  activities: RecordActivityRow[] = [],
-  glyph = "phone",
   access: Pick<RecordThreadPayload, "permissions" | "thread_post_access"> = {
     permissions: ["write"], thread_post_access: "write",
   },
@@ -142,9 +131,6 @@ function threadPayload(
       attachment_count: 0,
       notifications: [],
       followers: [],
-      activity_count: activities.length,
-      activities,
-      activity_types: [{ id: "act_call", key: "call", name: "Call", glyph }],
     },
   };
 }
@@ -308,7 +294,7 @@ describe("RecordThreadConversation", () => {
     { permissions: ["write"], thread_post_access: "comment" },
     { permissions: ["write"], thread_post_access: null },
   ])("keeps the transcript without a composer or reply when post access is absent: %j", (access) => {
-    mocks.threadData = threadPayload([message()], [], "phone", access);
+    mocks.threadData = threadPayload([message()], access);
     render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
 
     expect(screen.getByText("Ping the room")).toBeTruthy();
@@ -328,7 +314,7 @@ describe("RecordThreadConversation", () => {
   });
 
   test("uses the record's post permission even when it is not write", () => {
-    mocks.threadData = threadPayload([message()], [], "phone", {
+    mocks.threadData = threadPayload([message()], {
       thread_post_access: "comment", permissions: ["comment"],
     });
     render(<RecordThreadConversation modelLabel="projects.Task" recordId="task_1" />);
@@ -344,7 +330,7 @@ describe("RecordThreadConversation", () => {
     const view = <RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />;
     const { rerender } = render(view);
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Draft" } });
-    mocks.threadData = threadPayload([message()], [], "phone", {
+    mocks.threadData = threadPayload([message()], {
       thread_post_access: "write", permissions: [],
     });
     rerender(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
@@ -392,7 +378,7 @@ describe("RecordThreadConversation", () => {
   });
 
   test("does not show a disabled composer for a preview viewer without permission", () => {
-    mocks.threadData = threadPayload([message()], [], "phone", {
+    mocks.threadData = threadPayload([message()], {
       thread_post_access: "write", permissions: [],
     });
     render(conversationPreview(true));
@@ -418,53 +404,13 @@ describe("RecordThreadConversation", () => {
     expect(screen.getAllByRole("list", { name: "Comments" })).toHaveLength(1);
   });
 
-  test("merges exchanges without reordering equal instants from the server", () => {
-    mocks.threadData = threadPayload([
-      message({ id: "first", preview: "First from server", parts: [part("part-first", "First from server")], sent_at: "2026-07-06T12:00:00+02:00" }),
-      message({ id: "second", preview: "Second from server", parts: [part("part-second", "Second from server")], sent_at: "2026-07-06T10:00:00Z" }),
-    ], [activity({ due_date: "2026-07-05" })]);
-    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
-    const text = screen.getByRole("list", { name: "Comments" }).textContent ?? "";
-    expect(text.indexOf("Exchange note")).toBeLessThan(text.indexOf("First from server"));
-    expect(text.indexOf("First from server")).toBeLessThan(text.indexOf("Second from server"));
-  });
-
-  test("uses the activity glyph when the catalog glyph is unknown", () => {
-    mocks.threadData = threadPayload([], [activity()], "unknown-catalog-glyph");
-    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
-    expect(screen.getByRole("list", { name: "Comments" }).querySelector("svg.glyph")).not.toBeNull();
-  });
-
-  test("clears exchanges when the server returns an empty search window", async () => {
-    mocks.threadData = threadPayload([], [activity()]);
-    const { rerender } = render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
-    expect(screen.getByText("Exchange note")).toBeTruthy();
-    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "absent" } });
-    mocks.threadData = threadPayload([]);
-    rerender(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
-    await waitFor(() => expect(screen.getByText("No matching comments")).toBeTruthy());
-    expect(screen.queryByText("Exchange note")).toBeNull();
-  });
-
   test("renders the record-thread transcript for the given record", () => {
-    mocks.threadData = threadPayload([message()], [{
-      id: "activity_1", activity_type: "call", summary: "Earlier exchange",
-      note: "Agreed on the next step.", due_date: "2026-07-05",
-      completed_at: "2026-07-07T12:00:00Z", feedback: "", status: "DONE", state: "done",
-      user: null, created_by: null,
-    }]);
-    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1"
-      activityCopy={{ recordedOn: (day) => `Logged ${day}` }} />);
+    mocks.threadData = threadPayload([message()]);
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
 
     // The record-attached chatter — not the .inbox()-scoped generic messages.
     expect(screen.getByText("Ping the room")).toBeTruthy();
     expect(screen.getByText("Grace Hopper")).toBeTruthy();
-    expect(screen.getByText("Call")).toBeTruthy();
-    expect(screen.getByText(/Logged /)).toBeTruthy();
-    const feed = screen.getByRole("list", { name: "Comments" });
-    expect(feed.textContent?.indexOf("Agreed on the next step.")).toBeLessThan(
-      feed.textContent?.indexOf("Ping the room") ?? -1,
-    );
   });
 
   test("posts a message through the composer keyed by the record", () => {
@@ -480,7 +426,7 @@ describe("RecordThreadConversation", () => {
     expect(post?.vars.modelLabel).toBe("discuss/room");
     expect(post?.vars.recordId).toBe("rom_1");
     expect(post?.vars.body).toBe("Hello room");
-    expect(post?.vars.clientCreationKey).toEqual(expect.any(String));
+    expect(post?.vars.idempotencyKey).toEqual(expect.any(String));
   });
 
   test("defaults to Enter to submit and keeps Shift+Enter for a newline", () => {
@@ -617,7 +563,7 @@ describe("RecordThreadConversation", () => {
     await screen.findByRole("alert");
     const posts = mocks.mutateCalls.filter((call) => call.op === "MessagingPostRecordMessage");
     expect(posts).toHaveLength(2);
-    expect(posts[1]?.vars.clientCreationKey).toBe(first?.vars.clientCreationKey);
+    expect(posts[1]?.vars.idempotencyKey).toBe(first?.vars.idempotencyKey);
   });
 
   test("only a moderator's comment carries the remove control", () => {
@@ -706,9 +652,9 @@ describe("RecordThreadStream", () => {
     });
     render(<RecordThreadStream heading={{ label: "Conversation" }}
       source={{ kind: "record", modelLabel: "projects.Project", recordId: "project_1" }} />);
-    const skeleton = screen.getByRole("status");
-    expect(skeleton.textContent).toContain("Loading comments");
-    expect(skeleton.querySelectorAll('[aria-hidden="true"]')).toHaveLength(9);
+    // The shared loading panel, not a skeleton geometry chosen here.
+    const loading = screen.getByRole("status");
+    expect(loading.textContent).toContain("Loading comments");
     expect(screen.queryByRole("searchbox")).toBeNull();
   });
 
@@ -724,7 +670,7 @@ describe("RecordThreadStream", () => {
     expect(screen.getByText("What happens next?")).toBeTruthy();
     expect(screen.getByText("Please describe the next step.")).toBeTruthy();
     expect(mocks.useAuthoredQuery.mock.calls.filter(([doc]) => operationName(doc) === "MessagingRecordThread")).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Show conversation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Conversation" }));
     expect(mocks.useAuthoredQuery.mock.calls.filter(([doc]) => operationName(doc) === "MessagingRecordThread")).toHaveLength(1);
     expect(screen.getByText("Ping the room")).toBeTruthy();
     expect(screen.getByPlaceholderText("Add a reply")).toBeTruthy();

@@ -6,14 +6,27 @@ import hashlib
 import logging
 import re
 from email.utils import formataddr, getaddresses
+from smtplib import SMTPRecipientsRefused, SMTPResponseException, SMTPServerDisconnected
 from typing import Any
 
+from anymail.exceptions import (
+    AnymailAPIError,
+    AnymailInvalidAddress,
+    AnymailRecipientsRefused,
+    AnymailRequestsAPIError,
+    AnymailUnsupportedFeature,
+)
 from anymail.message import AnymailMessage
 from django.apps import apps
 from django.conf import settings
+from django.core.mail import get_connection
 from django.utils.html import strip_tags
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from requests.exceptions import ConnectTimeout
+from urllib3.exceptions import MaxRetryError, NewConnectionError
 
-from angee.messaging.backends import ChannelBackend
+from angee.integrate.errors import IntegrationError
+from angee.messaging.backends import ChannelBackend, DeliveryOutcome, DeliveryUncertain
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +46,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
     label = "Email"
     icon = "mail"
 
-    def deliver(self, message: Any) -> bool:
+    def deliver(self, message: Any) -> DeliveryOutcome:
         """Render and send ``message`` when an email transport is configured."""
 
         if not bool(getattr(settings, "ANGEE_EMAIL_DELIVERY_CONFIGURED", False)):
@@ -41,18 +54,81 @@ class AnymailEmailChannelBackend(ChannelBackend):
                 "Outbound email delivery is not configured; message %s was not sent.",
                 getattr(message, "pk", None),
             )
-            return False
-        email = self.email_message(message)
+            raise IntegrationError("Outbound email delivery is not configured.")
+        try:
+            email = self.email_message(message)
+        except Exception as error:
+            # Rendering has not entered the transport, so it cannot have sent mail.
+            raise IntegrationError("The email could not be rendered.") from error
         if not email.from_email or not (email.to or email.cc or email.bcc):
             logger.warning(
                 "Outbound email message %s has no complete from/to envelope; it was not sent.",
                 getattr(message, "pk", None),
             )
-            return False
-        accepted = email.send()
+            raise IntegrationError("The email envelope is incomplete.")
+        connection = get_connection()
+        try:
+            try:
+                connection.open()
+            except SMTPResponseException as error:
+                raise IntegrationError(
+                    "The mail server refused the connection.", transient=400 <= error.smtp_code < 500,
+                ) from error
+            except (OSError, SMTPServerDisconnected) as error:
+                # RequestNotSentError names HTTP; email uses the same transient
+                # non-acceptance contract with an email-specific safe message.
+                raise IntegrationError("The email connection failed before sending.", transient=True) from error
+            email.connection = connection
+            return self._send(email)
+        finally:
+            try:
+                connection.close()
+            except Exception as error:
+                logger.warning("Closing the email connection failed (%s).", type(error).__name__)
+
+    @staticmethod
+    def _send(email: Any) -> DeliveryOutcome:
+        """Once sending starts, only explicit provider replies prove refusal."""
+
+        try:
+            accepted = email.send()
+        except (AnymailInvalidAddress, AnymailRecipientsRefused, AnymailUnsupportedFeature) as error:
+            raise IntegrationError("The email provider refused the message.") from error
+        except SMTPRecipientsRefused as error:
+            codes = [code for code, _text in error.recipients.values()]
+            raise IntegrationError(
+                "The email recipients were refused.",
+                transient=bool(codes) and all(400 <= code < 500 for code in codes),
+            ) from error
+        except SMTPResponseException as error:
+            # Explicit SMTP replies are definite refusals, including DATA rejection.
+            raise IntegrationError(
+                "The mail server refused delivery.", transient=400 <= error.smtp_code < 500,
+            ) from error
+        except AnymailAPIError as error:
+            # AnymailRequestsBackend chains the real requests exception. A
+            # generic ConnectionError may follow a sent request (ProtocolError),
+            # but ConnectTimeout and urllib3's NewConnectionError (including DNS
+            # NameResolutionError) prove that the connection was never opened.
+            cause = error.__cause__
+            if isinstance(error, AnymailRequestsAPIError) and error.status_code is None and (
+                isinstance(cause, ConnectTimeout)
+                or (isinstance(cause, RequestsConnectionError) and cause.args
+                    and isinstance(cause.args[0], MaxRetryError)
+                    and isinstance(cause.args[0].reason, NewConnectionError))
+            ):
+                raise IntegrationError("The email connection failed before sending.", transient=True) from error
+            if error.status_code is not None and 400 <= error.status_code < 500:
+                raise IntegrationError(
+                    "The email provider refused delivery.", transient=error.status_code == 429,
+                ) from error
+            # HTTP 5xx, timeouts and lost acknowledgements may follow acceptance.
+            raise DeliveryUncertain("The email provider did not confirm delivery.") from error
+        except OSError as error:
+            raise DeliveryUncertain("The mail server did not confirm delivery.") from error
         if not accepted:
-            logger.warning("The configured email backend declined message %s.", getattr(message, "pk", None))
-        return bool(accepted)
+            logger.warning("The configured email backend declined the message.")
+        return DeliveryOutcome(accepted=bool(accepted))
 
     def email_message(self, message: Any) -> AnymailMessage:
         """Render a messaging ``Message`` into Anymail's provider-neutral message."""
@@ -64,9 +140,9 @@ class AnymailEmailChannelBackend(ChannelBackend):
         recipients = self._recipients(message, participants)
         subject = next(
             (
-                part.fragment.text
+                fragment.text
                 for part in parts
-                if part.role == part_model.PartRole.TITLE and part.fragment_id is not None
+                if part.role == part_model.PartRole.TITLE and (fragment := part.fragment) is not None
             ),
             "",
         )
@@ -89,12 +165,15 @@ class AnymailEmailChannelBackend(ChannelBackend):
         for part in parts:
             if part.file_id is None:
                 continue
-            with part.file.open_stream() as stream:
+            file = part.file
+            if file is None:
+                raise IntegrationError("An email attachment is unavailable.")
+            with file.open_stream() as stream:
                 content = stream.read()
             email.attach(
-                part.name or part.file.filename,
+                part.name or file.filename,
                 content,
-                str(part.file.mime_type or part.type or "application/octet-stream"),
+                str(file.mime_type or part.type or "application/octet-stream"),
             )
         return email
 

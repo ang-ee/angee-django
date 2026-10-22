@@ -1,6 +1,7 @@
 """Independent decision answers race cancellation without holding a question group."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from queue import Queue
 from time import monotonic, sleep
 
@@ -8,9 +9,8 @@ import pytest
 from django.db import close_old_connections, connection, connections, transaction
 from django.test.utils import CaptureQueriesContext
 
-from angee.base.mixins import StaleRevisionError
-from angee.base.scoping import system_queryset
 from angee.decisions.testing.models import Decision
+from angee.models import StaleRevisionError
 from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import run_until
 from angee.workflows.testing.models import StepRun, WorkflowRun
@@ -24,7 +24,13 @@ pytestmark = [
 
 
 def submit(pool, call):
-    """Give each worker its own connection and expose its native lock-wait identity."""
+    """Give each worker its own connection and expose its native lock-wait identity.
+
+    The worker runs in a copy of the caller's context, so the test's attribution
+    boundary and actor reach its captured writes the way a framework thread pool
+    carries them (``copy_context().run``); the boundary records the worker's own
+    changeset row in the worker's connection.
+    """
     started = Queue()
 
     def invoke():
@@ -37,7 +43,7 @@ def submit(pool, call):
         finally:
             connections.close_all()
 
-    return pool.submit(invoke), started.get(timeout=10)
+    return pool.submit(copy_context().run, invoke), started.get(timeout=10)
 
 
 def wait_for_lock(pid, future):
@@ -77,8 +83,8 @@ def test_answer_races_cancel_without_lock_inversion(review, winner):
                 contender.result(timeout=10)
     run_until(run)
     assert run.status == "canceled"
-    assert system_queryset(StepRun).get(pk=step.pk).status == "canceled"
-    assert system_queryset(Decision).get(pk=decision.pk).verdict == (["approve"] if winner == "answer" else [])
+    assert StepRun.system_queryset().get(pk=step.pk).status == "canceled"
+    assert Decision.system_queryset().get(pk=decision.pk).verdict == (["approve"] if winner == "answer" else [])
     assert runner.wake_decisions() == 0
 
 
@@ -89,7 +95,7 @@ def test_busy_run_wakes_on_the_next_sweep(review):
         with WorkflowRun.objects.hold(run.pk):
             future, _ = submit(pool, lambda: answer(questions(step)[0], people[0]))
             assert not future.result(timeout=10).is_open
-            assert system_queryset(StepRun).get(pk=step.pk).status == "waiting"
+            assert StepRun.system_queryset().get(pk=step.pk).status == "waiting"
     assert runner.wake_decisions() == 1
     run_until(run)
     assert run.status == "succeeded"
@@ -103,7 +109,7 @@ def test_answered_waiter_locks_only_the_step(review, monkeypatch):
         patch.setattr(type(runner), "wake_decisions", lambda *args, **kwargs: 0)
         answer(questions(step)[0], people[0])
     with transaction.atomic(), CaptureQueriesContext(connection) as captured:
-        row = system_queryset(StepRun).answered_decisions().select_for_update(no_key=True).get(pk=step.pk)
+        row = StepRun.system_queryset().answered_decisions().select_for_update(no_key=True).get(pk=step.pk)
         assert row.pk == step.pk
     locked = [query["sql"] for query in captured if "FOR NO KEY UPDATE" in query["sql"]]
     assert len(locked) == 1 and " JOIN " not in locked[0] and "DISTINCT" not in locked[0]

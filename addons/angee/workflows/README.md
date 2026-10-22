@@ -18,7 +18,7 @@ outside it fails the await step. Publishing returns the version and the readable
 published parent workflow keys that should be republished to adopt a changed child
 contract.
 Schema declaration checks, format validation and structural schema operations
-come from [`angee.base.jsonschema`](../../../angee/base/jsonschema.py).
+come from [`angee.jsonschema`](../../../angee/jsonschema.py).
 
 [`Step`](steps.py) owns `ANGEE_WORKFLOW_STEP_CLASSES` through the shared
 implementation registry and supplies its input, output and config types.
@@ -28,11 +28,15 @@ code executes under the actor's permissions. It must keep external effects out
 of database steps. Consumer settlements validate their own values; the runner
 records retry, timeout and diagnostic facts on attempts.
 
-[`DecisionStep`](decision_steps.py) asks exactly one decision retained by
+[`DecisionStep`](decision_steps.py) retains the current question in
 `StepRun.decision`. `ctx.ask(request, state=...)` holds for its verdict and keeps
 continuation facts in the step's state. Override `ask(ctx)` to declare the
 question and `continue_with(ctx, decision, outcome)` only when typed output needs
-adapting. The built-in `ask_decision` resolves the symbolic `subject` key in
+adapting. A continuation may ask a replacement after an answer; the old question
+remains a native execution record of the asking step's `created` operation,
+accessible through `ctx.decision(id)` in that run. Reading another run's question
+as evidence does not make it this run's question. An open question cannot be
+replaced. The built-in `ask_decision` resolves the symbolic `subject` key in
 configured actions to the run's subject public identity.
 
 [`apply_proposals`](decision_steps.py) is the shared application path: as the run actor
@@ -41,7 +45,7 @@ public identities, and invokes methods the model declares in `decision_methods`.
 It returns the sole selected outcome, or `done` for several distinct outcomes.
 Application and continuation share the worker's body transaction;
 failure rolls back record actions and retains final answers for operator retry.
-No automatic replacement question is asked. Repeated delivery still requires
+Application failure does not automatically ask a replacement. Repeated delivery still requires
 idempotent declared methods. Selected alternatives apply in authored order;
 multiple alternatives cannot overlap the same record's field write.
 
@@ -51,12 +55,20 @@ Run operators inherit decision read through the step link, without answer grants
 Pruning releases the step link and retains the question and verdict.
 
 `ctx.record(record, operation="read", label="")` stages one `StepRecord` for a
-read, created, changed, deleted or called record. `ctx.load` also records reads.
+read, created, changed, deleted or called record. `ctx.load` authorizes and loads;
+call `ctx.record` explicitly to retain evidence.
 Admission inputs use the same relation with no step. `step.records` and
 `WorkflowRun.objects.about(record_or_records)` provide both directions, including
 readable ancestors. `ctx.note(message, tone="info")` adds a small recorded note.
 The three reader-facing `StepRun.hold` states are `decision`, `run` and `error`;
 timer, record-change and map scheduling remain internal wait mechanics.
+
+`TriggerSource.watch_only` declares an observation that wakes `StepWatch` rows
+without contributing trigger scope or permissions. Its `model_label` and
+optional `fields` select saves through the same
+`ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES` registry as admission sources. A step
+locks and tests its actor-readable predicate, calls `ctx.watch(record)`, then
+returns `ctx.wait(until=deadline, state=...)`.
 
 `record_timeline(records: [{model, id}])` is the single authorized GraphQL read.
 It returns per-record graphs, open readable decisions and all-open attention
@@ -113,10 +125,11 @@ When the actor is a workflow principal, admission also checks the pinned
 version's human publisher against every delegation permission held through that
 principal's enabled triggers. The source-owned `TriggerGrantTarget` stores the
 permission and its resource beside each granted tuple. System-installed versions
-have no human publisher and remain trusted. A refusal disables a trigger with a
-readable reason; a child start fails its step with the same reason. Publishing
-remains available to workflow authors, while executing as a principal requires
-current delegation authority. Enabled triggers stored before this provenance was
+have no human publisher and remain trusted. Publication with an actor requires a
+user-backed actor; only an installation without an actor records no publisher.
+A refusal disables a trigger with a readable reason; a child start fails its
+step with the same reason. Executing as a principal requires current delegation
+authority. Enabled triggers stored before this provenance was
 recorded must be enabled again before human-published versions can run.
 It also checks the actor's standing read access to the subject and each
 record-reference field in the frozen admitted input schema. The run retains

@@ -1,14 +1,17 @@
-import { createContext, useContext, type ReactElement } from "react";
+import { createContext, useContext, useEffect, useState, type ReactElement } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { ThreadTranscript } from "@angee/messaging";
-import { Alert, Button, Glyph, PageHeader, Tag } from "@angee/ui";
+import { Button, Chip, CommandBand, ErrorBanner, Glyph, PaneToolbarHost, RecordHeader } from "@angee/ui";
 import { InboxTranscriptMatches } from "./documents";
+import type { DocumentType } from "@angee/gql/console";
 import { INBOX_MODELS, type InboxNavigation, type InboxScope } from "./state";
 import { useNexusT } from "../i18n";
 
 const Matches = createContext<readonly string[]>([]);
 
-/** Full Messaging transcript, with a bounded result-membership annotation around the visible window. */
+/** The open conversation as the subject: the band (back, match navigation), the record
+ *  header (the conversation, how much of it matches), then the full Messaging transcript
+ *  annotated with result membership around the visible window. */
 export function InboxConversation({
   navigation,
   scope,
@@ -17,22 +20,37 @@ export function InboxConversation({
   scope: InboxScope;
 }) {
   const t = useNexusT();
+  // The match window inside the transcript reports its read; the band and header live above it.
+  const [matches, setMatches] = useState<TranscriptMatches | null>(null);
+  const [error, setError] = useState<string | null>(null);
   return (
     <section
       className="flex h-full min-h-0 flex-col"
       aria-label={t("inbox.conversation")}
     >
-      <PageHeader
-        density="compact"
-        title={t("inbox.conversation")}
-        actions={
-          <Button size="sm" variant="secondary" onClick={navigation.results}>
+      <CommandBand
+        verbs={
+          <Button size="sm" variant="ghost" onClick={navigation.results}>
             <Glyph name="chevron-left" />
             {t("inbox.backResults")}
           </Button>
         }
+        // The matches walk as the band's pager: the previous and next matching message.
+        navigation={matches ? {
+          total: matches.count,
+          onPrev: matches.previous ? () => navigation.patch({ at: `message:${matches.previous}` }) : undefined,
+          onNext: matches.next ? () => navigation.patch({ at: `message:${matches.next}` }) : undefined,
+        } : null}
       />
-      <div className="min-h-0 flex-1 overflow-auto">
+      <RecordHeader
+        headingLevel={1}
+        crumbs={t("inbox.conversation")}
+        title={matches?.thread.conversation_label || t("inbox.conversation")}
+        meta={matches ? t("inbox.transcriptCount", { count: matches.count, total: matches.total }) : t("inbox.loading")}
+      />
+      <ErrorBanner description={error} />
+      {/* The transcript's own controls publish into this pane's toolbar row. */}
+      <PaneToolbarHost>
         <ThreadTranscript
           threadId={navigation.thread}
           anchor={navigation.at}
@@ -43,6 +61,8 @@ export function InboxConversation({
               scope={scope}
               navigation={navigation}
               ids={messages.map((message) => message.id)}
+              onMatches={setMatches}
+              onError={setError}
             >
               {children}
             </MatchWindow>
@@ -50,24 +70,32 @@ export function InboxConversation({
           renderMessageActions={(message) => (
             <MessageActions id={message.id} navigation={navigation} />
           )}
+          onPreviewFile={(message, part) => {
+            if (part.file?.id) navigation.previewFile(part.file.id, message.id);
+          }}
         />
-      </div>
+      </PaneToolbarHost>
     </section>
   );
 }
+
+type TranscriptMatches = NonNullable<DocumentType<typeof InboxTranscriptMatches>["inbox_transcript_matches"]>;
 
 function MatchWindow({
   scope,
   navigation,
   ids,
   children,
+  onMatches,
+  onError,
 }: {
   scope: InboxScope;
   navigation: InboxNavigation;
   ids: string[];
   children: ReactElement;
+  onMatches: (matches: TranscriptMatches | null) => void;
+  onError: (message: string | null) => void;
 }) {
-  const t = useNexusT();
   const query = useAuthoredQuery(
     InboxTranscriptMatches,
     {
@@ -80,47 +108,12 @@ function MatchWindow({
     },
     { models: INBOX_MODELS },
   );
-  const matches = query.data?.inbox_transcript_matches;
+  const matches = query.data?.inbox_transcript_matches ?? null;
+  const errorMessage = query.error?.message ?? null;
+  useEffect(() => { onMatches(matches); }, [matches, onMatches]);
+  useEffect(() => { onError(errorMessage); }, [errorMessage, onError]);
   return (
     <Matches.Provider value={matches?.visible ?? []}>
-      <div className="space-y-2 border-b border-border-subtle p-3">
-        <div className="font-medium text-13">
-          {matches?.thread.conversation_label || t("inbox.conversation")}
-        </div>
-        <div className="flex items-center gap-2 text-2xs text-fg-muted">
-          <span className="mr-auto">
-            {matches
-              ? t("inbox.transcriptCount", {
-                  count: matches.count,
-                  total: matches.total,
-                })
-              : t("inbox.loading")}
-          </span>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!matches?.previous}
-            onClick={() =>
-              navigation.patch({ at: `message:${matches!.previous}` })
-            }
-          >
-            <Glyph name="chevron-left" />
-            {t("inbox.previousMatch")}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!matches?.next}
-            onClick={() => navigation.patch({ at: `message:${matches!.next}` })}
-          >
-            {t("inbox.nextMatch")}
-            <Glyph name="chevron-right" />
-          </Button>
-        </div>
-        {query.error ? (
-          <Alert tone="danger">{query.error.message}</Alert>
-        ) : null}
-      </div>
       {children}
     </Matches.Provider>
   );
@@ -136,12 +129,12 @@ function MessageActions({
   const t = useNexusT();
   const matches = useContext(Matches);
   return (
-    <div className="flex items-center gap-2">
-      {matches.includes(id) ? <Tag tone="brand">{t("inbox.match")}</Tag> : null}
+    <>
+      {matches.includes(id) ? <Chip tone="brand">{t("inbox.match")}</Chip> : null}
       <Button size="sm" variant="ghost" onClick={() => navigation.read(id)}>
         {t("inbox.read")}
         <Glyph name="chevron-right" />
       </Button>
-    </div>
+    </>
   );
 }

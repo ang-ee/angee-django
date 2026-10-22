@@ -12,9 +12,7 @@ from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
-from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.schema import UserType
 
@@ -52,7 +50,7 @@ class NoteDeletePreviewMutation:
             Note,
             str(id),
             confirm=confirm,
-            queryset=write_queryset(Note),
+            queryset=Note.objects.for_write(),
         )
 
 
@@ -80,7 +78,7 @@ _NOTE_RESOURCE = hasura_model_resource(
 
 
 _NOTE_SCHEMA_BUCKET = {
-    "query": [_NOTE_RESOURCE.query, revisions(NoteType)],
+    "query": [_NOTE_RESOURCE.query],
     "mutation": [_NOTE_RESOURCE.mutation, NoteDeletePreviewMutation],
     "types": [NoteType, *_NOTE_RESOURCE.types],
 }

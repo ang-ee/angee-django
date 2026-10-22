@@ -15,7 +15,6 @@ import type { SearchCatalog, SearchFacet } from "./types";
 export interface UseSearchCatalogInput<TRow extends Row> {
   query?: ResourceQuery;
   search?: ListSearchDeclaration;
-  renderItem?: boolean;
   inferOptions?: boolean;
   serverGrouping?: boolean;
   columns: readonly ColumnDescriptor<TRow>[];
@@ -120,8 +119,8 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
   const text = React.useMemo(() => searchTextFields(query, input.textFilterField, shortcutTextFields).map((field) => ({
     field, label: fieldLabel(field, modelMetadata, columns.find((column) => column.field === field)?.header),
   })), [query, input.textFilterField, shortcutTextFields, modelMetadata, columns]);
-  return React.useMemo(() => ({ query, renderItem: input.renderItem, text, filters, facets, fields, groups, curatedGroups, favorites: resourceView.savedFavorites }),
-    [query, input.renderItem, text, filters, facets, fields, groups, curatedGroups, resourceView.savedFavorites]);
+  return React.useMemo(() => ({ query, text, filters, facets, fields, groups, curatedGroups, favorites: resourceView.savedFavorites }),
+    [query, text, filters, facets, fields, groups, curatedGroups, resourceView.savedFavorites]);
 }
 
 /** Null removes only the default; explicitly requested text fields still apply. */

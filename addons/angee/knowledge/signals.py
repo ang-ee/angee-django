@@ -1,35 +1,24 @@
-"""Knowledge-owned derived-index and record-binding lifecycle receivers.
+"""Knowledge-owned derived-index lifecycle receiver.
 
 A page's outgoing wikilinks are rebuilt from its markdown body on every
 body save, so the backlinks panel is a SQL query over rows, not a body scan.
-Record bindings point to REBAC-typed records through a ``GenericForeignKey``. For
-targets that do not declare a reverse generic relation, a ``pre_delete`` receiver
-bound to every such record model removes the canonical-target bindings before
-primary-key reuse can resolve them onto another row.
 """
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Iterable
 from typing import Any
 
 from django.apps import apps
-from django.db.models.signals import post_save, pre_delete
-
-from angee.base.refs import is_record_target_model
-from angee.base.signals import connect_for_models
+from django.db.models.signals import post_save
 
 _MARKDOWN_LABEL = "knowledge.markdownpage"
-logger = logging.getLogger(__name__)
 
 
 def connect() -> None:
     """Wire knowledge-owned receivers after app population."""
 
     post_save.connect(rebuild_backlinks, dispatch_uid="angee.knowledge.backlinks")
-    connect_for_models(pre_delete, teardown_record_bindings, applies=is_record_target_model,
-                       dispatch_uid="angee.knowledge.record_binding.teardown")
 
 
 def rebuild_backlinks(
@@ -48,11 +37,3 @@ def rebuild_backlinks(
         return
     link_model = apps.get_model(instance._meta.app_label, "Link")
     link_model._default_manager.rebuild_for(instance)
-
-
-def teardown_record_bindings(sender: type[Any], instance: Any, **kwargs: Any) -> None:
-    """Delete bindings to the canonical target before a bindable record row is deleted."""
-
-    if sender._meta.apps is not apps:
-        return
-    apps.get_model("knowledge", "RecordBinding").objects.teardown_for_record(instance)

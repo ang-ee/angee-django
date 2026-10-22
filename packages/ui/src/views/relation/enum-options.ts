@@ -23,6 +23,7 @@ const EMPTY_IMPL_PREFILL_RESET: Readonly<Record<string, unknown>> = {};
  * through `canonicalOptionValue`; CRUD submissions retain lowercase values.
  * The label is the SDL description where
  * authored, otherwise the humanized member name (`enumValueLabel`).
+ * @owner RelationFieldWidget
  */
 export function useEnumOptions(
   resource: string,
@@ -40,6 +41,9 @@ export function useEnumOptions(
   );
 }
 
+/**
+ * @owner RelationFieldWidget
+ */
 export function useImplChoices(
   resource: string,
   field: string,
@@ -62,6 +66,7 @@ export interface ImplConfigFields {
  * fields. The existing FormSpec parser/widget registry remain the only schema
  * engine; choices without a declaration continue to use their native raw JSON
  * field.
+ * @owner RelationFieldWidget
  */
 export function useImplConfigFields(
   resource: string,
@@ -107,6 +112,9 @@ export function useImplConfigFields(
   }, [choices, field, widgets]);
 }
 
+/**
+ * @owner RelationFieldWidget
+ */
 export function useImplCategory(resource: string, field: string): (value: unknown) => string {
   const choices = useImplChoices(resource, field);
   return React.useMemo(() => {
@@ -122,6 +130,7 @@ export function useImplCategory(resource: string, field: string): (value: unknow
  * The server (`impl_choices`) owns the per-impl defaults (merged along the impl MRO).
  * Picking an impl loads its full preset (overwriting those
  * fields, so boolean defaults land too); the backend also materialises them on create.
+ * @owner RelationFieldWidget
  */
 export function useImplPrefill(
   resource: string,

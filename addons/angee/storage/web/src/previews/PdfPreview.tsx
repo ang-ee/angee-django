@@ -4,8 +4,7 @@ import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
-import {
-  Button, cn, EmptyState, Glyph, LoadingPanel, textRoleVariants, type PreviewProviderProps } from "@angee/ui";
+import { ErrorBanner, LoadingPanel, Pager, type PreviewProviderProps } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 
@@ -47,45 +46,18 @@ export default function PdfPreview({ file, page: sourcePage }: PreviewProviderPr
           file={file.url}
           onLoadSuccess={({ numPages }) => setPageCount(numPages)}
           loading={<LoadingPanel message={t("preview.loading")} />}
-          error={
-            <EmptyState
-              icon="file"
-              title={file.name}
-              description={t("preview.loadError")}
-            />
-          }
+          error={<ErrorBanner title={file.name} description={t("preview.loadError")} />}
           className="grid place-content-center"
         >
           <Page pageNumber={currentPage} width={width} className="shadow-sm" />
         </Document>
       </div>
       {pageCount > 1 ? (
-        <div className={cn(textRoleVariants({ role: "meta" }), "flex items-center justify-center gap-3 border-t border-subtle bg-sheet p-2")}>
-          <Button
-            variant="ghost"
-            size="iconSm"
-            disabled={currentPage <= 1}
-            aria-label={t("preview.pdfPrev")}
-            onClick={() => setPage(Math.max(1, currentPage - 1))}
-          >
-            <Glyph name="chevron-left" />
-          </Button>
-          <span className="tabular-nums">
-            {t("preview.pdfPage", {
-              page: String(currentPage),
-              total: String(pageCount),
-            })}
-          </span>
-          <Button
-            variant="ghost"
-            size="iconSm"
-            disabled={currentPage >= pageCount}
-            aria-label={t("preview.pdfNext")}
-            onClick={() => setPage(Math.min(pageCount, currentPage + 1))}
-          >
-            <Glyph name="chevron-right" />
-          </Button>
-        </div>
+        <nav aria-label={t("preview.pages")} className="flex items-center justify-center gap-1 border-t border-subtle bg-sheet p-1">
+          <Pager mode="record" page={currentPage} pageSize={1} total={pageCount}
+            previousLabel={t("preview.pdfPrev")} nextLabel={t("preview.pdfNext")}
+            onPageChange={(next) => setPage(Math.min(pageCount, Math.max(1, next)))} />
+        </nav>
       ) : null}
     </div>
   );

@@ -17,19 +17,26 @@ const routes = resolveRoutePaths([
 describe("mountRoutes", () => {
   test("an alias and its record child reuse the mounted pages at the mount's path, anchored to its node", () => {
     const mounted = mountRoutes(routes, [
-      { id: "desk.people", route: "iam.users", path: "/desk/people", by: "desk", recordMatch: { field: "kind", equals: "staff" } },
+      { id: "desk.people", route: "iam.users", path: "/desk/people", by: "desk", recordMatch: { field: "kind", equals: "staff" },
+        defaultFilter: { kind: { exact: "staff" } } },
     ]);
     expect(mounted.routes.slice(0, routes.length)).toEqual(routes);
     // The model becomes a projection (`recordModel`): the canonical claim stays with the owner.
     expect(mounted.routes.slice(routes.length)).toEqual([
       { name: "desk.people", path: "/desk/people", menu: "desk.people", layout: "console", indexComponent: List,
-        recordModel: "iam.User", defaultResourceView: "iam.active", recordMatch: { field: "kind", equals: "staff" } },
+        recordModel: "iam.User", defaultResourceView: "iam.active", defaultFilter: { kind: { exact: "staff" } },
+        recordMatch: { field: "kind", equals: "staff" } },
       { name: "desk.people.record", path: "/desk/people/$id", parent: "desk.people", component: Detail },
     ]);
     expect(mounted.families).toEqual([new Map([["iam.users", "desk.people"], ["iam.users.record", "desk.people.record"]])]);
     // The mount's own default view wins over the mounted route's.
     const staff = mountRoutes(routes, [{ id: "desk.staff", route: "iam.users", path: "/desk/staff", by: "desk", defaultResourceView: "desk.staff" }]);
     expect(staff.routes.find((route) => route.name === "desk.staff")?.defaultResourceView).toBe("desk.staff");
+    const filtered = mountRoutes([
+      { ...routes[0]!, defaultFilter: { state: { exact: "active" } } }, ...routes.slice(1),
+    ], [{ id: "desk.filtered", route: "iam.users", path: "/desk/filtered", by: "desk" }]);
+    expect(filtered.routes.find((route) => route.name === "desk.filtered")?.defaultFilter)
+      .toEqual({ state: { exact: "active" } });
   });
 
   test("a page without a record child mounts alone", () => {

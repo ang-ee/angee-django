@@ -26,15 +26,15 @@ def create_slack_channel(user: Any, *, name: str, token: str) -> Any:
     if not clean_token:
         raise ValueError("A Slack User OAuth token is required.")
     requested_name = str(name).strip()
-    probe_values = {
-        "kind": CredentialKind.STATIC_TOKEN,
-        "name": "Slack connection probe",
-        "material": {"api_key": clean_token},
-    }
 
     # The SDK call is deliberately outside both system_context and transaction:
     # failed auth must leave no credential/channel rows and hold no database lock.
-    probe_credential = Credential.objects.prepare_local_credential(user, **probe_values)
+    probe_credential = Credential.objects.prepare_local_credential(
+        user,
+        kind=CredentialKind.STATIC_TOKEN,
+        name="Slack connection probe",
+        material={"api_key": clean_token},
+    )
     try:
         response = SlackChannelBackend.client_class(token=probe_credential.secret_value()).auth_test()
     except SlackApiError as error:

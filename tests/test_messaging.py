@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 
 import pytest
@@ -24,7 +26,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ValidationError
-from django.db import IntegrityError, connection, models, transaction
+from django.db import IntegrityError, close_old_connections, connection, models, transaction
 from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import (
@@ -40,21 +42,21 @@ from rebac.actors import current_sudo_reason, is_sudo
 
 import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
+from angee.actors import source_kind_for
 from angee.agents.testing.models import Agent
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeModel
-from angee.base.serialization import strip_null_bytes
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.messaging import managers as messaging_managers
 from angee.messaging.backends import (
+    ManualChannelBackend,
     ParsedHandle,
     ParsedMessage,
     ParsedPart,
     ParsedRecipient,
     ParsedThread,
 )
+from angee.messaging.events import message_ingested
 from angee.messaging.managers import derived_part_name, normalize_subject
 from angee.messaging.models import ThreadedModelMixin
 from angee.messaging.testing.models import (
@@ -69,18 +71,16 @@ from angee.messaging.testing.models import (
     Part,
     Participant,
     Party,
-    PartyHandle,
     Person,
     Reaction,
     Thread,
-    ThreadActivity,
     ThreadAttachment,
     ThreadFollower,
     ThreadNotification,
-    TrackingValue,
 )
-from angee.parties.managers import HandleAssociationStatus
-from angee.parties.mixins import LinkSource
+from angee.models import AngeeModel, AuditMixin, HistoryMixin, SourceKind, SqidMixin
+from angee.projects.testing.models import Task as ProjectTask
+from angee.serialization import strip_null_bytes
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
 from tests.conftest import Backend, Drive, MimeType, make_integration
 from tests.conftest import (
@@ -89,11 +89,10 @@ from tests.conftest import (
 from tests.mtidemo.models import MtiChild, MtiParent
 
 
-class ThreadedTicket(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):
+class ThreadedTicket(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, AngeeModel):
     """Concrete model that opts into record chatter for messaging tests."""
 
     sqid_prefix = "tkt_"
-    thread_tracking_fields = ("title", "status")
     thread_suggested_recipient_fields = ("assigned_user",)
 
     title = models.CharField(max_length=160)
@@ -123,7 +122,7 @@ class ThreadedTicket(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):
         return self.title
 
 
-class BroadcastRoom(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):
+class BroadcastRoom(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, AngeeModel):
     """A threaded host that opts its chatter into the ``changes(Thread)`` stream.
 
     Stands in for a chat room: ``thread_broadcasts_changes = True`` flips the F-stream
@@ -158,6 +157,18 @@ def channel(composed_tables: None) -> Any:
 
     del composed_tables
     return make_integration("msgchan", model=Channel, backend_class="manual")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_channel_source_kind_is_its_backends_declaration(channel: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A channel is admitted as a statement source only as the kind its protocol declares."""
+
+    principal = to_subject_ref(channel.integration_ptr)
+    assert (channel.source_kind, source_kind_for(principal)) == (None, None)
+
+    # An import-only protocol declares its channels' classification once, on the backend class.
+    monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.IMPORT)
+    assert (channel.source_kind, source_kind_for(principal)) == (SourceKind.IMPORT, SourceKind.IMPORT)
 
 
 def _parsed(
@@ -195,6 +206,92 @@ def _ingest(messages: list[ParsedMessage], *, channel: Any) -> int:
 
     with system_context(reason="test messaging ingest"):
         return len(Message.objects.ingest(messages, channel=channel))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_commits_each_message_and_does_not_lock_an_unchanged_observation(channel: Any) -> None:
+    """A later bad envelope cannot roll back the previous message's committed work."""
+
+    def overlay(message: Any) -> None:
+        if message.external_id == "bad-second":
+            raise ValidationError("Rejected overlay")
+
+    with system_context(reason="per-message ingest transactions"), pytest.raises(ValidationError):
+        Message.objects.ingest(
+            [_parsed("committed-first", sent_at=_AT), _parsed("bad-second", sent_at=_AT)],
+            channel=channel,
+            quote_edges=False,
+            after_landing=overlay,
+        )
+    first = Message._base_manager.get(external_id="committed-first")
+    assert not Message._base_manager.filter(external_id="bad-second").exists()
+    with system_context(reason="unchanged ingest lock intent"), CaptureQueriesContext(connection) as queries:
+        (replayed,) = Message.objects.ingest(
+            [_parsed("committed-first", sent_at=_AT)],
+            channel=channel,
+            quote_edges=False,
+        )
+    assert replayed.pk == first.pk
+    assert not any("FOR UPDATE" in query["sql"] for query in queries)
+    assert not any(query["sql"].lstrip().startswith("UPDATE") for query in queries)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_synced_own_message_edits_and_late_parent_land_and_emit(channel: Any) -> None:
+    """Direction is provider evidence, not proof that messaging authored an envelope."""
+
+    seen = []
+
+    def observe(sender: Any, instance: Any, **kwargs: Any) -> None:
+        seen.append(instance.external_id)
+
+    original = replace(
+        _parsed("own-reply", sent_at=_AT, text="Original", in_reply_to="late-parent"), direction="outbound"
+    )
+    message_ingested.connect(observe)
+    try:
+        _ingest([original], channel=channel)
+        row = Message._base_manager.get(external_id="own-reply")
+        assert row.status == "synced"
+        assert row.parent_id is None
+        assert seen == ["own-reply"]
+        original_hashes = list(
+            Part._base_manager.filter(message=row, role="body").values_list(
+                "fragment__hash",
+                flat=True,
+            )
+        )
+        _ingest([_parsed("late-parent", sent_at=_AT)], channel=channel)
+        edited = replace(
+            original,
+            body=ParsedPart(text="Provider edit"),
+            sender=ParsedHandle(platform="email", value="new@example.com"),
+        )
+        _ingest([edited], channel=channel)
+        row.refresh_from_db()
+        with system_context(reason="test own-message projection"):
+            assert row.body_text() == "Provider edit"
+        assert row.edit_history[0]["prev_fragment_hashes"] == original_hashes
+        parent = Message._base_manager.get(external_id="late-parent")
+        assert row.parent_id == parent.pk
+        assert row.sender_id == Handle._base_manager.get(value="new@example.com").pk
+        assert row.thread_id == parent.thread_id
+        # The identical follow-up remains idempotent after the provider edit.
+        _ingest([edited], channel=channel)
+        row.refresh_from_db()
+        assert len(row.edit_history) == 1
+    finally:
+        message_ingested.disconnect(observe)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_identical_synced_own_reply_repairs_a_late_parent(channel: Any) -> None:
+    own = replace(_parsed("own-late", in_reply_to="own-root", sent_at=_AT), direction="outbound")
+    _ingest([own], channel=channel)
+    _ingest([_parsed("own-root", sent_at=_AT)], channel=channel)
+    _ingest([own], channel=channel)
+    row = Message._base_manager.get(external_id="own-late")
+    assert row.parent_id == Message._base_manager.get(external_id="own-root").pk
 
 
 @pytest.mark.django_db(transaction=True)
@@ -425,8 +522,112 @@ def test_explicit_ingest_rejects_same_channel_message_reassignment(channel: Any,
         assert original.thread_id == thread.pk
         assert list(original.parts.values_list("pk", flat=True)) == part_ids
         assert original.edit_history == []
-        assert thread.message_count == 2
-        assert other.message_count == 1
+        # A record's creation is its first history line, not a message: only the ingest counts.
+        assert thread.message_count == 1
+        assert other.message_count == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_source_thread_correction_compares_locked_prior_and_keeps_native_counters(channel: Any) -> None:
+    with system_context(reason="test source thread correction"):
+        first, second, third = (
+            Thread.objects.create(channel=channel, platform="other", external_id=f"source-audience-{index}")
+            for index in range(3)
+        )
+        write_relationships([RelationshipTuple(to_object_ref(first), "reader", to_subject_ref(channel.owner))])
+        parsed = _parsed("source-audience-message", sent_at=datetime(2026, 1, 2, tzinfo=timezone.utc))
+        original = Message.objects.ingest([parsed], channel=channel, explicit_thread=first, historical=True)[0]
+        moved = Message.objects.ingest([parsed], channel=channel, explicit_thread=second, expected_thread=first,
+                                       historical=True)[0]
+        assert moved.pk == original.pk and moved.thread_id == second.pk
+        first.refresh_from_db()
+        second.refresh_from_db()
+        assert (first.message_count, second.message_count) == (0, 1)
+        assert parsed.sent_at is not None
+        later_parsed = replace(parsed, sent_at=parsed.sent_at + timedelta(days=1))
+        moved = Message.objects.ingest([later_parsed], channel=channel, explicit_thread=third, expected_thread=second,
+                                       historical=True)[0]
+        third.refresh_from_db()
+        assert (third.message_count, third.last_message_at) == (1, later_parsed.sent_at)
+        with pytest.raises(ValueError, match="changed after"):
+            Message.objects.ingest([parsed], channel=channel, explicit_thread=third, expected_thread=first,
+                                   historical=True)
+        moved.refresh_from_db()
+        assert moved.thread_id == third.pk
+        other_channel = make_integration("foreign-correction-source", model=Channel, backend_class="manual")
+        foreign = Thread.objects.create(channel=other_channel, platform="other", external_id="foreign-source-thread")
+        with pytest.raises(ValueError, match="different source channel"):
+            Message.objects.ingest([parsed], channel=channel, explicit_thread=foreign, expected_thread=third)
+        # The provider's historical import cannot move a locally authored envelope.
+        Message.objects.filter(pk=moved.pk).update(status=Message.MessageStatus.SENT)
+        with pytest.raises(ValueError, match="locally authored"):
+            Message.objects.ingest([parsed], channel=channel, explicit_thread=first, expected_thread=third)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_source_thread_correction_race_has_one_compare_and_set_winner(channel: Any) -> None:
+    if connection.vendor != "postgresql":
+        pytest.skip("Concurrent row-lock admission requires PostgreSQL.")
+    with system_context(reason="prepare source correction race"):
+        first, second, third = (
+            Thread.objects.create(channel=channel, platform="other", external_id=f"source-cas-race-{index}")
+            for index in range(3)
+        )
+        write_relationships([RelationshipTuple(to_object_ref(first), "reader", to_subject_ref(channel.owner))])
+        original = Message.objects.ingest([_parsed("source-cas-race")], channel=channel,
+                                           explicit_thread=first, historical=True)[0]
+    barrier = Barrier(2)
+
+    def move(target: Any) -> str:
+        close_old_connections()
+        try:
+            with system_context(reason="race source correction"):
+                barrier.wait(timeout=10)
+                try:
+                    Message.objects.correct_source_thread(
+                        original, channel=channel, expected_thread=first, thread=target,
+                    )
+                except ValueError as error:
+                    assert "changed after" in str(error)
+                    return "stale"
+                return "moved"
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(move, (second, third)))
+    assert sorted(results) == ["moved", "stale"]
+    with system_context(reason="inspect source correction race"):
+        first.refresh_from_db()
+        second.refresh_from_db()
+        third.refresh_from_db()
+        assert first.message_count == 0
+        assert second.message_count + third.message_count == 1
+        assert Message.objects.filter(external_id="source-cas-race", channel=channel).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("historical", (False, True))
+def test_source_thread_correction_same_content_preserves_event_policy(channel: Any, historical: bool) -> None:
+    with system_context(reason="source correction events"):
+        first, second = (
+            Thread.objects.create(channel=channel, platform="other", external_id=f"source-events-{index}")
+            for index in range(2)
+        )
+        parsed = _parsed("source-events")
+        original = Message.objects.ingest([parsed], channel=channel, explicit_thread=first, historical=True)[0]
+        received = []
+
+        def receive(sender: Any, instance: Any, **kwargs: Any) -> None:
+            received.append(instance.pk)
+
+        message_ingested.connect(receive, sender=Message)
+        try:
+            Message.objects.ingest([parsed], channel=channel, explicit_thread=second, expected_thread=first,
+                                   historical=historical)
+        finally:
+            message_ingested.disconnect(receive, sender=Message)
+        assert received == ([] if historical else [original.pk])
 
 
 @pytest.mark.django_db(transaction=True)
@@ -476,7 +677,8 @@ def test_threaded_model_posts_internal_message(composed_tables: None) -> None:
     assert message.subtype.key == "comment"
     assert message.subtype.model_label == "messaging.ThreadedTicket"
     assert message.preview == "Please follow up with the customer."
-    assert thread.message_count == 2
+    # The record's creation is a history line, not a message: the post is the thread's first.
+    assert thread.message_count == 1
     assert thread.last_message_at == message.sent_at
     part = Part._base_manager.select_related("fragment").get(message=message)
     assert part.role == "body"
@@ -543,17 +745,17 @@ def test_threaded_model_toggles_message_reaction(composed_tables: None) -> None:
     assert reaction.handle is not None
     assert reaction.handle.platform == "email"
     assert reaction.handle.value == "reactor@example.com"
-    assert reaction.handle.owner_id == user.pk
+    assert reaction.handle.controller_id == user.pk
     person = Person._base_manager.get(user=user)
-    link = PartyHandle._base_manager.get(handle=reaction.handle, party=person)
+    link = Party.statements.get(handle=reaction.handle, subject=person)
     assert link.confidence == 1.0
-    assert link.source == LinkSource.MANUAL
-    assert link.is_confirmed
+    assert link.source_kind == "person"
+    assert not link.is_confirmed
 
     with system_context(reason="test threaded model reaction remove"):
         ticket.message_reaction(message, reaction="👍", user=user)
     assert not Reaction._base_manager.filter(message=message).exists()
-    assert PartyHandle._base_manager.filter(handle=reaction.handle, party=person).count() == 1
+    assert Party.statements.filter(handle=reaction.handle, subject=person).count() == 1
 
     with system_context(reason="test threaded model reaction guard"):
         with pytest.raises(ValueError, match="Message does not belong to this record thread."):
@@ -649,20 +851,19 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
     """Hard-deleting a chattered record collects its whole private thread subtree (M1).
 
     The record's chatter thread is private to it, so deleting the record must remove its
-    thread, attachment, messages, followers, notifications, and activities rather than
-    orphaning them (a leftover attachment on a reused primary key would mis-resolve). A
-    sibling record's chatter is untouched.
+    thread, attachment, messages, followers and notifications rather than orphaning them
+    (a leftover attachment on a reused primary key would mis-resolve). A sibling record's
+    chatter is untouched. Record tasks point at their subject directly and go with it
+    through the task owner (projects), not through the thread.
     """
 
     del composed_tables
     user_model = get_user_model()
     with system_context(reason="test threaded model delete cascade setup"):
-        author = user_model.objects.create_user(username="cascade-author", email="cascade-author@example.com")
         watcher = user_model.objects.create_user(username="cascade-watcher", email="cascade-watcher@example.com")
         ticket = ThreadedTicket.objects.create(title="Cascade case")
         ticket.message_subscribe(user=watcher)
         ticket.message_post("Body to be collected.")
-        ticket.activity_schedule(user=author, summary="Follow up", due_date=_AT.date())
         survivor = ThreadedTicket.objects.create(title="Survivor case")
         survivor_message = survivor.message_post("Untouched body.")
 
@@ -672,7 +873,6 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
     attachment_pk = ThreadAttachment._base_manager.get(object_id=ticket.pk).pk
     assert Message._base_manager.filter(thread_id=thread_pk).exists()
     assert ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
-    assert ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
 
     with system_context(reason="test threaded model delete cascade"):
         ticket.delete(*delete_args)
@@ -682,7 +882,6 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
     assert not Message._base_manager.filter(thread_id=thread_pk).exists()
     assert not ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
     assert not ThreadNotification._base_manager.filter(thread_id=thread_pk).exists()
-    assert not ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
     survivor_thread = survivor.message_thread(create=False)
     assert survivor_thread is not None
     assert Message._base_manager.filter(pk=survivor_message.pk).exists()
@@ -707,7 +906,7 @@ def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tabl
             [
                 RelationshipTuple(
                     resource=to_object_ref(doc),
-                    relation="owner",
+                    relation="manager",
                     subject=to_subject_ref(owner),
                 ),
                 RelationshipTuple(resource=to_object_ref(doc), relation="reader", subject=to_subject_ref(watcher)),
@@ -715,13 +914,11 @@ def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tabl
         )
         doc.message_subscribe(user=watcher)
         doc.message_post("Body to be collected by owner delete.")
-        doc.activity_schedule(user=watcher, summary="Follow up", due_date=_AT.date())
 
     thread = doc.message_thread(create=False)
     assert thread is not None
     thread_pk = thread.pk
     assert ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
-    assert ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
 
     with actor_context(owner):
         doc.delete()
@@ -731,7 +928,6 @@ def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tabl
     assert not ThreadAttachment._base_manager.filter(object_id=doc.pk).exists()
     assert not Message._base_manager.filter(thread_id=thread_pk).exists()
     assert not ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
-    assert not ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -777,18 +973,14 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
 
     The ``GenericForeignKey`` the attachment binds through points *at* the thread, so the
     delete collector can never cascade from a deleted record up to its private ``Thread``
-    or that thread's messages. The ``pre_delete`` teardown receiver fires per collected
-    row on the bulk path exactly as on the instance path, so filtering-then-deleting a
-    chattered record leaves no orphaned thread, message, follower, or activity behind.
+    or that thread's messages. The generic target-delete owner must remove the edge and
+    its private graph on both instance and queryset paths.
     """
 
     del composed_tables
-    user_model = get_user_model()
     with system_context(reason="test threaded model bulk delete setup"):
-        author = user_model.objects.create_user(username="bulk-author", email="bulk-author@example.com")
         ticket = ThreadedTicket.objects.create(title="Bulk cascade case")
         ticket.message_post("Body to be collected in bulk.")
-        ticket.activity_schedule(user=author, summary="Follow up", due_date=_AT.date())
         survivor = ThreadedTicket.objects.create(title="Bulk survivor case")
         survivor_message = survivor.message_post("Untouched bulk body.")
 
@@ -796,7 +988,6 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
     assert thread is not None
     thread_pk = thread.pk
     assert Message._base_manager.filter(thread_id=thread_pk).exists()
-    assert ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
 
     with system_context(reason="test threaded model bulk delete"):
         deleted, _details = ThreadedTicket.objects.filter(pk=ticket.pk).delete()
@@ -807,7 +998,6 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
     assert not ThreadAttachment._base_manager.filter(object_id=ticket.pk).exists()
     assert not Message._base_manager.filter(thread_id=thread_pk).exists()
     assert not ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
-    assert not ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
     survivor_thread = survivor.message_thread(create=False)
     assert survivor_thread is not None
     assert Message._base_manager.filter(pk=survivor_message.pk).exists()
@@ -819,10 +1009,10 @@ def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: Non
     """Deleting a threaded MTI child collects its chatter attachment, leaving no orphan.
 
     ``TrackedRecordChild`` composes ``ThreadedModelMixin`` through its MTI parent, so the
-    chatter edge, the reverse ``thread_attachments`` GenericRelation, and the ``pre_delete``
-    teardown must all agree on the child's canonical content type. A leftover attachment on
+    chatter edge, reverse ``thread_attachments`` relation and target-delete policy must all
+    agree on the child's canonical content type. A leftover attachment on
     a reused primary key would mis-resolve, so the delete must remove it (the placement
-    invariant in ``angee.base.refs``).
+    invariant in ``angee.refs``).
     """
 
     del composed_tables
@@ -841,142 +1031,8 @@ def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: Non
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_activity_agenda_lists_assignee_activities_across_records(composed_tables: None) -> None:
-    """The actor's assigned activities across records, ordered by due date, windowed (F-act).
-
-    The agenda rides the ``messaging/thread_activity.read`` ``user`` (assignee) arm: the
-    activities are scheduled elevated (``created_by`` is not the assignee), so the actor
-    reaches its own rows through the assignee arm alone, with no parent-record grant. The
-    window is the whole bound — ``window_start`` inclusive, ``window_end`` exclusive — and
-    another actor's assignment, plus an unassigned actor, see nothing of
-    it. Each row carries its parent pointer (label + sqid + model_label) through the
-    attachment's owning model, computed without loading the target row.
-    """
-
-    del composed_tables
-    user_model = get_user_model()
-    window_start, window_end = date(2026, 3, 1), date(2026, 4, 1)
-    with system_context(reason="agenda across-records setup"):
-        assignee = user_model.objects.create_user(username="agenda-assignee", email="agenda-assignee@example.com")
-        other = user_model.objects.create_user(username="agenda-other", email="agenda-other@example.com")
-        unassigned = user_model.objects.create_user(username="agenda-unassigned", email="agenda-unassigned@example.com")
-        alpha = ThreadedTicket.objects.create(title="Alpha")
-        beta = ThreadedTicket.objects.create(title="Beta")
-        # Assignee's activities across two records, out of due-date order.
-        beta.activity_schedule(user=assignee, summary="Call Beta", due_date=date(2026, 3, 10))
-        alpha.activity_schedule(user=assignee, summary="Email Alpha", due_date=date(2026, 3, 5))
-        # Window boundaries: start is inclusive, end is exclusive.
-        alpha.activity_schedule(user=assignee, summary="Kickoff", due_date=window_start)
-        alpha.activity_schedule(user=assignee, summary="Boundary", due_date=window_end)
-        # Out of window, another assignee, and an unassigned actor — all absent.
-        alpha.activity_schedule(user=assignee, summary="Later", due_date=date(2026, 4, 15))
-        alpha.activity_schedule(user=other, summary="Other task", due_date=date(2026, 3, 7))
-
-    with actor_context(assignee):
-        rows = list(ThreadActivity.objects.agenda(assignee, window_start, window_end))
-        empty = list(ThreadActivity.objects.agenda(unassigned, window_start, window_end))
-
-    assert [row.summary for row in rows] == ["Kickoff", "Email Alpha", "Call Beta"]
-    assert {row.attachment.object_id for row in rows} == {alpha.pk, beta.pk}
-    assert empty == []
-
-    email_alpha = next(row for row in rows if row.summary == "Email Alpha")
-    assert email_alpha.attachment.label == "Alpha"
-    assert email_alpha.attachment.record_model_label == "messaging.ThreadedTicket"
-    assert email_alpha.attachment.record_public_id == alpha.public_id
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_activity_agenda_excludes_done_unless_included(composed_tables: None) -> None:
-    """Done/canceled rows drop out of the agenda by default and return under include_done (F-act)."""
-
-    del composed_tables
-    user_model = get_user_model()
-    window_start, window_end = date(2026, 5, 1), date(2026, 6, 1)
-    with system_context(reason="agenda done-filter setup"):
-        assignee = user_model.objects.create_user(username="agenda-done", email="agenda-done@example.com")
-        ticket = ThreadedTicket.objects.create(title="Case")
-        ticket.activity_schedule(user=assignee, summary="Open task", due_date=date(2026, 5, 10))
-        done = ticket.activity_schedule(user=assignee, summary="Done task", due_date=date(2026, 5, 12))
-        ThreadActivity.objects.complete(done, post_message=False)
-
-    with actor_context(assignee):
-        default_summaries = [row.summary for row in ThreadActivity.objects.agenda(assignee, window_start, window_end)]
-        with_done_summaries = [
-            row.summary for row in ThreadActivity.objects.agenda(assignee, window_start, window_end, include_done=True)
-        ]
-
-    assert default_summaries == ["Open task"]
-    assert with_done_summaries == ["Open task", "Done task"]
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_activity_agenda_row_reports_overdue_state_without_stored_flag(composed_tables: None) -> None:
-    """An overdue agenda row derives ``state == "overdue"`` from its due date, storing no flag (F-act)."""
-
-    del composed_tables
-    user_model = get_user_model()
-    window_start, window_end = date(2019, 1, 1), date(2021, 1, 1)
-    with system_context(reason="agenda overdue setup"):
-        assignee = user_model.objects.create_user(username="agenda-overdue", email="agenda-overdue@example.com")
-        ticket = ThreadedTicket.objects.create(title="Escalation")
-        ticket.activity_schedule(user=assignee, summary="Chase", due_date=date(2020, 6, 1))
-
-    with actor_context(assignee):
-        (row,) = list(ThreadActivity.objects.agenda(assignee, window_start, window_end))
-
-    assert row.status == ThreadActivity.ActivityStatus.TODO
-    assert row.activity_state == "overdue"
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_activity_agenda_record_pointer_batches_without_per_row_fanout(composed_tables: None) -> None:
-    """Projecting the agenda's record pointer is one batch, not a per-row lazy-load (D5).
-
-    ``with_record_pointers`` primes every row's ``attachment`` in a single elevated query
-    and each pointer field reads the process-cached ``ContentType``, so projecting the
-    label + model_label + record_id for the whole agenda costs a constant query count —
-    not the 1+2N a per-row ``attachment``/``content_type`` lazy-load would. Doubling the
-    row count keeps the projection query count flat.
-    """
-
-    del composed_tables
-    user_model = get_user_model()
-    window_start, window_end = date(2026, 3, 1), date(2026, 4, 1)
-    with system_context(reason="agenda n+1 setup"):
-        assignee = user_model.objects.create_user(username="agenda-n1", email="agenda-n1@example.com")
-        for index in range(6):
-            ticket = ThreadedTicket.objects.create(title=f"Case {index}")
-            ticket.activity_schedule(user=assignee, summary=f"Task {index}", due_date=date(2026, 3, 1 + index))
-
-    def project_query_count() -> tuple[int, int]:
-        with system_context(reason="agenda n+1 measure"), CaptureQueriesContext(connection) as captured:
-            rows = ThreadActivity.objects.agenda(assignee, window_start, window_end).with_record_pointers()
-            for row in rows:
-                _ = (row.attachment.label, row.attachment.record_model_label, row.attachment.record_public_id)
-        return len(rows), len(captured.captured_queries)
-
-    # Warm the process-cached ContentType so the flat comparison isolates the attachment batch.
-    ContentType.objects.get_for_model(ThreadedTicket)
-    small_rows, small_queries = project_query_count()
-
-    with system_context(reason="agenda n+1 grow"):
-        for index in range(6, 12):
-            ticket = ThreadedTicket.objects.create(title=f"Case {index}")
-            ticket.activity_schedule(user=assignee, summary=f"Task {index}", due_date=date(2026, 3, 1 + index))
-    large_rows, large_queries = project_query_count()
-
-    assert (small_rows, large_rows) == (6, 12)
-    assert large_queries == small_queries
-
-
-@pytest.mark.django_db(transaction=True)
-def test_threaded_model_create_autofollows_and_logs_author(composed_tables: None) -> None:
-    """Creating a threaded row follows Odoo's creator subscription and log behavior."""
+def test_threaded_model_create_autofollows_its_author_without_a_creation_message(composed_tables: None) -> None:
+    """Creating a threaded row subscribes its creator; the creation is history, not a comment."""
 
     del composed_tables
     user_model = get_user_model()
@@ -985,39 +1041,23 @@ def test_threaded_model_create_autofollows_and_logs_author(composed_tables: None
 
     with actor_context(user):
         ticket = ThreadedTicket.objects.create(title="Created case")
+        thread = ticket.message_thread()
 
     follower = ThreadFollower._base_manager.get()
-    messages = list(Message._base_manager.select_related("subtype").order_by("id"))
-    creation_message, tracking_message = messages
     assert follower.party_id == ThreadFollower.objects.get_party_id(user=user)
-    assert creation_message.message_type == "notification"
-    assert creation_message.subtype is not None
-    assert creation_message.subtype.key == "record_created"
-    assert creation_message.preview == "Threaded ticket created"
-    with actor_context(user):
-        assert creation_message.thread_id == ticket.message_thread().pk
-    assert tracking_message.message_type == "auto_comment"
-    assert tracking_message.subtype is not None
-    assert tracking_message.subtype.key == "record_updated"
-    assert tracking_message.preview == "Title:  -> Created case"
-    tracking = TrackingValue._base_manager.get(message=tracking_message)
-    assert tracking.field_name == "title"
-    assert tracking.old_display == ""
-    assert tracking.new_display == "Created case"
-    # Authors receive no notification of their own messages; their follower
-    # cursor already sits at the latest message.
+    assert follower.thread_id == thread.pk
+    assert not Message._base_manager.exists()
     assert ThreadNotification._base_manager.count() == 0
-    follower.refresh_from_db()
-    assert follower.last_read_message_id == tracking_message.pk
-    assert not ThreadFollower.objects.unread_messages(creation_message.thread, user=user).exists()
+    assert follower.last_read_message_id is None
+    assert not ThreadFollower.objects.unread_messages(thread, user=user).exists()
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_row_inserted_under_its_querysets_scope_logs_its_creation(composed_tables: None) -> None:
+def test_a_row_inserted_under_its_querysets_scope_owns_its_thread(composed_tables: None) -> None:
     """A queryset's pinned actor or system scope writes the row's chatter without an ambient scope.
 
     The pinned actor owns the new thread as an ambient actor does; an elevated
-    insert writes it as system bookkeeping even where the public sudo verb is off.
+    insert has no creator to subscribe, so its thread waits for the first post.
     """
 
     del composed_tables
@@ -1034,50 +1074,24 @@ def test_a_row_inserted_under_its_querysets_scope_logs_its_creation(composed_tab
 
     with system_context(reason="test queryset-scoped creation assertions"):
         threads = {ticket.title: ticket.message_thread(create=False) for ticket in (ambient, pinned, elevated)}
-        for thread in threads.values():
-            assert Message._base_manager.filter(thread=thread, subtype__key="record_created").count() == 1
+    assert not Message._base_manager.exists()
     assert threads["Ambient case"].owner_id == threads["Pinned case"].owner_id == user.pk
-    assert threads["Elevated case"].owner_id is None
+    assert threads["Elevated case"] is None
 
 
 @pytest.mark.django_db(transaction=True)
-def test_materialized_child_transition_yields_one_tracking_note(composed_tables: None) -> None:
-    """A native materialized child tracks a transition save once.
+def test_materialized_child_transition_keeps_native_history(composed_tables: None) -> None:
+    """An MTI transition records the parent's changed state without a second message store."""
 
-    The child-first MRO places ``ThreadedModelMixin.save`` once in the
-    chain, and MTI saves both tables inside that single ``save()`` — so a
-    ``StateTransitions`` ``save_state`` edge over a tracked field posts exactly one
-    tracking note, never one per MRO level. Pins the arch-review gap in the
-    materialized-child + record-chatter tracking interaction.
-    """
-
-    del composed_tables
-    user_model = get_user_model()
-    with system_context(reason="tracked child setup"):
-        user = user_model.objects.create_user(username="flip-tracker", email="flip@example.com")
-
-    with actor_context(user):
+    with system_context(reason="historized child transition"):
         record = TrackedRecordChild.objects.create(title="Flip case", note="child column")
-        # status defaults to open, so creation logs no tracking note; the transition
-        # is the one status change that must be tracked, once.
+        before = Message._base_manager.count()
         record.close()
-
-    thread = record.message_thread(create=False)
-    tracking_messages = [
-        message
-        for message in Message._base_manager.select_related("subtype").filter(thread=thread)
-        if message.subtype is not None and message.subtype.key == "record_updated"
-    ]
-    assert len(tracking_messages) == 1
-    tracking_value = TrackingValue._base_manager.get(message=tracking_messages[0])
-    assert tracking_value.field_name == "status"
-    assert tracking_value.old_display == "Open"
-    assert tracking_value.new_display == "Closed"
-    # The transition persisted the guarded state through save_state.
-    with system_context(reason="tracked child assertions"):
-        assert TrackedRecordChild.objects.get(pk=record.pk).status == "closed"
-        # The child column rode the same row (materialized child MTI).
-        assert TrackedRecordChild.objects.get(pk=record.pk).note == "child column"
+        record.refresh_from_db()
+        assert record.status == "closed"
+        assert record.note == "child column"
+        assert record.history.order_by("-history_id").first().status == "closed"
+        assert Message._base_manager.count() == before
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1170,16 +1184,17 @@ def test_threaded_model_updates_comment_content(composed_tables: None) -> None:
     assert "edited_at" not in edited.metadata
     assert "edited_by_id" not in edited.metadata
     assert Part._base_manager.select_related("fragment").get(message=edited).fragment.text == "Updated body"
-    assert Message._base_manager.count() == 2
+    # The record's creation is a history line, not a message: the comment is the only row.
+    assert Message._base_manager.count() == 1
     assert ThreadNotification._base_manager.count() == notification_count
     assert thread is not None
     thread.refresh_from_db()
-    assert thread.message_count == 2
+    assert thread.message_count == 1
 
 
 @pytest.mark.django_db(transaction=True)
 def test_threaded_model_rejects_system_message_updates(composed_tables: None) -> None:
-    """Odoo-style tracking/system messages are immutable chatter history."""
+    """System notifications are immutable chatter messages."""
 
     del composed_tables
     user_model = get_user_model()
@@ -1188,19 +1203,7 @@ def test_threaded_model_rejects_system_message_updates(composed_tables: None) ->
         ticket = ThreadedTicket.objects.create(title="Immutable")
 
     with actor_context(user):
-        message = ticket.message_track(
-            (
-                {
-                    "field_name": "stage",
-                    "field_label": "Stage",
-                    "field_type": "selection",
-                    "old_value": "new",
-                    "new_value": "done",
-                    "old_display": "New",
-                    "new_display": "Done",
-                },
-            ),
-        )
+        message = ticket.message_log("Stage: New → Won")
         with pytest.raises(ValueError, match="Only comment messages can be edited"):
             ticket.message_update_content(message, body="Tampered")
 
@@ -1369,6 +1372,13 @@ def test_unread_count_respects_default_subtype_subscription(composed_tables: Non
     # The explicit follower counts only their chosen subtype.
     explicit_unread = ThreadFollower.objects.unread_messages(thread, user=promo_watcher)
     assert [message.pk for message in explicit_unread] == [promo.pk]
+    messages = ThreadedTicket.thread_messages_expression(ticket.pk)
+    assert set(messages.unread_for(default_watcher).values_list("pk", flat=True)) == {comment.pk}
+    assert set(messages.unread_for(promo_watcher).values_list("pk", flat=True)) == {promo.pk}
+    assert not messages.unread_for(None).exists()
+    with system_context(reason="test unread muted projection"):
+        ticket.message_subscribe(user=default_watcher, notification_policy="muted")
+    assert not messages.unread_for(default_watcher).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1480,22 +1490,32 @@ def test_threaded_model_delivery_error_counts_for_author(composed_tables: None) 
     assert ThreadNotification.objects.error_count_for_record(ticket, user=recipient) == 0
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_threaded_model_activity_completion_notifies_activity_followers(composed_tables: None) -> None:
-    """Activity completion delivers to email followers subscribed to that subtype."""
+def _record_holders(doc: Any, **holders: Any) -> None:
+    """Grant ``doc``'s relations to users, keyed by relation name."""
 
-    del composed_tables
+    write_relationships([
+        RelationshipTuple(resource=to_object_ref(doc), relation=relation, subject=to_subject_ref(user))
+        for relation, user in holders.items()
+    ])
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+def test_record_task_completion_notifies_the_records_activity_followers() -> None:
+    """Completing a record task delivers to the record's followers of that subtype."""
+
     user_model = get_user_model()
     with system_context(reason="test threaded model activity notification setup"):
         author = user_model.objects.create_user(username="activity-author", email="activity-author@example.com")
         watcher = user_model.objects.create_user(username="activity-watcher", email="activity-watcher@example.com")
-        ticket = ThreadedTicket.objects.create(title="Activity notification")
-        ticket.message_subscribe(user=watcher, notification_policy="email", subtype_keys=("activity_done",))
+        doc = ChatterDoc.objects.create(title="Activity notification")
+        _record_holders(doc, writer=author, reader=watcher)
+        doc.message_subscribe(user=watcher, notification_policy="email", subtype_keys=("activity_done",))
 
     with actor_context(author):
-        activity = ticket.activity_schedule(user=author, summary="Call customer", due_date=_AT.date())
-        ticket.activity_feedback(activity, feedback="Done.")
+        record = ChatterDoc.objects.get(pk=doc.pk)
+        task = ProjectTask.objects.schedule(record, title="Call customer", due_date=_AT.date())
+        task.complete(feedback="Done.")
 
     notification = ThreadNotification._base_manager.select_related("message", "message__subtype").get(user=watcher)
     assert notification.notification_type == "email"
@@ -1505,14 +1525,10 @@ def test_threaded_model_activity_completion_notifies_activity_followers(composed
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_agent_activity_completion_posts_system_message_with_service_user(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An agent completing an activity posts messaging-private logs as its service user."""
+@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+def test_agent_record_task_completion_posts_system_message_with_service_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An agent completing a record task posts the record's log as its service user."""
 
-    del composed_tables
     user_model = get_user_model()
     with system_context(reason="test.messaging.agent_activity.setup"):
         owner = user_model.objects.create_user(
@@ -1521,8 +1537,9 @@ def test_agent_activity_completion_posts_system_message_with_service_user(
         )
         agent = Agent.objects.create(name="Activity Agent", owner=owner)
         service_user_id = agent.user_id
-        ticket = ThreadedTicket.objects.create(title="Agent activity")
-        activity = ticket.activity_schedule(user=owner, summary="Close the loop", due_date=_AT.date())
+        doc = ChatterDoc.objects.create(title="Agent activity")
+        _record_holders(doc, reader=owner, writer=agent.user)
+        task = ProjectTask.objects.schedule(doc, title="Close the loop", assignee=owner, due_date=_AT.date())
 
     post_context: dict[str, Any] = {}
     manager_type = type(Message.objects)
@@ -1536,16 +1553,16 @@ def test_agent_activity_completion_posts_system_message_with_service_user(
     monkeypatch.setattr(manager_type, "post_to_thread", spy_post_to_thread)
 
     with actor_context(agent.principal_subject()):
-        ticket.activity_feedback(activity, feedback="Handled by agent.")
+        ProjectTask.objects.get(pk=task.pk).complete(feedback="Handled by agent.")
 
-    message = Message._base_manager.get(message_type=Message.MessageKind.AUTO_COMMENT)
-    assert post_context == {"is_sudo": True, "reason": "messaging.activity.complete"}
+    message = Message._base_manager.get(subtype__key="activity_done")
+    assert post_context == {"is_sudo": True, "reason": "messaging.system_post"}
     assert message.created_by_id == service_user_id
-    assert message.message_type == Message.MessageKind.AUTO_COMMENT
+    assert message.message_type == Message.MessageKind.NOTIFICATION
     assert message.subtype is not None
     assert message.subtype.key == "activity_done"
     assert Part._base_manager.select_related("fragment").get(message=message).fragment.text == (
-        "Activity done: Close the loop\n\nHandled by agent."
+        "Done: Close the loop\n\nHandled by agent."
     )
 
 
@@ -1719,158 +1736,84 @@ def test_deduped_file_keeps_first_name_while_each_part_keeps_its_own(composed_ta
 
 
 @pytest.mark.django_db(transaction=True)
-def test_threaded_model_tracks_structured_field_values(composed_tables: None) -> None:
-    """A threaded model can log Odoo-style tracking values without a free-text body."""
+def test_threaded_model_history_keeps_record_values(composed_tables: None) -> None:
+    """The record's history preserves versions; comments carry authored discussion."""
 
-    del composed_tables
-    user_model = get_user_model()
-    with system_context(reason="test threaded model tracking setup"):
-        user = user_model.objects.create_user(username="tracker", email="tracker@example.com")
-        ticket = ThreadedTicket.objects.create(title="Tracking case")
-
-    with actor_context(user):
-        message = ticket.message_track(
-            (
-                {
-                    "field_name": "stage",
-                    "field_label": "Stage",
-                    "field_type": "selection",
-                    "old_value": "new",
-                    "new_value": "done",
-                    "old_display": "New",
-                    "new_display": "Done",
-                },
-            ),
-        )
-
-    message.refresh_from_db()
-    assert message.message_type == "auto_comment"
-    assert message.subtype is not None
-    assert message.subtype.key == "record_updated"
-    assert message.preview == "Stage: New -> Done"
-    assert Part._base_manager.filter(message=message).count() == 0
-    tracking = TrackingValue._base_manager.get(message=message)
-    assert tracking.field_name == "stage"
-    assert tracking.field_label == "Stage"
-    assert tracking.field_type == "selection"
-    assert tracking.old_value == "new"
-    assert tracking.new_value == "done"
-    assert tracking.old_display == "New"
-    assert tracking.new_display == "Done"
-    assert ThreadFollower._base_manager.count() == 0
+    with system_context(reason="record history"):
+        ticket = ThreadedTicket.objects.create(title="Initial", status="open")
+        before = Message._base_manager.count()
+        ticket.status = "closed"
+        ticket.save(update_fields=("status",))
+        versions = list(ticket.history.order_by("history_id").values_list("status", flat=True))
+        assert versions == ["open", "closed"]
+        assert Message._base_manager.count() == before
 
 
 @pytest.mark.django_db(transaction=True)
-def test_threaded_model_autotracks_configured_field_saves(composed_tables: None) -> None:
-    """Saving a threaded row logs configured field changes in the chatter."""
-
-    del composed_tables
-    user_model = get_user_model()
-    with system_context(reason="test threaded model autotrack setup"):
-        user = user_model.objects.create_user(username="autotracker", email="autotracker@example.com")
+def test_threaded_model_history_preserves_multiple_field_changes(composed_tables: None) -> None:
+    with system_context(reason="record history fields"):
         ticket = ThreadedTicket.objects.create(title="Initial")
-
-    assert Message._base_manager.count() == 1
-    assert not TrackingValue._base_manager.exists()
-
-    with actor_context(user):
         ticket.title = "Escalated"
         ticket.status = "closed"
         ticket.save(update_fields=("title", "status"))
-
-    message = Message._base_manager.get(message_type=Message.MessageKind.AUTO_COMMENT)
-    assert message.message_type == "auto_comment"
-    assert message.subtype is not None
-    assert message.subtype.key == "record_updated"
-    assert message.preview == "Title: Initial -> Escalated"
-    tracking = list(TrackingValue._base_manager.filter(message=message).order_by("position"))
-    assert [(item.field_name, item.field_label, item.old_display, item.new_display) for item in tracking] == [
-        ("title", "Title", "Initial", "Escalated"),
-        ("status", "Status", "Open", "Closed"),
-    ]
+        versions = list(ticket.history.order_by("history_id").values_list("title", "status"))
+        assert versions == [("Initial", "open"), ("Escalated", "closed")]
+        # The creation and the edits are history lines; no message is written.
+        assert Message._base_manager.count() == 0
 
 
 @pytest.mark.django_db(transaction=True)
-def test_threaded_model_autotracking_respects_update_fields(composed_tables: None) -> None:
-    """Saves that omit tracked fields do not create chatter noise."""
-
-    del composed_tables
-    with system_context(reason="test threaded model autotrack update-fields"):
+def test_threaded_model_history_uses_persisted_update_fields(composed_tables: None) -> None:
+    with system_context(reason="record history persisted fields"):
         ticket = ThreadedTicket.objects.create(title="Unchanged")
+        ticket.title = "Not persisted"
         ticket.status = "closed"
         ticket.save(update_fields=("status",))
-
-    assert Message._base_manager.count() == 2
-    assert TrackingValue._base_manager.get().field_name == "status"
-
-    with system_context(reason="test threaded model autotrack no tracked fields"):
-        ticket.title = "Ignored in update_fields"
-        ticket.save(update_fields=("updated_at",))
-
-    assert Message._base_manager.count() == 2
+        latest = ticket.history.order_by("-history_id").first()
+        assert (latest.title, latest.status) == ("Unchanged", "closed")
+        # The creation and the edit are history lines; no message is written.
+        assert Message._base_manager.count() == 0
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_threaded_model_schedules_and_completes_activity(composed_tables: None) -> None:
-    """A threaded model row owns Odoo-style scheduled activities."""
+@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+def test_threaded_model_schedules_and_completes_a_record_task() -> None:
+    """A threaded record carries record tasks; completing one logs it on the record."""
 
-    del composed_tables
     user_model = get_user_model()
-    with system_context(reason="test threaded model activity setup"):
+    with system_context(reason="test threaded model record task setup"):
         user = user_model.objects.create_user(username="assignee", email="assignee@example.com")
-        ticket = ThreadedTicket.objects.create(title="Activity case")
+        ticket = ChatterDoc.objects.create(title="Record task case")
+        _record_holders(ticket, writer=user)
 
     with actor_context(user):
-        activity = ticket.activity_schedule(
-            summary="Call customer",
+        ticket = ChatterDoc.objects.get(pk=ticket.pk)
+        task = ProjectTask.objects.schedule(
+            ticket,
+            title="Call customer",
             note="Ask about the rollout.",
             due_date=_AT.date(),
             activity_type="call",
         )
 
-    activity.refresh_from_db()
-    assert activity.user_id == user.pk
-    assert activity.thread_id == ThreadAttachment._base_manager.get().thread_id
-    assert activity.summary == "Call customer"
-    assert activity.note == "Ask about the rollout."
-    assert activity.due_date == _AT.date()
-    assert activity.activity_type_id == "call"
-    assert activity.status == "todo"
+    task.refresh_from_db()
+    assert task.assignee_id == user.pk
+    assert task.subject == ticket
+    assert (task.title, task.note, task.due_date) == ("Call customer", "Ask about the rollout.", _AT.date())
+    assert task.activity_type_id == "call"
+    assert task.status == "open"
     with actor_context(user):
-        assert list(ticket.activity_ids()) == [activity]
-
-    with actor_context(user):
-        completed = ticket.activity_feedback(activity, feedback="Customer confirmed.")
+        assert list(ProjectTask.objects.for_record(ticket)) == [task]
+        completed = task.complete(feedback="Customer confirmed.")
 
     completed.refresh_from_db()
     assert completed.status == "done"
-    assert completed.activity_state == "done"
-    assert completed.feedback == "Customer confirmed."
-    assert completed.completed_at is not None
-    message = Message._base_manager.get(message_type=Message.MessageKind.AUTO_COMMENT)
-    assert message.thread_id == completed.thread_id
-    assert message.direction == "internal"
-    assert message.message_type == "auto_comment"
-    assert message.subtype is not None
-    assert message.subtype.key == "activity_done"
-    assert message.preview.startswith("Activity done: Call customer")
+    assert completed.done_at is not None
+    message = Message._base_manager.get(subtype__key="activity_done")
+    assert message.thread_id == ThreadAttachment._base_manager.get(object_id=ticket.pk).thread_id
     assert Part._base_manager.select_related("fragment").get(message=message).fragment.text == (
-        "Activity done: Call customer\n\nCustomer confirmed."
+        "Call done: Call customer\n\nCustomer confirmed."
     )
-    before = Message._base_manager.count()
-    note = "  Agreed next steps.\nKeep the original spacing.\n"
-    with actor_context(user):
-        logged = ticket.activity_log("call", _AT.date(), note)
-        with pytest.raises(ValidationError, match="activity_type"):
-            ticket.activity_log("undeclared", _AT.date(), note)
-    assert logged.status == "done"
-    assert logged.user_id == logged.created_by_id == user.pk
-    assert logged.due_date == _AT.date()
-    assert logged.completed_at is not None
-    assert logged.summary == "Agreed next steps."
-    assert logged.note == note
-    assert Message._base_manager.count() == before
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1885,25 +1828,20 @@ def test_ingest_autolinks_sender_from_resolved_normalized_twin(channel: Any) -> 
             value="a.lice@gmail.com",
             created_by=owner,
         )
-        PartyHandle.objects.link(
-            alice,
-            resolved,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, resolved, asserted_by=owner, confidence=1.0)
 
     sender = _ingest_sender(
         channel=channel,
         external_id="normalized-sender-1",
         value="alice+inbound@gmail.com",
     )
-    link = PartyHandle._base_manager.filter(handle=sender, party=alice).first()
+    link = Party.statements.filter(handle=sender, subject=alice).first()
 
     assert link is not None
     sender.refresh_from_db()
     assert sender.party_id == alice.pk
     assert link.confidence == 1.0
-    assert link.source == LinkSource.EMAIL_MATCH
+    assert link.source_kind == "rule"
     assert not link.is_confirmed
 
 
@@ -1918,12 +1856,12 @@ def test_ingest_leaves_unknown_first_contact_sender_unresolved(channel: Any) -> 
     )
 
     assert sender.party_id is None
-    assert not PartyHandle._base_manager.filter(handle=sender).exists()
+    assert not Party.statements.filter(handle=sender).exists()
 
 
 @pytest.mark.django_db(transaction=True)
 def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmation(channel: Any) -> None:
-    """Repeated source claims retain evidence while human identity state remains authoritative."""
+    """Repeated source claims accumulate on the rule's statement; the person's confirmation stays authoritative."""
 
     with system_context(reason="test claimed sender proposal fixtures"):
         owner = channel.owner
@@ -1945,88 +1883,29 @@ def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmat
             )
             for index in range(1, 22)
         ]
-        link = PartyHandle.objects.link(
-            party,
-            handle,
-            confidence=1.0,
-            source=LinkSource.MANUAL,
-            is_confirmed=True,
-            created_by_id=owner.pk,
-        )
-        foreign_owner = get_user_model().objects.create_user(
-            username="foreign-sender-evidence",
-            email="foreign-sender-evidence@example.test",
-        )
-        foreign_party = Party._base_manager.create(display_name="Private evidence", created_by=foreign_owner)
-        link.metadata = {"evidence": [{"model": "messaging.Party", "id": str(foreign_party.sqid)}]}
-        link.save(update_fields=("metadata", "updated_at"))
+        confirmed = party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
 
     for message in messages:
-        PartyHandle.objects.propose_claimed_handle(
+        Party.objects.propose_claimed_handle_as_system(
             party,
             handle,
             evidence=message,
-            actor=owner,
+            reason="test claimed sender proposal",
         )
 
-    link.refresh_from_db()
-    assert link.is_confirmed
-    assert not link.is_dismissed
-    assert link.confidence == 1.0
-    assert link.source == LinkSource.MANUAL
-    assert link.metadata["evidence"] == [
-        {"model": "messaging.Party", "id": str(foreign_party.sqid)},
-        *({"model": "messaging.Message", "id": str(message.sqid)} for message in messages),
+    with system_context(reason="test claimed sender proposal read"):
+        confirmed.refresh_from_db()
+        handle.refresh_from_db()
+        claim = Party.statements.filter(subject=party, handle=handle).exclude(pk=confirmed.pk).get()
+        readable = claim.readable_evidence(owner)
+    assert confirmed.is_confirmed and not confirmed.is_dismissed
+    assert (handle.party_id, handle.party_link_confirmed) == (party.pk, True)
+    assert (claim.source_kind, claim.confidence, claim.applied) == ("rule", 0.4, False)
+    assert claim.evidence == [
+        {"model": "messaging.Message", "id": str(message.sqid), "pointer": ""} for message in messages
     ]
-    page = link.evidence_page(owner, limit=100)
-    assert len(page.items) == 20
-    assert page.truncated
-    assert [(item.model, item.id) for item in page.items] == [
-        ("messaging.Message", str(message.sqid)) for message in messages[:20]
-    ]
-    assert all(item.id != str(foreign_party.sqid) for item in page.items)
-    assert link.evidence_page(None).items == ()
-
-
-@pytest.mark.django_db(transaction=True)
-def test_claimed_sender_assessment_reports_hidden_confirmed_other_without_disclosure(channel: Any) -> None:
-    """A private conflicting owner blocks association without revealing its identity."""
-
-    actor = channel.owner
-    foreign = get_user_model().objects.create_user(
-        username="foreign-handle-owner",
-        email="foreign-handle-owner@example.test",
-    )
-    with system_context(reason="test hidden sender association fixtures"):
-        candidate = Party._base_manager.create(display_name="Candidate counterparty", created_by=actor)
-        other = Party._base_manager.create(display_name="Private counterparty", created_by=foreign)
-        handle = Handle._base_manager.create(
-            platform=Handle.Platform.EMAIL,
-            value="private-owner@example.test",
-            created_by=actor,
-        )
-        PartyHandle._base_manager.create(
-            party=other,
-            handle=handle,
-            confidence=1.0,
-            source=LinkSource.MANUAL,
-            is_confirmed=True,
-            created_by=foreign,
-        )
-        visible = PartyHandle._base_manager.create(
-            party=candidate,
-            handle=handle,
-            confidence=0.4,
-            source=LinkSource.EMAIL_MATCH,
-            created_by=actor,
-        )
-
-    assessment = PartyHandle.objects.assess_claimed_handle(candidate, handle, actor=actor)
-
-    assert PartyHandle.objects.has_confirmed_association(handle, actor=actor)
-    assert assessment.status is HandleAssociationStatus.CONFIRMED_OTHER
-    assert assessment.readable_links == (visible,)
-    assert not assessment.conflict_evidence_readable
+    assert claim.evidence_truncated
+    assert len(readable) == 20
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2039,7 +1918,7 @@ def test_ingest_retries_unknown_sender_after_late_twin_without_duplicate_links(c
         value="alice+late@gmail.com",
     )
     assert sender.party_id is None
-    assert not PartyHandle._base_manager.filter(handle=sender).exists()
+    assert not Party.statements.filter(handle=sender).exists()
 
     with system_context(reason="test ingest late sender evidence"):
         owner = channel.owner
@@ -2049,12 +1928,7 @@ def test_ingest_retries_unknown_sender_after_late_twin_without_duplicate_links(c
             value="a.lice@gmail.com",
             created_by=owner,
         )
-        PartyHandle.objects.link(
-            alice,
-            resolved,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, resolved, asserted_by=owner, confidence=1.0)
 
     retried = _ingest_sender(
         channel=channel,
@@ -2065,7 +1939,7 @@ def test_ingest_retries_unknown_sender_after_late_twin_without_duplicate_links(c
     retried.refresh_from_db()
     assert retried.pk == sender.pk
     assert retried.party_id == alice.pk
-    assert PartyHandle._base_manager.filter(handle=retried, party=alice).count() == 1
+    assert Party.statements.filter(handle=retried, subject=alice).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2080,22 +1954,17 @@ def test_ingest_keeps_dismissed_sender_suggestion_dismissed(channel: Any) -> Non
             value="a.lice@gmail.com",
             created_by=owner,
         )
-        PartyHandle.objects.link(
-            alice,
-            resolved,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, resolved, asserted_by=owner, confidence=1.0)
 
     sender = _ingest_sender(
         channel=channel,
         external_id="dismissed-sender-1",
         value="alice+dismissed@gmail.com",
     )
-    dismissed = PartyHandle._base_manager.filter(handle=sender, party=alice).first()
+    dismissed = Party.statements.filter(handle=sender, subject=alice).first()
     assert dismissed is not None
     with actor_context(owner):
-        dismissed.dismiss()
+        dismissed = dismissed.dismiss()
     assert dismissed.is_dismissed
     assert not dismissed.is_confirmed
 
@@ -2110,12 +1979,12 @@ def test_ingest_keeps_dismissed_sender_suggestion_dismissed(channel: Any) -> Non
     assert dismissed.is_dismissed
     assert not dismissed.is_confirmed
     assert sender.party_id is None
-    assert PartyHandle._base_manager.filter(handle=sender, party=alice).count() == 1
+    assert Party.statements.filter(handle=sender, subject=alice).count() == 2
 
 
 @pytest.mark.django_db(transaction=True)
 def test_ingest_suggests_sender_from_organization_domain(channel: Any) -> None:
-    """An inbound sender matching a tracked domain receives the weak organization link."""
+    """An inbound sender matching a tracked domain receives the weak organization link for review."""
 
     with system_context(reason="test ingest organization sender"):
         owner = channel.owner
@@ -2130,14 +1999,46 @@ def test_ingest_suggests_sender_from_organization_domain(channel: Any) -> None:
         external_id="organization-sender-1",
         value="bob@acme.example",
     )
-    link = PartyHandle._base_manager.filter(handle=sender, party=acme).first()
+    link = Party.statements.filter(handle=sender, subject=acme).first()
 
     assert link is not None
     sender.refresh_from_db()
-    assert sender.party_id == acme.pk
+    assert sender.party_id is None
     assert link.confidence == 0.4
-    assert link.source == LinkSource.RULE
+    assert link.source_kind == "rule"
     assert not link.is_confirmed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_automated_senders_send_only_list_or_auto_submitted_mail(channel: Any) -> None:
+    """A sender is automated only when every message it sent carries an automation header."""
+
+    mail = (
+        ("list-1", "notifications@example.test", (("list-id", "<repo.example.test>"),)),
+        ("bulk-1", "news@example.test", (("precedence", "Bulk"),)),
+        ("person-1", "ada@example.test", ()),
+        ("person-2", "ada@example.test", (("auto-submitted", "auto-replied"),)),
+        ("manual-1", "grace@example.test", (("auto-submitted", "no"),)),
+    )
+    with system_context(reason="test automated senders"):
+        for external_id, value, headers in mail:
+            parsed = ParsedMessage(
+                external_id=external_id,
+                platform="email",
+                subject="Automation",
+                sender=ParsedHandle(platform="email", value=value, display_name="Sender"),
+                body=ParsedPart(text=external_id),
+                headers=headers,
+            )
+            Message.objects.ingest([parsed], channel=channel, quote_edges=False)
+        automated = set(Message.objects.automated_sender_ids())
+        expected = set(
+            Handle._base_manager.filter(value__in=("notifications@example.test", "news@example.test")).values_list(
+                "pk", flat=True
+            )
+        )
+
+    assert automated == expected
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2152,10 +2053,10 @@ def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
     monkeypatch.setattr(
         messaging_managers.transaction,
         "on_commit",
-        lambda callback: callbacks.append(callback),
+        lambda callback, **options: callbacks.append(callback),
     )
     monkeypatch.setattr(
-        type(PartyHandle.objects),
+        type(Party.objects),
         "suggest_for",
         lambda manager, handle: suggested.append(handle.pk),
     )
@@ -2176,8 +2077,12 @@ def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
 
     assert len(landed) == 2
     assert suggested == []
-    assert len(callbacks) == 1
-    callback = callbacks[0]
+    # History capture registers its own commit callbacks; the one suggestion batch is the manager's.
+    batches = [
+        callback for callback in callbacks if getattr(callback, "__qualname__", "").startswith("MessageManager.")
+    ]
+    assert len(batches) == 1
+    callback = batches[0]
     callback()
     assert suggested == [Handle._base_manager.get(value="shared@example.com").pk]
 
@@ -2198,7 +2103,7 @@ def test_ingest_contains_suggestion_failures_and_continues_batch(
         if handle.value == "fail@example.com":
             raise RuntimeError("directory unavailable")
 
-    monkeypatch.setattr(type(PartyHandle.objects), "suggest_for", suggest)
+    monkeypatch.setattr(type(Party.objects), "suggest_for", suggest)
     messages = [
         ParsedMessage(
             external_id=f"suggest-failure-{index}",
@@ -2224,8 +2129,8 @@ def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
 
     Re-syncing the same provider event through the same channel resolves to the
     existing row; the same external id reached through a *different* channel is a
-    second message row (one row per provider event per source), while the thread —
-    platform-scoped — merges both copies into the one conversation.
+    second message row with its own channel's physical thread. Same-as evidence
+    groups readable source copies without moving either occurrence.
     """
 
     parsed = _parsed("m1", sent_at=_AT)
@@ -2241,10 +2146,10 @@ def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
     rows = list(Message._base_manager.filter(external_id="m1").order_by("pk"))
     assert len(rows) == 2
     assert {row.channel_id for row in rows} == {channel.pk, other_channel.pk}
-    # Threads stay platform-scoped, so both copies land in the same conversation.
-    assert {row.thread_id for row in rows} == {thread.pk}
+    # Source threads and counters stay physical; a same_as fold redirects, never moves.
+    assert len({row.thread_id for row in rows}) == 2
     thread.refresh_from_db()
-    assert thread.message_count == 2
+    assert thread.message_count == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2388,6 +2293,38 @@ def test_identical_resync_does_not_churn_message_or_parts(channel: Any) -> None:
     assert Fragment._base_manager.count() == fragment_count
     assert Message._base_manager.filter(external_id="m1").count() == 1
     assert Thread._base_manager.get().message_count == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_identical_resync_without_receipt_time_does_not_save_or_rebuild_parts(channel: Any, monkeypatch) -> None:
+    received = replace(_parsed("m1", sent_at=_AT), received_at=_AT + timedelta(minutes=5))
+    assert _ingest([received], channel=channel) == 1
+    message = Message._base_manager.get(external_id="m1")
+    part_pks = set(Part._base_manager.filter(message=message).values_list("pk", flat=True))
+    saves = []
+    original = Message.save
+
+    def save(row, *args, **kwargs):
+        saves.append(row.pk)
+        return original(row, *args, **kwargs)
+
+    monkeypatch.setattr(Message, "save", save)
+    assert _ingest([replace(received, received_at=None)], channel=channel) == 1
+    assert saves == []
+    message.refresh_from_db()
+    assert message.received_at == received.received_at
+    assert set(Part._base_manager.filter(message=message).values_list("pk", flat=True)) == part_pks
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resync_without_receipt_time_keeps_the_known_one(channel: Any) -> None:
+    received = replace(_parsed("m1", sent_at=_AT), received_at=_AT + timedelta(minutes=5))
+    assert _ingest([received], channel=channel) == 1
+    assert _ingest([_parsed("m1", sent_at=_AT, text="Edited body")], channel=channel) == 1
+    message = Message._base_manager.get(external_id="m1")
+    assert message.received_at == received.received_at
+    with system_context(reason="test receipt time body"):
+        assert message.body_text() == "Edited body"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2666,7 +2603,8 @@ def test_resync_with_changed_body_appends_edit_history(channel: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_read_receipts_anchor_unread_and_never_regress(composed_tables: None) -> None:
+@pytest.mark.parametrize("equal_timestamps", [False, True])
+def test_read_receipts_anchor_unread_and_never_regress(composed_tables: None, equal_timestamps: bool) -> None:
     """Unread is everything past the receipt; the receipt only ever advances.
 
     A follower with no receipt sees the whole thread unread; marking read up to the
@@ -2687,11 +2625,22 @@ def test_read_receipts_anchor_unread_and_never_regress(composed_tables: None) ->
         first = ticket.message_post("First.")
         second = ticket.message_post("Second.")
         third = ticket.message_post("Third.")
+    if equal_timestamps:
+        # Equal chronological timestamps use primary-key order, including the
+        # creation-time fallback for a provider row with no send timestamp.
+        with system_context(reason="test.receipts.equal_timestamps"):
+            Message.objects.filter(pk__in=[first.pk, second.pk, third.pk]).update(sent_at=_AT, created_at=_AT)
+            Message.objects.filter(pk=second.pk).update(sent_at=None)
+        for message in (first, second, third):
+            message.refresh_from_db()
     thread = ticket.message_thread(create=False)
     assert thread is not None
 
     def unread_pks(user: Any) -> set[Any]:
-        return set(ThreadFollower.objects.unread_messages(thread, user=user).values_list("pk", flat=True))
+        expected = set(ThreadFollower.objects.unread_messages(thread, user=user).values_list("pk", flat=True))
+        projected = ThreadedTicket.thread_messages_expression(ticket.pk).unread_for(user)
+        assert set(projected.values_list("pk", flat=True)) == expected
+        return expected
 
     # No receipt yet: the whole thread is unread for the watcher.
     assert unread_pks(watcher) == {first.pk, second.pk, third.pk}
@@ -2729,37 +2678,21 @@ def _grant(record: Any, relation: str, user: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_tracked_field_log_lands_without_post_access(composed_tables: None) -> None:
-    """An automatic tracked-field log is a system write that ignores post access.
+def test_record_history_captures_write_without_post_access(composed_tables: None) -> None:
+    """Record write and comment post are separate permissions, including capture."""
 
-    F-v part 1: a ``writer`` grant confers ``write`` (the tracked-field save) but not
-    ``post``, so ``ChatterDoc.thread_post_access="post"`` makes ``can_post`` deny the
-    actor. The tracked change and its system tracking note must both land — the save
-    is not rolled back by a post-access denial — and the thread's message count
-    increments by exactly the one tracked change.
-    """
-
-    del composed_tables
-    user_model = get_user_model()
-    with system_context(reason="test.chatterdemo.part1.seed"):
-        writer = user_model.objects.create_user(username="cdc-writer", email="cdc-writer@example.com")
+    with system_context(reason="history write setup"):
+        writer = get_user_model().objects.create_user(username="history-writer", email="history@example.com")
         doc = ChatterDoc.objects.create(title="Document 1", status="open")
+        before = Message._base_manager.count()
     _grant(doc, "writer", writer)
-
     with actor_context(writer):
+        assert not doc.can_post()
         doc.status = "closed"
         doc.save(update_fields=["status"])
-
-    with system_context(reason="test.chatterdemo.part1.read"):
-        doc.refresh_from_db()
-        assert doc.status == "closed"
-        thread = doc.message_thread(create=False)
-        assert thread is not None
-        assert thread.message_count == 2
-        logs = list(Message._base_manager.filter(thread=thread, message_type=Message.MessageKind.AUTO_COMMENT))
-        assert len(logs) == 1
-        assert logs[0].message_type == Message.MessageKind.AUTO_COMMENT
-        assert [value.field_name for value in logs[0].tracking_values.all()] == ["status"]
+    with system_context(reason="history write read"):
+        assert doc.history.order_by("-history_id").first().status == "closed"
+        assert Message._base_manager.count() == before
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2799,7 +2732,6 @@ def _collecting_broadcasts(
     sent: list[tuple[Any, dict[str, Any]]] = []
     monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append((model, payload)))
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
-    publishing.connect_change_broadcast_receiver()
     already_wired = {model: publishing.disconnect_publishers(model) for model in models}
     for model in models:
         publishing.connect_publishers(model)
@@ -2847,13 +2779,14 @@ def test_post_bumps_thread_through_an_instance_save(composed_tables: None) -> No
     finally:
         post_save.disconnect(sender=Thread, dispatch_uid="test-thread-bump-probe")
 
-    # One thread INSERT and one bump each for the creation note and the explicit post.
+    # One thread INSERT and one bump for the explicit post; the record's creation is a
+    # history line, not a message, so it bumps nothing.
     bumps = [row for row in saves if not row["created"]]
-    assert len(bumps) == 2
+    assert len(bumps) == 1
     assert all({"message_count", "last_message_at"} <= bump["update_fields"] for bump in bumps)
 
     thread = Thread._base_manager.get()
-    assert thread.message_count == 2
+    assert thread.message_count == 1
     assert thread.last_message_at == message.sent_at
 
 

@@ -6,6 +6,8 @@
  * escape (both of which browsers resolve to another origin).
  *
  * Client-side validation is defense-in-depth; the server is the real boundary.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function safeRedirectPath(
   value: string | null | undefined,

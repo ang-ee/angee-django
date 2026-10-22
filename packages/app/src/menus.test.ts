@@ -290,14 +290,16 @@ describe("compileMenus", () => {
     const iam: MenuLayer = { id: "iam", routes: [{ name: "iam.users" }], menus: { iam: {}, "iam.users": { parent: "iam", route: "iam.users" } } };
     const deskMenus: MenuDeclarations = {
       desk: {},
-      "desk.people": { parent: "desk", mount: "iam.users", path: "people", label: "People", defaultResourceView: "desk.staff" },
+      "desk.people": { parent: "desk", mount: "iam.users", path: "people", label: "People", defaultResourceView: "desk.staff",
+        defaultFilter: { kind: { exact: "staff" } } },
       "desk.admin": { parent: "desk" },
       "desk.admin.users": { parent: "desk.admin", mount: "iam.users", path: "/admin/users/", recordMatch: { field: "kind", equals: "admin" } },
     };
     const desk: MenuLayer = { id: "desk", dependsOn: ["iam"], menus: deskMenus };
     const compiled = compileMenus([iam, desk]);
     expect(compiled.mounts).toEqual([
-      { id: "desk.people", route: "iam.users", path: "/desk/people", by: "desk", defaultResourceView: "desk.staff" },
+      { id: "desk.people", route: "iam.users", path: "/desk/people", by: "desk", defaultResourceView: "desk.staff",
+        defaultFilter: { kind: { exact: "staff" } } },
       { id: "desk.admin.users", route: "iam.users", path: "/desk/admin/users", by: "desk", recordMatch: { field: "kind", equals: "admin" } },
     ]);
     // The node routes to its alias, which carries its default view; mount fields never reach the chrome.
@@ -333,6 +335,10 @@ describe("compileMenus", () => {
     expect(() => compileMenus(desk({ "desk.people": { ...people, params: { id: "1" } } }))).toThrow(/with params/);
     expect(() => compileMenus(desk({ "desk.people": { parent: "desk", route: "iam.users", recordMatch: { field: "kind", equals: "staff" } } })))
       .toThrow(/sets recordMatch, which only a mount claims/);
+    expect(() => compileMenus(desk({ "desk.people": { parent: "desk", route: "iam.users", defaultFilter: { kind: "staff" } } })))
+      .toThrow(/sets defaultFilter, which only a mount owns/);
+    expect(() => compileMenus(desk({ "desk.people": { ...people, defaultFilter: [] } } as unknown as MenuDeclarations)))
+      .toThrow(/defaultFilter must be a filter mapping/);
     expect(() => compileMenus(desk({ "desk.people": { parent: "desk", route: "iam.users", path: "people" } })))
       .toThrow(/sets path, which only an app or a mount has/);
     expect(() => compileMenus(desk({ "desk.people": { ...people, recordMatch: { field: "kind" } } } as unknown as MenuDeclarations)))

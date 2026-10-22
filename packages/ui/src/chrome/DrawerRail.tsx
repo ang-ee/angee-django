@@ -35,6 +35,8 @@ const drawerRailVariants = tv({
  * Renders nothing when the edge has no contributed drawers. JetBrains-style:
  * every drawer toggle lives on the edge stripe (panes toggle from the TopBar).
  * Route admission closes a drawer whose tab is no longer present.
+ * @kind region
+ * @region drawer-rail
  */
 export function DrawerRail({ edge }: { edge: DrawerEdge }): ReactElement | null {
   const drawers = useDrawers(edge);

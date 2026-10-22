@@ -14,7 +14,6 @@ from django.db.models.functions import Now
 from django.utils import timezone
 from rebac import actor_context, system_context
 
-from angee.base.scoping import system_queryset
 from angee.integrate import scheduler
 from angee.integrate import sync_runner as integrate_sync_runner
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
@@ -66,7 +65,7 @@ def dispatch(bridge):
         bridge._meta.label_lower, bridge.pk, now, require_queue_token=True,
     ) == {"ok": True, "items": 0, "skipped": False, "dispatched": True}
     bridge.refresh_from_db()
-    return system_queryset(WorkflowRun).get(pk=bridge.sync_run_id)
+    return WorkflowRun.system_queryset().get(pk=bridge.sync_run_id)
 
 
 def test_scheduler_dispatches_once_and_request_replay_keeps_the_original_input(
@@ -92,7 +91,7 @@ def test_scheduler_dispatches_once_and_request_replay_keeps_the_original_input(
     assert scheduler.enqueue_due_bridges(now=now + timedelta(minutes=10)) == {"enqueued": 0, "skipped": 0}
 
     bridge.refresh_from_db()
-    run = system_queryset(WorkflowRun).get(pk=bridge.sync_run_id)
+    run = WorkflowRun.system_queryset().get(pk=bridge.sync_run_id)
     content_type = ContentType.objects.get_for_model(bridge, for_concrete_model=False)
     assert run.request_key == f"bridge-sync:{content_type.pk}:{bridge.pk}:{now.isoformat()}"
     assert run.run_as_id == bridge.owner_id
@@ -102,7 +101,7 @@ def test_scheduler_dispatches_once_and_request_replay_keeps_the_original_input(
         bridge.save(update_fields=["config"])
     assert bridge.sync() is SyncDispatch.DISPATCHED
     assert snapshots == [bridge.pk]
-    assert system_queryset(WorkflowRun).for_subject(bridge).count() == 1
+    assert WorkflowRun.system_queryset().for_subject(bridge).count() == 1
     run.refresh_from_db()
     assert run.input == {"value": 7}
     assert bridge.sync_is_dispatched and bridge.next_sync_at is None
@@ -127,10 +126,10 @@ def test_delayed_delivery_reads_the_current_cycle_under_its_row_lock(cycle_facto
                 bridge._meta.label_lower, bridge.pk, now, require_queue_token=True,
             )["dispatched"] is True
             bridge.refresh_from_db()
-            run = system_queryset(WorkflowRun).get(pk=bridge.sync_run_id)
+            run = WorkflowRun.system_queryset().get(pk=bridge.sync_run_id)
             if terminal:
                 run_until(run)
-            observed.update(system_queryset(SyncCycleTestBridge).filter(pk=bridge.pk).values(*fields).get())
+            observed.update(SyncCycleTestBridge.system_queryset().filter(pk=bridge.pk).values(*fields).get())
         return bridge_model(model_label)
 
     monkeypatch.setattr(integrate_sync_runner, "_bridge_model", first_delivery_wins)
@@ -143,8 +142,8 @@ def test_delayed_delivery_reads_the_current_cycle_under_its_row_lock(cycle_facto
         {"ok": True, "items": 0, "skipped": True, "stale": True} if terminal else
         {"ok": True, "items": 0, "skipped": False, "dispatched": True}
     )
-    assert system_queryset(SyncCycleTestBridge).filter(pk=bridge.pk).values(*fields).get() == observed
-    assert system_queryset(WorkflowRun).for_subject(bridge).count() == 1
+    assert SyncCycleTestBridge.system_queryset().filter(pk=bridge.pk).values(*fields).get() == observed
+    assert WorkflowRun.system_queryset().for_subject(bridge).count() == 1
     bridge.refresh_from_db()
     assert bridge.sync_is_dispatched is not terminal
 
@@ -184,7 +183,7 @@ def test_duplicate_delivery_cannot_clear_the_winners_queue_token(cycle_factory, 
 
     bridge.refresh_from_db()
     assert bridge.sync_is_dispatched
-    run = system_queryset(WorkflowRun).for_subject(bridge).get()
+    run = WorkflowRun.system_queryset().for_subject(bridge).get()
     run_until(run)
     bridge.refresh_from_db()
     assert run.status == RunStatus.SUCCEEDED and bridge.sync_stage == Bridge.SyncStage.COMPLETED
@@ -257,7 +256,7 @@ def test_failure_and_worker_timeout_settle_the_bridge_as_failed(cycle_factory, r
     assert bridge.runtime_status == IntegrationRuntimeStatus.ERROR
     assert before + timedelta(seconds=37) <= bridge.next_sync_at <= after + timedelta(seconds=37)
     assert bridge.settle_dispatch(run.pk) is False
-    attempt = system_queryset(StepAttempt).get(step_run__run=run)
+    attempt = StepAttempt.system_queryset().get(step_run__run=run)
     assert attempt.result == ("timed_out" if timeout else "failed")
 
 
@@ -269,7 +268,7 @@ def test_success_sums_stream_outputs_including_mapped_partitions(cycle_factory, 
 
         def run(self, ctx):
             return ctx.done(StreamStageOutput(
-                counts={"cycle_items": int(ctx.input.partition)}, discrepancy_ids=[], evidence=[],
+                counts={"cycle_items": int(ctx.input.partition)}, failure_ids=[], evidence=[],
             ))
 
     register_step(CountedStream)
@@ -294,7 +293,7 @@ def test_success_sums_stream_outputs_including_mapped_partitions(cycle_factory, 
     run_until(run)
     bridge.refresh_from_db()
     assert run.status == RunStatus.SUCCEEDED
-    assert system_queryset(StepRun).filter(run=run, node_key="partitions.body").count() == 2
+    assert StepRun.system_queryset().filter(run=run, node_key="partitions.body").count() == 2
     assert bridge.last_sync_items == 10
     assert bridge.sync_stage == Bridge.SyncStage.COMPLETED
     assert bridge.sync_error == "" and bridge.runtime_status == IntegrationRuntimeStatus.OK
@@ -317,7 +316,7 @@ def test_operator_retry_reclaims_the_same_cycle_and_settles_again(cycle_factory,
     run_until(run)
     bridge.refresh_from_db()
     assert run.status == RunStatus.FAILED and not bridge.sync_is_dispatched
-    failed = system_queryset(StepRun).get(run=run)
+    failed = StepRun.system_queryset().get(run=run)
 
     ready = StepRun.objects.retry_step(failed, actor=bridge.owner)
 
@@ -331,7 +330,7 @@ def test_operator_retry_reclaims_the_same_cycle_and_settles_again(cycle_factory,
     assert run.status == RunStatus.SUCCEEDED
     assert bridge.sync_stage == Bridge.SyncStage.COMPLETED
     assert bridge.runtime_status == IntegrationRuntimeStatus.OK
-    assert system_queryset(WorkflowRun).for_subject(bridge).count() == 1
+    assert WorkflowRun.system_queryset().for_subject(bridge).count() == 1
 
 
 def test_operator_retry_preserves_an_active_cycle_after_delivery_exhaustion(cycle_factory, settings):
@@ -341,7 +340,7 @@ def test_operator_retry_preserves_an_active_cycle_after_delivery_exhaustion(cycl
     run = dispatch(bridge)
     started_at = bridge.last_sync_started_at
     progress = bridge.sync_progress
-    row = system_queryset(StepRun).get(run=run)
+    row = StepRun.system_queryset().get(run=run)
     for _ in range(2):
         with system_context(reason="test bridge cycle delivery exhaustion"):
             StepRun.objects.filter(pk=row.pk).update(dispatched_at=Now() - timedelta(seconds=61))
@@ -363,8 +362,8 @@ def test_operator_retry_preserves_an_active_cycle_after_delivery_exhaustion(cycl
     run_until(run)
     bridge.refresh_from_db()
     assert run.status == RunStatus.SUCCEEDED and bridge.sync_stage == Bridge.SyncStage.COMPLETED
-    assert system_queryset(WorkflowRun).for_subject(bridge).count() == 1
-    assert system_queryset(StepAttempt).filter(step_run__run=run).count() == 1
+    assert WorkflowRun.system_queryset().for_subject(bridge).count() == 1
+    assert StepAttempt.system_queryset().filter(step_run__run=run).count() == 1
     assert bridge.settle_dispatch(run.pk, result=99) is False
 
 
@@ -377,7 +376,7 @@ def test_admission_refuses_a_second_active_cycle(cycle_factory):
 
     bridge.refresh_from_db()
     assert bridge.sync_run_id == run.pk and bridge.sync_is_dispatched
-    assert system_queryset(WorkflowRun).for_subject(bridge).count() == 1
+    assert WorkflowRun.system_queryset().for_subject(bridge).count() == 1
 
 
 def test_connect_grants_the_regular_owner_start_access_before_dispatch(cycle_factory):
@@ -387,14 +386,14 @@ def test_connect_grants_the_regular_owner_start_access_before_dispatch(cycle_fac
         workflow.require_access("start", bridge.owner)
     with pytest.raises(PermissionDenied):
         bridge.sync()
-    assert not system_queryset(WorkflowRun).for_subject(bridge).exists()
+    assert not WorkflowRun.system_queryset().for_subject(bridge).exists()
 
     with system_context(reason="test connect grants sync workflow starter"):
         bridge.connect()
 
     workflow.require_access("start", bridge.owner)
     assert bridge.sync() is SyncDispatch.DISPATCHED
-    run = system_queryset(WorkflowRun).for_subject(bridge).get()
+    run = WorkflowRun.system_queryset().for_subject(bridge).get()
     assert run.run_as_id == bridge.owner_id
     assert bridge.lifecycle == IntegrationLifecycle.CONNECTED
 

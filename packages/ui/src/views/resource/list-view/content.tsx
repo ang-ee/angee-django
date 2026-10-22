@@ -4,7 +4,6 @@ import { ResourceQuery, modelLabelSegment, useModelMetadata } from "@angee/metad
 import type { ModelFieldMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { titleCase } from "../../../lib/titleCase";
-import { LoadingPanel } from "../../../fragments/LoadingPanel";
 import { BoardView } from "../BoardView";
 import { GroupedBoardBody } from "../board/grouped";
 import { type ResourceViewContextValue } from "../resource-view-context";
@@ -12,7 +11,7 @@ import { type ResourceViewFilter, type ResourceViewGroup, type ResourceViewKind 
 import { DeletePreviewDialog } from "../../tree/DeletePreviewDialog";
 import { type GroupedResourceViewSurface, type ResourceViewSurface } from "../resource-view-surface";
 import { GroupedListBody } from "../GroupedList";
-import { FlatListBody, ListEmpty, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
+import { FlatListBody, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
 import { ResourceListFrame } from "../ResourceListFrame";
 import { listChromeState, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps } from "../resource-view-types";
 import { DeclaredBoardCardBody } from "../board/cards";
@@ -27,7 +26,9 @@ import { useResourceSearch } from "../search/use-resource-search";
 import { useSearchCatalog } from "../search/catalog";
 import type { ResourceToolbarProps } from "../../../toolbars";
 import { PAGE_SIZE_OPTIONS } from "../page-size";
+import { EMPTY_SELECTED_IDS } from "../resource-view-codecs";
 import { ResourceViewUtilities } from "../resource-view-utilities";
+import { PaneListBody } from "./pane-list-body";
 interface ListViewContentProps<TRow extends Row> {
   source?: ListViewProps<TRow>["source"];
   textFilterField?: string | null;
@@ -35,9 +36,10 @@ interface ListViewContentProps<TRow extends Row> {
   toolbarWrap?: boolean;
   tableLayout: ListViewProps<TRow>["tableLayout"];
   headerVisibility: ListViewProps<TRow>["headerVisibility"];
-  selectable: ListViewProps<TRow>["selectable"];
+  selectable: boolean;
   renderGroupLabel?: ListViewProps<TRow>["renderGroupLabel"];
-  renderItem?: ListViewProps<TRow>["renderItem"];
+  renderPaneRow?: ListViewProps<TRow>["renderPaneRow"];
+  pane?: ListViewProps<TRow>["pane"];
   surface: ResourceViewSurface<TRow> | GroupedResourceViewSurface<TRow>;
   resource: string;
   resolvedColumns: readonly ColumnDescriptor<TRow>[];
@@ -83,9 +85,10 @@ export function ListViewContent<TRow extends Row = Row>({
   toolbarWrap,
   tableLayout = "auto",
   headerVisibility = "visible",
-  selectable: declaredSelectable,
+  selectable,
   renderGroupLabel,
-  renderItem,
+  renderPaneRow,
+  pane,
   surface,
   resource,
   resolvedColumns,
@@ -130,7 +133,7 @@ export function ListViewContent<TRow extends Row = Row>({
   );
   const catalog = useSearchCatalog({
     query: source?.query,
-    search: searchDeclaration, renderItem: Boolean(renderItem),
+    search: searchDeclaration,
     inferOptions: !source,
     serverGrouping: !clientRowModel,
     columns: resolvedColumns,
@@ -147,9 +150,11 @@ export function ListViewContent<TRow extends Row = Row>({
     textFilterField: declaredTextField,
   });
   const interactive = Boolean(onRowClick || rowHref);
+  const resolvedChrome = listChromeState(presentation, chrome, { ...surface.list, queryDirty: resourceView.queryDirty });
+  const selectedIds = selectable ? surface.selectedIds : EMPTY_SELECTED_IDS;
   const bulkDelete = useBulkDelete(
     source ? "" : resource,
-    surface.selectedIds,
+    selectedIds,
     resourceView.clearSelectedIds,
   );
   const cardActionContext = React.useMemo(
@@ -183,9 +188,7 @@ export function ListViewContent<TRow extends Row = Row>({
   [declaredCardColumns, modelMetadata]);
   const resolvedRenderCard = renderCard ?? (boardCard ? boardCardBody : undefined);
   const search = useResourceSearch({ resourceView, catalog, groupStack: effectiveGroupStack,
-    groupingEnabled: !renderItem && !boardGroupingPinned, maxGroupDepth });
-  const resolvedChrome = listChromeState(presentation, chrome, { ...surface.list, queryDirty: search.queryDirty });
-  const selectable = declaredSelectable ?? !resolvedChrome.compact;
+    groupingEnabled: !boardGroupingPinned, maxGroupDepth });
   const heading = chrome?.heading ?? (resolvedChrome.compact
     ? { label: modelMetadata?.pluralLabel ?? modelMetadata?.label ?? titleCase(modelLabelSegment(resource)) }
     : undefined);
@@ -196,7 +199,7 @@ export function ListViewContent<TRow extends Row = Row>({
       value={{
         resource: modelMetadata?.resource.modelLabel ?? resource,
         filter: effectiveFilter,
-        selectedIds: surface.selectedIds,
+        selectedIds,
         selectable,
         fields: resolvedColumns.flatMap((column) => column.field ? [column.field] : []),
         refresh: () => void surface.list.refetch(),
@@ -204,6 +207,10 @@ export function ListViewContent<TRow extends Row = Row>({
     />
   );
   const toolbar: ResourceToolbarProps = {
+    pane: renderPaneRow ? pane ?? {} : pane,
+    sortOptions: resolvedColumns.flatMap((column) => column.field && column.sortable !== false
+      ? [{ value: column.field, label: typeof column.header === "string" ? column.header : column.field }] : []),
+    sorting: resourceView.state.sorting, onSortingChange: resourceView.setSorting,
     search, chrome: resolvedChrome, wrap: toolbarWrap, actions: toolbarActions,
     utilityActions: contributedUtilities, availableViews, pager: surface.list,
     view: resourceView.state.view, searchDeclaration, modelMetadata,
@@ -216,6 +223,14 @@ export function ListViewContent<TRow extends Row = Row>({
     pagerMaxPageSize: clientRowModel ? undefined : MAX_PAGE_SIZE,
   };
 
+  const domainBulkActions = selectable && selectedIds.size > 0
+    ? bulkActions?.(selectedIds, resourceView.clearSelectedIds, {
+      filter: surface.mergedFilter,
+      // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
+      selectedRows: resourceView.selectedRows as readonly TRow[],
+    }) : null;
+  const replacesDelete = domainBulkActions != null && domainBulkActions !== false;
+
   return (
     <ResourceListFrame
       heading={heading}
@@ -224,17 +239,14 @@ export function ListViewContent<TRow extends Row = Row>({
       compact={resolvedChrome.compact}
       toolbar={toolbar}
       selection={selectable ? {
-        count: surface.selectedIds.size,
+        count: selectedIds.size,
         onClear: resourceView.clearSelectedIds,
         onDelete:
-          !source && !bulkActions && bulkDelete.canDelete
+          !source && !replacesDelete && bulkDelete.canDelete
             ? bulkDelete.deleteInitiate
             : undefined,
-        deletePending: !bulkActions && bulkDelete.isPending,
-        actions:
-          bulkActions && surface.selectedIds.size > 0
-            ? bulkActions(surface.selectedIds, resourceView.clearSelectedIds)
-            : undefined,
+        deletePending: !replacesDelete && bulkDelete.isPending,
+        actions: replacesDelete ? domainBulkActions : undefined,
       } : undefined}
       error={surface.list.error}
       onRetry={() => void surface.list.refetch()}
@@ -261,13 +273,9 @@ export function ListViewContent<TRow extends Row = Row>({
         ) : null
       }
     >
-      {renderItem ? (
-        surface.rowModels.length > 0 ? <ol
-          start={(surface.list.page - 1) * surface.list.pageSize + 1}
-          className="min-h-0 flex-1 list-decimal space-y-6 overflow-auto p-4 pl-10"
-        >{surface.rowModels.map((row) => <li key={row.id}>{renderItem(row.original)}</li>)}</ol>
-          : surface.list.fetching ? <LoadingPanel message={t("list.loading")} />
-            : <ListEmpty className="p-6">{emptyContent}</ListEmpty>
+      {renderPaneRow ? (
+        <PaneListBody surface={surface} renderRow={renderPaneRow} renderGroupLabel={renderGroupLabel}
+          groupStack={effectiveGroupStack} emptyContent={emptyContent} toolbar={toolbar} />
       ) : surface.kind === "grouped" && resourceView.state.view === "board" ? (
         <GroupedBoardBody
           columns={resolvedColumns}
@@ -311,7 +319,7 @@ export function ListViewContent<TRow extends Row = Row>({
           setGroupsExpanded={surface.setGroupsExpanded}
           setScopePage={surface.setScopePage}
           setScopePageSize={surface.setScopePageSize}
-          selectedIds={surface.selectedIds}
+          selectedIds={selectedIds}
           interactive={interactive}
           rowHref={rowHref}
           renderRowActions={renderRowActions}
@@ -328,7 +336,7 @@ export function ListViewContent<TRow extends Row = Row>({
           groups={surface.groupedRows}
           resourceView={resourceView}
           modelMetadata={modelMetadata}
-          selectedIds={surface.selectedIds}
+          selectedIds={selectedIds}
           interactive={interactive}
           fetching={surface.list.fetching}
           emptyContent={emptyContent}

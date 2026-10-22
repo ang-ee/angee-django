@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 
-import { invalidateAuthoredQueries } from "../query-invalidation";
+import { createAuthoredLiveInvalidation, invalidateAuthoredQueries } from "../query-invalidation";
 import type { TypedDocumentNode } from "../typed-document";
 import { ActiveDataProviderNameProvider } from "./data-provider-context";
 import {
@@ -223,6 +223,28 @@ describe("useAuthoredQueryBatch", () => {
       );
     });
     expect(batchMock.calls).toHaveLength(2);
+  });
+
+  test("related-record changes invalidate only the matching batch entry", async () => {
+    for (const id of ["folder-a", "folder-b"]) {
+      batchMock.handlers.set(`drive-a/${id}`, async () => data(id, "drive-a", id));
+    }
+    const client = createQueryClient();
+    renderHook(() => useAuthoredQueryBatch(["folder-a", "folder-b"].map((id) => ({
+      ...scope(id, "drive-a", id),
+      models: ["storage.Folder", "workflows.WorkflowRun"],
+      records: [{ model: "storage.Folder", id }],
+      relatedModels: ["workflows.WorkflowRun"],
+    }))), { wrapper: ({ children }) => <Providers client={client}>{children}</Providers> });
+    await waitFor(() => expect(batchMock.calls).toHaveLength(2));
+    const live = createAuthoredLiveInvalidation(client);
+    await act(async () => {
+      live.push({ model: "workflows.WorkflowRun", id: "run-1",
+        relatedRecords: [{ model: "storage.Folder", id: "folder-a" }] });
+    });
+    await waitFor(() => expect(batchMock.calls).toHaveLength(3));
+    expect(batchMock.calls[2]?.parent).toBe("folder-a");
+    live.clear();
   });
 
   test("tears down live interest when the batch becomes empty", async () => {

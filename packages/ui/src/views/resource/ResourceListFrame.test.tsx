@@ -58,7 +58,7 @@ test("a compact heading row carries the count, create and toolbar actions instea
   expect(within(row).getByRole("button", { name: "Import" })).toBeTruthy();
   fireEvent.click(within(row).getByRole("button", { name: "New address" }));
   expect(onCreate).toHaveBeenCalledOnce();
-  expect(screen.queryByRole("region", { name: "Data controls" })).toBeNull();
+  expect(screen.queryByRole("toolbar", { name: "Data controls" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
 });
 
@@ -68,7 +68,7 @@ test("a compact list renders its enabled controls inline, below the heading row"
       chrome: { search: true, pager: true, viewSwitcher: false } }}>
     <p>Rows</p>
   </ResourceListFrame>);
-  const controls = screen.getByRole("region", { name: "Data controls" });
+  const controls = screen.getByRole("toolbar", { name: "Data controls" });
   expect(within(controls).getByRole("button", { name: "Next page" })).toBeTruthy();
   expect(within(controls).queryByRole("button", { name: "New address" })).toBeNull();
   expect(screen.getAllByRole("button", { name: "New address" })).toHaveLength(1);
@@ -81,7 +81,7 @@ test("a compact list whose host owns the heading keeps its verbs in the toolbar"
     <p>Rows</p>
   </ResourceListFrame>);
   expect(screen.queryByRole("heading")).toBeNull();
-  const controls = screen.getByRole("region", { name: "Data controls" });
+  const controls = screen.getByRole("toolbar", { name: "Data controls" });
   expect(within(controls).getByRole("button", { name: "New address" })).toBeTruthy();
 });
 

@@ -165,6 +165,7 @@ class OAuthCredentialHandler(CredentialKindHandler):
             self.kind,
             renewed_material,
             external_account=credential.external_account,
+            reconnect=False,
         )
         credential.refresh_from_db()
 

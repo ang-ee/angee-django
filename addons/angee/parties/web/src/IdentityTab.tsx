@@ -1,98 +1,55 @@
 import * as React from "react";
-import {
-  ListView,
-  Tag,
-  NavLink,
-  type ListColumn,
-  type RecordPanelContext,
-  useRouteSearch,
-  useResourceRecordHrefLookup,
-} from "@angee/ui";
+import { Alert, ListView, type ListColumn, type RecordPanelContext, useRouteSearch } from "@angee/ui";
 
 import { usePartiesT } from "./i18n";
-import {
-  usePartyHandleRowActions,
-  type PartyHandleActionRow,
-} from "./party-handle-row-actions";
-
-type LinkRow = PartyHandleActionRow & {
-  confidence?: number;
-  evidence_refs?: Array<{ model: string; id: string }>;
-  evidence_truncated?: boolean;
-};
-
-function linkState(row: LinkRow, t: ReturnType<typeof usePartiesT>): React.ReactElement {
-  if (row.is_dismissed) return <Tag tone="neutral">{t("identity.state.dismissed")}</Tag>;
-  if (row.is_confirmed) return <Tag tone="success">{t("identity.state.confirmed")}</Tag>;
-  return <Tag tone="warning">{t("identity.state.suggested")}</Tag>;
-}
+import { useIdentityClaimColumns, type IdentityClaimRow } from "./identity-columns";
+import { usePartyStatementRowActions } from "./party-statement-row-actions";
 
 /**
- * The person's identity claims — every party↔handle link with its confidence and
+ * The party's identity claims — every handle statement with its confidence and
  * the two review verbs. Confirm outranks any synced score; dismiss is the durable
  * anti-link (the pair is never re-proposed), so both stay visible here instead of
  * silently vanishing.
  */
 export function IdentityTab({ recordId, form }: RecordPanelContext): React.ReactElement {
   const t = usePartiesT();
-  const rowActions = usePartyHandleRowActions<LinkRow>("remaining");
-  const recordHref = useResourceRecordHrefLookup();
+  const rowActions = usePartyStatementRowActions<IdentityClaimRow>("remaining");
+  const shared = useIdentityClaimColumns<IdentityClaimRow>();
   const search = useRouteSearch();
-  const focusedHandle = typeof search.partyHandle === "string" ? search.partyHandle : "";
+  const focusedHandle = typeof search.partyStatement === "string" ? search.partyStatement : "";
 
-  const columns = React.useMemo<readonly ListColumn<LinkRow>[]>(
+  const columns = React.useMemo<readonly ListColumn<IdentityClaimRow>[]>(
     () => [
       { field: "handle.value", header: t("identity.handle") },
       { field: "handle.platform", header: t("identity.platform") },
-      { field: "confidence" },
-      {
-        field: "source",
-        header: t("identity.claim"),
-        render: (row) => row.source === "EMAIL_MATCH"
-          ? t("identity.senderClaim")
-          : String(row.source ?? ""),
-      },
-      {
-        field: "evidence_refs",
-        header: t("identity.evidence"),
-        render: (row) => row.evidence_refs?.length
-          ? <span className="flex flex-wrap gap-2">{row.evidence_refs.map((ref, index) => {
-            const href = recordHref(ref.model, ref.id);
-            return href ? <NavLink key={`${ref.model}:${ref.id}`} href={href} variant="inline">
-              {t("identity.evidenceSource", { number: index + 1 })}
-            </NavLink> : null;
-          })}{row.evidence_truncated ? <span>{t("identity.evidenceTruncated")}</span> : null}</span>
-          : t("identity.evidenceUnavailable"),
-      },
-      {
-        field: "is_confirmed",
-        header: t("identity.state"),
-        render: (row) => linkState(row, t),
-      },
+      shared.confidence,
+      { field: "source_kind", header: t("identity.claim") },
+      shared.evidence,
+      shared.state,
     ],
-    [recordHref, t],
+    [shared, t],
   );
 
   return (
     <div className="grid gap-3">
-      <p className="text-13 text-fg-muted">{t("identity.authenticationScope")}</p>
-      <ListView<LinkRow>
-        resource="parties.PartyHandle"
+      <Alert tone="info">{t("identity.authenticationScope")}</Alert>
+      <ListView<IdentityClaimRow>
+        resource="parties.PartyStatement"
         presentation="embedded"
         fields={[
           "id",
           "handle.value",
           "handle.platform",
           "confidence",
-          "source",
-          "evidence_refs.model",
-          "evidence_refs.id",
+          "source_kind",
+          "evidence.model",
+          "evidence.id",
           "evidence_truncated",
           "is_confirmed",
           "is_dismissed",
         ]}
         baseFilter={{
-          party: { exact: recordId },
+          subject: { exact: recordId },
           ...(focusedHandle ? { id: { exact: focusedHandle } } : {}),
         }}
         columns={columns}

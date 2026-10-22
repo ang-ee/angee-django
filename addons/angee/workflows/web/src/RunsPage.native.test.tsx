@@ -86,7 +86,7 @@ test("routed record uses the framework action menu, facts and retained JSON", as
 
 test("empty run facts are omitted", async () => {
   render(<RunStory run={runFixture({ finished_at: null })} />);
-  await screen.findByRole("heading", { name: "Record review run" });
+  await screen.findByRole("heading", { name: "Record review" });
   for (const label of ["Finished", "Outcome", "Reprocess of", "Parent run", "Trigger event"]) {
     expect(screen.queryByText(label)).toBeNull();
   }
@@ -95,7 +95,7 @@ test("empty run facts are omitted", async () => {
 test("populated run facts remain visible", async () => {
   render(<RunStory run={runFixture({ outcome: "approved", outcome_label: "Approved", reprocess_of: { id: "wfr_previous" },
     parent_step: { id: "wsr_parent", run: { id: "wfr_parent" } }, trigger_event: { id: "wte_review" } })} />);
-  await screen.findByRole("heading", { name: "Record review run" });
+  await screen.findByRole("heading", { name: "Record review" });
   await screen.findByText("Approved");
   for (const label of ["Finished", "Outcome", "Reprocess of", "Parent run", "Trigger event"]) {
     expect(screen.getByText(label)).toBeTruthy();
@@ -123,9 +123,12 @@ test("retained evidence links readable records and marks redacted records", asyn
     { id: "wre_hidden", record_model: null, record_id: null },
   ]} onRequest={(request) => requests.push(request)} />);
   fireEvent.click(await screen.findByRole("tab", { name: "Records" }));
-  expect((await screen.findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
-  expect(await screen.findByText("Record unavailable")).toBeTruthy();
-  expect(requests.find(({ query }) => query.includes("steprecord("))?.variables.where)
+  // The run's subject is the same note: its header reference carries the same name, so read the pane.
+  const records = await screen.findByRole("tabpanel", { name: "Records" });
+  expect((await within(records).findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
+  expect(await within(records).findByText("Record unavailable")).toBeTruthy();
+  // The header's related read also selects step records; the Records tab's list read pages them.
+  expect(requests.find(({ query, variables }) => query.includes("steprecord(") && variables.limit !== undefined)?.variables.where)
     .toEqual({ _and: [{ run: { _eq: "wfr_review" } }] });
 });
 
@@ -168,7 +171,7 @@ test("reprocess confirms then navigates to the returned replacement through the 
   await waitFor(() => expect(requests.filter(({ query }) => query.includes("mutation"))).toHaveLength(1));
   expect(await screen.findByText("Run reprocessed.")).toBeTruthy();
   await waitFor(() => expect(requests.some(({ query, variables }) => query.includes("workflowrun_by_pk") && variables.id === "wfr_replacement")).toBe(true));
-  expect(await screen.findByRole("heading", { name: "Record review run" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Record review" })).toBeTruthy();
 });
 
 test("cancel reports the backend outcome through the shared action lifecycle", async () => {
@@ -191,7 +194,7 @@ test("step rows are paged in execution order without per-row detail queries", as
   await screen.findByText("step-9");
   expect(screen.queryByText("step-10")).toBeNull();
   expect(requests.some(({ query }) => query.includes("steprun_by_pk"))).toBe(false);
-  expect(requests.find(({ query }) => /\bsteprun\s*\(/.test(query))?.variables).toMatchObject({
+  expect(requests.find(({ query, variables }) => /\bsteprun\s*\(/.test(query) && variables.limit !== undefined)?.variables).toMatchObject({
     where: { _and: [{ run: { _eq: "wfr_review" } }] }, limit: 10, offset: 0, order_by: { rank: "asc", map_index: "asc" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Next page" }));
@@ -244,7 +247,7 @@ test("selected step opens in the shared drawer with attempts and records", async
   expect(within(step).queryByText("Map items settled")).toBeNull();
   expect(within(step).queryByText("Map items total")).toBeNull();
   fireEvent.click(within(step).getByRole("tab", { name: "Attempts" }));
-  expect(await screen.findByText("The operation did not finish.")).toBeTruthy();
+  expect(await within(step).findByRole("cell", { name: "The operation did not finish." })).toBeTruthy();
   fireEvent.click(await within(step).findByRole("button", { name: "Open 1" }));
   const attempt = await screen.findByRole("dialog", { name: "Step Attempt" });
   expect(await within(attempt).findByText("TimeoutError: operation expired")).toBeTruthy();
@@ -348,7 +351,7 @@ test("run query failures retain the shared retry action", async () => {
 test("backend capability facts hide operator actions and retain complete error evidence", async () => {
   const error = "Retained details: " + "all evidence remains visible. ".repeat(50);
   render(<RunStory run={runFixture({ can_reprocess: false, outcome: "error", failure_reason: error })} />);
-  await screen.findByRole("heading", { name: "Record review run" });
+  await screen.findByRole("heading", { name: "Record review" });
   expect(await screen.findByText(error.trim())).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
 });

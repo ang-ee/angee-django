@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from functools import partial
 from typing import Any, cast
 
@@ -9,9 +10,11 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ObjectDoesNotExist
 from graphql import GraphQLError
 from graphql.execution.values import get_argument_values
 from rebac import current_actor
+from rebac.graphql.strawberry_django import optimize
 from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.experimental.pydantic import input as pydantic_input
@@ -28,11 +31,10 @@ from angee.graphql.data import (
     public_pk_decoder,
     row_annotations,
 )
-from angee.graphql.ids import PublicID, optional_public_id, require_public_id
+from angee.graphql.ids import PublicID, instance_for_id, optional_public_id
 from angee.graphql.inputs import InputReference, input_values
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
-from angee.graphql.revisions import revisions
+from angee.graphql.relations import RecordPointerType, actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
@@ -40,6 +42,7 @@ from angee.iam.schema import UserType
 from angee.parties.schema import PartyType
 from angee.projects.inputs import MilestoneTemplate
 from angee.projects.models import ProjectSetupState
+from angee.projects.models import Task as TaskModel
 from angee.storage.schema import FolderType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
@@ -50,7 +53,7 @@ TaskRelation = apps.get_model("projects", "TaskRelation")
 Participant = apps.get_model("projects", "Participant")
 Link = apps.get_model("projects", "Link")
 ProjectBinding = apps.get_model("projects", "ProjectBinding")
-ThreadActivity = apps.get_model("messaging", "ThreadActivity")
+ActivityType = apps.get_model("projects", "ActivityType")
 Folder = apps.get_model("storage", "Folder")
 Party = apps.get_model("parties", "Party")
 User = get_user_model()
@@ -121,10 +124,10 @@ _TASK_EXTENSION_FORBIDDEN_INSERT_FIELDS = set(
 )
 _TASK_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Task)
 
-DroppedReason = Task._meta.get_field("dropped_reason").choices_enum
-strawberry.enum(cast(Any, DroppedReason))
-TaskVisibility = Task._meta.get_field("visibility").choices_enum
-strawberry.enum(cast(Any, TaskVisibility))
+DroppedReason = TaskModel.TaskDroppedReason
+strawberry.enum(DroppedReason)
+TaskVisibility = TaskModel.TaskVisibility
+strawberry.enum(TaskVisibility)
 
 
 @pydantic_input(model=MilestoneTemplate, all_fields=True)
@@ -306,6 +309,44 @@ _TASK_ACTION_ANNOTATIONS = {
 }
 
 
+
+def _subject_label(reference: Any) -> str:
+    """Return one subject's display label through the reader's own scope.
+
+    A subject the reader cannot read keeps its public id as its label.
+    """
+
+    actor = current_actor()
+    if actor is None:
+        return ""
+    model = apps.get_model(reference.model_label)
+    row = model.objects.with_actor(actor).filter(pk=reference.object_id).first()
+    return str(row) if row is not None else ""
+
+
+def _prime_subject_labels(tasks: list[Any]) -> None:
+    """Batch task subject labels once per content type onto their pointer owners."""
+
+    references = [(task, task.record_ref) for task in tasks]
+    by_model: dict[str, set[Any]] = {}
+    for _task, reference in references:
+        if reference.public_id:
+            by_model.setdefault(reference.model_label, set()).add(reference.object_id)
+    labels: dict[tuple[str, Any], str] = {}
+    actor = current_actor()
+    if actor is None:
+        for task, _reference in references:
+            task._projects_subject_label = ""
+        return
+    for model_label, object_ids in by_model.items():
+        model = apps.get_model(model_label)
+        labels.update(
+            ((model_label, row.pk), str(row))
+            for row in model.objects.with_actor(actor).filter(pk__in=object_ids)
+        )
+    for task, reference in references:
+        task._projects_subject_label = labels.get((reference.model_label, reference.object_id), "")
+
 def _task_annotations(row: Any, info: strawberry.Info, annotations: dict[str, Any]) -> dict[str, Any]:
     """The row's verb annotations: optimized on reads, read once for a mutation payload."""
 
@@ -319,6 +360,25 @@ class TaskProjectionMixin:
     setup_state: ProjectSetupState = setup_state_field(Task)
     overdue_milestone_count: int = overdue_milestone_count_field(Task)
 
+    @strawberry_django.field(only=["activity_type_id"])
+    def activity_type(self) -> str | None:
+        """Return the stable key of the task's activity type, if it has one."""
+
+        return cast(Any, self).activity_type_id
+
+    @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
+    def subject(self, info: strawberry.Info) -> RecordPointerType | None:
+        """Project the task's direct subject, labelled as its reader sees it."""
+
+        reference = cast(Any, self).record_ref
+        if not reference.public_id:
+            return None
+        label = cast(Any, self).__dict__.get("_projects_subject_label")
+        return RecordPointerType.from_reference(
+            reference,
+            label=label if label is not None else _subject_label(reference),
+        )
+
     @strawberry_django.field(only=Task.visibility_audience_fields())
     def audience_label(self) -> str:
         """Project the task owner's audience explanation beside the visibility verb."""
@@ -326,7 +386,7 @@ class TaskProjectionMixin:
         return cast(Any, self).visibility_audience_label()
 
     @strawberry_django.field(annotate=_VISIBILITY_ANNOTATIONS)
-    def allowed_visibility(self, info: strawberry.Info) -> list[TaskVisibility]:  # type: ignore[valid-type]
+    def allowed_visibility(self, info: strawberry.Info) -> list[TaskVisibility]:
         """Choices returned by the same owner that validates visibility writes."""
         allowed = _task_annotations(self, info, _VISIBILITY_ANNOTATIONS)
         return [
@@ -340,7 +400,7 @@ class TaskProjectionMixin:
         allowed = _task_annotations(self, info, _TASK_ACTION_ANNOTATIONS)
         return [action for action in Task.hand_actions() if allowed.get(f"_task_action_{action}")]
 
-    @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.objects.priority_rank_expression()})
+    @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.priority_rank_expression()})
     def priority_rank(self) -> int:
         """Return the priority's position in its declared order."""
 
@@ -396,13 +456,6 @@ class TaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
 
         return optional_public_id(user_public_id(cast(Any, self).delegate_id))
 
-    @strawberry_django.field(only=["converted_from_activity_id"])
-    def converted_from_activity(self) -> strawberry.ID | None:
-        """Return the provenance activity's public id without exposing its row."""
-
-        activity_id = cast(Any, self).converted_from_activity_id
-        return None if activity_id is None else require_public_id(ThreadActivity, activity_id)
-
 
 @strawberry_django.type(Task)
 class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, AngeeNode):
@@ -436,13 +489,6 @@ class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, AngeeNo
     parent: "ConsoleTaskType | None" = actor_scoped_to_one("parent")
     assignee: UserType | None = actor_scoped_to_one("assignee")
     delegate: UserType | None = actor_scoped_to_one("delegate")
-
-    @strawberry_django.field(only=["converted_from_activity_id"])
-    def converted_from_activity(self) -> strawberry.ID | None:
-        """Return the provenance activity's public id without exposing its row."""
-
-        activity_id = cast(Any, self).converted_from_activity_id
-        return None if activity_id is None else require_public_id(ThreadActivity, activity_id)
 
 
 @strawberry_django.type(TaskRelation)
@@ -520,6 +566,116 @@ class ProjectBindingType(AuthoredRefMixin, AngeeNode):
         return cast(strawberry.ID, cast(Any, self).record_public_id)
 
 
+@strawberry_django.type(ActivityType)
+class ActivityTypeType(AngeeNode):
+    """The installed, resource-declared kinds of record task."""
+
+    key: auto
+    name: auto
+    glyph: auto
+
+
+@strawberry.input
+class RecordTaskScheduleInput:
+    """A record task to schedule."""
+
+    model_label: str = strawberry.field(name="model_label")
+    record_id: strawberry.ID = strawberry.field(name="record_id")
+    title: str
+    assignee: PublicID | None = None
+    due_date: date | None = strawberry.field(name="due_date", default=None)
+    note: str = ""
+    activity_type: str | None = strawberry.field(name="activity_type", default=None)
+
+
+@strawberry.input
+class RecordTaskLogInput:
+    """An exchange that already happened, logged on its record."""
+
+    model_label: str = strawberry.field(name="model_label")
+    record_id: strawberry.ID = strawberry.field(name="record_id")
+    activity_type: str = strawberry.field(name="activity_type")
+    occurred_on: date = strawberry.field(name="occurred_on")
+    note: str
+
+
+def _record(model_label: str, record_id: strawberry.ID) -> Any:
+    """Resolve a declared subject under its native actor-scoped manager."""
+
+    model = Task.declared_target_model(model_label)
+    record = instance_for_id(model, str(record_id), queryset=model._default_manager.all())
+    if record is None:
+        raise ObjectDoesNotExist("Record not found.")
+    return record
+
+
+def _record_tasks(info: strawberry.Info, model_label: str, record_id: strawberry.ID, include_done: bool) -> Any:
+    """Return the record's tasks the actor reads, optimized for the selected task fields."""
+
+    model = Task.declared_target_model(model_label)
+    record = instance_for_id(model, str(record_id), queryset=model._default_manager.all())
+    if record is None:
+        return []
+    tasks = list(optimize(Task.objects.for_record(record, include_done=include_done), info))
+    _prime_subject_labels(tasks)
+    return tasks
+
+
+@strawberry.type
+class PublicRecordTaskQuery:
+    """A record's tasks as public task nodes."""
+
+    @strawberry.field(name="record_tasks")
+    def record_tasks(
+        self, info: strawberry.Info, model_label: str, record_id: strawberry.ID, include_done: bool = True,
+    ) -> list[TaskType]:
+        """Return the record's tasks: open first, then by due date and title."""
+
+        return _record_tasks(info, model_label, record_id, include_done)
+
+
+@strawberry.type
+class ConsoleRecordTaskQuery:
+    """A record's tasks as console task nodes."""
+
+    @strawberry.field(name="record_tasks")
+    def record_tasks(
+        self, info: strawberry.Info, model_label: str, record_id: strawberry.ID, include_done: bool = True,
+    ) -> list[ConsoleTaskType]:
+        """Return the record's tasks: open first, then by due date and title."""
+
+        return _record_tasks(info, model_label, record_id, include_done)
+
+
+@strawberry.type
+class ProjectRecordTaskMutation:
+    """Schedule and log record tasks; the generic task verbs complete and drop them."""
+
+    @strawberry.mutation(name="schedule_record_task")
+    @action_guard("Schedule task failed.")
+    def schedule_record_task(self, info: strawberry.Info, input: RecordTaskScheduleInput) -> ActionResult:
+        """Schedule an open record task."""
+
+        record = _record(input.model_label, input.record_id)
+        assignee = authorized_permission_target(info, User, input.assignee, "read") if input.assignee else None
+        task = Task.objects.schedule(
+            record, title=input.title, assignee=assignee, due_date=input.due_date, note=input.note,
+            activity_type=input.activity_type,
+        )
+        return ActionResult(ok=True, message="Task scheduled.", id=task.sqid)
+
+    @strawberry.mutation(name="log_record_task")
+    @action_guard("Log exchange failed.")
+    def log_record_task(self, info: strawberry.Info, input: RecordTaskLogInput) -> ActionResult:
+        """Log an exchange that already happened as a done record task."""
+
+        record = _record(input.model_label, input.record_id)
+        task = Task.objects.log(
+            record, activity_type=input.activity_type, occurred_on=input.occurred_on, note=input.note,
+        )
+        return ActionResult(ok=True, message="Exchange logged.", id=task.sqid)
+
+
 @strawberry.type
 class ProjectTaskActionMutation:
     """Row-authorized lifecycle and maturation actions."""
@@ -527,14 +683,14 @@ class ProjectTaskActionMutation:
     @strawberry.mutation
     @action_guard("Project setup failed.")
     def setup_project(
-        self, info: strawberry.Info, id: PublicID, configuration: ProjectSetupInput, client_creation_key: str,
+        self, info: strawberry.Info, id: PublicID, configuration: ProjectSetupInput, idempotency_key: str,
         expected_revision: int | None = None,
     ) -> ActionResult:
         """Complete the composed project setup under its owning transaction."""
 
         task = authorized_action_target(info, Task, id, "write")
         project = Project.objects.setup_from_task(
-            task, configuration=input_values(info, configuration), client_creation_key=client_creation_key,
+            task, configuration=input_values(info, configuration), idempotency_key=idempotency_key,
             expected_revision=expected_revision,
         )
         return ActionResult(ok=True, message="Project set up.", id=project.sqid)
@@ -579,11 +735,11 @@ class ProjectTaskActionMutation:
 
     @strawberry.mutation
     @action_guard("Complete task failed.")
-    def complete_task(self, info: strawberry.Info, id: PublicID) -> ActionResult:
-        """Complete one writable task."""
+    def complete_task(self, info: strawberry.Info, id: PublicID, feedback: str = "") -> ActionResult:
+        """Complete one writable task; a record task posts ``feedback`` on its record."""
 
         target = authorized_action_target(info, Task, id, "write")
-        target.complete()
+        target.complete(feedback=feedback)
         return ActionResult(ok=True, message="Task completed.", id=target.sqid)
 
     @strawberry.mutation
@@ -592,7 +748,7 @@ class ProjectTaskActionMutation:
         self,
         info: strawberry.Info,
         id: PublicID,
-        reason: DroppedReason,  # type: ignore[valid-type]
+        reason: DroppedReason,
     ) -> ActionResult:
         """Drop one writable task for a closed reason."""
 
@@ -626,7 +782,7 @@ class ProjectTaskActionMutation:
         self,
         info: strawberry.Info,
         id: PublicID,
-        visibility: TaskVisibility,  # type: ignore[valid-type]
+        visibility: TaskVisibility,
         expected_revision: int | None = None,
     ) -> ActionResult:
         """Change a task audience through its narrowing or widening permission."""
@@ -695,19 +851,6 @@ class ProjectTaskActionMutation:
         user = authorized_permission_target(info, User, owner, "read") if owner is not None else None
         target.transfer_ownership(user)
         return ActionResult(ok=True, message="Task ownership transferred.", id=target.sqid)
-
-    @strawberry.mutation
-    @action_guard("Promote activity to task failed.")
-    def promote_thread_activity_to_task(
-        self,
-        info: strawberry.Info,
-        activity: PublicID,
-    ) -> ActionResult:
-        """Promote one writable chatter activity to a task with provenance."""
-
-        target = authorized_action_target(info, ThreadActivity, activity, "write")
-        task = target.promote_to_task()
-        return ActionResult(ok=True, message="Activity promoted to task.", id=task.sqid)
 
     @strawberry.mutation
     @action_guard("Attach link failed.")
@@ -837,17 +980,6 @@ def _project_resource(node_type: type) -> Any:
             "folder",
             *_PROJECT_EXTENSION_UPDATE_FIELDS,
         ],
-        field_id_decode={
-            "lead": public_pk_decoder(User),
-            "owner": public_pk_decoder(User),
-            "current_milestone": public_pk_decoder(Milestone),
-            "folder": public_pk_decoder(Folder),
-            "converted_from": public_pk_decoder(Task),
-            **{
-                name: public_pk_decoder(Project._meta.get_field(name).related_model)
-                for name in _PROJECT_EXTENSION_PUBLIC_ID_FIELDS
-            },
-        },
         write_backend=AngeeHasuraWriteBackend(
             Project,
             public_id_fields=("lead", "folder", *_PROJECT_EXTENSION_PUBLIC_ID_FIELDS),
@@ -905,14 +1037,6 @@ _MILESTONE_RESOURCE = hasura_model_resource(
         "sort_order",
         *_MILESTONE_EXTENSION_UPDATE_FIELDS,
     ],
-    field_id_decode={
-        "project": public_pk_decoder(Project),
-        "reached_by": public_pk_decoder(User),
-        **{
-            name: public_pk_decoder(Milestone._meta.get_field(name).related_model)
-            for name in _MILESTONE_EXTENSION_PUBLIC_ID_FIELDS
-        },
-    },
     write_backend=AngeeHasuraWriteBackend(
         Milestone,
         public_id_fields=("project", *_MILESTONE_EXTENSION_PUBLIC_ID_FIELDS),
@@ -927,6 +1051,7 @@ def _task_resource(node_type: type) -> Any:
         node_type,
         model=Task,
         name="project_tasks",
+        get_queryset=lambda info: Task.objects.canonical(),
         filterable=[
             "owner",
             "id",
@@ -944,7 +1069,6 @@ def _task_resource(node_type: type) -> Any:
             "recurrence",
             "done_at",
             "dropped_at",
-            "converted_from_activity",
             "created_at",
             "updated_at",
             *_TASK_EXTENSION_FILTER_FIELDS,
@@ -968,7 +1092,7 @@ def _task_resource(node_type: type) -> Any:
             *_TASK_EXTENSION_ORDER_FIELDS,
         ],
         sortable_aliases={
-            "priority_rank": SortAlias("_priority_rank", lambda _info, queryset: queryset.priority_rank_expression()),
+            "priority_rank": SortAlias("_priority_rank", lambda _info, _queryset: Task.priority_rank_expression()),
         },
         aggregatable=[
             "id",
@@ -1028,19 +1152,6 @@ def _task_resource(node_type: type) -> Any:
             "sub_sort_order",
             *_TASK_EXTENSION_UPDATE_FIELDS,
         ],
-        field_id_decode={
-            "owner": public_pk_decoder(User),
-            "project": public_pk_decoder(Project),
-            "milestone": public_pk_decoder(Milestone),
-            "parent": public_pk_decoder(Task),
-            "assignee": public_pk_decoder(User),
-            "delegate": public_pk_decoder(User),
-            "converted_from_activity": public_pk_decoder(ThreadActivity),
-            **{
-                name: public_pk_decoder(Task._meta.get_field(name).related_model)
-                for name in _TASK_EXTENSION_PUBLIC_ID_FIELDS
-            },
-        },
         write_backend=AngeeHasuraWriteBackend(
             Task,
             public_id_fields=(
@@ -1118,7 +1229,20 @@ _BINDING_RESOURCE = hasura_model_resource(
     delete=False,
 )
 
+_ACTIVITY_TYPE_RESOURCE = hasura_model_resource(
+    ActivityTypeType,
+    model=ActivityType,
+    name="activity_types",
+    filterable=["id", "key", "name"],
+    sortable=["name", "key"],
+    aggregatable=["id"],
+    insertable=["key", "name", "glyph"],
+    updatable=["name", "glyph"],
+    write_backend=AngeeHasuraWriteBackend(ActivityType),
+)
+
 _COMMON_RESOURCE_TYPES = [
+    *_ACTIVITY_TYPE_RESOURCE.types,
     *_MILESTONE_RESOURCE.types,
     *_TASK_RELATION_RESOURCE.types,
     *_PARTICIPANT_RESOURCE.types,
@@ -1144,10 +1268,12 @@ def _projects_schema_bucket(
             _PARTICIPANT_RESOURCE.query,
             _LINK_RESOURCE.query,
             _BINDING_RESOURCE.query,
-            revisions(project_type),
+            _ACTIVITY_TYPE_RESOURCE.query,
+            ConsoleRecordTaskQuery if task_type is ConsoleTaskType else PublicRecordTaskQuery,
         ],
         "mutation": [
             ProjectTaskActionMutation,
+            ProjectRecordTaskMutation,
             project_resource.mutation,
             _MILESTONE_RESOURCE.mutation,
             task_resource.mutation,
@@ -1155,6 +1281,7 @@ def _projects_schema_bucket(
             _PARTICIPANT_RESOURCE.mutation,
             _LINK_RESOURCE.mutation,
             _BINDING_RESOURCE.mutation,
+            _ACTIVITY_TYPE_RESOURCE.mutation,
         ],
         "types": [
             project_type,

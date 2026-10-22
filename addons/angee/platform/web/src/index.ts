@@ -54,6 +54,8 @@ const platform = defineBaseAddon({
   routes: platformRoutes,
   menus: platformMenu,
   i18n: { platform: enPlatformMessages },
+  // The reflection enums' tones: lifecycle state and provenance source.
+  statusTones: { enabled: "success", removed: "danger", installed: "neutral", local: "neutral", remote: "info" },
   // Verbs on the addon board's toolbar, such as the VCS marketplace's sources.
   containers: { "platform.addons#toolbar": {} },
 });

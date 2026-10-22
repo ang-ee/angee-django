@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 
 import { Button } from "../../ui/button";
 import { DropdownMenu } from "../../ui/dropdown-menu";
+import { Tooltip } from "../../ui/tooltip";
 import { Glyph } from "../../chrome/Glyph";
 import { errorMessage, useConfirm, usePrompt, useToast } from "../../feedback";
 import { ActionFormDialog } from "./ActionFormDialog";
@@ -40,6 +41,8 @@ interface ActionMutationVariables {
  * reach `run` via its context. The patch/refresh come from the form (which owns
  * the field selection and re-seeds itself); errors surface as a toast and a
  * `run` may return a success message.
+ * @kind region
+ * @region command-band
  */
 export function RecordActionBar({
   record,
@@ -49,6 +52,7 @@ export function RecordActionBar({
   deleteAction,
   contributedActions,
   blocked: blockedByForm = false,
+  menuPlacement = "trailing",
 }: {
   record: Row | null;
   actions: readonly RecordActionDescriptor[];
@@ -59,6 +63,8 @@ export function RecordActionBar({
   contributedActions?: React.ReactNode;
   /** A dirty or pending form must be saved before acting on its persisted record. */
   blocked?: boolean;
+  /** Where the Actions menu sits: an icon-only `⋮` before the verbs (the command band), or a labeled menu after them. */
+  menuPlacement?: "leading" | "trailing";
 }): React.ReactElement | null {
   const preview = useRuntimeViewAs();
   const t = useUiT();
@@ -75,10 +81,10 @@ export function RecordActionBar({
   const [formAction, setFormAction] = React.useState<{ action: RecordActionDescriptor; fromMenu: boolean } | null>(
     null,
   );
-  // A reason that reads the record applies once a record is loaded; a static reason applies with `disabled`.
+  // A reason that reads the record applies once a record is loaded; a static reason applies directly.
   const disabledReason = (action: ActionDescriptor): React.ReactNode =>
     typeof action.disabledReason === "function" ? (record != null ? action.disabledReason(record) : undefined)
-      : action.disabled ? action.disabledReason : undefined;
+      : action.disabledReason;
   const actionMutation = useMutation<
     ActionResult,
     unknown,
@@ -195,15 +201,33 @@ export function RecordActionBar({
       {t("actions.delete")}
     </ActionTrigger>
   ) : null;
-  const renderAction = (action: RecordActionDescriptor) => (
-    <ActionTrigger key={action.id} glyph={action.icon}
-      variant={action.danger ? "danger" : "secondary"}
-      disabled={disabled(action)} loading={pendingId === action.id}
-      onClick={() => void runAction(action)}>
-      {action.label}
-    </ActionTrigger>
-  );
+  const renderAction = (action: RecordActionDescriptor) => {
+    const reason = disabledReason(action);
+    const reasonId = reason ? `${descriptionId}-${action.id}` : undefined;
+    return <React.Fragment key={action.id}>
+      <ActionTrigger glyph={action.icon}
+        variant={action.danger ? "danger" : "secondary"}
+        disabled={disabled(action)} aria-describedby={reasonId}
+        loading={pendingId === action.id}
+        onClick={() => void runAction(action)}>
+        {action.label}
+      </ActionTrigger>
+      {reason ? <div id={reasonId} className="px-2 pb-1 text-12 text-fg-muted">{reason}</div> : null}
+    </React.Fragment>;
+  };
 
+  const actionMenu = menuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null || formAction?.fromMenu ? (
+    <ActionMenu blocked={blocked} loading={pendingId !== null}
+      {...(menuPlacement === "leading" ? { label: null, "aria-label": t("list.actions"), size: "iconSm" as const } : {})}>
+      {deleteTrigger}
+      {visibleDeleteAction !== undefined && menuActions.length > 0 ? (
+        <DropdownMenu.Separator />
+      ) : null}
+      {menuActions.map(renderAction)}
+      {contributedActions}
+      {formAction?.fromMenu ? formDialog : null}
+    </ActionMenu>
+  ) : null;
   return (
     <>
       {menu ? <>
@@ -212,24 +236,21 @@ export function RecordActionBar({
         {contributedActions}
         {formDialog}
       </> : <>
+        {menuPlacement === "leading" ? actionMenu : null}
         {toolbarActions.map((action, index) => { const reason = disabledReason(action); return (
-          <React.Fragment key={action.id}><Button type="button" size="sm"
-            variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
-            disabled={disabled(action)} aria-describedby={reason ? `${descriptionId}-${action.id}` : undefined}
-            loading={pendingId === action.id} onClick={() => void runAction(action)}>
-            {action.icon ? <Glyph name={action.icon} /> : null}
-            {action.label}
-          </Button>{reason ? <span id={`${descriptionId}-${action.id}`} className="text-xs text-fg-muted">{reason}</span> : null}</React.Fragment>
+          // A band verb's disabled reason is its tooltip: the verb stays focusable while
+          // disabled so keyboard users reach the reason too.
+          <Tooltip key={action.id} label={reason} side="bottom">
+            <Button type="button" size="sm"
+              variant={action.danger ? "danger" : action.primary && toolbarActions.findIndex((entry) => entry.primary) === index ? "primary" : "secondary"}
+              disabled={disabled(action)} focusableWhenDisabled={Boolean(reason)}
+              loading={pendingId === action.id} onClick={() => void runAction(action)}>
+              {action.icon ? <Glyph name={action.icon} /> : null}
+              {action.label}
+            </Button>
+          </Tooltip>
         ); })}
-        {menuActions.length > 0 || visibleDeleteAction !== undefined || contributedActions != null || formAction?.fromMenu ? <ActionMenu blocked={blocked} loading={pendingId !== null}>
-          {deleteTrigger}
-          {visibleDeleteAction !== undefined && menuActions.length > 0 ? (
-            <DropdownMenu.Separator />
-          ) : null}
-          {menuActions.map(renderAction)}
-          {contributedActions}
-          {formAction?.fromMenu ? formDialog : null}
-        </ActionMenu> : null}
+        {menuPlacement === "trailing" ? actionMenu : null}
         {formAction && !formAction.fromMenu ? formDialog : null}
       </>}
     </>

@@ -27,15 +27,15 @@ const resources = forms.map(({ resource }) => testDataResource(resource, {
   fields: [
     "id", "display_name", "legal_name", "domain", "notes", "external_reference",
     "given_name", "family_name", "additional_name", "nickname", "name_prefix",
-    "name_suffix", "birthday", "anniversary", "folder",
+    "name_suffix", "birthday", "anniversary",
   ].map((name) => ({
     name, kind: "scalar" as const, scalar: "String", readable: true,
     filterable: false, sortable: false, aggregatable: false, groupable: false,
     creatable: true, updatable: true, requiredOnCreate: false,
   })),
 }));
-// A saved party opens on its first pane, Identity, which lists the party's handles.
-resources.push(testDataResource("parties.PartyHandle"));
+// A saved party opens on its first pane: Identity (organizations) or Handles (people).
+resources.push(testDataResource("parties.PartyStatement"), testDataResource("parties.Handle"));
 
 const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://parties" });
 afterEach(() => {

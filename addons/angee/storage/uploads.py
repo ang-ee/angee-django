@@ -12,9 +12,12 @@ from __future__ import annotations
 import hashlib
 import logging
 import mimetypes
-from typing import BinaryIO
+from io import Reader
 
 import magic
+from django.conf import settings
+
+from angee.storage import exceptions
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +97,7 @@ def truncate_filename(name: str, max_length: int) -> str:
     return name[:max_length]
 
 
-def sha256_stream(reader: BinaryIO, *, capture_head: int = 0) -> tuple[str, int, bytes]:
+def sha256_stream(reader: Reader[bytes], *, capture_head: int = 0) -> tuple[str, int, bytes]:
     """Stream-hash a binary reader without materializing it.
 
     Returns ``(hex_digest, total_bytes, head_bytes)``; ``head_bytes`` is the
@@ -135,6 +138,60 @@ def detect_mime(payload: bytes, filename: str = "") -> str:
     return (guessed or FALLBACK_MIME).split(";", 1)[0].strip().lower()
 
 
+def renders_inline(mime: str) -> bool:
+    """Whether a browser opening a stored file of ``mime`` renders it in place rather than downloads it.
+
+    The raster types of the image rule (``ANGEE_STORAGE_IMAGE_TYPES``) and the
+    types a browser opens in its own viewer (:func:`opens_in_viewer`) render in
+    place. Every other type, a document that can carry script (HTML, SVG, XML)
+    above all, is an attachment.
+    """
+
+    return mime in settings.ANGEE_STORAGE_IMAGE_TYPES or opens_in_viewer(mime)
+
+
+def opens_in_viewer(mime: str) -> bool:
+    """Whether a browser opens ``mime`` in its own viewer: ``ANGEE_STORAGE_VIEWER_TYPES``.
+
+    PDF, plain text, audio and video by default; an entry ``major/*`` names a whole
+    major type.
+    """
+
+    types = settings.ANGEE_STORAGE_VIEWER_TYPES
+    return mime in types or f"{mime.split('/', 1)[0]}/*" in types
+
+
+def require_image(content: bytes) -> str:
+    """Return the type of an image the server may render inline, or refuse it.
+
+    The bytes must be a raster type in ``ANGEE_STORAGE_IMAGE_TYPES`` (an SVG can
+    carry script) within ``ANGEE_STORAGE_IMAGE_MAX_BYTES``. Unlike
+    :func:`detect_mime` at finalize, the type comes from libmagic alone with no
+    filename fallback, so a type the host's libmagic cannot name (HEIC on an older
+    magic database) is refused. Raises :class:`~angee.storage.exceptions.UploadTooLarge`
+    or :class:`~angee.storage.exceptions.UploadTypeRefused`.
+    """
+
+    require_image_size(len(content))
+    return require_image_type(content)
+
+
+def require_image_size(size: int) -> None:
+    """Refuse an image larger than ``ANGEE_STORAGE_IMAGE_MAX_BYTES`` (the size half of :func:`require_image`)."""
+
+    if size > int(settings.ANGEE_STORAGE_IMAGE_MAX_BYTES):
+        raise exceptions.UploadTooLarge("The image is larger than the image size cap.")
+
+
+def require_image_type(content: bytes) -> str:
+    """Return the sniffed type of an admitted image (the type half of :func:`require_image`)."""
+
+    mime = detect_mime(content[:MIME_SNIFF_BYTES])
+    if mime not in settings.ANGEE_STORAGE_IMAGE_TYPES:
+        raise exceptions.UploadTypeRefused(f"{mime} is not an accepted image type.")
+    return mime
+
+
 class BodyTooLarge(Exception):
     """Internal sentinel raised by :class:`CappedReader` when the cap trips."""
 
@@ -148,7 +205,7 @@ class CappedReader:
     partial backend object before answering with an API error.
     """
 
-    def __init__(self, reader: BinaryIO, *, max_bytes: int) -> None:
+    def __init__(self, reader: Reader[bytes], *, max_bytes: int) -> None:
         """Wrap ``reader`` with a hard byte cap."""
 
         self._reader = reader

@@ -1,27 +1,29 @@
 import { defineBaseAddon } from "@angee/app";
 import { holdsPermission } from "@angee/metadata";
-import { Field, Group, } from "@angee/ui";
+import { Field, Group } from "@angee/ui";
 
-import { enProposalsWorkMessages, useProposalsWorkT } from "./i18n";
+import { enProposalsWorkMessages } from "./i18n";
 
-function Label({ name }: { name: keyof typeof enProposalsWorkMessages }) {
-  const t = useProposalsWorkT();
-  return <>{t(name)}</>;
+const NAMESPACE = "proposals-work";
+
+/** A label from this addon's bundle, resolved by the form through the runtime i18n. */
+function labelKey(key: keyof typeof enProposalsWorkMessages) {
+  return { namespace: NAMESPACE, key, fallback: enProposalsWorkMessages[key] };
 }
 
 export default defineBaseAddon({
   id: "proposals-work",
-  i18n: { "proposals-work": enProposalsWorkMessages },
+  i18n: { [NAMESPACE]: enProposalsWorkMessages },
   containers: {
     "proposals.Round#sections": {
       "proposals-work.questions": {
         sequence: 30,
         content: (
-          <Group label={<Label name="round.group.questions" />}>
+          <Group label={labelKey("round.group.questions")}>
             <Field name="permissions" hidden readOnly />
             <Field
               name="clarification_queue"
-              label={enProposalsWorkMessages["round.queue"]}
+              label={labelKey("round.queue")}
               resolve={(values) => ({
                 name: "clarification_queue",
                 readOnly: !holdsPermission(values, "write"),

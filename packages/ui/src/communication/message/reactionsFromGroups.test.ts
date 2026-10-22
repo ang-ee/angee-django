@@ -1,6 +1,10 @@
+// @vitest-environment happy-dom
+
+import { renderHook } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 
-import { reactionsFromGroups } from "./index";
+import { reactionsFromGroups, useReactionGroups } from "./index";
+
 
 describe("reactionsFromGroups", () => {
   test("projects active state and routes count-only titles through i18n", () => {
@@ -50,5 +54,13 @@ describe("reactionsFromGroups", () => {
         { count: vi.fn(), named },
       )[0]?.title,
     ).toBe("reaction.named:Alex, Sam");
+  });
+
+  test("useReactionGroups titles the groups with the shared copy", () => {
+    const { result } = renderHook(() => useReactionGroups([
+      { reaction: "👍", count: 2, self_reacted: false, handles: [] },
+      { reaction: "🎉", count: 1, self_reacted: true, handles: [{ display_name: "Ada", value: "ada" }] },
+    ]));
+    expect(result.current.map((reaction) => reaction.title)).toEqual(["👍 reaction, 2", "🎉 by Ada"]);
   });
 });

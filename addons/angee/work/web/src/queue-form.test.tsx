@@ -12,7 +12,7 @@ const CATEGORY_OPTIONS = ["triage", "backlog", "unstarted", "started", "complete
   .map((value) => ({ value, label: value }));
 
 vi.mock("@angee/ui", () => ({
-  Badge: ({ children }: { children?: React.ReactNode }) => <span data-badge>{children}</span>,
+  Chip: ({ children }: { children?: React.ReactNode }) => <span data-badge>{children}</span>,
   Field: () => null,
   Form: (props: Record<string, unknown>) => {
     mocks.formProps = props;
@@ -89,10 +89,9 @@ describe("queue settings form declaration", () => {
     expect(mocks.formProps?.layout).toBeUndefined();
     expect(mocks.formProps?.linePrimaryFields).toEqual(["name", "category", "tone"]);
     const fields = mocks.formProps?.lineFields as readonly LineField[];
-    expect(fields.map((field) => field.name)).toEqual(["name", "category", "tone", "rule_owned", "conceals"]);
+    expect(fields.map((field) => field.name)).toEqual(["name", "category", "tone", "rule_owned"]);
     const byName = new Map(fields.map((field) => [field.name, field]));
     expect(byName.get("rule_owned")).toMatchObject({ label: "stage.ruleOwned", description: "stage.ruleOwned.help" });
-    expect(byName.get("conceals")).toMatchObject({ label: "stage.conceals", description: "stage.conceals.help" });
     const title = mocks.formProps?.children as React.ReactElement<{ name: string; title?: boolean }>;
     expect(title.props).toMatchObject({ name: "name", title: true });
   });
@@ -114,12 +113,10 @@ describe("queue settings form declaration", () => {
     expect(badges!.align).toBe("left");
     cleanup();
     render(<>
-      {badges!.render({ rule_owned: true, conceals: false }, null, 0, { formIsDirty: false })}
-      {badges!.render({ rule_owned: false, conceals: true }, null, 1, { formIsDirty: false })}
-      {badges!.render({ rule_owned: false, conceals: false }, null, 2, { formIsDirty: false })}
+      {badges!.render({ rule_owned: true }, null, 0, { formIsDirty: false })}
+      {badges!.render({ rule_owned: false }, null, 1, { formIsDirty: false })}
     </>);
     expect(screen.getAllByText("stage.ruleOwned")).toHaveLength(1);
-    expect(screen.getAllByText("stage.conceals")).toHaveLength(1);
   });
 
   test("a product's own route renders one queue's settings with its FormView props", () => {

@@ -52,14 +52,14 @@ test.describe("notes form — field interactions", () => {
 test.describe("notes chatter — activity", () => {
   test.use({ storageState: roleStatePath("alice") });
 
-  test("the Activity tab renders the revision timeline", async ({ page }) => {
+  test("the Timeline tab renders the revision lines", async ({ page }) => {
     const notes = new NotesPage(page);
     await notes.gotoReady();
     await notes.openFirstNote();
 
-    await notes.chatterTab("Activity").click();
+    await notes.chatterTab("Timeline").click();
     // The panel renders (a revision entry or its empty state), with no error.
-    await expect(notes.chatterTab("Activity")).toHaveAttribute(
+    await expect(notes.chatterTab("Timeline")).toHaveAttribute(
       "aria-selected",
       "true",
     );

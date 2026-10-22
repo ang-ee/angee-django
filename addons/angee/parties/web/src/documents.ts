@@ -12,22 +12,22 @@ export const PartyRecordRedirectDocument = graphql(`
   }
 `);
 
-export const PartyHandleRedirectDocument = graphql(`
-  query PartyHandleRedirect($id: String!) {
-    party_handles_by_pk(id: $id) {
+export const PartyStatementRedirectDocument = graphql(`
+  query PartyStatementRedirect($id: String!) {
+    party_statements_by_pk(id: $id) {
       id
-      party { id }
+      subject { id }
     }
   }
 `);
 
-// Identity decisions: the two verbs of the review flow. Confirming sets full
-// confidence + manual source and re-resolves the handle; dismissing writes the
+// Identity decisions write preferred person statements and re-resolve the handle.
+// A dismissal is the
 // durable anti-link. Their write blast radius lives here with the verbs;
 // `useAuthoredResourceMutation` maps it to both Refine resource invalidations
 // and authored-read refetches because this stack has no normalized cache.
-export const PARTY_HANDLE_DECISION_INVALIDATES = [
-  "parties.PartyHandle",
+export const PARTY_STATEMENT_DECISION_INVALIDATES = [
+  "parties.PartyStatement",
   "parties.Handle",
   "parties.Party",
   "parties.Person",
@@ -39,9 +39,15 @@ export const PARTY_MERGE_INVALIDATES = [
   "parties.Person",
   "parties.Organization",
   "parties.Handle",
+  "parties.PartyStatement",
+  "parties.PersonStatement",
+  "parties.OrganizationStatement",
+  "parties.Address",
+  "parties.AddressStatement",
+  "parties.RelationshipStatement",
   "parties.CircleMember",
   "parties.Relationship",
-  "parties.MergeVeto",
+  "parties.PartySameAsPairStatement",
 ] as const;
 
 export const CIRCLE_MEMBER_INVALIDATES = [
@@ -89,7 +95,7 @@ export const RemoveCircleMember = graphql(`
 `);
 
 export const PartiesOverview = graphql(`
-  query PartiesOverview($duplicateLimit: Int = 100) {
+  query PartiesOverview($sameAsLimit: Int = 100) {
     contacts: people_aggregate {
       aggregate {
         count
@@ -105,18 +111,16 @@ export const PartiesOverview = graphql(`
         count
       }
     }
-    review_queue: party_handles_aggregate(
+    review_queue: party_statements_aggregate(
       where: {
-        confidence: { _lt: 0.5 }
-        is_confirmed: { _eq: false }
-        is_dismissed: { _eq: false }
+        to_review: { _eq: true }
       }
     ) {
       aggregate {
         count
       }
     }
-    duplicate_party_candidates(limit: $duplicateLimit) {
+    same_as_pairs(limit: $sameAsLimit) {
       left {
         id
       }
@@ -132,6 +136,7 @@ export const PartyMergeComparison = graphql(`
     left: parties_by_pk(id: $left) {
       id
       display_name
+      display_avatar { id url }
       notes
       first_met_note
       handles {
@@ -159,6 +164,7 @@ export const PartyMergeComparison = graphql(`
     right: parties_by_pk(id: $right) {
       id
       display_name
+      display_avatar { id url }
       notes
       first_met_note
       handles {
@@ -192,10 +198,6 @@ export const PartyMergeComparison = graphql(`
       name_suffix
       nickname
       birthday
-      folder {
-        id
-        name
-      }
     }
     right_person: people_by_pk(id: $right) {
       id
@@ -206,25 +208,23 @@ export const PartyMergeComparison = graphql(`
       name_suffix
       nickname
       birthday
-      folder {
-        id
-        name
-      }
     }
   }
 `);
 
-export const DuplicatePartyCandidates = graphql(`
-  query DuplicatePartyCandidates($limit: Int = 50) {
-    duplicate_party_candidates(limit: $limit) {
+export const SameAsPairs = graphql(`
+  query SameAsPairs($limit: Int = 50) {
+    same_as_pairs(limit: $limit) {
       normalized_value
       left {
         id
         display_name
+        display_avatar { id url }
       }
       right {
         id
         display_name
+        display_avatar { id url }
       }
     }
   }
@@ -232,11 +232,9 @@ export const DuplicatePartyCandidates = graphql(`
 
 export const PartyReviewCounts = graphql(`
   query PartyReviewCounts {
-    party_handles_aggregate(
+    party_statements_aggregate(
       where: {
-        confidence: { _lt: 0.5 }
-        is_confirmed: { _eq: false }
-        is_dismissed: { _eq: false }
+        to_review: { _eq: true }
       }
     ) {
       aggregate {
@@ -255,32 +253,32 @@ export const MergeParties = graphql(`
   }
 `);
 
-export const VetoMerge = graphql(`
-  mutation VetoMerge($aId: ID!, $bId: ID!) {
-    veto_merge(a_id: $aId, b_id: $bId) {
+export const DismissSameAs = graphql(`
+  mutation DismissSameAs($aId: ID!, $bId: ID!) {
+    dismiss_same_as(a_id: $aId, b_id: $bId) {
       id
     }
   }
 `);
 
-export const ConfirmPartyHandle = graphql(`
-  mutation ConfirmPartyHandle($id: ID!) {
-    confirm_party_handle(id: $id) {
+export const ConfirmPartyStatement = graphql(`
+  mutation ConfirmPartyStatement($id: ID!) {
+    confirm_party_statement(id: $id) {
       id
       confidence
-      source
+      asserted_by
       is_confirmed
       is_dismissed
     }
   }
 `);
 
-export const DismissPartyHandle = graphql(`
-  mutation DismissPartyHandle($id: ID!) {
-    dismiss_party_handle(id: $id) {
+export const DismissPartyStatement = graphql(`
+  mutation DismissPartyStatement($id: ID!) {
+    dismiss_party_statement(id: $id) {
       id
       confidence
-      source
+      asserted_by
       is_confirmed
       is_dismissed
     }

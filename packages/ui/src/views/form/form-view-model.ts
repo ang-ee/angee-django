@@ -12,6 +12,7 @@ import {
   type Row,
 } from "@angee/metadata";
 
+import { formatNumber } from "../../lib/format-number";
 import { dateFromUnknown, formatDate } from "../../widgets/date-format";
 import { canonicalOptionValue, relationIdList, relationValueId } from "../../widgets/types";
 import type { UiTranslate } from "../../i18n";
@@ -550,7 +551,10 @@ function isBlankCreateValue(
   if (value !== "") return false;
   if (isRelationIdField(field) || (metadata && relationModelLabelForField(metadata))) return true;
   if (metadata) {
-    return metadata.kind === "enum" || !isStringScalar(metadata);
+    return metadata.kind === "enum" || !isStringScalar(metadata) || (
+      metadata.requiredOnCreate === false
+      && !intent.dirty && !intent.seeded && !field.presenceRequired
+    );
   }
   return (
     hasOptionValue(field)
@@ -575,7 +579,10 @@ export function gridFieldClass(field: FieldDescriptor): string | undefined {
   return fieldWidgetId(field) === "tagInput" ? "col-span-full" : undefined;
 }
 
-/** Whether a descriptor owns structured child controls through a template. */
+/** Whether a descriptor owns structured child controls through a template.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isCompositeFieldDescriptor(field: FieldDescriptor): boolean {
   return Boolean(field.objectTemplate || field.itemTemplate || ("rowTemplate" in field && field.rowTemplate));
 }
@@ -584,6 +591,8 @@ export function isCompositeFieldDescriptor(field: FieldDescriptor): boolean {
  * Exact-field messages stay bare. With a root path, descendants keep their full
  * dotted paths for nested routing; an empty root produces relative paths.
  * Omit the root to leave every message unprefixed.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function fieldErrorMessages(errors: readonly unknown[], path?: string): string[] {
   return errors.flatMap((error) => nestedFieldErrorMessages(error, path, path));
@@ -625,18 +634,19 @@ export function recordSubtitleParts(
   id: string | null | undefined,
   fields: DataResourceSubtitleMetadata | null | undefined,
   t: UiTranslate,
+  developerMode = false,
 ): ReactNode[] {
   const parts: ReactNode[] = [];
   const recordId = presentValue(record?.id) ?? presentValue(id);
-  if (recordId !== undefined) parts.push(recordIdLabel(String(recordId)));
+  if (developerMode && recordId !== undefined) parts.push(recordIdLabel(String(recordId)));
   if (record) {
     const created = fieldValue(record, fields?.created);
     const updated = fieldValue(record, fields?.updated);
     const words = fieldValue(record, fields?.wordCount);
-    if (created !== undefined) {
+    if (developerMode && created !== undefined) {
       parts.push(t("form.created", { value: formatRecordDate(created) }));
     }
-    if (updated !== undefined) {
+    if (developerMode && updated !== undefined) {
       parts.push(t("form.updated", { value: formatRecordDate(updated) }));
     }
     if (words !== undefined) parts.push(formatWordCount(words, t));
@@ -680,7 +690,7 @@ function formatWordCount(value: unknown, t: UiTranslate): string {
         ? Number(value)
         : Number.NaN;
   if (Number.isFinite(count)) {
-    return t("form.wordCount", { count: new Intl.NumberFormat().format(count) });
+    return t("form.wordCount", { count: formatNumber(count) });
   }
   return t("form.wordCount", { count: String(value) });
 }

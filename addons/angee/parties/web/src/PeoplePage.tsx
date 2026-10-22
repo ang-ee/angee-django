@@ -1,125 +1,26 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import { Action, Alert, Column, Facet, Form, List, ListView, LoadingPanel, PrimaryPanePublisher, ResourceList, SectionEyebrow, TreeView, errorMessage, containerContents, useContainer, useAuthoredResourceMutation, useLatestRef, useRouteHref, useRouteSearch, useToast, updateRouteSearch, type ActionDescriptor, type DndPayload, type ListColumn, type RecordPanelContext, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
+import { Alert, Column, List, LoadingPanel, PaneLabel, PrimaryPanePublisher, ResourceList, TreeView, errorMessage, useAuthoredResourceMutation, useLatestRef, useRouteSearch, useToast, updateRouteSearch, type DndPayload, type StringIdRow } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
-import { PersonCirclesList } from "./CircleMembershipList";
 import {
   AddCircleMember,
   CIRCLE_MEMBER_INVALIDATES,
   PeopleWorkbench,
 } from "./documents";
-import { IdentityTab } from "./IdentityTab";
-import { PartyAddresses } from "./PartyAddresses";
-import { PersonRelationshipsTab } from "./PersonRelationships";
 import { usePartiesT } from "./i18n";
-import { usePartyContactActions } from "./party-contact-actions";
-
-import { personFields } from "./PersonForm";
+import { personForm } from "./PersonForm";
 
 const MODEL = "parties.Person";
-
-type HandleRow = StringIdRow;
-
-/** The person's handles: an embedded list filtered to this party. */
-function PersonHandlesTab({ recordId }: Pick<RecordPanelContext, "recordId">): React.ReactElement {
-  const t = usePartiesT();
-  const columns = React.useMemo<readonly ListColumn<HandleRow>[]>(() => [
-    { field: "platform" },
-    { field: "value", render: (row) => <span className="font-medium text-fg">{String(row.value ?? "")}</span> },
-    { field: "label" },
-    {
-      field: "is_preferred",
-      header: t("person.handlePreferred"),
-      render: (row) => (row.is_preferred ? t("common.yes") : ""),
-    },
-  ], [t]);
-  return (
-    <ListView<HandleRow>
-      resource="parties.Handle"
-      presentation="embedded"
-      fields={["id", "platform", "value", "label", "is_preferred"]}
-      baseFilter={{ party: { exact: recordId } }}
-      columns={columns}
-      emptyContent={t("person.empty.handles")}
-    />
-  );
-}
-
-function personRecordTabs(
-  t: ReturnType<typeof usePartiesT>,
-): readonly RecordTabDescriptor[] {
-  return [
-    {
-      id: "handles",
-      label: t("person.tabs.handles"),
-      render: (context) => <PersonHandlesTab {...context} />,
-    },
-    {
-      id: "identity",
-      label: t("person.tabs.identity"),
-      render: (context) => <IdentityTab {...context} />,
-    },
-    {
-      id: "circles",
-      label: t("person.tabs.circles"),
-      render: ({ recordId }) => <PersonCirclesList personId={recordId} />,
-    },
-    {
-      id: "relationships",
-      label: t("person.tabs.relationships"),
-      render: (context) => <PersonRelationshipsTab {...context} />,
-    },
-    {
-      id: "addresses",
-      label: t("person.tabs.addresses"),
-      render: (context) => <PartyAddresses {...context} />,
-    },
-  ];
-}
-
-function peopleForm(
-  t: ReturnType<typeof usePartiesT>,
-  mergeSubmit: NonNullable<ActionDescriptor["submit"]>,
-  extraFields: React.ReactNode,
-  contactActions: React.ReactNode,
-): React.ReactElement {
-  return (
-    <Form resource={MODEL}>
-      {personFields(t, extraFields)}
-      {contactActions}
-      <Action
-        id="merge-into"
-        label={t("person.action.merge")}
-        args={[
-          {
-            name: "otherParty",
-            argKind: "relation",
-            resource: "parties.Party",
-            label: t("person.action.mergeOther"),
-            description: t("person.action.mergeOther.description"),
-          },
-        ]}
-        visibleWhen={() => true}
-        submit={mergeSubmit}
-      />
-    </Form>
-  );
-}
-
 
 /**
  * People (the person-kind contacts): a circle/smart-view workbench around the
  * shared create/edit/list/detail surface. The primary pane owns scope selection
- * and circle drops; the list keeps its generated folder facet and generic record
- * behavior. Detail tabs carry identity, circle, relationship, and address
- * collections.
+ * and circle drops; the list keeps its generated facets and generic record
+ * behavior; the registered Person form carries the record tabs and verbs.
  */
 export function PeoplePage(): React.ReactElement {
-  const extraFields = containerContents(useContainer("parties.person#fields"));
   const t = usePartiesT();
-  const contactActions = usePartyContactActions();
   const navigate = useNavigate();
-  const routeHref = useRouteHref();
   const search = useRouteSearch();
   const toast = useToast();
   const scope = React.useMemo(
@@ -140,25 +41,6 @@ export function PeoplePage(): React.ReactElement {
     invalidateModels: CIRCLE_MEMBER_INVALIDATES,
   });
   const dropRef = useLatestRef({ addCircleMember, t, toast });
-  const tabs = React.useMemo(() => personRecordTabs(t), [t]);
-  const mergeSubmit = React.useCallback<NonNullable<ActionDescriptor["submit"]>>(
-    async (values, context) => {
-      const recordId = typeof context.record?.id === "string" ? context.record.id : "";
-      const otherId = typeof values.otherParty === "string" ? values.otherParty : "";
-      if (!recordId || !otherId || recordId === otherId) {
-        return {
-          ok: false,
-          message: t("person.action.mergeRequired"),
-          validationErrors: { otherParty: [t("person.action.mergeRequired")] },
-        };
-      }
-      await navigate({
-        to: routeHref("parties.merge", { left: recordId, right: otherId }),
-      });
-      return { ok: true, message: "" };
-    },
-    [navigate, routeHref, t],
-  );
   const circles = React.useMemo<readonly CircleTreeRow[]>(
     () =>
       (workbench.data?.people_workbench.circles ?? []).map((circle) => ({
@@ -232,11 +114,9 @@ export function PeoplePage(): React.ReactElement {
   );
   const primaryPane = React.useMemo(
     () => (
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-2">
         <section>
-          <SectionEyebrow as="h2" spacing="menu">
-            {t("people.smart.heading")}
-          </SectionEyebrow>
+          <PaneLabel>{t("people.smart.heading")}</PaneLabel>
           <TreeView<SmartViewRow>
             rows={smartViews}
             label="name"
@@ -246,9 +126,7 @@ export function PeoplePage(): React.ReactElement {
           />
         </section>
         <section className="flex min-h-0 flex-col">
-          <SectionEyebrow as="h2" spacing="menu">
-            {t("people.circles.heading")}
-          </SectionEyebrow>
+          <PaneLabel>{t("people.circles.heading")}</PaneLabel>
           {workbench.isFetching && circles.length === 0 ? (
             <LoadingPanel message={t("people.circles.loading")} density="inline" />
           ) : (
@@ -283,23 +161,20 @@ export function PeoplePage(): React.ReactElement {
       <PrimaryPanePublisher node={primaryPane} />
       <ResourceList<PersonRow>
         resource={MODEL}
+        form={personForm}
         placement="inline"
         routed
-        recordTabs={tabs}
         baseFilter={baseFilter}
         draggableRow={personDragPayload}
       >
         <List resource={MODEL}>
-          <Facet field="folder" label={t("person.folder")} />
           <Column field="display_name" />
           <Column field="circle_names" header={t("people.circles.heading")} />
-          <Column field="folder.name" header={t("person.folder")} />
           <Column field="given_name" />
           <Column field="family_name" />
           <Column field="created_at" />
           <Column field="tags" hiddenByDefault />
         </List>
-        {peopleForm(t, mergeSubmit, extraFields, contactActions)}
       </ResourceList>
     </>
   );

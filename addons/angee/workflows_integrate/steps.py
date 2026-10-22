@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from datetime import timedelta
 from typing import Any
 
@@ -12,15 +12,17 @@ from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from angee.base.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
+from angee.identity import public_id_of
 from angee.integrate.impl import AdapterContractError, BridgeImpl
+from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge
-from angee.integrate.states import DiscrepancyKind, StreamPhase
+from angee.integrate.net import AddressResolutionError
+from angee.integrate.states import StreamPhase, SyncFailureKind
 from angee.integrate.streams import advance_stream, begin_stream_cycle, open_stream
 from angee.workflows.context import StepContext
 from angee.workflows.decision_steps import DecisionStep
-from angee.workflows.steps import Retryable, RetryPolicy, Settlement, Step, StepMode, Superseded
+from angee.workflows.steps import Retryable, RetryPolicy, Settlement, Step, StepMode, Superseded, Wait
 
 
 class StreamReference(BaseModel):
@@ -30,6 +32,11 @@ class StreamReference(BaseModel):
     key: str = Field(min_length=1)
     partition: str = ""
 
+    def current_stream(self, bridge: Bridge) -> Any:
+        """Resolve the opened partition's current epoch through its durable owner."""
+        manager = apps.get_model("integrate", "SyncStream").objects
+        return _pull_only(manager.current_for_bridge(bridge, self.key).get(partition=self.partition))
+
 
 class StreamStageInput(StreamReference):
     """One mapped partition and its page bound; SyncStream alone owns the cursor."""
@@ -38,23 +45,23 @@ class StreamStageInput(StreamReference):
 
 
 class StreamStageOutput(BaseModel):
-    """Acknowledged page counts and current stream/discrepancy evidence."""
+    """Acknowledged page counts and current stream/failure evidence."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     counts: dict[str, int]
-    discrepancy_ids: list[str]
+    failure_ids: list[str]
     evidence: list[DecisionRecordReference]
 
     @classmethod
     def for_streams(cls, streams: list[Any], *, counts: dict[str, int]) -> StreamStageOutput:
         """Project unresolved truth through its manager for the admitted partitions."""
-        discrepancies = list(apps.get_model("integrate", "SyncDiscrepancy").objects.unresolved().filter(
-            stream__in=streams,
-        ).order_by("pk"))
+        failures = [row for stream in streams for row in stream.sync_failures(open_only=True)]
+        links = {row.link.pk: row.link for row in failures if row.link is not None}
+
         return cls(
             counts=counts,
-            discrepancy_ids=[public_id_of(row) for row in discrepancies],
-            evidence=[_reference(row) for row in [*streams, *discrepancies]],
+            failure_ids=[row.id for row in failures],
+            evidence=[_reference(row) for row in [*streams, *links.values()]],
         )
 
 
@@ -74,12 +81,11 @@ class CoverageInput(BaseModel):
 
     def current_streams(self, bridge: Bridge) -> list[Any]:
         """Resolve each declared partition through the durable epoch owner."""
-        manager = apps.get_model("integrate", "SyncStream").objects
-        return [manager.current_for_bridge(bridge, row.key).get(partition=row.partition) for row in self.streams]
+        return [row.current_stream(bridge) for row in self.streams]
 
 
 class RescanConfig(BaseModel):
-    """Bounded work and the polling interval for externally resolved discrepancies."""
+    """Bounded work and the interval within which a due retry keeps the rescan waiting."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     reconcile_seconds: int = Field(default=60, ge=1)
@@ -93,6 +99,10 @@ class StreamStage(Step[StreamStageInput, StreamStageOutput, None]):
     lost after the page commits cannot replay that page; its unacknowledged
     count is absent because stream advancement and workflow settlement commit
     independently. Fan-out belongs to the native map step.
+
+    A stage run is one drain of its partition: its first page opens the stream, which
+    reconciles it with the adapter's current declaration (``open_stream``), and each
+    later page resumes the stream that page opened.
     """
 
     key = "integrate_stream"
@@ -104,26 +114,39 @@ class StreamStage(Step[StreamStageInput, StreamStageOutput, None]):
     def run(self, ctx: StepContext) -> Settlement:
         """Apply exactly one bounded page with integrate's page/cursor transaction."""
         bridge = _bridge_subject(ctx)
-        with _stream_io(ctx, bridge) as adapter:
-            stream = open_stream(bridge, ctx.input.key, ctx.input.partition, adapter)
+        with bridge_io(ctx, bridge) as adapter:
+            if isinstance(adapter, Wait):
+                return adapter
+            if ctx.state.get("progress") is None:
+                stream = _pull_only(open_stream(bridge, ctx.input.key, ctx.input.partition, adapter))
+            else:
+                stream = ctx.input.current_stream(bridge)
             page = advance_stream(stream, adapter, page_bound=ctx.input.page_bound)
         progress, resets = page.check_continuation(
-            previous=ctx.state.get("progress"), resets=ctx.state.get("resets", 0),
+            previous=ctx.state.get("progress"),
+            resets=ctx.state.get("resets", 0),
         )
         cycle_items = ctx.state.get("cycle_items", 0) + page.count
         if not page.exhausted:
             return ctx.next_page({"cycle_items": cycle_items, "progress": progress, "resets": resets})
-        return ctx.done(StreamStageOutput.for_streams(
-            [page.stream], counts={"page_items": page.count, "cycle_items": cycle_items},
-        ))
+        return ctx.done(
+            StreamStageOutput.for_streams(
+                [page.stream],
+                counts={"page_items": page.count, "cycle_items": cycle_items},
+            )
+        )
 
 
 class Rescan(Step[CoverageInput, StreamStageOutput, RescanConfig]):
-    """Rescan one partition per attempt and wait while coverage remains open.
+    """Rescan one partition per attempt and wait while a retry falls due.
 
     The driver owns due-identity selection, conflict exclusion and baseline
-    fallback. A baseline's persisted phase survives lost workflow settlement;
-    continuation carries the partition index and progress digest, never a cursor.
+    fallback. The step waits only while some failure the rescan retries is due
+    within ``reconcile_seconds``. One that backs off further, or waits on a
+    conflict, stays on its link for a later cycle and the step finishes reporting
+    it, so a permanent refusal never holds the bridge's one cycle open. A
+    baseline's persisted phase survives lost workflow settlement; continuation
+    carries the partition index and progress digest, never a cursor.
     """
 
     key = "integrate_rescan"
@@ -133,75 +156,94 @@ class Rescan(Step[CoverageInput, StreamStageOutput, RescanConfig]):
     retry = RetryPolicy(max_attempts=3)
 
     def run(self, ctx: StepContext) -> Settlement:
-        """Bound recovery work before testing the current discrepancy truth."""
+        """Bound recovery work before testing the current failure truth."""
         bridge = _bridge_subject(ctx)
         streams = ctx.input.current_streams(bridge)
         index = ctx.state.get("rescan_index", 0)
         stream = streams[index]
         page = None
-        with _stream_io(ctx, bridge) as adapter:
-            if stream.phase != StreamPhase.BASELINE:
-                stream = begin_stream_cycle(stream, adapter, page_bound=ctx.config.rescan_bound)
+        with bridge_io(ctx, bridge) as adapter:
+            if isinstance(adapter, Wait):
+                return adapter
+            stream = begin_stream_cycle(stream, adapter, page_bound=ctx.config.rescan_bound)
             if stream.resync_required or stream.phase == StreamPhase.BASELINE:
                 page = advance_stream(stream, adapter, page_bound=ctx.config.rescan_bound)
         if page is not None:
             progress, resets = page.check_continuation(
-                previous=ctx.state.get("progress"), resets=ctx.state.get("resets", 0),
+                previous=ctx.state.get("progress"),
+                resets=ctx.state.get("resets", 0),
             )
             if not page.exhausted:
                 return ctx.next_page({"rescan_index": index, "progress": progress, "resets": resets})
         if index + 1 < len(streams):
             return ctx.next_page({"rescan_index": index + 1})
-        output = StreamStageOutput.for_streams(
-            ctx.input.current_streams(bridge), counts={"streams": len(streams)},
-        )
-        if output.discrepancy_ids:
-            return ctx.wait(until=ctx.now + timedelta(seconds=ctx.config.reconcile_seconds), state={"rescan_index": 0})
-        return ctx.done(output)
+        current = ctx.input.current_streams(bridge)
+        wake = ctx.now + timedelta(seconds=ctx.config.reconcile_seconds)
+        if any(row.links.rescan(limit=1, due_by=wake) for row in current):
+            return ctx.wait(until=wake, state={"rescan_index": 0})
+        return ctx.done(StreamStageOutput.for_streams(current, counts={"streams": len(streams)}))
 
 
 class ConflictReview(DecisionStep[CoverageInput, StreamStageOutput, None]):
-    """Ask independent questions; direct domain edits resolve the discrepancies."""
+    """Ask independent questions; direct domain edits resolve the failures."""
 
     key = "integrate_conflicts"
     label = "Review sync conflicts"
 
     def ask(self, ctx: StepContext) -> Settlement:
         streams = ctx.input.current_streams(_bridge_subject(ctx))
-        conflicts = (
-            apps.get_model("integrate", "SyncDiscrepancy")
-            .objects.unresolved()
-            .filter(
-                stream__in=streams,
-                kind=DiscrepancyKind.CONFLICT,
-            )
-            .order_by("pk")
+        conflicts = [
+            row
+            for stream in streams
+            for row in stream.sync_failures(open_only=True)
+            if row.kind == SyncFailureKind.CONFLICT
+        ]
+        # Decisions reference permission-bearing owners, never a JSON state slot.
+        records = tuple(
+            {
+                (owner._meta.label, owner.pk): owner
+                for row in conflicts
+                for owner in (row.link if row.link is not None else row.stream,)
+            }.values()
         )
-        records = tuple(conflicts.select_related("stream"))
+
         if records:
-            return ctx.ask(DecisionRequest(
-                kind="review-sync-conflict", records=records, assignees=(ctx.actor,), requester=None,
-                proposal=DecisionProposal.model_validate({"multiple": True, "alternatives": [
-                    {"key": public_id_of(row), "label": f"Recheck {row}", "outcome": "done"}
-                    for row in records
-                ]}),
-                context=DecisionContext(references=tuple(_reference(row.stream) for row in records)),
-            ))
+            return ctx.ask(
+                DecisionRequest(
+                    kind="review-sync-conflict",
+                    records=records,
+                    assignees=(ctx.actor,),
+                    requester=None,
+                    proposal=DecisionProposal.model_validate(
+                        {
+                            "multiple": True,
+                            "alternatives": [
+                                {"key": public_id_of(row), "label": f"Recheck {row}", "outcome": "done"}
+                                for row in records
+                            ],
+                        }
+                    ),
+                    context=DecisionContext(references=tuple(_reference(row.stream) for row in conflicts)),
+                )
+            )
         return ctx.done(StreamStageOutput.for_streams(streams, counts={"streams": len(streams)}))
 
     def continue_with(self, ctx: StepContext, decision: Any, outcome: str) -> Settlement:
         streams = ctx.input.current_streams(_bridge_subject(ctx))
-        if (
-            apps.get_model("integrate", "SyncDiscrepancy")
-            .objects.unresolved()
-            .filter(
-                stream__in=streams,
-                kind=DiscrepancyKind.CONFLICT,
-            )
-            .exists()
+        if any(
+            row.kind == SyncFailureKind.CONFLICT for stream in streams for row in stream.sync_failures(open_only=True)
         ):
             raise ValidationError({"conflicts": "Resolve the sync conflicts before retrying this step."})
         return ctx.done(StreamStageOutput.for_streams(streams, counts={"streams": len(streams)}))
+
+
+def _pull_only(stream: Any) -> Any:
+    """Admit a pull-only partition: no cycle stage pushes, so none could write or retry a refused write."""
+    if stream.writes_back:
+        raise ValidationError(
+            f"Workflow sync cycles pull only; stream {stream.key!r} partition {stream.partition!r} writes back."
+        )
+    return stream
 
 
 def _bridge_subject(ctx: StepContext) -> Bridge:
@@ -213,15 +255,39 @@ def _bridge_subject(ctx: StepContext) -> Bridge:
 
 
 @contextmanager
-def _stream_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl]:
-    """Fence transport and classify infrastructure failures for native retries."""
-    ctx.heartbeat()
-    ctx.begin_effect()
+def bridge_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl | Wait]:
+    """Serialize single-partition adapters and fence one bounded IO operation.
+
+    A cap of exactly one uses the bridge's existing sync/webhook lock across
+    partitions and workflow runs. Contention waits without marking an effect or
+    charging retry budget; callers return the yielded native Wait unchanged.
+    Other caps retain native map scheduling rather than promising a semaphore.
+
+    A host that does not resolve is retried too: a resolver that is briefly offline
+    answers "no such host" on some platforms (macOS), and a host that truly has no
+    address still fails once the step's attempts run out.
+    """
     try:
-        with closing(bridge.backend) as adapter:
-            yield adapter
-    except (AdapterContractError, ImproperlyConfigured, PermissionDenied, ValidationError,
-            Retryable, Superseded, SoftTimeLimitExceeded):
+        with closing(bridge.capability_impl) as adapter:
+            lock = bridge_advisory_lock(bridge) if adapter.sync_parallelism == 1 else nullcontext(True)
+            with lock as acquired:
+                if not acquired:
+                    yield ctx.wait(until=ctx.now + timedelta(seconds=1), state=ctx.state)
+                    return
+                ctx.heartbeat()
+                ctx.begin_effect()
+                yield adapter
+    except AddressResolutionError as error:
+        raise Retryable("The bridge host could not be resolved.") from error
+    except (
+        AdapterContractError,
+        ImproperlyConfigured,
+        PermissionDenied,
+        ValidationError,
+        Retryable,
+        Superseded,
+        SoftTimeLimitExceeded,
+    ):
         raise
     except Exception as error:  # noqa: BLE001 -- adapters quarantine semantic errors in the page owner.
         raise Retryable("Stream transport failed.") from error

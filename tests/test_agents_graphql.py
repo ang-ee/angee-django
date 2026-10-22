@@ -31,10 +31,12 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.memberships import containers_of
 
 from angee.agents import signals as agent_signals
 from angee.agents.context import render_view_context
 from angee.agents.models import MCPPlacement
+from angee.agents.reader_role import RESOURCE_READER_ROLE
 from angee.agents.testing.models import (
     Agent,
     AgentSession,
@@ -44,11 +46,11 @@ from angee.agents.testing.models import (
     MCPServer,
     Skill,
 )
-from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
 from angee.jobs.locks import task_lock
+from angee.models import TransitionNotAllowed
 from angee.operator.daemon import OperatorDaemonConflict, OperatorDaemonNotFound, OperatorInstanceKind, WorkspaceStatus
 from tests.conftest import (
     Credential,
@@ -112,9 +114,9 @@ def test_agent_hasura_insert_accepts_enum_member_names(composed_tables: None) ->
         _execute(
             console,
             """
-            mutation CreateAgent($owner: ID!) {
+            mutation CreateAgent {
               insert_agents_one(
-                object: {name: "InProcess", owner: $owner, runtime_class: "PYDANTIC"}
+                object: {name: "InProcess", runtime_class: "PYDANTIC"}
               ) {
                 id
                 runtime_class
@@ -123,7 +125,7 @@ def test_agent_hasura_insert_accepts_enum_member_names(composed_tables: None) ->
               }
             }
             """,
-            {"owner": str(admin.sqid)},
+            {},
             user=admin,
         )
     )["insert_agents_one"]
@@ -159,6 +161,111 @@ def test_agent_chat_readiness_requires_its_runtime_transport(
     assert agent.expects_service is expects_service
 
 
+def test_agent_hasura_reader_policy_reconciles_membership_with_the_write(composed_tables: None) -> None:
+    """Hasura patches revoke immediately and grant only a provisioned in-process agent."""
+    admin = _platform_admin("agent-reader-admin")
+    console = _schema()
+    with system_context(reason="agent reader policy fixture"):
+        agent = Agent.objects.create(name="Reader policy", owner=admin, runtime_class="pydantic")
+        assert RESOURCE_READER_ROLE not in set(containers_of(agent.user))
+        agent.mark_provisioning()
+        agent.mark_provisioned(workspace="")
+        assert RESOURCE_READER_ROLE in set(containers_of(agent.user))
+
+    query = """
+        mutation ReaderPolicy($id: String!, $enabled: Boolean!) {
+          update_agents_by_pk(pk_columns: {id: $id}, _set: {resource_reader: $enabled}) {
+            resource_reader
+          }
+        }
+    """
+    for enabled in (False, True):
+        result = _data(_execute(console, query, {"id": str(agent.sqid), "enabled": enabled}, user=admin))
+        assert result["update_agents_by_pk"]["resource_reader"] is enabled
+        with system_context(reason="agent reader policy assertion"):
+            agent.refresh_from_db()
+            assert agent.resource_reader is enabled
+            assert (RESOURCE_READER_ROLE in set(containers_of(agent.user))) is enabled
+
+    with pytest.raises(RuntimeError, match="Roll back policy"):
+        with transaction.atomic():
+            _data(_execute(console, query, {"id": str(agent.sqid), "enabled": False}, user=admin))
+            with system_context(reason="reader policy transaction assertion"):
+                assert RESOURCE_READER_ROLE not in set(containers_of(agent.user))
+            raise RuntimeError("Roll back policy")
+    with system_context(reason="reader policy rollback assertion"):
+        agent.refresh_from_db()
+        assert agent.resource_reader
+        assert RESOURCE_READER_ROLE in set(containers_of(agent.user))
+
+
+@pytest.mark.parametrize("change", ["lifecycle", "runtime"])
+def test_agent_reader_membership_is_revoked_when_readiness_or_runtime_changes(
+    composed_tables: None, change: str,
+) -> None:
+    admin = _platform_admin("reader-revocation-admin")
+    with system_context(reason="agent reader revocation fixture"):
+        agent = Agent.objects.create(name="Reader", owner=admin, runtime_class="pydantic")
+        agent.mark_provisioning()
+        agent.mark_provisioned(workspace="")
+        assert RESOURCE_READER_ROLE in set(containers_of(agent.user))
+        if change == "lifecycle":
+            agent.mark_deprovisioning()
+        else:
+            agent.runtime_class = "claude_code"
+            agent.save(update_fields=("runtime_class", "updated_at"))
+        assert RESOURCE_READER_ROLE not in set(containers_of(agent.user))
+
+
+@pytest.mark.parametrize("relation", ["owner", "editor"])
+def test_only_admin_can_change_resource_reader_policy(composed_tables: None, relation: str) -> None:
+    admin = _platform_admin("reader-field-admin")
+    with system_context(reason="reader field authority fixture"):
+        owner = User.objects.create_user(username="reader-field-owner")
+        editor = User.objects.create_user(username="reader-field-editor")
+        agent = Agent.objects.create(name="Restricted reader", owner=owner, runtime_class="pydantic",
+                                     resource_reader=False)
+        agent.mark_provisioning()
+        agent.mark_provisioned(workspace="")
+    with system_context(reason="reader field editor fixture"):
+        write_relationships([
+            RelationshipTuple(resource=to_object_ref(agent), relation="editor", subject=to_subject_ref(editor)),
+        ])
+    actor = owner if relation == "owner" else editor
+    query = """mutation ReaderPolicy($id: String!, $enabled: Boolean!) {
+      update_agents_by_pk(pk_columns: {id: $id}, _set: {resource_reader: $enabled}) { resource_reader }
+    }"""
+    console = _schema()
+    for enabled in (True, False):
+        _data(_execute(console, query, {"id": str(agent.sqid), "enabled": not enabled}, user=admin))
+        result = _execute(console, query, {"id": str(agent.sqid), "enabled": enabled}, user=actor)
+        assert result.errors
+        with system_context(reason="refused reader policy"):
+            agent.refresh_from_db()
+            assert agent.resource_reader is not enabled
+            assert (RESOURCE_READER_ROLE in set(containers_of(agent.user))) is not enabled
+    assert _data(_execute(console, query, {"id": str(agent.sqid), "enabled": True}, user=admin))[
+        "update_agents_by_pk"
+    ]["resource_reader"] is True
+
+
+def test_stale_full_save_reconciles_reader_membership_from_locked_policy(composed_tables: None) -> None:
+    admin = _platform_admin("stale-reader-admin")
+    with system_context(reason="stale reader policy"):
+        agent = Agent.objects.create(name="Stale reader", owner=admin, runtime_class="pydantic")
+        agent.mark_provisioning()
+        agent.mark_provisioned(workspace="")
+        stale = Agent.objects.get(pk=agent.pk)
+        agent.mark_deprovisioning()
+        assert RESOURCE_READER_ROLE not in set(containers_of(agent.user))
+        stale.description = "A full save from an earlier read"
+        stale.save()
+        agent.refresh_from_db()
+        assert (RESOURCE_READER_ROLE in set(containers_of(agent.user))) == (
+            agent.lifecycle == "ready" and agent.runs_in_process and agent.resource_reader
+        )
+
+
 def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
     """Agent row writes use the generated Hasura mutation roots."""
 
@@ -169,8 +276,8 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
         _execute(
             console,
             """
-            mutation CreateAgent($owner: ID!) {
-              insert_agents_one(object: {name: "Composer", owner: $owner}) {
+            mutation CreateAgent {
+              insert_agents_one(object: {name: "Composer"}) {
                 id
                 name
                 lifecycle
@@ -184,10 +291,11 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
               }
             }
             """,
-            {"owner": str(admin.sqid)},
+            {},
             user=admin,
         )
     )["insert_agents_one"]
+    # The insert takes the acting user as owner; ownership changes only by transfer.
     assert created == {
         "id": created["id"],
         "name": "Composer",
@@ -204,11 +312,11 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
     rejected_insert = _execute(
         console,
         """
-        mutation SeedState($owner: ID!) {
-          insert_agents_one(object: {name: "Bypass", owner: $owner, lifecycle: "ready"}) { id }
+        mutation SeedState {
+          insert_agents_one(object: {name: "Bypass", lifecycle: "ready"}) { id }
         }
         """,
-        {"owner": str(admin.sqid)},
+        {},
         user=admin,
     )
     assert rejected_insert.errors
@@ -291,8 +399,8 @@ def test_agent_delete_preview_hides_other_users_transcripts_and_confirms(compose
     other = User.objects.create_user(username="agt-preview-other")
     with system_context(reason="test.agents.delete_preview.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner, lifecycle="deprovisioned")
-        visible_session = AgentSession.objects.create(agent=agent, owner=owner, title="Own conversation")
-        hidden_session = AgentSession.objects.create(agent=agent, owner=other, title="Secret conversation")
+        visible_session = AgentSession.objects.create(agent=agent, user=owner, title="Own conversation")
+        hidden_session = AgentSession.objects.create(agent=agent, user=other, title="Secret conversation")
         visible_turn = AgentTurn.objects.create(
             session=visible_session,
             index=1,
@@ -380,7 +488,7 @@ def test_agent_delete_preview_reports_hidden_active_turn_blockers(
     other = User.objects.create_user(username="agt-active-preview-other")
     with system_context(reason="test.agents.active_preview.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner)
-        session = AgentSession.objects.create(agent=agent, owner=other, title="Secret conversation")
+        session = AgentSession.objects.create(agent=agent, user=other, title="Secret conversation")
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Secret prompt", status=status)
     preview = _data(
         _execute(
@@ -410,14 +518,14 @@ def test_agent_delete_preview_has_constant_query_count_across_sessions(composed_
     """Collecting 1 or 50 private active sessions adds no per-session blocker queries."""
 
     owner = User.objects.create_user(username="agt-preview-budget-owner")
-    other = User.objects.create_user(username="agt-preview-budget-session-owner")
+    other = User.objects.create_user(username="agt-preview-budget-session-user")
     agents = []
     with system_context(reason="test.agents.preview_budget.seed"):
         for size in (1, 50):
             agent = Agent.objects.create(name=f"Assistant {size}", owner=owner, lifecycle="deprovisioned")
             agents.append(agent)
             for _ in range(size):
-                session = AgentSession.objects.create(agent=agent, owner=other)
+                session = AgentSession.objects.create(agent=agent, user=other)
                 AgentTurn.objects.create(session=session, index=1, prompt="Private question", status="running")
     console = _schema()
     _data(_execute(console, _DELETE_AGENT_PREVIEW, {"id": str(agents[0].sqid)}, user=owner))
@@ -445,7 +553,7 @@ def test_graphql_delete_receivers_refuse_after_preview_race(
     admin = _platform_admin("agt-preview-race-admin")
     with system_context(reason="test.agents.preview_race.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner, lifecycle="deprovisioned")
-        session = AgentSession.objects.create(agent=agent, owner=owner)
+        session = AgentSession.objects.create(agent=agent, user=owner)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status="running")
         principal = agent.user
     from_instance = DeletePreview.from_instance
@@ -488,16 +596,16 @@ def test_agent_delete_capability_has_constant_query_count(composed_tables: None)
     """A narrow can_delete selection batches active turns and lifecycle facts."""
 
     owner = User.objects.create_user(username="agt-delete-budget-owner")
-    other = User.objects.create_user(username="agt-delete-budget-session-owner")
+    other = User.objects.create_user(username="agt-delete-budget-session-user")
     with system_context(reason="test.agents.delete_capability.seed"):
         idle = Agent.objects.create(name="A idle", owner=owner)
-        AgentSession.objects.create(agent=idle, owner=other)
+        AgentSession.objects.create(agent=idle, user=other)
         active = Agent.objects.create(name="B active", owner=owner)
-        session = AgentSession.objects.create(agent=active, owner=other)
+        session = AgentSession.objects.create(agent=active, user=other)
         AgentTurn.objects.create(session=session, index=1, prompt="Private question", status="running")
         Agent.objects.create(name="C rendered", owner=owner, lifecycle="ready", service="agent-service")
         waiting = Agent.objects.create(name="D waiting", owner=owner)
-        session = AgentSession.objects.create(agent=waiting, owner=other)
+        session = AgentSession.objects.create(agent=waiting, user=other)
         AgentTurn.objects.create(session=session, index=1, prompt="Private approval", status="awaiting_approval")
     query = """
         query Capabilities($limit: Int!) {
@@ -572,7 +680,7 @@ def test_owner_deletes_agent_with_idle_sessions_from_several_users(composed_tabl
     with system_context(reason="test.agents.cascade.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner, lifecycle="deprovisioned")
         sessions = [
-            AgentSession.objects.create(agent=agent, owner=user, title=f"Private {user.username}")
+            AgentSession.objects.create(agent=agent, user=user, title=f"Private {user.username}")
             for user in (owner, *others)
         ]
         turns = [
@@ -581,7 +689,7 @@ def test_owner_deletes_agent_with_idle_sessions_from_several_users(composed_tabl
             for index, status in enumerate(("completed", "failed", "canceled", "pending"), 1)
         ]
         unrelated = Agent.objects.create(name="Unrelated", owner=others[0])
-        unrelated_session = AgentSession.objects.create(agent=unrelated, owner=others[0])
+        unrelated_session = AgentSession.objects.create(agent=unrelated, user=others[0])
         unrelated_turn = AgentTurn.objects.create(session=unrelated_session, index=1, prompt="Keep", status="completed")
     with actor_context(owner):
         assert Agent.objects.get(pk=agent.pk).can_delete
@@ -622,10 +730,10 @@ def test_agent_transcript_delete_keeps_owner_authority_throughout(
     """Private sessions and turns delete through their agent without any elevation."""
 
     owner = User.objects.create_user(username="agt-cascade-binding-owner")
-    other = User.objects.create_user(username="agt-cascade-binding-session-owner")
+    other = User.objects.create_user(username="agt-cascade-binding-session-user")
     with system_context(reason="test.agents.cascade_binding.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner, lifecycle="deprovisioned")
-        session = AgentSession.objects.create(agent=agent, owner=other)
+        session = AgentSession.objects.create(agent=agent, user=other)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Private", status="completed")
     seen: set[type[models.Model]] = set()
 
@@ -662,7 +770,7 @@ def test_agent_owner_or_admin_deletes_a_session_directly(composed_tables: None, 
     admin = _platform_admin("agt-direct-session-admin")
     with system_context(reason="test.agents.direct_session_delete.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner)
-        session = AgentSession.objects.create(agent=agent, owner=owner)
+        session = AgentSession.objects.create(agent=agent, user=owner)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Question", status="completed")
     console = _schema()
     delete_session = "mutation Delete($id: String!) { delete_agent_sessions_by_pk(id: $id) { id } }"
@@ -676,14 +784,14 @@ def test_agent_owner_or_admin_deletes_a_session_directly(composed_tables: None, 
         assert not AgentTurn.objects.filter(pk=turn.pk).exists()
 
 
-def test_session_owner_without_agent_ownership_cannot_delete_transcripts(composed_tables: None) -> None:
+def test_session_user_without_agent_ownership_cannot_delete_transcripts(composed_tables: None) -> None:
     """Session write permission grants neither session nor turn deletion."""
 
     owner = User.objects.create_user(username="agt-session-agent-owner")
-    other = User.objects.create_user(username="agt-session-only-owner")
-    with system_context(reason="test.agents.session_owner_delete.seed"):
+    other = User.objects.create_user(username="agt-session-only-user")
+    with system_context(reason="test.agents.session_user_delete.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner)
-        session = AgentSession.objects.create(agent=agent, owner=other)
+        session = AgentSession.objects.create(agent=agent, user=other)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Question", status="completed")
     with actor_context(other):
         for model, pk in ((AgentSession, session.pk), (AgentTurn, turn.pk)):
@@ -699,7 +807,7 @@ def test_session_owner_without_agent_ownership_cannot_delete_transcripts(compose
     )
     assert refused.errors is not None
     assert refused.errors[0].extensions == {"code": "PERMISSION_DENIED"}
-    with system_context(reason="test.agents.session_owner_delete.verify"):
+    with system_context(reason="test.agents.session_user_delete.verify"):
         assert Agent.objects.filter(pk=agent.pk).exists()
         assert AgentSession.objects.filter(pk=session.pk).exists()
         assert AgentTurn.objects.filter(pk=turn.pk).exists()
@@ -710,11 +818,11 @@ def test_agent_delete_refuses_active_turns_in_unreadable_sessions(composed_table
     """The projection and delete verb refuse all active work without disclosing its transcript."""
 
     owner = User.objects.create_user(username="agt-active-agent-owner")
-    other = User.objects.create_user(username="agt-active-agent-session-owner")
+    other = User.objects.create_user(username="agt-active-agent-session-user")
     with system_context(reason="test.agents.active_agent_delete.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner)
         # Turn execution owns eligibility, even if the session projection is stale.
-        session = AgentSession.objects.create(agent=agent, owner=other)
+        session = AgentSession.objects.create(agent=agent, user=other)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Private question", status=status)
     with actor_context(owner):
         target = Agent.objects.get(pk=agent.pk)
@@ -774,7 +882,7 @@ def test_agent_delete_denies_before_locking_or_disclosing_session_counts(
     reader = User.objects.create_user(username="agt-delete-reader")
     with system_context(reason="test.agents.delete_permission.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner)
-        AgentSession.objects.create(agent=agent, owner=owner)
+        AgentSession.objects.create(agent=agent, user=owner)
         write_relationships(
             [
                 RelationshipTuple(resource=to_object_ref(agent), relation=relation, subject=to_subject_ref(reader)),
@@ -823,7 +931,7 @@ def test_agent_session_delete_refuses_an_active_turn(composed_tables: None, stat
     admin = _platform_admin(f"agt-active-session-admin-{status}")
     with system_context(reason="test.agents.active_session_delete.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner)
-        session = AgentSession.objects.create(agent=agent, owner=owner, status=status)
+        session = AgentSession.objects.create(agent=agent, user=owner, status=status)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Question", status=status)
     result = _execute(
         _schema(),
@@ -847,12 +955,12 @@ def test_agent_queryset_delete_refuses_private_active_turns(
     """Bulk deletion refuses hidden active work without exposing a turn identity."""
 
     owner = User.objects.create_user(username="agt-bulk-active-owner")
-    other = User.objects.create_user(username="agt-bulk-active-session-owner")
+    other = User.objects.create_user(username="agt-bulk-active-session-user")
     admin = _platform_admin("agt-bulk-active-admin")
     with system_context(reason="test.agents.bulk_active.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner, lifecycle="deprovisioned")
         idle = Agent.objects.create(name="Idle", owner=owner, lifecycle="deprovisioned")
-        session = AgentSession.objects.create(agent=agent, owner=other)
+        session = AgentSession.objects.create(agent=agent, user=other)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Private question", status=status)
         principal = agent.user
     targets = (
@@ -890,7 +998,7 @@ def test_agent_queryset_delete_requires_deprovisioning(
     admin = _platform_admin("agt-bulk-provisioned-admin")
     with system_context(reason="test.agents.bulk_provisioned.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner, **state)
-        session = AgentSession.objects.create(agent=agent, owner=owner)
+        session = AgentSession.objects.create(agent=agent, user=owner)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status="completed")
         principal = agent.user
     targets = (
@@ -915,7 +1023,7 @@ def test_transcript_queryset_delete_refuses_active_turns(
     owner = User.objects.create_user(username="agt-transcript-bulk-owner")
     with system_context(reason="test.agents.transcript_bulk.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner)
-        session = AgentSession.objects.create(agent=agent, owner=owner)
+        session = AgentSession.objects.create(agent=agent, user=owner)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status=status)
     with pytest.raises(ValidationError, match="An agent turn is still running or awaiting approval; stop it first"):
         model.system_queryset().filter(pk=session.pk if model is AgentSession else turn.pk).delete()
@@ -925,7 +1033,6 @@ def test_transcript_queryset_delete_refuses_active_turns(
         assert AgentTurn.objects.filter(pk=turn.pk, status=status).exists()
 
 
-@pytest.mark.parametrize("cascade", ["agent_owner", "session_owner"])
 @pytest.mark.parametrize("status", ["running", "awaiting_approval"])
 @pytest.mark.parametrize(
     ("mutation", "is_preview"),
@@ -940,36 +1047,31 @@ def test_transcript_queryset_delete_refuses_active_turns(
 )
 def test_user_delete_refuses_active_turn_cascades(
     composed_tables: None,
-    cascade: str,
     status: str,
     mutation: str,
     is_preview: bool,
 ) -> None:
-    """IAM cannot delete an active turn through either user-owned cascade."""
+    """IAM cannot delete an active turn through the session user's cascade."""
 
     owner = User.objects.create_user(username="agt-user-cascade-agent-owner")
-    other = User.objects.create_user(username="agt-user-cascade-session-owner")
+    other = User.objects.create_user(username="agt-user-cascade-session-user")
     admin = _platform_admin("agt-user-cascade-admin")
     with system_context(reason="test.agents.user_cascade.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner, lifecycle="deprovisioned")
-        session = AgentSession.objects.create(agent=agent, owner=other)
+        session = AgentSession.objects.create(agent=agent, user=other)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status=status)
         principal = agent.user
-    target = owner if cascade == "agent_owner" else other
-    result = _execute(_schema(), mutation, {"id": str(target.sqid)}, user=admin)
+    result = _execute(_schema(), mutation, {"id": str(other.sqid)}, user=admin)
     turn_message = "An agent turn is still running or awaiting approval; stop it first."
-    agent_message = "Stop all active turns before deleting this agent."
     if is_preview:
         preview = _data(result)["delete_user"]
         assert preview["has_blockers"] is True
         assert preview["blocked"] == []
-        assert preview["refusals"] == ([agent_message, turn_message] if cascade == "agent_owner" else [turn_message])
+        assert preview["refusals"] == [turn_message]
     else:
         assert result.errors is not None
         assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
-        assert result.errors[0].message == (
-            f"{agent_message} {turn_message}" if cascade == "agent_owner" else turn_message
-        )
+        assert result.errors[0].message == turn_message
     with system_context(reason="test.agents.user_cascade.verify"):
         assert User.objects.filter(pk__in=[owner.pk, other.pk, principal.pk]).count() == 3
         assert User.objects.filter(pk=principal.pk, is_active=True).exists()
@@ -985,7 +1087,7 @@ def test_instance_delete_uses_current_lifecycle_state(composed_tables: None, mod
     owner = User.objects.create_user(username="agt-stale-delete-owner")
     with system_context(reason="test.agents.stale_delete.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner)
-        session = AgentSession.objects.create(agent=agent, owner=owner)
+        session = AgentSession.objects.create(agent=agent, user=owner)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained")
     with actor_context(owner):
         stale = model.objects.get(pk=agent.pk if model is Agent else turn.pk)
@@ -1006,10 +1108,10 @@ def test_agent_owner_cannot_delete_session_with_hidden_active_turn(composed_tabl
     """Delete authority over a private session never bypasses hidden active work."""
 
     owner = User.objects.create_user(username="agt-hidden-active-owner")
-    other = User.objects.create_user(username="agt-hidden-active-session-owner")
+    other = User.objects.create_user(username="agt-hidden-active-session-user")
     with system_context(reason="test.agents.hidden_active.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner)
-        session = AgentSession.objects.create(agent=agent, owner=other)
+        session = AgentSession.objects.create(agent=agent, user=other)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Private", status=status)
     with actor_context(owner):
         target = AgentSession.objects.with_action("delete").get(pk=session.pk)
@@ -1029,7 +1131,7 @@ def test_instance_delete_tolerates_a_vanished_row(composed_tables: None, model: 
     owner = User.objects.create_user(username="agt-vanished-delete-owner")
     with system_context(reason="test.agents.vanished_delete"):
         agent = Agent.objects.create(name="Assistant", owner=owner, lifecycle="deprovisioned")
-        session = AgentSession.objects.create(agent=agent, owner=owner)
+        session = AgentSession.objects.create(agent=agent, user=owner)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status="completed")
         target_pk = {Agent: agent.pk, AgentSession: session.pk, AgentTurn: turn.pk}[model]
         stale = model.objects.get(pk=target_pk)
@@ -1045,7 +1147,7 @@ def test_fifty_turn_agent_cascade_has_bounded_guard_queries(composed_tables: Non
     owner = User.objects.create_user(username="agt-delete-query-owner")
     with system_context(reason="test.agents.delete_queries.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner, lifecycle="deprovisioned")
-        sessions = [AgentSession.objects.create(agent=agent, owner=owner) for _ in range(3)]
+        sessions = [AgentSession.objects.create(agent=agent, user=owner) for _ in range(3)]
         for index in range(50):
             AgentTurn.objects.create(
                 session=sessions[index % len(sessions)], index=index + 1, prompt="Retained", status="completed",
@@ -1101,7 +1203,7 @@ def test_agent_delete_after_stop_uses_current_capability(composed_tables: None) 
     owner = User.objects.create_user(username="agt-stale-capability-owner")
     with system_context(reason="test.agents.stale_capability.seed"):
         agent = Agent.objects.create(name="Assistant", owner=owner, lifecycle="deprovisioned")
-        session = AgentSession.objects.create(agent=agent, owner=owner)
+        session = AgentSession.objects.create(agent=agent, user=owner)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status="running")
     with actor_context(owner):
         target = Agent.objects.annotate(_has_active_turns=Agent.has_active_turns_expression()).get(pk=agent.pk)
@@ -1114,25 +1216,30 @@ def test_agent_delete_after_stop_uses_current_capability(composed_tables: None) 
         assert not AgentTurn.objects.filter(pk=turn.pk).exists()
 
 
-def test_user_delete_requires_owned_agent_deprovisioning(composed_tables: None) -> None:
-    """Deleting an owner cannot bypass teardown merely because their agent is idle."""
+@pytest.mark.parametrize("lifecycle", ["ready", "deprovisioned"])
+def test_user_delete_leaves_their_agents_ownerless_with_running_work(composed_tables: None, lifecycle: str) -> None:
+    """Deleting an agent's owner clears the owner; the agent, its principal and active turns remain."""
 
-    owner = User.objects.create_user(username="agt-user-provisioned-owner")
-    admin = _platform_admin("agt-user-provisioned-admin")
-    with system_context(reason="test.agents.user_provisioned.seed"):
-        agent = Agent.objects.create(name="Assistant", owner=owner, lifecycle="ready", workspace="ws-agent")
+    owner = User.objects.create_user(username="agt-user-agent-owner")
+    other = User.objects.create_user(username="agt-user-agent-session-user")
+    admin = _platform_admin("agt-user-agent-admin")
+    with system_context(reason="test.agents.user_agent_owner.seed"):
+        agent = Agent.objects.create(
+            name="Assistant", owner=owner, lifecycle=lifecycle, workspace="ws-agent" if lifecycle == "ready" else "",
+        )
+        session = AgentSession.objects.create(agent=agent, user=other)
+        turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status="running")
         principal = agent.user
     result = _execute(
         _schema(), "mutation Delete($id: String!) { delete_users_by_pk(id: $id) { id } }",
         {"id": str(owner.sqid)}, user=admin,
     )
-    assert result.errors is not None
-    assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
-    assert result.errors[0].message == "Deprovision this agent before deleting it."
-    with system_context(reason="test.agents.user_provisioned.verify"):
-        assert User.objects.filter(pk__in=[owner.pk, principal.pk]).count() == 2
+    assert result.errors is None
+    with system_context(reason="test.agents.user_agent_owner.verify"):
+        assert not User.objects.filter(pk=owner.pk).exists()
+        assert Agent.objects.filter(pk=agent.pk, owner__isnull=True, lifecycle=lifecycle).exists()
         assert User.objects.filter(pk=principal.pk, is_active=True).exists()
-        assert Agent.objects.filter(pk=agent.pk).exists()
+        assert AgentTurn.objects.filter(pk=turn.pk, session=session, status="running").exists()
 
 
 def test_agent_hasura_update_sets_many_to_many_skills(composed_tables: None) -> None:
@@ -1449,13 +1556,17 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(composed_
     """Provider connect resolves OAuth from provider.backend."""
 
     del composed_tables
-    provider = _provider("agt-provider-connect", backend_class="anthropic", name="Anthropic")
+    provider = _provider(
+        "agt-provider-connect", backend_class="anthropic", name="Anthropic", credential=None, lifecycle="disconnected",
+    )
     provider_id = _public_id(provider.sqid)
     with system_context(reason="test.agents.provider_connect.seed"):
         oauth_client = OAuthClient.objects.create(
             slug="anthropic-personal",
             display_name="Anthropic Personal",
             client_id="anthropic-client",
+            authorize_endpoint="https://provider.example/authorize",
+            token_endpoint="https://provider.example/token",
         )
         credential = Credential.objects.upsert_for_user(
             provider.owner,
@@ -1463,6 +1574,7 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(composed_
             str(CredentialKind.OAUTH),
             {"access_token": "anthropic-token"},
         )
+        assert provider.connect_oauth_client("Inference provider").pk == oauth_client.pk
     mutation = """
         mutation ConnectProvider($id: ID!) {
           connect_inference_provider(id: $id) {
@@ -1487,6 +1599,23 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(composed_
     }
     provider.refresh_from_db()
     assert provider.credential_id == credential.pk
+
+
+def test_inference_provider_projects_shared_connection_readiness(composed_tables: None) -> None:
+    provider = _provider("provider-readiness", backend_class="anthropic")
+    with system_context(reason="test provider ready registration"):
+        OAuthClient.objects.create(
+            slug="anthropic-personal", display_name="Personal", client_id="application",
+            authorize_endpoint="https://provider.example/auth", token_endpoint="https://provider.example/token",
+        )
+    row = _data(_execute(_schema(), """
+        query($id: String!) {
+          inference_providers_by_pk(id: $id) {
+            credential_status is_reconnect_required is_oauth_connectable
+          }
+        }
+    """, {"id": _public_id(provider.sqid)}, user=provider.owner))["inference_providers_by_pk"]
+    assert row == {"credential_status": "active", "is_reconnect_required": False, "is_oauth_connectable": True}
 
 
 def test_connect_inference_provider_uses_shared_oauth_client_error_code(
@@ -2902,7 +3031,7 @@ def test_agent_verb_eligibility_selects_without_per_row_queries(composed_tables:
                     conflict_name=f"ws-row-{index}" if index % 2 else "",
                 )
                 if index % 3 == 0:
-                    AgentSession.objects.create(agent=agent, owner=admin)
+                    AgentSession.objects.create(agent=agent, user=admin)
         with CaptureQueriesContext(connection) as captured:
             rows = _data(_execute(_schema(), query, user=admin))["agents"]
         assert len(rows) == count
@@ -3186,7 +3315,7 @@ def test_agent_session_reads_and_view_resolution(composed_tables: None, capture_
             ]
         )
     with actor_context(owner):
-        session = AgentSession.objects.start(agent, owner=owner, context={"kind": "list"})
+        session = AgentSession.objects.start(agent, user=owner, context={"kind": "list"})
         turn = session.post("Private question", context={"kind": "record"})
     console = _schema()
     target = _data(
@@ -3229,7 +3358,7 @@ def test_deprovision_in_process_agent_closes_open_sessions(composed_tables: None
             lifecycle="ready",
         )
         for status in ("running", "awaiting_approval"):
-            session = AgentSession.objects.create(agent=agent, owner=admin, status=status)
+            session = AgentSession.objects.create(agent=agent, user=admin, status=status)
             AgentTurn.objects.create(session=session, index=1, prompt="Message", status=status)
     result = _data(
         _execute(
@@ -3356,6 +3485,25 @@ def test_mcp_config_emits_secret_ref_auth_header_for_credentialed_server(
     # The bearer reaches the container via the service env, set from the operator secret.
     assert f'{agent.mcp_bearer_env(secured)}: "${{secret.{secret_name}}}"' in service_inputs["mcp_env"]
     assert secrets == {secret_name: "tok-notes"}  # synced server-side, never in the file
+
+
+@pytest.mark.parametrize("placement", [MCPPlacement.EXTERNAL, MCPPlacement.INTERNAL])
+def test_mcp_authenticated_operations_require_a_configured_credential(composed_tables: None, placement: str) -> None:
+    """An uncredentialed server remains public and cannot mint authenticated secrets."""
+
+    with system_context(reason="test.agents.mcp_missing_credential"):
+        agent = Agent.objects.create(name="Public MCP agent")
+        server = MCPServer.objects.create(name="Public MCP", url="https://mcp.example.test/", placement=placement)
+        agent.mcp_servers.add(server)
+        assert agent.mcp_secrets() == {}
+        assert "headers" not in agent.mcp_config()["mcpServers"][server.name]
+        for operation in (
+            lambda: server.bearer_for(agent),
+            lambda: agent.mcp_secret_name(server),
+            lambda: agent.mcp_bearer_env(server),
+        ):
+            with pytest.raises(ValidationError, match="no authentication credential"):
+                operation()
 
 
 def test_mcp_secrets_derive_per_agent_bearer_for_internal_server(composed_tables: None) -> None:

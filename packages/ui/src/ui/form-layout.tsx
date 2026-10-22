@@ -1,17 +1,16 @@
 import * as React from "react";
 
 import { tv, type VariantProps } from "../lib/variants";
-import { RequiredMark } from "./label";
-import { SectionEyebrow } from "./section-eyebrow";
 
+/**
+ * @kind token
+ */
 export const formLayoutVariants = tv({
   slots: {
     grid: "grid min-w-0",
     actions: "flex shrink-0 flex-wrap items-center",
     footer: "flex min-h-btn-md items-center",
     fieldRow: "block min-w-0",
-    fieldHeader: "mb-1 flex min-h-4 items-center justify-between gap-2",
-    fieldControl: "min-w-0",
   },
   variants: {
     density: {
@@ -88,12 +87,6 @@ export const formLayoutVariants = tv({
 });
 
 export type FormLayoutRecipeProps = VariantProps<typeof formLayoutVariants>;
-export type FormLayoutDensity = NonNullable<FormLayoutRecipeProps["density"]>;
-export type FormGridColumns = NonNullable<FormLayoutRecipeProps["columns"]>;
-export type FormLayoutPadding = NonNullable<FormLayoutRecipeProps["padding"]>;
-export type FormActionsAlign = NonNullable<FormLayoutRecipeProps["align"]>;
-export type FormFooterBorder = NonNullable<FormLayoutRecipeProps["border"]>;
-export type FormFooterSurface = NonNullable<FormLayoutRecipeProps["surface"]>;
 export type FormFieldSpan = NonNullable<FormLayoutRecipeProps["span"]>;
 
 export type FormGridAreas = readonly string[] | string;
@@ -104,6 +97,9 @@ export type FormGridProps = React.HTMLAttributes<HTMLDivElement> &
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const FormGrid = React.forwardRef<HTMLDivElement, FormGridProps>(
   function FormGrid(
     {
@@ -139,6 +135,9 @@ export type FormActionsProps = React.HTMLAttributes<HTMLDivElement> &
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const FormActions = React.forwardRef<HTMLDivElement, FormActionsProps>(
   function FormActions(
     { align = "end", className, density = "comfortable", ...props },
@@ -159,6 +158,9 @@ export type FormFooterProps = React.HTMLAttributes<HTMLElement> &
     noteClassName?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const FormFooter = React.forwardRef<HTMLElement, FormFooterProps>(
   function FormFooter(
     {
@@ -177,7 +179,7 @@ export const FormFooter = React.forwardRef<HTMLElement, FormFooterProps>(
     const styles = formLayoutVariants({ align, border, density, surface });
     return (
       <footer ref={ref} className={styles.footer({ className })} {...props}>
-        <div className={noteClassName ?? "min-w-0 text-xs text-fg-muted"}>
+        <div className={noteClassName ?? "min-w-0 text-12 text-fg-muted"}>
           {note}
         </div>
         <div className="flex shrink-0 items-center gap-2">{children}</div>
@@ -186,76 +188,6 @@ export const FormFooter = React.forwardRef<HTMLElement, FormFooterProps>(
   },
 );
 FormFooter.displayName = "FormFooter";
-
-export type FieldRowProps = Omit<
-  React.LabelHTMLAttributes<HTMLLabelElement>,
-  "className"
-> &
-  Pick<FormLayoutRecipeProps, "density" | "span"> & {
-    area?: string;
-    className?: string;
-    controlClassName?: string;
-    label?: React.ReactNode;
-    labelClassName?: string;
-    meta?: React.ReactNode;
-    required?: boolean;
-    requiredIndicator?: React.ReactNode;
-  };
-
-export const FieldRow = React.forwardRef<HTMLLabelElement, FieldRowProps>(
-  function FieldRow(
-    {
-      area,
-      children,
-      className,
-      controlClassName,
-      density = "comfortable",
-      label,
-      labelClassName,
-      meta,
-      required = false,
-      requiredIndicator = "*",
-      span = "one",
-      style,
-      ...props
-    },
-    ref,
-  ) {
-    const styles = formLayoutVariants({ density, span });
-    return (
-      <label
-        ref={ref}
-        className={styles.fieldRow({ className })}
-        style={{ ...gridCellStyle(area), ...style }}
-        {...props}
-      >
-        {label || meta ? (
-          <span className={styles.fieldHeader({ className: labelClassName })}>
-            {label ? (
-              <SectionEyebrow as="span" weight="medium">
-                {label}
-                <RequiredMark
-                  required={required}
-                  indicator={requiredIndicator}
-                  className="ml-1"
-                />
-              </SectionEyebrow>
-            ) : null}
-            {meta ? (
-              <span className="shrink-0 text-2xs font-normal normal-case text-fg-subtle">
-                {meta}
-              </span>
-            ) : null}
-          </span>
-        ) : null}
-        <div className={styles.fieldControl({ className: controlClassName })}>
-          {children}
-        </div>
-      </label>
-    );
-  },
-);
-FieldRow.displayName = "FieldRow";
 
 function gridAreaStyle(
   areas: FormGridAreas | undefined,
@@ -268,7 +200,11 @@ function gridAreaStyle(
   return { gridTemplateAreas };
 }
 
-function gridCellStyle(area: string | undefined): React.CSSProperties | undefined {
+/** Places a field in a named `FormGrid` area.
+ * @kind null
+ * @reason Layout utility: computes a style, renders nothing.
+ */
+export function gridCellStyle(area: string | undefined): React.CSSProperties | undefined {
   if (!area) return undefined;
   return { gridArea: area };
 }
