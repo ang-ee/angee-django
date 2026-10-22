@@ -678,9 +678,8 @@ class ThreadQuerySet[ThreadT: Thread](MergeableQuerySet[ThreadT], OwnerQuerySet[
         # A structural anti-join inside the already authorized inbox queryset: the
         # unscoped base manager supplies every redirect group without opening a
         # separately audited system read. Equality on the survivor id is hashed once.
-        survivor = Coalesce(models.OuterRef("merged_into_id"), models.OuterRef("pk"))
         chatter = self.model._base_manager.filter(attachments__role="chatter").survivor_ids()
-        attached = chatter.filter(survivor=survivor)
+        attached = chatter.filter(survivor=self.survivor_id(ref=models.OuterRef))
         return self.alias(_record_attached=models.Exists(attached)).filter(_record_attached=False)
 
     def for_channel(self, channel: Any) -> Self:
@@ -1353,12 +1352,11 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         """Correlate follows to an outer message, ordered by the effective preference."""
 
         thread_model = self.model.thread.field.related_model
-        survivor = thread_model(pk=Coalesce(
-            models.OuterRef(models.OuterRef("thread__merged_into_id")),
-            models.OuterRef(models.OuterRef("thread_id")),
+        survivor = thread_model(pk=MergeableQuerySet.survivor_id(
+            "thread__", ref=lambda name: models.OuterRef(models.OuterRef(name)),
         ))
         members = thread_model._base_manager.redirect_group(survivor).values("pk")
-        current_thread = Coalesce(models.OuterRef("thread__merged_into_id"), models.OuterRef("thread_id"))
+        current_thread = MergeableQuerySet.survivor_id("thread__", ref=models.OuterRef)
         preference, tie = ThreadFollowerQuerySet._preference_order(current_thread)
         return self.model._base_manager.using(self.db).filter(
             ThreadFollowerQuerySet.user_q(user), thread_id__in=members,
@@ -1477,9 +1475,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             return 0
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
         thread_model = apps.get_model("messaging", "Thread")
-        survivor = thread_model(
-            pk=Coalesce(models.OuterRef("thread__merged_into_id"), models.OuterRef("thread_id")),
-        )
+        survivor = thread_model(pk=MergeableQuerySet.survivor_id("thread__", ref=models.OuterRef))
         selected_group = thread_model.objects.system_context(
             reason="messaging.follower.redirect_group"
         ).redirect_group(survivor).filter(attachments__pk__in=selected)
@@ -2531,10 +2527,9 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
 
         # The same structural anti-join as ``ThreadQuerySet.inbox``. A message
         # without a thread has no survivor id, so it matches no redirect group.
-        survivor = Coalesce(models.OuterRef("thread__merged_into_id"), models.OuterRef("thread_id"))
         thread_model = apps.get_model("messaging", "Thread")
         chatter = thread_model._base_manager.filter(attachments__role="chatter").survivor_ids()
-        attached = chatter.filter(survivor=survivor)
+        attached = chatter.filter(survivor=self.survivor_id("thread__", ref=models.OuterRef))
         return self.alias(_record_attached=models.Exists(attached)).filter(_record_attached=False)
 
     def automated_sender_ids(self) -> models.QuerySet[Any]:

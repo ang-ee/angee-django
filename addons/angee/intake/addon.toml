@@ -13,6 +13,11 @@ depends_on = [
   "angee.work",
 ]
 
+[[migrations]]
+name = "retire_original_task"
+app_label = "intake"
+module = "runtime_migrations.retire_original_task"
+
 [resources]
 master = []
 demo = [
