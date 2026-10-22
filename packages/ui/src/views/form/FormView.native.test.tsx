@@ -1007,12 +1007,13 @@ test.each([false, true])("a native create accepts an unmounted server-assigned r
   let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.update).toHaveBeenCalledTimes(1));
-  expect(f.update).toHaveBeenCalledWith(expect.objectContaining({ variables: { title: "Submitted title", body: "" } }));
+  expect(f.update).toHaveBeenCalledWith(expect.objectContaining({ variables: { title: "Submitted title" } }));
   if (laterEdit) fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Later title" } });
   const parent = { id: "note-parent", title: "Server-assigned parent" };
-  const accepted = { id: "note-created", title: "Submitted title", body: "", parent };
+  const accepted = { id: "note-created", title: "Submitted title", body: "Server default body", parent };
   await act(async () => { resolve({ data: accepted }); await saving; });
   expect(f.surface().form.getValues("parent")).toEqual(parent);
+  expect(f.surface().form.getValues("body")).toBe(accepted.body);
   expect(f.surface().form.formState.defaultValues?.parent).toEqual(parent);
   expect(f.surface().form.getFieldState("parent").isDirty).toBe(false);
   expect(f.surface().form.getValues("title")).toBe(laterEdit ? "Later title" : "Submitted title");

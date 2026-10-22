@@ -551,7 +551,10 @@ function isBlankCreateValue(
   if (value !== "") return false;
   if (isRelationIdField(field) || (metadata && relationModelLabelForField(metadata))) return true;
   if (metadata) {
-    return metadata.kind === "enum" || !isStringScalar(metadata);
+    return metadata.kind === "enum" || !isStringScalar(metadata) || (
+      metadata.requiredOnCreate === false
+      && !intent.dirty && !intent.seeded && !field.presenceRequired
+    );
   }
   return (
     hasOptionValue(field)

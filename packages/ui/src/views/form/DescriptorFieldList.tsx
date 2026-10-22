@@ -5,6 +5,7 @@ import { resolveFieldLabels } from "./field-labels";
 import { Controller, useFormContext, useWatch } from "react-hook-form";
 import { canonicalModelLabelOrNull, modelMetadataForLabel, useSchemaFieldMetadata } from "@angee/metadata";
 import type { CrudFilter } from "@refinedev/core";
+import type { ListQueryFieldArgument } from "@angee/refine";
 
 import { FieldDescription, FieldError, FieldLabel, FieldRoot } from "../../ui/field";
 import { relationValueId, type WidgetFocusTarget } from "../../widgets/types";
@@ -12,8 +13,8 @@ import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
 import { RelationPicker, type RelationCreateConfig } from "../relation/RelationPicker";
-import { RecordReference } from "../relation/RecordReference";
-import { useRelationPickerOptions } from "../relation/relation-options";
+import { RelationFieldWidget } from "../relation/RelationFieldWidget";
+import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import type { FieldDescriptor } from "../page";
 import { directDottedPathMessages } from "./validation-errors";
 import { fieldErrorMessages, isCompositeFieldDescriptor, isFieldVisible, resolveField } from "./form-view-model";
@@ -31,6 +32,10 @@ export interface DescriptorFieldRelation {
    * more kinds of row than this field accepts.
    */
   filters?: readonly CrudFilter[];
+  /** Related-row context and status projected by the shared relation widgets. */
+  optionDescriptionField?: string;
+  optionStatusField?: string;
+  optionStatusArguments?: readonly ListQueryFieldArgument[];
   /**
    * Enables native in-place creation, including an optional visible action.
    * A descriptor states creatability explicitly when no model field owns it.
@@ -327,27 +332,6 @@ function DescriptorRelationControl({
   onCommit?: () => void;
   controlRef?: (target: WidgetFocusTarget | null) => void;
 }): React.ReactElement {
-  if (readOnly) {
-    const id = relationValueId(value);
-    return id ? <RecordReference model={relation.resource} id={id} /> : <></>;
-  }
-  return <EditableDescriptorRelationControl
-    controlId={controlId} describedBy={describedBy} invalid={invalid} field={field}
-    relation={relation} value={value} onChange={onChange} onCommit={onCommit} controlRef={controlRef}
-  />;
-}
-
-function EditableDescriptorRelationControl({ controlId, describedBy, invalid, field, relation, value, onChange, onCommit, controlRef }: {
-  controlId: string;
-  describedBy?: string;
-  invalid: boolean;
-  field: DescriptorField;
-  relation: DescriptorFieldRelation;
-  value: unknown;
-  onChange: (value: unknown) => void;
-  onCommit?: () => void;
-  controlRef?: (target: WidgetFocusTarget | null) => void;
-}): React.ReactElement {
   const metadata = useSchemaFieldMetadata();
   const resource = React.useMemo(
     () =>
@@ -386,49 +370,47 @@ function EditableDescriptorRelationControl({ controlId, describedBy, invalid, fi
     },
     [metadata, relation.create],
   );
-  const selectedValue = relationValueId(value);
-  const picker = useRelationPickerOptions(optionInfo, {
-    value: selectedValue,
-    ...(relation.filters ? { filters: relation.filters } : {}),
-  });
-  if (!info) {
+  const controlProps = {
+    id: controlId,
+    "aria-describedby": describedBy,
+    "aria-invalid": invalid || undefined,
+    "aria-required": field.required || undefined,
+  };
+  if (!optionInfo) {
     // Metadata not yet loaded / the resource is unknown in this schema: retain
     // the relation control's shape, but disable it rather than throwing from
     // render or presenting a text input that could submit an unvalidated id.
     return (
       <RelationPicker
-        id={controlId}
-        value={selectedValue}
+        {...controlProps}
+        value={relationValueId(value)}
         options={[]}
         readOnly
         placeholder={field.placeholder}
         aria-label={typeof field.label === "string" ? field.label : field.name}
-        aria-describedby={describedBy}
-        aria-invalid={invalid || undefined}
-        aria-required={field.required || undefined}
         onChange={onChange}
         onCommit={onCommit}
       />
     );
   }
-  return (
-    <RelationPicker
-      controlRef={controlRef}
-      id={controlId}
-      value={selectedValue}
-      onChange={onChange}
-      onCommit={onCommit}
-      options={picker.options}
+  const common = {
+    relation: optionInfo,
+    filters: field.filters ?? relation.filters,
+    create: create ?? null,
+    readOnly,
+    onChange,
+    onCommit,
+    controlRef,
+    controlProps,
+    "aria-label": typeof field.label === "string" ? field.label : field.name,
+  };
+  return field.widget === "many2many"
+    ? <RelationMultiFieldWidget {...common} value={Array.isArray(value) ? value : []} />
+    : <RelationFieldWidget {...common}
+      value={relationValueId(value)}
       placeholder={field.placeholder}
-      aria-label={typeof field.label === "string" ? field.label : field.name}
-      aria-describedby={describedBy}
-      aria-invalid={invalid || undefined}
-      aria-required={field.required || undefined}
-      {...(create ? { create } : {})}
-      onCreated={() => picker.list.refetch()}
-      onOpenChange={picker.onOpenChange}
-      onSearchChange={picker.onSearchChange}
-      searchState={picker.searchState}
-    />
-  );
+      optionDescriptionField={relation.optionDescriptionField}
+      optionStatusField={relation.optionStatusField}
+      optionStatusArguments={relation.optionStatusArguments}
+    />;
 }

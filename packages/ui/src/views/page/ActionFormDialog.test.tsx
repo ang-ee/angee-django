@@ -112,8 +112,8 @@ function resourceMetadata(
 ): DataResourceMetadata {
   return testDataResource(modelLabel, {
     modelName: modelLabel,
-    roots: { list: listRoot },
-    typeNames: { node: typeName },
+    roots: { list: listRoot, aggregate: `${listRoot}_aggregate` },
+    typeNames: { node: typeName, filter: `${typeName}BoolExp`, order: `${typeName}OrderBy` },
     recordRepresentation: representation,
     fields: [
       scalarField("id", "ID"),
@@ -587,6 +587,51 @@ describe("ActionFormDialog", () => {
       resource: "collections",
       meta: expect.objectContaining({ fields: ["id", "name", "description", "verification_state"] }),
     }));
+  });
+
+  test("descriptor relations retain status arguments and follow resolved filters and sibling resets", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true });
+    renderDialog({ id: "scoped-choice", label: "Save choice", submit,
+      args: { defaultValues: { scope: "bank" }, fields: [
+        { name: "scope", label: "Scope", prefill: () => ({ collection: null }) },
+        { name: "collection", label: "Collection", relation: {
+          resource: "Collection", optionDescriptionField: "description", optionStatusField: "verification_state",
+          optionStatusArguments: [{ name: "company_id", type: "ID!", value: "company_7" }],
+        }, resolve: (values) => ({ name: "collection", filters: [{ field: "scope", operator: "eq", value: values.scope }] }) },
+      ] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Collection" }));
+    expect(await screen.findByText("Operating account •••• 4242")).toBeTruthy();
+    expect(screen.getByText("Verified").className).toContain("text-success-text");
+    expect(listOptions).toContainEqual(expect.objectContaining({ resource: "collections",
+      filters: [{ field: "scope", operator: "eq", value: "bank" }],
+      meta: expect.objectContaining({ gqlVariables: { selection_0_0: "company_7" } }),
+    }));
+    fireEvent.click(screen.getByText("Primary Collection"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Scope" }), { target: { value: "cash" } });
+    fireEvent.click(screen.getByRole("button", { name: "Collection" }));
+    await screen.findByText("Primary Collection");
+    expect(listOptions).toContainEqual(expect.objectContaining({ resource: "collections",
+      filters: [{ field: "scope", operator: "eq", value: "cash" }],
+    }));
+    fireEvent.keyDown(screen.getByPlaceholderText("Search…"), { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Save choice" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ scope: "cash", collection: null }, context));
+  });
+
+  test("descriptor many-to-many actions preserve selected records and submit the edited id list", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true });
+    renderDialog({ id: "select-documents", label: "Select documents", submit,
+      args: { defaultValues: { documentIds: ["doc-1"] }, fields: [
+        { name: "documentIds", label: "Documents", widget: "many2many", kind: "array", required: true,
+          relation: { resource: "Document" } },
+      ] },
+    });
+    expect(await screen.findByText("DOC-1")).toBeTruthy();
+    fireEvent.input(screen.getByRole("combobox", { name: "Documents" }), { target: { value: "DOC-2" }, inputType: "insertText" });
+    fireEvent.click(await screen.findByRole("option", { name: "DOC-2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select documents" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ documentIds: ["doc-1", "doc-2"] }, context));
   });
 
   test("offers the picker's inline create only for relation args that declare it", async () => {
