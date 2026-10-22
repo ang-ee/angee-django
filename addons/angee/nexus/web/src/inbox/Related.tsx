@@ -36,6 +36,7 @@ export function InboxRelatedPane({ navigation }: { navigation: InboxNavigation }
         <PaneRows className="px-2 py-1">
           <PaneLabel count={target?.count} action={fileHref ? <Button size="iconSm" variant="ghost"
             aria-label={t("inbox.openFile")} title={t("inbox.openFile")}
+            nativeButton={false} role="link"
             render={<a href={fileHref} {...fileLink} />}><Glyph name="arrow-up-right" /></Button> : undefined}>
             {target && file ? <Dialog.Root key={target.id}>
               <Dialog.Trigger render={<Button size="sm" variant="ghost" className="max-w-full justify-start px-0" />}>

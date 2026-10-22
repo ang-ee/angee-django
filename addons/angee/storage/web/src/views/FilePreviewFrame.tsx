@@ -60,7 +60,7 @@ export function FilePreviewFrame({
         // band never flickers when the pager moves to the next file.
         verbs={<>
           {file && !file.is_trashed && file.url ? (
-            <Button size="sm" variant="primary" render={<a href={file.url} download={file.filename} />}>
+            <Button size="sm" variant="primary" nativeButton={false} role="link" render={<a href={file.url} download={file.filename} />}>
               <Glyph name="download" />
               {t("file.download")}
             </Button>
