@@ -22,7 +22,11 @@ from angee.refs import generic_pointer_model
 
 
 class DecisionRecordReference(EvidenceReference):
-    """A public evidence identity with optional navigation hints."""
+    """A public evidence identity with optional tab/search navigation.
+
+    ``page`` retains the source page; the target addon's ``search`` keys select
+    that page in its record view.
+    """
 
     label: str = ""
     tab: str | None = None

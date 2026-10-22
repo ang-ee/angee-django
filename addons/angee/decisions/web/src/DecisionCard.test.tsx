@@ -32,6 +32,19 @@ test("choices reset with the revision and an accepted answer remains locked unti
   expect(document.activeElement?.textContent).toContain("Chose: Accept");
 });
 
+test("a refusal summary shows overlapping form and field messages once while retaining distinct errors", async () => {
+  const duplicate = "Choose only one value for due date.";
+  const distinct = "Choose an invoice date before the due date.";
+  decide.mockResolvedValue({ decide: { ok: false, message: duplicate,
+    validation_errors: { due_date: [duplicate], invoice_date: [distinct] },
+  } });
+  render(<Provider><DecisionCard decision={decisionFixture()} /></Provider>);
+  fireEvent.click(screen.getByRole("radio", { name: /^Accept/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  expect(await screen.findByText(`${duplicate} ${distinct}`)).toBeTruthy();
+  expect((screen.getByRole("button", { name: "Confirm" }) as HTMLButtonElement).disabled).toBe(false);
+});
+
 const contact = testDataResource("contacts.Contact", {
   recordRepresentation: "name", roots: { aggregate: "contacts_aggregate" },
   typeNames: { filter: "contacts_bool_exp", order: "contacts_order_by" },
@@ -194,7 +207,7 @@ test("a record action uses its human alternative label", () => {
 });
 
 test("a concerned record carries its evidence tab and page into the canonical link", () => {
-  const reference = { model: "storage.File", id: "fil_source", label: "Source file", tab: "preview", page: 2, search: { previewPage: "fil_source:2" } };
+  const reference = { model: "storage.File", id: "fil_source", label: "Source file", tab: "preview", search: { previewPage: "fil_source:2" } };
   const decision = decisionFixture({
     records: [{ id: "dcr_source", record_model: reference.model, record_id: reference.id }],
     context: { references: [reference] },
