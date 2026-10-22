@@ -4,9 +4,12 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db.models.deletion import ProtectedError
+from django.test import RequestFactory
 from django.utils import timezone
 from rebac import actor_context, system_context
 
+from angee.messaging.inbox import InboxCoverage, InboxSearch
+from angee.messaging.inbox_transcript import InboxTranscript
 from angee.messaging.testing.models import (
     Channel,
     Message,
@@ -15,12 +18,116 @@ from angee.messaging.testing.models import (
     ThreadFollower,
     ThreadNotification,
 )
-from tests.conftest import make_integration
+from tests.conftest import execute_schema, make_integration, result_data
 from tests.messaging_campaign import grant
 from tests.test_messaging import ThreadedTicket, _ingest, _parsed
 from tests.test_messaging import channel as channel
+from tests.test_nexus import _schema
 
 pytestmark = pytest.mark.django_db(transaction=True)
+
+
+@pytest.fixture
+def retained_feed_copy(channel):
+    other = make_integration("copy-anchor", model=Channel, backend_class="manual")
+    _ingest([_parsed("anchor@example.com")], channel=channel)
+    _ingest([_parsed("anchor@example.com")], channel=other)
+    left, right = Message._base_manager.filter(external_id="anchor@example.com").order_by("pk")
+    grant(channel, "reader", other.owner)
+    return left, right, other.owner
+
+
+def test_feed_keeps_the_exact_copy_across_windows_continuation_and_revalidation(retained_feed_copy):
+    left, right, reader = retained_feed_copy
+    third = make_integration("copy-anchor-unselected", model=Channel, backend_class="manual", owner=reader)
+    _ingest([_parsed("anchor@example.com")], channel=third)
+    unselected = Message._base_manager.get(channel=third, external_id="anchor@example.com")
+    anchor = f"message:{right.public_id}"
+    ids = [left.public_id, right.public_id]
+    with actor_context(reader):
+        query = Message.objects.inbox().untrashed().for_thread(right.thread)
+        options = {"scope": ("thread", right.thread.public_id), "limit": 1}
+        assert list(query.for_feed().values_list("pk", flat=True)) == [left.pk]
+        page = query.feed_page(anchor=anchor, **options)
+        assert [row.pk for row in page.rows] == [right.pk]
+        assert page.count == 2
+        older = query.feed_page(anchor=anchor, before_cursor=page.older_cursor, **options)
+        assert [row.pk for row in older.rows] == [left.pk]
+        newer = query.feed_page(anchor=anchor, after_cursor=older.newer_cursor, **options)
+        assert [row.pk for row in newer.rows] == [right.pk]
+        fixed = query.feed_page(anchor=anchor, through_cursor=page.older_cursor, **options)
+        assert [row.pk for row in fixed.rows] == [right.pk]
+        retained = query.feed_revalidate(ids, anchor=anchor)
+        assert [row.pk for row in retained["messages"]] == [right.pk, left.pk]
+        assert retained["absent_ids"] == []
+        assert query.feed_revalidate([unselected.public_id], anchor=anchor)["absent_ids"] == [unselected.public_id]
+        assert query.for_feed(all_copies=True).count() == 3
+        assert query.feed_revalidate(ids)["absent_ids"] == [right.public_id]
+        # The position remains a valid cut when the addressed occurrence changes.
+        changed = query.feed_page(before_cursor=page.older_cursor, anchor=f"message:{left.public_id}", **options)
+        assert [row.pk for row in changed.rows] == [left.pk]
+
+
+@pytest.mark.parametrize("change", ["search", "move", "trash", "unreadable"])
+def test_copy_anchor_cannot_widen_current_search_thread_or_read_scope(retained_feed_copy, channel, change):
+    left, right, reader = retained_feed_copy
+    anchor = f"message:{right.public_id}"
+    ids = [right.public_id]
+    with actor_context(reader):
+        query = Message.objects.inbox().untrashed().for_thread(left.thread)
+        options = {"scope": ("thread", left.thread.public_id), "anchor": anchor, "limit": 1}
+        first = query.feed_page(**options)
+    if change in ("move", "trash"):
+        with system_context(reason="test retained copy scope changes"):
+            if change == "move":
+                outside = Thread._base_manager.create(channel=channel, platform="email")
+                Message._base_manager.filter(pk=right.pk).update(thread=outside)
+            else:
+                Message._base_manager.filter(pk=right.pk).update(is_trashed=True)
+    actor = channel.owner if change == "unreadable" else reader
+    search = "does-not-match" if change == "search" else ""
+    with actor_context(actor):
+        query = Message.objects.inbox().untrashed().for_thread(left.thread)
+        with pytest.raises(ValueError, match="Message unavailable in this conversation"):
+            query.feed_page(search=search, **options)
+        assert query.feed_revalidate(ids, search=search, anchor=anchor)["absent_ids"] == ids
+        if change == "search":
+            with pytest.raises(ValueError, match="Invalid message feed cursor"):
+                query.feed_page(before_cursor=first.older_cursor, search=search, **options)
+        elif change != "unreadable":
+            # Cuts continue after the copy moves or disappears; their scope still binds search.
+            continuation = query.feed_page(before_cursor=first.older_cursor, **options)
+            assert [row.pk for row in continuation.rows] == [left.pk]
+
+
+def test_copy_anchor_and_match_navigation_share_the_merged_transcript(retained_feed_copy):
+    left, right, reader = retained_feed_copy
+    request = RequestFactory().post("/graphql/console/")
+    request.user = reader
+    result = result_data(execute_schema(
+        _schema(),
+        """query($thread: ID!, $id: ID!, $anchor: String!) {
+          thread_message_feed(thread_id: $thread, anchor: $anchor) { messages { id } count }
+          thread_message_feed_revalidate(thread_id: $thread, ids: [$id], anchor: $anchor) {
+            messages { id } absent_ids
+          }
+        }""",
+        {"thread": left.thread.public_id, "id": right.public_id, "anchor": f"message:{right.public_id}"},
+        request=request,
+    ))
+    assert [row["id"] for row in result["thread_message_feed"]["messages"]] == [right.public_id, left.public_id]
+    assert result["thread_message_feed"]["count"] == 2
+    assert result["thread_message_feed_revalidate"] == {"messages": [{"id": right.public_id}], "absent_ids": []}
+    with actor_context(reader):
+        inbox = Message.objects.all().explorer()
+        matching = inbox.results(InboxCoverage(accounts=[right.channel.public_id]), InboxSearch())
+        assert list(matching.values_list("pk", flat=True)) == [right.pk]
+        transcript = InboxTranscript(inbox, matching, left.thread.public_id)
+        result = transcript.matches(visible=[left.public_id, right.public_id], at=right.public_id)
+        assert result.total == 2 and result.count == 1
+        assert result.visible == [right.public_id]
+        assert result.previous is None and result.next is None
+        assert transcript.matches(visible=[], at=left.public_id).next == right.public_id
 
 
 def test_email_copies_fold_into_the_oldest_and_a_reader_without_it_still_reads_their_own(channel):

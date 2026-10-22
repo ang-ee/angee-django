@@ -2675,8 +2675,13 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         )
         return self.filter(pk__in=models.Subquery(visible_message_ids))
 
-    def for_feed(self, search: str = "", *, all_copies: bool = False) -> Self:
-        """Apply current read scope, search and tuple order to an inbox scope."""
+    def for_feed(self, search: str = "", *, all_copies: bool = False, anchor: str = "") -> Self:
+        """Apply read/search scope and tuple order, retaining an explicitly addressed occurrence.
+
+        A message anchor names a physical row, including a retained source copy
+        normally collapsed by ``canonical()``. Keep only that occurrence beside
+        the canonical rows, under the same current scope and search predicates.
+        """
 
         queryset = self.scoped().annotate(_order_at=MessageQuerySet.chronological_time())
         terms = self._feed_search(search).split()
@@ -2685,7 +2690,11 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         if terms:
             queryset = queryset.distinct()
         if not all_copies:
-            queryset = queryset.canonical()
+            canonical = queryset.canonical()
+            kind, _, value = anchor.partition(":")
+            if kind == "message":
+                canonical |= queryset.untrashed().filter(sqid=value)
+            queryset = canonical
         return queryset.order_by("-_order_at", "-pk")
 
     @staticmethod
@@ -2715,7 +2724,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         """
 
         search = self._feed_search(search)
-        queryset = self.for_feed(search, all_copies=all_copies)
+        queryset = self.for_feed(search, all_copies=all_copies, anchor=anchor)
         around = None
         if anchor and before_cursor is None and after_cursor is None:
             kind, _, value = anchor.partition(":")
@@ -2748,7 +2757,9 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
             raise ValueError("Invalid message feed cursor for this scope.") from error
         return page
 
-    def feed_revalidate(self, ids: list[str], *, search: str = "", all_copies: bool = False) -> dict[str, Any]:
+    def feed_revalidate(
+        self, ids: list[str], *, search: str = "", all_copies: bool = False, anchor: str = "",
+    ) -> dict[str, Any]:
         """Partition at most 200 submitted IDs into current survivors and absences.
 
         The caller resolves the same readable root as feed_page. Every survivor
@@ -2759,10 +2770,12 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         if len(ids) > 200:
             raise ValueError("Message feed revalidation accepts at most 200 IDs.")
         unique = list(dict.fromkeys(ids))
-        messages = list(self.for_feed(search, all_copies=all_copies).filter(sqid__in=unique)) if unique else []
-        survivors = {str(message.sqid) for message in messages}
+        queryset = self.for_feed(search, all_copies=all_copies, anchor=anchor)
+        survivors = {
+            str(value) for value in queryset.filter(sqid__in=unique).values_list("sqid", flat=True)
+        } if unique else set()
         return {
-            "messages": self.for_feed(search, all_copies=all_copies).filter(sqid__in=survivors),
+            "messages": queryset.filter(sqid__in=survivors),
             "absent_ids": [value for value in unique if value not in survivors],
         }
 

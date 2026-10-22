@@ -313,8 +313,8 @@ export const ThreadTranscriptDocument = graphql(`
 `);
 
 export const ThreadTranscriptRevalidateDocument = graphql(`
-  query MessagingThreadTranscriptRevalidate($threadId: ID!, $ids: [ID!]!, $allCopies: Boolean! = false) {
-    thread_message_feed_revalidate(thread_id: $threadId, ids: $ids, all_copies: $allCopies) {
+  query MessagingThreadTranscriptRevalidate($threadId: ID!, $ids: [ID!]!, $allCopies: Boolean! = false, $anchor: String! = "") {
+    thread_message_feed_revalidate(thread_id: $threadId, ids: $ids, all_copies: $allCopies, anchor: $anchor) {
       messages {
         ...TranscriptMessageFields
       }
