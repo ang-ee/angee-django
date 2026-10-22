@@ -42,12 +42,16 @@ const pdf = (n: number) => ({
   },
 });
 const sender = { id: "handle-1", display_name: "Ada", value: "ada@example.com", party_link_confirmed: false, avatar: null, party: null };
+const parent = {
+  id: "parent-1", preview: "Meet at Casa Cosecha.", message_type: "COMMENT",
+  sender: { ...sender, display_name: "Dane" }, thread: { id: "thread-1" },
+};
 const message = {
   id: "message-1", feed_order_key: "v1:0001", direction: "INBOUND", preview: "Both renewals attached", title: "Renewal",
   message_type: "EMAIL", platform: "email", status: "RECEIVED", starred: false, sent_at: "2026-10-01T10:00:00Z",
   created_at: "2026-10-01T10:00:00Z", received_at: "2026-10-01T10:00:00Z", external_id: "", sender,
   thread: { id: "thread-1", title: null, modality: "EMAIL", conversation_label: "Renewals" }, channel: null,
-  participants: [], parts: [pdf(1), pdf(2)], reaction_groups: [],
+  participants: [], parts: [pdf(1), pdf(2)], reaction_groups: [], parent,
 };
 
 function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false) {
@@ -83,7 +87,7 @@ function fixture(uses: { part_id: string; target: string; count: number }[] = []
   }
   const navigation = {
     thread: "thread-1", at: "", message: "message-1", part: "", related: "file:file-2", relatedFrom: "message-1",
-    patch: vi.fn(), previewFile: vi.fn(), read: vi.fn(), results: vi.fn(), conversation: vi.fn(), connect: vi.fn(),
+    patch: vi.fn(), previewFile: vi.fn(), read: vi.fn(), results: vi.fn(), conversation: vi.fn(), connect: vi.fn(), openInContext: vi.fn(),
     href: (values: Record<string, string | undefined>) => createRouteHref([{ name: "inbox", path: "/nexus/inbox" }])("inbox", {}, values),
   };
   const scope = { coverage: { timezone: "UTC" }, search: {}, sender: "", circle: "" };
@@ -101,6 +105,7 @@ test("an attachment in the conversation previews in Related", async () => {
 
   fireEvent.click(await screen.findByRole("button", { name: /renewal-2\.pdf/ }));
 
+  expect(screen.getAllByRole("toolbar")).toHaveLength(1);
   expect(inbox.navigation.previewFile).toHaveBeenCalledWith("file-2", "message-1");
   expect(inbox.navigation.patch).not.toHaveBeenCalled();
 });
@@ -114,6 +119,15 @@ test("an attachment in the reader previews in Related and leaves the message ful
   expect(inbox.navigation.previewFile).toHaveBeenCalledWith("file-2", "message-1");
   expect(inbox.navigation.patch).not.toHaveBeenCalled();
   expect(screen.queryByRole("complementary", { name: "Attachment preview" })).toBeNull();
+});
+
+test("the reader retains the quoted author and opens the parent in its conversation", async () => {
+  const inbox = fixture();
+  render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+
+  fireEvent.click(await screen.findByRole("button", { name: /Replying to Dane Meet at Casa Cosecha/ }));
+
+  expect(inbox.navigation.openInContext).toHaveBeenCalledWith(parent);
 });
 
 test("Related shows a pinned file's preview in the pane", async () => {

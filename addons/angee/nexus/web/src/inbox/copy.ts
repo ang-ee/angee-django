@@ -6,7 +6,8 @@ export const inboxMessages = {
   "inbox.previousMatch": "Previous match",
   "inbox.nextMatch": "Next match",
   "inbox.match": "Matches current filters",
-  "inbox.transcriptCount": "{count} matching of {total} conversation messages",
+  "inbox.transcriptCount": "Full conversation · {total} messages · {count} match your filters",
+  "inbox.conversationCount": "Full conversation · {total} messages",
 
   "inbox.navigator": "Explore",
   "inbox.navigatorLens": "Explore by",
@@ -32,7 +33,7 @@ export const inboxMessages = {
   "inbox.latest": "Latest",
   "inbox.order": "Order messages",
   "inbox.oldest": "Oldest first",
-  "inbox.selectionHint": "Exchanges involving this selection in the selected coverage",
+  "inbox.selectionHint": "Matching messages · Open a message to read its full conversation",
   "inbox.coverageHint": "Explore all readable exchanges · {timezone}",
   "inbox.clearSelection": "Clear selection",
   "inbox.showExchanges": "Show exchanges involving {label}",
@@ -98,6 +99,7 @@ export const inboxMessages = {
   "inbox.openConversation": "Open conversation",
   "inbox.outside": "Outside current results",
   "inbox.details": "Message details",
+  "inbox.messageActions": "Message actions",
   "inbox.exploreSender": "Explore sender",
   "inbox.relatedHint":
     "Choose a file or shared text to see its other message uses.",

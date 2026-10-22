@@ -4,12 +4,12 @@ import {
   Avatar,
   Button,
   Chip,
-  ScopeChip,
   EmptyState,
   ErrorBanner,
   Glyph,
   LoadingPanel,
   MessageDaySeparator,
+  MessageActions,
   MessagePartsView,
   MessageRow,
   PaneToolbar,
@@ -18,13 +18,16 @@ import {
   formatDayLabel,
   useReactionGroups,
   useResolvedWidget,
+  useResourceRecordHrefLookup,
   type MessagePart,
+  type PaneToolbarAction,
 } from "@angee/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { useMessagingT } from "./i18n";
 import { MessageSourceCopies } from "./MessageSourceCopies";
-import type { ThreadTranscriptRow } from "./documents";
+import type { MessageReplyData, ThreadTranscriptRow } from "./documents";
+import { MessageReplyQuote } from "./MessageReplyQuote";
 import { messageFeedRows } from "./message-feed";
 import { useThreadMessageFeed } from "./thread-message-feed";
 
@@ -34,7 +37,7 @@ type MessagingT = ReturnType<typeof useMessagingT>;
 
 /** How the transcript reads — decided by where it is placed, not hardcoded:
  *  - `conversation`: a chat/drawer surface — newest at the bottom, opened at its
- *    heading or explicit anchor, with position preserved across "Load older" prepends.
+ *    latest turn or explicit anchor, with position preserved across "Load older" prepends.
  *  - `history`: a mail-like aside — oldest at the top, read top-down, no auto-scroll.
  *  Both render the same oldest→newest order; the mode only decides the scroll behavior. */
 export type TranscriptOrder = "conversation" | "history";
@@ -50,6 +53,8 @@ export interface ThreadTranscriptProps {
   /** Server resolves a bounded window around message:ID or date:YYYY-MM-DD. */
   anchor?: string;
   onAnchorChange?: (anchor: string) => void;
+  /** Host controls join the transcript's one native pane toolbar. */
+  toolbarActions?: readonly PaneToolbarAction[];
   timezone?: string;
   /** Wrap the visible window with an owner-provided annotation context. */
   renderWindow?: (
@@ -57,6 +62,8 @@ export interface ThreadTranscriptProps {
     children: React.ReactElement,
   ) => React.ReactElement;
   renderMessageActions?: (message: ThreadTranscriptRow) => React.ReactNode;
+  /** Open a quoted parent while preserving the host's navigation context. */
+  onOpenReply?: (message: MessageReplyData) => void;
   /** Open an attachment in the host's preview. Without it, a chip opens the file
    *  URL itself (see `MessagePartsView`). */
   onPreviewFile?: (message: ThreadTranscriptRow, part: MessagePart) => void;
@@ -81,6 +88,8 @@ export function ThreadTranscript({
   renderWindow,
   timezone,
   onPreviewFile,
+  onOpenReply,
+  toolbarActions = [],
 }: ThreadTranscriptProps): React.ReactElement {
   const [allCopies, setAllCopies] = React.useState(false);
   const t = useMessagingT();
@@ -91,18 +100,15 @@ export function ThreadTranscript({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PaneToolbar
-        scope={onAnchorChange ? (
-          <>
-            {DateEdit ? (
-              <DateEdit
-                value={jumpDate || null} field={jumpField}
-                onChange={(next) => onAnchorChange(typeof next === "string" && next ? `date:${next}${timezone ? `@${timezone}` : ""}` : "")}
-              />
-            ) : null}
-            {anchor ? <ScopeChip active label={t("transcript.latest")} onClick={() => onAnchorChange("")} /> : null}
-          </>
-        ) : undefined}
-        actions={[{ icon: "copy", label: t(allCopies ? "copies.collapse" : "copies.showAll"), pressed: allCopies, onClick: () => setAllCopies(!allCopies) }]}
+        scope={onAnchorChange && DateEdit ? <DateEdit
+          value={jumpDate || null} field={jumpField}
+          onChange={(next) => onAnchorChange(typeof next === "string" && next ? `date:${next}${timezone ? `@${timezone}` : ""}` : "")}
+        /> : undefined}
+        actions={[
+          ...(anchor && onAnchorChange ? [{ icon: "chevron-down", label: t("transcript.latest"), text: true, onClick: () => onAnchorChange("") }] : []),
+          ...toolbarActions,
+          { icon: "copy", label: t(allCopies ? "copies.collapse" : "copies.showAll"), pressed: allCopies, onClick: () => setAllCopies(!allCopies) },
+        ]}
       />
       {/* Remount per thread, anchor and copy mode: each is a different row set, so the
           virtualizer's measurements and the scroll anchor start over. */}
@@ -117,6 +123,7 @@ export function ThreadTranscript({
         renderWindow={renderWindow}
         timezone={timezone}
         onPreviewFile={onPreviewFile}
+        onOpenReply={onOpenReply}
       />
     </div>
   );
@@ -131,6 +138,8 @@ function TranscriptBody({
   renderWindow,
   timezone,
   onPreviewFile,
+  onOpenReply,
+  onAnchorChange,
 }: ThreadTranscriptProps & { allCopies: boolean }): React.ReactElement {
   const t = useMessagingT();
   const transcript = useThreadMessageFeed(threadId, anchor, allCopies);
@@ -173,9 +182,15 @@ function TranscriptBody({
   const totalSize = virtualizer.getTotalSize();
 
   // Conversation mode keeps the viewport anchored when "Load older" prepends
-  // earlier turns. Initial travel happens only for an explicit message anchor.
+  // earlier turns. Open at the selected message, or at the latest turn by default.
   const scrolledThreadRef = React.useRef<string | null>(null);
   const prependAnchorRef = React.useRef<number | null>(null);
+  React.useLayoutEffect(() => () => {
+    // The virtualizer cancels pending scroll reconciliation on effect teardown.
+    // A StrictMode replay with cached rows must request the initial position again.
+    scrolledThreadRef.current = null;
+    prependAnchorRef.current = null;
+  }, []);
   React.useLayoutEffect(() => {
     const scroll = scrollRef.current;
     if (!conversation || scroll === null || messages.length === 0) return;
@@ -192,6 +207,8 @@ function TranscriptBody({
         : -1;
       if (anchorIndex >= 0)
         virtualizer.scrollToIndex(anchorIndex, { align: "center" });
+      else if (!anchor)
+        virtualizer.scrollToIndex(messages.length - 1, { align: "end" });
       scrolledThreadRef.current = threadId;
     }
   }, [conversation, threadId, messages, totalSize, anchor, virtualizer]);
@@ -274,6 +291,9 @@ function TranscriptBody({
                     t={t}
                     timezone={timezone}
                     onPreviewFile={onPreviewFile}
+                    active={anchor === `message:${message.id}`}
+                    onOpenReply={onOpenReply ?? (onAnchorChange && message.parent?.thread?.id === threadId
+                      ? (parent) => onAnchorChange(`message:${parent.id}`) : undefined)}
                     actions={renderMessageActions?.(message)}
                     copies={<MessageSourceCopies messageId={message.id} channelName={message.channel?.display_name}
                       renderActions={renderMessageActions} />}
@@ -324,11 +344,14 @@ interface TranscriptMessageProps {
   onPreviewFile?: ThreadTranscriptProps["onPreviewFile"];
   actions?: React.ReactNode;
   copies?: React.ReactNode;
+  active?: boolean;
+  onOpenReply?: ThreadTranscriptProps["onOpenReply"];
 }
 
 /** One transcript turn as the shared feed row: sender, direction chip, the absolute
  *  time, body, read-only reaction pills, and the host's verbs on hover. */
-function TranscriptMessage({ message, t, timezone, onPreviewFile, actions, copies }: TranscriptMessageProps): React.ReactElement {
+function TranscriptMessage({ message, t, timezone, onPreviewFile, onOpenReply, active, actions, copies }: TranscriptMessageProps): React.ReactElement {
+  const recordHref = useResourceRecordHrefLookup();
   // Read the SDL's UPPERCASE `Direction` enum verbatim — one enum-casing convention
   // across the messaging web surface (see `message_type` reads in RecordChatterPane).
   const direction = message.direction;
@@ -342,14 +365,19 @@ function TranscriptMessage({ message, t, timezone, onPreviewFile, actions, copie
       : <Chip tone="neutral">{t("message.directionInbound")}</Chip>;
   return (
     <MessageRow
+      aria-current={active ? true : undefined}
+      className={active ? "selected rounded-6 p-2" : undefined}
       avatar={<Avatar size="sm" src={senderAvatarUrl(message.sender)} initials={avatarInitials(author)} alt={author} />}
       author={author}
       channel={channel}
       timestamp={timestamp}
       timeZone={timezone}
       reactions={reactions.length > 0 ? <ReactionBar reactions={reactions} label={t("message.reactions")} /> : undefined}
-      actions={actions || copies ? <div className="mt-1 flex flex-wrap items-center gap-2">{copies}{actions}</div> : undefined}
+      actions={actions || copies ? <MessageActions className="flex-wrap">{copies}{actions}</MessageActions> : undefined}
     >
+      {message.parent ? <MessageReplyQuote message={message.parent} className="mb-2"
+        href={onOpenReply ? undefined : recordHref("messaging.Message", message.parent.id)}
+        onOpen={onOpenReply ? () => onOpenReply(message.parent!) : undefined} /> : null}
       <MessagePartsView
         parts={message.parts}
         onPreviewFile={

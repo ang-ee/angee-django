@@ -18,6 +18,7 @@ import { senderDisplayName } from "@angee/parties";
 
 import { useMessagingT, type MessagingT } from "./i18n";
 import { StarButton } from "./StarButton";
+import { MessageReplyQuote } from "./MessageReplyQuote";
 import { StreamComposer } from "./StreamComposer";
 import {
   DeleteRecordMessageDocument,
@@ -679,8 +680,8 @@ function ChatterComposer({
     audience={stream?.audience}
     before={readOnly ? <Banner tone="warning">{uiT("viewAs.readOnly")}</Banner> : null}
     inputBefore={<>
-      {replyToMessage ? <ReplyQuote kind={replyKindLabel(replyToMessage, t)} t={t}
-        preview={replyToMessage.preview || editableMessageBody(replyToMessage)}
+      {replyToMessage ? <MessageReplyQuote message={{ ...replyToMessage,
+        preview: replyToMessage.preview || editableMessageBody(replyToMessage) }}
         onClear={disabled ? undefined : onClearReply} /> : null}
       {showKindSwitch && offeredKinds.length > 1 ? <SegmentedControl<RecordMessagePostKind>
         disabled={disabled} value={selectedPostKind} onValueChange={handleKindChange}
@@ -956,7 +957,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
       }
     >
       {message.parent ? (
-        <ReplyQuote kind={replyKindLabel(message.parent, t)} preview={message.parent.preview} t={t} className="mb-2" />
+        <MessageReplyQuote message={message.parent} className="mb-2" />
       ) : null}
       {subtypeDescription && message.message_type !== "COMMENT" && !streamMode ? (
         <div className={cn(textRoleVariants({ role: "caption" }), "mb-1 font-medium")}>
@@ -1045,30 +1046,6 @@ function RemovedMessages({ modelLabel, recordId, count, readOnly, t, onRestore }
   );
 }
 
-/** The one "replying to" quote: above a reply in the feed, and in the composer while composing one. */
-function ReplyQuote({ kind, preview, onClear, className, t }: {
-  kind: string;
-  preview: React.ReactNode;
-  onClear?: () => void;
-  className?: string;
-  t: MessagingT;
-}): React.ReactElement {
-  return (
-    <div className={cn("flex items-center gap-2 rounded-6 border-l-2 border-border-subtle bg-surface px-2 py-1", className)}>
-      <Glyph decorative name="quote" className="shrink-0 text-fg-muted" />
-      <div className="min-w-0 flex-1">
-        <div className={cn(textRoleVariants({ role: "caption" }), "font-medium")}>{t("message.replyingTo", { kind })}</div>
-        <div className="truncate text-13 text-fg-muted">{preview}</div>
-      </div>
-      {onClear ? (
-        <Button type="button" variant="ghost" size="iconSm" aria-label={t("composer.cancelReply")} onClick={onClear}>
-          <Glyph name="x" />
-        </Button>
-      ) : null}
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Pure helpers
 // ---------------------------------------------------------------------------
@@ -1082,11 +1059,6 @@ function editableMessageBody(message: Pick<RecordMessageRow, "parts" | "preview"
 
 function normaliseMessagePartValue(value: string | null | undefined): string {
   return (value ?? "").trim().toUpperCase();
-}
-
-function replyKindLabel(message: { message_type?: string | null }, t: MessagingT): string {
-  if (message.message_type === "NOTIFICATION") return t("message.kindNote");
-  return t("message.kindMessage");
 }
 
 function directionLabel(direction: string | null | undefined, t: MessagingT): string | null {

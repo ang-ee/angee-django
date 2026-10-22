@@ -11,13 +11,15 @@ import {
   avatarInitials,
   cn,
   formatDateTime,
+  useResourceRecordHrefLookup,
   type MessagePart,
 } from "@angee/ui";
 
-import { SetMessageStarredDocument, type MessageReaderData } from "./documents";
+import { SetMessageStarredDocument, type MessageReaderData, type MessageReplyData } from "./documents";
 import { useMessagingT } from "./i18n";
 import { MessageSourceCopies } from "./MessageSourceCopies";
 import { StarButton } from "./StarButton";
+import { MessageReplyQuote } from "./MessageReplyQuote";
 
 // The envelope roles listed under the sender, in header order.
 const RECIPIENT_ROLES = ["TO", "CC", "BCC"] as const;
@@ -36,6 +38,8 @@ export interface MessageReaderProps {
   renderPartActions?: (part: MessagePart) => React.ReactNode;
   /** The host's commands, after the star in the header. */
   actions?: React.ReactNode;
+  /** Open the quoted parent in the host's conversation context. */
+  onOpenReply?: (message: MessageReplyData) => void;
   /** The host's content after the body. */
   children?: React.ReactNode;
 }
@@ -51,9 +55,11 @@ export function MessageReader({
   activePartId,
   renderPartActions,
   actions,
+  onOpenReply,
   children,
 }: MessageReaderProps): React.ReactElement {
   const t = useMessagingT();
+  const recordHref = useResourceRecordHrefLookup();
   const [setStarred, starState] = useAuthoredMutation(SetMessageStarredDocument, { invalidateModels: STAR_MODELS });
   const [starError, setStarError] = React.useState<string>();
   const recipientLabels = { TO: t("message.to"), CC: t("message.cc"), BCC: t("message.bcc") };
@@ -64,7 +70,6 @@ export function MessageReader({
   return (
     <div className={cn("grid min-w-0 gap-6", previewUrl && "lg:grid-cols-2")}>
       <article aria-label={message.title || t("message.label")} className="min-w-0 space-y-5">
-        <MessageSourceCopies messageId={message.id} channelName={message.channel?.display_name} />
         <header className="flex flex-wrap items-start gap-3">
           <Avatar src={senderAvatarUrl(message.sender)} initials={avatarInitials(sender)} />
           <div className="min-w-40 flex-1 space-y-0.5">
@@ -107,6 +112,9 @@ export function MessageReader({
           </div>
         </header>
         <ErrorBanner description={starError ?? null} />
+        {message.parent ? <MessageReplyQuote message={message.parent}
+          href={onOpenReply ? undefined : recordHref("messaging.Message", message.parent.id)}
+          onOpen={onOpenReply ? () => onOpenReply(message.parent!) : undefined} /> : null}
         <MessagePartsView
           parts={message.parts}
           activePartId={activePartId ?? previewPartId}
@@ -115,6 +123,7 @@ export function MessageReader({
         />
         {message.parts.length === 0 ? <p className="whitespace-pre-wrap text-13">{message.preview}</p> : null}
         {children}
+        <MessageSourceCopies messageId={message.id} channelName={message.channel?.display_name} />
       </article>
       {preview && previewUrl ? (
         <aside aria-label={t("message.attachmentPreview")} className="min-w-0 space-y-3">
