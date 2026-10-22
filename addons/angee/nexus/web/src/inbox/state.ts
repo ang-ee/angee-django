@@ -80,6 +80,13 @@ export function useInboxNavigation() {
       }),
     [navigate],
   );
+  const read = useCallback((message: string, part?: string) => patch({ message, part }), [patch]);
+  const conversation = useCallback((thread: string, message?: string) => patch({
+    thread,
+    at: message ? `message:${message}` : undefined,
+    message: undefined,
+    part: undefined,
+  }), [patch]);
   const param = (key: string) => routeSearchParam(search, key) ?? "";
   return useMemo(
     () => ({
@@ -140,14 +147,11 @@ export function useInboxNavigation() {
             ),
         });
       },
-      read: (message: string, part?: string) => patch({ message, part }),
-      conversation: (thread: string, message?: string) =>
-        patch({
-          thread,
-          at: message ? `message:${message}` : undefined,
-          message: undefined,
-          part: undefined,
-        }),
+      read,
+      conversation,
+      /** Read a match in its complete conversation; standalone messages use the inspector. */
+      openInContext: (message: { id: string; thread?: { id: string } | null }) =>
+        message.thread ? conversation(message.thread.id, message.id) : read(message.id),
       results: () =>
         patch({
           thread: undefined,
@@ -171,7 +175,7 @@ export function useInboxNavigation() {
         connect(`file:${file}`, message),
       closeRelated: () => connect(),
     }),
-    [search, patch, connect, navigate, router],
+    [search, patch, connect, read, conversation, navigate, router],
   );
 }
 export type InboxNavigation = ReturnType<typeof useInboxNavigation>;

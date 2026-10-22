@@ -25,8 +25,9 @@ export interface CommandBandProps {
 
 /**
  * The record page's command band: `⋮` menu · lifecycle verbs · (space) · header
- * controls · pager, in the shell's control row. Every record page renders this
- * one band; pages contribute verbs and the record, never a second bar.
+ * controls · pager, in the shell's control row. Pages with lifecycle commands
+ * contribute to this one band, never a second bar. Read-only inspectors can
+ * compose secondary actions and RecordChrome in RecordHeader.actions instead.
  * @kind region
  * @region command-band
  */

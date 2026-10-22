@@ -102,6 +102,11 @@ test("result pane labels expand native groups and page members independently", a
   expect(screen.queryByRole("button", { name: /A conversation/ })).toBeNull();
   expect(row.closest("ul")).toBeTruthy();
   expect(screen.queryByRole("table")).toBeNull();
+  fireEvent.click(row);
+  await waitFor(() => expect(f.router.state.location.search).toMatchObject({ thread: "thread-one", at: "message:msg-one" }));
+  expect(f.router.state.location.search).not.toHaveProperty("message");
+  fireEvent.click(screen.getByRole("button", { name: "Message details" }));
+  await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
   const pager = screen.getByRole("navigation", { name: /Conversation 1/ });
   fireEvent.click(within(pager).getByRole("button", { name: /Next/ }));
   await screen.findByRole("button", { name: /Message page 2/ });

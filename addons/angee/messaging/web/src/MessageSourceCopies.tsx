@@ -20,7 +20,7 @@ export function MessageSourceCopies({ messageId, channelName, renderActions }: S
   const t = useMessagingT();
   const [open, setOpen] = React.useState(false);
   return (
-    <Collapsible.Root open={open} onOpenChange={setOpen}>
+    <Collapsible.Root open={open} onOpenChange={setOpen} className={open ? undefined : "w-auto"}>
       <Collapsible.Trigger render={<Button size="sm" variant="ghost" />}>
         <Collapsible.Icon />
         {channelName ? t("copies.transport", { channel: channelName }) : t("copies.inspect")}
