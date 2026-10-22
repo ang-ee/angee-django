@@ -146,13 +146,16 @@ class Runner:
                                 rows, map_concurrency=settings.ANGEE_WORKFLOW_MAP_CONCURRENCY,
                             )
                             wake = [node.node_key for node in planned if node.existing]
-                            step_runs.filter(node_key__in=wake).to_ready()
-                            step_runs.bulk_create([
+                            if wake:
+                                step_runs.filter(node_key__in=wake).to_ready()
+                            new_steps = [
                                 step_runs.model(
                                     run=run, node_key=node.node_key, map_index=node.map_index,
                                     status=node.status, rank=node.rank,
                                 ) for node in planned if not node.existing
-                            ])
+                            ]
+                            if new_steps:
+                                step_runs.bulk_create(new_steps)
                             statuses = set(step_runs.values_list("status", flat=True))
                             if statuses & {StepRunStatus.READY, StepRunStatus.RUNNING}:
                                 status, outcome, output = RunStatus.RUNNING, "", {}
@@ -217,7 +220,7 @@ class Runner:
         if run_id is None:
             return False
         try:
-            with self.run_model.objects.hold(run_id, skip_locked=True) as run:
+            with self.run_model.objects.select_related("version", "run_as").hold(run_id, skip_locked=True) as run:
                 if run is None:
                     return False
                 with system_context(reason="workflows.execute.claim"):

@@ -84,12 +84,12 @@ class TimelineKind(ABC):
         return None
 
     def targets(self, row: Any) -> Iterable[models.Model]:
-        """Resolve a changed dependency to the source rows whose record reads depend on it."""
+        """Resolve source rows inside the invalidation owner's audited system context."""
         return (row,)
 
     @abstractmethod
     def records(self, row: Any) -> Iterable[RecordIdentity]:
-        """Records to invalidate when this source row changes; no display payload."""
+        """Resolve record identities in that same audited invalidation context."""
 
 
 @lru_cache(maxsize=1)

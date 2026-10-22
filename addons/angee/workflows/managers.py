@@ -16,7 +16,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import DatabaseError, IntegrityError, OperationalError, connection, transaction
-from django.db.models import Count, Exists, F, Max, OuterRef, Q, QuerySet, Sum, Value, Window
+from django.db.models import NOT_PROVIDED, Count, Exists, F, Max, OuterRef, Q, QuerySet, Sum, Value, Window
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now, RowNumber
 from pydantic import Field, TypeAdapter
@@ -1040,6 +1040,7 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
         )
         deadline = timedelta(seconds=settings.CELERY_TASK_TIME_LIMIT)
         until = attempt.started_at + deadline
+        running = False
         try:
             with transaction.atomic():
                 step = step_run.step
@@ -1050,21 +1051,28 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
                     step_run.node_key, step_run.run.input, step_run.run.step_runs.all(),
                     map_index=step_run.map_index,
                 )
-                self.filter(pk=step_run.pk).update(input=step_run.input)
+                self.filter(pk=step_run.pk).to_running(deadline, until=until, input=step_run.input)
+            running = True
         finally:
-            self.filter(pk=step_run.pk).to_running(deadline, until=until)
+            # Failed input preparation rolls back before this durable fence,
+            # allowing the caller to retain the attempt's failure.
+            if not running:
+                self.filter(pk=step_run.pk).to_running(deadline, until=until)
             step_run.refresh_from_db(fields=[
                 "status", "deadline_at", "waiting_kind", "wake_at", "wait_reason", "dispatches",
                 "retry_acknowledged_by_id",
             ])
         return attempt
 
-    def to_running(self, timeout: timedelta, *, until: datetime) -> int:
-        """Finish a claim with one deadline write after class/input resolution."""
-        return self.filter(status=StepRunStatus.READY).update(
-            **(self._cleared_wait() | {"deadline_at": Least(Now() + timeout, until)}),
-            status=StepRunStatus.RUNNING, dispatches=0, retry_acknowledged_by_id=None,
-        )
+    def to_running(self, timeout: timedelta, *, until: datetime, input: Any = NOT_PROVIDED) -> int:
+        """Persist the running fence and, when prepared, its input in one write."""
+        values = self._cleared_wait() | {
+            "deadline_at": Least(Now() + timeout, until), "status": StepRunStatus.RUNNING,
+            "dispatches": 0, "retry_acknowledged_by_id": None,
+        }
+        if input is not NOT_PROVIDED:
+            values["input"] = input
+        return self.filter(status=StepRunStatus.READY).update(**values)
 
     def extend_deadline(self, timeout: timedelta, *, until: datetime) -> int:
         """Extend a fenced claim from database time within the worker's IO budget."""

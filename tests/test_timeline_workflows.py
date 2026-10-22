@@ -21,6 +21,7 @@ from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.states import RunStatus, WaitingKind
 from angee.workflows.testing.drivers import decide, load_workflow, run_until
 from angee.workflows.testing.models import StepRun, WorkflowRun
+from angee.workflows.timeline import RunKind
 from tests.conftest import create_user
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_timeline import read_timeline, timeline_entries
@@ -37,6 +38,24 @@ def kinds(settings):
         "angee.workflows.timeline.timeline_kinds", "angee.decisions.timeline.timeline_kinds",
         "angee.provenance.timeline.timeline_kinds",
     ]
+
+
+@pytest.mark.parametrize("redacted_run", [False, True])
+def test_run_invalidation_reuses_its_audited_scope_and_reloads_relations(execution, redacted_run) -> None:
+    actor, _sent = execution
+    workflow = load_workflow(document("entry"), key="timeline-native-relations", actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    row = StepRun.system_queryset().get(run=run)
+    StepRun.run.field.set_cached_value(row, None if redacted_run else run)
+    kind = RunKind()
+    with CaptureQueriesContext(connection) as captured:
+        with system_context(reason="timeline.invalidate"):
+            assert tuple(kind.targets(row)) == (run,)
+            assert tuple(kind.records(run)) == ()
+    queries = [query["sql"] for query in captured]
+    assert sum(sql.startswith('INSERT INTO "rebac_permissionauditevent"') for sql in queries) == 1
+    assert sum(sql.startswith("SELECT") for sql in queries) == 2
+    assert sum(f'FROM "{run._meta.db_table}"' in sql for sql in queries) == 1
 
 
 def test_run_follows_execution_without_an_explicit_projection(execution) -> None:
