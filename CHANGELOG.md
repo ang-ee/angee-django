@@ -25,7 +25,13 @@ live in code docstrings.
   `Workflow` and `ExternalAccount` (the external-account `#owner` tuples fold into the
   column). Each addon declares the cutover as a `[[migrations]]` runtime migration.
 - `client_creation_key` is `idempotency_key` on every create argument and on the
-  GraphQL wire; the conflict error keeps its code.
+  GraphQL wire; the conflict error keeps its code. A changeset claim owns create
+  replay, so a kept database retires the stored creation keys through declared
+  cutovers: `retire_creation_keys` in dashboards, knowledge, messaging and projects
+  (with `ProjectSetupReceipt`), proposals `retire_clarification_keys` and provenance
+  `retire_idempotency_key`. Intake retires `Need.original_task`; posts
+  `single_scope_quota` deletes the legacy and spender-less quota rows the required
+  `integration` and `scope` cannot hold.
 - Workflows: extension points (`workflows.workflowextension` resources add steps to
   a published workflow at `after_<node>` / `before_<node>`), `blocks` tokens with
   `WorkflowRun.objects.blocking(record, action)` evaluated as policy, blocking runs,
