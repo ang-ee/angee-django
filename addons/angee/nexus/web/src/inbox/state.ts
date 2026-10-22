@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Filter, localTimeZone, mergeResourceViewSearch, resourceViewStateToSearch, routeSearchParam, updateRouteSearch, useRouteSearch, type ResourceViewFilter, type ResourceViewState } from "@angee/ui";
 import {
   InboxFilter,
@@ -63,6 +63,7 @@ export type InboxScope = ReturnType<typeof inboxQuery> & {
 export function useInboxNavigation() {
   const search = useRouteSearch();
   const navigate = useNavigate();
+  const router = useRouter();
   const patch = useCallback(
     (values: Record<string, string | undefined>, replace = false) => {
       void navigate({ to: ".", search: updateRouteSearch(values), replace });
@@ -70,21 +71,14 @@ export function useInboxNavigation() {
     [navigate],
   );
   const connect = useCallback(
-    (related: string, relatedFrom: string) =>
-      patch({
-        related,
-        relatedFrom,
-        "r.page": undefined,
-        "r.filter": undefined,
-        "r.sort": undefined,
-        "r.group": undefined,
-        "r.then": undefined,
-        "r.pageSize": undefined,
-        "r.view": undefined,
-        "r.mode": undefined,
-        "r.anchor": undefined,
+    (related?: string, relatedFrom?: string) =>
+      void navigate({
+        to: ".",
+        search: (current: Record<string, unknown>) => mergeResourceViewSearch(
+          updateRouteSearch({ related, relatedFrom })(current), {}, "r",
+        ),
       }),
-    [patch],
+    [navigate],
   );
   const param = (key: string) => routeSearchParam(search, key) ?? "";
   return useMemo(
@@ -101,6 +95,7 @@ export function useInboxNavigation() {
       part: param("part"),
       related: param("related"),
       relatedFrom: param("relatedFrom"),
+      href: (values: Record<string, string | undefined>) => router.buildLocation({ to: ".", search: updateRouteSearch(values) }).href,
       patch,
       changeNavigator: (finder: NavigatorLens, state: ResourceViewState) => {
         const filter =
@@ -153,7 +148,6 @@ export function useInboxNavigation() {
           message: undefined,
           part: undefined,
         }),
-      back: () => patch({ message: undefined, part: undefined }),
       results: () =>
         patch({
           thread: undefined,
@@ -172,25 +166,12 @@ export function useInboxNavigation() {
           part: undefined,
         }),
       connect,
-      /** A file previews in Related as the pinned target, beside the message that used it. */
+      /** A file previews in Links as the pinned target, beside the message that used it. */
       previewFile: (file: string, message: string) =>
         connect(`file:${file}`, message),
-      closeRelated: () =>
-        patch({
-          related: undefined,
-          relatedFrom: undefined,
-          "r.page": undefined,
-          "r.filter": undefined,
-          "r.sort": undefined,
-          "r.group": undefined,
-          "r.then": undefined,
-          "r.pageSize": undefined,
-          "r.view": undefined,
-          "r.mode": undefined,
-          "r.anchor": undefined,
-        }),
+      closeRelated: () => connect(),
     }),
-    [search, patch, connect, navigate],
+    [search, patch, connect, navigate, router],
   );
 }
 export type InboxNavigation = ReturnType<typeof useInboxNavigation>;

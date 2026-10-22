@@ -41,6 +41,8 @@ const BreadcrumbLeafLabelContext = React.createContext<string | null>(null);
 const BreadcrumbLeafLabelSetterContext = React.createContext<
   ((label: string | null) => void) | null
 >(null);
+const BreadcrumbTrailContext = React.createContext<readonly BreadcrumbItem[] | null>(null);
+const BreadcrumbTrailSetterContext = React.createContext<React.Dispatch<React.SetStateAction<readonly BreadcrumbItem[] | null>> | null>(null);
 
 interface BreadcrumbCollectionLink {
   to: string;
@@ -62,17 +64,35 @@ export function BreadcrumbLabelProvider({
   children: React.ReactNode;
 }): ReactElement {
   const [leafLabel, setLeafLabel] = React.useState<string | null>(null);
+  const [trail, setTrail] = React.useState<readonly BreadcrumbItem[] | null>(null);
   const [link, setLink] = React.useState<BreadcrumbCollectionLink | null>(null);
   const collection = React.useMemo(() => ({ link, setLink }), [link]);
   return (
-    <BreadcrumbCollectionContext.Provider value={collection}>
-      <BreadcrumbLeafLabelSetterContext.Provider value={setLeafLabel}>
-        <BreadcrumbLeafLabelContext.Provider value={leafLabel}>
-          {children}
-        </BreadcrumbLeafLabelContext.Provider>
-      </BreadcrumbLeafLabelSetterContext.Provider>
-    </BreadcrumbCollectionContext.Provider>
+    <BreadcrumbTrailSetterContext.Provider value={setTrail}>
+      <BreadcrumbTrailContext.Provider value={trail}>
+        <BreadcrumbCollectionContext.Provider value={collection}>
+          <BreadcrumbLeafLabelSetterContext.Provider value={setLeafLabel}>
+            <BreadcrumbLeafLabelContext.Provider value={leafLabel}>
+              {children}
+            </BreadcrumbLeafLabelContext.Provider>
+          </BreadcrumbLeafLabelSetterContext.Provider>
+        </BreadcrumbCollectionContext.Provider>
+      </BreadcrumbTrailContext.Provider>
+    </BreadcrumbTrailSetterContext.Provider>
   );
+}
+
+/** Publish a hierarchy whose record selections live in route search, using the
+ * shell's existing breadcrumb rendering, link policy and history.
+ * @owner Breadcrumb
+ */
+export function useBreadcrumbTrail(items: readonly BreadcrumbItem[] | null): void {
+  const setTrail = React.useContext(BreadcrumbTrailSetterContext);
+  React.useEffect(() => {
+    if (!setTrail) return;
+    setTrail(items);
+    return () => setTrail(null);
+  }, [items, setTrail]);
 }
 
 /** Let a route page replace the generic current crumb with its record label.
@@ -117,9 +137,11 @@ export function Breadcrumb({
  * @owner Breadcrumb
  */
 export function useBreadcrumbItems(): readonly BreadcrumbItem[] {
+  const trail = React.useContext(BreadcrumbTrailContext);
   const leafLabel = React.useContext(BreadcrumbLeafLabelContext);
   const collection = React.useContext(BreadcrumbCollectionContext)?.link;
-  return breadcrumbItemsFromRefine(useRefineBreadcrumb().breadcrumbs, leafLabel, collection);
+  const defaults = useRefineBreadcrumb().breadcrumbs;
+  return trail ?? breadcrumbItemsFromRefine(defaults, leafLabel, collection);
 }
 
 /**

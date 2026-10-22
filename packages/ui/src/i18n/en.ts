@@ -467,8 +467,8 @@ export const enUiMessages: Record<string, string> = {
   "auth.hero.composable.body":
     "Compose Django, React, permissions, data views, and agent workflows into a deterministic product surface that stays clear as it grows.",
   "chatter.label": "Context",
-  "related.empty.title": "Nothing related",
-  "related.empty.description": "Files, pages and sources attached to this record appear here.",
+  "related.empty.title": "No links yet",
+  "related.empty.description": "Linked files, pages, sources and records that reference this record appear here.",
   "chatter.unavailable.title": "Nothing selected",
   "chatter.unavailable.description": "Open this from a line on the Timeline.",
   // Message + chat surface primitives (communication/message, communication/chat).

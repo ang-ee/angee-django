@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from django.db.models import (
@@ -43,6 +44,9 @@ class InboxGroup:
     label: str
     count: int
     message_count: int
+    latest: datetime | None = None
+    platform: str = ""
+    account: str = ""
 
 
 @dataclass(frozen=True)
@@ -185,6 +189,7 @@ class InboxGroups:
                     label=row["_label"],
                     count=row["records"],
                     message_count=row["messages"],
+                    latest=row.get("_latest"),
                 )
                 for row in selected
             ],

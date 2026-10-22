@@ -37,6 +37,18 @@ test("rows without a destination or action remain readable and non-interactive",
   expect(open).toHaveBeenCalledOnce();
 });
 
+test("primary hints do not displace row text and secondary controls stay independent", () => {
+  const open = vi.fn(), related = vi.fn();
+  render(<><PaneRow title="Sender" detail={0} verb="Results" onOpen={open} />
+    <PaneRow title="File" onOpen={open} verb={<button onClick={related}>3 uses</button>} /></>);
+  expect(screen.queryByText("Results")).toBeNull();
+  expect(screen.getByRole("button", { name: "Sender · 0" }).title).toBe("Results");
+  fireEvent.click(screen.getByRole("button", { name: "3 uses" }));
+  expect(related).toHaveBeenCalledOnce();
+  expect(open).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "3 uses" }).parentElement?.className).not.toContain("opacity-0");
+});
+
 test("outbound rows preserve native new-tab navigation", () => {
   const navigate = vi.fn();
   render(<InAppLinkProvider navigate={navigate}>

@@ -219,7 +219,7 @@ export function useChatterPresentation(explicitTabs?: readonly ChatterTab[]): {
     [published],
   );
   const children = useContainer<ChatterTabContent | ChatterTab>("record#aside", { models, extra });
-  // The framework's Related tab shows only where an edge owner declared a group.
+  // The framework's Links tab shows only where an edge owner declared a group.
   const relatedGroups = useRelatedGroups(context);
   const tabs = React.useMemo(() => children.filter((child) => {
     if (child.owner === PAGE_OWNER) return true;

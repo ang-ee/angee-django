@@ -10,6 +10,11 @@ dependencies = [
   "markdown-it-py>=4.2",
 ]
 
+[[migrations]]
+name = "retire_creation_keys"
+app_label = "knowledge"
+module = "runtime_migrations.retire_creation_keys"
+
 [resources]
 demo = [
   { path = "resources/demo/010_knowledge.vault.yaml", depends_on = "iam:resources/demo/010_iam.user.yaml", adopt = ["owner", "name"] },

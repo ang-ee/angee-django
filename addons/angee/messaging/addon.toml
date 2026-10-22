@@ -14,6 +14,11 @@ dependencies = [
   "urllib3>=2.2",
 ]
 
+[[migrations]]
+name = "retire_creation_keys"
+app_label = "messaging"
+module = "runtime_migrations.retire_creation_keys"
+
 [resources]
 install = [
   { path = "resources/install/030_provenance.rule.yaml", adopt = "key" },

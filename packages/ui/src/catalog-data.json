@@ -7923,6 +7923,16 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useBreadcrumbTrail",
+    "source": "packages/ui/src/chrome/Breadcrumb.tsx",
+    "kind": "region",
+    "owner": "@angee/ui:Breadcrumb",
+    "region": "breadcrumb",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useBulkDelete",
     "source": "packages/ui/src/views/resource/useBulkDelete.ts",
     "kind": "surface",

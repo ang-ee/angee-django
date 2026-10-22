@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from itertools import batched
@@ -229,10 +229,35 @@ class MergeableQuerySet(CanonicalQuerySet[_ModelT]):
         survivors = self.filter(pk=models.OuterRef("merged_into_id")).order_by().values("pk")
         return rows.filter(models.Q(merged_into__isnull=True) | ~models.Exists(survivors))
 
+    @staticmethod
+    def survivor_id(through: str = "", *, ref: Callable[[str], Any] = models.F) -> Coalesce:
+        """Return the survivor id of a row, or of the mergeable row reached through ``through``.
+
+        The survivor id is the id a row redirects to, else its own. Redirects are
+        flattened to one hop, so :meth:`redirect_group` of a survivor is exactly the
+        rows whose survivor id is its pk. ``ref`` builds each column reference:
+        ``F`` within the query, ``OuterRef`` from a subquery.
+        """
+
+        return Coalesce(ref(f"{through}merged_into_id"), ref(f"{through}pk"))
+
     def redirect_group(self, survivor: _ModelT) -> Self:
-        """Return ``survivor`` and the one-hop redirects flattened into it."""
+        """Return ``survivor`` and the one-hop redirects flattened into it.
+
+        The disjunction probes the primary key and redirect indexes, which suits a
+        bounded or per-row lookup; a corpus-wide join keys on :meth:`survivor_ids`.
+        """
 
         return self.filter(models.Q(pk=survivor.pk) | models.Q(merged_into_id=survivor.pk))
+
+    def survivor_ids(self) -> models.QuerySet[Any]:
+        """Return each row's :meth:`survivor_id` as ``survivor``.
+
+        A corpus-wide anti-join or semi-join on equality with this key is hashed
+        once, where a correlated :meth:`redirect_group` probe runs once per outer row.
+        """
+
+        return self.order_by().values(survivor=self.survivor_id())
 
 
 class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):

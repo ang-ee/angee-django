@@ -1,7 +1,8 @@
 import { useMemo } from "react";
+import { senderAvatarUrl } from "@angee/parties";
 import {
-  CollectionTreeView, ListView, PaneLabelAction, PaneRow, PaneToolbarHost,
-  AbsoluteTime, ScopeChip, Select, useResourceView,
+  CollectionTreeView, ListView, PaneRow, PaneRows, PaneToolbarHost,
+  AbsoluteTime, Select, avatarInitials, useResourceView,
   type ResourceViewFilter,
 } from "@angee/ui";
 import { InboxFilter, NAVIGATOR_LENSES, navigatorAxes } from "./contract";
@@ -39,49 +40,50 @@ export function InboxNavigatorPane({ coverage, onCoverage, timezone, navigation 
   };
   const renderRow = (row: InboxNavigatorRow, interactive = true) => (
     <PaneRow icon={row.circle ? "users" : row.thread ? "channel" : "user"}
+      avatar={!row.circle && !row.thread ? { initials: avatarInitials(row.label),
+        src: row.party?.display_avatar?.url || senderAvatarUrl(row.handle) } : undefined}
       title={row.label || t("inbox.conversation")} detail={row.count}
       meta={row.latest ? <AbsoluteTime display="date" value={row.latest} timeZone={timezone} /> : undefined}
       sub={[row.handle?.value, row.preview].filter(Boolean).join(" · ")}
       selected={navigation.sender === row.id || Boolean(row.circle && navigation.circle === row.circle.id)}
-      verb={row.thread ? t("inbox.openConversation") : t("inbox.results")}
+      label={row.thread ? t("inbox.openConversation") : t("inbox.showExchanges", { label: row.label })}
       onOpen={interactive ? () => select(row) : undefined} />
   );
-  // The band: the lens as the selector, then the scope chips: Everyone (or the selection) and
-  // the conversation-kind coverage as a chip menu, so the row fits a 16rem pane.
+  // The band chooses how to explore; the root row below it clears the selection.
   const pane = {
-      selector: <Select size="sm" className="min-w-0 w-32" aria-label={t("inbox.navigatorLens")} value={lens}
+      selector: <Select size="sm" className="min-w-0 flex-1" aria-label={t("inbox.navigatorLens")} value={lens}
           options={NAVIGATOR_LENSES.map((value) => ({ value, label: t(`inbox.${value}`) }))}
           onValueChange={(finder) => {
             const selected = NAVIGATOR_LENSES.find((lens) => lens === finder);
             if (selected) navigation.changeNavigator(selected, view.state);
           }} />,
-      scope: <>
-        <ScopeChip label={t("inbox.everyone")} active={!navigation.sender && !navigation.circle} onClick={() => navigation.select()} />
-        {kind.value !== "any" ? <ScopeChip label={kind.label} active onClick={() => kind.setValue("any")} /> : null}
-      </>,
       // The conversation-kind coverage is an occasional narrowing: it lives in the pane's overflow.
       overflowGroups: [{ label: t("inbox.kind"), value: kind.value, onValueChange: kind.setValue, items: kind.options }],
   };
   return (
     <PaneToolbarHost role="region" aria-label={t("inbox.navigator")}>
+      <PaneRows className="shrink-0 px-2 py-1">
+        <li><PaneRow icon="channel" title={t("inbox.anyKind")}
+          sub={kind.value !== "any" ? kind.label : undefined}
+          selected={!navigation.sender && !navigation.circle && !navigation.message && !navigation.thread}
+          onOpen={() => navigation.select()} /></li>
+      </PaneRows>
       {lens === "circles" ? (
         <CollectionTreeView presentation="workspace" resource="nexus.InboxNavigator" source={source}
           columns={columns} rowKey="id" parent="parent_id" label="label" hasChildren="has_children"
           selectedId={navigation.circle ? `circle:${navigation.circle}` : undefined}
           onRowClick={select} renderRow={(row) => renderRow(row, false)}
-          textFilterField="text" {...controls} pane={pane} emptyContent={t("inbox.noCircles")} />
+          textFilterField="text" {...controls} search={{ box: true }} pane={pane} emptyContent={t("inbox.noCircles")} />
       ) : (
         <ListView presentation="workspace" selectable={false} resource="nexus.InboxNavigator" source={source}
           columns={columns} availableViews={["list"]} textFilterField="text" maxGroupDepth={1}
-          defaultExpandedGroups="none" {...controls}
+          defaultExpandedGroups="none" {...controls} search={{ box: true }}
           groupOptions={navigatorAxes(lens).map((axis) => ({ id: axis, label: t(`inbox.axis.${axis}`), group: { field: `by_${axis}` } }))}
-          pane={pane} renderPaneRow={renderRow} emptyContent={t("inbox.noSenders")}
-          renderGroupLabel={groupField === "by_circle" || groupField === "by_group" ? ({ bucket }) => {
+          pane={pane} renderPaneRow={renderRow} emptyContent={t("inbox.noNavigatorResults")}
+          renderGroupLabel={groupField === "by_circle" || groupField === "by_group" ? ({ bucket, label }) => {
             const id = bucket.key?.[groupField];
-            return typeof id === "string" ? <PaneLabelAction icon="chevron-right"
-              onClick={() => groupField === "by_circle" ? navigation.select(undefined, id) : navigation.conversation(id)}>
-              {t(groupField === "by_circle" ? "inbox.results" : "inbox.openConversation")}
-            </PaneLabelAction> : null;
+            return typeof id === "string" ? <PaneRow icon={groupField === "by_circle" ? "users" : "channel"} title={label}
+              onOpen={() => groupField === "by_circle" ? navigation.select(undefined, id) : navigation.conversation(id)} /> : undefined;
           } : undefined} />
       )}
     </PaneToolbarHost>

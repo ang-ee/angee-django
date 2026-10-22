@@ -41,7 +41,7 @@ export interface ContainerKinds {
   aside: ChatterTabContent;
   /** How a timeline kind presents (`timeline#kinds`), declared by the kind's owner. */
   kinds: TimelineKindContent;
-  /** The Related tab's groups (`related#groups`, `<model>#groups`), declared by each edge's owner. */
+  /** The Links tab's groups (`related#groups`, `<model>#groups`), declared by each edge's owner. */
   groups: RelatedGroupContent;
   /**
    * Renderable children of addon pages' own containers, declared on the

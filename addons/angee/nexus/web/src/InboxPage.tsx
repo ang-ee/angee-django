@@ -6,7 +6,6 @@ import {
   PrimaryPanePublisher,
   ResourceViewProvider,
   localTimeZone,
-  useBreadcrumbLeafLabel,
   useChatter,
   useChatterContent,
   useLatestRef,
@@ -45,7 +44,6 @@ export function InboxPage() {
 
 function InboxExplorer() {
   const t = useNexusT();
-  useBreadcrumbLeafLabel(t("inbox.title"));
   const navigation = useInboxNavigation();
   const view = useResourceView();
   const timezone = localTimeZone();
