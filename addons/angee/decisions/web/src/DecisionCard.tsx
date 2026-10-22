@@ -81,7 +81,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, detail = 
         .then((data) => actionFormSubmitResult(data, "decide")).catch(formSubmitError);
       if (result.status === "ok") setChoice({ revision: decision.revision, keys: chosen, values, accepted: true });
       else setError(result.status === "conflict" ? t("decision.conflict")
-        : [...result.issues.formErrors, ...Object.values(result.issues.fieldErrors).flat()].join(" "));
+        : [...new Set([...result.issues.formErrors, ...Object.values(result.issues.fieldErrors).flat()])].join(" "));
     } finally { setBusy(false); }
   };
   const recordLink = (id: string) => {
