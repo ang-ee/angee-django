@@ -18,6 +18,7 @@ from strawberry.scalars import JSON
 from strawberry_django.queryset import run_type_get_queryset
 
 from angee.decisions.schema import DecisionType
+from angee.evidence import readable_evidence
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
@@ -136,14 +137,11 @@ class WorkflowRunType(RecordReferenceNode):
     origin: RunOrigin
     @strawberry_django.field(only=["input", "version_id"])
     def input(self, info: strawberry.Info) -> JSON:
-        """Keep non-reference input while checking marked sources at read time."""
+        """Keep non-reference input and check each source's declared model read policy."""
         run = cast(Any, self)
-        evidence = StepRecord.objects.with_actor(request_from_info(info).user)
-        readable: set[tuple[str, str]] = set()
-        for row in with_record_reference_access(evidence.filter(run_id=run.pk)):
-            if row._angee_record_readable:
-                readable.add((row.record_model_label.lower(), row.record_public_id))
-        return run.policy_version.definition.redacted_input(run.input, readable)
+        definition = run.policy_version.definition
+        readable = readable_evidence(definition.input_evidence(run.input), request_from_info(info).user)
+        return definition.redacted_input(run.input, {(ref.model.lower(), ref.id) for ref in readable})
     output: JSON
     outcome: auto
     outcome_label: str = strawberry_django.field(
