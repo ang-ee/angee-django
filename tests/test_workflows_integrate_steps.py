@@ -119,7 +119,7 @@ def cycle(execution, register_step, monkeypatch):
             local_keys.add(record.external_key)
             return ApplyResult(mapped_payload=record.mapped_payload)
 
-    monkeypatch.setattr(SyncCycleTestBridge, "backend", property(Adapter), raising=False)
+    monkeypatch.setattr(SyncCycleTestBridge, "capability_impl", property(Adapter))
     for step in (StreamStage, Rescan, ConflictReview):
         register_step(step)
 

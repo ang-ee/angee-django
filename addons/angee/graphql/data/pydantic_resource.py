@@ -33,17 +33,18 @@ from angee.graphql.data.metadata import (
 )
 
 
-def pydantic_node(row_model: type[BaseModel], *, name: str) -> type:
+def pydantic_node(row_model: type[BaseModel], *, name: str, include_computed: bool = False) -> type:
     """Derive the GraphQL node type from a pydantic row model (all fields).
 
     The resolver returns the pydantic instances directly (strawberry resolves
     each field by ``getattr``); this holds while the strawberry-exposed field
     types coincide with the pydantic runtime types (no custom conversion).
+    ``include_computed`` opts into Strawberry's native computed-field support.
     """
 
-    return strawberry.experimental.pydantic.type(model=row_model, all_fields=True, name=name)(
-        type(name, (), {"__annotations__": {}})
-    )
+    return strawberry.experimental.pydantic.type(
+        model=row_model, all_fields=True, name=name, include_computed=include_computed
+    )(type(name, (), {"__annotations__": {}}))
 
 
 def hasura_pydantic_resource(

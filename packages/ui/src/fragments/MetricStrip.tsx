@@ -1,11 +1,12 @@
 import * as React from "react";
+import { Meter } from "@base-ui/react/meter";
 import NumberFlow, { type Format, type NumberFlowProps } from "@number-flow/react";
 
 import { useInAppLink } from "../lib/in-app-link";
 import { cn } from "../lib/cn";
 import { formatNumber } from "../lib/format-number";
 import { getHumanLocale } from "../lib/human-locale";
-import { type Tone } from "../lib/tones";
+import { toneSolidBg, type Tone } from "../lib/tones";
 import { useMotionTokens } from "../lib/use-motion-tokens";
 import { tv, type VariantProps } from "../lib/variants";
 import { Chip } from "../ui/chip";
@@ -22,6 +23,8 @@ export interface MetricTileValue {
   /** Opt into animated transitions for the typed numeric value. */
   animate?: boolean;
   detail?: React.ReactNode;
+  /** A real part-of-total measure, independent of any historical trend. */
+  share?: { value: number; total: number; label: string };
   /** Native Intl formatting options for the typed numeric value. */
   format?: Format;
   /** Stable identity for preserving a tile across label or value changes. */
@@ -56,12 +59,18 @@ export const metricStripVariants = tv({
     root: "grid grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))] gap-3",
     tile: "min-w-0 shadow-none",
     value: "",
+    meter: "mt-3 h-1 overflow-hidden rounded-full bg-inset",
+    indicator: "h-full rounded-full",
   },
   variants: {
     density: {
       compact: {
         root: "",
         tile: "px-3 py-2.5",
+      },
+      spacious: {
+        root: "gap-3",
+        tile: "flex min-h-36 flex-col justify-between px-4 py-4 shadow-xs",
       },
       prominent: {
         root: "gap-4",
@@ -121,6 +130,7 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
       className,
       density = "compact",
       detail,
+      share,
       format,
       icon,
       label,
@@ -151,29 +161,40 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
         ? <AnimatedMetricTileNumber format={format} suffix={suffix} value={numericValue} />
         : <>{formatNumber(numericValue, format)}{suffix}</>;
     const body = (
-      <dl>
-        <DefinitionPair
-          action={icon ? <IconTile icon={icon} size="md" /> : undefined}
-          density={density}
-          detail={detail}
-          label={
-            density === "prominent" ? (
-              // The label sits as a grid item of the stacked pair: a pill must not stretch to the tile.
-              <Chip tone={tone ?? "neutral"} className="justify-self-start">{label}</Chip>
-            ) : (
-              label
-            )
-          }
-          orientation="stacked"
-          value={
-            valueSize === "lg" ? (
-              <span className={styles.value()}>{resolvedValue}</span>
-            ) : (
-              resolvedValue
-            )
-          }
-        />
-      </dl>
+      <>
+        <dl>
+          <DefinitionPair
+            action={icon ? <IconTile icon={icon} size="md" /> : undefined}
+            density={density}
+            detail={detail}
+            label={
+              density === "prominent" ? (
+                // The label sits as a grid item of the stacked pair: a pill must not stretch to the tile.
+                <Chip tone={tone ?? "neutral"} className="justify-self-start">{label}</Chip>
+              ) : (
+                label
+              )
+            }
+            orientation="stacked"
+            value={
+              valueSize === "lg" ? (
+                <span className={styles.value()}>{resolvedValue}</span>
+              ) : (
+                resolvedValue
+              )
+            }
+          />
+        </dl>
+        {share && Number.isFinite(share.value) && Number.isFinite(share.total) && share.total >= 0 && share.value >= 0 && share.value <= share.total ? (
+          <Meter.Root value={share.value} max={share.total || 1}
+            aria-label={share.label} aria-valuetext={`${formatNumber(share.value)} / ${formatNumber(share.total)}`}
+            locale={getHumanLocale()}>
+            <Meter.Track className={styles.meter()}>
+              <Meter.Indicator className={cn(styles.indicator(), toneSolidBg(tone ?? "brand"))} />
+            </Meter.Track>
+          </Meter.Root>
+        ) : null}
+      </>
     );
 
     if (href != null) {

@@ -86,8 +86,8 @@ export function parsePageColumns<TRow extends object = Record<string, unknown>>(
     });
     return assertUniqueDescriptor(
       columns,
-      (column) => column.field,
-      "column field",
+      (column) => column.id ?? column.field,
+      "column identity",
     );
   });
 }
@@ -196,6 +196,7 @@ function columnDescriptor<TRow extends object = Record<string, unknown>>(
 ): ColumnDescriptor<TRow> {
   return cachedDescriptor(columnDescriptorCache, props, () => ({
     field: props.field,
+    ...(props.id !== undefined ? { id: props.id } : {}),
     ...(props.selectionPaths !== undefined
       ? { selectionPaths: props.selectionPaths }
       : {}),

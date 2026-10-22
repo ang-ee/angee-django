@@ -50,6 +50,8 @@ class FreshnessMilestone(AbstractMilestone):
 
 
 class FreshnessTask(TaskWork, AbstractTask):
+    # This scope intentionally supplies no item-ownership policy.
+    owner_container = None
     project = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
     milestone = models.ForeignKey(FreshnessMilestone, null=True, blank=True, on_delete=models.SET_NULL)
     queue = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)

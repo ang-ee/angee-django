@@ -36,6 +36,8 @@ export interface DashboardBarSelection {
 export type DashboardBarsProps = {
   title: string;
   emptyLabel?: string;
+  /** Compact horizontal rows fit short dashboard panels without hiding their legend. */
+  density?: "comfortable" | "compact";
   /** Input order is preserved, so time buckets remain chronological. */
   orientation?: "horizontal" | "vertical";
   /** The caller owns navigation or filtering; the chart only identifies the chosen bucket. */
@@ -100,20 +102,21 @@ interface BarSegment {
   seriesKey?: string;
 }
 
-function BarSegments({ segments, pointKey, label, positiveExtent, negativeExtent, vertical, onSelect }: {
+function BarSegments({ segments, pointKey, label, positiveExtent, negativeExtent, vertical, compact, onSelect }: {
   segments: readonly BarSegment[];
   pointKey: string;
   label: string;
   positiveExtent: number;
   negativeExtent: number;
   vertical: boolean;
+  compact?: boolean;
   onSelect?: DashboardBarsProps["onSelect"];
 }): React.ReactElement {
   const extent = positiveExtent + negativeExtent || 1;
   let positive = negativeExtent;
   let negative = negativeExtent;
   return (
-    <span className={cn("relative block min-h-0 min-w-0 rounded-4 bg-inset", vertical ? "h-full w-full" : "h-6 w-full")}>
+    <span className={cn("relative block min-h-0 min-w-0 rounded-4 bg-inset", vertical ? "h-full w-full" : compact ? "h-4 w-full" : "h-6 w-full")}>
       <span aria-hidden className={cn("absolute bg-border-strong", vertical ? "inset-x-0 h-px" : "inset-y-0 w-px")}
         style={vertical ? { bottom: `${negativeExtent / extent * 100}%` } : { left: `${negativeExtent / extent * 100}%` }} />
       {segments.map((segment) => {
@@ -125,7 +128,7 @@ function BarSegments({ segments, pointKey, label, positiveExtent, negativeExtent
         const size = `${Math.abs(segment.value) / extent * 100}%`;
         const style: React.CSSProperties = {
           backgroundColor: segment.color,
-          ...(vertical ? { bottom: offset, height: size, width: "100%" } : { left: offset, width: size, height: "100%" }),
+          ...(vertical ? { left: 0, bottom: offset, height: size, width: "100%" } : { top: 0, left: offset, width: size, height: "100%" }),
         };
         const description = `${label}${segment.seriesKey ? ` · ${segment.label}` : ""}: ${formatChartNumber(segment.value)}`;
         return onSelect ? (
@@ -151,6 +154,7 @@ export function DashboardBars(props: DashboardBarsProps): React.ReactElement {
   const t = useDashboardT();
   const { title, emptyLabel, onSelect, series } = props;
   const vertical = props.orientation === "vertical";
+  const compact = props.density === "compact";
   const rows = props.points.map((point, index) => {
     const segments: BarSegment[] = "values" in point
       ? (series ?? []).map((item, seriesIndex) => ({
@@ -169,8 +173,8 @@ export function DashboardBars(props: DashboardBarsProps): React.ReactElement {
     <figure aria-label={title} className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-auto">
       <figcaption className="sr-only">{title}</figcaption>
       <ul
-        className={cn("grid flex-1 gap-3", vertical ? "min-h-40 grid-flow-col auto-cols-[minmax(2.5rem,1fr)]" : "min-h-0")}
-        style={vertical ? undefined : { gridTemplateRows: `repeat(${rows.length}, minmax(1.5rem, 1fr))` }}
+        className={cn("grid flex-1", compact ? "gap-2" : "gap-3", vertical ? "min-h-24 grid-flow-col auto-cols-[minmax(2.5rem,1fr)]" : "min-h-0")}
+        style={vertical ? undefined : { gridTemplateRows: `repeat(${rows.length}, minmax(${compact ? "1rem" : "1.5rem"}, 1fr))` }}
       >
         {rows.map(({ point, segments, total }) => (
           <li key={point.key} className={cn("grid min-h-0 min-w-0 gap-2", vertical
@@ -178,7 +182,7 @@ export function DashboardBars(props: DashboardBarsProps): React.ReactElement {
             : "grid-cols-[minmax(0,8rem)_minmax(0,1fr)_auto] items-center")}>
             <span aria-hidden className={cn("truncate text-12 text-fg", vertical && "col-start-1 row-start-3")} title={point.label}>{point.label}</span>
             <BarSegments segments={segments} pointKey={point.key} label={point.label}
-              positiveExtent={positiveExtent} negativeExtent={negativeExtent} vertical={vertical} onSelect={onSelect} />
+              positiveExtent={positiveExtent} negativeExtent={negativeExtent} vertical={vertical} compact={compact} onSelect={onSelect} />
             <span aria-hidden className={cn("text-12 tabular-nums text-fg-muted", vertical && "col-start-1 row-start-1")}>
               {formatChartNumber(total)}
             </span>

@@ -1037,7 +1037,7 @@ def _run_probe_command(tmp_path: Path, manage_source: str) -> subprocess.Complet
         history = apps.get_model("notes", "Note").history.get()
         assert history.changeset_id == context.pk
         assert history.history_change_reason == context.change_reason == "manage.captureprobe"
-        assert context.actor == ""
+        assert context.actor_ref == ""
         assert context.activity == "system"
         assert context.state == "closed"
         assert context.outcome == "success"

@@ -3,6 +3,8 @@
 import { cleanup, fireEvent, render, screen, within, } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createRouteHref } from "@angee/ui/runtime";
+import { ModelMetadataProvider, ResourceQuery, schemaFieldMetadataFromDataResources, type QueryFilter } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 import {
   ChatterTabsTestHost,
   PrimaryPaneTestHost,
@@ -167,13 +169,20 @@ import {
 import knowledge from "../index";
 import { KnowledgePage } from "./KnowledgePage";
 
-function renderPage() {
+const metadata = schemaFieldMetadataFromDataResources([testDataResource("knowledge.Page", {
+  query: ResourceQuery.forRows({ fields: { id: { scalar: "ID" }, vault: { scalar: "ID" } } }).contract,
+})]);
+
+function renderPage(filter?: QueryFilter) {
   return render(
-    <ShellPageTestProviders>
+    <ShellPageTestProviders runtime={{
+      defaultResourceFilter: filter ? { resource: "knowledge.Page", filter } : undefined,
+    }}>
       <KnowledgePage />
       <PrimaryPaneTestHost />
       <ChatterTabsTestHost tabTestId={(id) => `chatter-tab-${id}`} />
     </ShellPageTestProviders>,
+    { wrapper: ({ children }) => <ModelMetadataProvider metadata={metadata}>{children}</ModelMetadataProvider> },
   );
 }
 
@@ -215,6 +224,25 @@ afterEach(() => {
 });
 
 describe("KnowledgePage explorer wiring", () => {
+  test("a mounted scope is compiled into the read and only represented vaults remain", () => {
+    knowledgeData.pages = [page("page-a", "Page A", "note", "vault-a")];
+    renderPage({ vault: { exact: "vault-a" } });
+    const call = sdkMocks.useAuthoredQuery.mock.calls.findLast(([document]) => document === KnowledgePages)!;
+    expect(call[1]).toMatchObject({ where: { vault: { _eq: "vault-a" } } });
+    expect(call[2]).toMatchObject({ enabled: true });
+    expect(within(screen.getByTestId("root-picker")).getAllByRole("option").map((option) => option.textContent))
+      .toEqual(["Vault A"]);
+    expect(treeAttribute("data-row-ids")).toBe("page-a");
+  });
+
+  test("an invalid mounted filter blocks its read instead of loading an unscoped collection", () => {
+    renderPage({ missing_scope: { exact: "not-a-field" } });
+    const call = sdkMocks.useAuthoredQuery.mock.calls.findLast(([document]) => document === KnowledgePages)!;
+    expect(call[2]).toMatchObject({ enabled: false });
+    expect(screen.queryByTestId("root-picker")).toBeNull();
+    expect(screen.getByRole("alert")).toBeTruthy();
+  });
+
   test("uses the open page vault for a direct link", () => {
     routerMocks.params = { id: "page-b" };
 

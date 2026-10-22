@@ -45,6 +45,12 @@ export const definitionPairVariants = tv({
       compact: {
         root: "text-13",
       },
+      spacious: {
+        root: "gap-y-3",
+        label: "text-2xs uppercase tracking-wide",
+        value: "truncate text-3xl font-semibold leading-none tabular-nums",
+        detail: "min-h-8 whitespace-normal leading-relaxed",
+      },
       prominent: {
         root: "gap-y-3",
         label: "contents normal-case tracking-normal",

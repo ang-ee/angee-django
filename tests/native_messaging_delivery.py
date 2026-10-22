@@ -452,7 +452,9 @@ class DeliveryContracts(DeliveryFixtures):
                 records = [fixture.post("first"), fixture.post("")] if page == 0 else [fixture.post("second")]
                 return StreamPage(records=records, cursor={"page": page + 1}, exhausted=page > 0)
 
-        with system_context(reason="paged feed fixture"), patch.object(Feed, "backend", property(PagedFeed)):
+        with system_context(reason="paged feed fixture"), patch.object(
+            Feed.feed_backend_class.field, "resolve_class", return_value=PagedFeed,
+        ):
             self.assertEqual(self.feed.sync(), 2)
             stream = apps.get_model("integrate", "SyncStream").objects.get(integration_id=self.feed.pk, key="history")
             self.assertEqual(stream.cursor, {"page": 2})
@@ -474,7 +476,9 @@ class DeliveryContracts(DeliveryFixtures):
                      RecordRefusal("bad-second", "invalid_record")], {"page": 1},
                 )
 
-        with system_context(reason="refused feed records"), patch.object(Feed, "backend", property(RefusingFeed)):
+        with system_context(reason="refused feed records"), patch.object(
+            Feed.feed_backend_class.field, "resolve_class", return_value=RefusingFeed,
+        ):
             self.assertEqual(self.feed.sync(), 1)
             stream = apps.get_model("integrate", "SyncStream").objects.get(integration_id=self.feed.pk)
             self.assertEqual(stream.cursor, {"page": 1})
@@ -503,7 +507,7 @@ class DeliveryContracts(DeliveryFixtures):
                 return StreamPage([fixture.post(f"observed-{page}")], {"page": page + 1}, exhausted=False)
 
         with system_context(reason="bounded separate reobservation"), patch.object(
-            Feed, "backend", property(BoundedFeed),
+            Feed.feed_backend_class.field, "resolve_class", return_value=BoundedFeed,
         ):
             self.feed.config = {"reobserve_units_per_cycle": 2}
             self.feed.save(update_fields=("config", "updated_at"))
@@ -993,7 +997,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         self.assertFalse(FeedBackend.reconciles_delivery())
         self.assertTrue(FakeFeedBackend.reconciles_delivery())
         with system_context(reason="class-only transport capability"), patch.object(
-            Feed, "resolve_impl", return_value=FakeFeedBackend,
+            Feed.feed_backend_class.field, "resolve_class", return_value=FakeFeedBackend,
         ), patch.object(FakeFeedBackend, "__init__", side_effect=AssertionError("Constructed a backend")):
             self.assertTrue(self.original_channel_capability(self.channel))
             self.assertEqual(self.original_channel_visibility_delay(self.channel), timedelta())

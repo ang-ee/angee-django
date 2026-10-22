@@ -28,6 +28,22 @@ afterEach(() => {
 });
 
 describe("MetricStrip", () => {
+  test("spacious summaries expose real shares without implying a trend", () => {
+    const { rerender } = render(<MetricTile density="spacious" label="Risks" numericValue={5}
+      detail="Review the evidence" share={{ value: 5, total: 26, label: "Risk share" }} />);
+    const meter = screen.getByRole("meter", { name: "Risk share" });
+    expect(meter.getAttribute("aria-valuenow")).toBe("5");
+    expect(meter.getAttribute("aria-valuemax")).toBe("26");
+    expect(screen.getByText("Risks").className).toContain("uppercase");
+    expect(screen.getByText("5").className).toContain("tabular-nums");
+    rerender(<MetricTile density="spacious" label="Risks" numericValue={0}
+      share={{ value: 0, total: 0, label: "Risk share" }} />);
+    expect(screen.getByRole("meter").getAttribute("aria-valuenow")).toBe("0");
+    expect(screen.getByRole("meter").getAttribute("aria-valuetext")).toBe("0 / 0");
+    rerender(<MetricTile label="Risks" share={{ value: NaN, total: 26, label: "Risk share" }} />);
+    expect(screen.queryByRole("meter")).toBeNull();
+  });
+
   test("renders a tile per metric with label and value", () => {
     const { container } = render(
       <MetricStrip
@@ -186,5 +202,32 @@ describe("MetricStrip", () => {
     expect(screen.getByRole("status")).toBeTruthy();
     expect(screen.getByText("Loading metrics")).toBeTruthy();
     expect(document.querySelectorAll("[data-slot='metric-skeleton']")).toHaveLength(3);
+  });
+
+  test("an action tile exposes controlled selection through a native button", () => {
+    const select = vi.fn();
+    const { rerender } = render(<MetricTile label="Conflicts" value={3} selected onClick={select} />);
+    const button = screen.getByRole("button", { name: /Conflicts/ });
+    expect(button.tagName).toBe("BUTTON");
+    expect(button.getAttribute("type")).toBe("button");
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(button);
+    expect(select).toHaveBeenCalledOnce();
+    rerender(<MetricTile label="Conflicts" value={3} selected={false} disabled onClick={select} />);
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    button.click();
+    expect(select).toHaveBeenCalledOnce();
+  });
+
+  test("a disabled navigation tile does not follow its destination", () => {
+    const navigate = vi.fn();
+    render(<InAppLinkProvider navigate={navigate}>
+      <MetricTile label="Bills" value={3} href="/bills" disabled />
+    </InAppLinkProvider>);
+    const tile = screen.getByText("Bills").closest("a")!;
+    expect(tile.getAttribute("aria-disabled")).toBe("true");
+    expect(tile.getAttribute("tabindex")).toBe("-1");
+    fireEvent.click(tile);
+    expect(navigate).not.toHaveBeenCalled();
   });
 });

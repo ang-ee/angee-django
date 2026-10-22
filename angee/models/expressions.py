@@ -1,9 +1,15 @@
 """Small Django expression bridges for the supported database backends."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from django.db import models
 from django.db.models.functions import SHA256
+
+if TYPE_CHECKING:
+    from django.db.backends.base.base import BaseDatabaseWrapper
+    from django.db.models.sql.compiler import SQLCompiler, _AsSqlType
 
 
 class JSONArraySubquery(models.Subquery):
@@ -16,7 +22,9 @@ class JSONArraySubquery(models.Subquery):
     output_field = models.JSONField()
     template = "(SELECT COALESCE(jsonb_agg(_item), '[]'::jsonb) FROM (%(subquery)s) items)"
 
-    def as_sqlite(self, compiler: Any, connection: Any, **extra_context: Any) -> Any:
+    def as_sqlite(
+        self, compiler: SQLCompiler, connection: BaseDatabaseWrapper, **extra_context: Any,
+    ) -> _AsSqlType:
         return super().as_sql(
             compiler,
             connection,
@@ -28,7 +36,9 @@ class JSONArraySubquery(models.Subquery):
 class TextSHA256(SHA256):
     """Django's text digest using PostgreSQL's built-in SHA256, without pgcrypto."""
 
-    def as_postgresql(self, compiler: Any, connection: Any, **extra_context: Any) -> Any:
+    def as_postgresql(
+        self, compiler: SQLCompiler, connection: BaseDatabaseWrapper, **extra_context: Any,
+    ) -> _AsSqlType:
         return super().as_sql(
             compiler,
             connection,

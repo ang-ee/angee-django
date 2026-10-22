@@ -80,7 +80,7 @@ function Incoming() {
 }
 
 function Attention() {
-  return <DashboardBars title="Where attention is needed" series={[
+  return <DashboardBars title="Where attention is needed" density="compact" series={[
     { key: "risk", label: "Risk", tone: "warning" }, { key: "conflict", label: "Conflict", tone: "danger" },
     { key: "unresolved", label: "Unresolved", tone: "muted" },
   ]} points={[
@@ -101,9 +101,9 @@ function panel(id: string, title: string, x: number, y: number, w: number, h: nu
 const definition: DashboardDefinition = {
   key: KEY, title: "Records overview", revision: "1", editable: false, columns: 12,
   widgets: [
-    panel("incoming", "Incoming records · this week", 0, 0, 6, 5),
-    panel("attention", "Where attention is needed", 6, 0, 6, 5),
-    panel("inbox", "Inbox", 0, 5, 12, 6),
+    panel("incoming", "Incoming records · this week", 0, 0, 6, 4),
+    panel("attention", "Where attention is needed", 6, 0, 6, 4),
+    panel("inbox", "Inbox", 0, 4, 12, 6),
   ],
   authored: { incoming: Incoming, attention: Attention, inbox: Inbox },
 };
@@ -111,9 +111,10 @@ const definition: DashboardDefinition = {
 /** The production dashboard, list, cards and charts composed together; fixtures contain no queries or policy engine. */
 export const Overview: Story = {
   render: () => <RuntimeRegistryFixture runtime={{ dashboards: registry }}>
-    <DashboardSurface target={{ scope: "addon", key: KEY }} definition={definition} className="h-screen"
+    <DashboardSurface target={{ scope: "addon", key: KEY }} definition={definition} className="h-screen" headerDensity="comfortable" headingLevel={1}
+      subtitle="Your records, their checks, and what needs a closer look."
       toolbar={<div className="px-4 pt-4">
-        <MetricStrip density="prominent" metrics={[
+        <MetricStrip density="spacious" className="grid-cols-2 lg:grid-cols-5" metrics={[
           { label: "Open records", numericValue: 6, detail: "Awaiting processing" },
           { label: "All checks passed", numericValue: 3, tone: "success", detail: "No outstanding findings" },
           { label: "Risks", numericValue: 1, tone: "warning", detail: "Review the evidence" },
