@@ -20,10 +20,12 @@ import {
   type RecordChromeContext,
 } from "@angee/ui";
 
-const MESSAGE_MODEL = "messaging.Message";
 import { InboxMessage } from "./documents";
 import { useNexusT } from "../i18n";
 import { INBOX_MODELS, type InboxNavigation, type InboxScope } from "./state";
+import { useInboxBreadcrumbs } from "./breadcrumbs";
+
+const MESSAGE_MODEL = "messaging.Message";
 
 /** A message replaces the results or transcript while their route state stays intact. */
 export function InboxMessageReader({
@@ -43,11 +45,20 @@ export function InboxMessageReader({
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const message = query.data?.inbox_message.message;
+  useInboxBreadcrumbs(navigation, {
+    message: message?.title || t("inbox.message"),
+    conversation: message?.thread ? { id: message.thread.id, label: message.thread.conversation_label } : undefined,
+  });
   const uses = useMemo(() => {
-    const byTarget = new Map<string, number>();
-    for (const use of query.data?.inbox_message.uses ?? []) byTarget.set(use.target, (byTarget.get(use.target) ?? 0) + use.count);
-    return [...byTarget].map(([target, count]) => ({ target, count }));
-  }, [query.data?.inbox_message.uses]);
+    // The server count is already distinct messages per target, not per part.
+    const byTarget = new Map((query.data?.inbox_message.uses ?? [])
+      .filter((use) => use.target.startsWith("file:") || use.count > 1)
+      .map((use) => [use.target, use]));
+    return [...byTarget.values()].map((use) => {
+      const part = message?.parts.find((part) => part.id === use.part_id);
+      return { ...use, label: part?.name || part?.fragment?.text || t("inbox.sharedText") };
+    });
+  }, [query.data?.inbox_message.uses, message?.parts, t]);
   async function copyLink() {
     try {
       await navigator.clipboard.writeText(window.location.href);
@@ -56,9 +67,6 @@ export function InboxMessageReader({
       setActionError(error instanceof Error ? error.message : String(error));
     }
   }
-  const backLabel = navigation.thread
-    ? t("inbox.backConversation")
-    : t("inbox.backResults");
   const metadata = useModelMetadata(MESSAGE_MODEL);
   const directions = useEnumOptions(MESSAGE_MODEL, "direction", { casing: "upper" });
   const statuses = useEnumOptions(MESSAGE_MODEL, "status", { casing: "upper" });
@@ -94,17 +102,6 @@ export function InboxMessageReader({
             )}>{t("inbox.exploreSender")}</ActionTrigger>
           ) : null}
         </> : null}
-        verbs={<>
-          <Button size="sm" variant="ghost" onClick={navigation.back}>
-            <Glyph name="chevron-left" />
-            {backLabel}
-          </Button>
-          {message?.thread ? (
-            <Button size="sm" variant="primary" onClick={() => navigation.conversation(message.thread!.id, message.id)}>
-              {t("inbox.openConversation")}
-            </Button>
-          ) : null}
-        </>}
         chrome={chrome}
       />
       <RecordHeader
@@ -131,12 +128,13 @@ export function InboxMessageReader({
               if (file) navigation.previewFile(file.id, message.id);
             }}
           >
-            {/* The message's uses, once under the body: one verb per target, counts summed over its parts. */}
+            {/* One labelled action per exact content target, with its distinct message count. */}
             {uses.length ? (
               <div className="flex flex-wrap gap-2">
                 {uses.map((use) => (
-                  <Button key={use.target} size="sm" variant="link" onClick={() => navigation.connect(use.target, message.id)}>
+                  <Button key={use.target} size="sm" variant="secondary" className="max-w-full" onClick={() => navigation.connect(use.target, message.id)}>
                     <Glyph name="link" />
+                    <span className="max-w-48 truncate">{use.label}</span>
                     {t("inbox.accessibleUses", { count: use.count })}
                   </Button>
                 ))}

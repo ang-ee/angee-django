@@ -35,7 +35,7 @@ export function PaneListBody<TRow extends Row>({ surface, renderRow, renderGroup
             group.groupingColumnId!, group.getGroupingValue(group.groupingColumnId!),
           ]));
           return <PaneLabel key={row.id} count={count} folded={!row.getIsExpanded()}
-            action={renderGroupLabel?.({ label, depth: row.depth, bucket: { key, count } })}
+            labelAction={renderGroupLabel?.({ label, depth: row.depth, bucket: { key, count } })}
             onToggle={() => row.toggleExpanded()}>{label}</PaneLabel>;
         })
           : surface.groupedItems.map((item) => {
@@ -44,7 +44,7 @@ export function PaneListBody<TRow extends Row>({ surface, renderRow, renderGroup
               case "groupHeader": return <React.Fragment key={item.bucketKey}>
                 <PaneLabel count={item.count} folded={!item.expanded}
                   onToggle={item.expandable ? () => surface.toggleGroup(item.bucketKey) : undefined}
-                  action={renderGroupLabel?.(item)}>{item.label}</PaneLabel>
+                  labelAction={renderGroupLabel?.(item)}>{item.label}</PaneLabel>
                 {item.expanded && item.pager ? <li><GroupedScopePager pager={item.pager} label={item.label}
                   onPageChange={surface.setScopePage} onPageSizeChange={surface.setScopePageSize} t={t} /></li> : null}
                 {!item.expandable ? <li className="px-1 text-12 text-fg-muted">{item.unavailableMessage}</li> : null}

@@ -30,7 +30,7 @@ function useRecordFilesVerb(context: ChatterViewContext): boolean {
   return Boolean(query.data?.record_files.can_upload && !preview.viewAs && !preview.pending);
 }
 
-/** The Files group of the Related tab, where the record type carries attachments. */
+/** The Files group of the Links tab, where the record type carries attachments. */
 export const recordFilesGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {

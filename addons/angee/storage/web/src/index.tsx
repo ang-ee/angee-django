@@ -61,7 +61,7 @@ const storage = defineBaseAddon({
         content: <Tab id="preview" label={{ namespace: "storage", key: "preview.label", fallback: enStorageMessages["preview.label"] }}><FilePreviewSection /></Tab>,
       },
     },
-    // The Related tab's Files group, on types whose schema lets a record carry attachments.
+    // The Links tab's Files group, on types whose schema lets a record carry attachments.
     "related#groups": { "storage.files": recordFilesGroup },
     "storage.File#groups": { "storage.attached-to": fileAttachedToGroup },
   },

@@ -45,7 +45,7 @@ const knowledge = defineBaseAddon({
   menus: knowledgeMenu,
   i18n: { knowledge: enKnowledgeMessages },
   containers: {
-    // The Related tab: bound pages on every record type that carries bindings; on a
+    // The Links tab: bound pages on every record type that carries bindings; on a
     // page, the pages that link to it and the records it is bound to.
     "related#groups": { "knowledge.pages": recordPagesGroup() },
     "knowledge.Page#groups": { "knowledge.backlinks": pageBacklinksGroup, "knowledge.bound-to": pageBoundToGroup },

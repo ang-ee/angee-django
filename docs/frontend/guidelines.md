@@ -848,7 +848,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   by a child projection are read from the canonical resource. A tab for every
   record kind is a `form#sections` child gated on the resource fact it reads.
   Changes are Timeline lines and the changeset drill-in; attached work is the
-  Related tab; neither is a saved-record section.
+  Links tab; neither is a saved-record section.
   Inside a section panel, use
   `useRecordChromeContext()` and scope a related collection with a base filter
   on a `presentation="embedded"` list, which brings compact chrome and local
@@ -1246,7 +1246,7 @@ the toolbar through `RecordChromeContext.toolbarHost`
 | `resource#search` | separate controls over the list search model; page shortcuts are `page.*` extras | `SearchShortcut` |
 | `record#aside` | context-aside tabs (`strip: true`) and drill-ins (`strip: false`, with a target) | `ChatterTabContent` |
 | `timeline#kinds` | presentation of a timeline kind a Python source implements | `TimelineKindContent` |
-| `related#groups`, `<model>#groups` | one group of the Related tab per edge: rows that link to their records and one verb | `RelatedGroupContent` |
+| `related#groups`, `<model>#groups` | one group of the Links tab per edge: rows that link to their records and one verb | `RelatedGroupContent` |
 | `shell#notices` | notices below the console navigation | `ReactNode` |
 | `shell#user-menu` | user-menu items between the theme item and sign-out | `ReactNode` |
 | `shell#drawers-right`, `shell#drawers-bottom` | non-modal drawers docked on that edge | `DockedDrawerContent` |
@@ -1280,9 +1280,13 @@ pane renders into the shell's `PaneToolbar` band (scope · selector · search ·
 actions · overflow; back and title first on a drill-in) instead of its own
 header row; the same band heads explorer panes on the left.
 Collections in these panes keep their native resource query/state owner and use
-`ListView.renderPaneRow` for pointer rows and `pane` for the selector and scope.
-The shared resource toolbar publishes search, chips, ordering, grouping and
-utilities into the pane band; the list body owns group expansion and paging.
+`ListView.renderPaneRow` for pointer rows and explicit `pane` for compact
+selector and scope chrome. Row anatomy does not select a toolbar: omit `pane`
+to keep the standard resource toolbar and its pager. With `pane`, the shared
+toolbar publishes search, chips, ordering, grouping and utilities into the pane
+band and the collection pager goes below the rows. `search.box: true` exposes
+the same search control below the compact band. Group expansion and paging
+remain owned by the resource collection in either presentation.
 
 **Four tabs are in the strip, in this order**, each only where its capability
 exists. A tab serves a recurring record-wide job (reading what happened,
@@ -1311,10 +1315,10 @@ state belongs in the header and sheet; a drill-in acts on the record's process
 Messaging's [`messaging.conversation`](../../addons/angee/messaging/web/src/index.tsx)
 drill-in targets a `ThreadAttachment`. Its pane resolves the thread through the
 authorized `record_source_threads` read and composes `ThreadTranscript`.
-Conversation rows in Related continue linking to the thread page.
+Conversation rows in Links continue linking to the thread page.
 
 A tab that lists one polymorphic edge (files, pages, sources, the chatter
-thread, tasks) shows only where the record's type can carry it: Related groups
+thread, tasks) shows only where the record's type can carry it: Links groups
 declare `edge.model`; other tabs check it in `when`. The framework checks the
 edge's model label in `context.route.recordEdges`, the resource
 metadata the backend derives from each edge's schema target relations. Timeline
@@ -1329,7 +1333,10 @@ in a loop changes their order. The [Related count owner](../../packages/ui/src/c
 sums the results published by each group reader.
 
 Each `related#groups` child (or `<model>#groups` for one model's pages) is one
-group of the framework's Related tab, declared by the addon that owns the edge.
+group of the framework's Links tab, declared by the addon that owns the edge.
+Use **Backlinks** for incoming references, such as pages citing a record or
+messages using a file. The tab includes both directions; the existing `related`
+tab id and `related#groups` contribution addresses remain stable.
 The tab draws the group's label, count and action; the group supplies its rows
 through the shared pane row anatomy:
 
@@ -1363,14 +1370,19 @@ Pages group therefore includes `related` and unclaimed roles while a Contract
 group owns `contract`, without counting that binding twice.
 
 **Every pane list composes one row anatomy** (`PaneRow`, `PaneRows`,
-`PaneLabel`, `PaneLabelAction`, `PaneLabelPopover` in `@angee/ui`): glyph, `title · detail`, a right meta, a muted
-second line and one hover verb, on the 13/12 scale; a row is a link when its
+`PaneLabel`, `PaneLabelAction`, `PaneLabelPopover` in `@angee/ui`): glyph or avatar, `title · detail`, a right meta, a muted
+second line and an optional secondary control, on the 13/12 scale; a row is a link when its
 target has a page and a button when it opens something beside it. Rows without
 either remain non-interactive. `PaneRow` composes `useInAppLink` for host navigation,
 preloading and native modified clicks. Reverse record pointers use
 `RecordReferenceRow`, supplying the list's references so labels share one bounded
-query per model without changing row order. Day and
-section labels sit above rows, folded sections open from their label. A pane
+query per model without changing row order. A string `verb` describes the primary
+action in its tooltip; a node is an always visible secondary action beside the
+primary target. Supply `avatar` from the identity owner when a row represents a
+person; the shared Avatar owns image loading and initials fallback. Day and
+section labels sit above rows. Folded sections open from
+their label, or from a separate chevron when `PaneLabel.labelAction` supplies a
+navigable title. A pane
 never picks its own font size, card or header row.
 
 Each `timeline#kinds` child presents one kind a Python timeline kind
@@ -1815,7 +1827,10 @@ Hard-won traps — the wise learn from others' mistakes
   on an app root keeps the page on its own item there. The route projection
   publishes the winning `activeMenuId`; the Refine router binding uses that same
   destination for native breadcrumbs. Breadcrumbs occupy the sheet strip below
-  the top bar; pane toggles stay in the top bar. A route whose anchor and path
+  the top bar; pane toggles stay in the top bar. Explorers whose selected records
+  live in route search publish their ancestry with `useBreadcrumbTrail`; they
+  use the shell's existing breadcrumbs rather than adding Back/Open navigation
+  to the record toolbar. A route whose anchor and path
   fall in different places (an app and Settings, as when composition lifts the
   page its path nests under into Settings) fails composition
   ([`AppRouteProjection`](../../packages/app/src/resource-projection.ts)),

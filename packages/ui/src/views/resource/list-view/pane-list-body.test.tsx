@@ -23,7 +23,9 @@ test("pane labels follow native client group expansion without rendering a group
   render(<ResourceViewProvider scope="local" initialState={{ groupStack: [{ field: "category" }] }}><Pane openGroup={open} /></ResourceViewProvider>);
   fireEvent.click(screen.getByRole("button", { name: "Open People" }));
   expect(open).toHaveBeenCalledWith({ key: { category: "People" }, count: 2 });
-  const group = screen.getByRole("button", { name: "People · 2" });
+  const group = screen.getByRole("button", { name: "Expand People" });
+  expect(screen.getAllByText("Open People")).toHaveLength(1);
+  expect(group.contains(screen.getByRole("button", { name: "Open People" }))).toBe(false);
   expect(screen.queryByText("Ada")).toBeNull();
   fireEvent.click(group);
   expect(screen.getAllByText("Ada")).toHaveLength(1);

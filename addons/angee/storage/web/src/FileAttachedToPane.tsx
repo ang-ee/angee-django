@@ -19,7 +19,7 @@ function useFileAttachments(context: ChatterViewContext) {
   return { query, attachments };
 }
 
-/** The records the open file is attached to, on the file's Related tab. */
+/** The records the open file is attached to, on the file's Links tab. */
 export const fileAttachedToGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {

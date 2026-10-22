@@ -44,7 +44,7 @@ export function RelatedCountProbe({ id, context, onCount }: CountProbeProps): Re
   ) : null)}</>;
 }
 
-/** The Related tab: every eligible group, its label with count and verb, then its rows.
+/** The Links tab: every eligible group, its label with count and verb, then its rows.
  * @kind surface
  */
 export function RelatedPane({ context }: { context: ChatterViewContext }): React.ReactElement {

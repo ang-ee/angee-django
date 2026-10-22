@@ -173,8 +173,9 @@ export function resultSource({
         ),
         totalCount: data.inbox_result_groups.count,
         buckets: data.inbox_result_groups.rows.map((row) => ({
-          key: { [groupField]: row.value, label: row.label },
+          key: { [groupField]: row.value, label: row.label, platform: row.platform, account: row.account },
           count: row.count,
+          max: { latest: row.latest },
         })),
         summary: t("inbox.unitSummary", {
           count:
