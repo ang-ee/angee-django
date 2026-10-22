@@ -281,9 +281,7 @@ class ThreadedModelMixin(models.Model):
         thread_model = apps.get_model("messaging", "Thread")
         record_ref = record_id if hasattr(record_id, "resolve_expression") else models.Value(record_id)
         rows = message_model.objects.system_context(reason="messaging.record.messages").alias(_record_id=record_ref)
-        survivor = thread_model(
-            pk=Coalesce(models.OuterRef("thread__merged_into_id"), models.OuterRef("thread_id")),
-        )
+        survivor = thread_model(pk=rows.survivor_id("thread__", ref=models.OuterRef))
         # The thread rows are structural plumbing for an already-authorized
         # record projection.  The message queryset below is the content-bearing
         # elevated read; auditing this attachment subquery as a second content
