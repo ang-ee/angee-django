@@ -675,14 +675,13 @@ class ThreadQuerySet[ThreadT: Thread](MergeableQuerySet[ThreadT], OwnerQuerySet[
         owner-scoped generic ``threads`` list, aggregate, or by-pk lookup.
         """
 
-        survivor = self.model(pk=Coalesce(models.OuterRef("merged_into_id"), models.OuterRef("pk")))
-        # This is a structural anti-join inside the already authorized inbox
-        # queryset.  The unscoped base manager supplies the complete redirect
-        # group without opening a separately audited system read at SQL compile.
-        attached = self.model._base_manager.redirect_group(survivor).filter(attachments__role="chatter")
-        return self.alias(_record_attached=models.Exists(attached)).filter(
-            _record_attached=False,
-        )
+        # A structural anti-join inside the already authorized inbox queryset: the
+        # unscoped base manager supplies every redirect group without opening a
+        # separately audited system read. Equality on the survivor id is hashed once.
+        survivor = Coalesce(models.OuterRef("merged_into_id"), models.OuterRef("pk"))
+        chatter = self.model._base_manager.filter(attachments__role="chatter").survivor_ids()
+        attached = chatter.filter(survivor=survivor)
+        return self.alias(_record_attached=models.Exists(attached)).filter(_record_attached=False)
 
     def for_channel(self, channel: Any) -> Self:
         """Return the threads that belong to ``channel`` — the purge-scope predicate.
@@ -2530,16 +2529,13 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         in the inbox.
         """
 
+        # The same structural anti-join as ``ThreadQuerySet.inbox``. A message
+        # without a thread has no survivor id, so it matches no redirect group.
+        survivor = Coalesce(models.OuterRef("thread__merged_into_id"), models.OuterRef("thread_id"))
         thread_model = apps.get_model("messaging", "Thread")
-        survivor = thread_model(
-            pk=Coalesce(models.OuterRef("thread__merged_into_id"), models.OuterRef("thread_id")),
-        )
-        attached = thread_model.objects.system_context(
-            reason="messaging.message.record_gate"
-        ).redirect_group(survivor).filter(attachments__role="chatter")
-        return self.alias(_record_attached=models.Exists(attached)).filter(
-            models.Q(thread_id__isnull=True) | models.Q(_record_attached=False),
-        )
+        chatter = thread_model._base_manager.filter(attachments__role="chatter").survivor_ids()
+        attached = chatter.filter(survivor=survivor)
+        return self.alias(_record_attached=models.Exists(attached)).filter(_record_attached=False)
 
     def automated_sender_ids(self) -> models.QuerySet[Any]:
         """Return the senders whose every message here is automated mail.

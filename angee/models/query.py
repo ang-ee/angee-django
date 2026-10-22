@@ -234,6 +234,17 @@ class MergeableQuerySet(CanonicalQuerySet[_ModelT]):
 
         return self.filter(models.Q(pk=survivor.pk) | models.Q(merged_into_id=survivor.pk))
 
+    def survivor_ids(self) -> models.QuerySet[Any]:
+        """Return each row's survivor id: the id it redirects to, else its own.
+
+        Redirects are flattened to one hop, so :meth:`redirect_group` of a survivor is
+        exactly the rows whose survivor id is its pk. A corpus-wide anti-join on
+        equality with this key is hashed once, where the disjunction in a correlated
+        ``redirect_group`` probe runs once per outer row.
+        """
+
+        return self.order_by().values(survivor=Coalesce("merged_into_id", "pk"))
+
 
 class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
     """Shared lookup, locking and history capture, preserving each manager's policy.
