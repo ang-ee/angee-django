@@ -17,6 +17,11 @@ depends_on = [
   "angee.timeline",
 ]
 
+[[migrations]]
+name = "retire_creation_keys"
+app_label = "projects"
+module = "runtime_migrations.retire_creation_keys"
+
 [resources]
 master = [{ path = "resources/master/010_projects.activitytype.yaml", adopt = "key" }]
 demo = [
