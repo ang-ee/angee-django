@@ -221,6 +221,50 @@ def test_artifact_reference_is_redacted_for_run_reader_without_source_read(schem
     }
 
 
+def test_run_input_reads_declared_mti_sources_under_their_own_permission(schema, callers, register_step):
+    """Canonical retained edges neither hide a readable child nor authorize it by its parent."""
+    from tests.mtidemo.models import MtiChild, MtiParent
+
+    admin, owner, reader = callers
+    with system_context(reason="workflow input MTI source fixture"):
+        source = MtiChild.objects.create(title="Shared source", detail="Concrete source")
+    write_relationships([
+        RelationshipTuple(to_object_ref(source), "reader", to_subject_ref(owner)),
+        RelationshipTuple(to_object_ref(source.mtiparent_ptr), "reader", to_subject_ref(owner)),
+        RelationshipTuple(to_object_ref(source.mtiparent_ptr), "reader", to_subject_ref(reader)),
+    ])
+
+    class SourceInput(BaseModel):
+        source: str = Field(json_schema_extra={"relation": {"resource": "mtidemo.MtiChild"}})
+        note: str = "Retained text"
+
+    class SourceStep(Step[SourceInput, SourceInput, None]):
+        key = "concrete_input_source"
+
+        def run(self, ctx):
+            return ctx.done(ctx.input)
+
+    register_step(SourceStep)
+    workflow = load_workflow(document("entry", step=SourceStep.key), actor=admin)
+    workflow.with_actor(admin).grant_record_access("starter", owner)
+    run = start_run(workflow, actor=owner, input={"source": source.sqid})
+    run.with_actor(owner).grant_record_access("reader", reader)
+    retained = StepRecord.objects.with_actor(owner).get(run=run)
+    assert retained.record_model_label == MtiParent._meta.label
+    assert retained.record_public_id == source.sqid
+    assert MtiParent.objects.with_actor(reader).filter(pk=source.pk).exists()
+    assert not MtiChild.objects.with_actor(reader).filter(pk=source.pk).exists()
+    query = "query($id: String!) { workflowrun_by_pk(id: $id) { input } }"
+
+    def projected(actor):
+        return result_data(execute_schema(schema, query, {"id": run.sqid}, user=actor))["workflowrun_by_pk"]["input"]
+
+    assert projected(owner) == {"source": source.sqid, "note": "Retained text"}
+    assert projected(reader) == {"source": None, "note": "Retained text"}
+    write_relationships([RelationshipTuple(to_object_ref(source), "reader", to_subject_ref(reader))])
+    assert projected(reader) == {"source": source.sqid, "note": "Retained text"}
+
+
 def test_cancel_action_checks_requester_before_calling_owner(schema, callers):
     """An unrelated or anonymous requester cannot cancel another user's run."""
 
