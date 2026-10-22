@@ -255,7 +255,10 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
         ``for_channel`` predicate; callers run elevated so it sees every message.
         """
 
-        impl_class = self.model.resolve_impl_class(self.model.live_impl_field, backend_class)
+        field = self.model.live_implementation_field()
+        if field is None:
+            raise ValueError("Unfinished pairing requires a live channel backend.")
+        impl_class = field.resolve_class(backend_class)
         if not issubclass(impl_class, LiveBridgeImpl):
             raise ValueError("Unfinished pairing requires a live channel backend.")
         identity_key = impl_class.state_identity_key
@@ -292,11 +295,6 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
     ingested and forecasts the same scope for the delete-confirmation preview — one
     owner for both the destructive path and its forecast, so the preview cannot drift.
     """
-
-    def get_queryset(self) -> ChannelQuerySet[ChannelT]:
-        """Preserve channel scopes and the bound channel row type."""
-
-        return cast(ChannelQuerySet[ChannelT], super().get_queryset())
 
     def create_disconnected(
         self,
@@ -757,11 +755,6 @@ _ThreadManagerBase = AngeeManager.from_queryset(ThreadQuerySet)
 
 class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
     """Owns thread resolution — the 4-step RFC-5322 priority under a row lock."""
-
-    def get_queryset(self) -> ThreadQuerySet[ThreadT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(ThreadQuerySet[ThreadT], super().get_queryset())
 
     @staticmethod
     def chat_key_prefix(channel: Any) -> str:
@@ -1357,11 +1350,6 @@ _ThreadFollowerManagerBase = AngeeManager.from_queryset(ThreadFollowerQuerySet)
 class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerManagerBase[ThreadFollowerT]):
     """Owns party subscriptions to model-attached chatter threads."""
 
-    def get_queryset(self) -> ThreadFollowerQuerySet[ThreadFollowerT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(ThreadFollowerQuerySet[ThreadFollowerT], super().get_queryset())
-
     def for_message_expression(self, user: Any) -> models.QuerySet[ThreadFollowerT]:
         """Correlate follows to an outer message, ordered by the effective preference."""
 
@@ -1920,11 +1908,6 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
     _ThreadNotificationManagerBase[ThreadNotificationT]
 ):
     """Owns per-item delivery and acknowledgement, independently of follower cursors."""
-
-    def get_queryset(self) -> ThreadNotificationQuerySet[ThreadNotificationT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(ThreadNotificationQuerySet[ThreadNotificationT], super().get_queryset())
 
     def prime_message_pointers(self, rows: Sequence[Any], actor: Any) -> None:
         """Load narrow message context, checking read once per distinct attached record.
@@ -2798,11 +2781,6 @@ _MessageManagerBase = AngeeManager.from_queryset(MessageQuerySet)
 
 class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
     """Owns idempotent ingest, insert deltas and state-change thread recounts."""
-
-    def get_queryset(self) -> MessageQuerySet[MessageT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(MessageQuerySet[MessageT], super().get_queryset())
 
     def compose_reply(
         self, parent: Any, *, body: str, sender: Any, actor: Any,
@@ -3821,6 +3799,43 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         with system_context(reason="messaging.thread.bump"):
             thread.save(update_fields=tuple(values))
 
+    def correct_source_thread(
+        self, message: MessageT, *, channel: Channel, expected_thread: Thread, thread: Thread,
+    ) -> MessageT:
+        """Compare and set a source message's thread without rebuilding its content.
+
+        Both saved threads and the non-local envelope must belong to the admitted
+        channel. The message lock fences stale corrections; native saves retain
+        changeset/history and both thread counters are recomputed in that transaction.
+        This source-ingestion command grants no caller authority of its own.
+        """
+        thread_model = apps.get_model("messaging", "Thread")
+        if any(not isinstance(candidate, thread_model) or candidate.pk is None
+               for candidate in (expected_thread, thread)):
+            raise ValueError("Source thread correction requires saved previous and explicit target threads.")
+        with transaction.atomic():
+            message = self.model._base_manager.select_for_update(of=("self",)).get(pk=message.pk)
+            if message.channel_id != channel.pk or message.thread_id != expected_thread.pk:
+                raise ValueError("Source message thread changed after the correction was prepared.")
+            if message.is_locally_written:
+                raise ValueError("Source correction cannot move a locally authored message.")
+            channels = dict(thread_model._base_manager.select_for_update().filter(
+                pk__in={expected_thread.pk, thread.pk},
+            ).order_by("pk").values_list("pk", "channel_id"))
+            if any(channels.get(pk) != channel.pk for pk in (expected_thread.pk, thread.pk)):
+                raise ValueError("Source thread correction must stay within its admitted channel.")
+            if message.thread_id == thread.pk:
+                return message
+            message.thread = thread
+            parent = message.parent
+            if parent is not None and parent.thread_id != thread.pk:
+                message.parent = None
+            message.save(update_fields=("thread", "parent", "updated_at"))
+            apps.get_model("messaging", "Participant")._base_manager.filter(message=message).update(thread=thread)
+            self._recount_thread(expected_thread)
+            self._recount_thread(thread)
+            return message
+
     def ingest(
         self,
         parsed_messages: list[ParsedMessage],
@@ -3831,6 +3846,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         visibility: Any = None,
         quote_edges: bool = True,
         explicit_thread: Any = None,
+        expected_thread: Any = None,
         historical: bool = False,
         after_landing: Callable[[Any], None] | None = None,
     ) -> list[Any]:
@@ -3863,7 +3879,10 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
         ``explicit_thread`` binds source record chatter to an already resolved,
         saved thread, avoiding email subject/reply heuristics. Replaying a channel's
-        external ID into a different explicit thread is rejected. ``historical``
+        external ID into a different explicit thread is rejected unless
+        ``expected_thread`` names its exact previous source thread. That compare
+        and set runs under the message lock, requires both threads to belong to
+        this channel, and never moves a locally authored message. ``historical``
         suppresses the live message event and party-suggestion side effects while
         retaining original timestamps, content history and thread counters.
         ``after_landing`` writes an addon's overlay and moderation before counters
@@ -3877,6 +3896,10 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 raise ValueError("Explicit ingestion requires a saved messaging Thread.")
             if explicit_thread.channel_id not in (None, channel.pk):
                 raise ValueError("Explicit thread belongs to a different source channel.")
+        if expected_thread is not None and (
+            explicit_thread is None or not isinstance(expected_thread, thread_model) or expected_thread.pk is None
+        ):
+            raise ValueError("Source thread correction requires saved previous and explicit target threads.")
         ingested: list[Any] = []
         unresolved_handles: dict[Any, Any] = {}
         for parsed in parsed_messages:
@@ -3892,6 +3915,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     modality=modality,
                     visibility=visibility,
                     explicit_thread=explicit_thread,
+                    expected_thread=expected_thread,
                     historical=historical,
                     after_landing=after_landing,
                 )
@@ -3953,6 +3977,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         modality: Any = None,
         visibility: Any = None,
         explicit_thread: Any = None,
+        expected_thread: Any = None,
         historical: bool = False,
         after_landing: Callable[[Any], None] | None = None,
     ) -> Any:
@@ -3982,7 +4007,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 platform=parsed.platform, channel=channel, in_reply_to=parsed.in_reply_to, references=parsed.references,
             )
             unchanged = referenced is None or referenced.pk == prior.thread_id
-        if unchanged and (
+        if expected_thread is None and unchanged and (
             prior.is_locally_written or not parsed.in_reply_to or prior.parent_id is not None
             or self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread) is None
         ):
@@ -3993,6 +4018,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         if prior is not None:
             # Lock only the message row: the thread is a nullable (outer) join.
             prior = self.model._base_manager.select_for_update(of=("self",)).select_related("thread").get(pk=prior.pk)
+        source_thread_changed = (
+            expected_thread is not None and prior is not None and prior.thread_id != explicit_thread.pk
+        )
+        if expected_thread is not None:
+            if prior is None:
+                raise ValueError("Source message thread changed after the correction was prepared.")
         created = prior is None
         if created:
             try:
@@ -4041,7 +4072,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             )
         if (
             prior is not None
-            and prior.thread_id == (thread.pk if thread is not None else None)
+            and (expected_thread is not None or prior.thread_id == (thread.pk if thread is not None else None))
             and (prior.metadata or {}).get(_SYNC_HASH_KEY) == content_hash
         ):
             # Idempotent re-sync into the same thread with identical content: nothing
@@ -4051,6 +4082,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             # the re-sync backfills the pointer once its parent exists (this is how a
             # resumed backup import heals reply order across batches).
             message = authored_message or self.model._base_manager.select_related("thread").get(pk=prior.pk)
+            if expected_thread is not None:
+                message = self.correct_source_thread(message, channel=channel, expected_thread=expected_thread,
+                                                     thread=explicit_thread)
             if authored_message is None and parsed.in_reply_to and prior.parent_id is None:
                 parent = self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread)
                 if parent is not None:
@@ -4059,11 +4093,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     message.save(update_fields=("parent", "updated_at"))
             if after_landing is not None:
                 after_landing(message)
+            if source_thread_changed and not historical and not message.is_trashed:
+                message_ingested.send(sender=self.model, instance=message)
             return message, ()
         metadata = {**envelope_metadata, _SYNC_HASH_KEY: content_hash}
         parent = self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread)
         defaults = {
-            "thread_id": thread.pk if thread is not None else None,
+            "thread_id": prior.thread_id if expected_thread is not None else thread.pk if thread is not None else None,
             "channel_id": channel.pk if channel is not None else None,
             "sender_id": sender.pk if sender is not None else None,
             "parent_id": parent.pk if parent is not None else None,
@@ -4106,7 +4142,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     defaults[field] = getattr(message, field)
                 thread = message.thread
                 retain_authored_parts = True
-            if explicit_thread is not None and message.thread_id != explicit_thread.pk:
+            if explicit_thread is not None and message.thread_id != explicit_thread.pk and expected_thread is None:
                 raise ValueError("Source message already belongs to a different explicit thread.")
             prior_hashes = self._content_fragment_hashes(part_model, message)
             for field, value in defaults.items():
@@ -4130,6 +4166,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         handles = (
             () if retain_authored_parts else self._write_participants(message, thread, parsed, sender, created_by_id)
         )
+        if expected_thread is not None:
+            message = self.correct_source_thread(message, channel=channel, expected_thread=expected_thread,
+                                                 thread=explicit_thread)
         # Reconcile the denormalised thread counters. The winning thread gains the
         # message whenever it is a fresh row or a re-sync re-resolved an existing message
         # onto a *different* thread (e.g. a References parent that only just landed). The
@@ -4138,7 +4177,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         # the winner still gains the message and there is no
         # loser to recount. Gating the winner's bump on ``created`` alone dropped exactly
         # that NULL-prior re-home; an idempotent re-sync into the same thread is a no-op.
-        thread_changed = prior is not None and prior.thread_id != message.thread_id
+        thread_changed = expected_thread is None and prior is not None and prior.thread_id != message.thread_id
         if thread_changed and prior.thread_id is not None:
             losing_thread = thread_model._base_manager.select_for_update().get(pk=prior.thread_id)
             self._recount_thread(losing_thread)
@@ -4146,8 +4185,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             after_landing(message)
         if (created or thread_changed) and not message.is_trashed and thread is not None:
             self._bump_thread(message)
-            if not historical and not message.is_trashed:
-                message_ingested.send(sender=self.model, instance=message)
+        if (created or thread_changed or source_thread_changed) and not historical and not message.is_trashed:
+            message_ingested.send(sender=self.model, instance=message)
         return message, handles
 
     def _resolve_reply_parent(self, parsed: ParsedMessage, *, channel: Any, explicit_thread: Any = None) -> Any:
@@ -4559,11 +4598,6 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
     Incomplete caches fall back to that single joined read. Prefetch the relation with
     those joins for repeated queries without SQL; no separate tree cache is kept.
     """
-
-    def get_queryset(self) -> PartQuerySet[PartT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(PartQuerySet[PartT], super().get_queryset())
 
     BODY_SEPARATOR = "\n\n"
 

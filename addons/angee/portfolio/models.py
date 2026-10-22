@@ -343,7 +343,7 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             # A retained relation may predate a reparenting; validate the current path.
             initiative_model = type(self).initiative.field.related_model
             initiative = initiative_model._base_manager.get(pk=self.initiative_id)
-            placements = type(self).objects.filter(project_id=self.project_id).exclude(pk=self.pk)
+            placements = type(self).system_queryset().filter(project_id=self.project_id).exclude(pk=self.pk)
             if lock:
                 project_model = type(self).project.field.related_model
                 project_model.objects.lock_if_supported().filter(pk=self.project_id).exists()

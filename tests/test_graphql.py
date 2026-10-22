@@ -551,6 +551,7 @@ def test_type_extension_is_idempotent_across_collections() -> None:
 @strawberry_django.type(HierNode)
 class OptimizedExtensionNode:
     id: strawberry.auto
+    children: list["OptimizedExtensionNode"]
 
 
 @strawberry_django.type(HierNode, name="OptimizedExtensionNode", extend=True)
@@ -591,7 +592,7 @@ def test_type_extension_optimizer_hints_are_selected_and_batched(count: int, dja
     schema = schemas.build("console")
     public = schemas.build("public")
     assert "upper_name" not in public.as_str()
-    assert len(OptimizedExtensionNode.__strawberry_definition__.fields) == 1
+    assert len(OptimizedExtensionNode.__strawberry_definition__.fields) == 2
     with system_context(reason="test.graphql.extension_hints"):
         root = HierNode.objects.create(name="root")
         for _ in range(count):
@@ -612,6 +613,26 @@ def test_type_extension_optimizer_hints_are_selected_and_batched(count: int, dja
         assert result.data == {"nodes": [
             {"value": "BRANCH", "label": "branch", "parent_label": "root", "child_labels": ["leaf"]}
         ] * count}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("count", [1, 6])
+def test_nested_type_extension_optimizer_hints_are_batched(count: int, django_assert_num_queries: Any) -> None:
+    schemas = GraphQLSchemas([addon(
+        public={"query": [OptimizedExtensionQuery]},
+        console={"query": [OptimizedExtensionQuery], "type_extensions": [OptimizedExtensionFields]},
+    )])
+    schema = schemas.build("console")
+    assert "upper_name" not in schemas.build("public").as_str()
+    assert len(OptimizedExtensionNode.__strawberry_definition__.fields) == 2
+    with system_context(reason="test.graphql.nested_extension_hints"):
+        for _ in range(count):
+            branch = HierNode.objects.create(name="branch")
+            HierNode.objects.create(name="leaf", parent=branch)
+        with django_assert_num_queries(2):
+            result = schema.execute_sync("{ nodes { children { value: upper_name label } } }")
+        assert result.errors is None
+        assert result.data == {"nodes": [{"children": [{"value": "LEAF", "label": "leaf"}]}] * count}
 
 
 def test_type_extension_rejects_field_collision() -> None:

@@ -161,6 +161,8 @@ assert_type(Child.objects.get().title, str)
 assert_type(Explicit._base_manager.get_queryset().lock_if_supported().get(), Explicit)
 assert_type(Explicit.objects.get(), Explicit)
 assert_type(Explicit._default_manager.other_method(), int)
+assert_type(Child.system_queryset().lock_if_supported().get(), Child)
+assert_type(Explicit.system_queryset().lock_if_supported().get(), Explicit)
 """
     source.write_text(valid)
     env = dict(os.environ, DJANGO_SETTINGS_MODULE="manager_settings")
@@ -173,7 +175,8 @@ Child._base_manager.unknown_method()
 Explicit._default_manager.parent_method()
 Child.objects.get().title = {}
 bad: str = Child.objects.get()
+Child.system_queryset().unknown_method()
 """)
     negative = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, check=False)
     assert negative.returncode == 1, negative.stdout + negative.stderr
-    assert "Found 4 errors in 1 file" in negative.stdout, negative.stdout
+    assert "Found 5 errors in 1 file" in negative.stdout, negative.stdout

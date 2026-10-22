@@ -2799,7 +2799,10 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
             raise PermissionDenied("Answer narrow access is required.")
         manager = self.has_access("manage")
         with transaction.atomic():
-            locked = type(self).objects.sudo(reason="proposals.answer.visibility").lock_if_supported().get(pk=self.pk)
+            locked = (
+                type(self)._default_manager.sudo(reason="proposals.answer.visibility")
+                .lock_if_supported().get(pk=self.pk)
+            )
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
             if visibility not in locked.allowed_visibility(narrow=True, manage=manager):
@@ -2817,7 +2820,8 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
             raise PermissionDenied("The answer audience permission is required.")
         with transaction.atomic():
             locked = (
-                type(self).objects.sudo(reason="proposals.answer.responder_share").lock_if_supported().get(pk=self.pk)
+                type(self)._default_manager.sudo(reason="proposals.answer.responder_share")
+                .lock_if_supported().get(pk=self.pk)
             )
             if expected_revision is not None:
                 locked.require_revision(expected_revision)

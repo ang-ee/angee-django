@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -51,11 +51,6 @@ EvidenceManager = AngeeManager.from_queryset(EvidenceQuerySet)
 
 class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
     """Retain evidence after actor, schema, source and identity validation."""
-
-    def get_queryset(self) -> EvidenceQuerySet[ExtractionT]:
-        """Preserve the configured queryset and retained extraction row type."""
-
-        return cast(EvidenceQuerySet[ExtractionT], super().get_queryset())
 
     def prepare_pages(
         self,

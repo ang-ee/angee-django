@@ -14,7 +14,7 @@ export interface RecordFieldMark {
   tone: Tone;
   /** Hover copy naming the source that supplied this field value. */
   origin?: string;
-  /** A saved record the mark opens, such as the applied statement. */
+  /** A resource-backed saved record the mark opens through its registered route. */
   target?: { model: string; id: string };
   icon?: string;
   /** An owner-supplied reveal action, such as opening a decision pane. */
@@ -148,12 +148,16 @@ function RecordFieldMarkItem({ mark, field, label }: {
   const badge = <Chip tone={mark.tone}>
     {mark.icon ? <Glyph decorative name={mark.icon} /> : null}{mark.label}
   </Chip>;
+  let control: ReactNode;
   if (mark.target) {
-    return <Tooltip label={mark.origin}>
-      <span className="inline-flex"><RecordReference {...mark.target} label={badge} /></span>
-    </Tooltip>;
+    control = <RecordReference {...mark.target} label={badge} />;
+  } else if (mark.reveal) {
+    control = <Button type="button" variant="ghost" size="sm" className="h-auto px-1 py-0"
+      onClick={mark.reveal} aria-label={ariaLabel}>{badge}</Button>;
+  } else {
+    control = <span aria-label={ariaLabel}>{badge}</span>;
   }
-  if (!mark.reveal) return <span aria-label={ariaLabel}>{badge}</span>;
-  return <Button type="button" variant="ghost" size="sm" className="h-auto px-1 py-0"
-    onClick={mark.reveal} aria-label={ariaLabel}>{badge}</Button>;
+  return mark.origin
+    ? <Tooltip label={mark.origin}><span className="inline-flex" tabIndex={mark.target || mark.reveal ? undefined : 0}>{control}</span></Tooltip>
+    : control;
 }

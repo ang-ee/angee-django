@@ -69,6 +69,13 @@ def test_integrate_bases_are_abstract() -> None:
     assert "integration" not in {field.name for field in Bridge._meta.local_fields}
 
 
+def test_bridge_implementation_property_is_owned_by_integration(concrete_bridge: type[Bridge]) -> None:
+    """A typed bridge contract must not shadow the parent's native selection."""
+
+    assert "capability_impl" not in vars(Bridge)
+    assert concrete_bridge.capability_impl is Integration.capability_impl
+
+
 def test_bridge_declares_runtime_contract_methods() -> None:
     """Bridge exposes the contract domain subclasses implement."""
 

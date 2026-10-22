@@ -1808,13 +1808,17 @@ bridge advisory lock as polling and delivery settlement.
   access has gone. Paging carries the checkpoint into a fresh claim. A run
   records one protected cause with its origin at start; retention cannot prune
   a cited cause before its effects, and a retained event protects its trigger.
-- **Reviews compose one decision per step.**
+- **Reviews retain one current decision per step.**
   [`DecisionStep`](../../addons/angee/workflows/decision_steps.py) asks through
   `ctx.ask(request, state=...)`; `StepRun.decision` retains the question.
   The answer wakes the step after commit, with a tick sweep for missed delivery.
+  A continuation may ask again after an answer when its reviewed facts changed;
+  the previous question remains a native execution record associated with its run.
+  Open questions cannot be replaced. Check the owning record's revision before
+  applying an old answer; a fresh question must not certify changed facts.
   The resumed body applies the chosen alternatives through record write owners
-  as the run actor. A failure rolls the body back, retains the answer and appears
-  as an error hold for retry. Non-workflow askers apply synchronously inside the
+  as the run actor. A failure rolls the body back and retains the answer for
+  retry. Non-workflow askers apply synchronously inside the
   verdict transaction; refused application rolls the answer back.
 - **Conditional queryset updates send no model signals.** Workflow owners
   publish completed run writes through `publish_change` and step transitions
@@ -2105,10 +2109,11 @@ results the same way. Preserve configurable unions and nullable values rather
 than inferring a contract from one default. The [typing adapter](../../angee/compose/typing.py)
 reads those native declarations through [yamlconf provenance](../../angee/compose/yamlconf.py).
 
-Keep `angee` as a namespace package. Do not add an `__init__.py` at either
-namespace root (`angee/` for the framework, `addons/angee/` for the base
-addons); split addon distributions must be able to contribute packages under the
-shared `angee.*` namespace.
+Keep the shared `angee.*` namespace open to every configured addon source.
+The core's [`angee/__init__.py`](../../angee/__init__.py) owns
+`pkgutil.extend_path`, preserving addon portions alongside the foundation
+package. Leave addon namespace roots such as `addons/angee/` without an
+`__init__.py`; they contribute to that namespace rather than replacing it.
 
 Avoid `__all__` unless a module has a concrete star-import or compatibility
 requirement. Public API should usually be obvious from module names, object

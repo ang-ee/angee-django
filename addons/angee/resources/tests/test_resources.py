@@ -529,6 +529,11 @@ def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(composed_tabl
         # ``resources`` is the short label of the ``angee.resources`` app, so the
         # app-registry alias map resolves the label form to the canonical addon name.
         assert resolve_ledger_xref("resources.user_alice") == target
+        assert resolve_ledger_xref("resources.user_alice", model=LedgerXrefTarget) == target
+        assert ledger.objects.resolve("resources.user_alice", model=LedgerXrefTarget) == target
+        with pytest.raises(ValueError, match="not contenttypes.ContentType"):
+            ledger.objects.resolve("resources.user_alice", model=ContentType)
+        assert resolve_ledger_xref("resources.user_alice", model=ContentType) is None
         # An unresolved handle is a graceful ``None``, never a raise.
         assert resolve_ledger_xref("resources.user_missing") is None
         assert resolve_ledger_xref("no_such_addon.user_alice") is None

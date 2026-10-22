@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from operator import attrgetter
-from typing import Any, Self, cast
+from typing import Any, Self
 
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
@@ -126,11 +126,6 @@ class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase
     on the target through the relation its type's app declares, so a type no
     relation names is refused.
     """
-
-    def get_queryset(self) -> TagAssignmentQuerySet[AssignmentT]:
-        """Preserve the configured queryset and assignment row type."""
-
-        return cast(TagAssignmentQuerySet[AssignmentT], super().get_queryset())
 
     def resolve_target(self, target_type: str, target_id: str) -> GenericTarget | None:
         """Resolve the canonical edge target for a public target address.

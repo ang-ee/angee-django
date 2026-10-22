@@ -192,20 +192,19 @@ describe("storage file/folder actions", () => {
     ]);
     expect(sdk.invalidations).toEqual([
       {
-        resource: "files",
+        resource: "console:storage.File",
         dataProviderName: "console",
-        invalidates: ["list", "many", "detail"],
+        invalidates: ["resourceAll"],
       },
       {
-        resource: "folders",
+        resource: "console:storage.Folder",
         dataProviderName: "console",
-        id: "fld_1",
-        invalidates: ["list", "many", "detail"],
+        invalidates: ["resourceAll"],
       },
       {
-        resource: "files",
+        resource: "console:storage.File",
         dataProviderName: "console",
-        invalidates: ["list", "many", "detail"],
+        invalidates: ["resourceAll"],
       },
     ]);
   });

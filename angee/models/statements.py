@@ -631,9 +631,6 @@ _StatementSubjectManagerBase = AngeeManager.from_queryset(StatementSubjectQueryS
 class StatementSubjectManager[T: models.Model](_StatementSubjectManagerBase[T]):
     """Shared scope for canonical models whose presence is asserted."""
 
-    def get_queryset(self) -> StatementSubjectQuerySet[T]:
-        return cast(StatementSubjectQuerySet[T], super().get_queryset())
-
 class SourceKind(models.TextChoices):
     """Source classification, never a global precedence order."""
 

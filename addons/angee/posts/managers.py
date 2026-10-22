@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Self
 from zoneinfo import ZoneInfo
 
 from django.db import models, transaction
@@ -34,11 +34,6 @@ _FeedFollowManagerBase = AngeeManager.from_queryset(FeedFollowQuerySet)
 
 class FeedFollowManager[FollowT: FeedFollow](_FeedFollowManagerBase[FollowT]):
     """Owns the follow/unfollow writes over the ``(feed, handle)`` subscription."""
-
-    def get_queryset(self) -> FeedFollowQuerySet[FollowT]:
-        """Preserve the configured queryset and follow row type."""
-
-        return cast(FeedFollowQuerySet[FollowT], super().get_queryset())
 
     def follow(self, *, feed: Any, handle: Any) -> FollowT:
         """Open (or re-open) the follow of ``feed`` by ``handle``; idempotent."""

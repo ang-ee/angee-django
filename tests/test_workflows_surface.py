@@ -36,7 +36,7 @@ EXPECTED_MODELS = {
 
 EXPECTED_VERBS = {
     "extraction.Extraction.manager": (
-        "authorized_document_sources get_queryset identity_preserving_pipeline_successor inference_authority_base "
+        "authorized_document_sources identity_preserving_pipeline_successor inference_authority_base "
         "inference_candidate_selectors inference_current_head latest_succeeded_identity_authority "
         "prepare_correction_binding prepare_pages retain_result reused_inference "
         "reviewed_correction_authority revise_from_decision"

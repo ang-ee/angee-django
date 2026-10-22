@@ -103,11 +103,6 @@ _ProjectManagerBase = AngeeManager.from_queryset(ProjectQuerySet)
 class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
     """Own the idempotent Task-to-Project maturation write."""
 
-    def get_queryset(self) -> ProjectQuerySet[ProjectT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(ProjectQuerySet[ProjectT], super().get_queryset())
-
     def setup_from_task(
         self,
         task: Any,
@@ -296,11 +291,6 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
     verbs write under the actor and the task schema refuses a record the actor
     cannot write.
     """
-
-    def get_queryset(self) -> TaskQuerySet[TaskT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(TaskQuerySet[TaskT], super().get_queryset())
 
     def schedule(
         self,
@@ -542,7 +532,7 @@ class Project(
         abstract = True
         ordering = ("status", "target_date", "title", "sqid")
         rebac_resource_type = "projects/project"
-        constraints: ClassVar[tuple[models.BaseConstraint, ...]] = (
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.UniqueConstraint(
                 fields=("converted_from",),
                 name="uq_projects_project_converted_from",
@@ -799,11 +789,6 @@ _MilestoneManagerBase = AngeeManager.from_queryset(MilestoneQuerySet)
 class _MilestoneManager[MilestoneT: Milestone](_MilestoneManagerBase[MilestoneT]):
     """Preserve the native milestone scheduling queryset on manager reads."""
 
-    def get_queryset(self) -> MilestoneQuerySet[MilestoneT]:
-        """Return the configured scheduling queryset and model row type."""
-
-        return cast(MilestoneQuerySet[MilestoneT], super().get_queryset())
-
 
 class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
     """A named marker reached within one project."""
@@ -857,7 +842,7 @@ class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMi
         abstract = True
         ordering = ("project", "sort_order", "sqid")
         rebac_resource_type = "projects/milestone"
-        constraints: ClassVar[tuple[models.BaseConstraint, ...]] = (
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.CheckConstraint(
                 condition=Q(start_date__isnull=True)
                 | Q(target_date__isnull=True)
@@ -1096,7 +1081,7 @@ class Task(
         abstract = True
         ordering = ("project", "sort_order", "sub_sort_order", "sqid")
         rebac_resource_type = "projects/task"
-        constraints: ClassVar[tuple[models.BaseConstraint, ...]] = (
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.CheckConstraint(
                 condition=(
                     Q(subject_content_type__isnull=True, subject_object_id__isnull=True)
@@ -1589,7 +1574,7 @@ class TaskRelation(HistoryMixin, AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("task", "related_task", "sqid")
         rebac_resource_type = "projects/task_relation"
-        constraints: ClassVar[tuple[models.BaseConstraint, ...]] = (
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.UniqueConstraint(
                 fields=("task", "related_task"),
                 name="uq_projects_task_relation_pair",
@@ -1675,7 +1660,7 @@ class Participant(HistoryMixin, AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("project", "kind", "sqid")
         rebac_resource_type = "projects/participant"
-        constraints: ClassVar[tuple[models.BaseConstraint, ...]] = (
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.UniqueConstraint(
                 fields=("project", "party"),
                 name="uq_projects_participant_project_party",
@@ -1722,7 +1707,7 @@ class ProjectBinding(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
         abstract = True
         ordering = ("project", "content_type", "object_id", "sqid")
         rebac_resource_type = "projects/project_binding"
-        constraints: ClassVar[tuple[models.BaseConstraint, ...]] = (
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.UniqueConstraint(
                 fields=("project", "content_type", "object_id"),
                 name="uq_projects_binding_project_target",
@@ -1779,7 +1764,7 @@ class Link(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
         abstract = True
         ordering = ("-updated_at", "url", "sqid")
         rebac_resource_type = "projects/link"
-        constraints: ClassVar[tuple[models.BaseConstraint, ...]] = (
+        constraints: ClassVar[list[models.BaseConstraint] | tuple[models.BaseConstraint, ...]] = (
             models.UniqueConstraint(
                 fields=("content_type", "object_id", "url"),
                 name="uq_projects_link_target_url",

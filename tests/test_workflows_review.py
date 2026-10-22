@@ -3,17 +3,18 @@
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
-from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, generic_target, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.actors import is_sudo
 
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.identity import public_id_of
+from angee.workflows.context import StepContext
 from angee.workflows.decision_steps import AskDecision, DecisionStep, apply_proposals
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
-from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
+from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Workflow, WorkflowRun
 from tests.conftest import create_platform_admin, create_user, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
 
@@ -265,6 +266,76 @@ def test_later_step_loads_only_this_runs_decision(review, register_step):
     answer(questions(step)[0], people[0])
     run_until(run)
     assert run.output == {"answered_by": public_id_of(people[0]), "verdict": ["approve"]}
+
+
+def test_answered_question_can_be_replaced_without_losing_its_run_association(review, register_step):
+    actor, people, sent, question = review
+
+    class Followup(question):
+        def ask(self, ctx):
+            prior = public_id_of(ctx.step_run.decision) if ctx.step_run.decision_id else None
+            return ctx.ask(DecisionRequest(
+                kind="followup", records=(self.review_subject,), assignees=people,
+                proposal=DecisionProposal(alternatives=[
+                    {"key": "approve", "label": "Approve", "outcome": "approved"},
+                ]),
+            ), state={"prior": prior})
+
+        def continue_with(self, ctx, decision, outcome):
+            if not ctx.state["prior"]:
+                return self.ask(ctx)
+            previous = ctx.decision(ctx.state["prior"])
+            return ctx.done({"prior": previous.verdict, "current": decision.verdict}, outcome=outcome)
+
+    register_step(Followup)
+    run, step = start_review((actor, people, sent, Followup))
+    first = questions(step)[0]
+    answer(first, people[0])
+    first.refresh_from_db()
+    frozen = (first.proposal, first.context, first.verdict, first.answered_by_id)
+    concerns = list(first.records.with_actor(actor).values_list("pk", flat=True))
+    run_until(run)
+    second = questions(step)[0]
+    step.refresh_from_db()
+    assert run.status == "waiting" and step.status == "waiting"
+    assert second.pk != first.pk and second.is_open
+    first.refresh_from_db()
+    assert (first.proposal, first.context, first.verdict, first.answered_by_id) == frozen
+    assert list(first.records.with_actor(actor).values_list("pk", flat=True)) == concerns
+    assert run in first.requesting_records()
+    assert run.records.with_actor(actor).filter(object_id=first.pk, content_type__model="decision").exists()
+
+    def context(for_run, principal):
+        return StepContext(run=for_run, step_run=step, step=Followup, attempt=None,
+                           input={}, config=None, actor=principal, now=first.answered_at)
+
+    assert context(run, actor).decision(public_id_of(first)).pk == first.pk
+    other, other_step = start_review((actor, people, sent, Followup))
+    # Reading another run's question as evidence does not claim it as this run's question.
+    with system_context(reason="test unrelated decision evidence"):
+        StepRecord.objects.create(run=other, step_run=other_step, operation="read",
+                                  **generic_target(first).lookups(StepRecord, "record"))
+    with pytest.raises(PermissionDenied, match="inaccessible"):
+        context(other, actor).decision(public_id_of(first))
+    with pytest.raises(PermissionDenied, match="inaccessible"):
+        context(run, create_user("unrelated-review-reader")).decision(public_id_of(first))
+    answer(second, people[1])
+    run_until(run)
+    assert run.status == "succeeded" and run.output == {"prior": ["approve"], "current": ["approve"]}
+
+
+def test_open_question_cannot_be_replaced(review):
+    actor, _people, _sent, question = review
+    run, step = start_review(review)
+    current = questions(step)[0]
+    ctx = StepContext(run=run, step_run=step, step=question, attempt=None,
+                      input={}, config=None, actor=actor, now=run.created_at)
+    before = Decision.system_queryset().count()
+    with pytest.raises(ValidationError, match="still has an open decision"):
+        question().ask(ctx).admit(ctx)
+    assert Decision.system_queryset().count() == before and not ctx.pending_records
+    step.refresh_from_db()
+    assert step.decision_id == current.pk
 
 
 def test_undeclared_delete_is_rejected_at_ask(review):

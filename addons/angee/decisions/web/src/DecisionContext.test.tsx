@@ -88,6 +88,15 @@ describe("decision context", () => {
     expect(screen.queryByText("2026-10-04")).toBeNull();
   });
 
+  test("a percentage fact uses the native display widget while retaining its exact value", () => {
+    const fact = Object.freeze({ pointer: "/variance", label: "Amount variance percent", authority: "source",
+      value: "65.68738656987295825771324864", widget: "percent" });
+    render(<ShellPageTestProviders runtime={{ widgets: defaultWidgets }}><DecisionContext context={{ facts: [fact] }} /></ShellPageTestProviders>);
+    expect(screen.getByText("65.69%")).toBeTruthy();
+    expect(screen.queryByText(fact.value)).toBeNull();
+    expect(fact.value).toBe("65.68738656987295825771324864");
+  });
+
   test("shows structured facts as readable fields without a JSON code block", () => {
     const { container } = render(<ShellPageTestProviders><DecisionContext context={{ facts: [{
       pointer: "/review", label: "Review", authority: "source", value: {

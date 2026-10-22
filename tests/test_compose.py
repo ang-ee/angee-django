@@ -506,8 +506,7 @@ def test_runtime_renders_iam_user_sources(tmp_path: Path) -> None:
     assert "class User" in user_source
     assert "app_label = 'iam'" in user_source
     assert "rebac_resource_type = 'auth/user'" in user_source
-    assert "_UserMeta = getattr(AbstractUser, 'Meta', object)" in user_source
-    assert "class Meta(_UserMeta):" in user_source
+    assert "class Meta(AbstractUser.Meta):" in user_source
     assert "swappable = 'AUTH_USER_MODEL'" not in user_source
 
 
@@ -538,9 +537,8 @@ def test_role_anchor_emits_the_hand_rolled_runtime_source(tmp_path: Path) -> Non
     source = render_models(ModelComposition({"tests": (probe,)}, {}), "tests")
 
     assert "from tests.role_anchor_probe import ProbeRole as AbstractProbeRole" in source
-    assert "_ProbeRoleMeta = getattr(AbstractProbeRole, 'Meta', object)" in source
     assert "class ProbeRole(AbstractProbeRole):" in source
-    assert "class Meta(_ProbeRoleMeta):" in source
+    assert "class Meta(AbstractProbeRole.Meta):" in source
     assert "abstract = False" in source
     assert "rebac_resource_type = 'tests/role'" in source
 

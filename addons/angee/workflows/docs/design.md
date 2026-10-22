@@ -49,8 +49,14 @@ How the ontology maps to this addon.
   relation without a step. `step.records` and `WorkflowRun.objects.about(record_or_records)`
   expose both directions. Identities obey the target's current read scope.
 - **Asking:** the existing ask-and-wait step outcome creates a decision with its concern links and resumes on the
-  answer. `ctx.ask(request, state=...)` asks exactly one decision per step, retained
-  by `StepRun.decision`. `DecisionStep` owns shared application and continuation;
+  answer. `ctx.ask(request, state=...)` retains the current decision in
+  `StepRun.decision`. A continuation may ask again after that question is answered;
+  replacing an open question is refused. The prior question, verdict and concern
+  links remain immutable, and a native `StepRecord` retains the asking step's
+  `created` operation and requesting run. Ordinary read references to another
+  run's question do not confer that association.
+  `ctx.decision(id)` reads current or retained questions only within its own run.
+  `DecisionStep` owns shared application and continuation;
   askers supply alternatives. `StepRun.hold` exposes decision, run and error holds.
 - **Stopping:** one action on a run, offered in the timeline: cancel the run and withdraw its open decisions
   through the decisions owner.

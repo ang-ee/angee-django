@@ -192,7 +192,7 @@ class Uom(ArchiveMixin, AngeeDataModel):
 
     @staticmethod
     def quantize_expression(
-        qty: models.Expression,
+        qty: models.expressions.BaseExpression | models.F,
         unit: UomExpressions,
         *,
         output_field: models.Field | None = None,
@@ -225,7 +225,7 @@ class Uom(ArchiveMixin, AngeeDataModel):
 
     @staticmethod
     def convert_expression(
-        qty: models.Expression,
+        qty: models.expressions.BaseExpression | models.F,
         source: UomExpressions,
         destination: UomExpressions,
         *,

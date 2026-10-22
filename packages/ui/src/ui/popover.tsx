@@ -229,7 +229,10 @@ export const PopoverContent = React.forwardRef<
   return (
     <BasePopover.Popup
       ref={ref}
-      className={styles.content({ className })}
+      className={styles.content({ className: cn(
+        "max-h-[var(--available-height)] max-w-[var(--available-width)] overflow-y-auto overscroll-contain",
+        className,
+      ) })}
       {...props}
     />
   );

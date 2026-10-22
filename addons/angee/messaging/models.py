@@ -22,7 +22,7 @@ The write path lives on the managers.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -1044,7 +1044,7 @@ class Channel(Bridge):
     rebac_grantable = {"reader": "write", "replier": "write"}
     extends: ClassVar[str | None] = "integrate.Integration"
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
-    live_impl_field = "backend_class"
+    live_impl_field: ClassVar[str | None] = "backend_class"
 
     backend_class = ImplClassField(ChannelBackend,
         default="manual",
@@ -2035,7 +2035,9 @@ class Message(
 
         return all(getattr(self, key) == value for key, value in self.held_draft_fields().items())
 
-    hasura_filter_expressions = {
+    hasura_filter_expressions: ClassVar[
+        Mapping[str, Callable[[models.QuerySet[Any]], models.expressions.BaseExpression]]
+    ] = {
         "is_held": lambda rows: models.ExpressionWrapper(
             models.Q(**rows.model.held_draft_fields()), output_field=models.BooleanField(),
         ),

@@ -48,9 +48,9 @@ Party = apps.get_model("parties", "Party")
 Handle = apps.get_model("parties", "Handle")
 
 HISTORY = """
-query History($model: String!, $id: ID!, $limit: Int, $offset: Int) {
-  history(model: $model, id: $id, limit: $limit, offset: $offset) {
-    model id total
+query History($model: String!, $id: ID!, $limit: Int, $offset: Int, $selected: ID) {
+  history(model: $model, id: $id, limit: $limit, offset: $offset, selected: $selected) {
+    model id total offset
     entries {
       id actor actor_model actor_id source_kind action activity change_reason outcome can_revert
       changes { model id field old new }
@@ -74,7 +74,7 @@ mutation Revert($model: String!, $id: ID!, $changeset: ID!) {
 FIELD_PROVENANCE = """
 query FieldProvenance($model: String!, $id: ID!) {
   field_provenance(model: $model, id: $id) {
-    field authority origin statement_model statement_id
+    field authority origin statement_model statement_id changeset_id
   }
 }
 """
@@ -155,6 +155,7 @@ def test_history_pages_by_changeset_and_refuses_an_unbounded_page() -> None:
 
     second = _history(schema, owner, "knowledge.Page", page, limit=1, offset=1)
     assert second["total"] == 2
+    assert second["offset"] == 1
     assert [entry["change_reason"] for entry in second["entries"]] == ["Draft"]
 
     refused = execute_schema(
@@ -164,6 +165,41 @@ def test_history_pages_by_changeset_and_refuses_an_unbounded_page() -> None:
         user=owner,
     )
     assert refused.errors and "limit" in refused.errors[0].message
+
+
+def test_history_locates_an_older_selected_changeset_within_the_records_own_pages() -> None:
+    owner = create_user("history-selection-owner")
+    _vault, page = _titled_page(owner)
+    schema = _schema()
+    draft = _history(schema, owner, "knowledge.Page", page)["entries"][-1]["id"]
+    with actor_context(owner):
+        for number in range(provenance_schema.HISTORY_LIMIT_DEFAULT):
+            with changeset(fresh=True, change_reason=f"Later {number}"):
+                page.title = f"Later title {number}"
+                page.save()
+
+    selected = _history(schema, owner, "knowledge.Page", page, selected=draft)
+    assert selected["offset"] == provenance_schema.HISTORY_LIMIT_DEFAULT
+    assert selected["total"] == provenance_schema.HISTORY_LIMIT_DEFAULT + 2
+    assert [entry["id"] for entry in selected["entries"]][-1] == draft
+    # Explicit offset paging remains available after resolving the initial target.
+    assert _history(schema, owner, "knowledge.Page", page, offset=0)["offset"] == 0
+
+
+def test_history_selection_never_follows_an_unrelated_or_unreadable_record() -> None:
+    owner = create_user("history-selection-reader")
+    outsider = create_user("history-selection-outsider")
+    _vault, page = _titled_page(owner)
+    _other_vault, other = _titled_page(outsider)
+    _readable_vault, readable_other = _titled_page(owner, vault_name="Other readable history")
+    schema = _schema()
+    foreign = _history(schema, outsider, "knowledge.Page", other)["entries"][0]["id"]
+    original = _history(schema, owner, "knowledge.Page", page, limit=1, offset=1)
+    assert _history(schema, owner, "knowledge.Page", page, limit=1, offset=1, selected=foreign) == original
+    readable_foreign = _history(schema, owner, "knowledge.Page", readable_other)["entries"][0]["id"]
+    assert _history(schema, owner, "knowledge.Page", page, limit=1, offset=1, selected=readable_foreign) == original
+    assert _history(schema, owner, "knowledge.Page", other, selected=foreign) is None
+    assert _history(schema, outsider, "knowledge.Page", page, selected=foreign) is None
 
 
 def test_history_follows_the_records_read_gate_and_write_decides_revert() -> None:
@@ -323,6 +359,7 @@ def test_field_provenance_decorates_a_partys_stated_field_through_the_statement_
             "origin": str(public_subject_ref(to_subject_ref(person))),
             "statement_model": "parties.PartyStatement",
             "statement_id": public_id_of(statement),
+            "changeset_id": public_id_of(statement.changeset),
         }
     ]
     assert _field_provenance(schema, outsider, "parties.Party", party) is None

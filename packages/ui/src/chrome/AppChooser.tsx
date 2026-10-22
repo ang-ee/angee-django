@@ -138,7 +138,7 @@ function AppChooserBody({
             role="dialog"
             aria-label={resolvedTriggerLabel}
             surface="sheet"
-            className="w-[min(45rem,calc(100vw-2rem))] p-5"
+            className="w-[45rem] p-5"
           >
             <div className="mb-4 flex items-center gap-3">
               <span className={cn("grid size-7 shrink-0 place-content-center rounded-6", toneFillClass("brand", "soft"))}>

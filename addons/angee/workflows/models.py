@@ -468,7 +468,12 @@ class WorkflowDecision(models.Model):
         runs = apps.get_model("workflows", "WorkflowRun").system_queryset().annotate(
             _decision_id=models.F("step_runs__decision_id"),
         )
-        return (*cast(Any, super()).requester_querysets(), runs)
+        retained = apps.get_model("workflows", "WorkflowRun").system_queryset().filter(
+            records__content_type__app_label=cls._meta.app_label,
+            records__content_type__model=cls._meta.model_name,
+            records__operation=RecordOperation.CREATED,
+        ).annotate(_decision_id=models.F("records__object_id"))
+        return (*cast(Any, super()).requester_querysets(), runs, retained)
 
 
 class StepRun(AngeeDataModel):

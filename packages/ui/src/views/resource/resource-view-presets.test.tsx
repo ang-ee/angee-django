@@ -41,13 +41,14 @@ function fixture(entry = "/", presetIds: readonly string[] = [archived.id], tool
   let view!: ResourceViewContextValue;
   let facts!: ReturnType<typeof useResourceViewQueryFacts>;
   let table!: ReturnType<typeof useResourceViewTableState>;
+  let search!: ReturnType<typeof useResourceSearch>;
   function Probe() {
     view = useResourceView();
     facts = useResourceViewQueryFacts({ resourceView: view, columns, modelMetadata: model });
     table = useResourceViewTableState({ resourceView: view, columns, modelMetadata: model,
       groupStack: view.state.groupStack });
     const catalog = useSearchCatalog({ resourceView: view, columns, rows: [], modelMetadata: model });
-    const search = useResourceSearch({ resourceView: view, catalog });
+    search = useResourceSearch({ resourceView: view, catalog });
     const controls = { search, pager: { total: 1, page: 1, pageSize: 20 }, view: view.state.view,
       availableViews: ["list", "board"] as const, onViewChange: view.setView, searchDeclaration: { box: "collapsed" as const } };
     if (toolbar) return <ResourceToolbar {...controls} />;
@@ -68,7 +69,7 @@ function fixture(entry = "/", presetIds: readonly string[] = [archived.id], tool
       <RouterProvider router={router} />
     </AppRuntimeProvider>
   </ModelMetadataProvider>);
-  return { get view() { return view; }, get facts() { return facts; }, get table() { return table; }, router, ...rendered };
+  return { get view() { return view; }, get facts() { return facts; }, get table() { return table; }, get search() { return search; }, router, ...rendered };
 }
 
 test("route presets seed native state; editable clears preserve the fixed query", async () => {
@@ -217,6 +218,21 @@ test("clearing an active shipped preset removes its fixed filter", async () => {
   await waitFor(() => expect(f.view.state.preset).toBe(""));
   expect(f.view.baseFilter).toBeUndefined();
   expect(f.router.state.location.search).toMatchObject({ preset: "" });
+});
+
+test("a shipped preset chip still clears fixed scope after editable reset; Clear restores the route default", async () => {
+  const f = fixture();
+  await waitFor(() => expect(f.view.state.preset).toBe(open.id));
+  act(() => f.search.resetQuery());
+  await waitFor(() => expect(f.view.state.filter).toEqual({}));
+  expect(f.search.active.some((item) => item.id === `favorite:${open.id}`)).toBe(true);
+  act(() => f.search.clear(`favorite:${open.id}`));
+  await waitFor(() => expect(f.view.state.preset).toBe(""));
+  expect(f.view.baseFilter).toBeUndefined();
+  expect(f.search.active.some((item) => item.id === `favorite:${open.id}`)).toBe(false);
+  act(() => f.search.clearQuery());
+  await waitFor(() => expect(f.view.state.preset).toBe(open.id));
+  expect(f.view.baseFilter).toEqual(open.fixedFilter);
 });
 
 function LocalCapture({ onValue }: { onValue: (value: ResourceViewContextValue) => void }) {

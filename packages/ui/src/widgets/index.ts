@@ -9,7 +9,7 @@ import { datetimeWidget } from "./datetime";
 import { lazyWidget } from "./lazy-widget";
 import { many2manyWidget } from "./many2many";
 import { many2oneWidget } from "./many2one";
-import { floatWidget, integerWidget } from "./number";
+import { floatWidget, integerWidget, percentWidget } from "./number";
 import { ownerCellWidget } from "./ownerCell";
 import { progressBarWidget } from "./progressBar";
 import { emailWidget, passwordWidget, phoneWidget, urlWidget } from "./scalarText";
@@ -143,6 +143,7 @@ export const defaultWidgets = {
   textarea: textareaWidget,
   integer: integerWidget,
   float: floatWidget,
+  percent: percentWidget,
   email: emailWidget,
   password: passwordWidget,
   url: urlWidget,

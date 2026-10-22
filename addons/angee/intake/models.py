@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping
 from types import NotImplementedType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Self
 
 from django.apps import apps
 from django.conf import settings
@@ -77,11 +77,6 @@ _NeedManagerBase = AngeeManager.from_queryset(NeedQuerySet)
 
 class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
     """Own manual capture, message capture, and triage-task construction."""
-
-    def get_queryset(self) -> NeedQuerySet[NeedT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(NeedQuerySet[NeedT], super().get_queryset())
 
     TARGET_FIELDS = {
         "projects.project": "project",

@@ -439,7 +439,7 @@ class CompositionPlugin(NewSemanalDjangoPlugin):
         )
         method = get_proper_type(helpers.analyze_member_access(
             "get_queryset", manager, ctx.context, is_lvalue=False,
-            is_super=False, is_operator=False, original_type=ctx.type, chk=api,
+            is_super=False, is_operator=False, original_type=manager, chk=api,
         ))
         if isinstance(method, CallableType):
             result = get_proper_type(method.ret_type)
@@ -492,9 +492,18 @@ class CompositionPlugin(NewSemanalDjangoPlugin):
         return None
 
     def _role_anchor(self, ctx: DynamicClassDefContext) -> None:
+        api = helpers.get_semanal_api(ctx)
+        existing = api.lookup_current_scope(ctx.name)
+        if existing is not None and isinstance(existing.node, TypeInfo):
+            return
         symbol = self.lookup_fully_qualified("angee.models.base.AngeeModel")
-        if symbol is None or not isinstance(symbol.node, TypeInfo):
+        if symbol is None or not isinstance(symbol.node, TypeInfo) or not symbol.node.mro:
             if not ctx.api.final_iteration:
+                if existing is None or not isinstance(existing.node, PlaceholderNode):
+                    placeholder = PlaceholderNode(
+                        api.qualified_name(ctx.name), ctx.call, ctx.call.line, becomes_typeinfo=True,
+                    )
+                    ctx.api.add_symbol_table_node(ctx.name, SymbolTableNode(GDEF, placeholder))
                 ctx.api.defer()
             else:
                 ctx.api.fail("role_anchor requires the AngeeModel typing contract", ctx.call)

@@ -21,7 +21,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from itertools import chain, combinations, groupby, islice
-from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -203,11 +203,6 @@ _CircleManagerBase = AngeeManager.from_queryset(CircleQuerySet)
 class CircleManager[CircleT: Circle](_CircleManagerBase[CircleT]):
     """Keep a stable import identity for circle subtree managers."""
 
-    def get_queryset(self) -> CircleQuerySet[CircleT]:
-        """Preserve the configured queryset and model row type."""
-
-        return cast(CircleQuerySet[CircleT], super().get_queryset())
-
 
 class _HandleSenderName(TypedDict):
     _sender_name: str
@@ -296,11 +291,6 @@ _HandleManagerBase = AngeeManager.from_queryset(HandleQuerySet)
 
 class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
     """Factory + upsert for handles (the contact-point write path)."""
-
-    def get_queryset(self) -> HandleQuerySet[HandleT]:
-        """Preserve the configured queryset and handle row type."""
-
-        return cast(HandleQuerySet[HandleT], super().get_queryset())
 
     def for_user(self, user: Any) -> Any:
         """Return the account's self-claimed handle for internal attribution."""
@@ -885,11 +875,6 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     inherit the parent's concrete default manager), so the Person-per-user factory
     :meth:`for_user` lives here.
     """
-
-    def get_queryset(self) -> PartyQuerySet[PartyT]:
-        """Retain party scopes and concrete MTI row types through the native factory."""
-
-        return cast(PartyQuerySet[PartyT], super().get_queryset())
 
     def display_avatar(self, party: Any, *, actor: Any) -> Any | None:
         """Return the avatar ``party`` shows ``actor``: its own, else its strongest handle's.

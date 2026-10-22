@@ -22,6 +22,16 @@ statement, and a kept-separate decision splits the redirect and refuses a later
 fold. The pair rule principal is granted read and write on threads and messages
 like the parties statement sources.
 
+An authoritative source audience correction uses
+`Message.objects.correct_source_thread(message, channel=..., expected_thread=..., thread=...)`.
+The native owner compares the locked previous thread, requires the envelope and
+both threads to belong to that channel, and refuses locally authored messages.
+It preserves content and repairs participants and both physical thread counters.
+`ingest(..., explicit_thread=..., expected_thread=...)` composes the same command
+with envelope ingestion; absent the exact precondition, changing an explicit
+source thread remains refused. Historical ingestion suppresses live message
+events while retaining native content history and counter updates.
+
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
 [`backends.py`](backends.py). Acceptance settles the existing row to `sent` and

@@ -134,6 +134,7 @@ class FieldProvenanceType:
     origin: str
     statement_model: str
     statement_id: PublicID
+    changeset_id: PublicID | None
 
 
 @strawberry.type
@@ -191,6 +192,7 @@ class RecordHistoryType:
     model: str
     id: PublicID
     total: int
+    offset: int
     entries: list[HistoryEntryType]
 
 
@@ -243,6 +245,9 @@ def field_provenance(record: StatementsMixin, actor: Any) -> list[FieldProvenanc
                     origin=_statement_origin(row),
                     statement_model=statement_model._meta.label,
                     statement_id=PublicID(public_id_of(row)),
+                    changeset_id=PublicID(public_id_for(Changeset, row.changeset_id))
+                    if row.changeset_id is not None
+                    else None,
                 )
                 for name in declaration.fields
                 if name not in hidden
@@ -364,12 +369,17 @@ class RecordHistory:
             for changeset in page
         ]
 
-    def page(self, limit: int, offset: int) -> RecordHistoryType:
+    def page(self, limit: int, offset: int, selected: PublicID | None = None) -> RecordHistoryType:
         changesets = self.changesets()
+        if selected is not None:
+            target = instance_for_id(Changeset, selected, queryset=changesets)
+            if target is not None:
+                offset = target.offset_in(changesets) // limit * limit
         return RecordHistoryType(
             model=self.model._meta.label,
             id=PublicID(public_id_of(self.record)),
             total=changesets.count(),
+            offset=offset,
             entries=self.entries(changesets[offset : offset + limit]),
         )
 
@@ -678,7 +688,12 @@ class HistoryQuery:
 
     @strawberry.field
     def history(
-        self, model: str, id: PublicID, limit: int = HISTORY_LIMIT_DEFAULT, offset: int = 0
+        self,
+        model: str,
+        id: PublicID,
+        limit: int = HISTORY_LIMIT_DEFAULT,
+        offset: int = 0,
+        selected: PublicID | None = None,
     ) -> RecordHistoryType | None:
         """A record's changesets through its read gate; hidden and unknown records read as null."""
 
@@ -693,7 +708,7 @@ class HistoryQuery:
         record = instance_for_id(tracked, id, queryset=queryset)
         if record is None:
             return None
-        return RecordHistory(record, actor).page(limit, offset)
+        return RecordHistory(record, actor).page(limit, offset, selected)
 
 
 @strawberry.type
