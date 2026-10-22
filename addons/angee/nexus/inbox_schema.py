@@ -115,6 +115,9 @@ class InboxGroup:
     label: str
     count: int
     message_count: int
+    latest: datetime | None
+    platform: str
+    account: str
 
 
 @strawberry.type

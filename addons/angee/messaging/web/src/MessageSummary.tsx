@@ -1,6 +1,6 @@
 import * as React from "react";
 import { senderAvatarUrl, senderDisplayName, type SenderIdentity } from "@angee/parties";
-import { AbsoluteTime, Avatar, Glyph, PaneRow, avatarInitials, optionLabel, useEnumOptions, type PaneRowProps } from "@angee/ui";
+import { AbsoluteTime, Avatar, Button, Glyph, PaneRow, avatarInitials, optionLabel, useEnumOptions, type PaneRowProps } from "@angee/ui";
 
 import { useMessagingT } from "./i18n";
 
@@ -28,15 +28,20 @@ export function useMessageChannelLabel(): (message: { channel?: { display_name: 
 }
 
 /** Messaging's compact pointer for a pane; the caller owns its destination. */
-export function MessagePaneRow({ message, ...props }: {
+export function MessagePaneRow({ message, onOpenConversation, ...props }: {
   message: MessageSummaryData & { platform?: string | null };
+  onOpenConversation?: () => void;
 } & Pick<PaneRowProps, "onOpen" | "href" | "selected" | "detail" | "sub" | "meta" | "icon" | "verb">): React.ReactElement {
   const t = useMessagingT();
   const channelLabel = useMessageChannelLabel();
-  return <PaneRow icon="channel" title={message.title || message.preview}
+  const sender = senderDisplayName(message.sender, t("message.unknownSender"));
+  return <PaneRow icon="channel" title={message.title || sender}
+    avatar={props.icon ? undefined : { src: senderAvatarUrl(message.sender), initials: avatarInitials(sender) }}
     detail={channelLabel(message)}
     meta={<AbsoluteTime value={message.sent_at || message.created_at} display="date" />}
-    sub={senderDisplayName(message.sender, t("message.unknownSender"))} verb={t("message.read")}
+    sub={[message.title ? sender : undefined, message.preview].filter(Boolean).join(" · ")}
+    verb={onOpenConversation ? <Button size="iconSm" variant="ghost" onClick={onOpenConversation}
+      aria-label={t("conversations.open")} title={t("conversations.open")}><Glyph name="channel" /></Button> : t("message.read")}
     {...props} />;
 }
 

@@ -15,6 +15,16 @@ import { ResourceViewUtilities } from "../views/resource/resource-view-utilities
 const PAGER = { total: 0, page: 1, pageSize: 20 };
 const status = { id: "status", label: "Status", group: { field: "status" } };
 
+test("a pane can show the native search box without duplicating its active chips", () => {
+  const search = searchFixture({
+    active: [{ id: "text:title", kind: "text", field: "title", label: "Title", value: "needle" }],
+  });
+  render(<PaneToolbarHost><ResourceToolbar pane={{ selector: "Senders" }} search={search}
+    searchDeclaration={{ box: true }} pager={PAGER} /></PaneToolbarHost>);
+  expect(screen.getByRole("combobox", { name: "Filter records" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /needle/, pressed: true })).toBeNull();
+});
+
 test("pane controls retain contributed search, utilities, chips and native radio state without a toolbar pager", async () => {
   const sort = vi.fn();
   const search = searchFixture({ groupingEnabled: true, groupStack: [status.group],

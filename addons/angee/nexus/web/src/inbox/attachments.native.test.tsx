@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { ShellPageTestProviders } from "@angee/app/testing";
-import { ToastProvider } from "@angee/ui";
+import { ToastProvider, createRouteHref, type ChatterViewContext } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -17,6 +17,7 @@ import { InboxConversation } from "./Conversation";
 import { InboxConnections, InboxMessage, InboxRelatedTarget, InboxTranscriptMatches } from "./documents";
 import { InboxMessageReader } from "./MessageReader";
 import { InboxRelatedPane } from "./Related";
+import { FileMessages, useFileMessageCount } from "./FileMessages";
 import type { InboxNavigation, InboxScope } from "./state";
 
 const { Provider, createClient, clearClients } = createUiTestProviders({ apiUrl: "test://inbox-files", providerNames: [] });
@@ -49,7 +50,7 @@ const message = {
   participants: [], parts: [pdf(1), pdf(2)], reaction_groups: [],
 };
 
-function fixture() {
+function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false) {
   const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const dataProvider = { custom: vi.fn(async ({ meta }) => {
     if (meta?.gqlQuery === InboxTranscriptMatches) {
@@ -58,7 +59,7 @@ function fixture() {
       } } };
     }
     if (meta?.gqlQuery === InboxMessage) {
-      return { data: { inbox_message: { matches: true, uses: [], message } } };
+      return { data: { inbox_message: { matches: true, uses, message } } };
     }
     if (meta?.gqlQuery === InboxRelatedTarget) {
       const part = pdf(2);
@@ -68,7 +69,7 @@ function fixture() {
       } } };
     }
     if (meta?.gqlQuery === InboxConnections) {
-      return { data: { inbox_connections: { rows: [], count: 0, message_count: 0 } } };
+      return { data: { inbox_connections: { rows: fileUses ? [{ id: "use-1", message, part: pdf(2) }] : [], count: fileUses ? 1 : 0, message_count: fileUses ? 1 : 0 } } };
     }
     return { data: { thread_message_feed: {
       messages: [message], count: 1, older_cursor: null, has_older: false, has_more_in_window: false,
@@ -82,10 +83,12 @@ function fixture() {
   }
   const navigation = {
     thread: "thread-1", at: "", message: "message-1", part: "", related: "file:file-2", relatedFrom: "message-1",
-    patch: vi.fn(), previewFile: vi.fn(), read: vi.fn(), results: vi.fn(), back: vi.fn(), conversation: vi.fn(), connect: vi.fn(),
+    patch: vi.fn(), previewFile: vi.fn(), read: vi.fn(), results: vi.fn(), conversation: vi.fn(), connect: vi.fn(),
+    href: (values: Record<string, string | undefined>) => createRouteHref([{ name: "inbox", path: "/nexus/inbox" }])("inbox", {}, values),
   };
   const scope = { coverage: { timezone: "UTC" }, search: {}, sender: "", circle: "" };
   return {
+    custom: dataProvider.custom,
     wrapper: Providers,
     navigation,
     props: { navigation: navigation as unknown as InboxNavigation, scope: scope as unknown as InboxScope },
@@ -122,4 +125,46 @@ test("Related shows a pinned file's preview in the pane", async () => {
 
   expect(await screen.findByRole("region", { name: "File preview" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "renewal-2.pdf" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /Renewal.*Original source/ }));
+  expect(inbox.navigation.read).toHaveBeenCalledWith("message-1", "part-2");
+  fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
+  expect(inbox.navigation.conversation).toHaveBeenCalledWith("thread-1", "message-1");
+});
+
+test("repeated parts of one target keep the server's distinct message count", async () => {
+  const inbox = fixture([
+    { part_id: "part-1", target: "file:file-2", count: 2 },
+    { part_id: "part-2", target: "file:file-2", count: 2 },
+    { part_id: "part-3", target: "fragment:single", count: 1 },
+  ]);
+  render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+  const use = await screen.findByRole("button", { name: "renewal-2.pdf 2 accessible message uses" });
+  expect(screen.getAllByRole("button", { name: /accessible message uses/ })).toHaveLength(1);
+  fireEvent.click(use);
+  expect(inbox.navigation.connect).toHaveBeenCalledWith("file:file-2", "message-1");
+});
+
+test("Files backlinks count readable message uses and link to their exact part with the file pinned", async () => {
+  const inbox = fixture([], true);
+  const context: ChatterViewContext = {
+    pathname: "/storage/file-2", params: { id: "file-2" },
+    route: { name: "storage.file", path: "/storage/$id", viewType: "storage/file", modelLabel: "storage.File" },
+    view: { kind: "record", type: "storage/file", sqid: "file-2" },
+  };
+  function Messages() {
+    const count = useFileMessageCount(context);
+    return <><span>Related messages: {count}</span><FileMessages context={context} /></>;
+  }
+  const root = createRootRoute({ component: Messages });
+  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ["/"] }) });
+  render(<ShellPageTestProviders runtime={{ routeHref: createRouteHref([{ name: "nexus.inbox", path: "/nexus/inbox" }]) }}>
+    <ToastProvider><RouterProvider router={router} /></ToastProvider>
+  </ShellPageTestProviders>, { wrapper: inbox.wrapper });
+  await screen.findByText("Related messages: 1");
+  const link = await screen.findByRole("link", { name: /Renewal/ });
+  const target = new URL(link.getAttribute("href")!, "https://example.test");
+  expect(target.pathname).toBe("/nexus/inbox");
+  expect(Object.fromEntries(target.searchParams)).toEqual({ message: "message-1", part: "part-2", related: "file:file-2", relatedFrom: "message-1" });
+  expect(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxConnections)
+    .every(([request]) => request.meta?.gqlVariables?.target === "file:file-2")).toBe(true);
 });

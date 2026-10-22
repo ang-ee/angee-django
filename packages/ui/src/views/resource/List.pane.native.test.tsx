@@ -27,7 +27,7 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 afterEach(() => { cleanup(); clearClients(); });
 
-function fixture({ state, mode }: { state?: ResourceViewInitialState; mode?: "loading" | "empty" | "error" } = {}) {
+function fixture({ state, mode, pane = true }: { state?: ResourceViewInitialState; mode?: "loading" | "empty" | "error"; pane?: boolean } = {}) {
   const getList = vi.fn(async ({ pagination }: GetListParams) => {
     if (mode === "loading") return new Promise<never>(() => undefined);
     if (mode === "error") throw new Error("Read unavailable");
@@ -43,7 +43,7 @@ function fixture({ state, mode }: { state?: ResourceViewInitialState; mode?: "lo
     <AppRuntimeProvider runtime={{ icons: baseIcons }}><ModalsHost><ToastProvider>
       <ResourceViewProvider resource={resource.modelLabel} scope="local" initialState={{ pageSize: 2, ...state }}>
         <ResourceList resource={resource.modelLabel} scope="inherit" presentation="embedded" hideCreate>
-          <List renderPaneRow={(row) => <h3>{String(row.title)}</h3>} emptyContent="No notes">
+          <List pane={pane ? {} : undefined} renderPaneRow={(row) => <h3>{String(row.title)}</h3>} emptyContent="No notes">
             <Column field="title" />
           </List>
         </ResourceList>
@@ -65,6 +65,15 @@ test("List pane declarations retain native paging and list semantics", async () 
   await screen.findByRole("heading", { name: "Third note" });
   expect(screen.queryByRole("heading", { name: "First note" })).toBeNull();
   expect(getList.mock.calls.at(-1)?.[0].pagination).toMatchObject({ currentPage: 2, pageSize: 2 });
+});
+
+test("rich rows can use the standard toolbar with exactly one pager", async () => {
+  fixture({ pane: false });
+  await screen.findByRole("heading", { name: "First note" });
+  expect(screen.getAllByRole("button", { name: "Next page" })).toHaveLength(1);
+  expect(screen.getByRole("toolbar", { name: "Data controls" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+  await screen.findByRole("heading", { name: "Third note" });
 });
 
 test.each(["loading", "empty", "error"] as const)("item collections retain the shared %s surface", async (mode) => {

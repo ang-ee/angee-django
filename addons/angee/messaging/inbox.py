@@ -427,7 +427,11 @@ class MessageInbox:
         return message
 
     def target_parts(self, target: str) -> Any:
-        """Authorize an exact file or shared-text target through an eligible use."""
+        """Authorize a file through Storage, or shared text through an eligible use.
+
+        A readable file can have no message uses; its Related collection is empty.
+        Fragments have no independent read gate, so require an eligible message.
+        """
 
         kind, _, public_id = target.partition(":")
         if kind == "file":
@@ -439,7 +443,7 @@ class MessageInbox:
             parts = self.parts.filter(fragment__sqid=public_id)
         else:
             raise ValueError("Unknown Related target.")
-        if not parts.exists():
+        if kind == "fragment" and not parts.exists():
             raise ValueError("Related content unavailable.")
         return parts
 

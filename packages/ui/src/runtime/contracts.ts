@@ -238,10 +238,10 @@ export interface TimelineKindContent {
 }
 
 /**
- * One group of the Related tab: a `related#groups` child (every record view) or
+ * One group of the Links tab: a `related#groups` child (every record view) or
  * `<model>#groups` child (that model's pages), declared by the addon that owns
  * the edge. The group lists rows that link to their records and offers at most
- * one verb (upload, bind); the Related tab shows when any group is eligible.
+ * one verb (upload, bind); the Links tab shows when any group is eligible.
  */
 export interface RelatedGroupContent {
   when?: (context: ChatterViewContext) => boolean;

@@ -138,7 +138,7 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
     "form#chrome": {
       "messaging.follow": { sequence: 30, content: <FollowRecordChrome /> },
     },
-    // The conversations a record came from, in the Related tab.
+    // The conversations a record came from, in the Links tab.
     "related#groups": {
       "messaging.conversations": { sequence: 40, content: {
         label: "Conversations",

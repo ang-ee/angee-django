@@ -50,7 +50,7 @@ function sourceRows(data: unknown): readonly RecordSourceRow[] {
   return (data as { record_links?: readonly RecordSourceRow[] } | undefined)?.record_links ?? [];
 }
 
-/** The Sources group of the Related tab: the record's retained provider identities. */
+/** The Sources group of the Links tab: the record's retained provider identities. */
 export const recordSourcesGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 70,
   content: {

@@ -142,6 +142,7 @@ function PaneResourceToolbar({ search, pane, searchDeclaration, modelMetadata, s
   onCreate, createLabel, viewControls }: ResourceToolbarProps): ReactElement {
   const t = useUiT();
   const shortcuts = useSearchShortcuts(searchDeclaration, modelMetadata);
+  const expandedSearch = searchDeclaration?.box === true && chrome?.search !== false;
   const order = sorting?.[0];
   const firstGroup = search.groupStack[0];
   const groups = [
@@ -174,17 +175,20 @@ function PaneResourceToolbar({ search, pane, searchDeclaration, modelMetadata, s
         ...search.catalog.curatedGroups.map((item) => ({ value: item.id, label: item.label }))],
     }] : []),
   ];
-  return <PaneToolbar selector={pane?.selector}
-    scope={<>{pane?.scope}{search.active.map((item) => <ScopeChip key={item.id} active
+  return <><PaneToolbar selector={pane?.selector}
+    scope={<>{pane?.scope}{!expandedSearch && search.active.map((item) => <ScopeChip key={item.id} active
       label={<SearchActiveLabel item={item} search={search} />} onClick={() => search.clear(item.id)} />)}</>}
-    search={chrome?.search !== false ? <SearchControls search={{ ...search, groupingEnabled: false }}
+    search={!expandedSearch && chrome?.search !== false ? <SearchControls search={{ ...search, groupingEnabled: false }}
       shortcuts={shortcuts} box="collapsed" /> : undefined}
     actions={<>{onCreate ? <ResourceCreateButton label={createLabel} onCreate={onCreate} /> : null}
       {actions}{viewControls ? <ResourceViewControls {...viewControls} /> : null}{utilityActions}
       {view && onViewChange && chrome?.viewSwitcher !== false ? <ResourceViewSwitcher view={view}
         kinds={availableViews} favorites={search.catalog.favorites} onFavoriteSelect={(favorite) => search.applyFavorite(favorite.id)}
         onViewChange={onViewChange} /> : null}{chrome?.viewSwitcher !== false ? viewSwitcher : null}</>}
-    overflow={<PaneToolbarMenu groups={groups} />} />;
+    overflow={<PaneToolbarMenu groups={groups} />} />
+    {expandedSearch ? <div className="border-b border-border-subtle px-2 py-2">
+      <SearchControls search={search} shortcuts={shortcuts} box />
+    </div> : null}</>;
 }
 
 function FullResourceToolbar({

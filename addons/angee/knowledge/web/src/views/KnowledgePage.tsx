@@ -50,7 +50,7 @@ type KnowledgeExplorerController = ScopedExplorerController<
  * a tree filter, one labeled "New" menu and the vault's overflow in the pane
  * toolbar; a new page is typed where it will live, as a row in the tree.
  * Subject: the open page framed by the command band and the record header.
- * The page's backlinks and bindings are Related groups on its record.
+ * The page's backlinks and bindings are Links groups on its record.
  */
 export function KnowledgePage(): ReactElement {
   const t = useKnowledgeT();

@@ -65,7 +65,7 @@ describe("Nexus menu aggregation", () => {
       layouts: { console: { requireAuth: false } },
       schemas: { console: {
         url: "/graphql/console/",
-        metadata: { angee: { resources: ["nexus.Tie", "nexus.Cadence", "parties.Party", "parties.Circle"].map((label) => testDataResource(label)) } },
+        metadata: { angee: { resources: ["nexus.Tie", "nexus.Cadence", "parties.Party", "parties.Circle", "storage.File"].map((label) => testDataResource(label)) } },
       } },
       defaultSchema: "console",
     });
@@ -86,8 +86,8 @@ describe("Nexus menu aggregation", () => {
     // above stand in for Spaces and Posts without importing undeclared web deps.
     const owners = [timeline, parties, { ...messaging, dependsOn: ["parties", "timeline"] }, ...upstream.slice(2)];
     const liveAddons = [...owners, { ...nexus, dependsOn: owners.map(({ id }) => id) }];
-    const models = [...new Set(liveAddons.flatMap((addon) => (addon.routes ?? []).flatMap((route) =>
-      route.resource ? [route.resource] : [])))];
+    const models = [...new Set(["storage.File", ...liveAddons.flatMap((addon) => (addon.routes ?? []).flatMap((route) =>
+      route.resource ? [route.resource] : []))])];
     const schemas = { ...TEST_SCHEMAS, console: {
       ...TEST_SCHEMAS.console,
       metadata: { angee: { resources: models.map((label) => testDataResource(label)) } },

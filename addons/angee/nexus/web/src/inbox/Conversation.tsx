@@ -6,10 +6,11 @@ import { InboxTranscriptMatches } from "./documents";
 import type { DocumentType } from "@angee/gql/console";
 import { INBOX_MODELS, type InboxNavigation, type InboxScope } from "./state";
 import { useNexusT } from "../i18n";
+import { useInboxBreadcrumbs } from "./breadcrumbs";
 
 const Matches = createContext<readonly string[]>([]);
 
-/** The open conversation as the subject: the band (back, match navigation), the record
+/** The open conversation as the subject: the band (match navigation), the record
  *  header (the conversation, how much of it matches), then the full Messaging transcript
  *  annotated with result membership around the visible window. */
 export function InboxConversation({
@@ -23,18 +24,14 @@ export function InboxConversation({
   // The match window inside the transcript reports its read; the band and header live above it.
   const [matches, setMatches] = useState<TranscriptMatches | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useInboxBreadcrumbs(navigation, { conversation: { id: navigation.thread,
+    label: matches?.thread.conversation_label || t("inbox.conversation") } });
   return (
     <section
       className="flex h-full min-h-0 flex-col"
       aria-label={t("inbox.conversation")}
     >
       <CommandBand
-        verbs={
-          <Button size="sm" variant="ghost" onClick={navigation.results}>
-            <Glyph name="chevron-left" />
-            {t("inbox.backResults")}
-          </Button>
-        }
         // The matches walk as the band's pager: the previous and next matching message.
         navigation={matches ? {
           total: matches.count,

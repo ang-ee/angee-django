@@ -1,17 +1,19 @@
 import * as React from "react";
 
 import { Glyph } from "../chrome/Glyph";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { useInAppLink } from "../lib/in-app-link";
 import { Chip } from "../ui/chip";
+import { Avatar, type AvatarProps } from "../ui/avatar";
 import { Popover, type PopoverRootProps } from "../ui/popover";
 import { StatusIcon, type StatusIconTone } from "../ui/status-icon";
 
 /**
  * The one row anatomy of every side pane list: the Timeline rail, Tasks, the
- * Related groups, a drill-in's references. A row is a pointer: glyph, `title ·
+ * Links groups, a drill-in's references. A row is a pointer: glyph or avatar, `title ·
  * detail`, a right-aligned meta (time, due), a muted second line and one verb
- * that shows on hover. It is a link when its target has a page, a button when it
+ * for a distinct secondary action. It is a link when its target has a page, a button when it
  * opens something beside it. Labels name days and sections above rows. Type
  * sits on the 13/12 scale; nothing in a pane list picks its own size.
  */
@@ -19,6 +21,8 @@ import { StatusIcon, type StatusIconTone } from "../ui/status-icon";
 export interface PaneRowProps {
   /** The leading glyph, through the status icon so tones agree across panes. */
   icon?: string;
+  /** Identity in place of the glyph, inside the primary target. */
+  avatar?: Pick<AvatarProps, "src" | "initials" | "alt">;
   tone?: StatusIconTone;
   /** A custom leading control (a checkbox) in place of the glyph. */
   leading?: React.ReactNode;
@@ -30,9 +34,8 @@ export interface PaneRowProps {
   /** The muted second line: actor, folded summary, assignee. */
   sub?: React.ReactNode;
   /**
-   * The row's one verb at the end of the row, revealed on hover. A string names
-   * what opening the row does (a hint beside the row's own control); a node is
-   * the verb's own control, rendered beside the row's link or button.
+   * A string describes the row's primary action in its tooltip. A node is a
+   * distinct, always visible secondary control beside the row's link or button.
    */
   verb?: React.ReactNode;
   /** Draws the warning dot and emphasises the title: this row waits on the viewer. */
@@ -50,19 +53,19 @@ export interface PaneRowProps {
 }
 
 // The row's own control carries `aria-current`; the wrapper reads it for the selected fill.
-const ROW_CLASS = "group/row flex w-full gap-2 rounded-6 px-1 py-1.5 text-left hover:bg-canvas/70 has-[[aria-current=true]]:selected";
+const ROW_CLASS = "group/row flex w-full items-start gap-2 rounded-6 px-2 py-2 text-left hover:bg-canvas/70 has-[[aria-current=true]]:selected";
 const TARGET_CLASS = "flex min-w-0 flex-1 gap-2 rounded-4 text-left outline-none focus-visible:focus-ring";
 
 /**
  * @kind fragment
  */
 export function PaneRow({
-  icon, tone = "muted", leading, title, detail, meta, sub, verb, needsMe = false, selected, href, target, rel, onOpen, label, className,
+  icon, avatar, tone = "muted", leading, title, detail, meta, sub, verb, needsMe = false, selected, href, target, rel, onOpen, label, className,
 }: PaneRowProps): React.ReactElement {
   const link = useInAppLink(href);
   const glyph = (
     <span className="relative mt-0.5 shrink-0">
-      <StatusIcon tone={tone} icon={icon ?? "activity"} size="sm" />
+      {avatar ? <Avatar size="sm" {...avatar} /> : <StatusIcon tone={tone} icon={icon ?? "activity"} size="sm" />}
       {needsMe ? <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-warning-text ring-2 ring-sheet" /> : null}
     </span>
   );
@@ -71,14 +74,14 @@ export function PaneRow({
       <span className="flex items-baseline gap-2">
         <span className="min-w-0 flex-1 truncate text-13">
           <span className={needsMe ? "font-semibold" : "font-medium"}>{title}</span>
-          {detail ? <span className="text-fg-muted"> · {detail}</span> : null}
+          {detail !== undefined && detail !== null ? <span className="text-fg-muted"> · {detail}</span> : null}
         </span>
         {meta ? <span className="shrink-0 text-12 tabular-nums text-fg-muted">{meta}</span> : null}
       </span>
       {sub ? <span className="block min-w-0 truncate text-12 text-fg-muted">{sub}</span> : null}
     </span>
   );
-  const common = { title: label, "aria-current": selected ? true : undefined } as const;
+  const common = { title: label ?? (typeof verb === "string" ? verb : undefined), "aria-current": selected ? true : undefined } as const;
   // The leading control and the verb are interactive on their own, so they sit
   // beside the row's link or button rather than inside it.
   const control = href
@@ -89,9 +92,9 @@ export function PaneRow({
     <span className={cn(ROW_CLASS, className)}>
       {leading ? <span className="mt-0.5 shrink-0">{leading}</span> : null}
       {control}
-      {verb ? (
-        <span className="flex shrink-0 items-end text-12 text-link opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 [&>*]:rounded-4 [&>*]:hover:bg-canvas">
-          {typeof verb === "string" ? <span aria-hidden="true">{verb}</span> : verb}
+      {verb && typeof verb !== "string" ? (
+        <span className="flex shrink-0 items-center self-center text-12 text-fg-muted [&>*]:rounded-4 [&>*]:hover:bg-canvas">
+          {verb}
         </span>
       ) : null}
     </span>
@@ -107,6 +110,8 @@ export function PaneRows({ children, className, ...rest }: React.HTMLAttributes<
 
 export interface PaneLabelProps {
   children: React.ReactNode;
+  /** A navigable label; its control remains separate from the expansion chevron. */
+  labelAction?: React.ReactNode;
   count?: number;
   /** Folded sections open and close from their label. */
   folded?: boolean;
@@ -119,7 +124,8 @@ export interface PaneLabelProps {
 /** A day or section label above rows: 12px, muted, with an optional count, fold and verb.
  * @kind fragment
  */
-export function PaneLabel({ children, count, folded, onToggle, action, className }: PaneLabelProps): React.ReactElement {
+export function PaneLabel({ children, labelAction, count, folded, onToggle, action, className }: PaneLabelProps): React.ReactElement {
+  const t = useUiT();
   const text = (
     <>
       {onToggle ? <Glyph name={folded ? "chevron-right" : "chevron-down"} /> : null}
@@ -129,7 +135,15 @@ export function PaneLabel({ children, count, folded, onToggle, action, className
   );
   return (
     <li className={cn("group flex items-center gap-1 px-1 pb-1 pt-4 text-12 font-medium text-fg-muted first:pt-1", className)}>
-      {onToggle ? (
+      {labelAction ? <>
+        {onToggle ? <button type="button" aria-expanded={!folded}
+          aria-label={t(folded ? "chrome.expandItem" : "chrome.collapseItem", { label: typeof children === "string" ? children : "" })}
+          onClick={onToggle} className="shrink-0 rounded-4 p-1 hover:bg-canvas focus-visible:focus-ring">
+          <Glyph name={folded ? "chevron-right" : "chevron-down"} />
+        </button> : null}
+        <span className="min-w-0 flex-1">{labelAction}</span>
+        {typeof count === "number" ? <span className="shrink-0 font-normal tabular-nums">{count}</span> : null}
+      </> : onToggle ? (
         <button type="button" aria-expanded={!folded} onClick={onToggle} className="flex min-w-0 items-center gap-1 rounded-4 hover:text-fg">{text}</button>
       ) : text}
       {/* The verb shows on hover or focus, so a list of labels reads as labels, not as a column of links. */}

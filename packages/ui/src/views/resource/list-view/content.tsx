@@ -207,7 +207,7 @@ export function ListViewContent<TRow extends Row = Row>({
     />
   );
   const toolbar: ResourceToolbarProps = {
-    pane: renderPaneRow ? pane ?? {} : pane,
+    pane,
     sortOptions: resolvedColumns.flatMap((column) => column.field && column.sortable !== false
       ? [{ value: column.field, label: typeof column.header === "string" ? column.header : column.field }] : []),
     sorting: resourceView.state.sorting, onSortingChange: resourceView.setSorting,
@@ -275,7 +275,7 @@ export function ListViewContent<TRow extends Row = Row>({
     >
       {renderPaneRow ? (
         <PaneListBody surface={surface} renderRow={renderPaneRow} renderGroupLabel={renderGroupLabel}
-          groupStack={effectiveGroupStack} emptyContent={emptyContent} toolbar={toolbar} />
+          groupStack={effectiveGroupStack} emptyContent={emptyContent} toolbar={pane ? toolbar : undefined} />
       ) : surface.kind === "grouped" && resourceView.state.view === "board" ? (
         <GroupedBoardBody
           columns={resolvedColumns}
