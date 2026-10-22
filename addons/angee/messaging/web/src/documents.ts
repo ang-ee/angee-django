@@ -116,7 +116,18 @@ export const MessagePartFields = graphql(`
   }
 `);
 
-/** What `MessageReader` presents: the envelope header, the body parts and their files. */
+/** One level of actor-readable reply context, shared by readers and transcripts. */
+export const MessageReplyFields = graphql(`
+  fragment MessageReplyFields on MessageType {
+    id
+    preview
+    message_type
+    sender { ...MessageSenderFields }
+    thread { id }
+  }
+`);
+
+/** What `MessageReader` presents: the envelope, reply context, body parts and files. */
 export const MessageReaderFields = graphql(`
   fragment MessageReaderFields on MessageType {
     id
@@ -127,6 +138,7 @@ export const MessageReaderFields = graphql(`
     created_at
     starred
     sender { ...MessageSenderFields }
+    parent { ...MessageReplyFields }
     participants {
       id
       role
@@ -256,6 +268,7 @@ export const TranscriptMessageFields = graphql(`
     feed_order_key
     direction
     preview
+    parent { ...MessageReplyFields }
     message_type
     sent_at
     created_at
@@ -762,6 +775,7 @@ export type ThreadTranscriptRow =
   DocumentType<typeof ThreadTranscriptDocument>["thread_message_feed"]["messages"][number];
 export type PartListRow = DocumentType<typeof MessagingPartListRow>;
 export type MessageReaderData = DocumentType<typeof MessageReaderFields>;
+export type MessageReplyData = DocumentType<typeof MessageReplyFields>;
 
 export type RecordThreadPayload = DocumentType<typeof RecordThreadDocument>["record_thread"];
 export type RecordMessageRow = NonNullable<RecordThreadPayload["messages"]>[number];

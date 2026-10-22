@@ -49,7 +49,7 @@ export function InboxResultsPane({ navigation, timezone }: { navigation: InboxNa
             options={[{ value: "latest", label: t("inbox.recent") }, { value: "oldest", label: t("inbox.oldest") }]}
             onValueChange={(value) => view.setSorting([{ id: "latest", desc: value !== "oldest" }])} />
         </>}
-        renderPaneRow={(row) => <ResultRow row={row} navigation={navigation} />}
+        renderPaneRow={(row) => <ResultRow row={row} navigation={navigation} inConversationGroup={groupField === "by_conversation"} />}
         emptyContent={{ title: t("inbox.noResults"), description: t("inbox.noResultsHint") }}
         renderGroupLabel={groupField === "by_conversation" ? (context) =>
           <ConversationLabel {...context} timezone={timezone} navigation={navigation} /> : undefined} />
@@ -73,7 +73,7 @@ function ConversationLabel({ bucket, label, timezone, navigation }: GroupLabelCo
     onOpen={() => target.startsWith("thread:") ? navigation.conversation(target.slice(7)) : navigation.read(target.slice(8))} />;
 }
 
-function ResultRow({ row, navigation }: { row: InboxResultRow; navigation: InboxNavigation }) {
+function ResultRow({ row, navigation, inConversationGroup }: { row: InboxResultRow; navigation: InboxNavigation; inConversationGroup: boolean }) {
   const t = useNexusT();
   const [preview, setPreview] = useState(false);
   const channelLabel = useMessageChannelLabel();
@@ -81,8 +81,10 @@ function ResultRow({ row, navigation }: { row: InboxResultRow; navigation: Inbox
   const message = row.message;
   const sender = senderDisplayName(message.sender);
   if (!row.part) return <MessagePaneRow message={message}
-    selected={navigation.message === message.id} onOpen={() => navigation.read(message.id)}
-    onOpenConversation={message.thread ? () => navigation.conversation(message.thread!.id, message.id) : undefined} />;
+    {...(inConversationGroup ? { detail: undefined } : {})}
+    selected={navigation.message === message.id} onOpen={() => navigation.openInContext(message)}
+    verb={message.thread ? <Button size="iconSm" variant="ghost" onClick={() => navigation.read(message.id)}
+      aria-label={t("inbox.details")} title={t("inbox.details")}><Glyph name="file" /></Button> : t("inbox.read")} />;
   const available = Boolean(row.file || row.fragment);
   const title = row.file ? row.part.name || row.file.filename : row.fragment ? t("inbox.sharedText") : row.part.name || t("inbox.file");
   const file = row.file?.url ? {

@@ -9,7 +9,7 @@ export const enMessagingMessages: Record<string, string> = {
   "copies.showAll": "Show source copies",
   "copies.collapse": "Group source copies",
   "copies.inspect": "Source copies",
-  "copies.transport": "Reply transport: {channel}",
+  "copies.transport": "Source: {channel}",
   "copies.open": "Open copy",
   "copies.separate": "Keep separate",
   "copies.unknownTransport": "Unavailable transport",

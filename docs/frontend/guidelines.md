@@ -899,6 +899,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   standard copy titled by the verb. Declare `confirm` only for domain copy.
   See the shipped [record action bar](../../packages/storybook/src/stories/RecordActionBar.stories.tsx) (story id `views-recordactionbar--default`) and
   [command band](../../packages/storybook/src/stories/CommandBand.stories.tsx) (story id `page-commandband--default`).
+  A read-only inspector with only secondary actions composes `ActionMenu` and
+  `RecordChrome` in `RecordHeader.actions`; it does not reserve an empty command
+  band. Collection and transcript controls remain in their owning pane toolbar.
 - **Trash composes the shared owner.** A resource whose metadata marks a field
   `trashable` gets Trash and Restore from [the trash module](../../packages/ui/src/views/resource/trash.tsx):
   `useTrashActions` for record forms, `useTrashRowActions` for lists, and
@@ -1316,6 +1319,12 @@ Messaging's [`messaging.conversation`](../../addons/angee/messaging/web/src/inde
 drill-in targets a `ThreadAttachment`. Its pane resolves the thread through the
 authorized `record_source_threads` read and composes `ThreadTranscript`.
 Conversation rows in Links continue linking to the thread page.
+Message matches open the full conversation at the selected message; inspecting
+the message record is a separate secondary action. Messaging's
+[`MessageReplyQuote`](../../addons/angee/messaging/web/src/MessageReplyQuote.tsx)
+renders the access-checked parent in readers, transcripts and record discussions.
+Readers and transcripts navigate quotes through the host when retaining an
+explorer scope, or through the same-thread anchor or native record link.
 
 A tab that lists one polymorphic edge (files, pages, sources, the chatter
 thread, tasks) shows only where the record's type can carry it: Links groups

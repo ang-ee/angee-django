@@ -2,19 +2,19 @@ import { useMemo, useState } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { useModelMetadata, type Row } from "@angee/metadata";
 import { MessageReader } from "@angee/messaging";
-import { senderDisplayName } from "@angee/parties";
 import {
+  ActionMenu,
   ActionTrigger,
   Alert,
   Button,
   Collapsible,
-  CommandBand,
   ErrorBanner,
   formatDateTime,
   Glyph,
   LoadingPanel,
   MetaGrid,
   RecordHeader,
+  RecordChrome,
   optionLabel,
   useEnumOptions,
   type RecordChromeContext,
@@ -80,36 +80,34 @@ export function InboxMessageReader({
     record: message as unknown as Row,
     formReadOnly: true,
   } : null, [message, metadata?.resource.schemaName]);
-  const sender = message?.sender ? senderDisplayName(message.sender) : undefined;
-  const channel = message?.channel?.display_name || (message?.platform ? optionLabel(platforms, message.platform) : undefined);
   const direction = message ? optionLabel(directions, message.direction) : undefined;
   return (
     <section
       aria-label={t("inbox.message")}
       className="flex h-full min-h-0 flex-col"
     >
-      <CommandBand
-        menu={message ? <>
-          <ActionTrigger glyph="link" onClick={() => void copyLink()}>{t(copied ? "inbox.copied" : "inbox.copyLink")}</ActionTrigger>
-          <ActionTrigger glyph="users" onClick={() => navigation.connect(`participants:${message.id}`, message.id)}>{t("inbox.participants")}</ActionTrigger>
-          <ActionTrigger glyph="link" onClick={() => navigation.connect(`relations:${message.id}`, message.id)}>{t("inbox.relations")}</ActionTrigger>
-          {message.sender?.party_link_confirmed && message.sender.party ? (
-            <ActionTrigger onClick={() => navigation.connect(`handles:${message.sender!.party!.id}`, message.id)}>{t("inbox.handles")}</ActionTrigger>
-          ) : null}
-          {message.sender ? (
-            <ActionTrigger onClick={() => navigation.select(
-              message.sender!.party_link_confirmed && message.sender!.party ? `party:${message.sender!.party.id}` : `handle:${message.sender!.id}`,
-            )}>{t("inbox.exploreSender")}</ActionTrigger>
-          ) : null}
-        </> : null}
-        chrome={chrome}
-      />
       <RecordHeader
+        density="compact"
         headingLevel={1}
-        crumbs={[t("inbox.message"), channel, direction].filter(Boolean).join(" · ")}
-        title={message?.title || t("inbox.message")}
-        meta={message ? [sender, message.received_at ? formatDateTime(message.received_at) : undefined].filter(Boolean).join(" · ") : undefined}
+        crumbs={message?.thread?.conversation_label}
+        title={message?.title || t("inbox.details")}
         status={message && !message.thread ? { label: t("inbox.standalone") } : undefined}
+        actions={message ? <>
+          <ActionMenu label={null} aria-label={t("inbox.messageActions")} glyph="more-vertical" size="iconSm">
+            <ActionTrigger glyph="link" onClick={() => void copyLink()}>{t(copied ? "inbox.copied" : "inbox.copyLink")}</ActionTrigger>
+            <ActionTrigger glyph="users" onClick={() => navigation.connect(`participants:${message.id}`, message.id)}>{t("inbox.participants")}</ActionTrigger>
+            <ActionTrigger glyph="link" onClick={() => navigation.connect(`relations:${message.id}`, message.id)}>{t("inbox.relations")}</ActionTrigger>
+            {message.sender?.party_link_confirmed && message.sender.party ? (
+              <ActionTrigger onClick={() => navigation.connect(`handles:${message.sender!.party!.id}`, message.id)}>{t("inbox.handles")}</ActionTrigger>
+            ) : null}
+            {message.sender ? (
+              <ActionTrigger onClick={() => navigation.select(
+                message.sender!.party_link_confirmed && message.sender!.party ? `party:${message.sender!.party.id}` : `handle:${message.sender!.id}`,
+              )}>{t("inbox.exploreSender")}</ActionTrigger>
+            ) : null}
+          </ActionMenu>
+          {chrome ? <RecordChrome value={chrome} /> : null}
+        </> : undefined}
       />
       {query.isPending ? (
         <LoadingPanel />
@@ -122,6 +120,7 @@ export function InboxMessageReader({
         <div className="min-h-0 flex-1 overflow-auto p-6">
           <MessageReader
             message={message}
+            onOpenReply={navigation.openInContext}
             activePartId={navigation.part}
             onPreviewPartChange={(partId) => {
               const file = message.parts.find((part) => part.id === partId)?.file;
@@ -160,6 +159,7 @@ export function InboxMessageReader({
                 <MetaGrid
                   rows={[
                     [t("inbox.account"), message.channel?.display_name ?? "—"],
+                    [t("inbox.platform"), optionLabel(platforms, message.platform)],
                     [t("inbox.direction"), direction ?? "—"],
                     [t("inbox.status"), optionLabel(statuses, message.status)],
                     [t("inbox.received"), message.received_at ? formatDateTime(message.received_at) : "—"],
