@@ -118,8 +118,8 @@ export interface CompiledMenus {
   diagnostics: readonly string[];
 }
 
-/** What an app root says about itself when it is selected: where it lands, its identity, its theme. */
-const ROOT_FIELDS = ["home", "brand", "theme"] as const satisfies readonly (keyof MenuEntry)[];
+/** What an app root says about itself when it is selected: its landing, identity and display defaults. */
+const ROOT_FIELDS = ["home", "brand", "theme", "railExpanded"] as const satisfies readonly (keyof MenuEntry)[];
 const DECLARATION_FIELDS = [
   "label", "route", "params", "defaultResourceView", "to", "icon", "requires",
   "description", "group", "status", "tone", "personal", "parent", "sequence", "before", "after", ...ROOT_FIELDS,
@@ -243,7 +243,7 @@ function validateEntry(layer: string, id: string, entry: unknown): asserts entry
   };
   if (value.include !== undefined) strings("include", value.include);
   if (value.only !== undefined) strings("only", value.only);
-  for (const key of ["remove", "hide", "personal", "force"] as const) {
+  for (const key of ["remove", "hide", "personal", "force", "railExpanded"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "boolean") throw new Error(`${where}: ${key} must be true or false.`);
   }
   // Addons only narrow (G-14); the deployment may force an `only`, and says so.
@@ -293,6 +293,9 @@ function declareLegacy(
   if (!id) throw new Error(`Addon "${layer}" declares a menu item without id or route; menu id defaults require one of them.`);
   const { id: _id, children, parentId, ...rest } = item;
   if (rest.brand !== undefined) assertBrand(`Menu item "${id}" of "${layer}"`, rest.brand);
+  if (rest.railExpanded !== undefined && typeof rest.railExpanded !== "boolean") {
+    throw new Error(`Menu item "${id}" of "${layer}": railExpanded must be true or false.`);
+  }
   const owner = parent ?? parentId;
   if (id !== layer && !id.startsWith(`${layer}.`)) {
     diagnostics.push(`Addon "${layer}" declares menu item "${id}" outside its namespace ("${layer}" or "${layer}.…").`);

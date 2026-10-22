@@ -143,6 +143,21 @@ const shell: ShellSettings = {
 };
 
 describe("selectApp", () => {
+  test("only the selected app supplies a rail default, and named apps may override their first root", () => {
+    const configured = roots.map((root) => root.id === "accounting" ? { ...root, railExpanded: false } : root);
+    expect(selectApp({ search: "?app=accounting", shell, roots: configured })).toMatchObject({
+      railExpanded: false, sources: { railExpanded: 'menu root "accounting"' },
+    });
+    expect(selectApp({ hostname: "payables.example.test", shell, roots: configured }).railExpanded).toBe(false);
+    expect(selectApp({ roots: configured })).not.toHaveProperty("railExpanded");
+    expect(selectApp({ search: "?app=pm", shell, roots: configured })).not.toHaveProperty("railExpanded");
+    for (const railExpanded of [false, true]) {
+      expect(selectApp({ search: "?app=payables", roots: configured, shell: {
+        apps: { payables: { rail: ["accounting"], railExpanded } },
+      } })).toMatchObject({ railExpanded, sources: { railExpanded: "ANGEE_UI.shell.apps.payables" } });
+    }
+  });
+
   test("?app= wins over the hostname, which wins over nothing; no choice is stored", () => {
     expect(selectApp({ search: "?app=pm", hostname: "payables.example.test", shell, roots }).app).toBe("pm");
     expect(selectApp({ search: "?tab=one", hostname: "payables.example.test", shell, roots }).app).toBe("payables");
@@ -241,6 +256,9 @@ describe("assertShellSettings", () => {
       .toThrow('ANGEE_UI.shell.apps.ap has unknown key "hosts".');
     expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting"], home: "" } } }))
       .toThrow("ANGEE_UI.shell.apps.ap.home must be a non-empty string.");
+    expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting"], railExpanded: false } } })).not.toThrow();
+    expect(() => assertShellSettings({ apps: { ap: { rail: ["accounting"], railExpanded: "false" } } }))
+      .toThrow("ANGEE_UI.shell.apps.ap.railExpanded must be true or false.");
     expect(() => assertShellSettings({ hosts: { "ap.example.test": ["accounting"] } }))
       .toThrow('ANGEE_UI.shell.hosts["ap.example.test"] must be a non-empty string.');
     expect(() => assertShellSettings({ hosts: { "AP.example.test": "accounting" } }))

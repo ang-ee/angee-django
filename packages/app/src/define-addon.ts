@@ -116,6 +116,8 @@ export interface AppDeclaration {
   theme?: string;
   /** A route name inside the rail. */
   home?: string;
+  /** Desktop rail expansion until the person chooses otherwise; inherits the first root's default. */
+  railExpanded?: boolean;
 }
 
 /**

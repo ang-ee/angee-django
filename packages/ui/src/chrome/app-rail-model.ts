@@ -62,12 +62,13 @@ export interface RailTargetItem {
   target?: string;
 }
 
-/** Resolve the persisted rail preference at the viewport where expansion exists. */
+/** Resolve the saved preference, then the selected app's default, where expansion exists. */
 export function resolvedRailExpanded(
   preference: boolean | undefined,
   largeViewport: boolean,
+  defaultExpanded = true,
 ): boolean {
-  return largeViewport && (preference ?? true);
+  return largeViewport && (preference ?? defaultExpanded);
 }
 
 export function orderedRailItems<TItem extends RailOrderItem>(

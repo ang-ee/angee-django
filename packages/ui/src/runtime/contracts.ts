@@ -17,7 +17,7 @@ export interface RuntimeBrand {
 }
 
 /** A field of the selected app; each records where it came from. */
-export type RuntimeSelectionField = "app" | "rail" | "brand" | "theme" | "home";
+export type RuntimeSelectionField = "app" | "rail" | "brand" | "theme" | "home" | "railExpanded";
 
 /**
  * The app the deployment selected, by `?app=` or by hostname: the roots its rail
@@ -33,6 +33,8 @@ export interface RuntimeSelection {
   theme?: string;
   /** The route name `/` lands on; unset lands on the rail's first app. */
   home?: string;
+  /** Desktop rail expansion until the person chooses otherwise; unset defaults to expanded. */
+  railExpanded?: boolean;
   /** Where each field came from, named the way a person fixing it finds it. */
   sources: Readonly<Partial<Record<RuntimeSelectionField, string>>>;
   /** Why a requested app was not selected, such as an unknown `?app=`. */

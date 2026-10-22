@@ -292,7 +292,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **An app root declares itself; the deployment selects the app.** A
   top-level menu root is an app. It may declare `home` (a route name inside
   the root), `brand` (`{ name, mark }`, with `mark` a registered glyph; it
-  defaults to the root's label and icon) and `theme` (an installed theme id).
+  defaults to the root's label and icon), `theme` (an installed theme id), and
+  `railExpanded` (the desktop rail's default expansion).
   They layer like any menu field, so a dependent addon or `ANGEE_UI.menus`
   overrides them, and an included app drops them. The deployment's
   `ANGEE_UI.shell` selects what the console shows; products never name
@@ -309,7 +310,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 
   [`selectApp`](../../packages/app/src/boot-app.tsx) takes `?app=<root id |
   apps name>`, else the hostname's `hosts` entry, else nothing; no choice is
-  stored. A root id is the one-root app with the root's home, brand and theme.
+  stored. A root id is the one-root app with the root's home, brand, theme and rail default.
   A named app takes its own, else its first rail root's; an unset theme falls
   back to `shell.theme`. Nothing selected shows every root with `shell.brand`
   and `shell.theme`. An unknown `?app=` warns in development and falls back.
@@ -324,7 +325,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   guarded: only a menu `remove` makes a page unavailable. Rail, login, public
   mark and document title read the selected brand through `useRuntimeBrand`;
   shell components hard-code no identity. The selected theme is the appearance
-  default, and the person's own choice still wins.
+  default, and the person's own choice still wins. The rail likewise takes its
+  selected app's `railExpanded` default only when no expansion preference is saved;
+  undeclared, it starts expanded at desktop widths. Visiting a route without
+  selecting an app does not apply that app's rail default.
   `/` signs in like the `console` layout, then lands by [`landingTarget`](../../packages/ui/src/chrome/app-rail-model.ts).
   A selected app lands on its home, else on its rail's first app. Otherwise
   `/` lands on the person's saved home page, their rail default, the first app

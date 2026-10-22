@@ -448,6 +448,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const runtime: Omit<AppRuntime, "auth" | "logoutAction" | "userPreferences"> = {
     rail: selection.rail,
     brand: selection.brand,
+    ...(selection.railExpanded !== undefined ? { railExpanded: selection.railExpanded } : {}),
     widgets: { ...defaultWidgets, ...composed.widgets },
     statusTones: composed.statusTones,
     i18n: i18n.instance,

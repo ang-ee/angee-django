@@ -236,17 +236,20 @@ describe("compileMenus", () => {
 
   test("a root declares where it lands, its brand and its theme; a dependent and the deployment override them", () => {
     const desk: MenuLayer = { id: "desk", menus: {
-      desk: { label: "Desk", home: "desk.inbox", brand: { name: "Desk", mark: "desk" }, theme: "desk.light" },
+      desk: { label: "Desk", home: "desk.inbox", brand: { name: "Desk", mark: "desk" }, theme: "desk.light", railExpanded: true },
       "desk.inbox": { parent: "desk", route: "desk.inbox" },
     } };
     const product: MenuLayer = { id: "product", dependsOn: ["desk"], menus: { desk: { home: "desk.board", theme: "product.dark" } } };
     const deployment: MenuLayer = { id: DEPLOYMENT_LAYER_ID, dependsOn: ["desk", "product"], menus: {
-      desk: { brand: { name: "Pinned", mark: "pin" } },
+      desk: { brand: { name: "Pinned", mark: "pin" }, railExpanded: false },
     } };
     const compiled = compileMenus([desk, product, deployment]);
     expect(compiled.logical[0]).toMatchObject({ home: "desk.board", brand: { name: "Pinned", mark: "pin" }, theme: "product.dark" });
     expect(compiled.navigation[0]).toMatchObject({ home: "desk.board", brand: { name: "Pinned", mark: "pin" }, theme: "product.dark" });
     expect(compiled.provenance.desk).toMatchObject({ home: "product", brand: DEPLOYMENT_LAYER_ID, theme: "product" });
+    expect(compiled.logical[0]?.railExpanded).toBe(false);
+    expect(compiled.navigation[0]?.railExpanded).toBe(false);
+    expect(compiled.provenance.desk?.railExpanded).toBe(DEPLOYMENT_LAYER_ID);
     // Two unrelated layers setting one still collide.
     const other: MenuLayer = { id: "other", dependsOn: ["desk"], menus: { desk: { home: "desk.other" } } };
     expect(() => compileMenus([desk, product, other])).toThrow(/Unrelated addons "product" and "other" both set menu "desk" home/);
@@ -262,7 +265,7 @@ describe("compileMenus", () => {
       .toThrow(/"desk.inbox" sets theme, which only a root/);
     const included = compileMenus([
       { id: "work", menus: {
-        work: { home: "work.inbox", brand: { name: "Work", mark: "work" } },
+        work: { home: "work.inbox", brand: { name: "Work", mark: "work" }, railExpanded: false },
         "work.inbox": { parent: "work", route: "work.inbox" },
       } },
       { id: "suite", dependsOn: ["work"], menus: { suite: { home: "work.inbox", include: ["work"] } } },
@@ -271,6 +274,9 @@ describe("compileMenus", () => {
     expect(work).toMatchObject({ app: true });
     expect(work).not.toHaveProperty("home");
     expect(work).not.toHaveProperty("brand");
+    expect(work).not.toHaveProperty("railExpanded");
+    expect(() => compileMenus([{ id: "desk", menus: { desk: {}, "desk.inbox": { parent: "desk", railExpanded: false } } }]))
+      .toThrow(/"desk.inbox" sets railExpanded, which only a root/);
     expect(included.logical[0]).toMatchObject({ id: "suite", home: "work.inbox" });
     // appRoot is gone: the rail lists every root, or the selected app's.
     expect(() => compileMenus([{ id: "desk", menus: { desk: { appRoot: true } } } as unknown as MenuLayer])).toThrow(/unknown key "appRoot"/);
@@ -284,6 +290,10 @@ describe("compileMenus", () => {
     expect(() => compileMenus([{ id: "desk", menus: [{ id: "desk", brand: { name: "", mark: "desk" } }] }])).toThrow(/brand must be/);
     expect(() => compileMenus([{ id: "desk", menus: { desk: { home: 7 } } } as unknown as MenuLayer])).toThrow(/home must be a string/);
     expect(() => compileMenus([{ id: "desk", menus: { desk: { theme: false } } } as unknown as MenuLayer])).toThrow(/theme must be a string/);
+    expect(() => compileMenus([{ id: "desk", menus: { desk: { railExpanded: "false" } } } as unknown as MenuLayer]))
+      .toThrow(/railExpanded must be true or false/);
+    expect(() => compileMenus([{ id: "desk", menus: [{ id: "desk", railExpanded: "false" }] }] as unknown as MenuLayer[]))
+      .toThrow(/railExpanded must be true or false/);
   });
 
   test("a mount links to its alias under its app's path; the source app keeps its own page", () => {

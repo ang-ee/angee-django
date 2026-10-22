@@ -13,14 +13,15 @@ DSN and environment; without a DSN no reporting SDK is loaded. See the
 A top-level menu root is an app. Its menu entry may declare `home` (a route
 name inside the root, where `/` lands when the app is selected), `brand`
 (`{ name, mark }`, the mark a registered glyph; it defaults to the root's label
-and icon) and `theme` (an installed theme id). They layer like other menu
+and icon), `theme` (an installed theme id), and `railExpanded` (desktop rail
+expansion until a user saves their own choice). They layer like other menu
 fields, and an included app drops them. The deployment's `ANGEE_UI.shell`
 selects the app: `{ brand?, theme?, apps?: { <name>: { rail, brand?, theme?,
-home? } }, hosts?: { <hostname>: <root id | apps name> } }`. `selectApp` (in
+home?, railExpanded? } }, hosts?: { <hostname>: <root id | apps name> } }`. `selectApp` (in
 [`boot-app.tsx`](src/boot-app.tsx)) takes `?app=`, else the hostname's `hosts`
 entry, else nothing, which shows every root with `shell.brand` and
 `shell.theme`. A root id is the one-root app; a named app takes its own brand,
-theme and home, else its first rail root's. `createApp` reads `location`
+theme, home and rail default, else its first rail root's. `createApp` reads `location`
 (default `window.location`) and projects the selected rail into the rail, the
 command palette and Refine's resources, keeping the personal Settings roots.
 Pages outside the rail stay reachable and sit in the selection's home root; no
