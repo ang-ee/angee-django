@@ -6,17 +6,25 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { jsonValueFromUnknown } from "../widgets/json-value";
+import { datetimeWidget } from "../widgets/datetime";
 import { filterOperatorLabel } from "../views/resource/utils/labels";
 
 export type FilterClauseFieldType = "text" | "number" | "date" | "datetime" | "selection" | "boolean";
 export type FilterClauseOperator = FilterOperator | "isNotNull";
-export interface FilterClauseChoice { value: string; label: React.ReactNode }
+export interface FilterClauseChoice {
+  value: string;
+  label: React.ReactNode;
+  /** Typed query operand when a native select token represents a non-string scalar. */
+  filterValue?: FilterValue;
+}
 export interface FilterClauseField {
   id: string;
   field?: string;
   label: React.ReactNode;
   group?: string;
   type?: FilterClauseFieldType;
+  /** Query input scalar; preserves exact Decimal and structured JSON operands. */
+  scalar?: string;
   options?: readonly FilterClauseChoice[];
   operators?: readonly FilterClauseOperator[];
   /** Declared picker; receives the same accessibility and read-only contract as native controls. */
@@ -37,6 +45,16 @@ export interface FilterClause {
 }
 /** Raw input stays controlled so incomplete numbers and JSON remain editable. */
 export interface FilterClauseDraft { fieldId: string; operator: FilterClauseOperator; value: string }
+
+/** Seed native draft controls from one canonical comparison, including negated null. */
+export function filterClauseDraft(fieldId: string, comparison?: { operator: FilterOperator; value: FilterValue }, scalar?: string): FilterClauseDraft {
+  return {
+    fieldId,
+    operator: comparison?.operator === "isNull" && comparison.value === false ? "isNotNull" : comparison?.operator ?? "exact",
+    value: comparison ? typeof comparison.value === "object" || structuredOperand(comparison.operator, scalar)
+      ? JSON.stringify(comparison.value) : String(comparison.value) : "",
+  };
+}
 export interface FilterClauseRowProps {
   fields: readonly FilterClauseField[];
   value: FilterClauseDraft;
@@ -55,7 +73,7 @@ export function FilterClauseRow({ fields, value, onChange, onSubmit, error, read
   const t = useUiT();
   const errorId = React.useId();
   const { field, operator } = resolveDraft(fields, value);
-  const structured = structuredOperand(operator);
+  const structured = structuredOperand(operator, field?.scalar);
   const valueProps = {
     value: value.value,
     onValueChange: (next: string) => onChange({ ...value, fieldId: field?.id ?? "", operator, value: next }),
@@ -82,6 +100,12 @@ export function FilterClauseRow({ fields, value, onChange, onSubmit, error, read
         }} />
       {needsValue(operator) ? (
         field.renderValue && !structured ? field.renderValue(valueProps)
+          : field.type === "datetime" && !structured ? <datetimeWidget.edit
+            value={value.value} readOnly={readOnly}
+            onChange={(next) => valueProps.onValueChange(typeof next === "string" ? next : next?.toISOString() ?? "")}
+            field={{ label: valueProps["aria-label"], controlProps: {
+              id: `${errorId}-value`, "aria-describedby": valueProps["aria-describedby"], "aria-invalid": valueProps["aria-invalid"],
+            } }} />
           : (field.options || field.type === "boolean") && !structured ? (
             <Select {...valueProps} size="sm" invalid={Boolean(error)} placeholder={t("resourceToolbar.value")}
               options={field.type === "boolean"
@@ -89,6 +113,7 @@ export function FilterClauseRow({ fields, value, onChange, onSubmit, error, read
                 : field.options ?? []} />
           ) : (
             <Input size="sm" type={structured ? "text" : inputType(field)}
+              step={field.type === "number" ? field.scalar === "Int" ? 1 : "any" : undefined}
               value={valueProps.value} readOnly={readOnly}
               aria-label={valueProps["aria-label"]} aria-describedby={valueProps["aria-describedby"]}
               aria-invalid={valueProps["aria-invalid"]} placeholder={t("resourceToolbar.value")}
@@ -112,20 +137,22 @@ export interface FilterClauseEditorProps {
   onSubmit: (clause: FilterClause) => void;
   /** Optional controlled draft, for editing a clause in a parent-owned collection. */
   value?: FilterClauseDraft;
+  /** Retained comparison for the editor-owned draft; stays after submit. Remount to load another clause. */
+  defaultValue?: FilterClauseDraft;
   onChange?: (value: FilterClauseDraft) => void;
   submitLabel?: React.ReactNode;
   readOnly?: boolean;
   className?: string;
 }
 
-/** Submit one typed clause. Uncontrolled mode clears the operand after adding;
- * controlled mode leaves reset, identity, and collection updates to the caller.
+/** Submit one typed clause. A new uncontrolled clause clears after adding;
+ * retained and controlled drafts leave identity and collection updates to the caller.
  * ResourceQuery remains responsible for executable field/operator validation.
  * @kind surface
  */
-export function FilterClauseEditor({ fields, onSubmit, value, onChange, submitLabel, readOnly = false, className }: FilterClauseEditorProps): React.ReactElement {
+export function FilterClauseEditor({ fields, onSubmit, value, defaultValue, onChange, submitLabel, readOnly = false, className }: FilterClauseEditorProps): React.ReactElement {
   const t = useUiT();
-  const [draft, setDraft] = React.useState<FilterClauseDraft>({ fieldId: "", operator: "contains", value: "" });
+  const [draft, setDraft] = React.useState<FilterClauseDraft>(() => defaultValue ?? { fieldId: "", operator: "contains", value: "" });
   const [failure, setFailure] = React.useState<{ draft: FilterClauseDraft; message: string }>();
   const editorRef = React.useRef<HTMLDivElement>(null);
   const current = value ?? draft;
@@ -154,7 +181,7 @@ export function FilterClauseEditor({ fields, onSubmit, value, onChange, submitLa
     setFailure(undefined);
     onSubmit({ field: field.field ?? field.id, operator,
       ...(operand !== undefined ? { value: operand } : {}), ...(field.type ? { type: field.type } : {}) });
-    if (value === undefined) change({ fieldId: field.id, operator, value: "" });
+    if (value === undefined && defaultValue === undefined) change({ fieldId: field.id, operator, value: "" });
     globalThis.requestAnimationFrame(() => editorRef.current?.querySelector<HTMLElement>(
       "input:not([disabled]), button:not([disabled]), [tabindex='0']",
     )?.focus());
@@ -162,7 +189,8 @@ export function FilterClauseEditor({ fields, onSubmit, value, onChange, submitLa
   return <div ref={editorRef} className={cn("grid gap-2 rounded-6 border border-border-subtle bg-sheet p-2 shadow-xs", className)}>
     <FilterClauseRow fields={fields} value={current} onChange={change} onSubmit={submit} error={error} readOnly={readOnly} />
     {field && !readOnly ? <Button type="button" size="sm" variant="secondary" className="justify-center"
-      disabled={needsValue(operator) && current.value.trim() === "" && !isDeclaredSelection(field, current.value, operator)} onClick={submit}>
+      disabled={needsValue(operator) && current.value.trim() === "" && !declaredSelection(field, current.value, operator)
+        && !isStringEquality(field, operator)} onClick={submit}>
       {submitLabel ?? t("resourceToolbar.add")}
     </Button> : null}
   </div>;
@@ -184,26 +212,33 @@ function resolveDraft(fields: readonly FilterClauseField[], draft: FilterClauseD
 function needsValue(operator: FilterClauseOperator): boolean {
   return operator !== "isNull" && operator !== "isNotNull";
 }
-function structuredOperand(operator: FilterClauseOperator): boolean {
-  return ["inList", "notInList", "hasKeysAny", "hasKeysAll", "jsonContains", "jsonContainedIn"].includes(operator);
+function structuredOperand(operator: FilterClauseOperator, scalar?: string): boolean {
+  return ["inList", "notInList", "hasKeysAny", "hasKeysAll", "jsonContains", "jsonContainedIn"].includes(operator)
+    || scalar === "JSON" && ["exact", "ne", "gt", "gte", "lt", "lte"].includes(operator);
 }
 function inputType(field: FilterClauseField): string {
-  return field.type === "number" || field.type === "date" ? field.type : field.type === "datetime" ? "datetime-local" : "text";
+  return field.type === "number" || field.type === "date" ? field.type : "text";
 }
 function coerceValue(field: FilterClauseField, value: string, operator: FilterClauseOperator): FilterValue | undefined {
-  if (isDeclaredSelection(field, value, operator)) return value;
+  const selected = declaredSelection(field, value, operator);
+  if (selected) return selected.filterValue !== undefined ? selected.filterValue : value;
+  if (isStringEquality(field, operator)) return value;
   const trimmed = value.trim();
   if (!trimmed) return undefined;
-  if (structuredOperand(operator)) return jsonValueFromUnknown(JSON.parse(trimmed));
+  if (structuredOperand(operator, field.scalar)) return jsonValueFromUnknown(JSON.parse(trimmed));
   if (field.type === "number") {
+    if (field.scalar === "Decimal") return trimmed;
     const number = Number(trimmed);
     return Number.isFinite(number) ? number : undefined;
   }
   if (field.type === "boolean") return trimmed === "true" ? true : trimmed === "false" ? false : undefined;
-  return trimmed;
+  return value;
 }
 
-function isDeclaredSelection(field: FilterClauseField, value: string, operator: FilterClauseOperator): boolean {
-  return !structuredOperand(operator) && field.type === "selection"
-    && Boolean(field.options?.some((option) => option.value === value));
+function declaredSelection(field: FilterClauseField, value: string, operator: FilterClauseOperator): FilterClauseChoice | undefined {
+  return !structuredOperand(operator, field.scalar) && field.type === "selection"
+    ? field.options?.find((option) => option.value === value) : undefined;
+}
+function isStringEquality(field: FilterClauseField, operator: FilterClauseOperator): boolean {
+  return field.type === "text" && field.scalar === "String" && (operator === "exact" || operator === "ne");
 }

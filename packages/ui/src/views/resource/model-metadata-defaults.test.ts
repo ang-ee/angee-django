@@ -8,6 +8,7 @@ import type {
 } from "@angee/metadata";
 import {
   RelationRepresentationError,
+  EMPTY_SCHEMA_FIELD_METADATA,
   ResourceQuery,
   modelMetadataForLabel,
   rowValueAtPath,
@@ -206,7 +207,7 @@ describe("resource metadata defaults", () => {
 
   test("derives list filter fields, enum filter chips, and group options", () => {
     const resolvedColumns = columnsWithMetadataDefaults(columns, NOTE_METADATA);
-    const filterFields = buildFilterFields(resolvedColumns, [], NOTE_METADATA);
+    const filterFields = buildFilterFields(resolvedColumns, [], NOTE_METADATA, EMPTY_SCHEMA_FIELD_METADATA);
 
     expect(filterFields).toMatchObject([
       {
@@ -292,7 +293,7 @@ describe("resource metadata defaults", () => {
       { id: "two", status: "CLOSED" },
     ];
 
-    const filterFields = buildFilterFields([{ field: "status" }], rows, metadata);
+    const filterFields = buildFilterFields([{ field: "status" }], rows, metadata, EMPTY_SCHEMA_FIELD_METADATA);
 
     expect(filterFields).toMatchObject([{
       id: "status",
@@ -312,10 +313,29 @@ describe("resource metadata defaults", () => {
           field: "origin", scalar: "Enum", values: values.map(({ value }) => ({ value })), operators: ["exact"],
         } }),
       } }) }));
-    const fields = buildFilterFields([{ field: "origin" }], [], metadata);
+    const fields = buildFilterFields([{ field: "origin" }], [], metadata, EMPTY_SCHEMA_FIELD_METADATA);
     expect(fields[0]?.options).toEqual(values.map(({ value, description }) => ({ value, label: description })));
     expect(buildFilterOptions([{ field: "origin" }], [], fields).map(({ chipLabel }) => chipLabel))
       .toEqual(["Manual", "Workflow"]);
+  });
+
+  test("IntegerChoices share numeric operands between native clause choices and inferred facet filters", () => {
+    const values = [{ value: "MONDAY", description: "Monday" }, { value: "SUNDAY", description: "Sunday" }];
+    const metadata = canonicalModel({ cycle_start_day: { name: "cycle_start_day", kind: "enum", values } },
+      testDataResource("work.Project", { query: testResourceQuery({ fields: {
+        cycle_start_day: testQueryField("cycle_start_day", { kind: "enum", values, filter: {
+          field: "cycle_start_day", scalar: "Int", values: [], operators: ["exact"],
+          valueMap: [{ from: "MONDAY", to: 0 }, { from: "SUNDAY", to: 6 }],
+        } }),
+      } }) }));
+    const fields = buildFilterFields([], [], metadata, EMPTY_SCHEMA_FIELD_METADATA);
+    expect(fields[0]?.options).toEqual([
+      { value: "0", filterValue: 0, label: "Monday" }, { value: "6", filterValue: 6, label: "Sunday" },
+    ]);
+    expect(buildFilterOptions([], [], fields).map(({ label, filter }) => ({ label, filter }))).toEqual([
+      { label: "Monday", filter: { cycle_start_day: { exact: 0 } } },
+      { label: "Sunday", filter: { cycle_start_day: { exact: 6 } } },
+    ]);
   });
 
   test("keeps relation query capabilities and augments them with the lazy picker seam", () => {
@@ -349,7 +369,7 @@ describe("resource metadata defaults", () => {
       }),
     } }) }));
     const query = ResourceQuery.from(metadata);
-    const base = buildFilterFields([], [{ id: "ignored", reviewer: "page-only" }], metadata, query);
+    const base = buildFilterFields([], [{ id: "ignored", reviewer: "page-only" }], metadata, EMPTY_SCHEMA_FIELD_METADATA, query);
 
     expect(base).toMatchObject([{
       id: "reviewer",
@@ -375,6 +395,8 @@ describe("resource metadata defaults", () => {
       operators: ["exact", "inList", "isNull", "isNotNull"],
       renderValue: expect.any(Function),
     }]);
+    expect(buildFilterFields([], [], metadata, schemaFieldMetadataFromDataResources([reviewer.resource]), query))
+      .toMatchObject([{ id: "reviewer", operators: ["exact", "inList", "isNull", "isNotNull"], renderValue: expect.any(Function) }]);
 
     // Authored collection sources carry their relation target on ResourceQuery
     // even though ListView deliberately has no parent model metadata for them.
@@ -399,7 +421,7 @@ describe("resource metadata defaults", () => {
       } }),
     } }) }));
 
-    expect(buildFilterFields([], [{ id: "page-row" }], metadata)).toMatchObject([{
+    expect(buildFilterFields([], [{ id: "page-row" }], metadata, EMPTY_SCHEMA_FIELD_METADATA)).toMatchObject([{
       id: "id",
       field: "id",
       type: "text",
@@ -420,7 +442,7 @@ describe("resource metadata defaults", () => {
       } }),
     } }) }));
 
-    expect(buildFilterFields([], [], metadata)).toMatchObject([
+    expect(buildFilterFields([], [], metadata, EMPTY_SCHEMA_FIELD_METADATA)).toMatchObject([
       { id: "metadata", type: "text", operators: ["jsonContains", "isNull", "isNotNull"] },
       { id: "tags", type: "text", operators: ["exact", "inList"] },
     ]);
@@ -431,7 +453,7 @@ describe("resource metadata defaults", () => {
       { id: "one", status: "OPEN" },
       { id: "two", status: "CLOSED" },
     ];
-    const filterFields = buildFilterFields([{ field: "status" }], rows, null);
+    const filterFields = buildFilterFields([{ field: "status" }], rows, null, EMPTY_SCHEMA_FIELD_METADATA);
 
     expect(filterFields).toMatchObject([{
       id: "status",

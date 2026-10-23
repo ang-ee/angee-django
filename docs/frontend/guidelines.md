@@ -1097,6 +1097,9 @@ The name after `#` types the entry. Each owner adds its name and content type to
 the `ContainerKinds` interface, so a `#aside` child carries
 `ChatterTabContent`, a `#views` child `ResourceViewKindContent`, and a
 `#sections` child the `Group`, `Action` and `Tab` declarations a form parses.
+Contribute those markers directly: the form parser does not render a component
+to discover declarations inside it. Use `LabelKey` for translated marker labels
+and put components in their rendered content slots.
 There are no per-kind constructor functions; an addon helper returns a plain
 child (`recordPagesTab()`, `decisionRecordTab()`). A new
 container name is added by declaration merging, as

@@ -10,26 +10,20 @@ import {
 import { RelationPicker } from "./RelationPicker";
 import { useRelationPickerOptions } from "./relation-options";
 
-interface RelationFilterValueProps {
-  relation: RelationFieldInfo;
-  value: string;
-  onValueChange: (value: string) => void;
-  label: string;
-}
+type RelationFilterValueProps = Parameters<NonNullable<FilterClauseField["renderValue"]>>[0]
+  & { relation: RelationFieldInfo };
 
 function RelationFilterValue({
   relation,
-  value,
   onValueChange,
-  label,
+  ...props
 }: RelationFilterValueProps): ReactElement {
-  const picker = useRelationPickerOptions(relation, { value });
+  const picker = useRelationPickerOptions(relation, { value: props.value });
   return (
     <RelationPicker
-      value={value}
+      {...props}
       onChange={onValueChange}
       options={picker.options}
-      aria-label={label}
       onOpenChange={picker.onOpenChange}
       onSearchChange={picker.onSearchChange}
       searchState={picker.searchState}
@@ -54,14 +48,7 @@ export function relationFilterFields(
       id: fieldName,
       field: fieldName,
       label,
-      renderValue: ({ value, onValueChange }) => (
-        <RelationFilterValue
-          relation={relation}
-          value={value}
-          onValueChange={onValueChange}
-          label={label}
-        />
-      ),
+      renderValue: (props) => <RelationFilterValue {...props} relation={relation} />,
     }];
   });
 }

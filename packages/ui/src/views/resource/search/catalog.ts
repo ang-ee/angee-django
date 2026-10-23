@@ -2,7 +2,6 @@ import * as React from "react";
 import { Filter, isClientRowModel, useSchemaFieldMetadata, type ModelMetadata, type ResourceQuery, type Row } from "@angee/metadata";
 import type { FilterClauseField, ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../../toolbars";
 import type { ColumnDescriptor } from "../../page";
-import { relationFilterFields } from "../../relation/relation-filter";
 import { fieldLabel, relationFieldInfo, relationFieldInfoForQueryField } from "../model-metadata-defaults";
 import { queryForColumns } from "../resource-query";
 import type { ResourceViewContextValue } from "../resource-view-context";
@@ -51,8 +50,7 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
     const axis = query.axes[group.field];
     return serverGrouping ? Boolean(axis?.server) : Boolean(axis?.identityPath);
   }), [columns, modelMetadata, defaults, query, serverGrouping]);
-  const inferredFields = React.useMemo(() => buildFilterFields(columns, inferOptions ? rows : EMPTY, modelMetadata, query), [columns, inferOptions, rows, modelMetadata, query]);
-  const relations = React.useMemo(() => relationFilterFields(query, modelMetadata, schema), [query, modelMetadata, schema]);
+  const inferredFields = React.useMemo(() => buildFilterFields(columns, inferOptions ? rows : EMPTY, modelMetadata, schema, query), [columns, inferOptions, rows, modelMetadata, schema, query]);
   const contributedFacets = React.useMemo(() => {
     const seen = new Set<string>();
     return [...(input.declaredFacets ?? EMPTY), ...(input.scalarFacets ?? EMPTY)].filter((facet) => {
@@ -63,9 +61,9 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
   }, [input.declaredFacets, input.scalarFacets]);
   const fields = React.useMemo(() => mergeFilterFields(input.customFilterFields,
     mergeFilterFields(input.contributedCustomFilterFields,
-      mergeFilterFields(contributedFacets.filter((facet) => facet.source === "relation" || facet.options.length > 0).map(facetField), mergeFilterFields(relations, inferredFields))))
+      mergeFilterFields(contributedFacets.filter((facet) => facet.source === "relation" || facet.options.length > 0).map(facetField), inferredFields)))
     .filter((field) => Boolean(query.fields[field.field ?? field.id]?.filter?.operators.length)),
-  [input.customFilterFields, input.contributedCustomFilterFields, contributedFacets, relations, inferredFields, query]);
+  [input.customFilterFields, input.contributedCustomFilterFields, contributedFacets, inferredFields, query]);
   const filters = React.useMemo(() => mergeFilterOptions(input.filterOptions, input.contributedFilterOptions ?? EMPTY, query, reported), [input.filterOptions, input.contributedFilterOptions, query, reported]);
   const facets = React.useMemo(() => {
     const choices = buildFilterOptions(columns, inferOptions ? rows : EMPTY, fields);

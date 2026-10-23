@@ -13,6 +13,7 @@ export type FilterPrimitive = string | number | boolean | null;
 export type FilterValue = FilterPrimitive | readonly FilterValue[] | { readonly [key: string]: FilterValue };
 export type QueryFilter = { readonly [field: string]: FilterValue };
 export type FilterRecord = QueryFilter;
+export interface FilterChoice { value: FilterPrimitive; description?: string | null }
 export interface GroupBucket { key?: Readonly<Record<string, unknown>> | null }
 export interface GroupDimension { input: string; key: string; granularity?: string; rangeKey?: string }
 export interface GroupProjection {
@@ -122,6 +123,20 @@ export class ResourceQuery {
 
   get fields(): DataResourceQuery["fields"] { return this.contract.fields; }
   get axes(): DataResourceQuery["axes"] { return this.contract.axes; }
+
+  /** Filter-input choices, including output enum symbols mapped to scalar inputs. */
+  filterChoices(name: string): readonly FilterChoice[] {
+    const field = this.fields[name];
+    if (!field?.filter) return [];
+    if (field.filter.values.length) return field.filter.values;
+    if (field.kind !== "enum") return [];
+    return field.values.map((choice) => {
+      const value = this.scalar(field, this.filterInputValue(field, choice.value), `query.${name}.filter`);
+      if (value !== null && typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean")
+        return fail(`query.${name}.filter`, "enum choices must map to scalar inputs");
+      return { ...choice, value };
+    });
+  }
 
   /**
    * Keep declared order while admitting only executable text comparisons.
@@ -293,11 +308,15 @@ export class ResourceQuery {
       if (readPath(row, path) === undefined) return fail(`query.${field}`, `missing selected value path "${path}"`);
     }
     const selected = readPath(row, projection.path) ?? null;
-    const mapping = declaration.filter?.valueMap?.find((entry) => Object.is(entry.from, selected));
-    const value = mapping ? mapping.to : selected;
+    const value = this.filterInputValue(declaration, selected);
     const scalar = declaration.filter?.scalar ?? declaration.scalar;
     if (value != null && (scalar === "Date" || scalar === "DateTime")) return temporalValue(value, scalar);
     return value;
+  }
+
+  private filterInputValue(field: QueryField, value: unknown): unknown {
+    const mapping = field.filter?.valueMap?.find((entry) => Object.is(entry.from, value));
+    return mapping ? mapping.to : value;
   }
 
   /** Client-owned text uses natural ordering; Decimal strings retain wire precision. */

@@ -108,6 +108,9 @@ export function mergeFilterFields(
       : field.operators === undefined ? base.operators
       : field.operators.filter((operator) => base.operators!.includes(operator));
     if (operators?.length === 0) return [];
-    return [{ ...base, ...field, ...(operators ? { operators } : {}) }];
+    const options = field.options?.map((option) => ({
+      ...base.options?.find((inherited) => inherited.value === option.value), ...option,
+    }));
+    return [{ ...base, ...field, ...(operators ? { operators } : {}), ...(options ? { options } : {}) }];
   });
 }

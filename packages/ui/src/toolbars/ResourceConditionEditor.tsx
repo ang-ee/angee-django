@@ -1,9 +1,10 @@
-import { ResourceQuery, useModelMetadata, type QueryFilter, type FilterValue } from "@angee/metadata";
+import { Filter, ResourceQuery, useModelMetadata, useSchemaFieldMetadata, type QueryFilter, type FilterValue } from "@angee/metadata";
 import { useUiT } from "../i18n";
 import { Button } from "../ui/button";
 import { buildFilterFields } from "../views/resource/utils/filter-options";
-import { customFilterChipsFor, addCustomFilter } from "../views/resource/utils/filter-mutations";
-import { FilterClauseEditor, type FilterClauseField } from "./FilterClauseEditor";
+import { addCustomFilter, removeCustomFilter } from "../views/resource/utils/filter-mutations";
+import { customFilterId } from "../views/resource/utils/labels";
+import { FilterClauseEditor, filterClauseDraft, type FilterClauseField } from "./FilterClauseEditor";
 
 export interface ResourceConditionEditorProps {
   resource: string;
@@ -17,6 +18,7 @@ export interface ResourceConditionEditorProps {
  */
 export function ResourceConditionEditor({ resource, value, onChange, readOnly = false }: ResourceConditionEditorProps) {
   const metadata = useModelMetadata(resource);
+  const schema = useSchemaFieldMetadata();
   const t = useUiT();
   if (!metadata?.resource) return <p role="status">{t("condition.selectResource")}</p>;
   const query = ResourceQuery.from(metadata);
@@ -28,7 +30,7 @@ export function ResourceConditionEditor({ resource, value, onChange, readOnly = 
         onClick={() => onChange({})}>{t("condition.clear")}</Button> : null}
     </div>;
   }
-  const fields = buildFilterFields([], [], metadata, query);
+  const fields = buildFilterFields([], [], metadata, schema, query);
   return <QueryConditionEditor value={filter} fields={fields} readOnly={readOnly || !onChange}
     onChange={(next) => onChange?.(query.toWhere(next))} />;
 }
@@ -69,10 +71,16 @@ export function QueryConditionEditor({ value, fields, onChange, readOnly = false
       </div>
       <QueryConditionEditor value={operand as QueryFilter} fields={fields} onChange={(next) => replace(name, next)} readOnly={readOnly} />
     </section> : <div key={name} className="grid gap-1">
-      {customFilterChipsFor({ [name]: operand }, [], fields, null, t).map((chip) => <div key={chip.id} className="flex items-center gap-2">
-        <span className="text-13">{chip.label}</span>
+      {Filter.from({ [name]: operand }).conjunctions().map((comparison) => <div
+        key={`${comparison.operator}:${JSON.stringify(comparison.value)}`} className="grid gap-1">
+        <FilterClauseEditor fields={fields} defaultValue={filterClauseDraft(name, comparison, fields.find((field) => field.id === name)?.scalar)}
+          readOnly={readOnly} submitLabel={t("pager.apply")}
+          onSubmit={(clause) => onChange(Filter.combine(
+            removeCustomFilter(value, customFilterId(name, comparison.operator)), addCustomFilter({}, clause),
+          ))} />
+        {!readOnly ? <Button type="button" size="sm" variant="ghost"
+          onClick={() => onChange(removeCustomFilter(value, customFilterId(name, comparison.operator)))}>{t("condition.removeRule")}</Button> : null}
       </div>)}
-      {!readOnly ? <Button type="button" size="sm" variant="ghost" onClick={() => replace(name)}>{t("condition.removeRule")}</Button> : null}
     </div>)}
     {!readOnly ? <>
       <FilterClauseEditor fields={fields} onSubmit={(clause) => append(addCustomFilter({}, clause))} />

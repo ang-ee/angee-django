@@ -10,7 +10,7 @@ import { SelectRoot, SelectTrigger, SelectValue, SelectIcon, SelectPortal, Selec
   SelectList, SelectItem, SelectItemText, SelectItemIndicator } from "../../../ui/select";
 import { PopoverRoot, PopoverTrigger, PopoverPortal, PopoverPositioner, PopoverContent } from "../../../ui/popover";
 import { Button } from "../../../ui/button";
-import { FilterClauseEditor, type FilterClauseDraft, type FilterClauseField } from "../../../toolbars/FilterClauseEditor";
+import { FilterClauseEditor, filterClauseDraft, type FilterClauseDraft, type FilterClauseField } from "../../../toolbars/FilterClauseEditor";
 import { labelText, parseCustomFilterId } from "../utils/labels";
 import { GroupStackPanel, groupLevelLabel } from "./GroupStackPanel";
 import { SearchBox } from "./SearchBox";
@@ -144,9 +144,7 @@ function ClauseEditor({ field, search, onApply }: { field: FilterClauseField; se
     try { comparisons = filter.conjunctions(); } catch (error) {
       if (!(error instanceof QueryParseError)) throw error;
     }
-    const comparison = comparisons[0];
-    return { fieldId: field.id, operator: comparison?.operator === "isNull" && comparison.value === false ? "isNotNull" : comparison?.operator ?? "exact",
-      value: comparison ? typeof comparison.value === "object" ? JSON.stringify(comparison.value) : String(comparison.value) : "" };
+  return filterClauseDraft(field.id, comparisons[0], field.scalar);
   });
   return <FilterClauseEditor fields={[field]} value={draft} onChange={setDraft} submitLabel={t("pager.apply")}
     onSubmit={(clause) => { search.setClause(field.field ?? field.id, clause); onApply(); }} />;

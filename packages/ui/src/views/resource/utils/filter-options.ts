@@ -1,12 +1,13 @@
-import type { ReactNode } from "react";
-import { filterFieldType as metadataFilterFieldType, supportsChoiceFacet as metadataSupportsChoiceFacet, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
+import { filterFieldType as metadataFilterFieldType, supportsChoiceFacet as metadataSupportsChoiceFacet, type ResourceQuery, type ModelMetadata, type Row, type SchemaFieldMetadata } from "@angee/metadata";
 import { queryForColumns } from "../resource-query";
 import { statusLabel } from "../../../lib/labels";
-import type { FilterClauseField, ResourceToolbarFilterOption } from "../../../toolbars";
+import type { FilterClauseChoice, FilterClauseField, ResourceToolbarFilterOption } from "../../../toolbars";
 import { DEFAULT_TEXT_FILTER_FIELD } from "../resource-view-model";
 import { readPath } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
 import { enumOptions, fieldLabel } from "../model-metadata-defaults";
+import { relationFilterFields } from "../../relation/relation-filter";
+import { mergeFilterFields } from "./filter-mutations";
 export function buildFilterOptions<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],
   rows: readonly TRow[],
@@ -24,7 +25,7 @@ export function buildFilterOptions<TRow extends Row>(
       id: `${field}:${option.value}`,
       label: option.label,
       chipLabel: option.label,
-      filter: { [field]: { exact: option.value } },
+      filter: { [field]: { exact: option.filterValue !== undefined ? option.filterValue : option.value } },
     }));
   });
 }
@@ -33,7 +34,7 @@ function selectionOptions<TRow extends Row>(
   column: ColumnDescriptor<TRow>,
   rows: readonly TRow[],
   field: FilterClauseField,
-): readonly { value: string; label: ReactNode }[] {
+): readonly FilterClauseChoice[] {
   if (field.options) return field.options;
   return statusValues(column, rows).map((value) => ({
     value,
@@ -45,6 +46,7 @@ export function buildFilterFields<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],
   rows: readonly TRow[],
   metadata: ModelMetadata | null,
+  schemaMetadata: SchemaFieldMetadata,
   suppliedQuery?: ResourceQuery,
 ): readonly FilterClauseField[] {
   const query = suppliedQuery ?? queryForColumns(columns, metadata);
@@ -59,22 +61,25 @@ export function buildFilterFields<TRow extends Row>(
       return;
     }
     const field = metadata?.fields[fieldName];
-    const filterType = capability.values.length ? "selection" : filterFieldType(fieldName, column, field ?? query.fields[fieldName]);
+    const choices = query.filterChoices(fieldName);
+    const filterType = choices.length ? "selection" : filterFieldType(fieldName, column, field ?? query.fields[fieldName]);
     const operators = [...capability.operators, ...(capability.operators.includes("isNull") ? ["isNotNull" as const] : [])];
     if (!filterType) return;
     seen.add(fieldName);
     if (filterType === "selection") {
       const enumLabels = new Map((field?.kind === "enum" ? enumOptions(field) : [])
         .map(({ value, label }) => [value, label]));
-      const options = capability.values.map(({ value, description }) => ({
-        value,
-        label: enumLabels.get(value) ?? description ?? statusLabel(value),
+      const options = choices.map(({ value, description }) => ({
+        value: String(value),
+        label: enumLabels.get(String(value)) ?? description ?? statusLabel(String(value)),
+        ...(typeof value === "string" ? {} : { filterValue: value }),
       }));
       fields.push({
         id: fieldName,
         field: fieldName,
         label: fieldLabel(fieldName, metadata, column?.header),
         type: "selection",
+        scalar: capability.scalar,
         operators,
         options: options.length > 0
           ? options
@@ -92,6 +97,7 @@ export function buildFilterFields<TRow extends Row>(
       field: fieldName,
       label: fieldLabel(fieldName, metadata, column?.header),
       type: filterType,
+      scalar: capability.scalar,
       operators,
     });
   };
@@ -101,7 +107,7 @@ export function buildFilterFields<TRow extends Row>(
   for (const fieldName of Object.keys(query.fields)) {
     addField(fieldName, undefined);
   }
-  return fields;
+  return mergeFilterFields(relationFilterFields(query, metadata, schemaMetadata), fields);
 }
 
 function filterFieldType<TRow extends Row>(
