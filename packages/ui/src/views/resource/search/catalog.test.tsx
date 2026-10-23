@@ -54,6 +54,20 @@ test("facet declarations override field labels and scalar enum inference remains
   expect(catalog().facets.find((item) => item.field === "status")?.options.map((item) => item.value)).toEqual(["open", "closed"]);
 });
 
+test("contributed facet labels retain IntegerChoices operands in the shared clause catalogue", () => {
+  const numericQuery = ResourceQuery.from(testDataResource("test.Record", { query: testResourceQuery({ fields: {
+    priority: testQueryField("priority", { kind: "enum", values: [{ value: "LOW", description: "Low priority" }], filter: {
+      field: "priority", scalar: "Int", values: [], operators: ["exact"], valueMap: [{ from: "LOW", to: 0 }],
+    } }),
+  } }) }));
+  const result = catalog({ query: numericQuery, columns: [], scalarFacets: [{
+    field: "priority", label: "Priority", source: "scalar", options: [{
+      id: "low", label: "Contributed low priority", value: "0", filter: { priority: { exact: 0 } },
+    }],
+  }] });
+  expect(result.fields[0]?.options).toEqual([{ value: "0", label: "Contributed low priority", filterValue: 0 }]);
+});
+
 test("relations require a declared facet; blank buckets retain their drill and stay out of typed values", () => {
   expect(catalog().facets.some((facet) => facet.field === "owner")).toBe(false);
   const owner: SearchFacet = { field: "owner", label: "Owner", source: "relation", options: [

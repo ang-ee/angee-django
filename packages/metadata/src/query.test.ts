@@ -290,9 +290,31 @@ describe("ResourceQuery", () => {
     expect(query.toWhere({ state: { exact: "in_review" } })).toEqual({
       state: { _eq: "in_review" },
     });
+    expect(query.filterChoices("state")).toEqual([{ value: "in_review" }]);
     expect(
       query.matches({ state: "IN_REVIEW" }, { state: { exact: "in_review" } }),
     ).toBe(true);
+  });
+  test("declared filter choices take precedence over mapped output enum symbols", () => {
+    const query = ResourceQuery.from(testDataResource("notes.Note", { query: testResourceQuery({ fields: {
+      state: testQueryField("state", { kind: "enum", values: [{ value: "OUTPUT_ONLY" }], filter: {
+        field: "state", scalar: "Enum", values: [{ value: "INPUT", description: "Input choice" }], operators: ["exact"],
+      } }),
+    } }) }));
+    expect(query.filterChoices("state")).toEqual([{ value: "INPUT", description: "Input choice" }]);
+    expect(query.filterChoices("missing")).toEqual([]);
+  });
+  test.each([
+    { scalar: "Int", symbol: "LOW", operand: 0 },
+    { scalar: "Boolean", symbol: "NO", operand: false },
+  ])("mapped enum choices retain typed $scalar input operands and their labels", ({ scalar, symbol, operand }) => {
+    const query = ResourceQuery.from(testDataResource("notes.Note", { query: testResourceQuery({ fields: {
+      priority: testQueryField("priority", { kind: "enum", values: [{ value: symbol, description: "Retained choice" }], filter: {
+        field: "priority", scalar, values: [], operators: ["exact"], valueMap: [{ from: symbol, to: operand }],
+      } }),
+    } }) }));
+    expect(query.filterChoices("priority")).toEqual([{ value: operand, description: "Retained choice" }]);
+    expect(query.toWhere({ priority: { exact: query.filterChoices("priority")[0]!.value } })).toEqual({ priority: { _eq: operand } });
   });
   test("decodes choice buckets and keeps blank, null and real values distinct", () => {
     const query = ResourceQuery.from(testDataResource("parties.Party", {

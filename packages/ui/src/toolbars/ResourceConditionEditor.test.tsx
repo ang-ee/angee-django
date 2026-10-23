@@ -35,8 +35,8 @@ test("nested existing conditions are visible and read-only conditions cannot be 
   fixture({ _or: [{ label: { _eq: "First" } }, { _not: { label: { _eq: "Second" } } }] }, true);
   expect(screen.getByText("Any of these conditions")).toBeTruthy();
   expect(screen.getByText("Not this condition")).toBeTruthy();
-  expect(screen.getByText(/First/)).toBeTruthy();
-  expect(screen.getByText(/Second/)).toBeTruthy();
+  expect(screen.getAllByLabelText("Filter value").map((input) => (input as HTMLInputElement).value)).toEqual(["First", "Second"]);
+  expect(screen.getAllByLabelText("Filter value").every((input) => (input as HTMLInputElement).readOnly)).toBe(true);
   expect(screen.queryByRole("button")).toBeNull();
 });
 
