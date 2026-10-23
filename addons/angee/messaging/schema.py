@@ -1217,10 +1217,13 @@ class MessageFeedRevalidation:
     @classmethod
     def from_scope(
         cls, queryset: MessageQuerySet, ids: list[strawberry.ID], *, search: str = "", all_copies: bool = False,
+        anchor: str = "",
     ) -> Self:
         """Revalidate the same readable domain scope using public message IDs."""
 
-        return cls(**queryset.feed_revalidate([str(value) for value in ids], search=search, all_copies=all_copies))
+        return cls(**queryset.feed_revalidate(
+            [str(value) for value in ids], search=search, all_copies=all_copies, anchor=anchor,
+        ))
 
 
 @strawberry.type
@@ -1280,6 +1283,7 @@ class MessagingQuery:
         ids: list[strawberry.ID],
         search: str = "",
         all_copies: bool = False,
+        anchor: str = "",
     ) -> MessageFeedRevalidation:
         """Revalidate loaded inbox messages through the current readable thread."""
 
@@ -1290,7 +1294,8 @@ class MessagingQuery:
             not_found="thread not found",
         )
         return MessageFeedRevalidation.from_scope(
-            Message.objects.inbox().untrashed().for_thread(thread), ids, search=search, all_copies=all_copies,
+            Message.objects.inbox().untrashed().for_thread(thread), ids,
+            search=search, all_copies=all_copies, anchor=anchor,
         )
 
     @strawberry.field(name="message_source_copies", graphql_type=list[MessageType])

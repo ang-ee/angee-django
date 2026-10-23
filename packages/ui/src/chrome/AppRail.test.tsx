@@ -59,6 +59,30 @@ const menuItems: readonly ChromeMenuItem[] = [
 ];
 
 describe("AppRail intermediate navigation", () => {
+  test("a selected app can start collapsed without writing preferences, and still expand on request", async () => {
+    media.large = true;
+    const { preferences } = renderRail({ confined: true, railExpanded: false });
+    const toggle = await screen.findByRole("button", { name: "Expand app navigation" });
+    expect(preferences()["chrome.rail"]).toBeUndefined();
+    fireEvent.click(toggle);
+    expect(await screen.findAllByRole("button", { name: "Collapse app navigation" })).toHaveLength(2);
+    expect(railPreferences(preferences()).expanded).toBe(true);
+  });
+
+  test.each([false, true])("a saved expansion choice %s overrides the selected app's default", async (expanded) => {
+    media.large = true;
+    renderRail({ railExpanded: !expanded, preferences: { "chrome.rail": { expanded } } });
+    expect(await screen.findAllByRole("button", { name: expanded ? "Collapse app navigation" : "Expand app navigation" }))
+      .toHaveLength(expanded ? 2 : 1);
+  });
+
+  test("a collapsed app default does not collapse its temporary navigation drawer", async () => {
+    media.large = false;
+    renderRail({ railExpanded: false, presentation: "drawer" });
+    expect((await screen.findByRole("navigation", { name: "Primary navigation" })).closest("aside")?.style.width).toBe("100%");
+    expect(screen.getByRole("link", { name: "Desk" })).toBeTruthy();
+  });
+
   test.each(["rail", "drawer"] as const)("Settings Back in the %s remembers the last app's path, search and hash", async (presentation) => {
     media.large = presentation === "rail";
     const tree = MenuTree.from(menuItems);
@@ -521,11 +545,12 @@ function longPressRailLink(link: HTMLElement): void {
   fireEvent.pointerUp(link, { ...pointer, clientY: 10 });
 }
 
-function renderRail({ confined = false, preferences: initialPreferences = {}, menuItems: items = menuItems, presentation }: {
+function renderRail({ confined = false, preferences: initialPreferences = {}, menuItems: items = menuItems, presentation, railExpanded }: {
   confined?: boolean;
   preferences?: Record<string, unknown>;
   menuItems?: readonly ChromeMenuItem[];
   presentation?: AppRailProps["presentation"];
+  railExpanded?: boolean;
 } = {}) {
   const saved = { current: {} as Record<string, unknown> };
   function Host() {
@@ -536,6 +561,7 @@ function renderRail({ confined = false, preferences: initialPreferences = {}, me
     saved.current = preferences;
     return <AppRuntimeProvider runtime={{
       ...(confined ? { rail: ["projects"], brand: { name: "Projects", mark: "projects" } } : {}),
+      ...(railExpanded !== undefined ? { railExpanded } : {}),
       userPreferences: { available: true, preferences, patchPreferences: async (patch) => setPreferences(patch) },
     }}><AppRail menuItems={confined ? MenuTree.from(items).confineTo(["projects"]).roots : items} presentation={presentation} /></AppRuntimeProvider>;
   }

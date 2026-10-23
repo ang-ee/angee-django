@@ -26,7 +26,7 @@ export function useThreadMessageFeed(threadId: string, anchor = "", allCopies = 
     },
     revalidate: {
       document: ThreadTranscriptRevalidateDocument,
-      variables: (ids) => ({ threadId, ids, allCopies }),
+      variables: (ids) => ({ threadId, ids, allCopies, anchor }),
       select: (data) => messageFeedRevalidation(data.thread_message_feed_revalidate),
     },
   }).query;

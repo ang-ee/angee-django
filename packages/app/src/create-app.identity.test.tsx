@@ -16,12 +16,13 @@ afterEach(cleanup);
 function IdentityProbe() {
   const brand = useRuntimeBrand();
   const theme = useOptionalAppearance()?.effectiveThemeId;
-  const { i18n } = useAppRuntime();
+  const { i18n, railExpanded } = useAppRuntime();
   const uiCopy = i18n?.getFixedT(null, "ui");
   const addonCopy = i18n?.getFixedT(null, "notes");
   return <>
     <output aria-label="Brand">{brand ? `${brand.name}/${brand.mark}` : "unbranded"}</output>
     <output aria-label="Theme">{theme ?? "none"}</output>
+    <output aria-label="Rail default">{railExpanded === undefined ? "unset" : String(railExpanded)}</output>
     <output aria-label="Base copy">{String(uiCopy?.("modal.copy") ?? "")}</output>
     <output aria-label="Addon copy">{String(addonCopy?.("title") ?? "")}</output>
   </>;
@@ -43,7 +44,7 @@ const deployment: RuntimeBrand = { name: "Deployment", mark: "notebook-mark" };
 /** The notes page under an `identity` menu root, with the deployment's shell when one is given. */
 function identityApp({ search = "", root = {}, shell, icons = { "notebook-mark": () => null }, appearance }: {
   search?: string;
-  root?: Pick<BaseMenuItem, "brand" | "theme" | "home">;
+  root?: Pick<BaseMenuItem, "brand" | "theme" | "home" | "railExpanded">;
   shell?: ShellSettings;
   icons?: Readonly<Record<string, unknown>>;
   appearance?: CreateAppInput["appearance"];
@@ -79,6 +80,16 @@ async function mounted(app: ReturnType<typeof createApp>, run: () => Promise<voi
 }
 
 describe("the selected app's identity", () => {
+  test.each([
+    { search: "", expected: "unset" },
+    { search: "?app=identity", expected: "false" },
+  ])("publishes the selected app's rail default for '$search'", async ({ search, expected }) => {
+    history.replaceState(null, "", "/notes");
+    await mounted(identityApp({ search, root: { railExpanded: false } }), async () => {
+      expect((await screen.findByLabelText("Rail default")).textContent).toBe(expected);
+    });
+  });
+
   test.each([
     { case: "no brand with nothing selected", search: "", brand: "unbranded" },
     { case: "the deployment's brand with nothing selected", search: "", shell: { brand: deployment }, brand: "Deployment/notebook-mark" },

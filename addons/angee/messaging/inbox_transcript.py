@@ -29,15 +29,16 @@ class InboxTranscript:
         self.thread = inbox.threads.from_public_id(thread)
         if self.thread is None:
             raise ValueError("Conversation unavailable.")
-        self.messages = inbox.collection("messaging", "Message").filter(thread=self.thread).for_feed()
-        self.matching = matching.filter(thread=self.thread)
+        self.messages = inbox.collection("messaging", "Message").for_thread(self.thread).untrashed()
+        self.matching = matching.for_thread(self.thread)
 
     def matches(self, *, visible: list[str], at: str = "") -> InboxTranscriptMatches:
-        """Annotate one loaded window and navigate by the feed's canonical chronological order."""
+        """Annotate a window and navigate the feed, including an explicitly addressed copy."""
 
         if len(visible) > 1000:
             raise ValueError("A transcript match window cannot exceed 1000 messages.")
-        anchor = self.messages.from_public_id(at) if at else None
+        messages = self.messages.for_feed(anchor=f"message:{at}" if at else "")
+        anchor = messages.from_public_id(at) if at else None
         if at and anchor is None:
             raise ValueError("Message unavailable in this conversation.")
         before, after = self.matching, self.matching
@@ -49,7 +50,7 @@ class InboxTranscript:
         return InboxTranscriptMatches(
             thread=self.thread,
             count=self.matching.count(),
-            total=self.messages.count(),
+            total=messages.count(),
             visible=[message.public_id for message in self.matching.filter(sqid__in=visible)],
             previous=previous.public_id if previous else None,
             next=following.public_id if following else None,

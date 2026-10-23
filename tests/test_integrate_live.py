@@ -287,6 +287,67 @@ def test_live_session_worker_shutdown_exits_within_one_wake(live_tables: Any, mo
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "terminal",
+    ["disconnected", "logged_out", None, "error_after_pairing", "error_before_pairing", "error_before_logout"],
+)
+def test_live_session_drains_events_after_vendor_thread_exits(live_tables: Any, terminal: str | None) -> None:
+    """Thread completion preserves queued work and the vendor's terminal outcome."""
+
+    from angee.integrate.live import SessionLoggedOut
+    from angee.integrate.sync import BridgeProgressReporter
+
+    handled: list[int] = []
+    vendor_error = ConnectionError("Vendor receive failed.")
+
+    class FinishedSession(FakeLiveSession):
+        def _connect(self) -> None:
+            self.vendor_thread = threading.current_thread()
+            self.events.put(("item", 1))
+            self.events.put(("item", 2))
+            if terminal == "error_after_pairing":
+                self.events.put(("paired", "account-1"))
+                self.events.put(("error", vendor_error))
+                self.events.put(("disconnected", None))
+            elif terminal == "error_before_pairing":
+                self.events.put(("error", vendor_error))
+                self.events.put(("paired", "account-1"))
+                self.events.put(("disconnected", None))
+            elif terminal == "error_before_logout":
+                self.events.put(("error", vendor_error))
+                self.events.put(("logged_out", None))
+            elif terminal is not None:
+                self.events.put((terminal, None))
+
+        def _handle(self, kind: str, payload: Any) -> bool:
+            # Guarantee the real producer has exited before the first drain returns.
+            self.vendor_thread.join(timeout=1)
+            assert not self.vendor_thread.is_alive()
+            handled.append(payload)
+            return self._still_wanted()
+
+    channel = _live_channel()
+    session = FinishedSession(channel, reporter=BridgeProgressReporter(channel), stop_event=threading.Event())
+    with system_context(reason="test completed vendor drain"), bridge_advisory_lock(channel) as acquired:
+        assert acquired
+        if terminal in {"logged_out", "error_before_logout"}:
+            with pytest.raises(SessionLoggedOut):
+                session.run()
+            assert session.pairing is PairingState.LOGGED_OUT
+        elif terminal is None:
+            with pytest.raises(ConnectionError, match="connection ended unexpectedly"):
+                session.run()
+        elif terminal in {"error_after_pairing", "error_before_pairing"}:
+            assert session.run() is PairingState.PAIRED
+        else:
+            assert session.run() is PairingState.STARTING
+    expected_error = vendor_error if terminal in {"error_after_pairing", "error_before_logout"} else None
+    assert session.outcome_error is expected_error
+    assert handled == [1, 2]
+    assert session.store_released
+
+
+@pytest.mark.django_db(transaction=True)
 def test_live_session_hands_off_submitted_password_and_consumes_it_once(
     live_tables: Any,
     monkeypatch: pytest.MonkeyPatch,

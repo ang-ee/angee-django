@@ -103,6 +103,21 @@ test("real Refine transport sends fixed cuts and revalidation documents through 
   unmount(); expect(feed.unsubscribe).toHaveBeenCalledWith("messages");
 });
 
+test("an exact message anchor accompanies continuation and retained ID revalidation", async () => {
+  const feed = fixture();
+  const anchor = "message:retained-source-copy";
+  const { result } = renderHook(() => useThreadMessageFeed("thread-a", anchor), { wrapper: feed.wrapper });
+  await waitFor(() => expect(messageFeedRows(result.current.data)).toHaveLength(2));
+  await act(async () => { await result.current.fetchNextPage({ cancelRefetch: false }); });
+  feed.refresh();
+  await act(async () => { await result.current.refetch(); });
+  const revalidations = feed.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === ThreadTranscriptRevalidateDocument);
+  expect(revalidations).toHaveLength(2);
+  for (const [request] of feed.custom.mock.calls) {
+    expect(request.meta?.gqlVariables).toMatchObject({ threadId: "thread-a", anchor, allCopies: false });
+  }
+});
+
 test.each(["parties.Handle", "parties.Party", "messaging.Thread", "storage.File", "provenance.Changeset"])("actual %s change events revalidate the transcript projection", async (model) => {
   const feed = fixture(true);
   const { result } = renderHook(() => useThreadMessageFeed("thread-a"), { wrapper: feed.wrapper });

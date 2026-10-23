@@ -108,6 +108,8 @@ export interface AppRuntime {
   brand: RuntimeBrand | null;
   /** The selected app's rail roots, null showing every root; this shapes navigation, never server access. */
   rail: readonly string[] | null;
+  /** The selected app's desktop rail default; a saved expansion preference takes precedence. */
+  railExpanded?: boolean;
   widgets: WidgetMap;
   statusTones: StatusToneMap;
   i18n: RuntimeI18n | null;

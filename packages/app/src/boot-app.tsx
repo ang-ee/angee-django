@@ -13,7 +13,7 @@ import { type ErrorReportingInput, startErrorReporting } from "./error-reporting
 import { assertBrand } from "./menus";
 
 /** A top-level menu root as selection reads it; its label and icon stand in for a brand it does not declare. */
-export type SelectableRoot = Pick<ChromeMenuNode, "id" | "displayLabel" | "iconName" | "home" | "brand" | "theme">;
+export type SelectableRoot = Pick<ChromeMenuNode, "id" | "displayLabel" | "iconName" | "home" | "brand" | "theme" | "railExpanded">;
 
 /** What selects the app: the page's `?app=` and hostname, `ANGEE_UI.shell` and the composed menu roots. */
 export interface SelectAppInput {
@@ -83,6 +83,7 @@ export function appSelection(
   const inherited = `menu root "${first.id}"`;
   const theme = app?.theme ?? first.theme ?? shell.theme;
   const home = app?.home ?? first.home;
+  const railExpanded = app?.railExpanded ?? first.railExpanded;
   const sources: Partial<Record<RuntimeSelectionField, string>> = {
     app: by,
     rail: declared,
@@ -90,12 +91,14 @@ export function appSelection(
   };
   if (theme !== undefined) sources.theme = app?.theme !== undefined ? declared : first.theme !== undefined ? inherited : "ANGEE_UI.shell.theme";
   if (home !== undefined) sources.home = app?.home !== undefined ? declared : inherited;
+  if (railExpanded !== undefined) sources.railExpanded = app?.railExpanded !== undefined ? declared : inherited;
   return {
     app: key,
     rail,
     brand: app?.brand ?? first.brand ?? { name: first.displayLabel, mark: first.iconName },
     ...(theme !== undefined ? { theme } : {}),
     ...(home !== undefined ? { home } : {}),
+    ...(railExpanded !== undefined ? { railExpanded } : {}),
     sources,
     diagnostics: [],
   };
@@ -118,12 +121,15 @@ export function assertShellSettings(shell: unknown): asserts shell is ShellSetti
   const facts = (value: Record<string, unknown>, where: string): void => {
     if (value.brand !== undefined) assertBrand(where, value.brand);
     if (value.theme !== undefined) text(value.theme, `${where}.theme`);
+    if (value.railExpanded !== undefined && typeof value.railExpanded !== "boolean") {
+      throw new Error(`${where}.railExpanded must be true or false.`);
+    }
   };
   const settings = mapping(shell, "ANGEE_UI.shell", ["brand", "theme", "apps", "hosts"]);
   facts(settings, "ANGEE_UI.shell");
   for (const [name, value] of Object.entries(mapping(settings.apps ?? {}, "ANGEE_UI.shell.apps"))) {
     const where = `ANGEE_UI.shell.apps.${name}`;
-    const app = mapping(value, where, ["rail", "brand", "theme", "home"]);
+    const app = mapping(value, where, ["rail", "brand", "theme", "home", "railExpanded"]);
     const rail = app.rail;
     if (!Array.isArray(rail) || !rail.length || !rail.every((id) => typeof id === "string" && id)) {
       throw new Error(`${where}.rail must be a non-empty list of menu root ids.`);

@@ -117,7 +117,9 @@ class LiveSession:
             while True:
                 if not self._drain_once():
                     break
-                if not connection.is_alive():
+                # A finished producer can leave payloads and its terminal event queued.
+                # Check completion first: only then is an empty queue final.
+                if not connection.is_alive() and self.events.empty():
                     # Stop may arrive after the handled event's last desire check.
                     if self.stop_event.is_set():
                         self._still_wanted()
@@ -205,6 +207,8 @@ class LiveSession:
         elif kind == "paired":
             keep_running = self._mark_paired(payload)
             return self._clear_delivered_password() and keep_running
+        elif kind == "error":
+            self.outcome_error = payload
         elif kind == "logged_out":
             self.pairing = PairingState.LOGGED_OUT
             self._report(PairingState.LOGGED_OUT)
@@ -488,7 +492,11 @@ class LiveSession:
         raise NotImplementedError
 
     def _connect(self) -> None:
-        """Run the blocking vendor connection."""
+        """Run the blocking vendor connection.
+
+        Queue producer failures as ``("error", exception)`` before the terminal
+        ``disconnected`` event so pairing and failures retain their event order.
+        """
 
         raise NotImplementedError
 

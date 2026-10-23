@@ -8,7 +8,8 @@ folds the newer copy into the older through ``merged_into`` and nothing else
 moves, so reply transport, delivery, cursors and purge keep addressing the
 physical row. Readers collapse copies through
 :meth:`~angee.models.MergeableQuerySet.canonical`, which still shows a
-copy whose survivor the reader cannot see.
+copy whose survivor the reader cannot see. Message feeds additionally retain an
+explicitly addressed occurrence under their current read and search scope.
 """
 
 from __future__ import annotations
