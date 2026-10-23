@@ -79,7 +79,7 @@ async function openDialog() {
 
 async function preview() {
   fireEvent.click(screen.getByRole("button", { name: "Preview messages" }));
-  await screen.findByText(/Mailbox snapshot/);
+  await screen.findByText(/matching messages/);
   await waitFor(() => expect(screen.getByRole("button", { name: "Preview messages" }).hasAttribute("disabled")).toBe(false));
 }
 
@@ -106,7 +106,7 @@ describe("ImportImapSampleAction snapshot selection", () => {
     expect(previewCalls()[0]?.[0].meta.gqlVariables).toEqual({
       id: "int_mail", mailbox: "INBOX", since: null, before: null, allDates: true, limit: 20,
     });
-    expect(screen.getByText("Mailbox snapshot 10:100. Loaded 2 of 3 matching messages (initial count, less confirmed missing messages).")).toBeTruthy();
+    expect(screen.getByText("Loaded 2 of 3 matching messages (initial count, less confirmed missing messages).")).toBeTruthy();
   });
 
   test("loads older rows without dropping selection, then resets pages and selection on a fresh preview", async () => {
@@ -145,7 +145,7 @@ describe("ImportImapSampleAction snapshot selection", () => {
     mocks.previewPages = [page([], null, 0)];
     await openDialog();
     await preview();
-    expect(screen.getByText("Mailbox snapshot 10:100. Loaded 0 of 0 matching messages (initial count, less confirmed missing messages).")).toBeTruthy();
+    expect(screen.getByText("Loaded 0 of 0 matching messages (initial count, less confirmed missing messages).")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Load older messages" })).toBeNull();
   });
 

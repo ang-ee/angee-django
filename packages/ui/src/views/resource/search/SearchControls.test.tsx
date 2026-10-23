@@ -54,13 +54,13 @@ const metadata = schemaFieldMetadataFromDataResources([testDataResource("notes.N
 const model = metadata.labels["notes.Note"]!;
 
 function fixture(searchDeclaration: ListSearchDeclaration = declaration, options: {
-  containers?: ComposedContainers; route?: string; pinned?: boolean; renderItem?: boolean; textFilterField?: string | null; wrap?: boolean;
+  containers?: ComposedContainers; route?: string; pinned?: boolean; textFilterField?: string | null; wrap?: boolean;
 } = {}) {
   let view!: ResourceViewContextValue;
   function Content() {
     view = useResourceView();
     const catalog = useSearchCatalog({ query, modelMetadata: model, columns, rows: [], resourceView: view,
-      search: searchDeclaration, serverGrouping: false, renderItem: options.renderItem, textFilterField: options.textFilterField,
+      search: searchDeclaration, serverGrouping: false, textFilterField: options.textFilterField,
       filterOptions: filters, scalarFacets: [blankStatus] });
     const search = useResourceSearch({ resourceView: view, catalog });
     return <ResourceToolbar search={search} searchDeclaration={searchDeclaration} modelMetadata={model}
@@ -222,7 +222,6 @@ test("unknown targets, nonfilterable fields, text without iContains and duplicat
   expect(() => fixture({ shortcuts: [{ kind: "clause", field: "missing" }] })).toThrow(/page.clause.missing.*not filterable/);
   expect(() => fixture({ shortcuts: [{ kind: "text", field: "duration" }] })).toThrow(/page.text.duration.*iContains/);
   expect(() => fixture({ shortcuts: [{ kind: "facet", field: "owner" }] })).toThrow(/page.facet.owner.*facet catalog/);
-  expect(() => fixture({ shortcuts: [{ kind: "group" }] }, { renderItem: true })).toThrow(/page.group.*renderItem/);
   expect(() => fixture({ shortcuts: [{ kind: "text", field: "title" }, { kind: "text", field: "title" }] })).toThrow(/Duplicate.*page.text.title/);
   expect(() => fixture({}, { containers: containersFromChildren(RESOURCE_CONTAINERS, { "resource#search": {
     "extension.missing": { content: { kind: "toggle", id: "missing" } },
@@ -274,7 +273,7 @@ test("the search area flexes only for the full box: shortcuts take a row, and a 
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 293, 80));
   for (const searchDeclaration of [{}, declaration]) {
     fixture(searchDeclaration, { wrap: true });
-    expect(area().closest("section")?.className).toContain("resource-toolbar-wrap");
+    expect(area().closest(".resource-toolbar")?.className).toContain("resource-toolbar-wrap");
     expect(area().getAttribute("data-search-layout")).toBe("trigger");
     expect(host().className).toContain("shrink-0");
     cleanup();
@@ -332,7 +331,7 @@ test("standalone shortcut controls drop unavailable targets once in production a
   expect(error).toHaveBeenCalledExactlyOnceWith('Search shortcut "page.toggle.setup": unknown toggle id "setup".');
 });
 
-test("malformed shortcuts, duplicate ids, box false and renderItem grouping still fail fast in production", () => {
+test("malformed shortcuts, duplicate ids, box false still fail fast in production", () => {
   vi.mocked(developmentMode).mockReturnValue(false);
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
   for (const content of [null, { kind: "unknown" }, { kind: "toggle" }, { kind: "text" },
@@ -345,7 +344,5 @@ test("malformed shortcuts, duplicate ids, box false and renderItem grouping stil
   expect(() => pageSearchShortcuts({ shortcuts: [{ kind: "toggle", id: "setup" }, { kind: "toggle", id: "setup" }] })).toThrow(/Duplicate.*page.toggle.setup/);
   // @ts-expect-error The box cannot be disabled by a declaration.
   expect(() => pageSearchShortcuts({ box: false })).toThrow(/box must be true or "collapsed"/);
-  expect(() => validateSearchShortcutCatalog(pageSearchShortcuts({ shortcuts: [{ kind: "group" }] }),
-    searchFixture().catalog, { renderItem: true })).toThrow(/page.group.*renderItem/);
   expect(error).not.toHaveBeenCalled();
 });

@@ -16,54 +16,13 @@ dependencies = [
   # httpcore2's API. httpx2 is bounded to the verified range for the same reason.
   "httpcore2>=2.10,<3",
   "httpx2>=2.10,<3",
-  "jsonpatch>=1.34",
   "qrcode[pil]>=8.2",
 ]
 
 [[migrations]]
-name = "record_link_target_names"
+name = "external_account_owner"
 app_label = "integrate"
-module = "runtime_migrations.record_link_target_names"
-
-[[migrations]]
-name = "integration_concrete_type"
-app_label = "integrate"
-module = "runtime_migrations.integration_concrete_type"
-
-[[migrations]]
-name = "record_link_history_state"
-app_label = "integrate"
-module = "runtime_migrations.record_link_history_state"
-
-[[migrations]]
-name = "record_sync_state"
-app_label = "integrate"
-module = "runtime_migrations.record_sync_state"
-
-[[migrations]]
-name = "fold_record_sync_history"
-app_label = "integrate"
-module = "runtime_migrations.fold_record_sync_history"
-
-[[migrations]]
-name = "retire_record_sync_stores"
-app_label = "integrate"
-module = "runtime_migrations.retire_record_sync_stores"
-
-[[migrations]]
-name = "retire_record_sync_hash_bases"
-app_label = "integrate"
-module = "runtime_migrations.retire_record_sync_hash_bases"
-
-[[migrations]]
-name = "record_link_failure_status"
-app_label = "integrate"
-module = "runtime_migrations.record_link_failure_status"
-
-[[migrations]]
-name = "sync_stream_authoritative"
-app_label = "integrate"
-module = "runtime_migrations.sync_stream_authoritative"
+module = "runtime_migrations.external_account_owner"
 
 [resources]
 master = [

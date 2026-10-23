@@ -1,243 +1,115 @@
-import { useMemo } from "react";
-import { useAuthoredQuery } from "@angee/refine";
-import { MessageSummary } from "@angee/messaging";
+import { useMemo, useState } from "react";
 import { senderDisplayName } from "@angee/parties";
+import { MessagePaneRow, useMessageChannelLabel } from "@angee/messaging";
 import {
-  Button,
-  Glyph,
-  ListView,
-  PageHeader,
-  RelativeTime,
-  Select,
-  Tag,
-  useResourceView,
+  AbsoluteTime, Button, Dialog, Glyph, ListView, PaneRow, PreviewPane, RecordHeader, Select,
+  optionLabel, useEnumOptions, useResourceView,
 } from "@angee/ui";
+import type { GroupLabelContext } from "@angee/ui/views/resource-view-types";
 import { RESULT_LENSES, resultLensForGroup } from "./contract";
-import { InboxOrder, InboxClearFilters, useResultControls } from "./Controls";
+import { useResultControls } from "./Controls";
 import { resultSource } from "./sources";
 import type { InboxResultRow } from "./documents";
-import { INBOX_MODELS, type InboxNavigation } from "./state";
-import { InboxSelection } from "./documents";
+import type { InboxNavigation } from "./state";
+import { useInboxBreadcrumbs } from "./breadcrumbs";
 import { useNexusT } from "../i18n";
 
-export function InboxResultsPane({
-  navigation,
-  timezone,
-}: {
-  navigation: InboxNavigation;
-  timezone: string;
-}) {
+/** A lens changes the row unit; the standard resource toolbar still owns the query. */
+export function InboxResultsPane({ navigation, timezone }: { navigation: InboxNavigation; timezone: string }) {
   const t = useNexusT();
   const view = useResourceView();
-  const selection = useAuthoredQuery(
-    InboxSelection,
-    { sender: navigation.sender, circle: navigation.circle },
-    {
-      models: INBOX_MODELS,
-      enabled: Boolean(navigation.sender || navigation.circle),
-    },
-  );
+  const selected = Boolean(navigation.sender || navigation.circle);
+  const selectionLabel = useInboxBreadcrumbs(navigation);
   const group = view.state.groupStack[0];
   const lens = resultLensForGroup(navigation.lens, group);
   const groupField = group?.field ?? "";
   const controls = useResultControls(lens);
-  const source = useMemo(
-    () => resultSource({ navigation, timezone, lens, groupField, t }),
-    [navigation, timezone, lens, groupField, t],
-  );
-  const columns = useMemo(
-    () => [
-      {
-        field: "id",
-        header: t("inbox.results"),
-        headerVisuallyHidden: true,
-        sortable: false,
-        interactive: true,
-        render: (row: InboxResultRow) => (
-          <ResultRow row={row} navigation={navigation} />
-        ),
-      },
-    ],
-    [navigation, t],
-  );
+  const source = useMemo(() => resultSource({ navigation, timezone, lens, groupField, t }), [navigation, timezone, lens, groupField, t]);
+  const columns = useMemo(() => [{ field: "latest", header: t("inbox.latest") }], [t]);
   return (
-    <section
-      aria-label={t("inbox.results")}
-      className="flex h-full min-h-0 flex-col"
-    >
-      <PageHeader
-        density="compact"
-        title={t("inbox.title")}
-        description={timezone}
-        actions={
-          navigation.sender || navigation.circle ? (
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => navigation.select()}
-            >
-              {selection.data?.inbox_selection?.label ??
-                selection.error?.message ??
-                t("inbox.loading")}
-              <Glyph name="x" />
-            </Button>
-          ) : null
-        }
-      />
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <ListView
-          presentation="workspace"
-          tableLayout="fixed"
-          headerVisibility="visually-hidden"
-          selectable={false}
-          resource="nexus.InboxResults"
-          source={source}
-          columns={columns}
-          availableViews={["list"]}
-          textFilterField="text"
-          maxGroupDepth={1}
-          defaultExpandedGroups="none"
-          {...controls}
-          toolbarActions={
-            <>
-              <Select
-                size="sm"
-                aria-label={t("inbox.resultLens")}
-                className="w-36"
-                value={lens}
-                options={RESULT_LENSES.map((value) => ({
-                  value,
-                  label: t(`inbox.${value}`),
-                }))}
-                onValueChange={(value) => {
-                  const selected = RESULT_LENSES.find((lens) => lens === value);
-                  if (!selected) return;
-                  navigation.changeResult(selected, view.state);
-                }}
-              />
-              <InboxOrder />
-              <InboxClearFilters />
-            </>
-          }
-          onRowClick={(row) => navigation.read(row.message.id, row.part?.id)}
-          emptyContent={{
-            title: t("inbox.noResults"),
-            description: t("inbox.noResultsHint"),
-          }}
-          renderGroupLabel={
-            groupField === "by_conversation"
-              ? ({ label, bucket }) => {
-                  const target = bucket.key?.by_conversation;
-                  return typeof target === "string" ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="min-w-0 justify-start px-0"
-                      onClick={() =>
-                        target.startsWith("thread:")
-                          ? navigation.conversation(target.slice(7))
-                          : navigation.read(target.slice(8))
-                      }
-                    >
-                      <Glyph name="comments" />
-                      <span className="truncate">
-                        {label || t("inbox.conversation")}
-                      </span>
-                      <Glyph name="chevron-right" />
-                    </Button>
-                  ) : (
-                    label
-                  );
-                }
-              : undefined
-          }
-        />
-      </div>
+    <section className="flex h-full min-h-0 min-w-0 flex-col" aria-label={t("inbox.results")}>
+      <RecordHeader density="compact" title={selected
+        ? selectionLabel
+        : t("inbox.anyKind")}
+        meta={selected ? t("inbox.selectionHint") : t("inbox.coverageHint", { timezone })}
+        actions={selected ? <Button size="iconSm" variant="ghost" aria-label={t("inbox.clearSelection")}
+          title={t("inbox.clearSelection")} onClick={() => navigation.select()}><Glyph name="x" /></Button> : undefined} />
+      <ListView presentation="workspace" selectable={false} resource="nexus.InboxResults" source={source}
+        columns={columns} availableViews={["list"]} textFilterField="text" maxGroupDepth={1}
+        defaultExpandedGroups="all" {...controls} search={{ box: true }}
+        toolbarActions={<>
+          <Select size="sm" aria-label={t("inbox.resultLens")} className="w-36" value={lens}
+            options={RESULT_LENSES.map((value) => ({ value, label: t("inbox." + value) }))}
+            onValueChange={(value) => {
+              const next = RESULT_LENSES.find((item) => item === value);
+              if (next) navigation.changeResult(next, view.state);
+            }} />
+          <Select size="sm" aria-label={t("inbox.order")} className="w-32"
+            value={view.state.sorting?.[0]?.desc === false ? "oldest" : "latest"}
+            options={[{ value: "latest", label: t("inbox.recent") }, { value: "oldest", label: t("inbox.oldest") }]}
+            onValueChange={(value) => view.setSorting([{ id: "latest", desc: value !== "oldest" }])} />
+        </>}
+        renderPaneRow={(row) => <ResultRow row={row} navigation={navigation} inConversationGroup={groupField === "by_conversation"} />}
+        emptyContent={{ title: t("inbox.noResults"), description: t("inbox.noResultsHint") }}
+        renderGroupLabel={groupField === "by_conversation" ? (context) =>
+          <ConversationLabel {...context} timezone={timezone} navigation={navigation} /> : undefined} />
     </section>
   );
 }
 
-function ResultRow({
-  row,
-  navigation,
-}: {
-  row: InboxResultRow;
-  navigation: InboxNavigation;
-}) {
+function ConversationLabel({ bucket, label, timezone, navigation }: GroupLabelContext & { timezone: string; navigation: InboxNavigation }) {
   const t = useNexusT();
-  if (!row.part)
-    return (
-      <div>
-        <MessageSummary message={row.message} />
-        {row.message.thread ? (
-          <div onClick={(event) => event.stopPropagation()}>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() =>
-                navigation.conversation(row.message.thread!.id, row.message.id)
-              }
-            >
-              {t("inbox.openConversation")}
-              <Glyph name="chevron-right" />
-            </Button>
-          </div>
-        ) : (
-          <Tag>{t("inbox.standalone")}</Tag>
-        )}
-      </div>
-    );
-  return (
-    <div className="space-y-2 whitespace-normal py-3">
-      <div
-        className="flex items-center gap-2"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <Glyph name={row.fragment ? "file" : "files"} />
-        {row.file ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="min-w-0 justify-start px-0"
-            onClick={() => navigation.connect(row.id, row.message.id)}
-          >
-            <span className="truncate">
-              {row.part.name || row.file.filename}
-            </span>
-          </Button>
-        ) : (
-          <span className="font-medium">
-            {row.fragment
-              ? t("inbox.sharedText")
-              : row.part.name || t("inbox.file")}
-          </span>
-        )}
-        <Tag>{row.part.role}</Tag>
-        {!row.file && !row.fragment ? (
-          <Tag tone="warning">{t("inbox.fileUnavailable")}</Tag>
-        ) : null}
-        {row.file || row.fragment ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="ml-auto"
-            onClick={() => navigation.connect(row.id, row.message.id)}
-          >
-            <Glyph name="link" />
-            {t("inbox.matchingUses", { count: row.count })}
-          </Button>
-        ) : null}
-      </div>
-      {row.fragment ? (
-        <p className="line-clamp-4 whitespace-pre-wrap text-13 text-fg-muted">
-          {row.fragment.text}
-        </p>
-      ) : null}
-      <div className="text-2xs text-fg-muted">
-        {t("inbox.sourceUse")}: {senderDisplayName(row.message.sender)} ·{" "}
-        {row.message.channel?.display_name || row.message.platform} ·{" "}
-        <RelativeTime value={row.latest} />
-      </div>
-    </div>
-  );
+  const platforms = useEnumOptions("messaging.Message", "platform", { casing: "upper" });
+  const target = bucket.key?.by_conversation;
+  if (typeof target !== "string") return label;
+  const platform = bucket.key?.platform;
+  const account = bucket.key?.account;
+  const latest = bucket.max?.latest;
+  return <PaneRow icon="channel" title={label || t("inbox.conversation")}
+    sub={[typeof platform === "string" && platform ? optionLabel(platforms, platform) : undefined,
+      typeof account === "string" ? account : undefined].filter(Boolean).join(" · ")}
+    meta={typeof latest === "string" ? <AbsoluteTime value={latest} timeZone={timezone} display="date" /> : undefined}
+    label={t("inbox.openConversation")}
+    onOpen={() => target.startsWith("thread:") ? navigation.conversation(target.slice(7)) : navigation.read(target.slice(8))} />;
+}
+
+function ResultRow({ row, navigation, inConversationGroup }: { row: InboxResultRow; navigation: InboxNavigation; inConversationGroup: boolean }) {
+  const t = useNexusT();
+  const [preview, setPreview] = useState(false);
+  const channelLabel = useMessageChannelLabel();
+  const roles = useEnumOptions("messaging.Part", "role", { casing: "upper" });
+  const message = row.message;
+  const sender = senderDisplayName(message.sender);
+  if (!row.part) return <MessagePaneRow message={message}
+    {...(inConversationGroup ? { detail: undefined } : {})}
+    selected={navigation.message === message.id} onOpen={() => navigation.openInContext(message)}
+    verb={message.thread ? <Button size="iconSm" variant="ghost" onClick={() => navigation.read(message.id)}
+      aria-label={t("inbox.details")} title={t("inbox.details")}><Glyph name="file" /></Button> : t("inbox.read")} />;
+  const available = Boolean(row.file || row.fragment);
+  const title = row.file ? row.part.name || row.file.filename : row.fragment ? t("inbox.sharedText") : row.part.name || t("inbox.file");
+  const file = row.file?.url ? {
+    url: row.file.url, name: title, mime: row.file.mime_type?.mime_type, size: row.file.size_bytes,
+  } : undefined;
+  const readSource = () => navigation.read(message.id, row.part!.id);
+  return <>
+    <PaneRow icon={row.fragment ? "file" : "files"} title={title}
+      detail={available ? optionLabel(roles, row.part.role) : t("inbox.fileUnavailable")} tone={available ? "muted" : "warning"}
+      meta={<AbsoluteTime value={row.latest} display="date" />}
+      sub={row.fragment?.text || [sender, channelLabel(message)].filter(Boolean).join(" · ")}
+      label={file ? t("inbox.filePreview") : t("inbox.readSource")}
+      verb={<div className="flex items-center gap-1">
+        {available ? <Button size="sm" variant="secondary" onClick={() => navigation.connect(row.id, message.id)}>
+          <Glyph name="link" />{t("inbox.matchingUses", { count: row.count })}
+        </Button> : null}
+        {row.file ? <Button size="iconSm" variant="ghost" aria-label={t("inbox.readSource")} title={t("inbox.readSource")}
+          onClick={readSource}><Glyph name="channel" /></Button> : null}
+      </div>}
+      onOpen={() => file ? setPreview(true) : readSource()} />
+    {file ? <Dialog.Root open={preview} onOpenChange={setPreview}>
+      <Dialog.Portal><Dialog.Backdrop /><Dialog.Content size="lg" placement="center">
+        <Dialog.Header className="flex items-center justify-between"><Dialog.Title>{title}</Dialog.Title><Dialog.Close /></Dialog.Header>
+        <Dialog.Body><PreviewPane file={file} /></Dialog.Body>
+      </Dialog.Content></Dialog.Portal>
+    </Dialog.Root> : null}
+  </>;
 }

@@ -6,9 +6,11 @@ import { useAuthoredQuery } from "@angee/refine";
 import {
   Button,
   Code,
+  Glyph,
   ListView,
   RowsListView,
   NavLink,
+  SectionHeading,
   defineRowAction,
   jsonObjectFromUnknown,
   useActionResultMutation,
@@ -163,7 +165,7 @@ export function IntegrationStreamsPane(): ReactElement {
   const failureColumns = useMemo<readonly ListColumn<FailureRow>[]>(() => [
     { field: "kind" },
     { field: "code" },
-    { field: "status" },
+    { field: "status", widget: "statusBadge" },
     { field: "attempts" },
     { field: "retry_at" },
     { field: "created_at" },
@@ -204,7 +206,7 @@ export function IntegrationStreamsPane(): ReactElement {
   ], [resolve, retry, t]);
   const linkColumns = useMemo<readonly ListColumn<LinkRow>[]>(() => [
     { field: "external_key" },
-    { field: "status" },
+    { field: "status", widget: "statusBadge" },
     { field: "origin" },
     { field: "remote_version" },
     { field: "applied_at" },
@@ -256,15 +258,15 @@ export function IntegrationStreamsPane(): ReactElement {
       />
     );
   }
+  // The drill-down's scope: a section heading naming the stream, and the way back.
   const toolbar = <>
-    <Button size="sm" variant="ghost" onClick={() => show("streams")}>
+    <Button size="sm" variant="link" onClick={() => show("streams")}>
+      <Glyph decorative name="chevron-left" />
       {t("streams.back")}
     </Button>
-    {stream ? <span className="text-13 text-fg-muted">
-      {t(view === "failures" ? "streams.failureScope" : "streams.linkScope", {
-        key: stream.key, partition: stream.partition,
-      })}
-    </span> : null}
+    {stream ? <SectionHeading as="span"
+      label={t(view === "failures" ? "streams.openFailures" : view === "history" ? "streams.history" : "streams.links")}
+      summary={t("streams.scope", { key: stream.key, partition: stream.partition })} /> : null}
   </>;
   return view === "failures" ? (
     <RowsListView<FailureRow>

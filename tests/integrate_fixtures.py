@@ -9,14 +9,14 @@ import httpx2
 from django.conf import settings
 from django.db import connection
 
-from angee.base.impl import ImplClassField
+from angee.impl import ImplClassField
 from angee.integrate.discovery import ConnectionDiscovery, DerivedCredential
 from angee.integrate.errors import IntegrationError
 from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
 from angee.integrate.models import Bridge
 from angee.integrate.oauth.providers import OAuthProviderType
-from angee.integrate.states import StreamKind
-from angee.integrate.streams import StreamDefinition, StreamPage
+from angee.integrate.states import StreamDefinition, StreamKind
+from angee.integrate.streams import StreamPage
 from angee.integrate.testing.integration import Integration
 
 CONNECTION_CLASSES = settings.ANGEE_TEST_CONNECTION_CLASSES

@@ -16,6 +16,8 @@ export type ColumnAggregate =
 
 export interface ColumnProps<TRow extends object = Record<string, unknown>> {
   field: string;
+  /** Native table identity when multiple presentations select the same field. */
+  id?: string;
   /** Concrete GraphQL leaf paths selected for a computed object field. */
   selectionPaths?: readonly string[];
   header?: ReactNode;
@@ -110,6 +112,9 @@ function ColumnMarker<
   return null;
 }
 
+/**
+ * @kind contribution
+ */
 export const Column = Object.assign(ColumnMarker, {
   [PAGE_ELEMENT_SLOT]: "column" as const,
 });

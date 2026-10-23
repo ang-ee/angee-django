@@ -19,6 +19,7 @@ export interface UsernamePasswordFormProps {
  * `useLoginWithPassword().login`; on `{ ok: true }` it calls `onSuccess`, and on
  * a rejected login or a thrown error it shows an inline message. Inputs are
  * disabled while the request is in flight.
+ * @kind surface
  */
 export function UsernamePasswordForm({
   onSuccess,

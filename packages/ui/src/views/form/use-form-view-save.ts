@@ -67,7 +67,7 @@ export interface FormSubmitContext {
   /** Saved record at the start of this local edit, held while the form is dirty. */
   baselineRecord: Row | null;
   /** One create attempt, retained across failures and renewed after acceptance/conflict. */
-  clientCreationKey: string | null;
+  idempotencyKey: string | null;
   lines: LineDiff | null;
   /** Exact RHF snapshot submitted by the user, including externally supplied fields. */
   values: FormValues;
@@ -88,6 +88,10 @@ export interface FormSubmitAcknowledgement {
   }) => FormValues;
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function acknowledgeFormSubmit(
   record: Row,
   values: FormValues,
@@ -210,8 +214,8 @@ export function useFormViewSave({
     && Boolean(dataResource?.fields?.some(({ name }) => name === "revision"));
   const mutationFields = React.useMemo(() => selectRevision && !refineFields.includes("revision")
     ? [...refineFields, "revision"] : refineFields, [refineFields, selectRevision]);
-  const creationKey = React.useRef<string | null>(null);
-  React.useEffect(() => { creationKey.current = null; }, [resource, id, isCreate]);
+  const idempotencyKey = React.useRef<string | null>(null);
+  React.useEffect(() => { idempotencyKey.current = null; }, [resource, id, isCreate]);
   const emptyValues = React.useMemo(
     () => emptyDraft(formFields, defaultValues),
     [defaultValues, formFields],
@@ -430,7 +434,7 @@ export function useFormViewSave({
       return submitOwner(data, {
         resource, id: id ?? null, isCreate, record: displayRecord,
         baselineRecord: editBasisRecordRef.current, lines,
-        clientCreationKey: creationKey.current,
+        idempotencyKey: idempotencyKey.current,
         values: submitted, baselineValues: baseline,
       });
     },
@@ -454,8 +458,8 @@ export function useFormViewSave({
   const runSubmit = React.useCallback(
     async (data: FormValues, lines: LineDiff | null = null, submitted: FormValues = data): Promise<FormSubmitResult<Row | FormSubmitAcknowledgement>> => {
       try {
-        if (isCreate && (submitOwner || dataResource?.createArguments?.some(({ name }) => name === "client_creation_key"))) {
-          creationKey.current ??= createClientKey("create");
+        if (isCreate && (submitOwner || dataResource?.createArguments?.some(({ name }) => name === "idempotency_key"))) {
+          idempotencyKey.current ??= createClientKey("create");
         }
         let result: FormSubmitResult<Row | FormSubmitAcknowledgement>;
         if (submitOwner) {
@@ -475,8 +479,8 @@ export function useFormViewSave({
             }
             rootArguments.expected_revision = revision;
           }
-          if (isCreate && creationKey.current) {
-            rootArguments.client_creation_key = creationKey.current;
+          if (isCreate && idempotencyKey.current) {
+            rootArguments.idempotency_key = idempotencyKey.current;
           }
           let saved: Row | null;
           if (useSave) {
@@ -497,11 +501,11 @@ export function useFormViewSave({
           }
           result = savedFormSubmitResult(saved, t("form.genericSaveError"));
         }
-        if (isCreate && result.status === "ok") creationKey.current = null;
+        if (isCreate && result.status === "ok") idempotencyKey.current = null;
         return result;
       } catch (error) {
         if (isCreate && publicGraphQLErrorsFromUnknown(error).some((item) => item.extensions.code === "CREATION_KEY_CONFLICT")) {
-          creationKey.current = null;
+          idempotencyKey.current = null;
         }
         throw error;
       }

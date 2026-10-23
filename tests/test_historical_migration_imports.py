@@ -1,58 +1,40 @@
-"""Materialized migration imports remain usable after framework refactors."""
+"""Retained migration modules must load before an upgrade can run."""
 
-from __future__ import annotations
+from importlib import import_module
 
-import ast
-import importlib
-import importlib.util
-from pathlib import Path
+from django.db.migrations.loader import MigrationLoader
+from django.db.models import GeneratedField
 
-import pytest
-
-FIXTURE = Path(__file__).with_name("fixtures") / "historical_migration_imports.txt"
-HEADERS = tuple(
-    header for line in FIXTURE.read_text(encoding="utf-8").splitlines() if (header := line.partition("#")[0].strip())
-)
-STATEMENTS = tuple(ast.parse(header).body[0] for header in HEADERS)
-MODULES: set[str] = set()
-for statement in STATEMENTS:
-    if isinstance(statement, ast.ImportFrom):
-        assert statement.module is not None
-        imported_modules = [statement.module]
-    elif isinstance(statement, ast.Import):
-        imported_modules = [alias.name for alias in statement.names]
-    else:
-        continue
-    for module in imported_modules:
-        parts = module.split(".")
-        MODULES.update(".".join(parts[:index]) for index in range(1, len(parts) + 1))
+from angee.fields import SqidField
+from angee.impl import ImplClassField
 
 
-@pytest.mark.parametrize("statement", STATEMENTS, ids=HEADERS)
-def test_historical_migration_import_resolves(statement: ast.stmt) -> None:
-    """Resolve names through Python, including module-level compatibility aliases."""
+def test_loader_imports_retained_field_and_relationship_contracts(tmp_path, monkeypatch, settings):
+    package = tmp_path / "retained_migrations"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "0001_initial.py").write_text(
+        "from django.db import migrations\n"
+        "from angee.base.fields import SqidField, ImplClassField\n"
+        "from angee.integrate.fields import DiscrepancyOpenField\n"
+        "from angee.base.historical_relationships import (\n"
+        "    ensure_historical_relationships, delete_historical_relationships,\n"
+        "    retarget_historical_resource,\n"
+        ")\n"
+        "class Migration(migrations.Migration):\n"
+        "    initial = True\n"
+        "    dependencies = []\n"
+        "    operations = []\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    settings.MIGRATION_MODULES = {**settings.MIGRATION_MODULES, "resources": "retained_migrations"}
 
-    if isinstance(statement, ast.Import):
-        assert len(statement.names) == 1
-        module_name = statement.names[0].name
-        attributes = []
-    elif isinstance(statement, ast.ImportFrom):
-        assert statement.module is not None and len(statement.names) == 1
-        module_name = statement.module
-        attributes = [statement.names[0].name]
-    else:
-        assert isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Attribute)
-        reference = ast.unparse(statement.value)
-        module_name = max(
-            (module for module in MODULES if reference == module or reference.startswith(f"{module}.")),
-            key=len,
-        )
-        suffix = reference.removeprefix(module_name).removeprefix(".")
-        attributes = suffix.split(".") if suffix else []
+    # Django imports even applied migration modules before it can plan new work.
+    loader = MigrationLoader(None, load=False)
+    loader.load_disk()
 
-    if module_name == "angee.messaging_integrate_telegram" and importlib.util.find_spec(module_name) is None:
-        pytest.skip("angee-messaging-bridges is optional and its Telegram addon is absent from these test settings")
-
-    resolved = importlib.import_module(module_name)
-    for attribute in attributes:
-        resolved = getattr(resolved, attribute)
+    assert ("resources", "0001_initial") in loader.disk_migrations
+    module = import_module("retained_migrations.0001_initial")
+    assert module.SqidField is SqidField
+    assert module.ImplClassField is ImplClassField
+    assert module.DiscrepancyOpenField is GeneratedField

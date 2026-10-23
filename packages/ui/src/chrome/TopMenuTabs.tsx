@@ -21,6 +21,9 @@ export interface TopMenuTabsProps {
   tabs: readonly TopMenuTab[];
 }
 
+/**
+ * @owner TopBar
+ */
 export function TopMenuTabs({
   className,
   tabs,

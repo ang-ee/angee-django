@@ -10,7 +10,8 @@ import { type UiTranslate } from "../../../i18n";
 import { enumValueLabel, groupFieldLabel, statusLabel } from "../../../lib/labels";
 import { formatNumber, isNumericString } from "../../../lib/format-number";
 import { titleCase } from "../../../lib/titleCase";
-import { Badge } from "../../../ui/badge";
+import { Chip } from "../../../ui/chip";
+import { formatJson } from "../../../widgets/json-format";
 import { ChipList } from "../../../ui/chip";
 import { dateFromUnknown, formatDate, formatDateTime } from "../../../widgets/date-format";
 import { canonicalOptionValue } from "../../../widgets/types";
@@ -56,7 +57,7 @@ export function cellContent<TRow extends Row>(
   const tone = columnTone(column, value);
   if (tone) {
     const label = value == null ? "" : String(value);
-    return <Badge tone={tone}>{enumValue?.label ?? (label ? statusLabel(label) : "—")}</Badge>;
+    return <Chip tone={tone}>{enumValue?.label ?? (label ? statusLabel(label) : "—")}</Chip>;
   }
   if (Array.isArray(value)) {
     if (value.length === 0) return "—";
@@ -212,7 +213,7 @@ export function formatMeasure(
 function displayValue(value: unknown, t: UiTranslate): React.ReactNode {
   if (value == null || value === "") return "—";
   if (typeof value === "boolean") return t(value ? "list.yes" : "list.no");
-  if (typeof value === "object") return JSON.stringify(value);
+  if (typeof value === "object") return formatJson(value, { compact: true });
   return String(value);
 }
 

@@ -132,7 +132,7 @@ export default function CalendarSurface({
         locales={allLocales}
         locale={language}
         // The console content area is a scrolling `main` (views grow with
-        // content — the TimelineView shape); a percentage height would resolve
+        // content); a percentage height would resolve
         // against an indefinite ancestor and collapse the grid, clipping rows
         // and killing hit-testing for select/drag.
         height="auto"

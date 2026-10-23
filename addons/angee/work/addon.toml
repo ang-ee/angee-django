@@ -12,6 +12,11 @@ depends_on = [
   "angee.spaces",
 ]
 
+[[migrations]]
+name = "stage_public_identity"
+app_label = "resources"
+module = "runtime_migrations.stage_public_identity"
+
 [resources]
 master = []
 demo = [

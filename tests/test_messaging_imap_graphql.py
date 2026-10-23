@@ -12,9 +12,8 @@ from rebac import system_context
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.streams import CursorInvalid, advance_stream
-from angee.integrate.testing.models import SyncStream
 from angee.messaging_integrate_imap.backend import ImapChannelBackend
-from tests.conftest import SchemaAddon, Vendor, create_user, execute_schema
+from tests.conftest import SchemaAddon, Vendor, create_user, current_stream, execute_schema
 from tests.conftest import result_data as _data
 from tests.test_messaging_graphql import (
     Channel,
@@ -238,7 +237,7 @@ def test_sample_preview_is_a_paged_query_with_no_mutation_or_dead_output(
     assert account.logouts == 2
     with system_context(reason="test.messaging.imap.preview.cursor"):
         saved = Channel.objects.get(sqid=channel["id"])
-        stream = SyncStream.objects.current(saved, "messages", "INBOX")
+        stream = current_stream(saved, "messages", "INBOX")
         assert stream.cursor == {"uidvalidity": 100, "last_uid": 1}
         assert saved.cursor == {}
 
@@ -291,7 +290,7 @@ def _paused_sample_channel(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, dict[s
     with system_context(reason="test.messaging.imap.sample.pause"):
         saved = Channel.objects.get(sqid=channel["id"])
         saved.pause()
-        SyncStream.objects.current(saved, "messages", "INBOX", cursor={"uidvalidity": 100, "last_uid": 1})
+        current_stream(saved, "messages", "INBOX", cursor={"uidvalidity": 100, "last_uid": 1})
     account = FakeImapAccount({"INBOX": _folder(*(_eml(subject=str(uid)) for uid in range(1, 4)))})
     monkeypatch.setattr(FakeIMAPClient, "account", account, raising=False)
     monkeypatch.setattr(ImapChannelBackend, "client_class", FakeIMAPClient)
@@ -323,7 +322,7 @@ def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
     monkeypatch.setattr(ImapChannelBackend, "client_class", FakeIMAPClient)
     with system_context(reason="test.messaging.imap.new_mail.pause"):
         saved = Channel.objects.get(sqid=channel["id"])
-        SyncStream.objects.current(saved, "messages", "INBOX", cursor={"uidvalidity": 100, "last_uid": 1})
+        current_stream(saved, "messages", "INBOX", cursor={"uidvalidity": 100, "last_uid": 1})
         saved.pause()
 
     with system_context(reason="test.messaging.imap.new_mail.first"):
@@ -337,7 +336,7 @@ def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
 
     with system_context(reason="test.messaging.imap.new_mail.verify"):
         saved = Channel.objects.get(sqid=channel["id"])
-        stream = SyncStream.objects.current(saved, "messages", "INBOX")
+        stream = current_stream(saved, "messages", "INBOX")
         assert saved.config["delivery_mode"] == "new_only"
         assert len(saved.config["source_identity"]) == 64
         assert stream.cursor["uidvalidity"] == 100

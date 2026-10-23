@@ -4,7 +4,6 @@ import pytest
 from django.db import IntegrityError, transaction
 from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
 
-from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.workflows import schema as workflow_schema
@@ -44,7 +43,7 @@ def test_workflow_and_version_reads_follow_workflow_permission(schema, execution
     assert saved.revision > 0
     current = Workflow.objects.publish(
         workflow,
-        expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+        expected_revision=Workflow.system_queryset().values_list("draft_revision", flat=True).get(pk=workflow.pk),
         actor=admin,
     ).version
     hidden = load_workflow(document("entry"), key="hidden-publication", actor=admin)
@@ -285,7 +284,7 @@ def test_run_origin_groups_and_filters_follow_admission_lineage_and_read_scope(s
     replacement = replacements[0]
     with pytest.raises(IntegrityError):
         with transaction.atomic():
-            system_queryset(WorkflowRun).filter(pk=replacement.pk).update(reprocess_of=None)
+            WorkflowRun.system_queryset().filter(pk=replacement.pk).update(reprocess_of=None)
     replacement.refresh_from_db()
     assert replacement.origin == "reprocess"
     assert result_data(execute_schema(schema, query, {"origin": "reprocess"}, user=starter))["workflowrun"] == [
@@ -333,8 +332,8 @@ def test_step_decisions_exact_filter_combines_with_status(schema, execution, reg
     runs = [start_run(workflow, actor=starter) for _ in range(2)]
     for run in runs:
         run_until(run)
-    step = system_queryset(StepRun).get(run=runs[0])
-    decision = system_queryset(Decision).get(requesting_steps=step)
+    step = StepRun.system_queryset().get(run=runs[0])
+    decision = Decision.system_queryset().get(requesting_steps=step)
     query = """query($where: steprun_bool_exp) {
       steprun(where: $where) { id decision { id } }
       steprun_aggregate(where: $where) { aggregate { count } }
@@ -375,7 +374,7 @@ def test_step_rank_orders_fork_join_nested_and_paginated_resources(schema, execu
         {"node_key": key, "rank": rank, "map_index": 0, "is_mapped": False, "is_map": False}
         for rank, key in enumerate(("start", "branch_a", "branch_b", "finish"))
     ]
-    assert list(system_queryset(StepRun).filter(run=run).order_by("rank").values_list("node_key", "rank")) == [
+    assert list(StepRun.system_queryset().filter(run=run).order_by("rank").values_list("node_key", "rank")) == [
         (row["node_key"], row["rank"]) for row in expected
     ]
     query = """query($id: String!, $offset: Int!) {

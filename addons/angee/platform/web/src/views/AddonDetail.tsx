@@ -1,10 +1,9 @@
 import { type ReactElement } from "react";
 
-import { Badge, Code, DetailSection, DetailSurface, useRouteHref, useRouteRecordId } from "@angee/ui";
+import { Chip, Code, DetailSection, DetailSurface, OverflowChipList, useRouteHref, useRouteRecordId } from "@angee/ui";
 
 import { addonEnumLabel, usePlatformT } from "../i18n";
 import { platformScopeSearch } from "../lib/paths";
-import { LinkedChips } from "../lib/cells";
 import { usePlatformAddon } from "../lib/explorer";
 
 export function AddonDetail(): ReactElement {
@@ -33,10 +32,8 @@ export function AddonDetail(): ReactElement {
         addon ? (
           <>
             <Code tone="muted">{addon.id}</Code>
-            <Badge tone="neutral">{addon.namespace}</Badge>
-            <Badge tone={addon.kind === "REQUIRED" ? "info" : "neutral"}>
-              {addonEnumLabel(t, "kind", addon.kind)}
-            </Badge>
+            <Chip tone="neutral">{addon.namespace}</Chip>
+            <Chip tone="neutral">{addonEnumLabel(t, "kind", addon.kind)}</Chip>
           </>
         ) : null
       }
@@ -83,17 +80,11 @@ export function AddonDetail(): ReactElement {
             rows={[
               [
                 t("col.dependsOn"),
-                <LinkedChips
-                  items={dependsOn}
-                  href={(id) => routeHref("platform.addons.record", { id })}
-                />,
+                <OverflowChipList items={dependsOn.map((id) => ({ id, label: id, href: routeHref("platform.addons.record", { id }) }))} />,
               ],
               [
                 t("col.dependedBy"),
-                <LinkedChips
-                  items={dependedBy}
-                  href={(id) => routeHref("platform.addons.record", { id })}
-                />,
+                <OverflowChipList items={dependedBy.map((id) => ({ id, label: id, href: routeHref("platform.addons.record", { id }) }))} />,
               ],
             ]}
           />
@@ -104,10 +95,7 @@ export function AddonDetail(): ReactElement {
                 count: modelLabels.length,
               })}
             >
-              <LinkedChips
-                items={modelLabels}
-                href={(id) => routeHref("platform.models.record", { id })}
-              />
+              <OverflowChipList items={modelLabels.map((id) => ({ id, label: id, href: routeHref("platform.models.record", { id }) }))} />
             </DetailSection>
           ) : null}
         </>

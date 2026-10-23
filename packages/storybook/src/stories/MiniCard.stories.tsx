@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { MiniCard, Tag } from "@angee/ui";
+import { MiniCard, Chip } from "@angee/ui";
 
 const meta = {
   title: "Fragments/MiniCard",
@@ -21,8 +21,8 @@ export const Summary: Story = {
         title="Q3 review brief"
         tags={
           <>
-            <Tag tone="info">Internal</Tag>
-            <Tag>2,840 words</Tag>
+            <Chip tone="info">Internal</Chip>
+            <Chip>2,840 words</Chip>
           </>
         }
       />

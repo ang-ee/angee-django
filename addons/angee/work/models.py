@@ -9,10 +9,10 @@ itself.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping
-from contextlib import contextmanager, nullcontext
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -21,26 +21,35 @@ from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q
+from django.db.models.expressions import Combinable
 from django.utils import timezone
 from django_choices_field import IntegerChoicesField
-from rebac import PermissionDenied, actor_context, current_actor, generic_target, system_context
+from rebac import PermissionDenied, current_actor, system_context
 from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
 
-from angee.base.actors import actor_user_id, instance_actor
-from angee.base.changesets import changeset
-from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, ImmutableFieldsMixin, RowLockMixin, clean_trash_reason
-from angee.base.models import AngeeDataModel, AngeeManager
-from angee.base.scoping import system_queryset
-from angee.base.stages import Stage as StagePrimitive
-from angee.base.stages import StagedModelMixin
+from angee.actors import actor_user_id, instance_actor
+from angee.fields import StateField
+from angee.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AuditMixin,
+    ImmutableFieldsMixin,
+    RowLockMixin,
+    StagedModelMixin,
+)
+from angee.models import Stage as StagePrimitive
 from angee.resources.mixins import ResourceLoadMixin
+from angee.sequence.models import PeriodReset
 from angee.spaces.managers import GroupManager
-from angee.work.merge import run_task_merge_contributors
+
+if TYPE_CHECKING:
+    from angee.iam.models import User
+    from angee.projects.models import Project
+    from angee.spaces.models import Membership
 
 
-class QueueManager(GroupManager):
+class QueueManager[QueueT: Queue](GroupManager[QueueT]):
     """Own personal-queue identity and idempotent provisioning."""
 
     PERSONAL_SLUG_PREFIX = "personal-"
@@ -70,7 +79,7 @@ class QueueManager(GroupManager):
             raise ValidationError("Personal queue keys support user PKs up to 11 decimal digits.")
         return f"{self.PERSONAL_KEY_PREFIX}{user_pk}"
 
-    def personal_for(self, user: models.Model, *, provision: bool = False) -> Any | None:
+    def personal_for(self, user: User, *, provision: bool = False) -> QueueT | None:
         """Return ``user``'s personal queue, optionally provisioning it."""
 
         slug = self.personal_slug(user)
@@ -79,7 +88,7 @@ class QueueManager(GroupManager):
             return queue
         return self.provision_personal(user)
 
-    def provision_personal(self, user: models.Model) -> Any:
+    def provision_personal(self, user: User) -> QueueT:
         """Idempotently create one private owner-rostered queue for ``user``."""
 
         slug = self.personal_slug(user)
@@ -150,7 +159,7 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
     """An ongoing operational context, materialized as a ``spaces.Group`` child."""
 
     runtime = True
-    extends = "spaces.Group"
+    extends: ClassVar[str | None] = "spaces.Group"
     immutable_fields = ("provision_stages",)
 
     class EstimateScale(models.TextChoices):
@@ -275,7 +284,7 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
                     "name": f"{self.key} task numbers",
                     "template": "{number}",
                     "prefix": "",
-                    "period_reset": "none",
+                    "period_reset": PeriodReset.NONE,
                     "preview_enabled": True,
                 },
             )
@@ -295,7 +304,7 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
         if not self.provision_stages:
             return
         stage_model = apps.get_model("work", "Stage")
-        stages: dict[str, models.Model] = {}
+        stages: dict[str, Stage] = {}
         with system_context(reason="work.queue.provision_workflow"):
             for name, tone, position, category in self.PROVISIONED_STAGES:
                 stage, _created = stage_model.objects.get_or_create(
@@ -313,7 +322,7 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
 
         if self.default_stage_id is None:
             return
-        stage_model = self._meta.get_field("default_stage").related_model
+        stage_model = type(self).default_stage.field.related_model
         stage = stage_model._base_manager.get(pk=self.default_stage_id)
         if self.pk is None or stage.queue_id != self.pk:
             raise ValidationError({"default_stage": "Default stage must belong to this queue."})
@@ -336,7 +345,7 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     """
 
     runtime = True
-    sqid_prefix = "stg_"
+    sqid_prefix = "wst_"
     container_field_name = "queue"
     category_field_name = "category"
     locked_rows_label = "Triage and duplicate stages"
@@ -353,8 +362,6 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
         DUPLICATE = "duplicate", "Duplicate"
 
     SYSTEM_CATEGORIES = frozenset((StageCategory.TRIAGE, StageCategory.DUPLICATE))
-    MANUAL_CATEGORY_FILTERS: ClassVar[dict[str, Any]] = {"rule_owned": False, "conceals": False}
-
     queue = models.ForeignKey(
         "work.Queue",
         on_delete=models.CASCADE,
@@ -362,7 +369,6 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     )
     category = StateField(choices_enum=StageCategory, default=StageCategory.UNSTARTED)
     rule_owned = models.BooleanField(default=False)
-    conceals = models.BooleanField(default=False)
 
     class Meta:
         """Django model options for queue stages."""
@@ -386,13 +392,13 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     def ordinary_entry_available(self) -> bool:
         """Whether this stage allows entry by ordinary work verbs."""
 
-        return not self.rule_owned and not self.conceals
+        return not self.rule_owned
 
     @property
     def on_path(self) -> bool:
         """Whether the stage belongs to the queue's ordinary progress path."""
 
-        return not self.conceals and self.category not in (
+        return self.category not in (
             self.StageCategory.CANCELED,
             self.StageCategory.DUPLICATE,
         )
@@ -444,24 +450,24 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
         raise ValidationError({"stage": f"Use {verb} to move a task into the system {following.category} stage."})
 
     @classmethod
-    def for_manual_category(cls, container: models.Model, category: str) -> models.QuerySet[Any]:
+    def for_manual_category(cls, container: models.Model | Combinable, category: str) -> models.QuerySet[Self]:
         """Return ordered category candidates available to hand verbs."""
 
-        return cls.for_container(container).filter(category=category, **cls.MANUAL_CATEGORY_FILTERS)
+        return cls.for_container(container).filter(category=category, rule_owned=False)
 
     @classmethod
-    def resolve_default_fallback(cls, stages: models.QuerySet[Any]) -> Any | None:
+    def resolve_default_fallback(cls, stages: models.QuerySet[Self]) -> Self | None:
         """Choose an ordinary unstarted stage when the queue has no explicit default."""
 
-        return stages.filter(category=cls.StageCategory.UNSTARTED, **cls.MANUAL_CATEGORY_FILTERS).first()
+        return stages.filter(category=cls.StageCategory.UNSTARTED, rule_owned=False).first()
 
     def validate_rule_stage(self, queue_id: Any | None) -> None:
-        """Require an active-phase mapping to name a non-concealing rule stage in its queue."""
+        """Require an active-phase mapping to name a rule stage in its queue."""
 
         if queue_id is not None and self.queue_id != queue_id:
             raise ValidationError({"active_stage": "Active stage must belong to the source task's queue."})
-        if not self.rule_owned or self.conceals:
-            raise ValidationError({"active_stage": "Active stage must be rule-owned and must not conceal tasks."})
+        if not self.rule_owned:
+            raise ValidationError({"active_stage": "Active stage must be rule-owned."})
 
     def clean(self) -> None:
         """Keep the queue's current default available for ordinary entry."""
@@ -472,14 +478,12 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     def _validate_configuration(self) -> None:
         """Keep stage edits consistent with defaults, phase mappings and promoted tasks."""
 
-        if self.conceals and self.rule_owned:
-            raise ValidationError({"conceals": "A rule-owned stage cannot conceal tasks."})
         if self._state.adding:
             return
         if self.entry_reserved or not self.ordinary_entry_available:
-            queue_model = self._meta.get_field("queue").related_model
+            queue_model = type(self).queue.field.related_model
             if queue_model._base_manager.filter(default_stage_id=self.pk).exists():
-                field = "conceals" if self.conceals else "rule_owned" if self.rule_owned else "category"
+                field = "rule_owned" if self.rule_owned else "category"
                 raise ValidationError({field: "The queue's default stage must allow ordinary entry."})
         # MilestoneWork owns this optional reverse relation in composed model graphs.
         try:
@@ -487,19 +491,16 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
         except FieldDoesNotExist:
             pass
         else:
+            assert milestones is not None
             mappings = milestones._base_manager.filter(active_stage_id=self.pk)
-            if (not self.rule_owned or self.conceals) and mappings.exists():
-                raise ValidationError({"rule_owned": "A mapped stage must remain rule-owned and non-concealing."})
+            if not self.rule_owned and mappings.exists():
+                raise ValidationError({"rule_owned": "A mapped stage must remain rule-owned."})
             if (
                 mappings.filter(project__converted_from__queue__isnull=False)
                 .exclude(project__converted_from__queue_id=self.queue_id)
                 .exists()
             ):
                 raise ValidationError({"queue": "A mapped stage must remain in its source task's queue."})
-        if self.conceals:
-            project_model = apps.get_model("projects", "Project")
-            if project_model._base_manager.filter(converted_from__stage_id=self.pk).exists():
-                raise ValidationError({"conceals": "A stage holding a promoted source task cannot conceal tasks."})
 
     def locked_fields(self) -> tuple[str, ...]:
         """Lock a system stage's identity; its tone, order and rule flags stay editable."""
@@ -507,13 +508,13 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
         return ("name", "category") if self.category in self.SYSTEM_CATEGORIES else ()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Keep the queue's default enterable; the row lock guards system-stage identity."""
+        """Keep stage edits consistent with the queue, its mappings and the tasks it holds."""
 
         self._validate_configuration()
         super().save(*args, **kwargs)
 
 
-class CycleManager(AngeeManager):
+class CycleManager[CycleT: Cycle](AngeeManager[CycleT]):
     """Own idempotent queue-cadence generation and due-cycle closure."""
 
     @staticmethod
@@ -529,19 +530,19 @@ class CycleManager(AngeeManager):
         return starts_on + timedelta(weeks=cycle_weeks) - timedelta(days=1)
 
     @staticmethod
-    def _next_starts_on(cycle: Any, cooldown_weeks: int) -> date:
+    def _next_starts_on(cycle: Cycle, cooldown_weeks: int) -> date:
         """Return the first date after the cycle and its whole cooldown gap."""
 
         return cycle.ends_on + timedelta(days=1, weeks=cooldown_weeks)
 
     def generate_for_queue(
         self,
-        queue: models.Model,
+        queue: Queue,
         *,
         as_of: date | None = None,
         window_end: date | None = None,
         completed_at: datetime | None = None,
-    ) -> tuple[Any, ...]:
+    ) -> tuple[CycleT, ...]:
         """Generate and close one queue's cadence, returning its ordered cycles.
 
         Cycle windows are closed date intervals: both ``starts_on`` and
@@ -768,12 +769,12 @@ fires a nested partial refresh whose reload re-enters ``__init__`` with the
 class ProjectWork(models.Model):
     """Bind a project's access to the roster of an optional team."""
 
-    extends = "projects.Project"
+    extends: ClassVar[str | None] = "projects.Project"
 
-    hasura_readable_fields = ("team",)
-    hasura_filterable_fields = hasura_readable_fields
-    hasura_insertable_fields = hasura_readable_fields
-    hasura_updatable_fields = hasura_readable_fields
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = ("team",)
+    hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_insertable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
 
     team = models.ForeignKey(
         "spaces.Group",
@@ -784,18 +785,21 @@ class ProjectWork(models.Model):
     )
 
     @transaction.atomic
-    def admit_manager(self, user: models.Model) -> models.Model:
+    def admit_manager(self, user: User) -> Membership:
         """Add a team moderator and follow this project in the same transaction."""
 
         if not self.has_access("share") or self.team_id is None:
             raise PermissionDenied("Project share and a team are required to add a manager.")
-        if getattr(user, "kind", None) != "person":
+        team = self.team
+        if team is None:
+            raise PermissionDenied("The project's team must be readable to add a manager.")
+        if user.kind != "person":
             raise ValidationError({"user": "Choose a person account."})
         with system_context(reason="work.project.manager.party"):
             party = apps.get_model("parties", "Party").objects.for_user(user)
         membership_model = apps.get_model("spaces", "Membership")
         membership = membership_model.objects.add_confirmed(
-            group=self.team,
+            group=team,
             party=party,
             role=membership_model.MembershipRole.MODERATOR,
         )
@@ -804,7 +808,7 @@ class ProjectWork(models.Model):
         return membership
 
     @transaction.atomic
-    def remove_manager(self, membership: models.Model) -> None:
+    def remove_manager(self, membership: Membership) -> None:
         """Dismiss one team moderator through the roster's removal owner."""
 
         if not self.has_access("share") or self.team_id is None:
@@ -842,7 +846,7 @@ class ProjectWork(models.Model):
 
         if self.converted_from_id is None:
             return
-        task_model = self._meta.get_field("converted_from").related_model
+        task_model = type(self).converted_from.field.related_model
         with system_context(reason="work.project.source_task_stage"):
             task = task_model.objects.lock_if_supported().get(pk=self.converted_from_id)
             stage = task.rule_stage(self)
@@ -856,12 +860,12 @@ class ProjectWork(models.Model):
 class MilestoneWork(models.Model):
     """Map a project's current phase to its source task's rule-owned stage."""
 
-    extends = "projects.Milestone"
+    extends: ClassVar[str | None] = "projects.Milestone"
 
-    hasura_readable_fields = ("active_stage",)
-    hasura_filterable_fields = hasura_readable_fields
-    hasura_insertable_fields = hasura_readable_fields
-    hasura_updatable_fields = hasura_readable_fields
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = ("active_stage",)
+    hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_insertable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
 
     active_stage = models.ForeignKey(
         "work.Stage",
@@ -904,22 +908,22 @@ class MilestoneWork(models.Model):
 
         if self.active_stage_id is None:
             return
-        project_model = self._meta.get_field("project").related_model
+        project_model = type(self).project.field.related_model
         queue_id = (
             project_model._base_manager.filter(pk=self.project_id)
             .values_list("converted_from__queue_id", flat=True)
             .first()
         )
-        stage_model = self._meta.get_field("active_stage").related_model
+        stage_model = type(self).active_stage.field.related_model
         stage_model._base_manager.get(pk=self.active_stage_id).validate_rule_stage(queue_id)
 
 
-class TaskWork(StagedModelMixin):
+class TaskWork(StagedModelMixin[Stage]):
     """Same-row work contribution folded into ``projects.Task``."""
 
-    extends = "projects.Task"
+    extends: ClassVar[str | None] = "projects.Task"
     stage_container_field_name = "queue"
-    thread_team_field = "queue"
+    thread_team_field: ClassVar[str | None] = "queue"
 
     if TYPE_CHECKING:
         queue_id: Any | None
@@ -929,7 +933,7 @@ class TaskWork(StagedModelMixin):
         dropped_at: datetime | None
 
     work_stage_projection = True
-    hasura_readable_fields = (
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = (
         "queue",
         "stage",
         "cycle",
@@ -940,10 +944,10 @@ class TaskWork(StagedModelMixin):
         "started_triage_at",
         "triaged_at",
     )
-    hasura_filterable_fields = hasura_readable_fields
+    hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
     # A stable scope key filters readable tasks without revealing the queue row.
-    hasura_container_scope_fields = ("queue__slug",)
-    hasura_sortable_fields = (
+    hasura_container_scope_fields: ClassVar[tuple[str, ...]] = ("queue__slug",)
+    hasura_sortable_fields: ClassVar[tuple[str, ...]] = (
         "queue",
         "stage",
         "stage__position",
@@ -954,13 +958,13 @@ class TaskWork(StagedModelMixin):
         "started_triage_at",
         "triaged_at",
     )
-    hasura_aggregatable_fields = ("number", "estimate")
-    hasura_groupable_fields = ("queue", "stage", "cycle")
+    hasura_aggregatable_fields: ClassVar[tuple[str, ...]] = ("number", "estimate")
+    hasura_groupable_fields: ClassVar[tuple[str, ...]] = ("queue", "stage", "cycle")
     # Projected as objects by the work type extension; the node class cannot
     # see extension fields, so selection layers read this declaration.
-    hasura_insertable_fields = ("queue", "stage", "cycle", "estimate")
-    hasura_updatable_fields = hasura_insertable_fields
-    hasura_forbidden_insertable_fields = ("status",)
+    hasura_insertable_fields: ClassVar[tuple[str, ...]] = ("queue", "stage", "cycle", "estimate")
+    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_insertable_fields
+    hasura_forbidden_insertable_fields: ClassVar[tuple[str, ...]] = ("status",)
 
     queue = models.ForeignKey(
         "work.Queue",
@@ -1145,7 +1149,7 @@ class TaskWork(StagedModelMixin):
                     update_fields.add("number")
                 kwargs["update_fields"] = update_fields
             super().save(*args, **kwargs)
-        object.__setattr__(self, "_work_status_assigned", False)
+            object.__setattr__(self, "_work_status_assigned", False)
         self._work_snapshot_loaded_values(fields=update_fields)
 
     @transaction.atomic
@@ -1218,7 +1222,7 @@ class TaskWork(StagedModelMixin):
         stage = self.resolve_default_stage()
         if stage is None:
             raise ValidationError({"stage": "Queue has no default stage."})
-        self._reject_reserved_stage_transition(target=cast(Stage, stage), manual=True, lock=True)
+        self._reject_reserved_stage_transition(target=stage, manual=True, lock=True)
         self.stage = stage
         self.save(update_fields=("stage", "updated_at"))
         return self
@@ -1230,6 +1234,12 @@ class TaskWork(StagedModelMixin):
         return (*super().hand_actions(), "accept", "start", "return_to_triage", "remove")
 
     @classmethod
+    def action_permission(cls, action: str) -> str:
+        """Removal uses the same authority in offered actions and shared trash."""
+
+        return "delete" if action == "remove" else super().action_permission(action)
+
+    @classmethod
     def action_blockers(cls, action: str) -> tuple[tuple[models.Q, Any], ...]:
         """Refuse the hand verbs a queued task's stages do not admit; queue-less tasks keep the base verbs.
 
@@ -1237,7 +1247,7 @@ class TaskWork(StagedModelMixin):
         the verb reports a missing one against the reason it was given.
         """
 
-        stage = cast("type[Stage]", cls.stage_model())
+        stage = cls.stage_model()
         queued = Q(queue__isnull=False)
         triage = Q(stage__category=stage.StageCategory.TRIAGE)
         reserved = (stage.exit_reserved_condition("stage"), {"stage": stage.EXIT_RESERVED_MESSAGE})
@@ -1251,14 +1261,13 @@ class TaskWork(StagedModelMixin):
         promoted = models.Exists(
             apps.get_model("projects", "Project")._base_manager.filter(converted_from_id=models.OuterRef("pk"))
         )
-        concealing = models.Exists(stage.for_container(models.OuterRef("queue")).filter(conceals=True))
         blockers: dict[str, tuple[tuple[models.Q, Any], ...]] = {
             "complete": (missing("completed"), reserved),
             "drop": (reserved,),
             "reopen": (
                 (lacks("unstarted") & Q(queue__default_stage__isnull=True), {"stage": "Queue has no default stage."}),
                 # A removed task returns through restore, which keeps its pre-removal stage.
-                (queued & Q(stage__conceals=True), {"stage": "Restore a removed task instead of reopening it."}),
+                (Q(is_trashed=True), {"stage": "Restore a removed task instead of reopening it."}),
                 reserved,
                 # Reopening returns closed work; open work never moves through it.
                 (
@@ -1286,7 +1295,6 @@ class TaskWork(StagedModelMixin):
             ),
             "remove": (
                 (Q(promoted), {"stage": "A promoted task cannot be removed."}),
-                (~Q(concealing), {"stage": "The queue has no concealing stage."}),
                 reserved,
             ),
         }
@@ -1295,7 +1303,7 @@ class TaskWork(StagedModelMixin):
     def _require_work_action(self, expected_revision: int | None, *, permission: str = "write") -> None:
         """Recheck the locked, fresh row before a hand verb, including no-op replay."""
 
-        system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+        type(self).system_queryset(lock=("self",)).get(pk=self.pk)
         self.refresh_from_db()
         actor, elevated = self.effective_actor(strict=True)
         if not elevated and not self.with_actor(actor).has_access(permission):
@@ -1303,132 +1311,55 @@ class TaskWork(StagedModelMixin):
         if expected_revision is not None:
             self.require_revision(expected_revision)
 
+    @classmethod
+    def merge_blockers(cls) -> tuple[tuple[Q, str], ...]:
+        """A fold refuses a task its removal would refuse, before anything moves."""
+
+        removal = tuple(
+            (condition, "; ".join(str(text) for text in error.values()) if isinstance(error, Mapping) else str(error))
+            for condition, error in cls.action_blockers("remove")
+        )
+        return (*super().merge_blockers(), *removal)
+
+    def validate_trash(self) -> None:
+        """Check stored work blockers under the shared trash owner's row lock."""
+
+        super().validate_trash()
+        if not is_sudo():
+            self.validate_action("remove")
+
     @transaction.atomic
     def remove(self, *, reason: str = "", expected_revision: int | None = None) -> Any:
-        """Conceal an unpromoted task in its queue; never physically delete it.
+        """Trash an unpromoted task while retaining its workflow stage."""
 
-        The optional reason (at most 1000 characters) is the removal's history
-        change reason, beside the stage it left for :meth:`restore`.
-        """
-
-        reason = clean_trash_reason(reason)
-        self._require_work_action(expected_revision)
-        self.validate_action("remove")
-        target = self.stage_model().for_container(self.queue).filter(conceals=True).first()
-        if target is None:
-            raise ValidationError({"stage": "The queue has no concealing stage."})
-        previous, _following = self._reject_reserved_stage_transition(target=target, lock=True)
-        Stage.validate_transition(previous, target)
-        if self.stage_id != target.pk:
-            self.stage = target
-            actor = instance_actor(self)
-            with (
-                actor_context(actor) if actor is not None else nullcontext(),
-                changeset(fresh=True, change_reason=reason, origin=self),
-            ):
-                self.save(update_fields=("stage", "updated_at"))
+        self._require_work_action(expected_revision, permission="delete")
+        self.trash(reason=reason)
         return self
 
     @transaction.atomic
     def restore(self, *, expected_revision: int | None = None) -> Any:
-        """Return a removed task to the stage it held before removal.
-
-        The task's ``restore`` permission authorizes it: the inherited queue's
-        writers and administrators. Concealment still withholds the task from
-        those writers, so the authorized stage move elevates this instance's
-        save alone and rebinds the restorer afterwards. History
-        owns the earlier stage; when it no longer admits the task by hand
-        (deleted, concealing or rule-owned), the queue's default stage serves.
-        Restoration changes only the stage: today's permissions decide access.
-        """
+        """Restore the task from shared trash."""
 
         self._require_work_action(expected_revision, permission="restore")
-        if not self.stage_model()._base_manager.filter(pk=self.stage_id, conceals=True).exists():
-            raise ValidationError({"stage": "Only a removed task can be restored."})
-        target = self._stage_before_removal() or self.resolve_default_stage()
-        if target is None:
-            raise ValidationError({"stage": "Queue has no default stage."})
-        system = target.category in Stage.SYSTEM_CATEGORIES
-        self._reject_reserved_stage_transition(target=target, manual=True, allow_system_entry=system, lock=True)
-        self.stage = target
-        actor = self.actor()
-        self.sudo(reason="work.task.restore")
-        try:
-            if system:
-                self._reject_direct_status_write()
-                with self._work_verb_write():
-                    self.save(update_fields=("stage", "updated_at"))
-            else:
-                self.save(update_fields=("stage", "updated_at"))
-        finally:
-            if actor is not None:
-                self.with_actor(actor)
-            else:
-                self.unsudo()
+        super().restore()
         return self
 
     @classmethod
     def removed_for(cls, actor: Any, *, queue: Any = None, parent: Any = None) -> models.QuerySet[Any]:
-        """Return the concealed tasks ``actor`` may restore, newest change first.
+        """Return shared trash the actor may restore, excluding merge redirects."""
 
-        The ``restore`` permission scopes the rows, so the removed list never
-        reads a task its reader cannot bring back; concealment keeps every other
-        read of these rows closed, including the reader's own.
-        """
-
-        rows = cls._default_manager.with_actor(actor).with_action("restore").scoped().filter(stage__conceals=True)
+        rows = (
+            cls._default_manager.with_actor(actor).with_action("restore").scoped()
+            .trashed().filter(merged_into__isnull=True)
+        )
         if queue is not None:
             rows = rows.filter(queue=queue)
         if parent is not None:
             rows = rows.filter(parent=parent)
-        return rows.order_by("-updated_at", "-pk")
-
-    @classmethod
-    def removal_records(cls, pks: Iterable[Any]) -> dict[Any, Any]:
-        """Return each concealed task's removal history record: when, by whom and why.
-
-        The removal is the oldest record of the latest run in the current
-        concealing stage. One history read serves the whole page.
-        """
-
-        records: dict[Any, Any] = {}
-        stages: dict[Any, Any] = {}
-        closed: set[Any] = set()
-        for record in cls.history.filter(id__in=list(pks)).order_by("id", "-history_date", "-history_id"):
-            if record.id in closed:
-                continue
-            if record.stage_id == stages.setdefault(record.id, record.stage_id):
-                records[record.id] = record
-            else:
-                closed.add(record.id)
-        return records
-
-    def _stage_before_removal(self) -> Stage | None:
-        """Return the stage history shows before the latest concealment, if still enterable."""
-
-        earlier = (
-            self.history.exclude(stage_id=self.stage_id)
-            .exclude(stage_id=None)
-            .order_by("-history_date", "-history_id")
-            .values_list("stage_id", flat=True)
-            .first()
-        )
-        if earlier is None:
-            return None
-        return cast(
-            "Stage | None",
-            self.stage_model()
-            ._base_manager.filter(
-                pk=earlier,
-                queue_id=self.queue_id,
-                conceals=False,
-                rule_owned=False,
-            )
-            .first(),
-        )
+        return rows.order_by("-trashed_at", "-pk")
 
     @transaction.atomic
-    def accept(self, stage: models.Model | None = None, *, expected_revision: int | None = None) -> Any:
+    def accept(self, stage: Stage | None = None, *, expected_revision: int | None = None) -> Any:
         """Leave triage for a same-queue, non-system stage, idempotently."""
 
         self._require_work_action(expected_revision)
@@ -1439,7 +1370,7 @@ class TaskWork(StagedModelMixin):
             raise ValidationError({"stage": "Queue has no default stage."})
         if target.queue_id != self.queue_id:
             raise ValidationError({"stage": "Accepted stage must belong to the task's queue."})
-        self._reject_reserved_stage_transition(target=cast(Stage, target), manual=True, lock=True)
+        self._reject_reserved_stage_transition(target=target, manual=True, lock=True)
         if self.stage_id == target.pk:
             if (
                 self.status == self.TaskStatus.OPEN
@@ -1567,107 +1498,38 @@ class TaskWork(StagedModelMixin):
         )
 
     def mark_duplicate(self, canonical: models.Model) -> Any:
-        """Merge this duplicate into ``canonical`` in one row-locked transaction.
+        """Fold this triage task into its operational survivor through the shared owner."""
 
-        The atomic postcondition is one directional duplicate relation, this
-        task in its system duplicate stage (and therefore dropped/duplicate), all
-        source links and followers moved with collision deduplication, followed
-        by every deterministic ``ANGEE_WORK_MERGE_CONTRIBUTORS`` mover. Any
-        failure rolls every one of those writes back.
-        """
-
+        if not isinstance(canonical, type(self)):
+            raise ValidationError({"canonical": "Choose a task as the canonical record."})
         if self.pk is None or canonical.pk is None:
             raise ValidationError("Both duplicate and canonical tasks must be saved.")
-        if self.pk == canonical.pk:
-            raise ValidationError({"canonical": "A task cannot duplicate itself."})
-        with system_context(reason="work.task.mark_duplicate"), transaction.atomic():
-            rows = list(
-                type(self)
-                .objects.sudo(reason="work.task.mark_duplicate.rows")
-                .lock_if_supported()
-                .filter(pk__in=(self.pk, canonical.pk))
-                .order_by("pk")
-            )
-            by_pk = {row.pk: row for row in rows}
-            if self.pk not in by_pk or canonical.pk not in by_pk:
-                raise ValidationError({"canonical": "Duplicate or canonical task no longer exists."})
-            source = by_pk[self.pk]
-            canonical = by_pk[canonical.pk]
+        if is_sudo():
+            canonical.fold([self], duplicate_triage=True)
+        else:
+            canonical.with_actor(instance_actor(self)).merge(records=[self.sqid], duplicate_triage=True)
+        self.refresh_from_db()
+        return self
+
+    def merge_fields(self, merged: Sequence[Any], *, duplicate_triage: bool = False, **options: Any) -> None:
+        """Work owns duplicate triage; the merge owner moves every declared reference."""
+
+        super().merge_fields(merged, **options)
+        if not duplicate_triage:
+            return
+        for source in merged:
             if source.queue_id is None:
                 raise ValidationError({"queue": "A queued task is required for duplicate triage."})
             duplicate_stage = source._stage_for_category("duplicate")
             source._reject_reserved_stage_transition(
-                target=duplicate_stage, manual=True, allow_system_entry=True, lock=True
+                target=duplicate_stage, manual=True, allow_system_entry=True, lock=True,
             )
-
-            relation_model = apps.get_model("projects", "TaskRelation")
-            duplicate_kind = relation_model.TaskRelationKind.DUPLICATE
-            if (
-                relation_model.objects.sudo(reason="work.task.mark_duplicate.reverse_relation_lookup")
-                .filter(
-                    task=canonical,
-                    related_task=source,
-                    kind=duplicate_kind,
-                )
-                .exists()
-            ):
-                raise ValidationError({"canonical": "A task and its canonical cannot be mutual duplicates."})
-            canonical_stage = canonical.stage
-            canonical_is_duplicate = (
-                canonical_stage is not None
-                and canonical_stage.category == canonical.stage_model().StageCategory.DUPLICATE
-            ) or relation_model.objects.sudo(reason="work.task.mark_duplicate.canonical_relation_lookup").filter(
-                task=canonical,
-                kind=duplicate_kind,
-            ).exists()
-            if canonical_is_duplicate:
-                raise ValidationError(
-                    {
-                        "canonical": (
-                            "The canonical task is itself a duplicate; merge into the ultimate canonical instead."
-                        )
-                    }
-                )
-            existing = (
-                relation_model.objects.sudo(reason="work.task.mark_duplicate.relation_lookup")
-                .filter(task=source, kind=duplicate_kind)
-                .first()
-            )
-            if existing is not None and existing.related_task_id != canonical.pk:
-                raise ValidationError({"canonical": "Task already names a different canonical task."})
-            relation, _created = relation_model.objects.get_or_create(
-                task=source,
-                related_task=canonical,
-                defaults={"kind": duplicate_kind},
-            )
-            if relation.kind != duplicate_kind:
-                raise ValidationError({"canonical": "Another relation already occupies this task pair."})
-
-            already_projected = (
-                source.stage_id == duplicate_stage.pk
-                and source.status == source.TaskStatus.DROPPED
-                and source.dropped_reason == source.TaskDroppedReason.DUPLICATE
-                and source.dropped_at is not None
-                and source.done_at is None
-            )
-            if not already_projected:
-                source_stage = source.stage
-                if source_stage is None or source_stage.category not in {
-                    source.stage_model().StageCategory.TRIAGE,
-                    source.stage_model().StageCategory.DUPLICATE,
-                }:
-                    raise ValidationError({"stage": "Only a task in triage can be marked duplicate."})
-                source.stage = duplicate_stage
-                source.dropped_reason = source.TaskDroppedReason.DUPLICATE
-                with source._work_verb_write():
-                    source.save(update_fields=("stage", "dropped_reason", "updated_at"))
-
-            source._move_links_to(canonical)
-            source._move_followers_to(canonical)
-            run_task_merge_contributors(source, canonical)
-        # Return the committed state written through the separately locked row.
-        self.refresh_from_db()
-        return self
+            if source.stage is None or source.stage.category != source.stage_model().StageCategory.TRIAGE:
+                raise ValidationError({"stage": "Only a task in triage can be marked duplicate."})
+            source.stage = duplicate_stage
+            source.dropped_reason = source.TaskDroppedReason.DUPLICATE
+            with source._work_verb_write():
+                source.save(update_fields=("stage", "dropped_reason", "updated_at"))
 
     @property
     def work_key(self) -> str | None:
@@ -1675,14 +1537,15 @@ class TaskWork(StagedModelMixin):
 
         if self.queue_id is None or self.number is None:
             return None
-        return f"{self.queue.key}-{self.number}"
+        queue = self.queue
+        return f"{queue.key}-{self.number}" if queue is not None else None
 
     def validate_cycle_scope(self) -> None:
         """Reject a cycle outside the task's queue."""
 
         if self.cycle_id is None:
             return
-        cycle_model = self._meta.get_field("cycle").related_model
+        cycle_model = type(self).cycle.field.related_model
         cycle_queue_id = (
             cycle_model._base_manager.values_list("queue_id", flat=True).get(pk=self.cycle_id)
             if self.queue_id is not None
@@ -1727,16 +1590,13 @@ class TaskWork(StagedModelMixin):
         target_id = target.pk if target is not None else self.stage_id
         if not stage_written:
             target_id = previous_id
-        stages = {stage.pk: stage for stage in self.stage_model()._base_manager.filter(pk__in=(previous_id, target_id))}
-        previous = stages.get(previous_id)
-        following = stages.get(target_id)
+        stage_ids = tuple(pk for pk in (previous_id, target_id) if pk is not None)
+        stages = {stage.pk: stage for stage in self.stage_model()._base_manager.filter(pk__in=stage_ids)}
+        previous = stages.get(previous_id) if previous_id is not None else None
+        following = stages.get(target_id) if target_id is not None else None
         changed = previous_id != target_id
         if changed and manual and following is not None and not following.ordinary_entry_available:
-            raise ValidationError({"stage": "Hand verbs cannot enter a rule-owned or concealing stage."})
-        if changed and following is not None and following.conceals and not self._state.adding:
-            project_model = apps.get_model("projects", "Project")
-            if project_model._base_manager.filter(converted_from_id=self.pk).exists():
-                raise ValidationError({"stage": "A task with a promoted project cannot enter a concealing stage."})
+            raise ValidationError({"stage": "Hand verbs cannot enter a rule-owned stage."})
         if manual or not (getattr(self, "_work_internal_status", False) or is_sudo()):
             Stage.validate_transition(
                 previous, following, allow_system_entry=allow_system_entry, adding=self._state.adding
@@ -1752,7 +1612,7 @@ class TaskWork(StagedModelMixin):
         if queue_cleared != stage_cleared or (queue_cleared and self.cycle_id is not None):
             raise ValidationError("stage and cycle imply their queue — clear queue, stage, and cycle together")
         if self.queue_id is None and self.cycle_id is not None:
-            cycle_model = self._meta.get_field("cycle").related_model
+            cycle_model = type(self).cycle.field.related_model
             self.queue_id = cycle_model._base_manager.values_list("queue_id", flat=True).get(pk=self.cycle_id)
             changed.add("queue")
         if self.queue_id is None and self.stage_id is not None:
@@ -1795,11 +1655,12 @@ class TaskWork(StagedModelMixin):
         needs_default = self._state.adding and self.estimate is None
         if self.queue_id is None or (not needs_default and self.estimate != 0):
             return set()
-        queue = self.queue
         fields: tuple[str, ...] = ("estimate_allow_zero", "default_estimate")
         if needs_default:
             fields += ("estimate_scale",)
         with system_context(reason="work.task.estimate_policy"):
+            queue = self.queue
+            assert queue is not None
             queue.refresh_from_db(fields=fields)
         changed = set()
         if needs_default and queue.estimate_scale != Queue.EstimateScale.NONE:
@@ -1873,21 +1734,27 @@ class TaskWork(StagedModelMixin):
         """Return the first ordered stage in this task's queue for ``category``."""
 
         stage_model = self.stage_model()
-        stage = cast(type[Stage], stage_model).for_manual_category(self.queue, category).first()
+        queue = self.queue
+        if queue is None:
+            raise ValidationError({"queue": "Choose a readable queue before selecting a stage."})
+        stage = stage_model.for_manual_category(queue, category).first()
         if stage is None:
             raise ValidationError({"stage": f"Queue has no {category} stage."})
-        return cast(Stage, stage)
+        return stage
 
-    def rule_stage(self, project: Any) -> Stage | None:
+    def rule_stage(self, project: Project) -> Stage | None:
         """Resolve the source-task stage from cancellation or the current phase, never receipts."""
 
         if self.queue_id is None:
             return None
+        queue = self.queue
+        if queue is None:
+            raise ValidationError({"queue": "A readable queue is required to resolve its rule stage."})
         if project.converted_from_id != self.pk:
             raise ValidationError({"project": "The project must have been promoted from this task."})
         category = "canceled" if project.status == project.ProjectStatus.DROPPED else "started"
         if category == "started" and project.current_milestone_id is not None:
-            milestone_model = project._meta.get_field("current_milestone").related_model
+            milestone_model = type(project).current_milestone.field.related_model
             stage_id = (
                 milestone_model._base_manager.filter(pk=project.current_milestone_id)
                 .values_list("active_stage_id", flat=True)
@@ -1896,78 +1763,8 @@ class TaskWork(StagedModelMixin):
             if stage_id is not None:
                 stage = self.stage_model()._base_manager.get(pk=stage_id)
                 stage.validate_rule_stage(self.queue_id)
-                return cast(Stage, stage)
-        return cast(
-            Stage | None,
-            self.stage_model()
-            .for_container(self.queue)
-            .filter(category=category, rule_owned=True, conceals=False)
-            .first(),
-        )
-
-    def _move_links_to(self, canonical: models.Model) -> None:
-        """Re-key source links to ``canonical``, deleting URL collisions."""
-
-        link_model = apps.get_model("projects", "Link")
-        canonical_target = generic_target(canonical)
-        source_links = list(
-            link_model.objects.sudo(reason="work.task.mark_duplicate.links")
-            .lock_if_supported()
-            .filter(**generic_target(self).lookups(link_model, "target"))
-            .order_by("pk")
-        )
-        if not source_links:
-            return
-        canonical_urls = set(
-            link_model._base_manager.filter(
-                **canonical_target.lookups(link_model, "target"),
-            ).values_list("url", flat=True)
-        )
-        for link in source_links:
-            if link.url in canonical_urls:
-                link.delete()
-                continue
-            link.content_type = canonical_target.content_type
-            link.object_id = canonical_target.object_id
-            link.save(update_fields=("content_type", "object_id", "updated_at"))
-            canonical_urls.add(link.url)
-
-    def _move_followers_to(self, canonical: models.Model) -> None:
-        """Move source chatter followers, preserving canonical collisions."""
-
-        attachment_model = apps.get_model("messaging", "ThreadAttachment")
-        follower_model = apps.get_model("messaging", "ThreadFollower")
-        source_attachment = attachment_model.objects.for_record(self)
-        if source_attachment is None:
-            return
-        source_followers = list(
-            follower_model.objects.sudo(reason="work.task.mark_duplicate.followers")
-            .lock_if_supported()
-            .filter(attachment=source_attachment)
-            .order_by("pk")
-        )
-        if not source_followers:
-            return
-        canonical_attachment = attachment_model.objects.ensure_for_record(
-            canonical,
-            title=canonical.message_thread_title(),
-        )
-        canonical_party_ids = set(
-            follower_model._base_manager.filter(thread=canonical_attachment.thread).values_list(
-                "party_id",
-                flat=True,
-            )
-        )
-        for follower in source_followers:
-            if follower.party_id in canonical_party_ids:
-                follower.delete()
-                continue
-            follower.thread_id = canonical_attachment.thread_id
-            follower.attachment = canonical_attachment
-            # A receipt is positional within its old thread and cannot be moved.
-            follower.last_read_message = None
-            follower.save(update_fields=("thread", "attachment", "last_read_message", "updated_at"))
-            canonical_party_ids.add(follower.party_id)
+                return stage
+        return self.stage_model().for_container(queue).filter(category=category, rule_owned=True).first()
 
     def _base_verb(self, name: str, *args: Any, **kwargs: Any) -> Any:
         """Run a projects-only lifecycle verb for a legacy queue-less task."""
@@ -1979,7 +1776,7 @@ class TaskWork(StagedModelMixin):
 class UserWork(ResourceLoadMixin):
     """Provision personal queues after IAM user resources load."""
 
-    extends = "iam.User"
+    extends: ClassVar[str | None] = "iam.User"
 
     class Meta:
         """Abstract same-row provisioning donor for IAM users."""

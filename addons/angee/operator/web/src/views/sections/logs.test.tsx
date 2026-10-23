@@ -117,7 +117,7 @@ describe("useServiceLogStream", () => {
     });
 
     expect(result.current.streaming).toBe(false);
-    expect(result.current.error?.message).toBe("Log stream closed (4403)");
+    expect(result.current.error?.message).toBe("The log stream closed (code 4403).");
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_000);

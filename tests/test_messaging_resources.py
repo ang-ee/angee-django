@@ -39,7 +39,7 @@ CHATTER = {
     "020_messaging.threadedticket.yaml": "- _xref: ticket\n  title: Seeded ticket\n",
     "030_messaging.message.yaml": (
         "- _xref: question\n  record: chatter_seed.ticket\n  author: chatter_seed.author\n"
-        "  body: Which day does it break?\n  client_creation_key: seed-question\n"
+        "  body: Which day does it break?\n  idempotency_key: seed-question\n"
         "- _xref: reply\n  record: chatter_seed.ticket\n  author: chatter_seed.author\n"
         "  body: Mondays, after the export.\n  parent: chatter_seed.question\n  edited: true\n"
         "- _xref: note\n  record: chatter_seed.ticket\n  author: chatter_seed.author\n"
@@ -62,7 +62,8 @@ def test_rows_post_comments_replies_and_notes_as_their_author(
         author = User.objects.get(username="chatter-author")
         ticket = ThreadedTicket.objects.get(title="Seeded ticket")
         thread = ticket.message_thread(create=False)
-        question = Message.objects.get(client_creation_key="seed-question")
+        question = Resource.objects.get(xref="question").target_instance()
+        assert isinstance(question, Message)
         reply = Message.objects.get(parent=question)
         note = Message.objects.get(thread=thread, subtype__key="note")
     assert {question.thread_id, reply.thread_id, note.thread_id} == {thread.pk}
@@ -93,7 +94,9 @@ def test_a_changed_chatter_row_is_refused_rather_than_reposted(composed_tables: 
         _load(addon)
 
     with system_context(reason="test.chatter_resources.unchanged"):
-        assert Message.objects.get(client_creation_key="seed-question").preview == "Which day does it break?"
+        question = Resource.objects.get(xref="question").target_instance()
+        assert isinstance(question, Message)
+        assert question.preview == "Which day does it break?"
 
 
 @pytest.mark.django_db(transaction=True)

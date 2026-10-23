@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Badge, Button, Glyph, SurfacePanel } from "@angee/ui";
+import { Chip, Button, Glyph, SurfacePanel } from "@angee/ui";
 
 const meta = {
   title: "Fragments/SurfacePanel",
@@ -26,11 +26,11 @@ export const Panel: Story = {
       <div className="divide-y divide-border-subtle">
         <div className="flex items-center justify-between gap-3 px-4 py-3">
           <span>Base fragments</span>
-          <Badge tone="success">Ready</Badge>
+          <Chip tone="success">Ready</Chip>
         </div>
         <div className="flex items-center justify-between gap-3 px-4 py-3">
           <span>Console panels</span>
-          <Badge tone="info">Draft</Badge>
+          <Chip tone="info">Draft</Chip>
         </div>
       </div>
     </SurfacePanel>

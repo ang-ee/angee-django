@@ -49,8 +49,14 @@ How the ontology maps to this addon.
   relation without a step. `step.records` and `WorkflowRun.objects.about(record_or_records)`
   expose both directions. Identities obey the target's current read scope.
 - **Asking:** the existing ask-and-wait step outcome creates a decision with its concern links and resumes on the
-  answer. `ctx.ask(request, state=...)` asks exactly one decision per step, retained
-  by `StepRun.decision`. `DecisionStep` owns shared application and continuation;
+  answer. `ctx.ask(request, state=...)` retains the current decision in
+  `StepRun.decision`. A continuation may ask again after that question is answered;
+  replacing an open question is refused. The prior question, verdict and concern
+  links remain immutable, and a native `StepRecord` retains the asking step's
+  `created` operation and requesting run. Ordinary read references to another
+  run's question do not confer that association.
+  `ctx.decision(id)` reads current or retained questions only within its own run.
+  `DecisionStep` owns shared application and continuation;
   askers supply alternatives. `StepRun.hold` exposes decision, run and error holds.
 - **Stopping:** one action on a run, offered in the timeline: cancel the run and withdraw its open decisions
   through the decisions owner.
@@ -86,18 +92,22 @@ The manual-start mutation reads the subject in the actor's scope and delegates
 validation and request-key replay to run admission. Success refreshes the run
 models; the timeline's existing attention owner opens it when a question appears.
 
-- **Record timeline:** one component with one input, a record or a set of records. It is a pane beside the
-  content and can be placed left or right.
-  Peeks are passive and publish no pane. The eager contribution alone owns attention:
-  after initial placement, only a new open question ID on the same record forces it open.
-  Counts going down do not reopen it. Stop uses the runs page's confirmed action descriptor.
-  - Beside a record: the vertical stepper described above, with decision cards inline.
-  - Beside a record set (a list or a selection): the open decisions and active runs across those records, grouped,
-    each linking to its record.
+- **Record timeline:** the shared timeline read owns record-aside chronology and attention.
+  Workflows contributes `timeline#kinds/workflows.run`; opening a run enters the
+  `record#aside/workflows.run` drill-in. That pane renders the vertical stepper
+  described above, with decision cards inline. Stop uses the runs page's confirmed
+  action descriptor. A collection can compose `RecordTimeline` over a record set
+  to show open decisions and active runs grouped by record, each linking to its record.
 - It replaces the separate runs tab and decisions tab on a record.
 
 Not built in the first version: timers on decisions, automatic answers, any consumer-specific timeline.
 
-`RecordTimeline` receives only `record`, a `{model, id}` or array of those.
-`useRecordTimelinePane({record, side})` publishes it through the existing right
-chatter or left primary-pane host; the default contribution is `record#aside`.
+`RecordTimeline` receives `record`, a `{model, id}` or array of those, and an
+optional `runId` that limits the drill-in to one run. Its host owns placement;
+the Python timeline kind reads native run lifecycle and waiting state into the shared union.
+
+Each step body opens a fresh run changeset whose origin is the WorkflowRun. Actor
+attribution follows the step actor; a handled failure marks that boundary failed.
+Database bodies retain their savepoint rollback, while IO bodies preserve their
+existing transaction boundary. StepWatch pointer moves are historized for merge
+reversal.

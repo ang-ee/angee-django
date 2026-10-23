@@ -11,7 +11,7 @@ from rebac import actor_context, generic_target, to_object_ref
 
 from angee.agents.context import record_view_context
 from angee.agents.models import ACTIVE_TURN_STATUSES, SessionStatus, TurnStatus
-from angee.base.identity import public_id_of
+from angee.identity import public_id_of
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
 from angee.workflows.steps import Fail, Settlement, Step
@@ -124,7 +124,7 @@ class StartConversation(Step[ConversationInput, ConversationOutput, StartConvers
         else:
             retry = False
             if ctx.input.session is None:
-                session = sessions.objects.start(agent, owner=ctx.run.run_as, context=context, actor=ctx.actor)
+                session = sessions.objects.start(agent, user=ctx.run.run_as, context=context, actor=ctx.actor)
                 ctx.record(session, "Conversation", operation="created")
             else:
                 session = ctx.load(sessions, ctx.input.session, permission="post", lock=True)
@@ -133,7 +133,7 @@ class StartConversation(Step[ConversationInput, ConversationOutput, StartConvers
                 ctx.record(session, "Conversation")
         if retained is None or retry:
             if retry and session.status == SessionStatus.CLOSED:
-                session = sessions.objects.start(agent, owner=ctx.run.run_as, context=context, actor=ctx.actor)
+                session = sessions.objects.start(agent, user=ctx.run.run_as, context=context, actor=ctx.actor)
                 ctx.record(session, "Conversation", operation="created")
             deadline = ctx.now + ctx.config.timeout
             turn = session.post(prompt, context=context, actor=ctx.actor, dispatch_expires=deadline)
@@ -187,7 +187,7 @@ def require_run_turn(ctx: Any, identity: ConversationIdentity) -> Any:
 
 
 class CloseConversation(Step[ConversationOutput, ConversationOutput, None]):
-    """Close a completed workflow-owned conversation through the ACP session owner."""
+    """Close a completed workflow conversation through ``AgentSession.close``."""
 
     key = "close_conversation"
     label = "Close conversation"

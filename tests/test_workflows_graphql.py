@@ -12,7 +12,6 @@ from django.test.utils import CaptureQueriesContext
 from pydantic import BaseModel, Field
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
-from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import schema as workflow_schema
 from angee.workflows.definition import Definition
@@ -94,7 +93,7 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
     assert "draft" in schema._schema.get_type("WorkflowType").fields
     assert "layout" in schema._schema.get_type("WorkflowType").fields
     for type_name, pair, obsolete in (
-        ("WorkflowRunType", {"subject_model", "subject_id"}, set()),
+        ("WorkflowRunType", {"subject_model", "subject_id", "subject_label"}, set()),
         ("StepRecordType", {"record_model", "record_id"}, {"model_label"}),
         ("StepWatchType", {"record_model", "record_id"}, {"record_model_label", "record_public_id"}),
         ("TriggerEventType", {"record_model", "record_id"}, set()),
@@ -133,9 +132,9 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
             ),
         ]
     )
-    step = system_queryset(StepRun).get(run=run)
-    attempt = system_queryset(StepAttempt).get(step_run=step)
-    artifact = system_queryset(StepRecord).get(step_run=step)
+    step = StepRun.system_queryset().get(run=run)
+    attempt = StepAttempt.system_queryset().get(step_run=step)
+    artifact = StepRecord.system_queryset().get(step_run=step)
     query = """{
       workflowrun { id origin run_as { id display_name } input output version { workflow { name } } }
       steprun { id node_key run { id } attempts { id } records { label } }
@@ -222,6 +221,50 @@ def test_artifact_reference_is_redacted_for_run_reader_without_source_read(schem
     }
 
 
+def test_run_input_reads_declared_mti_sources_under_their_own_permission(schema, callers, register_step):
+    """Canonical retained edges neither hide a readable child nor authorize it by its parent."""
+    from tests.mtidemo.models import MtiChild, MtiParent
+
+    admin, owner, reader = callers
+    with system_context(reason="workflow input MTI source fixture"):
+        source = MtiChild.objects.create(title="Shared source", detail="Concrete source")
+    write_relationships([
+        RelationshipTuple(to_object_ref(source), "reader", to_subject_ref(owner)),
+        RelationshipTuple(to_object_ref(source.mtiparent_ptr), "reader", to_subject_ref(owner)),
+        RelationshipTuple(to_object_ref(source.mtiparent_ptr), "reader", to_subject_ref(reader)),
+    ])
+
+    class SourceInput(BaseModel):
+        source: str = Field(json_schema_extra={"relation": {"resource": "mtidemo.MtiChild"}})
+        note: str = "Retained text"
+
+    class SourceStep(Step[SourceInput, SourceInput, None]):
+        key = "concrete_input_source"
+
+        def run(self, ctx):
+            return ctx.done(ctx.input)
+
+    register_step(SourceStep)
+    workflow = load_workflow(document("entry", step=SourceStep.key), actor=admin)
+    workflow.with_actor(admin).grant_record_access("starter", owner)
+    run = start_run(workflow, actor=owner, input={"source": source.sqid})
+    run.with_actor(owner).grant_record_access("reader", reader)
+    retained = StepRecord.objects.with_actor(owner).get(run=run)
+    assert retained.record_model_label == MtiParent._meta.label
+    assert retained.record_public_id == source.sqid
+    assert MtiParent.objects.with_actor(reader).filter(pk=source.pk).exists()
+    assert not MtiChild.objects.with_actor(reader).filter(pk=source.pk).exists()
+    query = "query($id: String!) { workflowrun_by_pk(id: $id) { input } }"
+
+    def projected(actor):
+        return result_data(execute_schema(schema, query, {"id": run.sqid}, user=actor))["workflowrun_by_pk"]["input"]
+
+    assert projected(owner) == {"source": source.sqid, "note": "Retained text"}
+    assert projected(reader) == {"source": None, "note": "Retained text"}
+    write_relationships([RelationshipTuple(to_object_ref(source), "reader", to_subject_ref(reader))])
+    assert projected(reader) == {"source": source.sqid, "note": "Retained text"}
+
+
 def test_cancel_action_checks_requester_before_calling_owner(schema, callers):
     """An unrelated or anonymous requester cannot cancel another user's run."""
 
@@ -233,9 +276,9 @@ def test_cancel_action_checks_requester_before_calling_owner(schema, callers):
     denied = result_data(action(schema, "cancel_workflow_run", run, other))
     assert not denied["cancel_workflow_run"]["ok"]
     assert action(schema, "cancel_workflow_run", run, None).errors
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.RUNNING
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.RUNNING
     assert result_data(action(schema, "cancel_workflow_run", run, owner))["cancel_workflow_run"]["ok"]
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.CANCELED
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.CANCELED
 
 
 def test_reprocess_action_returns_replacement_id_and_operator_attribution(schema, callers):
@@ -250,7 +293,7 @@ def test_reprocess_action_returns_replacement_id_and_operator_attribution(schema
     run.with_actor(owner).grant_record_access("operator", operator)
     result = result_data(action(schema, "reprocess_workflow_run", run, operator))["reprocess_workflow_run"]
     assert result["ok"] and result["id"] != run.sqid
-    replacement = system_queryset(WorkflowRun).get(reprocess_of=run)
+    replacement = WorkflowRun.system_queryset().get(reprocess_of=run)
     assert result["id"] == replacement.sqid
     assert replacement.run_as_id == operator.pk and replacement.input == run.input
     assert replacement.origin == "reprocess"
@@ -273,16 +316,16 @@ def test_retry_action_uses_run_permission_instead_of_engine_row_write(schema, ca
     workflow.with_actor(admin).grant_record_access("starter", owner)
     run = start_run(workflow, actor=owner)
     run_until(run)
-    step = system_queryset(StepRun).get(run=run)
+    step = StepRun.system_queryset().get(run=run)
     run.with_actor(owner).grant_record_access("reader", reader)
     for name in ("retry_step", "retry_step_accepting_duplicate"):
         assert not result_data(action(schema, name, step, reader))[name]["ok"]
         assert action(schema, name, step, None).errors
-    assert system_queryset(StepRun).get(pk=step.pk).status == StepRunStatus.FAILED
+    assert StepRun.system_queryset().get(pk=step.pk).status == StepRunStatus.FAILED
     assert not step.with_actor(owner).has_access("write")
     assert result_data(action(schema, "retry_step", step, owner))["retry_step"]["ok"]
-    assert system_queryset(StepRun).get(pk=step.pk).status == StepRunStatus.READY
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.RUNNING
+    assert StepRun.system_queryset().get(pk=step.pk).status == StepRunStatus.READY
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.RUNNING
 
 
 def test_duplicate_retry_action_records_requesting_operator(schema, callers, register_step):
@@ -310,9 +353,9 @@ def test_duplicate_retry_action_records_requesting_operator(schema, callers, reg
     run = start_run(workflow, actor=owner)
     run.with_actor(owner).grant_record_access("operator", operator)
     run_until(run)
-    step = system_queryset(StepRun).get(run=run)
+    step = StepRun.system_queryset().get(run=run)
     assert step.status == StepRunStatus.FAILED
-    initial = system_queryset(StepAttempt).get(step_run=step)
+    initial = StepAttempt.system_queryset().get(step_run=step)
     assert initial.result == AttemptResult.TIMED_OUT and initial.effect_started_at is not None
     facts = result_data(
         execute_schema(
@@ -334,7 +377,7 @@ def test_duplicate_retry_action_records_requesting_operator(schema, callers, reg
     acknowledged = result_data(action(schema, "retry_step_accepting_duplicate", step, operator))
     assert acknowledged["retry_step_accepting_duplicate"]["ok"]
     run_until(run)
-    attempts = list(system_queryset(StepAttempt).filter(step_run=step).order_by("number"))
+    attempts = list(StepAttempt.system_queryset().filter(step_run=step).order_by("number"))
     assert [attempt.acknowledged_by_id for attempt in attempts] == [None, operator.pk]
     visible = result_data(
         execute_schema(
@@ -356,7 +399,7 @@ def test_narrow_origin_and_actor_projection_does_not_fetch_each_run(schema, exec
     workflow = load_workflow(document("entry"), actor=actor)
     counts = []
     for count in (1, 4):
-        while system_queryset(WorkflowRun).count() < count:
+        while WorkflowRun.system_queryset().count() < count:
             start_run(workflow, actor=actor)
         with CaptureQueriesContext(connection) as queries:
             data: dict[str, Any] = result_data(
@@ -376,7 +419,7 @@ def test_narrow_outcome_label_uses_published_vocabulary_without_row_queries(sche
     workflow = load_workflow(document("entry"), actor=actor)
     counts = []
     for count in (1, 4):
-        while system_queryset(WorkflowRun).count() < count:
+        while WorkflowRun.system_queryset().count() < count:
             run_until(start_run(workflow, actor=actor))
         with CaptureQueriesContext(connection) as queries:
             data = result_data(execute_schema(schema, "{ workflowrun { outcome outcome_label } }", user=actor))
@@ -392,7 +435,7 @@ def test_narrow_step_run_relation_projection_does_not_fetch_each_foreign_key(sch
     workflow = load_workflow(document("entry"), actor=actor)
     counts = []
     for count in (1, 5):
-        while system_queryset(StepRun).count() < count:
+        while StepRun.system_queryset().count() < count:
             run_until(start_run(workflow, actor=actor))
         with CaptureQueriesContext(connection) as queries:
             data = result_data(execute_schema(schema, "{ steprun { run { id } } }", user=actor))
@@ -417,7 +460,7 @@ def test_diagnostics_distinguish_run_operators_editors_and_readers(schema, calle
         workflow.with_actor(admin).grant_record_access("starter", actor)
     run = start_run(workflow, actor=owner)
     run_until(run)
-    attempt = system_queryset(StepAttempt).get(step_run__run=run)
+    attempt = StepAttempt.system_queryset().get(step_run__run=run)
     editor, viewer, reader, operator = (
         create_user(f"diagnostic-{role}") for role in ("editor", "viewer", "reader", "operator")
     )
@@ -507,7 +550,7 @@ def test_terminal_cancel_reports_open_step_cleanup_without_claiming_run_cancella
     }
     second = result_data(execute_schema(schema, query, {"id": run.sqid}, user=actor))
     assert second["cancel_workflow_run"] == {"ok": True, "message": "Nothing to cancel."}
-    run = system_queryset(WorkflowRun).get(pk=run.pk)
+    run = WorkflowRun.system_queryset().get(pk=run.pk)
     assert (run.status, run.outcome, run.output, run.error, run.finished_at) == retained
     assert not run.can_cancel(actor)
 
@@ -539,7 +582,7 @@ def test_viewer_facts_share_state_and_permission_owners(schema, callers, step_ke
     workflow.with_actor(admin).grant_record_access("starter", owner)
     run = start_run(workflow, actor=owner)
     run.with_actor(owner).grant_record_access("reader", reader)
-    row = system_queryset(StepRun).get(run=run)
+    row = StepRun.system_queryset().get(run=run)
     if settle:
         runner.execute(row.pk)
     query = """{
@@ -570,7 +613,7 @@ def test_error_routed_failure_does_not_offer_retry(schema, callers):
     )
     workflow.with_actor(admin).grant_record_access("starter", owner)
     run = start_run(workflow, actor=owner)
-    runner.execute(system_queryset(StepRun).get(run=run, node_key="entry").pk)
+    runner.execute(StepRun.system_queryset().get(run=run, node_key="entry").pk)
     data = result_data(
         execute_schema(
             schema,
@@ -602,12 +645,12 @@ def test_step_rows_follow_graph_order_even_when_database_order_differs(schema, c
     )
     workflow.with_actor(admin).grant_record_access("starter", owner)
     run = start_run(workflow, actor=owner)
-    runner.execute(system_queryset(StepRun).get(run=run, node_key="start").pk)
-    runner.execute(system_queryset(StepRun).get(run=run, node_key="branch_b").pk)
+    runner.execute(StepRun.system_queryset().get(run=run, node_key="start").pk)
+    runner.execute(StepRun.system_queryset().get(run=run, node_key="branch_b").pk)
     run_until(run)
     assert run.status == "succeeded"
     run.with_actor(owner).grant_record_access("operator", operator)
-    rows = system_queryset(StepRun).filter(run=run)
+    rows = StepRun.system_queryset().filter(run=run)
     assert list(rows.order_by("pk").values_list("node_key", flat=True)) == [
         "start",
         "branch_a",
@@ -709,16 +752,20 @@ def test_studio_save_conflict_precedes_validation_and_publish_checks_revision(sc
     variables["draft"] = {"invalid": True}
     stale = execute_schema(schema, query, variables, user=editor)
     assert stale.errors[0].extensions == {"code": "STALE_REVISION", "current_revision": revision + 1}
-    assert system_queryset(Workflow).get(pk=workflow.pk).draft == draft
+    assert Workflow.system_queryset().get(pk=workflow.pk).draft == draft
     publish = """mutation($id: ID!, $revision: Int!) {
-      publish_workflow(id: $id, expected_revision: $revision) { number dependents }
+      publish_workflow(id: $id, expected_revision: $revision) { number dependents document }
     }"""
     stale = execute_schema(schema, publish, {"id": workflow.sqid, "revision": revision}, user=editor)
     assert stale.errors[0].extensions["code"] == "STALE_REVISION"
     published = result_data(
         execute_schema(schema, publish, {"id": workflow.sqid, "revision": revision + 1}, user=editor)
     )
-    assert published["publish_workflow"] == {"number": 2, "dependents": []}
+    assert published["publish_workflow"] == {
+        "number": 2,
+        "dependents": [],
+        "document": Workflow.system_queryset().get(pk=workflow.pk).published.document,
+    }
     unchanged = result_data(
         execute_schema(schema, publish, {"id": workflow.sqid, "revision": revision + 1}, user=editor)
     )
@@ -758,7 +805,7 @@ def test_studio_outcomes_resolve_await_contracts_and_isolate_bad_nodes(schema, c
         key="hidden",
         actor=admin,
     )
-    assert not read_scoped_queryset(Workflow, reader).filter(pk=hidden.pk).exists()
+    assert not Workflow.objects.with_actor(reader).with_action("read").filter(pk=hidden.pk).exists()
     workflow = load_workflow(document("entry"), actor=admin)
     workflow.with_actor(admin).grant_record_access("viewer", reader)
     child.with_actor(admin).grant_record_access("viewer", reader)
@@ -848,8 +895,8 @@ def test_studio_success_keeps_nonblocking_config_diagnostics_and_publish_validat
 
 def test_studio_registry_projection_resolves_and_builds_each_choice_once(monkeypatch, register_step):
     """The rowless projection passes one resolved class to the common choice owner."""
-    from angee.base import impl as impl_owner
-    from angee.base.impl import resolve_all_impl_classes
+    from angee import impl as impl_owner
+    from angee.impl import resolve_all_impl_classes
     from angee.workflows.schema import WorkflowStepChoice
 
     class Projected(Step[Value, Value, None]):
@@ -908,7 +955,7 @@ def test_broken_published_child_is_a_located_issue_for_query_save_and_publish(sc
                 document={"nodes": []},
                 content_hash="historical",
             )
-            system_queryset(Workflow).filter(pk=child.pk).update(published=version)
+            Workflow.system_queryset().filter(pk=child.pk).update(published=version)
     else:
 
         class Tightened(BaseModel):
@@ -1045,7 +1092,7 @@ def test_record_start_as_starter_replays_the_same_request(schema, callers):
     assert (run.sqid, run.run_as_id, run.subject_object_id) == (started["id"], actor.pk, subject.pk)
     refused = start_on_record(schema, workflow, subject, actor, input={"value": 1}, request_key=key)
     assert not refused["ok"] and "different request" in refused["message"]
-    assert system_queryset(WorkflowRun).count() == 1
+    assert WorkflowRun.system_queryset().count() == 1
 
 
 @pytest.mark.parametrize("refusal", ["start", "subject", "model", "input", "publication"])
@@ -1064,7 +1111,7 @@ def test_record_start_refuses_unavailable_or_invalid_admission(schema, callers, 
         input={"value": "invalid"} if refusal == "input" else {},
     )
     assert not result["ok"] and result["id"] is None
-    assert not system_queryset(WorkflowRun).exists()
+    assert not WorkflowRun.system_queryset().exists()
     if refusal == "input":
         assert result["validation_errors"]["input.value"]
 

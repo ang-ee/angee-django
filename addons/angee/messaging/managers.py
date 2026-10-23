@@ -29,13 +29,13 @@ import logging
 import re
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import nullcontext
 from contextvars import Context
-from datetime import date, datetime, time, timedelta
-from decimal import Decimal
-from functools import reduce
+from datetime import datetime, time, timedelta
+from functools import partial, reduce
 from itertools import batched
 from operator import or_
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Self, TypedDict, cast
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -45,9 +45,11 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, NotSupportedError, connections, models, transaction
+from django.db.models.deletion import ProtectedError
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.db.models.query import ModelIterable
 from django.utils import timezone
+from django.utils.html import strip_tags
 from rebac import (
     PermissionDenied,
     SubjectRef,
@@ -62,18 +64,13 @@ from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
-from angee.base.actors import actor_user_id
-from angee.base.changesets import changeset
-from angee.base.identity import instances_from_public_ids
-from angee.base.mixins import CreationKeyQuerySet, OwnerQuerySet, TrashQuerySet
-from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
-from angee.base.refs import generic_pointer_model, generic_pointer_target
-from angee.base.scoping import read_scoped_queryset, system_queryset
-from angee.base.serialization import strip_null_bytes
+from angee.actors import actor_user_id
+from angee.changesets import changeset, changeset_model, creation_fingerprint, require_changeset
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.graphql.publishing import mute_changes
+from angee.identity import instances_from_public_ids
 from angee.integrate.errors import IntegrationError, safe_integration_failure
+from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
 from angee.integrate.net import AddressNotAllowedError
 from angee.jobs.timeouts import task_claim_lease
@@ -86,13 +83,42 @@ from angee.messaging.delivery import (
 )
 from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
-from angee.messaging.tracking import TrackingChange
+from angee.messaging.source_copies import observe_email_identity
+from angee.models import (
+    AngeeManager,
+    AngeeModel,
+    AngeeQuerySet,
+    MergeableQuerySet,
+    OwnerQuerySet,
+    TrashQuerySet,
+    row_lock_paths,
+)
+from angee.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.parties.managers import Signing
+from angee.parties.models import Handle
+from angee.permissions import require_rebac_queryset
+from angee.refs import generic_pointer_model, generic_pointer_target
+from angee.serialization import strip_null_bytes
 from angee.storage.uploads import attachment_extension, fallback_attachment_name, truncate_filename
 
 if TYPE_CHECKING:
+    from django_stubs_ext import WithAnnotations
+
     from angee.messaging.backends import ParsedMessage, ParsedThread
-    from angee.messaging.models import Message, NotificationPolicy, Part
+    from angee.messaging.models import (
+        Channel,
+        Fragment,
+        Message,
+        MessageEdge,
+        MessageStar,
+        NotificationPolicy,
+        Part,
+        Reaction,
+        Thread,
+        ThreadAttachment,
+        ThreadFollower,
+        ThreadNotification,
+    )
 
 # A fragment quoted by more than this many messages is boilerplate (a disclaimer or
 # repeated signature); quote-linking it would join the whole corpus, so skip it.
@@ -216,10 +242,10 @@ _SEARCH_MAX_BYTES = 512 * 1024
 _MESSAGE_METADATA_MAX_BYTES = 512 * 1024
 
 
-class ChannelQuerySet(IntegrationQuerySet):
+class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
     """Chainable scopes over messaging channels and their pairing attempts."""
 
-    def unfinished_pairing(self, user: Any, backend_class: str) -> ChannelQuerySet:
+    def unfinished_pairing(self, user: Any, backend_class: str) -> Self:
         """Return the user's empty, never-claimed, non-paused channels, newest first.
 
         "Claimed" is the durable identity under the live implementation's
@@ -229,7 +255,12 @@ class ChannelQuerySet(IntegrationQuerySet):
         ``for_channel`` predicate; callers run elevated so it sees every message.
         """
 
-        impl_class = self.model.resolve_impl_class(self.model.live_impl_field, backend_class)
+        field = self.model.live_implementation_field()
+        if field is None:
+            raise ValueError("Unfinished pairing requires a live channel backend.")
+        impl_class = field.resolve_class(backend_class)
+        if not issubclass(impl_class, LiveBridgeImpl):
+            raise ValueError("Unfinished pairing requires a live channel backend.")
         identity_key = impl_class.state_identity_key
         identity = f"subscription_state__{identity_key}"
         claimed = (
@@ -238,8 +269,7 @@ class ChannelQuerySet(IntegrationQuerySet):
             & ~models.Q(**{identity: None})
         )
         message_model = apps.get_model("messaging", "Message")
-        return cast(
-            ChannelQuerySet,
+        return (
             self.filter(
                 ~models.Exists(message_model.objects.for_channel(models.OuterRef("pk"))),
                 owner_id=user.pk,
@@ -247,11 +277,14 @@ class ChannelQuerySet(IntegrationQuerySet):
             )
             .exclude(lifecycle=IntegrationLifecycle.PAUSED)
             .exclude(claimed)
-            .order_by("-created_at", "-pk"),
+            .order_by("-created_at", "-pk")
         )
 
 
-class ChannelManager(IntegrationManager.from_queryset(ChannelQuerySet)):  # type: ignore[misc]
+_ChannelManagerBase = IntegrationManager.from_queryset(ChannelQuerySet)
+
+
+class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
     """Channel factory + delete owner, bound as ``Channel.objects``.
 
     A Channel is a multi-table-inheritance child of the concrete ``Integration``, so
@@ -332,6 +365,10 @@ class ChannelManager(IntegrationManager.from_queryset(ChannelQuerySet)):  # type
             raise ValueError("A channel child must be deleted through its own capability.")
         if not channel.has_access("delete"):
             raise PermissionDenied(f"Denied: cannot delete {channel._meta.label}")
+        if blockers := channel.purge_blockers():
+            raise ProtectedError(
+                "Retained source identity evidence protects this channel. Disconnect it to stop sync.", blockers,
+            )
         thread_model = apps.get_model("messaging", "Thread")
         deleted_pk = channel.pk
         with transaction.atomic():
@@ -437,10 +474,6 @@ def _message_search_query(term: str) -> models.Q:
         | models.Q(parts__fragment__text__icontains=term)
         | models.Q(parts__file__filename__icontains=term)
         | models.Q(parts__file__title__icontains=term)
-        | models.Q(tracking_values__field_name__icontains=term)
-        | models.Q(tracking_values__field_label__icontains=term)
-        | models.Q(tracking_values__old_display__icontains=term)
-        | models.Q(tracking_values__new_display__icontains=term)
     )
 
 
@@ -453,15 +486,31 @@ def _message_search_query(term: str) -> models.Q:
 _MESSAGE_ORDER = KeysetOrder("_order_at")
 
 
-def _preview(body: ParsedPart | None, *, limit: int = 280) -> str:
-    """Return a short text preview from the first text node of a parsed body tree."""
+class _MessageChronology(TypedDict):
+    """The hydrated timestamp used by record transcript windows and cursors."""
 
-    if body is None:
+    _order_at: datetime
+
+
+def _preview(body: ParsedPart | None, *, limit: int = 280) -> str:
+    """Return a short text preview of a parsed body tree: the first plain body text, else the
+    first HTML body stripped of its markup. A preview is user text and never carries tags."""
+
+    plain = _first_body_text(body, html=False)
+    if plain:
+        return plain[:limit]
+    html = _first_body_text(body, html=True)
+    return " ".join(strip_tags(html).split())[:limit] if html else ""
+
+
+def _first_body_text(part: ParsedPart | None, *, html: bool) -> str:
+    if part is None:
         return ""
-    if body.text and body.role not in ("quoted", "signature"):
-        return body.text[:limit]
-    for child in body.children:
-        found = _preview(child, limit=limit)
+    is_html = (part.type or "").casefold() == "text/html"
+    if part.text and part.role not in ("quoted", "signature") and is_html == html:
+        return part.text
+    for child in part.children:
+        found = _first_body_text(child, html=html)
         if found:
             return found
     return ""
@@ -544,7 +593,7 @@ def _parsed_sync_hash(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-class FragmentManager(AngeeManager):
+class FragmentManager[FragmentT: Fragment](AngeeManager[FragmentT]):
     """Content-addressed text store: one row per distinct (null-stripped) text."""
 
     def search_query(self, term: str, *, search_type: str = "plain") -> SearchQuery:
@@ -552,7 +601,7 @@ class FragmentManager(AngeeManager):
 
         return SearchQuery(strip_null_bytes(term or "").strip(), search_type=search_type, config=_SEARCH_CONFIG)
 
-    def upsert(self, *, text: str, kind: str = "paragraph", created_by_id: Any = None) -> Any:
+    def upsert(self, *, text: str, kind: str = "paragraph", created_by_id: Any = None) -> FragmentT:
         """Get-or-create a fragment by the SHA-256 of its cleaned (null-stripped, trimmed) text.
 
         A new fragment's ``search`` vector is stamped in the same transaction — the
@@ -563,11 +612,12 @@ class FragmentManager(AngeeManager):
         text = strip_null_bytes(text).strip()
         encoded = text.encode("utf-8")
         digest = hashlib.sha256(encoded).hexdigest()
-        with transaction.atomic():
+        with transaction.atomic(using=self.db):
             fragment, created = self.get_or_create(
                 hash=digest,
                 defaults={"text": text, "kind": kind, "created_by_id": created_by_id},
             )
+            assert fragment._state.db is not None
             if created and connections[fragment._state.db].vendor == "postgresql":
                 # tsvector is a Postgres type; on other vendors (the SQLite test
                 # backend) the column stays NULL and full-text search is unavailable.
@@ -577,7 +627,7 @@ class FragmentManager(AngeeManager):
                 searchable: Any = "text"
                 if len(encoded) > _SEARCH_MAX_BYTES:
                     searchable = models.Value(encoded[:_SEARCH_MAX_BYTES].decode("utf-8", errors="ignore"))
-                self.model._base_manager.filter(pk=fragment.pk).update(
+                self.model._base_manager.using(fragment._state.db).filter(pk=fragment.pk).update(
                     search=SearchVector(searchable, config=_SEARCH_CONFIG)
                 )
         return fragment
@@ -602,7 +652,6 @@ def _channel_cascade_children(channel: Any) -> tuple[tuple[Any, models.Q], ...]:
         (apps.get_model("messaging", "Part"), by_message),
         (apps.get_model("messaging", "Reaction"), by_message),
         (apps.get_model("messaging", "MessageStar"), by_message),
-        (apps.get_model("messaging", "TrackingValue"), by_message),
         (
             apps.get_model("messaging", "MessageEdge"),
             models.Q(src__channel=channel) | models.Q(dst__channel=channel),
@@ -614,10 +663,10 @@ def _channel_cascade_children(channel: Any) -> tuple[tuple[Any, models.Q], ...]:
     )
 
 
-class ThreadQuerySet(OwnerQuerySet[Any], AngeeQuerySet[Any]):
+class ThreadQuerySet[ThreadT: Thread](MergeableQuerySet[ThreadT], OwnerQuerySet[ThreadT], AngeeQuerySet[ThreadT]):
     """Chainable read scopes for message threads."""
 
-    def inbox(self) -> ThreadQuerySet:
+    def inbox(self) -> Self:
         """Return channel/inbox threads — those not attached to a record.
 
         A thread bound to a model row through a ``ThreadAttachment`` is record
@@ -626,9 +675,14 @@ class ThreadQuerySet(OwnerQuerySet[Any], AngeeQuerySet[Any]):
         owner-scoped generic ``threads`` list, aggregate, or by-pk lookup.
         """
 
-        return cast(ThreadQuerySet, self.exclude(attachments__role="chatter"))
+        # A structural anti-join inside the already authorized inbox queryset: the
+        # unscoped base manager supplies every redirect group without opening a
+        # separately audited system read. Equality on the survivor id is hashed once.
+        chatter = self.model._base_manager.filter(attachments__role="chatter").survivor_ids()
+        attached = chatter.filter(survivor=self.survivor_id(ref=models.OuterRef))
+        return self.alias(_record_attached=models.Exists(attached)).filter(_record_attached=False)
 
-    def for_channel(self, channel: Any) -> ThreadQuerySet:
+    def for_channel(self, channel: Any) -> Self:
         """Return the threads that belong to ``channel`` — the purge-scope predicate.
 
         A channel's threads FK the shared ``integrate.Integration`` parent through the
@@ -637,7 +691,7 @@ class ThreadQuerySet(OwnerQuerySet[Any], AngeeQuerySet[Any]):
         delete and the delete-preview count both read it, so they cannot drift.
         """
 
-        return cast(ThreadQuerySet, self.filter(channel=channel))
+        return self.filter(channel=channel)
 
     def conversation_labels(self) -> dict[Any, str]:
         """Label each thread for the actor: its title, else the people in it.
@@ -694,7 +748,10 @@ class ThreadQuerySet(OwnerQuerySet[Any], AngeeQuerySet[Any]):
         return labels
 
 
-class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore[misc]
+_ThreadManagerBase = AngeeManager.from_queryset(ThreadQuerySet)
+
+
+class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
     """Owns thread resolution — the 4-step RFC-5322 priority under a row lock."""
 
     @staticmethod
@@ -750,13 +807,13 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
             created_by_id=created_by_id,
         )
 
-    def referenced_thread(self, *, platform: str, in_reply_to: str, references: tuple[str, ...]) -> Any:
-        """Read the platform-wide reference winner without locking or creating a thread."""
+    def referenced_thread(self, *, platform: str, channel: Any, in_reply_to: str, references: tuple[str, ...]) -> Any:
+        """Read the channel-local reference winner without locking or creating a thread."""
 
         message_model = apps.get_model("messaging", "Message")
         if in_reply_to:
             parent = message_model.objects.with_external_ids([in_reply_to]).filter(
-                platform=platform,
+                platform=platform, channel=channel,
             ).select_related("thread").first()
             if parent is not None and parent.thread_id:
                 return parent.thread
@@ -764,7 +821,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
             ref_map = {
                 row.external_id: row
                 for row in message_model.objects.with_external_ids(list(references)).filter(
-                    platform=platform,
+                    platform=platform, channel=channel,
                 ).select_related("thread")
             }
             for external_id in reversed(references):
@@ -794,10 +851,9 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         directly: the thread keys on ``chat:<channel>:<external_id>`` — this
         manager owns the deterministic-key namespace (``chat:`` beside
         ``subj:``/``msg:``), so adapters pass raw conversation ids and never
-        compose prefixes. Chat threads are **channel-scoped**, unlike email's
-        platform-wide merge: two linked accounts that each DM the same person
-        are two private conversations governed by their channels, so they must
-        not fuse into one REBAC-shared thread. The hint's ``modality``/
+        compose prefixes. Every source thread is channel-scoped: two accounts
+        retain separate transport and membership occurrences, and ``same_as``
+        evidence folds one into the other as a redirect. The hint's ``modality``/
         ``visibility`` land on a newly created thread only — a broadcast source
         names its feed public at the adapter that knows it, instead of every
         public source re-owning the visibility default. Its ``title`` also fills
@@ -850,7 +906,9 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
             ):
                 named.refresh_from_db(fields=["title"])
             return named
-        referenced = self.referenced_thread(platform=platform, in_reply_to=in_reply_to, references=references)
+        referenced = self.referenced_thread(
+            platform=platform, channel=channel, in_reply_to=in_reply_to, references=references,
+        )
         if referenced is not None:
             return referenced
 
@@ -865,8 +923,8 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
                 title_fragment = fragment_model._base_manager.filter(hash=title_digest).first()
                 if title_fragment is not None:
                     existing = (
-                        self.select_for_update()
-                        .filter(platform=platform, title=title_fragment)
+                        self.lock_if_supported()
+                        .filter(platform=platform, channel=channel, title=title_fragment)
                         .order_by("-created_at")
                         .first()
                     )
@@ -893,8 +951,9 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         platform: str,
         external_id: str,
         defaults: dict[str, Any],
+        ownerless: bool = False,
     ) -> tuple[Any, bool]:
-        """Get-or-create a thread on its ``(platform, external_id)`` identity, indexed.
+        """Get-or-create a thread on its ``(channel, platform, external_id)`` identity, indexed.
 
         A plain ``get_or_create(external_id=...)`` would seq-scan (the identity index
         carries the MD5 digest, not the value), so the read side filters through
@@ -903,19 +962,27 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         the same converge-on-unique contract the old column constraint provided.
         Channel-bound inserts skip personal ownership through the model's save;
         their access follows the channel while creation attribution remains intact.
+        ``ownerless`` inserts a thread nobody owns (a record's chatter without a creator).
         """
 
         # Identity resolution is system bookkeeping (the callers gate reads at their
         # own surface), so it runs elevated — a REBAC-scoped read that cannot see
         # the existing row would double-create and then dead-end.
-        identities = self.system_context(reason="messaging.thread.identity").lock_if_supported()
-        queryset = _external_id_annotated(identities).filter(_external_id_q(external_id), platform=platform)
+        # Let Django's FK descriptor resolve either channel= or channel_id=,
+        # and use that same proposed row for the insert if no occurrence exists.
+        thread = self.model(platform=platform, external_id=external_id, **defaults)
+        manager = self.db_manager(hints={"instance": thread})
+        using = manager.db
+        identities = manager.system_context(reason="messaging.thread.identity").lock_if_supported()
+        queryset = _external_id_annotated(identities).filter(
+            _external_id_q(external_id), platform=platform, channel_id=thread.channel_id,
+        )
         existing = queryset.first()
         if existing is not None:
             return existing, False
         try:
-            with transaction.atomic():
-                thread = self.model._base_manager.create(platform=platform, external_id=external_id, **defaults)
+            with transaction.atomic(using=using):
+                thread.save(force_insert=True, using=using, ownerless=ownerless)
                 return thread, True
         except IntegrityError:
             existing = queryset.first()
@@ -954,14 +1021,18 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         # Channel deletion authorizes its thread teardown even when a thread has
         # another owner; the thread's own delete gate remains owner/admin-only.
         with system_context(reason="messaging.channel.teardown"), mute_changes(), transaction.atomic():
+            for model in (message_model, self.model):
+                # A copy in another channel outlives its purged survivor as a canonical row.
+                purged = model.objects.for_channel(channel).order_by().values("pk")
+                model._base_manager.filter(merged_into__in=purged).update(merged_into=None)
             message_model.objects.for_channel(channel).delete()
             self.for_channel(channel).delete()
 
 
-class ThreadAttachmentManager(AngeeManager):
+class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeManager[ThreadAttachmentT]):
     """Owns the polymorphic edge from a model row to its chatter thread.
 
-    The edge names its record by :func:`angee.base.refs.generic_pointer_target`: a gated
+    The edge names its record by :func:`angee.refs.generic_pointer_target`: a gated
     record and each of its REBAC-typed MTI ancestors share one chatter thread,
     and an ungated host keeps its own content type. ``permissions.zed``
     backs one relation per attachable record type with ``target``, so a source
@@ -970,17 +1041,27 @@ class ThreadAttachmentManager(AngeeManager):
     materialize under system context.
     """
 
-    def for_record(self, record: Any, *, role: str = "chatter") -> Any | None:
+    def for_record(self, record: Any, *, role: str = "chatter") -> ThreadAttachmentT | None:
         """Return the existing thread attachment for ``record`` and ``role``."""
 
         if record.pk is None:
             return None
+        edges = self.model._base_manager.db_manager(hints={"instance": record})
         content_type, object_id = generic_pointer_target(record)
-        return (
-            self.model._base_manager.select_related("thread")
+        attachment = (
+            edges.select_related("thread")
             .filter(content_type=content_type, object_id=object_id, role=role)
             .first()
         )
+        if attachment is not None and role == "chatter" and attachment.thread.merged_into_id is not None:
+            thread = attachment.thread.canonical()
+            attachment = edges.select_related("thread").get(thread=thread, role=role)
+            target = attachment.require_threaded_target()
+            if isinstance(target, AngeeModel):
+                target.require_access(target.thread_read_access)
+            elif not target._message_read_allowed():
+                raise PermissionDenied("Reading a redirected chatter thread requires record read access.")
+        return attachment
 
     def source_threads_for_record(self, record: Any) -> Any:
         """Return every source-conversation edge attached to ``record``."""
@@ -1048,10 +1129,10 @@ class ThreadAttachmentManager(AngeeManager):
         target_model = key["content_type"].model_class()
         if target_model is None:
             raise ValueError("Source attachment target model is unavailable.")
-        system_queryset(target_model, lock=("self",)).get(pk=key["object_id"])
-        system_queryset(type(thread), lock=("self",)).get(pk=thread.pk)
+        target_model.system_queryset(lock=("self",)).get(pk=key["object_id"])
+        type(thread).system_queryset(lock=("self",)).get(pk=thread.pk)
 
-    def ensure_for_record(self, record: Any, *, role: str = "chatter", title: str = "") -> Any:
+    def ensure_for_record(self, record: Any, *, role: str = "chatter", title: str = "") -> ThreadAttachmentT:
         """Return ``record``'s attachment, creating its private chatter thread if needed.
 
         Both the thread and the attachment are resolved with ``get_or_create`` on a
@@ -1065,22 +1146,40 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None:
             raise ValueError("Cannot attach a thread to an unsaved record.")
-        content_type, object_id = generic_pointer_target(record)
-        _assert_canonical_composes_thread_mixin(record, content_type)
-        external_id = f"record:{content_type.app_label}.{content_type.model}:{object_id}:{role}"
-        thread_model = self.model._meta.get_field("thread").related_model
-        fragment_model = apps.get_model("messaging", "Fragment")
         # The host owns whether its record chatter streams over changes(); stamp its
         # opt-in onto the thread so broadcasts_changes() is O(1) at publish time and
         # never re-resolves the polymorphic target.
         host_broadcasts = bool(getattr(record, "thread_broadcasts_changes", False))
+        if existing := self.for_record(record, role=role):
+            self._reconcile_broadcast_state(existing.thread, host_broadcasts=host_broadcasts)
+            return existing
+        content_type, object_id = generic_pointer_target(record)
+        _assert_canonical_composes_thread_mixin(record, content_type)
+        external_id = f"record:{content_type.app_label}.{content_type.model}:{object_id}:{role}"
+        thread_model = self.model.thread.field.related_model
+        fragment_model = apps.get_model("messaging", "Fragment")
         title_text = strip_null_bytes(title or str(record)).strip()
-        with transaction.atomic():
-            title_fragment = fragment_model.objects.upsert(text=title_text) if title_text else None
-            thread, _created = thread_model.objects.get_or_create_by_external_id(
-                platform=thread_model._meta.get_field("platform").choices_enum.OTHER,
+        manager = self.db_manager(hints={"instance": record})
+        using = manager.db
+        # A chatter edge is the record's own thread: the record's verb has admitted
+        # the actor, and the edge and its thread are written as system rows. A
+        # source edge is created under the actor, who needs write on the record.
+        elevated = (
+            system_context(reason="messaging.thread_attachment.chatter")
+            if role == self.model.AttachmentRole.CHATTER else nullcontext()
+        )
+        # A record's chatter belongs to the record's creator, never to whoever first
+        # follows or posts: ownership is standing access the record does not grant.
+        creator_id = getattr(record, "created_by_id", None) if role == self.model.AttachmentRole.CHATTER else None
+        owned = {"owner_id": creator_id} if creator_id is not None else {}
+        with elevated, transaction.atomic(using=using):
+            title_fragment = fragment_model.objects.db_manager(using).upsert(text=title_text) if title_text else None
+            thread, _created = thread_model.objects.db_manager(using).get_or_create_by_external_id(
+                platform=Handle.Platform.OTHER,
                 external_id=external_id,
+                ownerless=role == self.model.AttachmentRole.CHATTER and creator_id is None,
                 defaults={
+                    **owned,
                     "title_id": title_fragment.pk if title_fragment is not None else None,
                     "modality": thread_model.Modality.GROUP,
                     "visibility": thread_model.Visibility.PRIVATE,
@@ -1088,7 +1187,7 @@ class ThreadAttachmentManager(AngeeManager):
                 },
             )
             self._reconcile_broadcast_state(thread, host_broadcasts=host_broadcasts)
-            attachment, _created = self.model._base_manager.get_or_create(
+            attachment, _created = self.model._base_manager.using(using).get_or_create(
                 content_type_id=content_type.pk,
                 object_id=object_id,
                 role=role,
@@ -1113,64 +1212,155 @@ class ThreadAttachmentManager(AngeeManager):
         """
 
         if thread.host_broadcasts_changes != host_broadcasts:
-            type(thread)._base_manager.filter(pk=thread.pk).update(host_broadcasts_changes=host_broadcasts)
+            type(thread)._base_manager.db_manager(hints={"instance": thread}).filter(pk=thread.pk).update(
+                host_broadcasts_changes=host_broadcasts,
+            )
             thread.host_broadcasts_changes = host_broadcasts
         if host_broadcasts and thread.owner_id is not None:
-            type(thread).objects.filter(pk=thread.pk).release(get_user_model()(pk=thread.owner_id))
+            type(thread).objects.db_manager(hints={"instance": thread}).filter(pk=thread.pk).release(
+                get_user_model()(pk=thread.owner_id)
+            )
             thread.owner = None
 
-    def teardown_for_record(self, record: Any) -> None:
-        """Detach ``record`` and delete only its unshared private chatter graph.
+    def teardown_for_target(self, target: Any) -> None:
+        """Remove target edges while preserving redirected chatter bookkeeping.
 
-        Source edges are removed without deleting their shared conversation. A private
-        chatter graph is deleted only when no other attachment retains its thread;
-        its messages and dependent rows follow the thread's native cascade.
-        The parent record delete is the authorization boundary, so cleanup runs under
-        the same system-context pattern as other messaging bookkeeping writes.
+        Rebind followers and notifications before deleting a retired host's edge;
+        their physical thread identities, preferences and receipts remain intact.
+        Only an unshared, unmerged private chatter thread is deleted with its
+        native cascade. Source threads retain their independently owned graph.
         """
 
-        if record.pk is None:
+        if target.pk is None:
             return
-        content_type, object_id = generic_pointer_target(record)
+        content_type, object_id = generic_pointer_target(target)
         target_model = content_type.model_class()
         if target_model is None:
             return
-        thread_model = self.model._meta.get_field("thread").related_model
-        with system_context(reason="messaging.record_thread.teardown"), transaction.atomic():
-            target_model._base_manager.select_for_update().filter(pk=object_id).exists()
+        thread_model = self.model.thread.field.related_model
+        manager = self.db_manager(hints={"instance": target})
+        using = manager.db
+        with system_context(reason="messaging.record_thread.teardown"), transaction.atomic(using=using):
+            target_model._base_manager.db_manager(hints={"instance": target}).select_for_update(
+                of=row_lock_paths(target_model),
+            ).filter(
+                pk=object_id
+            ).exists()
+            edges = self.model._base_manager.db_manager(hints={"instance": target})
             attachments = list(
-                self.model._base_manager.select_for_update()
+                edges.all()
+                .lock_if_supported()
                 .filter(content_type=content_type, object_id=object_id)
-                .values("pk", "thread_id", "role")
                 .order_by("pk")
             )
             if not attachments:
                 return
-            locked_thread_ids = sorted({row["thread_id"] for row in attachments})
-            list(thread_model._base_manager.select_for_update().filter(pk__in=locked_thread_ids).values_list("pk"))
-            attachment_ids = [row["pk"] for row in attachments]
-            chatter_thread_ids = {row["thread_id"] for row in attachments if row["role"] == "chatter"}
-            self.model._base_manager.filter(pk__in=attachment_ids).delete()
+            thread_ids = {edge.thread_id for edge in attachments}
+            threads = {
+                thread.pk: thread
+                for thread in thread_model._base_manager.db_manager(hints={"instance": target})
+                .all()
+                .lock_if_supported()
+                .filter(pk__in=thread_ids)
+                .order_by("pk")
+            }
+            attachment_ids = [edge.pk for edge in attachments]
+            chatter_thread_ids = set()
+            replacements = {}
+            for edge in attachments:
+                if edge.role != self.model.AttachmentRole.CHATTER:
+                    continue
+                chatter_thread_ids.add(edge.thread_id)
+                thread = threads[edge.thread_id]
+                if thread.merged_into_id is None:
+                    continue
+                survivor = thread.canonical()
+                replacement = (
+                    edges.all()
+                    .lock_if_supported()
+                    .filter(thread_id=survivor.pk, role=self.model.AttachmentRole.CHATTER)
+                    .exclude(pk__in=attachment_ids)
+                    .first()
+                )
+                if replacement is None or replacement.target is None:
+                    raise ValidationError("Retained chatter requires a surviving record attachment before deletion.")
+                replacements[edge.pk] = replacement.pk
+            for old_id, new_id in replacements.items():
+                for name in ("ThreadFollower", "ThreadNotification"):
+                    apps.get_model("messaging", name)._base_manager.db_manager(
+                        hints={"instance": target}
+                    ).filter(attachment_id=old_id).update(attachment_id=new_id)
+            edges.filter(pk__in=attachment_ids).delete()
             orphaned_chatter_ids = [
-                thread_id
-                for thread_id in chatter_thread_ids
-                if not self.model._base_manager.filter(thread_id=thread_id).exists()
+                thread_id for thread_id in chatter_thread_ids if not edges.filter(thread_id=thread_id).exists()
             ]
             if orphaned_chatter_ids:
-                thread_model._base_manager.filter(pk__in=orphaned_chatter_ids).delete()
+                thread_model._base_manager.db_manager(hints={"instance": target}).filter(
+                    pk__in=orphaned_chatter_ids,
+                    merged_into__isnull=True,
+                ).delete()
 
 
-class ThreadFollowerQuerySet(AngeeQuerySet[Any]):
+class ThreadFollowerQuerySet[ThreadFollowerT: ThreadFollower](AngeeQuerySet[ThreadFollowerT]):
     """Chainable read scopes for record chatter followers."""
 
-    def for_attachment(self, attachment: Any) -> ThreadFollowerQuerySet:
-        """Return followers bound to one record's chatter attachment edge."""
+    @staticmethod
+    def user_q(user: Any) -> models.Q:
+        """Select a user's existing person follows without creating or loading the person."""
 
-        return cast(ThreadFollowerQuerySet, self.filter(attachment=attachment))
+        user_id = _resolve_user_id(user=user)
+        if user_id is None:
+            return models.Q(pk__in=[])
+        people = apps.get_model("parties", "Person")._base_manager.filter(user_id=user_id)
+        return models.Q(party_id__in=people.values("pk"))
+
+    @staticmethod
+    def _preference_order(thread_id: Any) -> tuple[models.Case, str]:
+        return models.Case(models.When(thread_id=thread_id, then=0), default=1), "pk"
+
+    def for_thread(self, thread: Any) -> Self:
+        return self.filter(thread_id__in=thread.member_threads().values("pk"))
+
+    def effective_for_thread(self, thread: Any) -> Self:
+        """Current thread preferences win; otherwise retain the earliest physical follow.
+
+        Which physical follow represents a party is a fact of the rows, not an
+        access decision: the choice reads the table unscoped, and the caller's
+        own scope (an actor, a sudo) applies to the rows it returns.
+        """
+
+        members = thread.member_threads().values("pk")
+        physical = self.model._base_manager.using(self.db).filter(thread_id__in=members)
+        kept = (
+            physical.filter(party_id=models.OuterRef("party_id"))
+            .order_by(*self._preference_order(thread.canonical().pk))
+            .values("pk")[:1]
+        )
+        return self.filter(thread_id__in=members, pk=models.Subquery(kept))
+
+    def for_attachment(self, attachment: Any) -> Self:
+        return self.effective_for_thread(attachment.thread)
 
 
-class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):  # type: ignore[misc]
+_ThreadFollowerManagerBase = AngeeManager.from_queryset(ThreadFollowerQuerySet)
+
+
+class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerManagerBase[ThreadFollowerT]):
     """Owns party subscriptions to model-attached chatter threads."""
+
+    def for_message_expression(self, user: Any) -> models.QuerySet[ThreadFollowerT]:
+        """Correlate follows to an outer message, ordered by the effective preference."""
+
+        thread_model = self.model.thread.field.related_model
+        survivor = thread_model(pk=MergeableQuerySet.survivor_id(
+            "thread__", ref=lambda name: models.OuterRef(models.OuterRef(name)),
+        ))
+        members = thread_model._base_manager.redirect_group(survivor).values("pk")
+        current_thread = MergeableQuerySet.survivor_id("thread__", ref=models.OuterRef)
+        preference, tie = ThreadFollowerQuerySet._preference_order(current_thread)
+        return self.model._base_manager.using(self.db).filter(
+            ThreadFollowerQuerySet.user_q(user), thread_id__in=members,
+        ).alias(_thread_preference=preference).order_by("_thread_preference", tie)
 
     def get_party_id(self, *, party: Any = None, user: Any = None, user_id: Any = None, create: bool = False) -> Any:
         """Resolve a follower identity; only a subscribing write creates a person."""
@@ -1186,14 +1376,14 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
             return None
         if create:
             with system_context(reason="messaging.follower.person"):
-                account = user if user is not None else get_user_model()._base_manager.get(pk=resolved_user_id)
-                return apps.get_model("parties", "Party").objects.for_user(account).pk
-        return (
-            apps.get_model("parties", "Person")
-            ._base_manager.filter(user_id=resolved_user_id)
-            .values_list("pk", flat=True)
-            .first()
-        )
+                account = user if user is not None else get_user_model()._base_manager.using(self.db).get(
+                    pk=resolved_user_id,
+                )
+                return apps.get_model("parties", "Party").objects.db_manager(self.db).for_user(account).pk
+        parties = apps.get_model("parties", "Party").objects.system_context(
+            reason="messaging.follower.person"
+        ).using(self.db)
+        return parties.person_id_for_user(resolved_user_id)
 
     def _require_follow_access(self, record: Any, party_id: Any) -> None:
         """A person manages their own follow; a record writer may manage others."""
@@ -1209,16 +1399,10 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
     def _person_account(self, party_id: Any) -> Any | None:
         """Return the human account for a party, if this is an account follow."""
 
-        user_id = (
-            apps.get_model("parties", "Person")
-            ._base_manager.filter(pk=party_id)
-            .values_list("user_id", flat=True)
-            .first()
-        )
-        if user_id is None:
-            return None
-        user = get_user_model()._base_manager.get(pk=user_id)
-        return user if getattr(user, "kind", None) == "person" else None
+        parties = apps.get_model("parties", "Party").objects.system_context(
+            reason="messaging.follower.account"
+        ).using(self.db)
+        return parties.account_for_party(party_id)
 
     def end_unreadable_for_record(self, record: Any, *, role: str = "chatter") -> int:
         """End person-account follows after an access owner's revoke or seat removal."""
@@ -1228,16 +1412,20 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
             return 0
         people = list(
             apps.get_model("parties", "Person")
-            ._base_manager.filter(
-                pk__in=self.model._base_manager.filter(attachment=attachment).values("party_id"),
+            ._base_manager.using(self.db).filter(
+                pk__in=self.model._base_manager.using(self.db).filter(
+                    thread_id__in=attachment.thread.member_threads().values("pk"),
+                ).values("party_id"),
                 user__kind="person",
             )
             .select_related("user")
         )
-        allowed = record.thread_reader_ids(person.user for person in people)
+        allowed = attachment.require_threaded_target().thread_reader_ids(
+            account for person in people if (account := person.user) is not None
+        )
         with system_context(reason="messaging.follower.read_revoked"):
-            removed, _ = self.model._base_manager.filter(
-                attachment=attachment,
+            removed, _ = self.model._base_manager.using(self.db).filter(
+                thread_id__in=attachment.thread.member_threads().values("pk"),
                 party_id__in=[person.pk for person in people if person.user_id not in allowed],
             ).delete()
         return removed
@@ -1282,9 +1470,27 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
 
         from angee.messaging.models import ThreadedModelMixin
 
-        edges = {pk: (content_type_id, object_id) for pk, content_type_id, object_id in attachments}
-        if not edges:
+        selected = [pk for pk, _content_type_id, _object_id in attachments]
+        if not selected:
             return 0
+        attachment_model = apps.get_model("messaging", "ThreadAttachment")
+        thread_model = apps.get_model("messaging", "Thread")
+        survivor = thread_model(pk=MergeableQuerySet.survivor_id("thread__", ref=models.OuterRef))
+        selected_group = thread_model.objects.system_context(
+            reason="messaging.follower.redirect_group"
+        ).redirect_group(survivor).filter(attachments__pk__in=selected)
+        members = list(attachment_model._base_manager.alias(
+            _selected_group=models.Exists(selected_group),
+        ).filter(
+            _selected_group=True,
+            role=attachment_model.AttachmentRole.CHATTER,
+        ).values_list("pk", "thread_id", "thread__merged_into_id", "content_type_id", "object_id"))
+        targets = {thread_id: (content_type_id, object_id)
+                   for _pk, thread_id, merged_into_id, content_type_id, object_id in members
+                   if merged_into_id is None}
+        edges = {pk: targets[merged_into_id or thread_id]
+                 for pk, thread_id, merged_into_id, _content_type_id, _object_id in members
+                 if (merged_into_id or thread_id) in targets}
         follows = self.model._base_manager.filter(attachment_id__in=edges)
         if party_id is not None:
             follows = follows.filter(party_id=party_id)
@@ -1322,7 +1528,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
             readable = (
                 model._base_manager.using(self.db).filter(predicate, pk__in=record_ids)
                 if predicate is not None
-                else model._default_manager.using(self.db)
+                else require_rebac_queryset(model).using(self.db)
                 .with_actor(subject)
                 .with_action(model.thread_read_access)
                 .filter(pk__in=record_ids)
@@ -1332,8 +1538,8 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         revoked = []
         for pk, attachment_id, follower_party_id in follow_rows:
             content_type_id, record_id = edges[attachment_id]
-            readable = allowed.get((content_type_id, follower_party_id))
-            if readable is not None and record_id not in readable:
+            readable_ids = allowed.get((content_type_id, follower_party_id))
+            if readable_ids is not None and record_id not in readable_ids:
                 revoked.append(pk)
         removed, _ = self.model._base_manager.filter(pk__in=revoked).delete()
         return removed
@@ -1347,7 +1553,9 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         people = (
             apps.get_model("parties", "Person")
             ._base_manager.filter(
-                pk__in=self.model._base_manager.filter(attachment=attachment).values("party_id"),
+                pk__in=self.model._base_manager.filter(
+                    thread_id__in=attachment.thread.member_threads().values("pk"),
+                ).values("party_id"),
                 user__kind="person",
             )
             .select_related("user")
@@ -1374,9 +1582,10 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         attachment = _record_attachment(record, role=role)
         if attachment is None:
             return False
-        return self.model._base_manager.filter(attachment=attachment, party_id=party_id).exists()
+        return self.model._base_manager.filter(
+            thread_id__in=attachment.thread.member_threads().values("pk"), party_id=party_id,
+        ).exists()
 
-    @transaction.atomic
     def subscribe(
         self,
         record: Any,
@@ -1389,73 +1598,81 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         subtype_keys: tuple[str, ...] | None = None,
         history_before: Any | None = None,
     ) -> Any:
-        """Follow as a party; omitted preferences preserve an existing follow.
+        """Follow a party, reusing its effective subscription across chatter redirects.
 
-        A person account requires an existing record read; accountless parties
-        and service accounts remain delivery routes. Access is granted by the
-        chosen role owner before this call. Unfollowing never revokes that read.
+        Omitted preferences and an existing read cutoff remain unchanged. A person
+        account needs the current record's read permission; managing another party
+        needs that record's write permission. Only a new follow seeds a receipt.
         """
 
-        if party is None:
-            resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
-            if resolved_user_id is None:
-                raise ValueError("A party or user is required to follow a thread.")
-            account = user if user is not None else get_user_model()._base_manager.get(pk=resolved_user_id)
-            if getattr(account, "kind", None) == "person" and not record.thread_reader_allowed(account):
-                raise PermissionDenied("Only a person with record read access may follow.")
-            party_id = self.get_party_id(user=account, create=True)
-        else:
-            if user is not None or user_id is not None:
-                raise ValueError("Pass a party or a user, not both.")
-            party_id = self.get_party_id(party=party)
-            account = self._person_account(party_id)
-            if account is not None and not record.thread_reader_allowed(account):
-                raise PermissionDenied("Only a person with record read access may follow.")
-        self._require_follow_access(record, party_id)
-        attachment = apps.get_model("messaging", "ThreadAttachment").objects.ensure_for_record(
-            record,
-            role=role,
-            title=_record_thread_title(record),
+        follows = self.db_manager(hints={"instance": record})
+        using = follows.db
+        attachments = apps.get_model("messaging", "ThreadAttachment").objects.db_manager(
+            hints={"instance": record},
         )
-        with system_context(reason="messaging.follower.subscribe"):
-            follower, created = self.model._base_manager.get_or_create(
-                thread_id=attachment.thread.pk,
-                party_id=party_id,
-                defaults={
-                    "attachment_id": attachment.pk,
-                    "notification_policy": self.model.NotificationPolicy.INBOX
-                    if notification_policy is None
-                    else notification_policy,
-                    "subtype_keys": [] if subtype_keys is None else list(subtype_keys),
-                    "created_by_id": actor_user_id(current_actor()),
-                },
-            )
-            if created:
-                # History is read at join (the Matrix/Slack semantics): the fresh
-                # receipt anchors at the latest pre-join message, so a new
-                # follower's badge counts only what arrives after — or, when the
-                # subscribe reacts to one specific post (a direct recipient),
-                # strictly before that post so exactly it stays unread.
-                self._seed_receipt(follower, attachment.thread, history_before=history_before)
-            if not created:
-                # The attachment pointer is deterministic from the thread and
-                # re-primed on every follow; policy/subtype_keys are create-time
-                # state, updated only when the caller passes them.
-                updates: dict[str, Any] = {"attachment": attachment}
-                if notification_policy is not None:
-                    updates["notification_policy"] = notification_policy
-                if subtype_keys is not None:
-                    updates["subtype_keys"] = list(subtype_keys)
-                for field, value in updates.items():
-                    setattr(follower, field, value)
-                follower.save(update_fields=(*updates, "updated_at"))
-        return follower
+        with transaction.atomic(using=using):
+            attachment = attachments.for_record(record, role=role)
+            target = attachment.target if attachment is not None else record
+            if target is None:
+                raise ValidationError("A chatter follow requires a surviving record attachment.")
+            if party is None:
+                resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
+                if resolved_user_id is None:
+                    raise ValueError("A party or user is required to follow a thread.")
+                account = user if user is not None else get_user_model()._base_manager.using(using).get(
+                    pk=resolved_user_id,
+                )
+                if getattr(account, "kind", None) == "person" and not target.thread_reader_allowed(account):
+                    raise PermissionDenied("Only a person with record read access may follow.")
+                party_id = follows.get_party_id(user=account, create=True)
+            else:
+                if user is not None or user_id is not None:
+                    raise ValueError("Pass a party or a user, not both.")
+                party_id = follows.get_party_id(party=party)
+                account = follows._person_account(party_id)
+                if account is not None and not target.thread_reader_allowed(account):
+                    raise PermissionDenied("Only a person with record read access may follow.")
+            follows._require_follow_access(target, party_id)
+            if attachment is None:
+                attachment = attachments.ensure_for_record(record, role=role, title=_record_thread_title(record))
+            with system_context(reason="messaging.follower.subscribe"):
+                type(attachment.thread).system_queryset(lock=("self",)).using(using).get(pk=attachment.thread_id)
+                follower = follows.effective_for_thread(attachment.thread).lock_if_supported().filter(
+                    party_id=party_id,
+                ).first()
+                created = False
+                if follower is None:
+                    follower, created = self.model._base_manager.using(using).get_or_create(
+                        thread_id=attachment.thread_id,
+                        party_id=party_id,
+                        defaults={
+                            "attachment_id": attachment.pk,
+                            "notification_policy": self.model.NotificationPolicy.INBOX
+                            if notification_policy is None else notification_policy,
+                            "subtype_keys": [] if subtype_keys is None else list(subtype_keys),
+                            "created_by_id": actor_user_id(current_actor()),
+                        },
+                    )
+                if created:
+                    follows._seed_receipt(follower, attachment.thread, history_before=history_before)
+                else:
+                    updates: dict[str, Any] = {"attachment": attachment}
+                    if notification_policy is not None:
+                        updates["notification_policy"] = notification_policy
+                    if subtype_keys is not None:
+                        updates["subtype_keys"] = list(subtype_keys)
+                    for field, value in updates.items():
+                        setattr(follower, field, value)
+                    follower.save(using=using, update_fields=(*updates, "updated_at"))
+            return follower
 
     def _seed_receipt(self, follower: Any, thread: Any, *, history_before: Any | None) -> None:
         """Anchor a fresh follower's receipt at the latest pre-join message."""
 
         message_model = apps.get_model("messaging", "Message")
-        queryset = message_model._base_manager.filter(thread=thread, is_trashed=False).annotate(
+        queryset = message_model._base_manager.using(thread._state.db).filter(
+            thread_id__in=thread.member_threads().values("pk"), is_trashed=False,
+        ).annotate(
             _order_at=MessageQuerySet.chronological_time()
         )
         if history_before is not None:
@@ -1464,7 +1681,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         if latest is None:
             return
         follower.last_read_message = latest
-        follower.save(update_fields=("last_read_message", "updated_at"))
+        follower.save(using=thread._state.db, update_fields=("last_read_message", "updated_at"))
 
     def mark_read_up_to(
         self,
@@ -1491,14 +1708,14 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         target = message
         if target is None:
             target = (
-                message_model._base_manager.filter(thread=thread, is_trashed=False)
+                message_model._base_manager.filter(thread_id__in=thread.member_threads().values("pk"), is_trashed=False)
                 .annotate(_order_at=MessageQuerySet.chronological_time())
                 .order_by("-_order_at", "-pk")
                 .first()
             )
         if target is None:
             return 0
-        if message is not None and message.thread_id != getattr(thread, "pk", thread):
+        if message is not None and not thread.member_threads().filter(pk=message.thread_id).exists():
             raise ValueError("Receipt anchor does not belong to this thread.")
         target_key = target.chronological_key
         with transaction.atomic():
@@ -1509,7 +1726,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
             follower = (
                 self.sudo(reason="messaging.receipt.advance")
                 .lock_if_supported()
-                .filter(thread=thread, party_id=party_id)
+                .effective_for_thread(thread).filter(party_id=party_id)
                 .select_related("last_read_message")
                 .first()
             )
@@ -1541,14 +1758,14 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
             return apps.get_model("messaging", "Message")._base_manager.none()
         message_model = apps.get_model("messaging", "Message")
         follower = (
-            self.model._base_manager.filter(thread=thread, party_id=party_id)
+            self.sudo(reason="messaging.follower.effective").effective_for_thread(thread).filter(party_id=party_id)
             .select_related("last_read_message")
             .first()
         )
         if follower is None:
             return message_model._base_manager.none()
         queryset = (
-            message_model._base_manager.filter(thread=thread, is_trashed=False)
+            message_model._base_manager.filter(thread_id__in=thread.member_threads().values("pk"), is_trashed=False)
             .annotate(_order_at=MessageQuerySet.chronological_time())
             .filter(follower.notification_preference.subscribed_subtype_q())
         )
@@ -1604,7 +1821,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         if party_id is None:
             return False
         follower = (
-            self.model._base_manager.filter(thread_id=message.thread_id, party_id=party_id)
+            self.sudo(reason="messaging.follower.effective").effective_for_thread(message.thread).filter(party_id=party_id)
             .select_related("last_read_message")
             .first()
         )
@@ -1635,7 +1852,9 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
             return 0
         self._require_follow_access(record, party_id)
         with system_context(reason="messaging.follower.unsubscribe"):
-            deleted, _details = self.model._base_manager.filter(attachment=attachment, party_id=party_id).delete()
+            deleted, _details = self.model._base_manager.filter(
+                thread_id__in=attachment.thread.member_threads().values("pk"), party_id=party_id,
+            ).delete()
         return deleted
 
 
@@ -1644,38 +1863,45 @@ class NotificationPointerIterable(ModelIterable):
 
     def __iter__(self) -> Iterator[Any]:
         rows = list(super().__iter__())
-        self.queryset.model.objects.prime_message_pointers(rows, relation_actor(self.queryset))
+        manager = self.queryset.model._default_manager
+        if not isinstance(manager, ThreadNotificationManager):
+            raise ImproperlyConfigured("NotificationPointerIterable requires a ThreadNotificationManager.")
+        manager.prime_message_pointers(rows, relation_actor(self.queryset))
         yield from rows
 
 
-class ThreadNotificationQuerySet(AngeeQuerySet[Any]):
+class ThreadNotificationQuerySet[ThreadNotificationT: ThreadNotification](AngeeQuerySet[ThreadNotificationT]):
     """Chainable read scopes for per-recipient delivery rows."""
 
     DELIVERY_ERROR_STATUSES = ("bounce", "exception")
     """Notification statuses that mean the author has a delivery error."""
 
-    def with_message_pointers(self) -> ThreadNotificationQuerySet:
+    def with_message_pointers(self) -> Self:
         """Batch the recipient's narrow message context after filtering and pagination."""
 
         queryset = self.all()
         queryset._iterable_class = NotificationPointerIterable
-        return cast(ThreadNotificationQuerySet, queryset)
+        return queryset
 
-    def for_attachment(self, attachment: Any) -> ThreadNotificationQuerySet:
+    def for_attachment(self, attachment: Any) -> Self:
         """Return notifications bound to one record's chatter attachment edge."""
 
-        return cast(ThreadNotificationQuerySet, self.filter(attachment=attachment))
-
-    def delivery_errors(self) -> ThreadNotificationQuerySet:
-        """Return notifications whose delivery bounced or raised an exception."""
-
-        return cast(
-            ThreadNotificationQuerySet,
-            self.filter(notification_status__in=self.DELIVERY_ERROR_STATUSES),
+        return self.filter(
+            thread_id__in=attachment.thread.member_threads().values("pk"),
         )
 
+    def delivery_errors(self) -> Self:
+        """Return notifications whose delivery bounced or raised an exception."""
 
-class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQuerySet)):  # type: ignore[misc]
+        return self.filter(notification_status__in=self.DELIVERY_ERROR_STATUSES)
+
+
+_ThreadNotificationManagerBase = AngeeManager.from_queryset(ThreadNotificationQuerySet)
+
+
+class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
+    _ThreadNotificationManagerBase[ThreadNotificationT]
+):
     """Owns per-item delivery and acknowledgement, independently of follower cursors."""
 
     def prime_message_pointers(self, rows: Sequence[Any], actor: Any) -> None:
@@ -1709,10 +1935,26 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
                     models.Q(pk__in={row.attachment_id for row in rows if row.attachment_id is not None})
                     | models.Q(thread_id__in={row.thread_id for row in rows}, role="chatter")
                 )
-                .prefetch_related("target", "content_type")
+                .select_related("thread").prefetch_related("target", "content_type")
             )
-        by_id = {attachment.pk: attachment for attachment in attachments}
-        by_thread = {attachment.thread_id: attachment for attachment in attachments if attachment.role == "chatter"}
+        thread_model = apps.get_model("messaging", "Thread")
+        threads = thread_model.objects.system_context(reason="messaging.notification.redirect_groups")
+        redirect_groups: models.QuerySet[Thread] = threads.none()
+        for survivor_id in {edge.thread.merged_into_id for edge in attachments if edge.thread.merged_into_id}:
+            redirect_groups |= threads.redirect_group(thread_model(pk=survivor_id))
+        redirects = {
+            edge.thread_id: edge
+            for edge in apps.get_model("messaging", "ThreadAttachment")._base_manager.filter(
+                thread_id__in=redirect_groups,
+                role="chatter",
+            ).prefetch_related("target", "content_type")
+        }
+        def current(edge: Any) -> Any:
+            return redirects.get(edge.thread.merged_into_id, edge)
+        by_id = {attachment.pk: current(attachment) for attachment in attachments}
+        by_thread = {
+            attachment.thread_id: current(attachment) for attachment in attachments if attachment.role == "chatter"
+        }
         allowed: dict[tuple[Any, Any], bool] = {}
         for row in rows:
             attachment = by_id.get(row.attachment_id) if row.attachment_id is not None else by_thread.get(row.thread_id)
@@ -1884,11 +2126,12 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
         if message.thread_id is None:
             return 0
         follower_model = apps.get_model("messaging", "ThreadFollower")
-        followers = {row.party_id: row for row in follower_model._base_manager.filter(thread_id=message.thread_id)}
+        followers = {row.party_id: row for row in follower_model.objects.effective_for_thread(message.thread)}
         subtype = message.subtype
         policy_type = follower_model.NotificationPolicy
         # Identity reads grant no access; the record gates each account below.
-        audience: dict[Any, tuple[NotificationPolicy, Any | None]] = {}
+        audience: dict[Any, tuple[NotificationPolicy, ThreadFollower | None]] = {}
+        follower: ThreadFollower | None
         for party_id, follower in followers.items():
             preference = follower.notification_preference
             if preference.is_subscribed_to(subtype):
@@ -1921,7 +2164,7 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
             ._base_manager.filter(pk__in=audience, user__isnull=False)
             .select_related("user")
         )
-        deliveries: dict[Any, tuple[NotificationPolicy, Any | None]] = {}
+        deliveries: dict[Any, tuple[NotificationPolicy, ThreadFollower | None]] = {}
         accounts: dict[Any, Any] = {}
         for person in people:
             accounts[person.user_id] = person.user
@@ -1972,13 +2215,12 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
 def _assert_canonical_composes_thread_mixin(record: Any, canonical_content_type: Any) -> None:
     """Fail fast on a child-composed / parent-uncomposed threaded MTI split.
 
-    ``ThreadedModelMixin`` owns the reverse ``thread_attachments`` GenericRelation and the
-    ``pre_delete`` teardown, both of which key on the model that composes the mixin — while
-    the attachment row is written at the *canonical* (topmost REBAC-typed) target
-    (:func:`angee.base.refs.generic_pointer_target`). If a child composes the mixin but its canonical ancestor
+    ``ThreadedModelMixin`` owns the reverse ``thread_attachments`` GenericRelation while
+    the attachment row and target-delete policy key on the *canonical* (topmost REBAC-typed) target
+    (:func:`angee.refs.generic_pointer_target`). If a child composes the mixin but its canonical ancestor
     does not, the ancestor cannot collect the child's attachment on delete and a reused
     primary key would mis-resolve. Guard it where the write keys — the placement
-    invariant stated in :mod:`angee.base.refs`.
+    invariant stated in :mod:`angee.refs`.
     """
 
     from angee.messaging.models import ThreadedModelMixin
@@ -1996,7 +2238,7 @@ def _assert_canonical_composes_thread_mixin(record: Any, canonical_content_type:
         )
 
 
-def _record_attachment(record: Any, *, role: str = "chatter") -> Any | None:
+def _record_attachment(record: Any, *, role: str = "chatter") -> ThreadAttachment | None:
     """Return the chatter attachment edge for ``record`` via its owning manager.
 
     The resolution logic (content-type lookup, ``select_related`` on the thread,
@@ -2086,88 +2328,7 @@ def _humanize_key(value: str) -> str:
     return value.replace("_", " ").replace("-", " ").strip().capitalize() or "Message"
 
 
-def _tracking_preview(tracking_values: tuple[TrackingChange | dict[str, Any], ...]) -> str:
-    """Return a compact preview for a tracking-only message."""
-
-    if not tracking_values:
-        return ""
-    first = _normalise_tracking_value(tracking_values[0], 0)
-    return f"{first['field_label']}: {first['old_display']} -> {first['new_display']}"[:280]
-
-
-def _normalise_tracking_value(raw: TrackingChange | dict[str, Any], position: int) -> dict[str, Any]:
-    """Return one tracking row in the persisted shape, at ``position``.
-
-    Accepts the structured :class:`~angee.messaging.tracking.TrackingChange` the field
-    tracker emits, or a raw dict from an external ``message_track``/``message_log`` caller.
-    Either way it JSON-safes the stored values and null-strips the display strings; the
-    row shape itself is authored once on ``TrackingChange``.
-    """
-
-    if isinstance(raw, TrackingChange):
-        field_name = raw.field_name
-        field_label = raw.field_label
-        field_type = raw.field_type
-        old_value = _json_safe(raw.old_value)
-        new_value = _json_safe(raw.new_value)
-        old_display = strip_null_bytes(str(raw.old_display))
-        new_display = strip_null_bytes(str(raw.new_display))
-        metadata: dict[str, Any] = {}
-    else:
-        field_name = strip_null_bytes(str(raw.get("field_name") or raw.get("field") or "")).strip()
-        if not field_name:
-            raise ValueError("Tracking value field_name is required.")
-        field_label = strip_null_bytes(str(raw.get("field_label") or raw.get("label") or field_name)).strip()
-        field_type = strip_null_bytes(str(raw.get("field_type") or raw.get("type") or ""))
-        old_value = _json_safe(raw.get("old_value"))
-        new_value = _json_safe(raw.get("new_value"))
-        old_display = strip_null_bytes(str(raw.get("old_display") or _display_value(old_value)))
-        new_display = strip_null_bytes(str(raw.get("new_display") or _display_value(new_value)))
-        raw_metadata = raw.get("metadata")
-        metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
-    return {
-        "position": position,
-        "field_name": field_name,
-        "field_label": field_label,
-        "field_type": field_type,
-        "old_value": old_value,
-        "new_value": new_value,
-        "old_display": old_display,
-        "new_display": new_display,
-        "metadata": strip_null_bytes(metadata),
-    }
-
-
-def _json_safe(value: Any) -> Any:
-    """Return a JSONField-safe representation of a tracked value."""
-
-    value = strip_null_bytes(value)
-    if value is None or isinstance(value, str | int | float | bool):
-        return value
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, datetime | date):
-        return value.isoformat()
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, list | tuple):
-        return [_json_safe(item) for item in value]
-    return str(value)
-
-
-def _display_value(value: Any) -> str:
-    """Return the display text for a tracked value."""
-
-    if value is None:
-        return ""
-    if isinstance(value, list):
-        return ", ".join(_display_value(item) for item in value)
-    if isinstance(value, dict):
-        return ", ".join(f"{key}: {_display_value(item)}" for key, item in value.items())
-    return str(value)
-
-
-class MessageStarManager(AngeeManager):
+class MessageStarManager[MessageStarT: MessageStar](AngeeManager[MessageStarT]):
     """Owns per-user Odoo-style starred message state."""
 
     def is_starred(self, message: Any, *, user: Any | None) -> bool:
@@ -2194,8 +2355,8 @@ class MessageStarManager(AngeeManager):
         if user_id is None:
             raise ValueError("A user is required to star a message.")
         with transaction.atomic():
-            message = type(message)._base_manager.select_for_update().get(pk=message.pk)
-            star = self.model._base_manager.select_for_update().filter(message=message, user_id=user_id).first()
+            message = type(message)._base_manager.lock_if_supported().get(pk=message.pk)
+            star = self.model._base_manager.lock_if_supported().filter(message=message, user_id=user_id).first()
             next_starred = not bool(star) if starred is None else bool(starred)
             if next_starred and star is None:
                 self.model._base_manager.create(
@@ -2217,7 +2378,7 @@ class MessageStarManager(AngeeManager):
         return int(deleted)
 
 
-class ReactionManager(AngeeManager):
+class ReactionManager[ReactionT: Reaction](AngeeManager[ReactionT]):
     """Owns the attributed-reaction write — the row shape for a (message, handle, reaction).
 
     ``MessageManager.set_reaction`` is the user-keyed chatter toggle; this is the
@@ -2251,55 +2412,51 @@ class ReactionManager(AngeeManager):
         return len(rows)
 
 
-class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
+class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuerySet[MessageT], AngeeQuerySet[MessageT]):
     """Chainable read scopes for chatter/ingest messages."""
 
-    def for_creation_key(self, scope: Any, key: str | None, fingerprint: str) -> Any | None:
-        """Refuse a discarded own receipt explicitly instead of reinserting its key."""
-
-        existing = super().for_creation_key(scope, key, fingerprint)
-        if existing is not None or scope is None or key is None:
-            return existing
-        actor = self.actor() or current_actor()
-        if actor is not None and scope == str(to_subject_ref(actor)):
-            with system_context(reason="messaging.reply.discarded_receipt"):
-                discarded = self.model._base_manager.filter(
-                    creation_actor=scope, client_creation_key=key, is_trashed=True,
-                ).first()
-            if discarded is not None:
-                discarded.require_creation_fingerprint(fingerprint)
-                raise ValidationError("This reply creation key belongs to a discarded reply.")
-        return None
-
-    def trash_targets(self) -> MessageQuerySet:
+    def trash_targets(self) -> Self:
         """Keep record chatter off the shared trash verbs; its record moderates it."""
 
         return self.inbox()
 
-    def due_deliveries(self, *, now: datetime) -> MessageQuerySet:
+    def due_deliveries(self, *, now: datetime) -> Self:
         """Due unclaimed holds/retries and lost dispatches, never an uncertain effect."""
 
         due = models.Q(scheduled_at__lte=now, **self.model.held_draft_fields()) | models.Q(
-            scheduled_at__lte=now, status="queued", delivery_lease_until__isnull=False,
+            scheduled_at__lte=now,
+            status="queued",
+            delivery_lease_until__isnull=False,
         )
         lost = models.Q(status="queued", delivery_lease_until__lte=now)
-        return cast(MessageQuerySet, self.untrashed().filter(
-            due | lost, direction="outbound", channel__isnull=False, delivery_claim__isnull=True,
-        ).exclude(external_id="").filter(
-            models.Q(metadata__local__isnull=True) | ~models.Q(metadata__local__has_key="delivery_conflict"),
-        ))
+        return (
+            self.untrashed()
+            .filter(
+                due | lost,
+                direction="outbound",
+                channel__isnull=False,
+                delivery_claim__isnull=True,
+            )
+            .exclude(external_id="")
+            .filter(
+                models.Q(metadata__local__isnull=True) | ~models.Q(metadata__local__has_key="delivery_conflict"),
+            )
+        )
 
-    def expired_delivery_claims(self, *, now: datetime) -> MessageQuerySet:
+    def expired_delivery_claims(self, *, now: datetime) -> Self:
         """Claims with no settlement before their deadline require acknowledgement."""
 
-        return cast(MessageQuerySet, self.filter(
-            direction="outbound", status="queued", delivery_claim__isnull=False, delivery_lease_until__lte=now,
-        ))
+        return self.filter(
+            direction="outbound",
+            status="queued",
+            delivery_claim__isnull=False,
+            delivery_lease_until__lte=now,
+        )
 
-    def counted_in_thread(self) -> MessageQuerySet:
+    def counted_in_thread(self) -> Self:
         """Use the model's retained-row predicate for reads and recounts."""
 
-        return cast(MessageQuerySet, self.filter(self.model.counted_in_thread_q()))
+        return self.filter(self.model.counted_in_thread_q())
 
     @staticmethod
     def chronological_time(prefix: str = "") -> Any:
@@ -2307,17 +2464,46 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
 
         return Coalesce(f"{prefix}sent_at", f"{prefix}created_at")
 
+    def unread_for(self, user: Any) -> Self:
+        """Filter authorized messages by the user's effective follow and receipt.
+
+        This SQL projection keeps record lists at a fixed query count. The
+        caller authorizes the message population; follows are structural read
+        state, and the preference and chronological owners supply their rules.
+        """
+
+        # Models import their managers; preference values are needed only when querying.
+        from angee.messaging.models import NotificationPreference
+
+        follower_model = apps.get_model("messaging", "ThreadFollower")
+        follows = follower_model.objects.db_manager(self.db).for_message_expression(user)
+        return self.untrashed().alias(
+            _order_at=self.chronological_time(),
+            _follow_policy=models.Subquery(follows.values("notification_policy")[:1]),
+            _follow_subtypes=models.Subquery(follows.values("subtype_keys")[:1]),
+            _read_pk=models.Subquery(follows.values("last_read_message_id")[:1]),
+            _read_at=models.Subquery(follows.annotate(
+                _read_at=self.chronological_time("last_read_message__"),
+            ).values("_read_at")[:1]),
+        ).filter(
+            models.Exists(follows),
+            NotificationPreference.subscribed_row_q(
+                notification_policy="_follow_policy", subtype_keys="_follow_subtypes",
+            ),
+            models.Q(_read_pk__isnull=True) | _MESSAGE_ORDER.after((models.F("_read_at"), models.F("_read_pk"))),
+        )
+
     def explorer(self) -> MessageInbox:
         """Compose personal-inbox reads from this collection's current scope."""
 
         return MessageInbox(self)
 
-    def for_thread(self, thread: Any) -> MessageQuerySet:
+    def for_thread(self, thread: Any) -> Self:
         """Return messages belonging to one thread."""
 
-        return cast(MessageQuerySet, self.filter(thread=thread))
+        return self.filter(thread_id__in=thread.member_threads().values("pk"))
 
-    def for_channel(self, channel: Any) -> MessageQuerySet:
+    def for_channel(self, channel: Any) -> Self:
         """Return the messages that belong to ``channel`` — the purge-scope predicate.
 
         Only *this* channel's ``(channel, external_id)`` rows: the same logical message
@@ -2326,9 +2512,9 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
         the delete-preview count so they cannot drift.
         """
 
-        return cast(MessageQuerySet, self.filter(channel=channel))
+        return self.filter(channel=channel)
 
-    def inbox(self) -> MessageQuerySet:
+    def inbox(self) -> Self:
         """Return channel/inbox messages — those not attached to a record thread.
 
         A message whose thread carries a ``ThreadAttachment`` is record chatter,
@@ -2339,7 +2525,12 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
         in the inbox.
         """
 
-        return cast(MessageQuerySet, self.exclude(thread__attachments__role="chatter"))
+        # The same structural anti-join as ``ThreadQuerySet.inbox``. A message
+        # without a thread has no survivor id, so it matches no redirect group.
+        thread_model = apps.get_model("messaging", "Thread")
+        chatter = thread_model._base_manager.filter(attachments__role="chatter").survivor_ids()
+        attached = chatter.filter(survivor=self.survivor_id("thread__", ref=models.OuterRef))
+        return self.alias(_record_attached=models.Exists(attached)).filter(_record_attached=False)
 
     def automated_sender_ids(self) -> models.QuerySet[Any]:
         """Return the senders whose every message here is automated mail.
@@ -2368,12 +2559,12 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
             .values_list("sender_id", flat=True)
         )
 
-    def searching(self, term: str) -> MessageQuerySet:
+    def searching(self, term: str) -> Self:
         """Return messages matching one Odoo-style chatter search token."""
 
-        return cast(MessageQuerySet, self.filter(_message_search_query(term)))
+        return self.filter(_message_search_query(term))
 
-    def with_title_text(self) -> MessageQuerySet:
+    def with_title_text(self) -> Self:
         """Annotate each row's title text (its ``TITLE`` part's fragment) as ``_title_text``.
 
         The list-scale read: one correlated subquery per row instead of a per-row
@@ -2384,18 +2575,15 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
         title_text = part_model._base_manager.filter(
             message=models.OuterRef("pk"), role=part_model.PartRole.TITLE
         ).values("fragment__text")[:1]
-        return cast(
-            MessageQuerySet,
-            self.annotate(
-                _title_text=Coalesce(
-                    models.Subquery(title_text),
-                    models.Value(""),
-                    output_field=models.TextField(),
-                )
-            ),
+        return self.annotate(
+            _title_text=Coalesce(
+                models.Subquery(title_text),
+                models.Value(""),
+                output_field=models.TextField(),
+            )
         )
 
-    def sender_name_expression(self) -> models.Expression:
+    def sender_name_expression(self) -> models.Expression | models.Subquery:
         """Correlate the actor-readable sender identity without multiplying rows."""
 
         handle_model = apps.get_model("parties", "Handle")
@@ -2412,7 +2600,7 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
             )
         )
 
-    def thread_title_expression(self) -> models.Expression:
+    def thread_title_expression(self) -> models.Expression | models.Subquery:
         """Correlate the title from the actor-readable thread queryset."""
 
         thread_model = apps.get_model("messaging", "Thread")
@@ -2424,7 +2612,7 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
             output_field=models.TextField(),
         )
 
-    def channel_vendor_name_expression(self) -> models.Expression:
+    def channel_vendor_name_expression(self) -> models.Expression | models.Subquery:
         """Correlate the vendor label through readable Integration and Vendor sets.
 
         Keep scalar projection inside the scoped subquery: the outer message
@@ -2439,7 +2627,7 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
             pk=models.OuterRef("channel_id"), vendor_id__in=vendors.values("pk")
         ).readable_scalar_subquery("vendor__display_name", actor=actor, default="", output_field=models.TextField())
 
-    def with_external_ids(self, external_ids: tuple[str, ...] | list[str]) -> MessageQuerySet:
+    def with_external_ids(self, external_ids: tuple[str, ...] | list[str]) -> Self:
         """Filter to exact external ids through the ``MD5(external_id)`` identity index.
 
         The public owner of the indexed external-id read (a plain ``external_id__in``
@@ -2449,12 +2637,9 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
 
         values = [external_id for external_id in external_ids if external_id]
         digests = [hashlib.md5(value.encode("utf-8")).hexdigest() for value in values]
-        return cast(
-            MessageQuerySet,
-            _external_id_annotated(self).filter(_eid_digest__in=digests, external_id__in=values),
-        )
+        return _external_id_annotated(self).filter(_eid_digest__in=digests, external_id__in=values)
 
-    def searching_fulltext(self, term: str) -> MessageQuerySet:
+    def searching_fulltext(self, term: str) -> Self:
         """Return messages whose fragments full-text match ``term`` — the corpus-scale path.
 
         Rides the fragment GIN vector, so titles and bodies match through one index
@@ -2463,13 +2648,13 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
         """
 
         query = apps.get_model("messaging", "Fragment").objects.search_query(term)
-        return cast(MessageQuerySet, self.filter(parts__fragment__search=query))
+        return self.filter(parts__fragment__search=query)
 
-    def involving_parties(self, parties: Any) -> MessageQuerySet:
+    def involving_parties(self, parties: Any) -> Self:
         """Return messages any of ``parties``' resolved handles participated in.
 
-        Timeline reads pass either a lazy actor-scoped Party queryset (a circle
-        subtree) or a concrete iterable (one party). Participants are Handle-keyed
+        Inbox scopes and correspondence reads pass either a lazy Party
+        queryset (a circle subtree) or a concrete iterable. Participants are Handle-keyed
         and ``Handle.party`` is the resolution-materialised owner, so one join
         answers "every message exchanged with these parties across channels".
         The participant subquery preserves one row per message even when several
@@ -2488,13 +2673,15 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
             )
             .values("message_id")
         )
-        return cast(
-            MessageQuerySet,
-            self.filter(pk__in=models.Subquery(visible_message_ids)),
-        )
+        return self.filter(pk__in=models.Subquery(visible_message_ids))
 
-    def for_feed(self, search: str = "") -> MessageQuerySet:
-        """Apply current read scope, search and tuple order to an inbox scope."""
+    def for_feed(self, search: str = "", *, all_copies: bool = False, anchor: str = "") -> Self:
+        """Apply read/search scope and tuple order, retaining an explicitly addressed occurrence.
+
+        A message anchor names a physical row, including a retained source copy
+        normally collapsed by ``canonical()``. Keep only that occurrence beside
+        the canonical rows, under the same current scope and search predicates.
+        """
 
         queryset = self.scoped().annotate(_order_at=MessageQuerySet.chronological_time())
         terms = self._feed_search(search).split()
@@ -2502,7 +2689,13 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
             queryset = queryset.searching(term)
         if terms:
             queryset = queryset.distinct()
-        return cast(MessageQuerySet, queryset.order_by("-_order_at", "-pk"))
+        if not all_copies:
+            canonical = queryset.canonical()
+            kind, _, value = anchor.partition(":")
+            if kind == "message":
+                canonical |= queryset.untrashed().filter(sqid=value)
+            queryset = canonical
+        return queryset.order_by("-_order_at", "-pk")
 
     @staticmethod
     def _feed_search(search: str) -> str:
@@ -2513,6 +2706,7 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
         *,
         scope: tuple[str, str],
         search: str = "",
+        all_copies: bool = False,
         before_cursor: str | None = None,
         after_cursor: str | None = None,
         through_cursor: str | None = None,
@@ -2530,7 +2724,7 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
         """
 
         search = self._feed_search(search)
-        queryset = self.for_feed(search)
+        queryset = self.for_feed(search, all_copies=all_copies, anchor=anchor)
         around = None
         if anchor and before_cursor is None and after_cursor is None:
             kind, _, value = anchor.partition(":")
@@ -2551,7 +2745,7 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
         try:
             page = queryset.keyset_page(
                 order=_MESSAGE_ORDER,
-                cursor_scope=(scope, search),
+                cursor_scope=(scope, search, all_copies),
                 cursor_salt="angee.messaging.feed.v1",
                 before_cursor=before_cursor,
                 after_cursor=after_cursor,
@@ -2563,7 +2757,9 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
             raise ValueError("Invalid message feed cursor for this scope.") from error
         return page
 
-    def feed_revalidate(self, ids: list[str], *, search: str = "") -> dict[str, Any]:
+    def feed_revalidate(
+        self, ids: list[str], *, search: str = "", all_copies: bool = False, anchor: str = "",
+    ) -> dict[str, Any]:
         """Partition at most 200 submitted IDs into current survivors and absences.
 
         The caller resolves the same readable root as feed_page. Every survivor
@@ -2574,20 +2770,25 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
         if len(ids) > 200:
             raise ValueError("Message feed revalidation accepts at most 200 IDs.")
         unique = list(dict.fromkeys(ids))
-        messages = list(self.for_feed(search).filter(sqid__in=unique)) if unique else []
-        survivors = {str(message.sqid) for message in messages}
+        queryset = self.for_feed(search, all_copies=all_copies, anchor=anchor)
+        survivors = {
+            str(value) for value in queryset.filter(sqid__in=unique).values_list("sqid", flat=True)
+        } if unique else set()
         return {
-            "messages": self.for_feed(search).filter(sqid__in=survivors),
+            "messages": queryset.filter(sqid__in=survivors),
             "absent_ids": [value for value in unique if value not in survivors],
         }
 
 
-class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: ignore[misc]
+_MessageManagerBase = AngeeManager.from_queryset(MessageQuerySet)
+
+
+class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
     """Owns idempotent ingest, insert deltas and state-change thread recounts."""
 
     def compose_reply(
         self, parent: Any, *, body: str, sender: Any, actor: Any,
-        local: Mapping[str, Any] | None = None, creation_key: str | None = None,
+        local: Mapping[str, Any] | None = None, idempotency_key: str | None = None,
         scheduled_at: datetime | None = None, queued: bool = False,
         admit: Callable[[Any], None] | None = None,
     ) -> Any:
@@ -2596,14 +2797,15 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         Hold facts are final at insert. Every retained reply advances its thread
         counter once; queueing does not change the count. Callers may contribute provenance, but not
         messaging's delivery state. ``admit(parent)`` checks domain eligibility
-        only on insertion, after creation-key replay and fingerprint validation.
+        only on insertion, after idempotency replay and fingerprint validation.
         Admission and replay run under actor even for an elevated caller.
         """
 
         if is_sudo():
             return Context().run(
                 self.compose_reply, parent, body=body, sender=sender, actor=actor,
-                local=local, creation_key=creation_key, scheduled_at=scheduled_at, queued=queued, admit=admit,
+                local=local, idempotency_key=idempotency_key,
+                scheduled_at=scheduled_at, queued=queued, admit=admit,
             )
         parent = parent.with_actor(actor)
         body = strip_null_bytes(body).strip()
@@ -2619,47 +2821,56 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         values = dict(local or {})
         if any(key.startswith("delivery_") for key in values):
             raise ValidationError({"local": "Delivery facts are owned by messaging."})
-        scope = None
-        fingerprint = ""
-        if creation_key is not None:
-            self.model._meta.get_field("client_creation_key").clean(creation_key, None)
-            if not creation_key.strip() or "\x00" in creation_key:
-                raise ValidationError({"creation_key": "Creation key must be nonblank and contain no null bytes."})
-            scope = str(to_subject_ref(actor))
-            fingerprint = self.model.creation_fingerprint_for({
+        fingerprint = (
+            creation_fingerprint({
                 "parent": parent, "body": body, "sender": sender, "local": values,
             })
-        created_by_id = actor_user_id(to_subject_ref(actor))
-        with actor_context(actor), transaction.atomic():
-            def insert() -> Any:
-                if admit is not None:
-                    admit(parent)
-                with system_context(reason="messaging.reply.compose"):
-                    return self.create(
-                        parent=parent, thread_id=parent.thread_id, channel_id=parent.channel_id, sender=sender,
-                        platform=parent.platform, direction=self.model.Direction.OUTBOUND,
-                        status=self.model.MessageStatus.QUEUED if queued else self.model.MessageStatus.DRAFT,
-                        scheduled_at=scheduled_at, message_type=parent.message_type,
-                        external_id=str(uuid4()), preview=body[: self.model._meta.get_field("preview").max_length],
-                        metadata=_bounded_message_metadata({"local": values}), created_by_id=created_by_id,
-                        creation_actor=scope, client_creation_key=creation_key, creation_fingerprint=fingerprint,
-                    )
-            reply, created = self.with_actor(actor).replay_or_insert(scope, creation_key, fingerprint, insert)
-            if created:
-                with system_context(reason="messaging.reply.compose"):
-                    self._build_parts(
-                        reply, ParsedPart(text=body), parent=None, position=0, created_by_id=created_by_id,
-                    )
-                    self._bump_thread(reply)
-                    if queued:
-                        reply.deliver()
+            if idempotency_key is not None
+            else ""
+        )
+        actor_ref = to_subject_ref(actor)
+        created_by_id = actor_user_id(actor_ref)
+        claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
+        with actor_context(actor), claim_boundary, transaction.atomic():
+            if idempotency_key is not None:
+                replay = changeset_model().objects.claim(
+                    f"messaging.reply:{actor_ref}",
+                    idempotency_key,
+                    fingerprint=fingerprint,
+                )
+                if replay is not None:
+                    reply = replay.created_row
+                    if not isinstance(reply, self.model):
+                        raise ValidationError({"idempotency_key": "The claimed reply is unavailable."})
+                    if reply.is_trashed:
+                        raise ValidationError("This idempotency key belongs to a discarded reply.")
+                    return reply.with_actor(actor)
+            if admit is not None:
+                admit(parent)
+            with system_context(reason="messaging.reply.compose"):
+                reply = self.create(
+                    parent=parent, thread_id=parent.thread_id, channel_id=parent.channel_id, sender=sender,
+                    platform=parent.platform, direction=self.model.Direction.OUTBOUND,
+                    status=self.model.MessageStatus.QUEUED if queued else self.model.MessageStatus.DRAFT,
+                    scheduled_at=scheduled_at, message_type=parent.message_type,
+                    external_id=str(uuid4()), preview=body[: self.model.preview.field.max_length],
+                    metadata=_bounded_message_metadata({"local": values}), created_by_id=created_by_id,
+                )
+                self._build_parts(
+                    reply, ParsedPart(text=body), parent=None, position=0, created_by_id=created_by_id,
+                )
+                self._bump_thread(reply)
+                if queued:
+                    reply.deliver()
+            if idempotency_key is not None:
+                require_changeset().record_created(reply)
         return reply.with_actor(actor)
 
-    def cancel_delivery(self, message: Any, *, using: str | None = None) -> None:
+    def cancel_delivery(self, message: Any) -> None:
         """Disarm a removed outbound draft/queue under the same settlement row lock."""
 
-        with system_context(reason="messaging.delivery.cancel"), transaction.atomic(using=using):
-            row = self.sudo(reason="messaging.delivery.cancel").using(using).lock_if_supported().get(pk=message.pk)
+        with system_context(reason="messaging.delivery.cancel"), transaction.atomic(using=self.db):
+            row = self.sudo(reason="messaging.delivery.cancel").lock_if_supported().get(pk=message.pk)
             if row.direction == "outbound" and row.status != "uncertain" and (
                 row.delivery_needs_reconciliation
                 or (row.status in ("draft", "queued") and row.delivery_claim is not None)
@@ -2822,7 +3033,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         A collision is a successful publish with evidence, never a resend cue.
         The already ingested provider row owns the visible identity and payload;
         retain the local attempt as a trashed SENT audit row, with delivery_conflict
-        pointing to that provider id. Its creation key and operator provenance
+        pointing to that provider id. Its idempotency key and operator provenance
         remain available, but it contributes no second visible message or count.
         Acceptance racing with trash is still sent: removal cannot undo a publish.
         A settlement must carry its committed claim marker. Native transient
@@ -2951,7 +3162,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         if actor is None:
             raise PermissionDenied("Authentication required.")
         with transaction.atomic():
-            row = read_scoped_queryset(self.model, actor, action="send_held").lock_if_supported().get(pk=message.pk)
+            row = self.with_actor(actor).with_action("send_held").lock_if_supported().get(pk=message.pk)
             row.require_revision(expected_revision)
             if (row.status == "uncertain" and row.scheduled_at is None
                     and row.delivery_lease_until is not None and row.delivery_lease_until > timezone.now()):
@@ -3005,14 +3216,14 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             # send_held is precisely channel write, including for discard. The
             # identity owner decodes once and performs one scoped pk__in query.
             scoped = (
-                read_scoped_queryset(self.model, actor, action="send_held").inbox().lock_if_supported().order_by("pk")
+                self.with_actor(actor).with_action("send_held").inbox().lock_if_supported().order_by("pk")
             )
             rows = instances_from_public_ids(self.model, [str(item.id) for item in selection], queryset=scoped)
             threads = []
             if discard:
                 thread_model = apps.get_model("messaging", "Thread")
                 with system_context(reason="messaging.held.recount"):
-                    threads = list(thread_model._base_manager.select_for_update().filter(
+                    threads = list(thread_model._base_manager.lock_if_supported().filter(
                         pk__in={row.thread_id for row in rows.values() if row.thread_id is not None},
                     ).order_by("pk"))
             def run(item: ActionSelectionInput) -> ActionResult:
@@ -3076,6 +3287,63 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     )
         return count
 
+    def record_scope(
+        self,
+        record: Any,
+        *,
+        role: str = "chatter",
+        search: str = "",
+        message_types: tuple[str, ...] = (),
+        trashed: bool = False,
+    ) -> MessageQuerySet[WithAnnotations[MessageT, _MessageChronology]]:
+        """The record-gated, hydrated message scope shared by transcript windows."""
+
+        rows = self.db_manager(hints={"instance": record}).all()
+        using = rows.db
+        attachment_model = apps.get_model("messaging", "ThreadAttachment")
+        attachment = attachment_model.objects.db_manager(hints={"instance": record}).for_record(record, role=role)
+        if attachment is None:
+            return rows.none().annotate(_order_at=self.chronological_time())
+        # Chatter reads bypass per-row REBAC: the record-level gate already authorised
+        # the whole feed, so scope with sudo and compose the chainable read predicates.
+        queryset = (
+            rows.sudo(reason="messaging.message.for_record")
+            .for_thread(attachment.thread)
+            .filter(is_trashed=trashed)
+            .select_related("thread", "subtype", "sender", "channel", "parent", "parent__subtype")
+            .prefetch_related(
+                models.Prefetch("parts", queryset=apps.get_model("messaging", "Part").objects.using(using)),
+                models.Prefetch(
+                    "parts__fragment", queryset=apps.get_model("messaging", "Fragment")._base_manager.using(using)
+                ),
+                models.Prefetch(
+                    "parts__file",
+                    queryset=apps.get_model("storage", "File")._base_manager.using(using).select_related("mime_type"),
+                ),
+                models.Prefetch("reactions", queryset=apps.get_model("messaging", "Reaction").objects.using(using)),
+                models.Prefetch(
+                    "reactions__handle",
+                    queryset=apps.get_model("parties", "Handle")._base_manager.using(using),
+                ),
+                models.Prefetch("stars", queryset=apps.get_model("messaging", "MessageStar").objects.using(using)),
+            )
+            .annotate(_order_at=MessageQuerySet.chronological_time())
+        )
+        kinds = {
+            strip_null_bytes(value or "").strip().lower()
+            for value in message_types
+            if strip_null_bytes(value or "").strip()
+        }
+        allowed_kinds = {value for value, _label in self.model.MessageKind.choices}
+        if not kinds.issubset(allowed_kinds):
+            raise ValueError("Message type filter contains an unsupported value.")
+        if kinds:
+            queryset = queryset.filter(message_type__in=kinds)
+        search = strip_null_bytes(search or "").strip()
+        for term in (item for item in _WS_RE.split(search) if item):
+            queryset = queryset.searching(term)
+        return queryset.distinct()
+
     def for_record(
         self,
         record: Any,
@@ -3095,50 +3363,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         them, for a caller that already required the record's moderation.
         """
 
-        attachment = apps.get_model("messaging", "ThreadAttachment").objects.for_record(record, role=role)
-        if attachment is None:
-            return [], 0
         limit = max(1, min(int(limit or 50), 200))
-        # Chatter reads bypass per-row REBAC: the record-level gate already authorised
-        # the whole feed, so scope with sudo and compose the chainable read predicates.
-        queryset = (
-            self.sudo(reason="messaging.message.for_record")
-            .for_thread(attachment.thread)
-            .filter(is_trashed=trashed)
-            .select_related("thread", "subtype", "sender", "channel", "parent", "parent__subtype")
-            .prefetch_related(
-                models.Prefetch("parts", queryset=apps.get_model("messaging", "Part").objects.all()),
-                models.Prefetch(
-                    "parts__fragment", queryset=apps.get_model("messaging", "Fragment")._base_manager.all()
-                ),
-                models.Prefetch(
-                    "parts__file",
-                    queryset=apps.get_model("storage", "File")._base_manager.select_related("mime_type"),
-                ),
-                models.Prefetch("tracking_values", queryset=apps.get_model("messaging", "TrackingValue").objects.all()),
-                models.Prefetch("reactions", queryset=apps.get_model("messaging", "Reaction").objects.all()),
-                models.Prefetch("reactions__handle", queryset=apps.get_model("parties", "Handle")._base_manager.all()),
-                models.Prefetch("stars", queryset=apps.get_model("messaging", "MessageStar").objects.all()),
-            )
-            .annotate(
-                _order_at=MessageQuerySet.chronological_time(),
-                _has_tracking_values=self.model.has_tracking_values_expression(),
-            )
+        queryset = self.record_scope(
+            record, role=role, search=search, message_types=message_types, trashed=trashed,
         )
-        kinds = {
-            strip_null_bytes(value or "").strip().lower()
-            for value in message_types
-            if strip_null_bytes(value or "").strip()
-        }
-        allowed_kinds = {value for value, _label in self.model.MessageKind.choices}
-        if not kinds.issubset(allowed_kinds):
-            raise ValueError("Message type filter contains an unsupported value.")
-        if kinds:
-            queryset = queryset.filter(message_type__in=kinds)
-        search = strip_null_bytes(search or "").strip()
-        for term in (item for item in _WS_RE.split(search) if item):
-            queryset = queryset.searching(term)
-        queryset = queryset.distinct()
         count = int(queryset.count())
         # Window and cursor on the same `(sent_at, pk)` key the feed displays by, then
         # return the page chronological ascending so the client renders it verbatim.
@@ -3186,12 +3414,11 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         subtype_key: str = "comment",
         subtype_model_label: str = "",
         parent: Any | None = None,
-        tracking_values: tuple[TrackingChange | dict[str, Any], ...] = (),
         recipient_user_ids: tuple[Any, ...] = (),
         autofollow_author: bool = False,
         autofollow_recipients: bool = False,
-        client_creation_key: str | None = None,
-        creation_actor: SubjectRef | None = None,
+        idempotency_key: str | None = None,
+        idempotency_actor: SubjectRef | None = None,
     ) -> Any:
         """Create an internal user-authored message in ``thread`` and bump thread counters.
 
@@ -3201,27 +3428,21 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         the conversation. The poster's own read receipt advances to the new message,
         so an author never sees their own post as unread.
 
-        Keys belong to the initiating REBAC actor, including non-user actors;
+        Idempotency belongs to the initiating REBAC actor, including non-user actors;
         ``created_by_id`` remains attribution. An exact replay returns the original
         message without repeating posting side effects. Changed posting inputs
-        raise ``CreationKeyConflict``. Keyed calls require an explicit or ambient
-        non-anonymous actor. Hard deletion frees the key for a new message.
+        raise ``CreationKeyConflict``. Idempotent calls require an explicit or ambient
+        non-anonymous actor.
         """
 
         body = strip_null_bytes(body or "").strip()
-        tracking_rows = tuple(_normalise_tracking_value(value, index) for index, value in enumerate(tracking_values))
         kind = strip_null_bytes(message_type or self.model.MessageKind.COMMENT)
-        creation_scope = None
         fingerprint = ""
-        if client_creation_key is not None:
-            self.model._meta.get_field("client_creation_key").clean(client_creation_key, None)
-            if not client_creation_key.strip() or "\x00" in client_creation_key:
-                raise ValidationError({"client_creation_key": "Creation keys must not be blank or contain null bytes."})
-            actor = creation_actor or current_actor()
+        actor = None
+        if idempotency_key is not None:
+            actor = idempotency_actor or current_actor()
             if actor is None or is_anonymous_actor(actor):
-                raise ValueError("A keyed message requires an actor.")
-            creation_scope = str(actor)
-            self.model._meta.get_field("creation_actor").clean(creation_scope, None)
+                raise ValueError("An idempotent message requires an actor.")
             content = {
                 "thread": str(thread.pk),
                 "attachment": str(attachment.pk) if attachment is not None else None,
@@ -3230,56 +3451,60 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 "message_type": kind,
                 "subtype_key": strip_null_bytes(subtype_key or "").strip(),
                 "parent": str(parent.pk) if parent is not None else None,
-                "tracking_values": tracking_rows,
                 "recipient_user_ids": sorted({str(user_id) for user_id in recipient_user_ids}),
                 "autofollow_recipients": autofollow_recipients,
             }
-            fingerprint = self.model.creation_fingerprint_for(content)
-        if not body and not attachments and not tracking_rows:
-            raise ValueError("Message body, attachment, or tracking value is required.")
-        if parent is not None and parent.thread_id != thread.pk:
+            fingerprint = creation_fingerprint(content)
+        if not body and not attachments:
+            raise ValueError("Message body or attachment is required.")
+        if parent is not None and not thread.member_threads().filter(pk=parent.thread_id).exists():
             raise ValueError("Parent message does not belong to this thread.")
         if (autofollow_author or autofollow_recipients) and (record is None or attachment is None):
             raise ValueError("Autofollow requires the record and its thread attachment.")
         part_model = apps.get_model("messaging", "Part")
         fragment_model = apps.get_model("messaging", "Fragment")
         notification_model = apps.get_model("messaging", "ThreadNotification")
-        tracking_model = apps.get_model("messaging", "TrackingValue")
         sent_at = timezone.now()
-        with transaction.atomic():
+        claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
+        with claim_boundary, transaction.atomic():
+            if idempotency_key is not None:
+                replay = changeset_model().objects.claim(
+                    f"messaging.post:{actor}",
+                    idempotency_key,
+                    fingerprint=fingerprint,
+                )
+                if replay is not None:
+                    message = replay.created_row
+                    if not isinstance(message, self.model):
+                        raise ValidationError({"idempotency_key": "The claimed message is unavailable."})
+                    if message.is_trashed:
+                        raise ValidationError("This idempotency key belongs to a discarded message.")
+                    return message
             subtype = _message_subtype(
                 subtype_key=subtype_key,
                 model_label=subtype_model_label,
                 created_by_id=created_by_id,
             )
 
-            def insert() -> Any:
-                sender = None
-                if created_by_id is not None:
-                    user_model = self.model._meta.get_field("created_by").remote_field.model
-                    sender = apps.get_model("parties", "Handle").objects.for_user(
-                        user_model._base_manager.get(pk=created_by_id)
-                    )
-                return self.create(
-                    thread_id=thread.pk,
-                    sender=sender,
-                    platform=thread.platform,
-                    direction=self.model.Direction.INTERNAL,
-                    status=self.model.MessageStatus.SENT,
-                    message_type=kind,
-                    subtype_id=subtype.pk if subtype is not None else None,
-                    parent_id=parent.pk if parent is not None else None,
-                    preview=body[:280] if body else _tracking_preview(tracking_values),
-                    sent_at=sent_at,
-                    created_by_id=created_by_id,
-                    creation_actor=creation_scope,
-                    client_creation_key=client_creation_key,
-                    creation_fingerprint=fingerprint,
+            sender = None
+            if created_by_id is not None:
+                user_model = self.model.created_by.field.related_model
+                sender = apps.get_model("parties", "Handle").objects.for_user(
+                    user_model._base_manager.get(pk=created_by_id)
                 )
-
-            message, created = self.replay_or_insert(creation_scope, client_creation_key, fingerprint, insert)
-            if not created:
-                return message
+            message = self.create(
+                thread_id=thread.pk,
+                sender=sender,
+                platform=thread.platform,
+                direction=self.model.Direction.INTERNAL,
+                status=self.model.MessageStatus.SENT,
+                message_type=kind,
+                subtype_id=subtype.pk if subtype is not None else None,
+                parent_id=parent.pk if parent is not None else None,
+                preview=body[:280],
+                sent_at=sent_at,
+                created_by_id=created_by_id,
+            )
             position = 0
             if body:
                 fragment = fragment_model.objects.upsert(
@@ -3307,12 +3532,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     created_by_id=created_by_id,
                 )
                 position += 1
-            for row in tracking_rows:
-                tracking_model.objects.create(
-                    message_id=message.pk,
-                    created_by_id=created_by_id,
-                    **row,
-                )
             notification_model.objects.fanout_for_message(
                 message,
                 attachment=attachment,
@@ -3338,8 +3557,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 follower_model.objects.mark_read_up_to(thread, user_id=created_by_id, message=message)
             with system_context(reason="messaging.thread.count"):
                 self._advance_thread(thread, message.sent_at)
-            message._meta.get_field("thread").set_cached_value(message, thread)
+            type(message).thread.field.set_cached_value(message, thread)
             message_ingested.send(sender=self.model, instance=message)
+            if idempotency_key is not None:
+                require_changeset().record_created(message)
         return message
 
     def set_reaction(self, message: Any, *, reaction: str, action: str = "toggle", user: Any) -> Any:
@@ -3352,8 +3573,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             raise ValueError("Reaction action must be add, remove, or toggle.")
         handle = apps.get_model("parties", "Handle").objects.for_user(user)
         with transaction.atomic():
-            message = type(message)._base_manager.select_for_update().get(pk=message.pk)
-            queryset = reaction_model._base_manager.select_for_update().filter(
+            message = type(message)._base_manager.lock_if_supported().get(pk=message.pk)
+            queryset = reaction_model._base_manager.lock_if_supported().filter(
                 message=message,
                 handle=handle,
                 reaction=reaction,
@@ -3385,10 +3606,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         with transaction.atomic():
             message = (
                 type(message)
-                ._base_manager.select_for_update()
-                .annotate(
-                    _has_tracking_values=self.model.has_tracking_values_expression(),
-                )
+                ._base_manager.lock_if_supported()
                 .get(pk=message.pk)
             )
             edit_error = message.content_edit_error()
@@ -3408,12 +3626,14 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     text=body, kind=fragment_model.FragmentKind.PARAGRAPH, created_by_id=edited_by_id
                 )
                 text_parts = list(
-                    part_model._base_manager.select_for_update()
+                    part_model._base_manager.lock_if_supported()
                     .filter(message=message, role=part_model.PartRole.BODY, fragment__isnull=False)
                     .select_related("fragment")
                     .order_by("position", "pk")
                 )
-                prior_hashes = [part.fragment.hash for part in text_parts if part.fragment_id is not None]
+                prior_hashes = [
+                    prior_fragment.hash for part in text_parts if (prior_fragment := part.fragment) is not None
+                ]
                 if text_parts:
                     body_part = text_parts[0]
                     body_part.fragment = fragment
@@ -3448,13 +3668,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         with transaction.atomic():
             message = (
                 type(message)
-                ._base_manager.select_for_update()
-                .annotate(
-                    _has_tracking_values=self.model.has_tracking_values_expression(),
-                )
+                ._base_manager.lock_if_supported()
                 .get(pk=message.pk)
             )
-            if message.thread_id != thread.pk:
+            if not thread.member_threads().filter(pk=message.thread_id).exists():
                 raise ValueError("Message does not belong to this thread.")
             delete_error = message.delete_error()
             if delete_error is not None:
@@ -3468,9 +3685,9 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 raise PermissionDenied("Deleting requires author or moderator access to the record.")
             with system_context(reason="messaging.comment.delete"):
                 thread_model = type(thread)
-                thread = thread_model._base_manager.select_for_update().get(pk=thread.pk)
+                physical_thread = thread_model._base_manager.lock_if_supported().get(pk=message.thread_id)
                 message.delete()
-                self._recount_thread(thread)
+                self._recount_thread(physical_thread)
         return thread
 
     def trash_in_thread(self, message: Any, *, thread: Any, reason: str = "") -> Any:
@@ -3486,7 +3703,9 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
 
         return self._moderate_in_thread(message, thread=thread, trash=False)
 
-    def in_record(self, record: Any, message_id: str, *, role: str = "chatter", trashed: bool = False) -> Any | None:
+    def in_record(
+        self, record: Any, message_id: str, *, role: str = "chatter", trashed: bool = False,
+    ) -> MessageT | None:
         """Return one message of ``record``'s thread by public id, in or out of the trash.
 
         Elevated structural lookup, like the transcript it serves: the caller has
@@ -3510,12 +3729,9 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             message = (
                 type(message)
                 ._base_manager.select_for_update()
-                .annotate(
-                    _has_tracking_values=self.model.has_tracking_values_expression(),
-                )
                 .get(pk=message.pk)
             )
-            if message.thread_id != thread.pk:
+            if not thread.member_threads().filter(pk=message.thread_id).exists():
                 raise ValueError("Message does not belong to this record thread.")
             if trash and (error := message.trash_error()):
                 raise ValueError(error)
@@ -3546,7 +3762,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             last_sent_at=models.Max("sent_at", filter=untrashed),
         )
         count = int(summary["count"] or 0)
-        if not summary["total"] and not thread.is_record_attached():
+        if not summary["total"] and not thread.is_record_attached() and not thread.retained():
             # An emptied inbox thread is a husk — every message re-resolved
             # elsewhere. Deleting it keeps the thread list free of zero-message
             # rows; a record chatter thread stays (it exists before its first post),
@@ -3587,6 +3803,43 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         with system_context(reason="messaging.thread.bump"):
             thread.save(update_fields=tuple(values))
 
+    def correct_source_thread(
+        self, message: MessageT, *, channel: Channel, expected_thread: Thread, thread: Thread,
+    ) -> MessageT:
+        """Compare and set a source message's thread without rebuilding its content.
+
+        Both saved threads and the non-local envelope must belong to the admitted
+        channel. The message lock fences stale corrections; native saves retain
+        changeset/history and both thread counters are recomputed in that transaction.
+        This source-ingestion command grants no caller authority of its own.
+        """
+        thread_model = apps.get_model("messaging", "Thread")
+        if any(not isinstance(candidate, thread_model) or candidate.pk is None
+               for candidate in (expected_thread, thread)):
+            raise ValueError("Source thread correction requires saved previous and explicit target threads.")
+        with transaction.atomic():
+            message = self.model._base_manager.select_for_update(of=("self",)).get(pk=message.pk)
+            if message.channel_id != channel.pk or message.thread_id != expected_thread.pk:
+                raise ValueError("Source message thread changed after the correction was prepared.")
+            if message.is_locally_written:
+                raise ValueError("Source correction cannot move a locally authored message.")
+            channels = dict(thread_model._base_manager.select_for_update().filter(
+                pk__in={expected_thread.pk, thread.pk},
+            ).order_by("pk").values_list("pk", "channel_id"))
+            if any(channels.get(pk) != channel.pk for pk in (expected_thread.pk, thread.pk)):
+                raise ValueError("Source thread correction must stay within its admitted channel.")
+            if message.thread_id == thread.pk:
+                return message
+            message.thread = thread
+            parent = message.parent
+            if parent is not None and parent.thread_id != thread.pk:
+                message.parent = None
+            message.save(update_fields=("thread", "parent", "updated_at"))
+            apps.get_model("messaging", "Participant")._base_manager.filter(message=message).update(thread=thread)
+            self._recount_thread(expected_thread)
+            self._recount_thread(thread)
+            return message
+
     def ingest(
         self,
         parsed_messages: list[ParsedMessage],
@@ -3597,6 +3850,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         visibility: Any = None,
         quote_edges: bool = True,
         explicit_thread: Any = None,
+        expected_thread: Any = None,
         historical: bool = False,
         after_landing: Callable[[Any], None] | None = None,
     ) -> list[Any]:
@@ -3629,7 +3883,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
 
         ``explicit_thread`` binds source record chatter to an already resolved,
         saved thread, avoiding email subject/reply heuristics. Replaying a channel's
-        external ID into a different explicit thread is rejected. ``historical``
+        external ID into a different explicit thread is rejected unless
+        ``expected_thread`` names its exact previous source thread. That compare
+        and set runs under the message lock, requires both threads to belong to
+        this channel, and never moves a locally authored message. ``historical``
         suppresses the live message event and party-suggestion side effects while
         retaining original timestamps, content history and thread counters.
         ``after_landing`` writes an addon's overlay and moderation before counters
@@ -3643,11 +3900,16 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 raise ValueError("Explicit ingestion requires a saved messaging Thread.")
             if explicit_thread.channel_id not in (None, channel.pk):
                 raise ValueError("Explicit thread belongs to a different source channel.")
+        if expected_thread is not None and (
+            explicit_thread is None or not isinstance(expected_thread, thread_model) or expected_thread.pk is None
+        ):
+            raise ValueError("Source thread correction requires saved previous and explicit target threads.")
         ingested: list[Any] = []
         unresolved_handles: dict[Any, Any] = {}
         for parsed in parsed_messages:
             if not parsed.external_id:
                 continue
+            # The sync entrypoint (a stream cycle, a scheduled pull) owns the changeset.
             with transaction.atomic():
                 message, handles = self._ingest_one(
                     parsed,
@@ -3657,9 +3919,15 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     modality=modality,
                     visibility=visibility,
                     explicit_thread=explicit_thread,
+                    expected_thread=expected_thread,
                     historical=historical,
                     after_landing=after_landing,
                 )
+                if message.message_type == "email":
+                    # Robust: identity evidence never fails a committed envelope or the rest of the batch.
+                    transaction.on_commit(
+                        partial(observe_email_identity, message), using=self.db, robust=True,
+                    )
                 ingested.append(message)
                 for handle in handles:
                     if handle.party_id is None:
@@ -3703,44 +3971,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         for message in messages:
             edges.create_for_message(message)
 
-    def expand_retained_part(self, part: Any, children: tuple[ParsedPart, ...]) -> tuple[Any, ...]:
-        """Append parsed descendants beneath one retained byte-backed Part.
-
-        Source adapters own decoding their wire formats and pass neutral
-        :class:`ParsedPart` children here.  The existing Message, parent Part and
-        File remain untouched, so immutable evidence that points at any of them
-        stays valid.  Locking the parent and treating existing children as the
-        completed state makes concurrent and repeated repairs idempotent.
-        """
-
-        part_model = apps.get_model("messaging", "Part")
-        if not isinstance(part, part_model) or part.pk is None:
-            raise ValueError("Part expansion requires a saved messaging Part.")
-        with transaction.atomic():
-            retained = part_model._base_manager.select_for_update().select_related("message").get(pk=part.pk)
-            if retained.file_id is None:
-                raise ValueError("Part expansion requires a retained byte-backed messaging Part.")
-            if not retained.message.has_access("write"):
-                raise PermissionDenied("Denied: cannot expand the retained Message part")
-            existing = tuple(part_model._base_manager.filter(parent=retained).order_by("position", "sqid"))
-            if existing:
-                return existing
-            if not children:
-                return ()
-            # One counter across the expanded children so a retained part exploding
-            # into several nameless byte parts derives distinct ``-{index}`` names.
-            nameless: list[int] = [0]
-            for position, child in enumerate(children):
-                self._build_parts(
-                    retained.message,
-                    child,
-                    parent=retained,
-                    position=position,
-                    created_by_id=retained.created_by_id,
-                    nameless=nameless,
-                )
-            return tuple(part_model._base_manager.filter(parent=retained).order_by("position", "sqid"))
-
     def _ingest_one(
         self,
         parsed: ParsedMessage,
@@ -3751,6 +3981,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         modality: Any = None,
         visibility: Any = None,
         explicit_thread: Any = None,
+        expected_thread: Any = None,
         historical: bool = False,
         after_landing: Callable[[Any], None] | None = None,
     ) -> Any:
@@ -3771,15 +4002,16 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         )
         unchanged = (
             prior is not None and prior.thread_id is not None
+            and (explicit_thread is not None or prior.thread.channel_id == channel.pk)
             and (explicit_thread is None or prior.thread_id == explicit_thread.pk)
             and (prior.metadata or {}).get(_SYNC_HASH_KEY) == content_hash
         )
         if unchanged and not prior.is_locally_written and explicit_thread is None and parsed.thread is None:
             referenced = thread_model.objects.referenced_thread(
-                platform=parsed.platform, in_reply_to=parsed.in_reply_to, references=parsed.references,
+                platform=parsed.platform, channel=channel, in_reply_to=parsed.in_reply_to, references=parsed.references,
             )
             unchanged = referenced is None or referenced.pk == prior.thread_id
-        if unchanged and (
+        if expected_thread is None and unchanged and (
             prior.is_locally_written or not parsed.in_reply_to or prior.parent_id is not None
             or self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread) is None
         ):
@@ -3790,6 +4022,12 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         if prior is not None:
             # Lock only the message row: the thread is a nullable (outer) join.
             prior = self.model._base_manager.select_for_update(of=("self",)).select_related("thread").get(pk=prior.pk)
+        source_thread_changed = (
+            expected_thread is not None and prior is not None and prior.thread_id != explicit_thread.pk
+        )
+        if expected_thread is not None:
+            if prior is None:
+                raise ValueError("Source message thread changed after the correction was prepared.")
         created = prior is None
         if created:
             try:
@@ -3838,7 +4076,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             )
         if (
             prior is not None
-            and prior.thread_id == (thread.pk if thread is not None else None)
+            and (expected_thread is not None or prior.thread_id == (thread.pk if thread is not None else None))
             and (prior.metadata or {}).get(_SYNC_HASH_KEY) == content_hash
         ):
             # Idempotent re-sync into the same thread with identical content: nothing
@@ -3848,6 +4086,9 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             # the re-sync backfills the pointer once its parent exists (this is how a
             # resumed backup import heals reply order across batches).
             message = authored_message or self.model._base_manager.select_related("thread").get(pk=prior.pk)
+            if expected_thread is not None:
+                message = self.correct_source_thread(message, channel=channel, expected_thread=expected_thread,
+                                                     thread=explicit_thread)
             if authored_message is None and parsed.in_reply_to and prior.parent_id is None:
                 parent = self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread)
                 if parent is not None:
@@ -3856,11 +4097,13 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     message.save(update_fields=("parent", "updated_at"))
             if after_landing is not None:
                 after_landing(message)
+            if source_thread_changed and not historical and not message.is_trashed:
+                message_ingested.send(sender=self.model, instance=message)
             return message, ()
         metadata = {**envelope_metadata, _SYNC_HASH_KEY: content_hash}
         parent = self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread)
         defaults = {
-            "thread_id": thread.pk if thread is not None else None,
+            "thread_id": prior.thread_id if expected_thread is not None else thread.pk if thread is not None else None,
             "channel_id": channel.pk if channel is not None else None,
             "sender_id": sender.pk if sender is not None else None,
             "parent_id": parent.pk if parent is not None else None,
@@ -3877,7 +4120,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 if parsed.thread is not None or explicit_thread is not None
                 else self.model.MessageKind.EMAIL
             ),
-            "preview": strip_null_bytes(_preview(parsed.body))[: self.model._meta.get_field("preview").max_length],
+            "preview": strip_null_bytes(_preview(parsed.body))[: self.model.preview.field.max_length],
             "sent_at": parsed.sent_at,
             "received_at": received_at,
             "metadata": metadata,
@@ -3903,7 +4146,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     defaults[field] = getattr(message, field)
                 thread = message.thread
                 retain_authored_parts = True
-            if explicit_thread is not None and message.thread_id != explicit_thread.pk:
+            if explicit_thread is not None and message.thread_id != explicit_thread.pk and expected_thread is None:
                 raise ValueError("Source message already belongs to a different explicit thread.")
             prior_hashes = self._content_fragment_hashes(part_model, message)
             for field, value in defaults.items():
@@ -3927,6 +4170,9 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         handles = (
             () if retain_authored_parts else self._write_participants(message, thread, parsed, sender, created_by_id)
         )
+        if expected_thread is not None:
+            message = self.correct_source_thread(message, channel=channel, expected_thread=expected_thread,
+                                                 thread=explicit_thread)
         # Reconcile the denormalised thread counters. The winning thread gains the
         # message whenever it is a fresh row or a re-sync re-resolved an existing message
         # onto a *different* thread (e.g. a References parent that only just landed). The
@@ -3935,7 +4181,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         # the winner still gains the message and there is no
         # loser to recount. Gating the winner's bump on ``created`` alone dropped exactly
         # that NULL-prior re-home; an idempotent re-sync into the same thread is a no-op.
-        thread_changed = prior is not None and prior.thread_id != message.thread_id
+        thread_changed = expected_thread is None and prior is not None and prior.thread_id != message.thread_id
         if thread_changed and prior.thread_id is not None:
             losing_thread = thread_model._base_manager.select_for_update().get(pk=prior.thread_id)
             self._recount_thread(losing_thread)
@@ -3943,18 +4189,16 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             after_landing(message)
         if (created or thread_changed) and not message.is_trashed and thread is not None:
             self._bump_thread(message)
-            if not historical and not message.is_trashed:
-                message_ingested.send(sender=self.model, instance=message)
+        if (created or thread_changed or source_thread_changed) and not historical and not message.is_trashed:
+            message_ingested.send(sender=self.model, instance=message)
         return message, handles
 
     def _resolve_reply_parent(self, parsed: ParsedMessage, *, channel: Any, explicit_thread: Any = None) -> Any:
         """Resolve ``in_reply_to`` onto the parent ``Message`` row, or ``None``.
 
-        The single-parent reply pointer the model docstring promises. Resolution is
-        platform-wide (a reply through account B must find the parent account A
-        ingested), riding the non-unique ``MD5(external_id)`` index; when the same
-        provider event exists once per channel, the ingesting channel's own row wins
-        and a cross-channel copy is the fallback — the posts target-resolution rule.
+        The single-parent reply pointer names the ingesting channel's physical
+        parent, riding the non-unique ``MD5(external_id)`` index. Display identity
+        never selects a different account's reply transport.
         A reply that lands before its parent keeps ``NULL``; the no-op re-sync path
         backfills the pointer once the parent exists, so a re-run of the same
         import heals ordering gaps without rebuilding unchanged rows.
@@ -3965,14 +4209,11 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             return None
         queryset = _external_id_annotated(self.model._base_manager).filter(
             _external_id_q(reply_to),
-            platform=parsed.platform,
+            platform=parsed.platform, channel=channel,
         )
         if explicit_thread is not None:
             queryset = queryset.filter(channel=channel, thread=explicit_thread)
-        rows = list(queryset)
-        if not rows:
-            return None
-        return min(rows, key=lambda row: (row.channel_id != channel.pk, row.pk))
+        return queryset.order_by("pk").first()
 
     @staticmethod
     def _content_fragment_hashes(part_model: Any, message: Any) -> list[str]:
@@ -4174,10 +4415,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         return handles
 
 
-class PartQuerySet(AngeeQuerySet[Any]):
+class PartQuerySet[PartT: Part](AngeeQuerySet[PartT]):
     """Chainable read scopes for message body parts."""
 
-    def inbox(self) -> PartQuerySet:
+    def inbox(self) -> Self:
         """Return inbox messages' parts — the part mirror of ``MessageQuerySet.inbox``.
 
         Record chatter surfaces only through the record-gated payloads; a part
@@ -4185,15 +4426,12 @@ class PartQuerySet(AngeeQuerySet[Any]):
         (a thread-less provider event has no chatter attachment).
         """
 
-        return cast(
-            PartQuerySet,
-            self.exclude(message__thread__attachments__role="chatter"),
-        )
+        return self.exclude(message__thread__attachments__role="chatter")
 
-    def fragment_uses(self, fragment: Any) -> PartQuerySet:
+    def fragment_uses(self, fragment: Any) -> Self:
         """Return this actor's readable parts referencing the shared fragment."""
 
-        return cast(PartQuerySet, self.filter(fragment=fragment))
+        return self.filter(fragment=fragment)
 
     def signings(self) -> Iterator[Signing]:
         """Yield each pairing of a signature fragment with a sender who signed it, once.
@@ -4215,19 +4453,21 @@ class PartQuerySet(AngeeQuerySet[Any]):
             )
             .distinct()
         )
-        fragments = self.model._meta.get_field("fragment").related_model._base_manager
+        fragment_model = self.model.fragment.field.related_model
+        assert fragment_model is not None
+        fragments = fragment_model._base_manager
         for batch in batched(rows.iterator(chunk_size=_SIGNING_TEXT_BATCH), _SIGNING_TEXT_BATCH):
             texts = dict(fragments.filter(pk__in={row[0] for row in batch}).values_list("pk", "text"))
             for fragment_id, fragment_hash, sender_id, party_id, owner_id in batch:
                 if fragment_id in texts:
                     yield Signing(fragment_hash, texts[fragment_id] or "", sender_id, party_id, owner_id)
 
-    def attachments(self) -> PartQuerySet:
+    def attachments(self) -> Self:
         """Return parts that carry a stored file — a message's attachment parts."""
 
-        return cast(PartQuerySet, self.filter(file__isnull=False))
+        return self.filter(file__isnull=False)
 
-    def attached_files(self) -> PartQuerySet:
+    def attached_files(self) -> Self:
         """Return file-bearing attachment Part uses within this queryset's scope.
 
         Use ``message.parts.attached_files()`` under the usual actor context, or
@@ -4247,7 +4487,7 @@ class PartQuerySet(AngeeQuerySet[Any]):
         """
 
         selected, _skipped = self._attached_file_selection()
-        return cast(PartQuerySet, self.attachments().filter(pk__in=selected))
+        return self.attachments().filter(pk__in=selected)
 
     def attached_file_skip_counts(self) -> dict[str, int]:
         """Count skipped file-bearing Part uses using ``attached_files()`` policy.
@@ -4306,7 +4546,10 @@ class PartQuerySet(AngeeQuerySet[Any]):
         selected: list[Any] = []
         skipped: Counter[str] = Counter()
         for part in candidates:
-            lineage = (part, *owner.ancestors_for_message(part.message, part.pk))
+            file = part.file
+            if file is None:
+                continue
+            lineage: tuple[Part, ...] = (part, *owner.ancestors_for_message(part.message, part.pk))
             types = [row.type.split(";", 1)[0].strip().lower() for row in lineage]
             if any(row.role == self.model.PartRole.SIGNATURE for row in lineage) or any(
                 mime
@@ -4336,7 +4579,7 @@ class PartQuerySet(AngeeQuerySet[Any]):
                 reason = "forward_depth"
             elif types[0] == "message/rfc822":
                 reason = "forwarded_message"
-            elif not part.file.size_bytes:
+            elif not file.size_bytes:
                 reason = "empty_file"
             else:
                 selected.append(part.pk)
@@ -4345,7 +4588,10 @@ class PartQuerySet(AngeeQuerySet[Any]):
         return selected, skipped
 
 
-class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[misc]
+_PartManagerBase = AngeeManager.from_queryset(PartQuerySet)
+
+
+class PartManager[PartT: Part](_PartManagerBase[PartT]):
     """Owns bounded part creation and message-scoped navigation over body-part rows.
 
     Tree reads falling back to the base manager require callers to authorize
@@ -4363,8 +4609,9 @@ class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[mis
         """Join plain BODY fragments in the same depth-first order as the tree reader."""
 
         return self.BODY_SEPARATOR.join(
-            part.fragment.text for part in self.reading_order_for_message(message)
-            if part.role == self.model.PartRole.BODY and part.type == "text/plain" and part.fragment_id is not None
+            fragment.text for part in self.reading_order_for_message(message)
+            if part.role == self.model.PartRole.BODY and part.type == "text/plain"
+            and (fragment := part.fragment) is not None
         )
 
     def plain_body_sql(self, message_id_sql: str, *, connection: Any) -> tuple[str, list[Any]]:
@@ -4382,7 +4629,9 @@ class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[mis
             raise NotSupportedError("The plain-body projection needs ordered string aggregation.")
         quote = connection.ops.quote_name
         parts = quote(self.model._meta.db_table)
-        fragments = quote(self.model._meta.get_field("fragment").related_model._meta.db_table)
+        fragment_model = self.model.fragment.field.related_model
+        assert fragment_model is not None
+        fragments = quote(fragment_model._meta.db_table)
         rank = "printf('%%020d', sibling_rank)" if connection.vendor == "sqlite" else (
             "LPAD(CAST(sibling_rank AS text), 20, '0')"
         )
@@ -4400,7 +4649,7 @@ class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[mis
             FROM siblings s JOIN tree t ON s.parent_id = t.id
         ) SELECT COALESCE(({aggregate}), ''))""", [self.BODY_SEPARATOR]
 
-    def create(self, **fields: Any) -> Any:
+    def create(self, **fields: Any) -> PartT:
         """Bound source text and discard malformed Content-IDs before writing.
 
         A truncated Content-ID would reference a different part. Keep the part
@@ -4408,15 +4657,19 @@ class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[mis
         """
 
         if "name" in fields:
+            max_name_length = self.model.name.field.max_length
+            assert max_name_length is not None
             fields["name"] = truncate_filename(
                 strip_null_bytes(fields["name"] or ""),
-                self.model._meta.get_field("name").max_length,
+                max_name_length,
             )
         if "type" in fields:
-            fields["type"] = strip_null_bytes(fields["type"] or "")[: self.model._meta.get_field("type").max_length]
+            fields["type"] = strip_null_bytes(fields["type"] or "")[: self.model.type.field.max_length]
         if "cid" in fields:
             cid = strip_null_bytes(fields["cid"] or "")
-            fields["cid"] = cid if len(cid) <= self.model._meta.get_field("cid").max_length else ""
+            max_cid_length = self.model.cid.field.max_length
+            assert max_cid_length is not None
+            fields["cid"] = cid if len(cid) <= max_cid_length else ""
         return super().create(**fields)
 
     def reading_order_for_message(self, message: Message) -> list[Part]:
@@ -4515,9 +4768,12 @@ class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[mis
             # authorization. Re-evaluating its queryset would re-enter REBAC
             # before this owner can reject incomplete rows.
             parts = cache["parts"]._result_cache
-            fragment_field = self.model._meta.get_field("fragment")
-            file_field = self.model._meta.get_field("file")
-            mime_field = file_field.remote_field.model._meta.get_field("mime_type")
+            fragment_field = self.model.fragment.field
+            file_field = self.model.file.field
+            file_model = file_field.related_model
+            assert file_model is not None
+            mime_field = file_model._meta.get_field("mime_type")
+            assert isinstance(mime_field, models.ForeignKey)
             for part in parts if parts is not None else ():
                 fragment = fragment_field.get_cached_value(part, default=None)
                 file = file_field.get_cached_value(part, default=None)
@@ -4527,7 +4783,7 @@ class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[mis
                     any(row.get_deferred_fields() for row in (part, fragment, file, mime_type) if row is not None)
                     or (part.fragment_id is not None and fragment is None)
                     or (part.file_id is not None and file is None)
-                    or (file is not None and file.mime_type_id is not None and mime_type is None)
+                    or (file is not None and mime_field.value_from_object(file) is not None and mime_type is None)
                 ):
                     parts = None
                     break
@@ -4570,7 +4826,7 @@ class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[mis
         return ordered
 
 
-class MessageEdgeManager(AngeeManager):
+class MessageEdgeManager[MessageEdgeT: MessageEdge](AngeeManager[MessageEdgeT]):
     """Owns the cross-message graph — derived quote edges from shared fragments."""
 
     def _edge_fields(self, *, created_by_id: Any, fragment: Any = None, confidence: float = 1.0) -> dict[str, Any]:

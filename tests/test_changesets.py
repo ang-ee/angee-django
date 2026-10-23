@@ -21,11 +21,10 @@ from graphql import GraphQLError
 from rebac import actor_context, system_context, to_subject_ref
 from strawberry.types import ExecutionResult
 
-from angee.base.changesets import ChangesetRequired, changeset, changeset_model_label, current_changeset
-from angee.base.middleware import ChangesetMiddleware, ChangesetScopeMiddleware
-from angee.base.scoping import system_queryset
+from angee.changesets import ChangesetRequired, changeset, changeset_model_label, current_changeset, require_changeset
 from angee.compose import manage
 from angee.graphql.views import AngeeGraphQLView
+from angee.middleware import ChangesetMiddleware, ChangesetScopeMiddleware
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow
 
@@ -47,6 +46,16 @@ def changeset_of(row: Any) -> Any:
     return row.history.get(history_type="+").changeset
 
 
+def test_require_changeset_refuses_missing_storage_and_returns_the_open_owner(settings) -> None:
+    with pytest.raises(ChangesetRequired):
+        require_changeset()
+    with changeset(), system_context(reason="required changeset"):
+        assert require_changeset() is current_changeset()
+    settings.ANGEE_CHANGESET_MODEL = ""
+    with changeset(), pytest.raises(ChangesetRequired):
+        require_changeset()
+
+
 @pytest.mark.parametrize("command", sorted(manage.SERVER_COMMANDS))
 def test_servers_run_without_a_process_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path: Any, command: str) -> None:
     seen: list[Any] = []
@@ -64,8 +73,8 @@ def test_main_attributes_a_command_to_one_closed_changeset(
     monkeypatch.setattr(manage, "execute_from_command_line", lambda argv: write())
     manage.main(["manage.py", command])
     (context,) = changesets()
-    assert changeset_of(system_queryset(OwnedRow).get()) == context
-    assert (context.change_reason, context.activity, context.actor) == (f"manage.{command}", "system", "")
+    assert changeset_of(OwnedRow.system_queryset().get()) == context
+    assert (context.change_reason, context.activity, context.actor_ref) == (f"manage.{command}", "system", "")
     assert (context.state, context.outcome) == ("closed", "success")
 
 
@@ -86,7 +95,7 @@ def test_a_thread_a_command_starts_writes_under_the_command_boundary(
     rows = changesets()
     assert len(rows) == 2
     assert {row.change_reason for row in rows} == {"manage.migrate"}
-    assert {changeset_of(row) for row in system_queryset(OwnedRow).all()} == set(rows)
+    assert {changeset_of(row) for row in OwnedRow.system_queryset().all()} == set(rows)
     assert current_changeset() is None
 
 
@@ -98,7 +107,7 @@ def test_a_write_without_a_boundary_names_the_manage_py_remedy(monkeypatch: pyte
     with pytest.raises(ChangesetRequired) as error:
         write()
     assert "manage.py" not in str(error.value)
-    assert not system_queryset(OwnedRow).exists()
+    assert not OwnedRow.system_queryset().exists()
 
 
 @pytest.mark.parametrize(("status", "outcome"), [(200, "success"), (500, "failure")])
@@ -111,7 +120,7 @@ def test_sync_request_boundary_closes_with_the_response(status: int, outcome: st
     assert not iscoroutinefunction(middleware)
     assert middleware(RequestFactory().get("/")).status_code == status
     (context,) = changesets()
-    assert changeset_of(system_queryset(OwnedRow).get()) == context
+    assert changeset_of(OwnedRow.system_queryset().get()) == context
     assert (context.state, context.outcome) == ("closed", outcome)
 
 
@@ -134,7 +143,7 @@ def test_async_request_boundary_stays_on_the_request_task(status: int, outcome: 
     assert async_to_sync(scenario)().status_code == status
     assert tasks[0] is tasks[1], "the request was awaited on its own task, not through a sync bridge"
     (context,) = changesets()
-    assert changeset_of(system_queryset(OwnedRow).get()) == context
+    assert changeset_of(OwnedRow.system_queryset().get()) == context
     assert (context.state, context.outcome) == ("closed", outcome)
 
 
@@ -153,7 +162,7 @@ def test_a_connection_scope_owns_one_changeset(failing: bool) -> None:
     else:
         async_to_sync(application)({"type": "websocket"}, None, None)
     (context,) = changesets()
-    assert {changeset_of(row) for row in system_queryset(OwnedRow)} == {context}
+    assert {changeset_of(row) for row in OwnedRow.system_queryset()} == {context}
     assert (context.state, context.outcome) == ("closed", "failure" if failing else "success")
 
 
@@ -175,7 +184,7 @@ def test_worker_threads_record_their_own_changesets_under_the_shared_facts() -> 
         main_pk = current_changeset().pk  # type: ignore[union-attr]
         worker_pks = [in_new_thread(title) for title in ("a", "b")]
     assert len({main_pk, *worker_pks}) == 3
-    assert {row.title: changeset_of(row).pk for row in system_queryset(OwnedRow)} == {
+    assert {row.title: changeset_of(row).pk for row in OwnedRow.system_queryset()} == {
         "main": main_pk,
         "a": worker_pks[0],
         "b": worker_pks[1],
@@ -194,17 +203,18 @@ def test_each_actor_under_one_boundary_records_its_own_changeset() -> None:
             write("alice-again")
         with actor_context(bob):
             write("bob")
-    by_title = {row.title: changeset_of(row) for row in system_queryset(OwnedRow)}
+    by_title = {row.title: changeset_of(row) for row in OwnedRow.system_queryset()}
     assert by_title["alice"] == by_title["alice-again"]
     assert len({context.pk for context in by_title.values()}) == 3
-    assert {title: context.actor for title, context in by_title.items()} == {
+    assert {title: context.actor_ref for title, context in by_title.items()} == {
         "system": "",
         "alice": str(to_subject_ref(alice)),
         "alice-again": str(to_subject_ref(alice)),
         "bob": str(to_subject_ref(bob)),
     }
+    # Each user's storage Trash folder keeps history, so creating the users records its own boundary.
     assert {(context.change_reason, context.state, context.outcome) for context in changesets()} == {
-        ("loop", "closed", "success")
+        ("loop", "closed", "success"), ("storage.trash_folder", "closed", "success"),
     }
 
 

@@ -64,9 +64,10 @@ const completionRequests = new Map<string, Promise<CallbackOutcome>>();
 /**
  * Shared OAuth/OIDC redirect handler: reads `code`/`state` (or a provider
  * `error`) from the URL, exchanges the code exactly once, then redirects on
- * success or renders the error frame. The sign-in (`@angee/iam`) and
+ * success or renders the error frame. The sign-in (`@angee/iam-integrate-oidc`) and
  * account-connect (`@angee/integrate`) callbacks render this with their own
  * `complete` and `copy`.
+ * @kind page
  */
 export function OAuthCallback({
   redirectUri,

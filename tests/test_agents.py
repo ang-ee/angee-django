@@ -822,19 +822,10 @@ def test_ollama_backend_rejects_non_loopback_endpoints(base_url: str) -> None:
 def test_ollama_backend_disables_environment_proxies_for_both_sdk_clients(
     monkeypatch: Any,
 ) -> None:
-    from angee.agents_integrate_ollama import backend as ollama_backend
-
     calls: list[tuple[str, dict[str, Any]]] = []
-    monkeypatch.setattr(
-        ollama_backend,
-        "DefaultHttpxClient",
-        lambda **kwargs: calls.append(("sync", kwargs)) or object(),
-    )
-    monkeypatch.setattr(
-        ollama_backend,
-        "DefaultAsyncHttpxClient",
-        lambda **kwargs: calls.append(("async", kwargs)) or object(),
-    )
+    # The backend imports the SDK's client hooks when it binds a client.
+    monkeypatch.setattr("openai.DefaultHttpxClient", lambda **kwargs: calls.append(("sync", kwargs)) or object())
+    monkeypatch.setattr("openai.DefaultAsyncHttpxClient", lambda **kwargs: calls.append(("async", kwargs)) or object())
     backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url="http://127.0.0.1:11434/v1", config={}))
 
     backend._client_kwargs()
@@ -1094,10 +1085,7 @@ def test_unknown_inference_settings_are_rejected_before_binding(monkeypatch):
 def test_invalid_provider_timeout_is_configuration_error_before_sdk_client(timeout, monkeypatch):
     backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url="", config={"timeout_seconds": timeout}))
     monkeypatch.setattr(backend, "_credential_auth", lambda **kwargs: pytest.fail("credential was refreshed"))
-    monkeypatch.setattr(
-        "angee.agents_integrate_ollama.backend.DefaultHttpxClient",
-        lambda **kwargs: pytest.fail("provider client constructed"),
-    )
+    monkeypatch.setattr("openai.DefaultHttpxClient", lambda **kwargs: pytest.fail("provider client constructed"))
     with pytest.raises(ValueError, match="timeout") as error:
         backend._client_kwargs()
     assert not backend.is_transient_error(error.value)

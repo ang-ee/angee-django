@@ -1,8 +1,7 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Button, Dialog, Glyph, LoadingPanel, MutationDialog, actionOutcomeSubmitResult, errorMessage, mutationDialogValueCodecs, textRoleVariants, useActionOutcomeMutation, useActionResultRun, useRelationOptions, type DescriptorField, type MutationDialogValues } from "@angee/ui";
-import { ErrorBanner } from "@angee/ui/fragments/ErrorBanner";
+import { Button, DialogForm, ErrorBanner, Glyph, InlineEmpty, LoadingPanel, MutationDialog, PaneRow, PaneRows, actionOutcomeSubmitResult, errorMessage, mutationDialogValueCodecs, useActionOutcomeMutation, useActionResultRun, useRelationOptions, type DescriptorField, type MutationDialogValues } from "@angee/ui";
 import { RepositoryPicker, VCS_BRIDGE_RELATION } from "@angee/integrate-vcs";
 import { PLATFORM_ADDON_MUTATION_INVALIDATES } from "@angee/platform";
 
@@ -23,7 +22,7 @@ export function AddonSourceControls(): React.ReactElement {
   const [addOpen, setAddOpen] = React.useState(false);
   const [scanOpen, setScanOpen] = React.useState(false);
   return (
-    <div className="flex items-center gap-2">
+    <>
       <Button variant="secondary" size="sm" onClick={() => setScanOpen(true)}>
         <Glyph decorative name="search" />
         {t("apps.scan")}
@@ -34,7 +33,7 @@ export function AddonSourceControls(): React.ReactElement {
       </Button>
       <AddSourceDialog open={addOpen} onOpenChange={setAddOpen} />
       <ScanSourcesDialog open={scanOpen} onOpenChange={setScanOpen} />
-    </div>
+    </>
   );
 }
 
@@ -175,38 +174,24 @@ function ScanSourcesDialog({
     [scan, settle, refetch],
   );
 
+  // A list of verbs, not a form: Enter never submits anything here.
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Backdrop />
-        <Dialog.Content size="md">
-          <Dialog.Header>
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <Dialog.Title>{t("apps.scan.title")}</Dialog.Title>
-                <Dialog.Description>{t("apps.scan.description")}</Dialog.Description>
-              </div>
-              <Dialog.Close />
-            </div>
-          </Dialog.Header>
-          <Dialog.Body>
-            {query.error ? (
-              <ErrorBanner
-                description={errorMessage(query.error, t("apps.scan.loadError"))}
-                actions={<Button variant="secondary" size="sm" onClick={() => void refetch()}>{t("apps.scan.retry")}</Button>}
-              />
-            ) : (
-              <ScanSourceList
-                sources={sources}
-                fetching={query.isFetching}
-                scanning={scanning}
-                onScan={runScan}
-              />
-            )}
-          </Dialog.Body>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <DialogForm open={open} onOpenChange={onOpenChange} size="md" title={t("apps.scan.title")} description={t("apps.scan.description")}
+      onSubmit={(event) => event.preventDefault()}>
+      {query.error ? (
+        <ErrorBanner
+          description={errorMessage(query.error, t("apps.scan.loadError"))}
+          actions={<Button variant="secondary" size="sm" onClick={() => void refetch()}>{t("apps.scan.retry")}</Button>}
+        />
+      ) : (
+        <ScanSourceList
+          sources={sources}
+          fetching={query.isFetching}
+          scanning={scanning}
+          onScan={runScan}
+        />
+      )}
+    </DialogForm>
   );
 }
 
@@ -226,35 +211,35 @@ function ScanSourceList({
     return <LoadingPanel density="inline" message={t("apps.scan.loading")} />;
   }
   if (sources.length === 0) {
-    return <p className={textRoleVariants({ role: "meta" })}>{t("apps.scan.empty")}</p>;
+    return <InlineEmpty label={t("apps.scan.empty")} />;
   }
   return (
-    <ul className="flex max-h-72 flex-col gap-1 overflow-auto">
+    <PaneRows className="max-h-72 overflow-auto">
       {sources.map((source) => {
         const scope = [source.ref, source.path].filter(Boolean).join(" · ");
         return (
-          <li
-            key={source.id}
-            className="flex items-center gap-3 rounded-6 border border-border bg-sheet px-3 py-2"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-13 text-fg">{source.display_name}</div>
-              {scope ? <div className="truncate text-12 text-fg-muted">{scope}</div> : null}
-            </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={scanning !== null}
-              loading={scanning === source.id}
-              loadingText={t("apps.scan")}
-              onClick={() => onScan(source.id)}
-            >
-              <Glyph decorative name="search" />
-              {t("apps.scan")}
-            </Button>
+          <li key={source.id}>
+            <PaneRow
+              icon="versions"
+              title={source.display_name}
+              sub={scope || undefined}
+              verb={(
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={scanning !== null}
+                  loading={scanning === source.id}
+                  loadingText={t("apps.scan")}
+                  onClick={() => onScan(source.id)}
+                >
+                  <Glyph decorative name="search" />
+                  {t("apps.scan")}
+                </Button>
+              )}
+            />
           </li>
         );
       })}
-    </ul>
+    </PaneRows>
   );
 }

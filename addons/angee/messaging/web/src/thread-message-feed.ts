@@ -8,11 +8,11 @@ import { messageFeedWindow, messageFeedRevalidation } from "./message-feed";
 // parts have no independent change root. Reaction retains local-write interest.
 const MESSAGE_MODELS = [
   "messaging.Message", "messaging.Reaction", "messaging.Thread",
-  "parties.Handle", "parties.Party", "storage.File",
+  "parties.Handle", "parties.Party", "storage.File", "provenance.Changeset",
 ] as const;
 
 /** The thread owns its scope and full transcript projection; Query owns state. */
-export function useThreadMessageFeed(threadId: string, anchor = "") {
+export function useThreadMessageFeed(threadId: string, anchor = "", allCopies = false) {
   return useAuthoredKeysetFeed({
     actor: useAuth().user?.id,
     enabled: Boolean(threadId),
@@ -20,13 +20,13 @@ export function useThreadMessageFeed(threadId: string, anchor = "") {
     pageSize: 50,
     window: {
       document: ThreadTranscriptDocument,
-      variables: (beforeCursor, throughCursor, limit) => ({ threadId, anchor, beforeCursor, throughCursor, limit }),
-      newerVariables: (afterCursor, limit) => ({ threadId, anchor, afterCursor, limit }),
+      variables: (beforeCursor, throughCursor, limit) => ({ threadId, anchor, allCopies, beforeCursor, throughCursor, limit }),
+      newerVariables: (afterCursor, limit) => ({ threadId, anchor, allCopies, afterCursor, limit }),
       select: (data) => messageFeedWindow(data.thread_message_feed),
     },
     revalidate: {
       document: ThreadTranscriptRevalidateDocument,
-      variables: (ids) => ({ threadId, ids }),
+      variables: (ids) => ({ threadId, ids, allCopies, anchor }),
       select: (data) => messageFeedRevalidation(data.thread_message_feed_revalidate),
     },
   }).query;

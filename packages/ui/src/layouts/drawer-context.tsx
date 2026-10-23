@@ -75,6 +75,10 @@ function persistOpenByEdge(state: OpenByEdge): void {
   }
 }
 
+/**
+ * @kind null
+ * @reason Provider infrastructure: Drawer context.
+ */
 export function DrawerProvider({
   children,
 }: {
@@ -118,7 +122,9 @@ export function DrawerProvider({
   );
 }
 
-/** Read the per-edge open drawer id and the open/close/toggle controls. */
+/** Read the per-edge open drawer id and the open/close/toggle controls.
+ * @owner DrawerRail
+ */
 export function useDrawerState(): DrawerStateValue {
   return useContext(DrawerContext);
 }
@@ -127,6 +133,8 @@ export function useDrawerState(): DrawerStateValue {
  * The DOM id of an edge's overlay panel — the one owner of the
  * `aria-controls` target, so a `DrawerRail` tab and the `DrawerOverlay` it opens
  * agree without duplicating the string.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function drawerPanelId(edge: DrawerEdge): string {
   return `drawer-panel-${edge}`;

@@ -8,7 +8,7 @@ from typing import Any
 from celery import Celery
 from celery import Task as CeleryTask
 
-from angee.base.changesets import changeset
+from angee.changesets import changeset
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.compose.settings")
 

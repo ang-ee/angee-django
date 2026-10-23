@@ -1,5 +1,6 @@
 import type { ReactElement, Ref } from "react";
 import type { CrudFilter } from "@refinedev/core";
+import type { ListQueryFieldArgument } from "@angee/refine";
 
 import {
   useResourceRecordHref,
@@ -31,6 +32,12 @@ export interface RelationFieldWidgetProps {
    */
   create?: RelationCreateConfig | null;
   searchFields?: readonly string[];
+  /** Related-row field rendered as secondary picker-option text. */
+  optionDescriptionField?: string;
+  /** Related-row enum/status field rendered as a shared-tone picker badge. */
+  optionStatusField?: string;
+  /** Context values required by the computed status field. */
+  optionStatusArguments?: readonly ListQueryFieldArgument[];
   /**
    * The already-loaded selected record as a picker option (id + folded label),
    * derived by `FormView` from the parent read. Shows the trigger label before
@@ -54,6 +61,7 @@ export interface RelationFieldWidgetProps {
  * (model, display field, create) from the SDL and the selected record's label
  * from its own read. Opening the picker starts the bounded option read, and
  * typing searches that collection on the server.
+ * @kind contribution
  */
 export function RelationFieldWidget(props: RelationFieldWidgetProps): ReactElement {
   if (props.readOnly) return props.value ? <RecordReference
@@ -74,6 +82,9 @@ function EditableRelationFieldWidget(
   where,
   create,
   searchFields,
+  optionDescriptionField,
+  optionStatusField,
+  optionStatusArguments,
   selectedOption,
   placeholder,
   "aria-label": ariaLabel,
@@ -88,6 +99,9 @@ function EditableRelationFieldWidget(
     filters,
     where,
     searchFields,
+    optionDescriptionField,
+    optionStatusField,
+    optionStatusArguments,
   });
 
   const forms = useRelationForms(relation, create);

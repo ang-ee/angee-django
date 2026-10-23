@@ -649,12 +649,14 @@ describe("FormView", () => {
   test("a full-bleed pane fills the height beneath the sheet, which scrolls in its own region", async () => {
     renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields}
       recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, presentation: "full-bleed",
-        render: () => <div data-testid="lone-canvas" className="h-full">Canvas</div> }]} />);
+        render: () => <div data-testid="lone-canvas" className="min-h-0 flex-1">Canvas</div> }]} />);
     const canvas = await screen.findByTestId("lone-canvas");
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.getByRole("heading", { name: "Editor" })).toBeTruthy();
     const panel = canvas.parentElement!;
     expect(panel.className).toContain("flex-1");
+    // The pane is a flex column, so a `flex-1` canvas fills it.
+    expect(panel.className).toContain("flex-col");
     expect(panel.className).toContain("overflow-hidden");
     expect(panel.className).not.toContain("max-w-[1100px]");
     expect(panel.parentElement?.className).toContain("h-full");
@@ -728,6 +730,61 @@ describe("FormView", () => {
     expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
   });
 
+  test("shows a lock and label without a value for actor-redacted fields", async () => {
+    sdkMocks.record = {
+      id: "note-1",
+      title: "Visible title",
+      secret: null,
+      redacted_fields: ["secret"],
+      permissions: ["read"],
+    };
+    const note = defaultModel("NoteType", "notes.Note");
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1" fields={[
+        { name: "title", title: true },
+        { name: "secret", label: "Private note" },
+      ]} />,
+      { types: { NoteType: { ...note, fields: {
+        title: { name: "title", kind: "scalar", scalar: "String" },
+        secret: { name: "secret", kind: "scalar", scalar: "String" },
+        redacted_fields: { name: "redacted_fields", kind: "list", scalar: "String" },
+      } } } },
+    );
+
+    expect(await screen.findByRole("heading", { name: "Visible title" })).toBeTruthy();
+    expect(screen.getByText("Private note")).toBeTruthy();
+    expect(screen.getByLabelText("Restricted: Private note")).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Private note" })).toBeNull();
+    expect(sdkMocks.recordSelection).toContain("redacted_fields");
+  });
+
+  test("keeps a redacted context fact visible as its label and lock", async () => {
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = {
+      id: "note-1",
+      title: "Visible title",
+      secret: null,
+      redacted_fields: ["secret"],
+    };
+    const note = defaultModel("NoteType", "notes.Note");
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1" readOnly fields={[{ name: "title", title: true }]} />,
+      { types: { NoteType: {
+        ...note,
+        fields: {
+          title: { name: "title", kind: "scalar", scalar: "String" },
+          secret: { name: "secret", label: "Private context", kind: "scalar", scalar: "String" },
+          redacted_fields: { name: "redacted_fields", kind: "list", scalar: "String" },
+        },
+        resource: { ...note.resource, contextFields: ["secret"] },
+      } } },
+    );
+
+    expect(await screen.findByRole("heading", { name: "Visible title" })).toBeTruthy();
+    expect(screen.getByText("Private context")).toBeTruthy();
+    expect(screen.getByLabelText("Restricted: Private context")).toBeTruthy();
+  });
+
   test("refuses an absent record without record chrome or fallback title", () => {
     renderWithProviders(<FormView resource="notes.Note" id="missing"
       fields={[{ name: "title", title: true }]}
@@ -746,8 +803,51 @@ describe("FormView", () => {
     sdkMocks.record = { ...sdkMocks.record, title: "A long record title with several words that need wrapping" };
     renderWithProviders(<FormView resource="notes.Note" id="note-1" readOnly fields={[{ name: "title", title: true }]} />);
     const heading = await screen.findByRole("heading", { name: String(sdkMocks.record.title) });
-    expect(heading.className).toContain("break-words");
+    expect(heading.className).toContain("overflow-wrap:anywhere");
     expect(heading.className).not.toContain("truncate");
+  });
+
+  test("renders metadata context fields with native widgets and readable attribution", async () => {
+    window.sessionStorage.setItem("angee:developer-mode", "0");
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = {
+      id: "note-1",
+      title: "Invoice 104",
+      amount: "1234.50",
+      currency: { id: "cur_usd", code: "USD" },
+      due_on: "2026-10-31",
+      created_by: "user_ada",
+      created_by_label: "Ada",
+      updated_by: "user_grace",
+      updated_by_label: "Grace",
+      created_at: "2026-10-01T10:11:12Z",
+      updated_at: "2026-10-18T13:14:15Z",
+      permissions: ["read"],
+    };
+    const money = {
+      read: ({ value, row, field }: { value?: unknown; row?: unknown; field?: { currencyField?: string } }) => {
+        const currency = (row as { currency?: { code?: string } } | undefined)?.currency?.code;
+        return <span>{String(value)} {currency ?? field?.currencyField}</span>;
+      },
+    };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1" readOnly fields={[{ name: "title", title: true }]} />,
+      factsMetadata(),
+      undefined,
+      { widgets: { ...defaultWidgets, money } },
+    );
+
+    expect(await screen.findByRole("heading", { name: "Invoice 104" })).toBeTruthy();
+    expect(screen.getByText("1234.50 USD")).toBeTruthy();
+    expect(screen.getByText(/Oct 31, 2026/)).toBeTruthy();
+    expect(screen.getByText("created by").parentElement?.textContent).toContain("Ada");
+    expect(screen.getByText("updated by").parentElement?.textContent).toContain("Grace");
+    expect(sdkMocks.recordSelection).toEqual(expect.arrayContaining([
+      "amount", "currency.id", "currency.code", "due_on",
+      "created_by_label", "updated_by_label",
+    ]));
+    expect(screen.queryByText("note-1")).toBeNull();
+    expect(screen.queryByText("2026-10-01T10:11:12Z")).toBeNull();
   });
 
   test("uses a wrapping editor for a writable title", async () => {
@@ -2661,11 +2761,11 @@ describe("FormView", () => {
     const steps = within(header).getByRole("list");
     expect(screen.getAllByRole("list")).toEqual([steps]);
     expect(title.compareDocumentPosition(steps) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(header.firstElementChild?.contains(title)).toBe(true);
-    expect(header.lastElementChild?.contains(steps)).toBe(true);
-    expect(header.lastElementChild?.className).toContain("justify-end");
-    expect(header.className).toContain("flex-wrap");
-    expect(header.firstElementChild?.className).toContain("basis-64");
+    // The statusbar sits at the end of the title row, right-aligned, and the title keeps its width.
+    const titleRow = title.closest<HTMLElement>("[data-record-title-row]")!;
+    expect(titleRow.contains(steps)).toBe(true);
+    expect(steps.closest<HTMLElement>(".justify-end")).not.toBeNull();
+    expect(titleRow.className).toContain("flex-wrap");
     expect(screen.queryByText("Status")).toBeNull();
     expect(screen.queryByLabelText("Status")).toBeNull();
     expect(screen.getByText("Lead body").compareDocumentPosition(screen.getByText("Details")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -2715,7 +2815,6 @@ describe("FormView", () => {
     </FormView>);
     const title = await screen.findByDisplayValue("First");
     const header = title.closest("header")!;
-    expect(header.className).toBe("grid gap-4");
     const status = screen.getByLabelText("Status");
     expect(header.contains(status)).toBe(false);
     expect(screen.getByText("Status")).toBeTruthy();
@@ -3344,8 +3443,7 @@ describe("FormView", () => {
       const title = screen.getByRole("textbox", { name: "Title" });
       const header = title.closest("header")!;
       const strip = screen.getByRole("tablist");
-      expect(header.className).toContain("gap-y-4");
-      expect(title.className).toContain("text-28");
+      expect(title.className).toContain("text-22");
       return { headerClasses: header.parentElement!.className, stripClasses: strip.className };
     };
     const chrome = recordChrome();
@@ -3377,10 +3475,9 @@ describe("FormView", () => {
     );
 
     const heading = await screen.findByRole("heading", { name: "First" });
-    expect(heading.className).toContain("text-base");
-    expect(heading.className).not.toContain("text-28");
+    expect(heading.className).toContain("text-15");
+    expect(heading.className).not.toContain("text-22");
     expect(within(heading.closest("header")!).getByText("Active").className).toContain("justify-self-start");
-    expect(heading.closest("header")?.className).toBe("grid gap-1");
     expect(screen.getAllByText("Active")).toHaveLength(1);
     expect(screen.queryByRole("list")).toBeNull();
     expect(screen.queryByText("Draft")).toBeNull();
@@ -3419,7 +3516,7 @@ describe("FormView", () => {
       />,
     );
     const title = await screen.findByRole("textbox", { name: "Title" });
-    const row = title.closest<HTMLElement>("[data-form-title-row]")!;
+    const row = title.closest<HTMLElement>("[data-record-title-row]")!;
     // The row wraps, and the title keeps a readable basis rather than shrinking to its minimum.
     expect(row.className).toContain("flex-wrap");
     expect([...row.children][0]?.className).toContain("flex-[1_1_16rem]");
@@ -4116,6 +4213,40 @@ function teamMetadata(): TestSchemaMetadata {
         ...defaultModel("UserType", "iam.User"),
         fields: { display_name: { name: "display_name", kind: "scalar", scalar: "String" } },
         resource: { ...defaultResource("UserType", "iam.User"), recordRepresentation: "display_name" },
+      },
+    },
+  };
+}
+
+function factsMetadata(): TestSchemaMetadata {
+  const note = defaultModel("NoteType", "notes.Note");
+  return {
+    types: {
+      NoteType: {
+        ...note,
+        fields: {
+          title: { name: "title", kind: "scalar", scalar: "String" },
+          amount: { name: "amount", kind: "scalar", scalar: "Decimal", widget: "money", currencyField: "currency" },
+          currency: { name: "currency", kind: "relation", relationModelLabel: "money.Currency", relationObject: true },
+          due_on: { name: "due_on", kind: "scalar", scalar: "Date", widget: "date" },
+          created_by: { name: "created_by", kind: "scalar", scalar: "ID" },
+          created_by_label: { name: "created_by_label", kind: "scalar", scalar: "String" },
+          updated_by: { name: "updated_by", kind: "scalar", scalar: "ID" },
+          updated_by_label: { name: "updated_by_label", kind: "scalar", scalar: "String" },
+          created_at: { name: "created_at", kind: "scalar", scalar: "DateTime" },
+          updated_at: { name: "updated_at", kind: "scalar", scalar: "DateTime" },
+        },
+        resource: {
+          ...note.resource,
+          recordRepresentation: "title",
+          contextFields: ["amount", "due_on"],
+          subtitle: { created: "created_at", updated: "updated_at" },
+        },
+      },
+      CurrencyType: {
+        ...defaultModel("CurrencyType", "money.Currency"),
+        fields: { code: { name: "code", kind: "scalar", scalar: "String" } },
+        resource: { ...defaultResource("CurrencyType", "money.Currency"), recordRepresentation: "code" },
       },
     },
   };

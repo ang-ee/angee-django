@@ -4,6 +4,7 @@ import {
   refineResourceIdentifier,
   refineResourceName,
   resourceOperationTarget,
+  useResourceInvalidates,
   type DataResourceMetadata,
   type DataResourceRootMetadata,
   type ModelMetadata,
@@ -72,6 +73,10 @@ export function useGroupOperation(
   return useResourceOperation(resource, "groups", "groups");
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useDeletePreviewOperation(
   resource: DataResourceMetadata | null,
 ): ResourceOperation {
@@ -88,6 +93,7 @@ export interface UseDeleteWithPreviewResult extends UseAngeeDeletePreviewResult 
  * invalidation tail. Domain callers retain their own confirmation copy and any
  * related-resource invalidations, while the generated operation/document seam
  * stays in one place.
+ * @owner DeletePreviewDialog
  */
 export function useDeleteWithPreview(
   resource: DataResourceMetadata | null,
@@ -97,18 +103,14 @@ export function useDeleteWithPreview(
     document: operation.document,
   });
   const invalidate = useInvalidate();
+  const invalidations = useResourceInvalidates(resource ? [resource.modelLabel] : undefined);
   const remove = useCallback(async (id: string): Promise<void> => {
     if (!resource || !operation.target) {
       throw new Error("Delete preview is unavailable for this resource.");
     }
     await preview.mutate({ id, confirm: true });
-    await invalidate({
-      resource: refineResourceName(resource),
-      dataProviderName: resource.schemaName,
-      id,
-      invalidates: ["list", "many", "detail"],
-    });
-  }, [invalidate, operation.target, preview.mutate, resource]);
+    await Promise.all(invalidations.map((target) => invalidate(target)));
+  }, [invalidate, invalidations, operation.target, preview.mutate, resource]);
   return {
     ...preview,
     available: Boolean(resource && operation.target && operation.document),

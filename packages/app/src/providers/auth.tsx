@@ -136,6 +136,10 @@ interface AngeeAuthActionResponse extends AuthActionResponse {
   user?: CurrentUserPayload | null;
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const ANONYMOUS_AUTH: AuthState = {
   user: null,
   status: "anonymous",
@@ -153,6 +157,10 @@ const DEFAULT_PREFERENCES_STATE: UserPreferencesState = {
 const AuthContext = createContext<AuthState | null>(null);
 const UserPreferencesContext = createContext<UserPreferencesState | null>(null);
 
+/**
+ * @kind null
+ * @reason Provider infrastructure: adapts GraphQL authentication to Refine.
+ */
 export function createAngeeAuthProvider(
   options: AngeeAuthProviderOptions,
 ): RefineAuthProvider {
@@ -165,6 +173,10 @@ export function createAngeeAuthProvider(
   });
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function createAngeeAuthProviderFromRequest(
   request: GraphQLRequest,
   options: Pick<AngeeAuthProviderOptions, "loginPath" | "onAuthChange" | "queryClient" | "requires"> & {
@@ -290,6 +302,8 @@ export function createAngeeAuthProviderFromRequest(
  * endpoint to confirm session loss before logout. This matters because one
  * Refine auth provider serves data providers with independent credentials.
  * Client gates remain UX only; the server is the authorization boundary.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export const IDENTITY_STALE_TIME = Number.POSITIVE_INFINITY;
 const IDENTITY_QUERY_SETTINGS = {
@@ -299,6 +313,10 @@ const IDENTITY_QUERY_SETTINGS = {
 
 const identityQueryKey = () => keys().auth().action("identity").get();
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function identityQueryOptions(authProvider: RefineAuthProvider) {
   return {
     queryKey: identityQueryKey(),
@@ -308,6 +326,10 @@ export function identityQueryOptions(authProvider: RefineAuthProvider) {
   };
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useRuntimeAuthState(): UseRuntimeAuthStateResult {
   const identity = useGetIdentity<AuthIdentity | null>({
     queryOptions: IDENTITY_QUERY_SETTINGS,
@@ -323,6 +345,10 @@ export function useRuntimeAuthState(): UseRuntimeAuthStateResult {
   };
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useLoginWithPassword(): {
   login: (credentials: LoginCredentials) => Promise<LoginResult>;
   fetching: boolean;
@@ -347,6 +373,10 @@ export function useLoginWithPassword(): {
   };
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useLogoutAction(): {
   logout: () => Promise<boolean>;
   fetching: boolean;
@@ -365,6 +395,10 @@ export function useLogoutAction(): {
   };
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useUpdatePreferences(
   options: UseUpdatePreferencesOptions = {},
 ): UseUpdatePreferencesResult {
@@ -388,6 +422,10 @@ export function useUpdatePreferences(
   };
 }
 
+/**
+ * @kind null
+ * @reason Provider infrastructure: AuthState context.
+ */
 export function AuthStateProvider({
   auth,
   children,
@@ -398,10 +436,18 @@ export function AuthStateProvider({
   return <AuthContext.Provider value={auth}>{children}</AuthContext.Provider>;
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useAuth(): AuthState {
   return useContext(AuthContext) ?? ANONYMOUS_AUTH;
 }
 
+/**
+ * @kind null
+ * @reason Provider infrastructure: UserPreferences context.
+ */
 export function UserPreferencesProvider({
   children,
   dataProviderName,
@@ -515,6 +561,10 @@ function UserPreferencesSubscription({
   return null;
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function useUserPreferences(): UserPreferencesState {
   return useContext(UserPreferencesContext) ?? DEFAULT_PREFERENCES_STATE;
 }
@@ -540,6 +590,10 @@ function loginUserPayload(
   };
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function currentUserToAuthState(
   payload: CurrentUserPayload | null | undefined,
 ): AuthState {
@@ -628,6 +682,10 @@ function hasAuthGraphQLError(value: unknown): boolean {
   });
 }
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isUnauthorizedError(value: unknown): boolean {
   const record = recordValue(value);
   const response = recordValue(record?.response);

@@ -1,1 +1,1 @@
-"""Append-only upgrades for composed posts models."""
+"""Self-contained upgrade transitions copied into composed runtime history."""

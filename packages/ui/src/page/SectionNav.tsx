@@ -5,6 +5,9 @@ import { tv, type VariantProps } from "../lib/variants";
 import { NavLink } from "../ui/nav-link";
 import { tabsVariants } from "../ui/tabs";
 
+/**
+ * @kind token
+ */
 export const sectionNavVariants = tv({
   slots: {
     root: "shrink-0",
@@ -22,7 +25,7 @@ export const sectionNavVariants = tv({
       vertical: {
         list: "flex-col",
         link:
-          "inline-flex h-8 cursor-pointer items-center gap-1 rounded-6 px-3 text-13 font-medium text-fg-muted outline-none transition-colors hover:text-fg focus-visible:focus-ring data-[active]:bg-brand-soft data-[active]:text-brand-soft-text data-[active]:hover:bg-brand-soft data-[active]:hover:text-brand-soft-text",
+          "inline-flex h-8 cursor-pointer items-center gap-1 rounded-6 px-3 text-13 font-medium text-fg-muted outline-none transition-colors hover:text-fg focus-visible:focus-ring data-[active]:selected data-[active]:hover:selected",
       },
     },
   },
@@ -52,6 +55,10 @@ export type SectionNavProps = Omit<
     label?: string;
   };
 
+/**
+ * @kind region
+ * @region section-navigation
+ */
 export const SectionNav = React.forwardRef<HTMLElement, SectionNavProps>(
   function SectionNav(
     {

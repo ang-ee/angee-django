@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -75,3 +76,42 @@ def test_live_session_exit_during_pairing_respects_stop_request(
     assert session._stopping.is_set()
     assert session.vendor_thread is not None
     assert not session.vendor_thread.is_alive()
+
+
+def test_asyncio_vendor_failure_queues_error_after_pairing() -> None:
+    """The native asyncio producer preserves failure ordering for the task drain."""
+
+    from angee.messaging.session import AsyncioLiveSession
+
+    error = ConnectionError("Vendor receive failed.")
+
+    class FailedSession(AsyncioLiveSession):
+        async def _run_client(self) -> None:
+            self.events.put(("paired", "account-1"))
+            raise error
+
+        async def _download_coro(self, payload: Any, fact: Any) -> bytes | None:
+            return None
+
+        def _is_logged_out(self, error: Exception) -> bool:
+            return False
+
+        def _teardown_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+            pass
+
+        def _stop_main(self, loop: asyncio.AbstractEventLoop, *, deadline: float) -> None:
+            pass
+
+    bridge = SimpleNamespace(
+        live_impl=SimpleNamespace(key="fake", label="Fake", state_identity_key="own_id"),
+        subscription_state={},
+        sqid="fixture",
+    )
+    session = FailedSession(bridge, reporter=SimpleNamespace(), stop_event=threading.Event())  # type: ignore[arg-type]
+    session._connect()
+
+    assert session.outcome_error is None
+    assert session.events.get_nowait() == ("paired", "account-1")
+    assert session.events.get_nowait() == ("error", error)
+    assert session.events.get_nowait() == ("disconnected", None)
+    assert session.events.empty()

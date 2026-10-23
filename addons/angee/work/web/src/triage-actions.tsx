@@ -72,7 +72,7 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
           const task = recordId(context.record, t("triage.action.failed"));
           const data = await accept({
             task,
-            stage: requiredString(values.stage, "stage"),
+            stage: requiredString(values.stage, t("triage.action.required", { field: t("triage.action.stage") })),
           } satisfies AcceptTaskVariables);
           return extractActionOutcome(data, "accept_task") ?? {
             ok: false,
@@ -114,7 +114,7 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
         submit: async (values, context) => {
           const task = recordId(context.record, t("triage.action.failed"));
           return (await snooze(task, {
-            until: requiredString(values.until, "until"),
+            until: requiredString(values.until, t("triage.action.required", { field: t("triage.action.until") })),
           })) ?? { ok: false, message: t("triage.action.failed") };
         },
       },
@@ -135,7 +135,7 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
         submit: async (values, context) => {
           const task = recordId(context.record, t("triage.action.failed"));
           return (await duplicate(task, {
-            canonical: requiredString(values.canonical, "canonical"),
+            canonical: requiredString(values.canonical, t("triage.action.required", { field: t("triage.action.canonical") })),
           })) ?? { ok: false, message: t("triage.action.failed") };
         },
       },
@@ -197,9 +197,9 @@ function recordId(record: Record<string, unknown> | null, message: string): stri
   throw new TypeError(message);
 }
 
-function requiredString(value: unknown, name: string): string {
+function requiredString(value: unknown, message: string): string {
   if (typeof value === "string" && value.trim()) return value;
-  throw new TypeError(`${name} is required.`);
+  throw new TypeError(message);
 }
 
 export function declineReason(options: readonly WidgetOption[], value: unknown): TaskDroppedReason {

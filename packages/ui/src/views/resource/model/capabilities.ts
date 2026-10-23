@@ -1,26 +1,50 @@
 import { FILTER_OPERATORS, type FilterOperator } from "@angee/metadata";
 import { DEFAULT_PAGE_SIZE, normalisePageSize } from "../page-size";
 import type { ResourceViewInitialState } from "./filter";
-/** The framework's own view kinds; addons contribute more through `<model>#views`. */
+/** The framework's own view kinds; addons contribute more through `<model>#views`.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const RESOURCE_VIEW_KINDS = ["list", "board", "calendar", "gantt", "dashboard"] as const;
 
-/** The calendar kind's window modes; `month` is the default period. */
+/** The calendar kind's window modes; `month` is the default period.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const CALENDAR_VIEW_MODES = ["month", "week", "day"] as const;
 export type CalendarViewMode = (typeof CALENDAR_VIEW_MODES)[number];
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const DEFAULT_CALENDAR_VIEW_MODE: CalendarViewMode = "month";
-/** The anchor date's serialized shape — a local `yyyy-MM-dd`. */
+/** The anchor date's serialized shape — a local `yyyy-MM-dd`.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
+ */
 export const CALENDAR_ANCHOR_FORMAT = "yyyy-MM-dd";
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const DEFAULT_RESOURCE_VIEW_PAGE_SIZE = DEFAULT_PAGE_SIZE;
 
 export type BuiltInResourceViewKind = (typeof RESOURCE_VIEW_KINDS)[number];
 /** A view kind: a built-in one, or a contributed kind's namespaced id (`nexus.graph`). */
 export type ResourceViewKind = BuiltInResourceViewKind | `${string}.${string}`;
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isBuiltInResourceViewKind(kind: string): kind is BuiltInResourceViewKind {
   return RESOURCE_VIEW_KINDS.includes(kind as BuiltInResourceViewKind);
 }
 
-/** A built-in kind, or a contributed kind's id (namespaced, so it never collides with one). */
+/** A built-in kind, or a contributed kind's id (namespaced, so it never collides with one).
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isResourceViewKind(value: string): value is ResourceViewKind {
   return isBuiltInResourceViewKind(value) || /^[a-z0-9_-]+\.[a-z0-9_.-]+$/i.test(value);
 }
@@ -46,7 +70,10 @@ export interface ResourceViewKindCapabilities {
   requiresSources?: boolean;
 }
 
-/** The applicable data-controls per resource-view kind (the owner map on the kind). */
+/** The applicable data-controls per resource-view kind (the owner map on the kind).
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const RESOURCE_VIEW_KIND_CAPABILITIES: Record<
   BuiltInResourceViewKind,
   ResourceViewKindCapabilities
@@ -75,7 +102,10 @@ export const RESOURCE_VIEW_KIND_CAPABILITIES: Record<
   },
 };
 
-/** All applicable, for a surface (e.g. an in-memory rows list) that names no kind. */
+/** All applicable, for a surface (e.g. an in-memory rows list) that names no kind.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const FULL_RESOURCE_VIEW_KIND_CAPABILITIES: ResourceViewKindCapabilities = {
   grouping: true,
   pagination: true,
@@ -86,6 +116,8 @@ export const FULL_RESOURCE_VIEW_KIND_CAPABILITIES: ResourceViewKindCapabilities 
 /**
  * The active kind's applicability: a built-in kind's own, a contributed kind's
  * declared capabilities, or all-applicable when no kind is named.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function resourceViewKindCapabilities(
   view: ResourceViewKind | undefined,
@@ -100,6 +132,8 @@ export function resourceViewKindCapabilities(
  * The kinds a page offers, in declaration order: every kind whose capability is
  * unconditional, plus each `requiresSources` kind whose data the page declares.
  * The switcher's options derive from this — never a hardcoded array.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function availableResourceViewKinds(
   declared: { calendar?: boolean; gantt?: boolean; dashboard?: boolean } = {},
@@ -114,15 +148,26 @@ export function availableResourceViewKinds(
 }
 
 export type ResourceViewGroupGranularity = string;
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const RESOURCE_VIEW_SORT_DIRECTIONS = ["asc", "desc"] as const;
 export type ResourceViewSortDirection =
   (typeof RESOURCE_VIEW_SORT_DIRECTIONS)[number];
 export type ResourceViewOrderDirection = "ASC" | "DESC";
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const RESOURCE_VIEW_LOOKUP_OPERATORS = FILTER_OPERATORS;
 export type ResourceViewLookupOperator = FilterOperator;
 export type ResourceViewFacetLookupOperator = FilterOperator;
 
-/** Whether a string is one of the supported lookup operators. */
+/** Whether a string is one of the supported lookup operators.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isLookupOperator(value: string): value is ResourceViewLookupOperator {
   return (RESOURCE_VIEW_LOOKUP_OPERATORS as readonly string[]).includes(value);
 }

@@ -50,7 +50,7 @@ def test_composed_addon_dependencies_are_written_idempotently(tmp_path: Path) ->
         encoding="utf-8",
     )
     addon = _app_config(tmp_path / "fake-addon", "example.fake", ("zeta>=2", "alpha>=1", "alpha>=1"))
-    plain_core = _app_config(tmp_path / "fake-core", "angee.base", None)
+    plain_core = _app_config(tmp_path / "fake-core", "angee", None)
     projection = AddonDependencyGroup.from_app_configs((addon, plain_core), project_dir=host)
 
     assert projection.write() is AddonDependencyGroupResult.WRITTEN

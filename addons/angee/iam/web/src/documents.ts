@@ -1,8 +1,8 @@
 // Console-schema operations for the IAM admin surface: the identity overview,
 // users, roles, grants, relationships, the REBAC schema, and the grant/revoke
 // writes. These root fields live in the `console` runtime schema, so this file is
-// globbed against it by the per-schema codegen. The unauthenticated login surface
-// (available connections, login start/complete) lives in `./documents.public`.
+// globbed against it by the per-schema codegen. OIDC sign-in operations live in
+// the optional `iam_integrate_oidc` addon's public-schema documents.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 import type { DocumentVariables } from "@angee/refine";
@@ -237,13 +237,3 @@ export type IAMGrant = NonNullable<
 /** One `rebac_schema` resource entry, derived from the `IamRebacSchema` selection. */
 export type IAMResourceSchema =
   DocumentType<typeof IamRebacSchema>["rebac_schema"][number];
-
-/** A relation within a `rebac_schema` resource. */
-export type IAMRelationSchema = IAMResourceSchema["relations"][number];
-
-/** A permission within a `rebac_schema` resource. */
-export type IAMPermissionSchema = IAMResourceSchema["permissions"][number];
-
-export type IAMRevokeRoleVariables = DocumentVariables<typeof IamRevokeRole>;
-
-export type IAMGrantRoleVariables = DocumentVariables<typeof IamGrantRole>;

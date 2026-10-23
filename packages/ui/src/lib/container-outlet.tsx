@@ -12,18 +12,25 @@ export interface OutletChild {
  * arrays flatten, so an addon contributes any renderable to a named container.
  * The one owner shared by every base surface that exposes a container (login
  * card, record chrome, …).
+ * @kind contribution
  */
 export function ContainerOutlet({ entries }: { entries: readonly OutletChild[] }): ReactElement | null {
   const nodes = containerContents(entries);
   return nodes.length > 0 ? <>{nodes}</> : null;
 }
 
-/** Return container children as raw keyed nodes suitable for renderers or parsers. */
+/** Return container children as raw keyed nodes suitable for renderers or parsers.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function containerContents(entries: readonly OutletChild[]): ReactNode[] {
   return entries.flatMap((entry) => childNode(entry.content, entry.id));
 }
 
-/** Whether any child would render a node (so the host can omit an empty wrapper). */
+/** Whether any child would render a node (so the host can omit an empty wrapper).
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function containerHasContent(entries: readonly OutletChild[]): boolean {
   return containerContents(entries).length > 0;
 }

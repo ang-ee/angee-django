@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { GanttLane, GanttView } from "@angee/ui";
 import { toneColorVar } from "@angee/ui/lib/tones";
-import { Badge } from "@angee/ui/ui/badge";
+import { Chip } from "@angee/ui";
 
 const anchor = new Date("2026-09-14T12:00:00Z");
 const meta = {
@@ -24,7 +24,7 @@ const meta = {
     ],
     renderRowContent: (row) => row.id === "west" ? <div className="flex min-w-0 items-center gap-2">
       <GanttLane details={{ title: row.title, href: `/teams/${row.id}` }} />
-      <Badge tone="neutral">Available</Badge>
+      <Chip tone="neutral">Available</Chip>
     </div> : <GanttLane details={{ title: row.title, href: `/teams/${row.id}`, secondary: "Current phase: delivery",
       people: [{ id: "ada", name: "Ada Lovelace" }, { id: "grace", name: "Grace Hopper" }] }} />,
   },

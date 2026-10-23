@@ -4,21 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from datetime import datetime
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.db import models, transaction
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.fields import EncryptedField, StateField
-from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin
-from angee.base.models import AngeeDataModel, AngeeManager
+from angee.fields import EncryptedField, StateField
+from angee.impl import ImplClassField
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate_vcs import registry
 from angee.integrate_vcs.backend import VCSBackend
 from angee.integrate_vcs.templates import parse_template_meta
+from angee.models import AngeeDataModel, AngeeManager, AuditMixin
 
 
 class RepoVisibility(models.TextChoices):
@@ -42,8 +41,8 @@ class VcsBridge(Bridge):
     """
 
     runtime = True
-    extends = "integrate.Integration"
-    integration_create_mode = IntegrationCreateMode.FORM
+    extends: ClassVar[str | None] = "integrate.Integration"
+    integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.FORM
 
     backend_class = ImplClassField(
         VCSBackend,
@@ -69,14 +68,6 @@ class VcsBridge(Bridge):
 
         backend_class = cast(type[VCSBackend], self.resolve_impl("backend_class"))
         return backend_class(self)
-
-    def repositories_by_org(self) -> dict[str, list[Any]]:
-        """Return every visible repository grouped and sorted by owning org."""
-
-        groups: dict[str, list[Any]] = {}
-        for descriptor in self.backend.ls_repos():
-            groups.setdefault(descriptor.org, []).append(descriptor)
-        return {org: sorted(repos, key=lambda item: item.name) for org, repos in sorted(groups.items())}
 
     def discover(self, source: Any, *, marker: str, parse: Callable[[bytes], dict[str, Any]]) -> list[dict[str, Any]]:
         """Return one descriptor per directory under ``source`` bearing ``marker``.
@@ -314,7 +305,7 @@ class Source(AuditMixin, AngeeDataModel):
         return f"{self.kind}:{self.path or '/'}"
 
     @classmethod
-    def kind_models(cls) -> tuple[type[models.Model], ...]:
+    def kind_models(cls) -> tuple[type[registry.VcsOutput], ...]:
         """Return the output models that declare a ``source_kind`` (e.g. ``Template``).
 
         ``Source`` owns "what a kind resolves to": an output model binds itself to a
@@ -331,7 +322,7 @@ class Source(AuditMixin, AngeeDataModel):
         return tuple(sorted({str(model.source_kind) for model in cls.kind_models()}))
 
     @classmethod
-    def target_for_kind(cls, kind: str) -> type[models.Model]:
+    def target_for_kind(cls, kind: str) -> type[registry.VcsOutput]:
         """Return the output model bound to one source ``kind`` or raise."""
 
         for model in cls.kind_models():
@@ -343,7 +334,9 @@ class Source(AuditMixin, AngeeDataModel):
     def refresh(self) -> int:
         """Re-enumerate over REST into the kind's output rows; return the row count."""
 
-        return int(type(self).target_for_kind(self.kind).objects.sync_from_source(self))
+        manager = type(self).target_for_kind(self.kind)._default_manager
+        assert isinstance(manager, registry.VcsOutputManager)
+        return manager.sync_from_source(self)
 
     def materialize_spec(self) -> dict[str, str]:
         """Return the operator handoff coordinates to clone and check out this source."""

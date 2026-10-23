@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useModelMetadata, type Row } from "@angee/metadata";
+import { Filter, useModelMetadata, type Row } from "@angee/metadata";
 import { ControlBandProvider } from "../../../layouts/ControlBand";
 import { type ListColumn, type ListViewProps } from "../ListView";
 import { FormView, type FormField, type FormViewProps } from "../../form/FormView";
@@ -20,6 +20,11 @@ import { type ActionDescriptor, type FacetDescriptor, type GroupDescriptor } fro
 import { ResourceListBody } from "./body";
 import { parseResourceListDeclarations, validateResourceListDeclarations } from "./declarations";
 import { declaredGroupDefaults } from "../search/group-defaults";
+import { useAppRuntime } from "../../../runtime";
+import { REFINE_CREATE_ID } from "../../../runtime/route-href";
+
+export { REFINE_CREATE_ID } from "../../../runtime/route-href";
+
 /** Where the open record's form renders relative to the list. */
 export type ResourceRecordPlacement = "inline" | "drawer" | "split";
 
@@ -56,9 +61,6 @@ export interface ResourceListCalendarSpec {
   /** Map a selected range to the create form's seed values (quick-create). */
   createDefaults?: (start: Date, end: Date) => Record<string, unknown>;
 }
-
-/** Record id sentinel that tells `ResourceList` to render a blank create form. */
-export const REFINE_CREATE_ID = "new";
 
 export interface RecordSmartButtonDescriptor {
   id: string;
@@ -158,6 +160,8 @@ export interface ResourceListProps<TRow extends Row = Row> {
   list?: ListComponent<TRow>;
   /** Form options forwarded to `FormView`. */
   returning?: FormViewProps["returning"];
+  /** Override resource metadata for the record header's compact facts line. */
+  contextFields?: FormViewProps["contextFields"];
   /** Host-owned record counters/actions rendered between form actions and views. */
   recordSmartButtons?: readonly RecordSmartButtonDescriptor[];
   /** Hides the built-in "New" button when the host owns creation. */
@@ -226,7 +230,9 @@ export interface ResourceRecordController<TRow extends Row = Row> {
   onRecordTabChange?: (tab: string) => void;
 }
 
-/** The refine list action surface, with optional inline/drawer record UX. */
+/** The refine list action surface, with optional inline/drawer record UX.
+ * @kind surface
+ */
 export function ResourceList<TRow extends Row = Row>({
   pageSize,
   defaultView,
@@ -257,6 +263,15 @@ export function ResourceList<TRow extends Row = Row>({
   const initialDefaultView = declarations.list?.props.defaultView ?? defaultView;
   const resourceView = useResourceViewMaybe();
   const modelMetadata = useModelMetadata(props.resource);
+  const { defaultResourceFilter } = useAppRuntime();
+  const routeDefaultFilter = defaultResourceFilter
+    && defaultResourceFilter.resource === (modelMetadata?.resource.modelLabel ?? props.resource)
+    ? defaultResourceFilter.filter
+    : undefined;
+  const initialDefaultFilter = React.useMemo(
+    () => Filter.combineOptional(defaultFilter, routeDefaultFilter),
+    [defaultFilter, routeDefaultFilter],
+  );
   const initialOrder = declarations.list?.props.order ?? props.order;
   const initialDefaultGroup = declarations.list?.props.defaultGroup === undefined ? defaultGroup : declarations.list.props.defaultGroup;
   const initialDefaultGroups = declarations.list?.props.defaultGroups ?? defaultGroups;
@@ -265,10 +280,10 @@ export function ResourceList<TRow extends Row = Row>({
       pageSize: initialPageSize,
       view: initialDefaultView,
       sorting: initialResourceSorting(modelMetadata, initialOrder),
-      filter: defaultFilter,
+      filter: initialDefaultFilter,
       ...declaredGroupDefaults(initialDefaultGroup, initialDefaultGroups),
     }),
-    [defaultFilter, initialDefaultView, initialPageSize, initialOrder, initialDefaultGroup, initialDefaultGroups, modelMetadata],
+    [initialDefaultFilter, initialDefaultView, initialPageSize, initialOrder, initialDefaultGroup, initialDefaultGroups, modelMetadata],
   );
   return withResourceViewScope({
     ambient: resourceView,
@@ -308,7 +323,9 @@ export function ResourceList<TRow extends Row = Row>({
   });
 }
 
-/** A drawer-mode `ResourceList` with local query/record state and inline controls. */
+/** A drawer-mode `ResourceList` with local query/record state and inline controls.
+ * @kind surface
+ */
 export function DrawerResourceList<TRow extends Row = Row>(
   props: DrawerResourceListProps<TRow>,
 ): React.ReactElement {
@@ -334,7 +351,9 @@ export interface ResourceFormActionProps
   id?: string | null;
 }
 
-/** The refine create action surface for one resource. */
+/** The refine create action surface for one resource.
+ * @kind surface
+ */
 export function ResourceCreate({
   resource,
   ...props
@@ -342,7 +361,9 @@ export function ResourceCreate({
   return <FormView {...props} resource={resource} id={null} />;
 }
 
-/** The refine edit action surface for one resource record. */
+/** The refine edit action surface for one resource record.
+ * @kind surface
+ */
 export function ResourceEdit({
   resource,
   id,
@@ -351,7 +372,9 @@ export function ResourceEdit({
   return <FormView {...props} resource={resource} id={id} publishBreadcrumbLabel />;
 }
 
-/** The refine show action surface for one resource record. */
+/** The refine show action surface for one resource record.
+ * @kind surface
+ */
 export function ResourceShow({
   resource,
   id,

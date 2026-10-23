@@ -13,14 +13,15 @@ DSN and environment; without a DSN no reporting SDK is loaded. See the
 A top-level menu root is an app. Its menu entry may declare `home` (a route
 name inside the root, where `/` lands when the app is selected), `brand`
 (`{ name, mark }`, the mark a registered glyph; it defaults to the root's label
-and icon) and `theme` (an installed theme id). They layer like other menu
+and icon), `theme` (an installed theme id), and `railExpanded` (desktop rail
+expansion until a user saves their own choice). They layer like other menu
 fields, and an included app drops them. The deployment's `ANGEE_UI.shell`
 selects the app: `{ brand?, theme?, apps?: { <name>: { rail, brand?, theme?,
-home? } }, hosts?: { <hostname>: <root id | apps name> } }`. `selectApp` (in
+home?, railExpanded? } }, hosts?: { <hostname>: <root id | apps name> } }`. `selectApp` (in
 [`boot-app.tsx`](src/boot-app.tsx)) takes `?app=`, else the hostname's `hosts`
 entry, else nothing, which shows every root with `shell.brand` and
 `shell.theme`. A root id is the one-root app; a named app takes its own brand,
-theme and home, else its first rail root's. `createApp` reads `location`
+theme, home and rail default, else its first rail root's. `createApp` reads `location`
 (default `window.location`) and projects the selected rail into the rail, the
 command palette and Refine's resources, keeping the personal Settings roots.
 Pages outside the rail stay reachable and sit in the selection's home root; no
@@ -44,9 +45,12 @@ page. The alias reuses the route's page, detail page and model, so nothing is
 exported or re-declared; its path is the app's `path` (`/<app id>` by default,
 since an app's own target may itself be a mount) joined with the node's. A
 node targets one of `route`, `mount` and `to`; an addon mounts only routes of
-addons it depends on. The node's `defaultResourceView` and `recordMatch` go onto
-the alias, and inside it `useRouteHref()` builds the mounted route's names as
-the alias's, so the page's own links stay in the borrowing app. `remove: true`
+addons it depends on. The node's `defaultResourceView`, `defaultFilter` (an
+initial editable `QueryFilter`) and `recordMatch` go onto the alias. Inside the
+borrowing app, `useRouteHref()` builds the mounted route's names as the alias's
+from every page, so dashboards and the borrowed page stay in that app. Use
+`defaultResourceView` for a named shipped/saved view and `defaultFilter` for a
+mount-specific starting filter. `remove: true`
 takes a node and its subtree out and makes the pages only it reached
 unavailable: they stay
 registered, redirect home, and drop out of record links and claims (a
@@ -172,8 +176,11 @@ containers: {
     "desk.review": { sequence: 40, content: reviewSection },
   },
   "form#chrome": { only: ["iam.share-record"] },
+  "timeline#kinds": {
+    "messaging.comments": { sequence: 10 },
+  },
   "record#aside": [
-    { "chatter.comments": { remove: true } },
+    { only: ["timeline.rail", "related"] },
     { only: [], when: { route: "notes.detail" } }, // may be owned by another addon
   ],
 },

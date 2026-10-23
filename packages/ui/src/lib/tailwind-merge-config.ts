@@ -4,7 +4,7 @@ import { TONES } from "./tones";
 
 type TailwindMergeConfig = Parameters<typeof extendTailwindMerge>[0];
 
-const FONT_SIZE_TOKENS = ["2xs", "13", "15", "22", "28", "34"];
+const FONT_SIZE_TOKENS = ["2xs", "12", "13", "15", "22", "28", "34"];
 
 // The two-axis fill matrix (lib/tones.ts) emits, per vivid palette: `bg-P`
 // (solid) / `bg-P-tint` (surface), `border-P` (solid) / `border-P-soft` /
@@ -12,7 +12,7 @@ const FONT_SIZE_TOKENS = ["2xs", "13", "15", "22", "28", "34"];
 // the same TONES constant so this inventory can't drift from the matrix. (This
 // file is plain runtime config — NOT Tailwind-scanned — so interpolation is
 // safe here, unlike the literal matrix in lib/tones.ts.)
-const VIVID_TONES = TONES.filter((tone) => tone !== "neutral");
+const VIVID_TONES = TONES.filter((tone) => tone !== "neutral" && tone !== "muted");
 
 const FG_COLOR_TOKENS = [
   "fg",
@@ -73,6 +73,7 @@ const BORDER_COLOR_TOKENS = [
   "border-strong",
   "border-focus",
   "border-on-rail",
+  "fg-muted",
   "brand",
   "brand-hover",
   "brand-active",
@@ -126,6 +127,8 @@ const Z_INDEX_TOKENS = [
  * `rounded` extension would only cover the all-corners group and leave the
  * side/corner subgroups blind to the tokens. Default keys (`none`/`full`/the
  * Tailwind named scale) are preserved because this is `extend`, not `override`.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export const ANGEE_TW_MERGE_CONFIG = {
   extend: {

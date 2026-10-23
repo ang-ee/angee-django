@@ -6,22 +6,19 @@ from django.apps import AppConfig
 
 
 class MessagingConfig(AppConfig):
-    """Source app manifest for threads, messages, and channel bridges.
-
-    Owns the chatter thread graph plus channel ingest and outbound delivery paths.
-    The one runtime wiring it adds is the chatter-thread teardown receiver (``signals``),
-    connected after app population so deleting a chattered record never orphans its
-    private thread — on the instance or the bulk ``QuerySet.delete()`` path.
-    """
+    """Source app manifest for threads, messages, and channel bridges."""
 
     default = True
     name = "angee.messaging"
 
     def ready(self) -> None:
-        """Wire messaging-owned signal receivers after app population."""
+        from angee.messaging.events import end_unreadable_follows
+        from angee.messaging.models import ThreadedModelMixin
+        from angee.signals import connect_for_models, record_access_revoked
 
-        super().ready()
-        # App population phase 1 imports AppConfig before the models exist; defer.
-        from angee.messaging import signals
-
-        signals.connect()
+        connect_for_models(
+            record_access_revoked,
+            end_unreadable_follows,
+            applies=lambda model: issubclass(model, ThreadedModelMixin),
+            dispatch_uid="messaging.record_access_revoked",
+        )

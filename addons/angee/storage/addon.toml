@@ -5,20 +5,10 @@ name = "angee.storage"
 description = "Drives, folders, and content-addressed files with chunked uploads"
 keywords = ["storage", "files", "drives"]
 category = "Data"
-depends_on = ["angee.iam", "angee.resources", "angee.graphql", "angee.tags", "django.contrib.contenttypes"]
+depends_on = ["angee.iam", "angee.resources", "angee.graphql", "angee.tags", "django.contrib.contenttypes", "angee.provenance"]
 dependencies = [
   "python-magic>=0.4.27",
 ]
-
-[[migrations]]
-name = "smart_kind_nullable"
-app_label = "storage"
-module = "runtime_migrations.smart_kind_nullable"
-
-[[migrations]]
-name = "owner_column"
-app_label = "storage"
-module = "runtime_migrations.owner_column"
 
 [resources]
 master = [

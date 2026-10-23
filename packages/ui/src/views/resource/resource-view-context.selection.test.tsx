@@ -182,6 +182,29 @@ test("a changed preset fixed filter clears selection even with the same preset i
   expect(f.view.state.rowSelection).toEqual({});
 });
 
+test.each([
+  { resource: "tasks.Task" },
+  { baseFilter: { owner: { exact: "company-two" } } },
+])("a changed local collection starts on page one without losing the query (%j)", (props) => {
+  const f = fixture("local", { initialState: { pageSize: 10 } });
+  act(() => f.view.setFilter({ title: { iContains: "bill" } }));
+  act(() => f.view.setSorting([{ id: "title", desc: true }]));
+  act(() => f.view.setPage(3));
+  const before = f.renders.length;
+
+  f.rerender(props);
+
+  expect(f.renders.slice(before).every((value) => value.state.pagination.pageIndex === 0)).toBe(true);
+  expect(f.view.state.pagination).toEqual({ pageIndex: 0, pageSize: 10 });
+  expect(f.view.state.filter).toEqual({ title: { iContains: "bill" } });
+  expect(f.view.state.sorting).toEqual([{ id: "title", desc: true }]);
+  act(() => f.view.setPage(2));
+  f.rerender({ ...props });
+  expect(f.view.state.pagination.pageIndex).toBe(1);
+  f.rerender({});
+  expect(f.view.state.pagination.pageIndex).toBe(0);
+});
+
 test.each(["local", "route"] as const)("%s a preset name or view change without a query change keeps selection and group state", async (scope) => {
   const f = fixture(scope, { initialState: { sorting: [] } });
   await waitFor(() => expect(f.view).toBeDefined());

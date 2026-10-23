@@ -34,6 +34,7 @@ import {
   RetryDiscoveryAction,
   TestConnectionAction,
 } from "./IntegrationLifecycleActions";
+import { RECORD_SOURCES_GROUP_ID, recordSourcesGroup } from "./RecordSourcesPane";
 
 const INTEGRATE_ID = "integrate";
 
@@ -106,8 +107,8 @@ const integrateMenu: readonly BaseMenuItem[] = [
         label: "OAuth",
         icon: "auth",
         children: [
-          { id: "integrate.providers", label: "OAuth Providers", route: "integrate.providers", icon: "auth" },
-          { id: "integrate.accounts", label: "External Accounts", route: "integrate.accounts", icon: "users" },
+          { id: "integrate.providers", label: "OAuth providers", route: "integrate.providers", icon: "auth" },
+          { id: "integrate.accounts", label: "External accounts", route: "integrate.accounts", icon: "users" },
         ],
       },
       { id: "integrate.credentials", label: "Credentials", route: "integrate.credentials", icon: "check" },
@@ -118,7 +119,7 @@ const integrateMenu: readonly BaseMenuItem[] = [
 const integrate = defineBaseAddon({
   id: INTEGRATE_ID,
   routes: integrateRoutes,
-  recordSearchKeys: Object.values(INTEGRATION_STREAM_SEARCH_KEYS),
+  recordSearchKeys: [...Object.values(INTEGRATION_STREAM_SEARCH_KEYS)],
   menus: integrateMenu,
   i18n: { integrate: enIntegrateMessages },
   widgets: {
@@ -134,6 +135,8 @@ const integrate = defineBaseAddon({
   // handshake wherever an integration has credentials, and the addon that owns
   // the vendor contributes that against its own model.
   containers: {
+    // The Links tab's Sources group, on records that admit RecordLink edges.
+    "related#groups": { [RECORD_SOURCES_GROUP_ID]: recordSourcesGroup },
     [`${INTEGRATION_MODEL}#sections`]: {
       [INTEGRATION_STREAMS_TAB_ID]: {
         sequence: 30,
@@ -180,6 +183,11 @@ export {
   type OAuthConnectPayload,
 } from "./connect/ConnectOAuthButton";
 export {
+  useOAuthAuthorization,
+  type OAuthAuthorization,
+  type OAuthAuthorizationStart,
+} from "./connect/use-oauth-authorization";
+export {
   ConditionalMutationButton,
   type ConditionalMutationButtonContext,
   type ConditionalMutationButtonProps,
@@ -218,5 +226,11 @@ export {
   type IntegrationSyncFieldsOptions,
   type IntegrationSyncFragmentOptions,
 } from "./sync-fragments";
+export {
+  RECORD_LINK_MODEL,
+  RECORD_SOURCES_GROUP_ID,
+  RecordSourcesPane,
+  recordSourcesGroup,
+} from "./RecordSourcesPane";
 
 export default integrate;

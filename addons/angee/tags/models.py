@@ -27,14 +27,14 @@ declared relations in step. The tags addon never names another addon's model.
 Compose :class:`TaggedModel` on the topmost REBAC-typed MTI ancestor the
 canonical edge keys on, never on a child, so the delete collector filters at the
 same content type the write used (the placement invariant in
-:mod:`angee.base.refs`).
+:mod:`angee.refs`).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 from operator import attrgetter
-from typing import Any, cast
+from typing import Any, Self
 
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
@@ -44,26 +44,28 @@ from rebac import GenericTarget, generic_target
 from rebac.field_backing import canonical_model
 from rebac.resources import model_for_resource_type, model_resource_type
 
-from angee.base.fields import ColorField
-from angee.base.identity import instance_from_public_id
-from angee.base.merge import MergeableMixin
-from angee.base.mixins import (
-    ArchiveMixin,
-    ArchiveQuerySet,
-    AuditMixin,
-)
-from angee.base.models import (
+from angee.fields import ColorField
+from angee.identity import instance_from_public_id
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
+    ArchiveMixin,
+    ArchiveQuerySet,
+    AuditMixin,
+    HistoryMixin,
+    InputExtensionsMixin,
+    MergeableMixin,
+    MergeableQuerySet,
     role_anchor,
 )
-from angee.base.refs import MergePolicy, RecordRefMixin
+from angee.refs import MergePolicy, RecordRefMixin
 
 
-class TagQuerySet(
-    ArchiveQuerySet[Any],
-    AngeeQuerySet[Any],
+class TagQuerySet[TagT: Tag](
+    MergeableQuerySet[TagT],
+    ArchiveQuerySet[TagT],
+    AngeeQuerySet[TagT],
 ):
     """Archive read scopes layered over the REBAC-scoped tag queryset."""
 
@@ -71,7 +73,7 @@ class TagQuerySet(
 TagManager = AngeeManager.from_queryset(TagQuerySet)
 
 
-class Tag(MergeableMixin, ArchiveMixin, AngeeDataModel):
+class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel):
     """One label in a vocabulary shared by every non-anonymous actor."""
 
     runtime = True
@@ -79,6 +81,8 @@ class Tag(MergeableMixin, ArchiveMixin, AngeeDataModel):
 
     name = models.CharField(max_length=128)
     color = ColorField(max_length=32, blank=True, default="")
+    attention = models.BooleanField(default=False, db_index=True)
+    """Whether assignments of this tag belong in a record's attention cluster."""
 
     objects = TagManager()
 
@@ -95,22 +99,25 @@ class Tag(MergeableMixin, ArchiveMixin, AngeeDataModel):
         return self.name
 
 
-class TagAssignmentQuerySet(AngeeQuerySet[Any]):
+class TagAssignmentQuerySet[AssignmentT: TagAssignment](AngeeQuerySet[AssignmentT]):
     """Chainable read scopes for the polymorphic tag edge."""
 
-    def for_record(self, record: models.Model) -> TagAssignmentQuerySet:
+    def for_record(self, record: models.Model) -> Self:
         """Return the edges on one row, keyed by its canonical generic target."""
 
-        return cast(TagAssignmentQuerySet, self.filter(**generic_target(record).lookups(self.model, "target")))
+        return self.filter(**generic_target(record).lookups(self.model, "target"))
 
-    def by_tag(self) -> TagAssignmentQuerySet:
+    def by_tag(self) -> Self:
         """Order edges as their tags list: the tag model's own ordering, through ``tag``."""
 
-        tag_model = self.model._meta.get_field("tag").related_model
-        return cast(TagAssignmentQuerySet, self.order_by(*(f"tag__{name}" for name in tag_model._meta.ordering)))
+        tag_model = self.model.tag.field.related_model
+        return self.order_by(*(f"tag__{name}" for name in (tag_model._meta.ordering or ())))
 
 
-class TagAssignmentManager(AngeeManager.from_queryset(TagAssignmentQuerySet)):  # type: ignore[misc]
+_TagAssignmentManagerBase = AngeeManager.from_queryset(TagAssignmentQuerySet)
+
+
+class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase[AssignmentT]):
     """Owns the polymorphic tag edge: target resolution, attach, detach, and set.
 
     Every read and write runs under the ambient actor. The target and each tag
@@ -141,7 +148,7 @@ class TagAssignmentManager(AngeeManager.from_queryset(TagAssignmentQuerySet)):  
             return None
         return generic_target(instance)
 
-    def for_target(self, target_type: str, target_id: str) -> models.QuerySet[Any]:
+    def for_target(self, target_type: str, target_id: str) -> TagAssignmentQuerySet[AssignmentT]:
         """Return the assignments on one target row, empty when it does not resolve."""
 
         target = self.resolve_target(target_type, target_id)
@@ -193,17 +200,17 @@ class TagAssignmentManager(AngeeManager.from_queryset(TagAssignmentQuerySet)):  
         for tag_pk in sorted(wanted - current):
             self.create(tag_id=tag_pk, **lookups)
 
-    def _tag_for_id(self, tag_id: str) -> Any:
+    def _tag_for_id(self, tag_id: str) -> Tag:
         """Return the actor-readable tag row for one public id, or fail fast."""
 
-        tag_model = self.model._meta.get_field("tag").related_model
+        tag_model = self.model.tag.field.related_model
         tag_row = instance_from_public_id(tag_model, str(tag_id))
         if tag_row is None:
             raise ValueError(f"tag {str(tag_id)!r} not found")
-        return tag_row
+        return tag_row.canonical()
 
 
-class TagAssignment(AuditMixin, RecordRefMixin, AngeeDataModel):
+class TagAssignment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     """Polymorphic edge attaching one :class:`Tag` to a record of a taggable type.
 
     The ``target`` generic foreign key stores :func:`rebac.generic_target`. Each
@@ -212,6 +219,7 @@ class TagAssignment(AuditMixin, RecordRefMixin, AngeeDataModel):
     relations and the models composing :class:`TaggedModel` to match.
     """
 
+    history_revert_permission = "delete"
     merge_policy = MergePolicy.MOVE
     merge_identity = (("tag", "content_type", "object_id"),)
     runtime = True
@@ -267,35 +275,41 @@ class TagAssignment(AuditMixin, RecordRefMixin, AngeeDataModel):
             if owner is not None and issubclass(owner, TaggedModel):
                 owners.add(owner)
                 continue
-            errors.append(checks.Error(
-                f"{model._meta.label} composes TaggedModel, but its rows are tagged as "
-                + (f"{owner._meta.label}, which does not." if owner else "no REBAC type."),
-                hint="Compose TaggedModel on the topmost REBAC-typed MTI ancestor.",
-                obj=model,
-                id="tags.E001",
-            ))
+            errors.append(
+                checks.Error(
+                    f"{model._meta.label} composes TaggedModel, but its rows are tagged as "
+                    + (f"{owner._meta.label}, which does not." if owner else "no REBAC type."),
+                    hint="Compose TaggedModel on the topmost REBAC-typed MTI ancestor.",
+                    obj=model,
+                    id="tags.E001",
+                )
+            )
         declared = set(cls.declared_target_models().values())
         for owner in sorted(owners - declared, key=attrgetter("_meta.label")):
-            errors.append(checks.Error(
-                f"{owner._meta.label} composes TaggedModel, but {model_resource_type(cls)} declares no "
-                f"relation for {model_resource_type(owner)}.",
-                hint="Declare the type's `target`-backed relation and its target_read and target_write "
-                "arms in the owning addon's permissions.extends.zed.",
-                obj=owner,
-                id="tags.E002",
-            ))
+            errors.append(
+                checks.Error(
+                    f"{owner._meta.label} composes TaggedModel, but {model_resource_type(cls)} declares no "
+                    f"relation for {model_resource_type(owner)}.",
+                    hint="Declare the type's `target`-backed relation and its target_read and target_write "
+                    "arms in the owning addon's permissions.extends.zed.",
+                    obj=owner,
+                    id="tags.E002",
+                )
+            )
         for target in sorted(declared - owners, key=attrgetter("_meta.label")):
-            errors.append(checks.Error(
-                f"{model_resource_type(cls)} declares a relation for {model_resource_type(target)}, but "
-                f"{target._meta.label} does not compose TaggedModel.",
-                hint="Compose TaggedModel on the model, or remove the relation.",
-                obj=cls,
-                id="tags.E003",
-            ))
+            errors.append(
+                checks.Error(
+                    f"{model_resource_type(cls)} declares a relation for {model_resource_type(target)}, but "
+                    f"{target._meta.label} does not compose TaggedModel.",
+                    hint="Compose TaggedModel on the model, or remove the relation.",
+                    obj=cls,
+                    id="tags.E003",
+                )
+            )
         return errors
 
 
-class TaggedModel(models.Model):
+class TaggedModel(InputExtensionsMixin):
     """A model whose rows carry tags saved with the row.
 
     Declares the ``tag_assignments`` reverse accessor the tags read and the
@@ -318,11 +332,13 @@ class TaggedModel(models.Model):
         """Make this row's tags exactly ``tags`` when given, then delegate the remaining values."""
 
         if tags is not None:
-            type(self)._meta.get_field("tag_assignments").related_model.objects.set_for(self, tags)
+            assignment_model = type(self)._meta.get_field("tag_assignments").related_model
+            assert assignment_model is not None and issubclass(assignment_model, TagAssignment)
+            assignment_model.objects.set_for(self, tags)
         super().apply_input_extensions(**values)
 
 
 TagRole = role_anchor("tags/role", name="TagRole")
 """The ``tags/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective tags manager. See :func:`angee.base.models.role_anchor`.
+an effective tags manager. See :func:`angee.models.role_anchor`.
 """

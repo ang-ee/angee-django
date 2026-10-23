@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from typing import Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlsplit
 
-from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.profiles.openai import OpenAIModelProfile
-from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
+
+if TYPE_CHECKING:
+    from pydantic_ai.models.openai import OpenAIChatModel
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +59,10 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
     ) -> dict[str, Any]:
         kwargs = super()._client_kwargs(credential=credential)
         self._validate_loopback_url(str(kwargs.get("base_url") or ""))
+        # The SDK is an optional dependency, loaded once a client is bound, not
+        # when the backend is catalogued.
+        from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
+
         client_class = DefaultAsyncHttpxClient if asynchronous else DefaultHttpxClient
         kwargs["http_client"] = client_class(trust_env=False, follow_redirects=False)
         return kwargs
@@ -189,6 +192,11 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
 
     def _build_model(self, handle: str, client: Any) -> OpenAIChatModel:
         """Declare Ollama's OpenAI-compatible native JSON-schema envelope."""
+
+        # The SDK adapter loads with the model it binds, not with the catalogue.
+        from pydantic_ai.models.openai import OpenAIChatModel
+        from pydantic_ai.profiles.openai import OpenAIModelProfile
+        from pydantic_ai.providers.openai import OpenAIProvider
 
         return OpenAIChatModel(
             handle,

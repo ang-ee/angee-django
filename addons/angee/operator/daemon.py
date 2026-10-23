@@ -6,7 +6,6 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any, cast
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
@@ -16,9 +15,9 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from graphql import build_client_schema, get_introspection_query, print_schema
 
-from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import RequestNotSentError
 from angee.integrate.http import HttpClient
+from angee.serialization import canonical_json_sha256
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,7 @@ _TOKEN_CACHE_PREFIX = "angee:operator:token:"
 _TOKEN_CACHE_SKEW_SECONDS = 5
 
 
-class OperatorInstanceKind(models.TextChoices, StrEnum):
+class OperatorInstanceKind(models.TextChoices):
     """The daemon instance kinds a caller renders and records: workspaces and services.
 
     The daemon names the ``kind`` of the instance a classified error is about in

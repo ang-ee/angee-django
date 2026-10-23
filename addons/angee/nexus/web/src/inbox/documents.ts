@@ -10,7 +10,6 @@ export const InboxMessageFields = graphql(`
     status
     sent_at
     created_at
-    starred
     sender {
       ...MessageSenderFields
     }
@@ -19,7 +18,6 @@ export const InboxMessageFields = graphql(`
       title {
         text
       }
-      modality
     }
     channel {
       id
@@ -74,6 +72,7 @@ export const InboxNavigator = graphql(`
         party {
           id
           display_name
+          display_avatar { url }
         }
         thread {
           id
@@ -196,6 +195,9 @@ export const InboxResultGroups = graphql(`
         label
         count
         message_count
+        latest
+        platform
+        account
       }
     }
   }

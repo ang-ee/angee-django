@@ -19,7 +19,6 @@ export function WorkflowsPage() {
         <Column field="number" header={t("catalogue.version")} />
         <Column field="created_at" header={t("catalogue.created")} />
         <Column field="published_by" header={t("catalogue.publishedBy")} />
-        <Column field="content_hash" header={t("catalogue.contentHash")} />
       </List> },
     { id: "runs", label: t("catalogue.recentRuns"), render: ({ recordId }) =>
       <RunsList embedded baseFilter={{ "version.workflow": { exact: recordId } }} /> },
@@ -31,7 +30,7 @@ export function WorkflowsPage() {
       <Column field="subject_model" header={t("catalogue.subjectModel")} />
       <Column field="published.number" header={t("catalogue.publishedVersion")} />
     </List>
-    <Form readOnly>
+    <Form readOnly eyebrow={t("catalogue.eyebrow")}>
       <Field name="name" label={t("catalogue.name")} title />
       <Group columns={2}>
         <Field name="key" label={t("catalogue.key")} />

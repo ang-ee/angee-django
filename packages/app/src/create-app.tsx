@@ -73,7 +73,6 @@ import {
   sessionPermitted,
   type AppRuntime,
   type ComposedContainers,
-  type RouteHref,
   type RuntimeBrand,
   type RuntimeResourceRoutes,
   type RuntimeVocabulary,
@@ -252,6 +251,8 @@ const APP_QUERY_CLIENT_CONFIG: QueryClientConfig = {
  * invalidation · auth), builds the router, and mounts one persistent layout
  * route per refine layout. The host writes one
  * `createApp({...}).mount(...)`.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function createApp(input: CreateAppInput): AngeeApp {
   const queryClient = new QueryClient(APP_QUERY_CLIENT_CONFIG);
@@ -323,6 +324,10 @@ export function createApp(input: CreateAppInput): AngeeApp {
     removed: composed.menuComposition.removed,
     owners: composed.routeOwners,
     ancestors: composed.ancestors,
+    canonicalModels: Object.fromEntries(modelLabelInventory.flatMap((resource) =>
+      resource.canonicalLabel && resource.canonicalLabel !== resource.modelLabel
+        ? [[resource.modelLabel, resource.canonicalLabel] as const]
+        : [])),
   });
   const unavailable = projection.unavailable;
   validateSelections(shell, menuTree.roots, {
@@ -344,11 +349,6 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const runtimeRouteHref = unavailable.size
     ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
     : routeHref;
-  // Inside a mount, the mounted route's names build its alias's: the borrowed page's own links stay in the borrowing app.
-  const mountedRouteHrefs = new Map<string, RouteHref>(mounted.families.flatMap((family) => {
-    const href = aliasRouteHref(runtimeRouteHref, family);
-    return [...family.values()].map((alias) => [alias, href] as const);
-  }));
   const navigationTree = projection.navigationTree;
   validateContainerConditions(composed.containers, {
     routes: routesByName,
@@ -394,6 +394,20 @@ export function createApp(input: CreateAppInput): AngeeApp {
       if (!offered) throw new Error(`Resource view "${preset.id}" opens on view kind "${preset.view}", which no addon contributes to "${preset.resource}#views".`);
     }
   }
+  for (const route of routes) {
+    if (route.defaultFilter === undefined) continue;
+    const resource = inheritedRouteFact(route, routesByName, (item) => item.recordModel ?? item.resource);
+    const models = resource ? Object.values(schemas).flatMap((schema) => {
+      const model = schema.fieldMetadata.labels[resource];
+      return model ? [model] : [];
+    }) : [];
+    let failure: unknown;
+    const valid = models.some((model) => {
+      try { ResourceQuery.from(model).filterFrom(route.defaultFilter); return true; }
+      catch (error) { failure = error; return false; }
+    });
+    if (!valid) throw failure ?? new Error(`Route "${route.name}" declares a default filter without a resource model.`);
+  }
   const validateDefaultView = (id: string, route: BaseAddonRoute | undefined, menuId?: string) => {
     const preset = composed.resourceViews[id];
     const model = route ? inheritedRouteFact(route, routesByName, (item) => item.recordModel ?? item.resource) : undefined;
@@ -434,6 +448,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const runtime: Omit<AppRuntime, "auth" | "logoutAction" | "userPreferences"> = {
     rail: selection.rail,
     brand: selection.brand,
+    ...(selection.railExpanded !== undefined ? { railExpanded: selection.railExpanded } : {}),
     widgets: { ...defaultWidgets, ...composed.widgets },
     statusTones: composed.statusTones,
     i18n: i18n.instance,
@@ -542,14 +557,16 @@ export function createApp(input: CreateAppInput): AngeeApp {
         route = route.parent ? routesByName.get(route.parent) : undefined;
       }
       const routeNames = routeTrail(activeRoute);
+      const mountedAliases = projection.mountedRouteAliases(app, activeRoute?.name, mounted.families);
       return {
         ...runtime,
         i18n: words.i18n.instance,
         vocabulary: words.vocabulary,
         defaultResourceView: projection.defaultResourceView(activeRoute?.name),
+        defaultResourceFilter: projection.defaultResourceFilter(activeRoute?.name),
         menuResourceViewIds: [...menuResourceViewIds].sort(),
         routesByResource: selected,
-        routeHref: routeNames.map((name) => mountedRouteHrefs.get(name)).find((href) => href !== undefined) ?? runtimeRouteHref,
+        routeHref: mountedAliases.size > 0 ? aliasRouteHref(runtimeRouteHref, mountedAliases) : runtimeRouteHref,
         composition: explain,
         containerScope: {
           apps: appTrail ? appTrail.split("\0") : [],

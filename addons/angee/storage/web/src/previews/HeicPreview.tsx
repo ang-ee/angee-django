@@ -2,9 +2,10 @@ import { useEffect, useState, type ReactElement } from "react";
 import { heicTo } from "heic-to";
 
 import {
-  EmptyState,
+  ErrorBanner,
   ImagePreviewSurface,
   LoadingPanel,
+  errorMessage,
   type PreviewProviderProps,
 } from "@angee/ui";
 
@@ -26,7 +27,7 @@ export default function HeicPreview({ file }: PreviewProviderProps): ReactElemen
     setState({ url: null, error: null });
     fetch(file.url, { signal: controller.signal })
       .then((response) => {
-        if (!response.ok) throw new Error(`Preview fetch failed (${response.status})`);
+        if (!response.ok) throw new Error(t("preview.fetchFailed", { status: String(response.status) }));
         return response.blob();
       })
       .then((blob) => heicTo({ blob, type: "image/jpeg", quality: 0.9 }))
@@ -41,7 +42,7 @@ export default function HeicPreview({ file }: PreviewProviderProps): ReactElemen
         if (controller.signal.aborted) return;
         setState({
           url: null,
-          error: error instanceof Error ? error : new Error("Decode failed"),
+          error: error instanceof Error ? error : new Error(t("preview.decodeFailed")),
         });
       });
     return () => {
@@ -50,16 +51,10 @@ export default function HeicPreview({ file }: PreviewProviderProps): ReactElemen
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [file.url]);
+  }, [file.url, t]);
 
   if (state.error) {
-    return (
-      <EmptyState
-        icon="image"
-        title={t("preview.loadError")}
-        description={state.error.message}
-      />
-    );
+    return <ErrorBanner title={t("preview.loadError")} description={errorMessage(state.error, t("preview.loadError"))} />;
   }
   if (!state.url) return <LoadingPanel message={t("preview.decoding")} />;
   return <ImagePreviewSurface src={state.url} alt={file.name} />;

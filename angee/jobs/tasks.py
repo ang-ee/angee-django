@@ -9,7 +9,7 @@ from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from rebac import system_context
 
-from angee.base.fields import FractionalRankField
+from angee.fields import FractionalRankField
 
 
 @shared_task(

@@ -1,10 +1,11 @@
 import * as React from "react";
 import { Controller, get, useFormState, useWatch, type Control } from "react-hook-form";
+import { rowValueAtPath } from "@angee/metadata";
 
 // Render-only bindings for the headless FormView surface.
 
 import { Textarea } from "../../ui/textarea";
-import { Badge } from "../../ui/badge";
+import { Chip } from "../../ui/chip";
 import {
   FieldDescription,
   FieldLabel,
@@ -14,7 +15,6 @@ import { FormGrid } from "../../ui/form-layout";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import { Collapsible } from "../../ui/collapsible";
 import { useDeveloperFieldTitle } from "../../chrome/DeveloperMode";
-import { sectionEyebrowVariants } from "../../ui/section-eyebrow";
 import { textRoleVariants } from "../../ui/text";
 import { cn } from "../../lib/cn";
 import { optionLabel, relationValueId } from "../../widgets/types";
@@ -48,14 +48,10 @@ import {
 import type { FormViewSurface } from "./form-view-surface";
 import { directDottedPathMessages } from "./validation-errors";
 import { SectionHeading } from "./SectionHeading";
-import { RecordFieldMarkButton } from "./record-field-marks";
+import { AbsoluteTime } from "../../fragments/AbsoluteTime";
+import { RecordHeader } from "../../fragments/RecordHeader";
+import { RecordFieldMarkControl } from "./record-field-marks";
 
-const TITLE_TEXT_CLASS =
-  "block w-full min-w-0 break-words text-28 font-semibold leading-9 text-fg";
-const TITLE_EDITOR_CLASS =
-  "min-h-9 overflow-hidden rounded-none border-0 bg-transparent px-0 py-0 shadow-none " +
-  "text-28 font-semibold leading-9 hover:border-transparent focus:border-transparent " +
-  "focus:bg-transparent focus-visible:border-transparent placeholder:text-fg-subtle";
 const EDITABLE_FIELD_CONTROL_CLASS = cn(
   "-mx-2 min-h-8 rounded-6 border border-transparent bg-transparent px-2",
   "transition-colors hover:border-border-subtle hover:bg-inset",
@@ -70,12 +66,6 @@ const EDITABLE_FIELD_CONTROL_CLASS = cn(
 );
 const READONLY_FIELD_CONTROL_CLASS = "min-h-8 text-13 text-fg";
 const FIELD_ROOT_CLASS = "block min-w-0";
-const FIELD_LABEL_CLASS = sectionEyebrowVariants({
-  className: "flex min-h-4 items-center justify-between gap-2",
-  size: "sm",
-  spacing: "field",
-  weight: "medium",
-});
 const FIELD_CONTROL_CLASS = "min-w-0";
 
 function WrappingTitleEditor({
@@ -116,11 +106,16 @@ function WrappingTitleEditor({
 export const FORM_VIEW_COLUMN_CLASS =
   "mx-auto w-full max-w-[1100px] px-6 sm:px-8";
 
+/** The form's record header on the shared `RecordHeader`: eyebrow · title (read, editable, or a
+ * relation) with its marks · statusbar on the title row · facts line · header extras.
+ * @owner RecordHeader
+ */
 export function FormViewRecordHeader({
   surface,
   compact = false,
   awaiting = false,
   title,
+  eyebrow,
   extra,
   contextLine,
 }: {
@@ -129,6 +124,8 @@ export function FormViewRecordHeader({
   /** The saved record has not arrived yet: render the header's shape. */
   awaiting?: boolean;
   title?: React.ReactNode;
+  /** The eyebrow above the title: the record's kind and container. */
+  eyebrow?: React.ReactNode;
   extra?: React.ReactNode;
   contextLine?: React.ReactNode;
 }): React.ReactElement {
@@ -141,6 +138,8 @@ export function FormViewRecordHeader({
     titleFieldMessages,
     displayRecord,
     modelMetadata,
+    contextFields,
+    attributionFields,
     relationByField,
     loading,
     subtitleParts,
@@ -164,6 +163,9 @@ export function FormViewRecordHeader({
   const currentStatusField = resolvedStatusField && !resolvedStatusField.hidden
     && (!resolvedStatusField.showWhen || resolvedStatusField.showWhen(headerValues))
     ? resolvedStatusField : undefined;
+  const statusRestricted = Boolean(currentStatusField && fieldIsRedacted(displayRecord, currentStatusField.name));
+  const titleRestricted = Boolean(currentTitleField && fieldIsRedacted(displayRecord, currentTitleField.name));
+  const titlePlacementRestricted = Boolean(titlePlacementField && fieldIsRedacted(displayRecord, titlePlacementField.name));
   const statusbar = currentStatusField && fieldWidgetId(currentStatusField) === "statusbar";
   const statusOnTitleRow = statusbar && !compact;
   const compactStatus = statusbar && compact;
@@ -187,27 +189,30 @@ export function FormViewRecordHeader({
     observer.observe(container);
     return () => observer.disconnect();
   }, [awaiting, compact, currentStatusField]);
+  const density = compact ? "compact" : "comfortable";
   if (awaiting) {
     return (
-      <header className={cn("grid", compact ? "gap-1" : "gap-4")}>
+      <RecordHeader density={density} className="border-b-0 px-0" title={
         <SkeletonStatus label={t("form.loading")} className={cn("grid", compact ? "gap-1" : "gap-3")}>
           {statusField && !compact ? <Skeleton className="h-6 w-72" /> : null}
-          <Skeleton shape="text" className={compact ? "h-5 w-1/2" : "h-9 w-2/3"} />
+          <Skeleton shape="text" className={compact ? "h-5 w-1/2" : "h-7 w-2/3"} />
           {!compact ? <Skeleton shape="text" className="h-3 w-64" /> : null}
         </SkeletonStatus>
-      </header>
+      } />
     );
   }
-  const statusMark = currentStatusField ? <RecordFieldMarkButton field={currentStatusField.name} label={currentStatusField.label} /> : null;
-  const status = currentStatusField ? <><div ref={compactStatus ? undefined : statusContainerRef} className={cn(
+  const statusMark = currentStatusField ? <RecordFieldMarkControl field={currentStatusField.name} label={currentStatusField.label}
+    restricted={statusRestricted} /> : null;
+  const status = currentStatusField ? <div ref={compactStatus ? undefined : statusContainerRef} className={cn(
     compactStatus ? "contents" : "flex min-w-0 flex-wrap items-center gap-3",
     statusOnTitleRow ? "flex-auto justify-end" : "w-full",
   )}>
-    <Controller control={form.control} name={currentStatusField.name} render={({ field: controller }) =>
+    {statusRestricted ? <span className="text-13 text-fg-muted">{currentStatusField.label}</span>
+      : <Controller control={form.control} name={currentStatusField.name} render={({ field: controller }) =>
       compactStatus ? (
-        typeof controller.value === "string" && controller.value ? <Badge
-          tone={statusTone(controller.value)} density="compact" shape="pill" className="justify-self-start"
-        >{optionLabel(currentStatusField.options, controller.value)}</Badge> : <span aria-hidden />
+        typeof controller.value === "string" && controller.value ? <Chip
+          tone={statusTone(controller.value)} className="justify-self-start"
+        >{optionLabel(currentStatusField.options, controller.value)}</Chip> : <span aria-hidden />
       ) : <FieldDescriptorControl
         controlRef={controller.ref}
         field={{ ...currentStatusField, containerWidth: statusContainerWidth }}
@@ -222,102 +227,109 @@ export function FormViewRecordHeader({
         }}
         onCommit={() => commitFieldInteraction(currentStatusField.name)}
       />
-    } />
-    {statusOnTitleRow ? statusMark : null}
-  </div>{!statusOnTitleRow ? statusMark : null}</> : null;
+    } />}
+    {statusMark}
+  </div> : null;
+  const editorClass = cn(textRoleVariants({ role: "display" }), "min-h-7 w-full min-w-0 overflow-hidden rounded-none border-0 bg-transparent px-0 py-0 shadow-none hover:border-transparent focus:border-transparent focus:bg-transparent focus-visible:border-transparent placeholder:text-fg-subtle");
+  // The title: a given node, the restricted label, the read-only value, a relation picker, or the editor.
+  let titleNode: React.ReactNode;
+  let editable = false;
+  if (title !== undefined) {
+    titleNode = title;
+  } else if (currentTitleField) {
+    titleNode = (
+      <Controller
+        control={form.control}
+        name={currentTitleField.name}
+        render={({ field: controller }) =>
+          titleRestricted ? (
+            <>{currentTitleField.label ?? t("form.record")}</>
+          ) : fieldReadOnly(currentTitleField) ? (
+            <>{titleText(
+              titleRelation
+                ? titleSelectedOption?.label ?? relationValueId(controller.value)
+                : controller.value,
+              t("form.untitled"),
+            )}</>
+          ) : titleRelation ? (
+            <RelationFieldWidget
+              controlRef={controller.ref}
+              value={relationValueId(controller.value) || null}
+              onChange={(next) => {
+                startFieldInteraction(currentTitleField.name);
+                clearServerFieldError(currentTitleField.name);
+                controller.onChange(next);
+                afterFieldChange(currentTitleField, next);
+              }}
+              onCommit={() => commitFieldInteraction(currentTitleField.name)}
+              relation={titleRelation}
+              filters={currentTitleField.filters}
+              selectedOption={titleSelectedOption}
+              placeholder={currentTitleField.placeholder ?? t("form.untitled")}
+              aria-label={fieldAriaLabel(currentTitleField)}
+            />
+          ) : (
+            <WrappingTitleEditor
+              controlRef={controller.ref}
+              data-form-title="true"
+              value={String(controller.value ?? "")}
+              placeholder={currentTitleField.placeholder ?? t("form.untitled")}
+              aria-label={fieldAriaLabel(currentTitleField)}
+              className={editorClass}
+              onChange={(event) => {
+                startFieldInteraction(currentTitleField.name);
+                clearServerFieldError(currentTitleField.name);
+                controller.onChange(event.currentTarget.value);
+                afterFieldChange(currentTitleField, event.currentTarget.value);
+              }}
+              onBlur={() => commitFieldInteraction(currentTitleField.name)}
+            />
+          )
+        }
+      />
+    );
+    editable = !titleRestricted && !fieldReadOnly(currentTitleField);
+  } else {
+    titleNode = titleText(recordRepresentationValue(displayRecord, modelMetadata), t("form.record"));
+  }
+  const adornments = <>
+    {currentTitleField ? <RecordFieldMarkControl field={currentTitleField.name} label={currentTitleField.label}
+      restricted={titleRestricted} /> : null}
+    {titlePlacementField && displayRecord && !titlePlacementRestricted ? <FieldDescriptorControl
+      field={titlePlacementField}
+      value={displayRecord[titlePlacementField.name]}
+      row={displayRecord}
+      readOnly={fieldReadOnly(titlePlacementField)}
+    /> : null}
+    {titlePlacementField && titlePlacementRestricted ? <span className="inline-flex items-center gap-2 text-13 text-fg-muted">
+      <span>{titlePlacementField.label ?? titlePlacementField.name}</span>
+      <RecordFieldMarkControl field={titlePlacementField.name} label={titlePlacementField.label} restricted />
+    </span> : null}
+  </>;
+  // The metadata-owned facts line is the default. A declared context line
+  // remains the deliberate escape hatch for a domain-specific sentence.
+  const meta = contextLine
+    ? <span className="break-words">{contextLine}</span>
+    : compact ? undefined : <RecordFactsLine resource={modelMetadata?.resource.modelLabel}
+      record={displayRecord} fields={contextFields} attributionFields={attributionFields}
+      technicalParts={subtitleParts} loading={loading} loadingLabel={t("form.loading")}
+      createdByLabel={t("form.createdBy")} updatedByLabel={t("form.updatedBy")} />;
+  const messages = titleField && titleFieldMessages.length > 0 ? (
+    <p className="text-12 leading-5 text-danger-text">{titleFieldMessages.join(", ")}</p>
+  ) : null;
   return (
-    <header className={cn(statusOnTitleRow ? "flex flex-wrap items-start gap-x-6 gap-y-4" : "grid", compact ? "gap-1" : !statusOnTitleRow && "gap-4")}>
-      {!statusOnTitleRow ? status : null}
-      <div className={cn("min-w-0 flex-1 self-start", statusOnTitleRow && "basis-64")}>
-        {/* The title keeps a readable width; its adornments (mark, title-placed field) wrap below it. */}
-        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-form-title-row="true">
-          <div className="min-w-0 flex-[1_1_16rem]">
-        {title !== undefined ? (
-          <h1 className={compact ? "break-words text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>{title}</h1>
-        ) : currentTitleField ? (
-          <Controller
-            control={form.control}
-            name={currentTitleField.name}
-            render={({ field: controller }) =>
-              fieldReadOnly(currentTitleField) ? (
-                <h1 className={compact ? "break-words text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>
-                  {titleText(
-                    titleRelation
-                      ? titleSelectedOption?.label ?? relationValueId(controller.value)
-                      : controller.value,
-                    t("form.untitled"),
-                  )}
-                </h1>
-              ) : titleRelation ? (
-                <div className={compact ? "min-w-0 break-words text-base font-semibold" : TITLE_TEXT_CLASS}>
-                  <RelationFieldWidget
-                    controlRef={controller.ref}
-                    value={relationValueId(controller.value) || null}
-                    onChange={(next) => {
-                      startFieldInteraction(currentTitleField.name);
-                      clearServerFieldError(currentTitleField.name);
-                      controller.onChange(next);
-                      afterFieldChange(currentTitleField, next);
-                    }}
-                    onCommit={() => commitFieldInteraction(currentTitleField.name)}
-                    relation={titleRelation}
-                    filters={currentTitleField.filters}
-                    selectedOption={titleSelectedOption}
-                    placeholder={currentTitleField.placeholder ?? t("form.untitled")}
-                    aria-label={fieldAriaLabel(currentTitleField)}
-                  />
-                </div>
-              ) : (
-                <WrappingTitleEditor
-                  controlRef={controller.ref}
-                  data-form-title="true"
-                  value={String(controller.value ?? "")}
-                  placeholder={currentTitleField.placeholder ?? t("form.untitled")}
-                  aria-label={fieldAriaLabel(currentTitleField)}
-                  className={cn(
-                    compact ? "min-h-8 overflow-hidden border-0 bg-transparent px-0 text-base font-semibold shadow-none" : cn(TITLE_TEXT_CLASS, TITLE_EDITOR_CLASS),
-                  )}
-                  onChange={(event) => {
-                    startFieldInteraction(currentTitleField.name);
-                    clearServerFieldError(currentTitleField.name);
-                    controller.onChange(event.currentTarget.value);
-                    afterFieldChange(currentTitleField, event.currentTarget.value);
-                  }}
-                  onBlur={() => commitFieldInteraction(currentTitleField.name)}
-                />
-              )
-            }
-          />
-        ) : (
-          <h1 className={compact ? "break-words text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>
-            {titleText(
-              recordRepresentationValue(displayRecord, modelMetadata),
-              t("form.record"),
-            )}
-          </h1>
-        )}
-          </div>
-          {currentTitleField ? <RecordFieldMarkButton field={currentTitleField.name} label={currentTitleField.label} /> : null}
-          {titlePlacementField && displayRecord ? <FieldDescriptorControl
-            field={titlePlacementField}
-            value={displayRecord[titlePlacementField.name]}
-            row={displayRecord}
-            readOnly={fieldReadOnly(titlePlacementField)}
-          /> : null}
-        </div>
-        {titleField && titleFieldMessages.length > 0 ? (
-          <p className="mt-1 text-xs leading-5 text-danger-text">
-            {titleFieldMessages.join(", ")}
-          </p>
-        ) : null}
-        {/* A declared context line is the record's one compact subtitle; the
-            generic id/created/updated line is the fallback for forms without one. */}
-        {!compact && !contextLine ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
-        {contextLine ? <div className="mt-1 break-words text-xs text-fg-muted">{contextLine}</div> : null}
-      </div>
-      {statusOnTitleRow ? status : null}
-      {extra ? <div className={cn(compact && "pt-1", statusOnTitleRow && "w-full")}>{extra}</div> : null}
-    </header>
+    <RecordHeader
+      density={density}
+      className="border-b-0 px-0"
+      headingLevel={editable ? null : 1}
+      crumbs={eyebrow}
+      lead={!statusOnTitleRow ? status : undefined}
+      title={titleNode}
+      titleAdornments={adornments}
+      status={statusOnTitleRow && status ? status : undefined}
+      meta={meta}
+      extra={messages || extra ? <>{messages}{extra}</> : undefined}
+    />
   );
 }
 
@@ -401,6 +413,7 @@ export function FormViewSheet({
   const currentBodyField = bodyField
     ? resolveField(bodyField, bodyValues)
     : undefined;
+  const bodyRestricted = Boolean(currentBodyField && fieldIsRedacted(surface.displayRecord, currentBodyField.name));
   const renderField = boundFieldRenderer(surface);
   // A declared `lines` group holds the editable lines in its place in the sheet.
   const sheetSections = sections.map((section) => section.key === EDITABLE_LINES_SECTION
@@ -418,9 +431,10 @@ export function FormViewSheet({
         <section className="grid gap-2">
           {currentBodyField.label ? (
             <div className="flex items-center gap-2"><SectionHeading as="h2" label={currentBodyField.label} />
-              <RecordFieldMarkButton field={currentBodyField.name} label={currentBodyField.label} /></div>
+              <RecordFieldMarkControl field={currentBodyField.name} label={currentBodyField.label}
+                restricted={bodyRestricted} /></div>
           ) : null}
-          <Controller
+          {!bodyRestricted ? <Controller
             control={form.control}
             name={currentBodyField.name}
             render={({ field: controller, fieldState }) => (
@@ -440,7 +454,7 @@ export function FormViewSheet({
                 }}
               />
             )}
-          />
+          /> : null}
         </section>
       ) : null}
       <div className="grid gap-6">
@@ -513,6 +527,7 @@ function BoundFormField({
           value={value}
           row={values}
           readOnly={readOnly}
+          restricted={fieldIsRedacted(surface.displayRecord, field.name)}
           errors={fieldState.error ? [fieldState.error] : []}
           onCommit={() => surface.commitFieldInteraction(field.name)}
           onChange={(picked) => {
@@ -545,32 +560,84 @@ export function FormViewRail({ surface }: { surface: FormViewSurface }): React.R
   </aside>;
 }
 
-function RecordSubtitle({
+function RecordFactsLine({
+  resource,
+  record,
+  fields,
+  attributionFields,
+  technicalParts,
   loading,
   loadingLabel,
-  parts,
+  createdByLabel,
+  updatedByLabel,
 }: {
+  resource?: string;
+  record: FormValues | null;
+  fields: readonly FieldDescriptor[];
+  attributionFields: readonly FieldDescriptor[];
+  technicalParts: readonly React.ReactNode[];
   loading: boolean;
   loadingLabel: React.ReactNode;
-  parts: readonly React.ReactNode[];
+  createdByLabel: React.ReactNode;
+  updatedByLabel: React.ReactNode;
 }): React.ReactElement | null {
+  const valueParts = record == null ? [] : fields.flatMap((field) => {
+    if (fieldIsRedacted(record, field.name)) return [
+      <span key={field.name} className="inline-flex min-w-0 items-center gap-1">
+        <span>{field.label ?? field.name}</span>
+        <RecordFieldMarkControl field={field.name} label={field.label} restricted />
+      </span>,
+    ];
+    const value = rowValueAtPath(record, field.name);
+    if (value == null || value === "") return [];
+    const control = <FieldDescriptorControl key={field.name} resource={resource} field={field}
+      value={value} row={record} readOnly />;
+    // A bare date says nothing about what it is; a date fact carries its label ("due date Oct 15").
+    const dated = field.widget === "date" || field.widget === "datetime";
+    return dated && field.label ? [
+      <span key={field.name} className="inline-flex min-w-0 items-baseline gap-1">
+        <span className="lowercase">{field.label}</span>{control}
+      </span>,
+    ] : [control];
+  });
+  const labels = {
+    created_by: createdByLabel,
+    created_by_label: createdByLabel,
+    updated_by: updatedByLabel,
+    updated_by_label: updatedByLabel,
+  } as const;
+  // "created by admin · Oct 20": the by-field leads, its stamp follows as an absolute date.
+  const stampFor = (prefix: string) => attributionFields.find((field) => field.name === `${prefix}_at`);
+  const attributionParts = record == null ? [] : attributionFields.flatMap((field) => {
+    if (field.name.endsWith("_at")) return [];
+    const value = rowValueAtPath(record, field.name);
+    if (value == null || value === "") return [];
+    const stamp = stampFor(field.name.replace(/_by(_label)?$/, ""));
+    const stampValue = stamp ? rowValueAtPath(record, stamp.name) : undefined;
+    return [<span key={field.name} className="inline-flex min-w-0 items-center gap-1">
+      <span>{labels[field.name as keyof typeof labels]}</span>
+      <FieldDescriptorControl resource={resource} field={field} value={value} row={record} readOnly />
+      {typeof stampValue === "string" && stampValue ? <AbsoluteTime display="date" value={stampValue} /> : null}
+    </span>];
+  });
+  const parts = [...valueParts, ...attributionParts, ...technicalParts];
   if (!loading && parts.length === 0) return null;
   return (
     <div
       className={cn(
         textRoleVariants({ role: "meta" }),
-        "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono",
+        "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 [&_[data-slot=field-control]]:min-h-0",
       )}
     >
       {parts.map((part, index) => (
         <React.Fragment key={index}>
-          {index > 0 ? <span aria-hidden="true">/</span> : null}
+          {index > 0 ? <span aria-hidden="true">·</span> : null}
           <span>{part}</span>
         </React.Fragment>
       ))}
       {loading ? (
         <>
-          {parts.length > 0 ? <span aria-hidden="true">/</span> : null}
+          {parts.length > 0 ? <span aria-hidden="true">·</span> : null}
           <SkeletonStatus label={loadingLabel} className="inline-flex min-w-20 items-center">
             <Skeleton className="h-3 w-20" shape="text" />
           </SkeletonStatus>
@@ -646,6 +713,7 @@ function BoundFieldRow({
   value,
   row,
   readOnly,
+  restricted = false,
   errors,
   serverMessages,
   onChange,
@@ -660,6 +728,7 @@ function BoundFieldRow({
   value: unknown;
   row: FormValues;
   readOnly?: boolean;
+  restricted?: boolean;
   errors: readonly unknown[];
   serverMessages?: readonly string[];
   onChange: (value: unknown) => void;
@@ -678,12 +747,12 @@ function BoundFieldRow({
       invalid={displayedMessages.length > 0}
       className={cn(FIELD_ROOT_CLASS, gridFieldClass(field), rail && "grid grid-cols-[minmax(0,5.5rem)_minmax(0,1fr)] items-start gap-x-2")}
     >
-      <div className="flex items-center gap-1"><FieldLabel className={cn(FIELD_LABEL_CLASS, rail && "mb-0 min-h-8 normal-case tracking-normal")}
+      <div className="flex items-center gap-1"><FieldLabel variant="eyebrow" className={cn(rail && "mb-0 min-h-8 normal-case tracking-normal")}
         title={developerTitle(field.name, field.widget)}>
         {field.label ?? field.name}
       </FieldLabel>
-      <RecordFieldMarkButton field={field.name} label={field.label} /></div>
-      <div
+      <RecordFieldMarkControl field={field.name} label={field.label} restricted={restricted} /></div>
+      {!restricted ? <div
         className={cn(
           FIELD_CONTROL_CLASS,
           effectiveReadOnly
@@ -729,10 +798,15 @@ function BoundFieldRow({
           />
         )}
         </DescriptorPresenceControl>
-      </div>
+      </div> : null}
       <FieldFooter description={field.description} errors={displayedMessages} />
     </FieldRoot>
   );
+}
+
+function fieldIsRedacted(record: FormValues | null | undefined, field: string): boolean {
+  const redacted = record?.redacted_fields;
+  return Array.isArray(redacted) && redacted.includes(field.split(".", 1)[0]);
 }
 
 function BodyFieldControl({
@@ -789,7 +863,7 @@ function FieldFooter({
     <>
       {description ? <FieldDescription>{description}</FieldDescription> : null}
       {errors.length > 0 ? (
-        <p className="text-xs leading-5 text-danger-text">{errors.join(", ")}</p>
+        <p className="text-12 leading-5 text-danger-text">{errors.join(", ")}</p>
       ) : null}
     </>
   );

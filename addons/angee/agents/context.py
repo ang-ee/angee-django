@@ -18,8 +18,8 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from rebac.resources import model_for_resource_type, model_resource_type
 
-from angee.base.fields import EncryptedField
-from angee.base.identity import instance_from_public_id, public_id_of
+from angee.fields import EncryptedField
+from angee.identity import instance_from_public_id, public_id_of
 
 _PREVIEW_CAP = 20
 """Most rows previewed for a list/dashboard view — full bodies come from the MCP tools."""
@@ -104,7 +104,7 @@ def _preview(row: models.Model) -> str:
 def _preview_field_names(model: type[models.Model]) -> tuple[str, ...]:
     """Return the concrete, non-relational field names to preview, capped.
 
-    Never previews an :class:`~angee.base.fields.EncryptedField`: its Python value
+    Never previews an :class:`~angee.fields.EncryptedField`: its Python value
     decrypts to a secret (``client_secret``, OAuth ``material``) and this block is sent
     to a third-party LLM, so a secret-by-type column must never reach it — the same
     "never on a boundary" contract the field declares for GraphQL. Relations and the

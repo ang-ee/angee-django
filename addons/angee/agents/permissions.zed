@@ -1,7 +1,7 @@
 // Authorization schema for the agents addon.
 // @rebac_package: agents
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 15
+// @rebac_schema_revision: 17
 
 definition agents/agent {
     relation owner: auth/user // rebac:field=owner
@@ -69,6 +69,7 @@ definition agents/inference_provider {
     permission read = integration->read + admin->member
     permission write = integration->write + admin->member
     permission delete = integration->write + admin->member
+    permission write__owner = integration->transfer
 }
 
 definition agents/inference_model {
@@ -103,14 +104,14 @@ definition agents/mcp_server {
 }
 
 definition agents/session {
-    relation owner: auth/user // rebac:field=owner
+    relation user: auth/user // rebac:field=user
     relation agent: agents/agent // rebac:field=agent
     relation admin: angee/role // rebac:const=admin
 
-    permission create = (owner & agent->call) + admin->member
-    permission read = owner + agent->actor + admin->member
-    permission write = owner + agent->actor + admin->member
-    permission post = (owner & agent->call) + admin->member
+    permission create = (user & agent->call) + admin->member
+    permission read = user + agent->actor + admin->member
+    permission write = user + agent->actor + admin->member
+    permission post = (user & agent->call) + admin->member
     permission delete = agent->delete + admin->member
 }
 

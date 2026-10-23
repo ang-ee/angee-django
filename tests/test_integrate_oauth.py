@@ -17,7 +17,7 @@ from django.utils import timezone
 from rebac import actor_context, system_context
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 
-from angee.base.impl import ImplClassField
+from angee.impl import ImplClassField
 from angee.integrate import connect
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.oauth import state

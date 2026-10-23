@@ -22,16 +22,12 @@ import {
   DialogHeader,
   DialogPortal,
   DialogTitle,
-  type DialogBackdropProps,
-  type DialogBodyProps,
   type DialogContentProps,
-  type DialogDescriptionProps,
-  type DialogFooterProps,
-  type DialogHeaderProps,
-  type DialogPortalProps,
-  type DialogTitleProps,
 } from "./dialog";
 
+/**
+ * @kind token
+ */
 export const alertDialogVariants = tv({
   slots: {
     content: "",
@@ -46,32 +42,51 @@ export type AlertDialogTone = "info" | "warning" | "danger";
 export type AlertDialogRootProps<Payload = unknown> =
   BaseAlertDialogRootProps<Payload>;
 
+/**
+ * @owner AlertDialog
+ */
 export const AlertDialogRoot = BaseAlertDialog.Root;
+/**
+ * @owner AlertDialog
+ */
 export const AlertDialogTrigger = BaseAlertDialog.Trigger;
+/**
+ * @owner AlertDialog
+ */
 export const AlertDialogPortal = DialogPortal;
+/**
+ * @owner AlertDialog
+ */
 export const AlertDialogBackdrop = DialogBackdrop;
+/**
+ * @owner AlertDialog
+ */
 export const AlertDialogHeader = DialogHeader;
+/**
+ * @owner AlertDialog
+ */
 export const AlertDialogBody = DialogBody;
+/**
+ * @owner AlertDialog
+ */
 export const AlertDialogFooter = DialogFooter;
+/**
+ * @owner AlertDialog
+ */
 export const AlertDialogTitle = DialogTitle;
+/**
+ * @owner AlertDialog
+ */
 export const AlertDialogDescription = DialogDescription;
-
-export type AlertDialogTriggerProps = React.ComponentPropsWithoutRef<
-  typeof BaseAlertDialog.Trigger
->;
-export type AlertDialogPortalProps = DialogPortalProps;
-export type AlertDialogBackdropProps = DialogBackdropProps;
-export type AlertDialogHeaderProps = DialogHeaderProps;
-export type AlertDialogBodyProps = DialogBodyProps;
-export type AlertDialogFooterProps = DialogFooterProps;
-export type AlertDialogTitleProps = DialogTitleProps;
-export type AlertDialogDescriptionProps = DialogDescriptionProps;
 
 export type AlertDialogContentProps = DialogContentProps & {
     className?: string;
     tone?: AlertDialogTone;
   };
 
+/**
+ * @owner AlertDialog
+ */
 export const AlertDialogContent = React.forwardRef<
   HTMLDivElement,
   AlertDialogContentProps
@@ -98,6 +113,9 @@ export type AlertDialogIconProps = React.HTMLAttributes<HTMLDivElement> & {
     tone?: AlertDialogTone;
   };
 
+/**
+ * @owner AlertDialog
+ */
 export const AlertDialogIcon = React.forwardRef<
   HTMLDivElement,
   AlertDialogIconProps
@@ -122,6 +140,9 @@ export type AlertDialogCancelProps = Omit<
     variant?: Exclude<ButtonVariant, "danger" | "primary">;
   };
 
+/**
+ * @owner AlertDialog
+ */
 export const AlertDialogCancel = React.forwardRef<
   HTMLButtonElement,
   AlertDialogCancelProps
@@ -154,6 +175,9 @@ export type AlertDialogActionProps = Omit<
     variant?: ButtonVariant;
   };
 
+/**
+ * @owner AlertDialog
+ */
 export const AlertDialogAction = React.forwardRef<
   HTMLElement,
   AlertDialogActionProps
@@ -175,6 +199,9 @@ export const AlertDialogAction = React.forwardRef<
 });
 AlertDialogAction.displayName = "AlertDialogAction";
 
+/**
+ * @kind primitive
+ */
 export const AlertDialog = {
   Root: AlertDialogRoot,
   Trigger: AlertDialogTrigger,

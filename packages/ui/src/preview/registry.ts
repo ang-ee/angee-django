@@ -56,6 +56,8 @@ export interface PreviewProvider extends PreviewContribution {
  * addon-contributed providers. Sort is stable, so on a priority tie an earlier
  * entry wins (callers list runtime providers before the built-ins to let an
  * addon override a built-in at equal priority).
+ * @kind null
+ * @reason Provider infrastructure: selects a preview contribution by MIME and priority.
  */
 export function resolvePreviewProvider(
   providers: readonly PreviewProvider[],

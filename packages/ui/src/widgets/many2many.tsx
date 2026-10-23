@@ -1,14 +1,10 @@
-import { Combobox } from "@base-ui/react/combobox";
 import { useRef, useState, type ReactElement } from "react";
 
-import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
-import { cn } from "../lib/cn";
-import { textRoleVariants } from "../ui/text";
 import { Chip, ChipList, RemovableChip } from "../ui/chip";
+import { Combobox } from "../ui/combobox";
 import { chipInputVariants } from "../ui/input";
-import { PORTALED_CONTROL_LAYER } from "../ui/popover";
-import { SelectPrimitive, SelectValue, SelectIcon, SelectList, SelectItem, SelectItemText, SelectItemIndicator, selectVariants } from "../ui/select";
+import { SelectPrimitive, SelectValue, SelectIcon, SelectList, SelectItem, SelectItemText, SelectItemIndicator } from "../ui/select";
 import { widgetControlPresentationProps } from "../ui/widget-control";
 import { widgetLabel } from "./label";
 import {
@@ -78,7 +74,6 @@ function Many2ManyChipsEdit({
   const options = field?.options ?? [];
   const { presentation, ...controlProps } = field?.controlProps ?? ({} as Partial<WidgetControlProps>);
   const sizing = widgetControlPresentationProps(presentation);
-  const styles = selectVariants(sizing);
   const text = query.trim();
   const needle = text.toLocaleLowerCase();
   const labelText = (option: WidgetOption) => optionTextLabel(option.label, option.value);
@@ -125,29 +120,20 @@ function Many2ManyChipsEdit({
           </Combobox.Chip>;
         })}
         <Combobox.Input {...controlProps} ref={controlRef} aria-label={widgetLabel(field, t("many2many.label"))}
-          className="h-5 min-w-[7rem] flex-1 border-0 bg-transparent text-13 text-fg outline-none" />
-        <Combobox.Trigger aria-label={t("many2many.options")} data-widget-affordance=""
-          className={styles.icon({ className: "ml-auto shrink-0 cursor-pointer" })}>
-          <Glyph name="chevron-down" />
-        </Combobox.Trigger>
+          className="h-5 min-w-[7rem]" />
+        <Combobox.Trigger shape="caret" aria-label={t("many2many.options")} />
       </Combobox.Chips>
-      <Combobox.Portal>
-        <Combobox.Positioner anchor={boxRef} className={PORTALED_CONTROL_LAYER} sideOffset={4}>
-          <Combobox.Popup className={styles.content()}>
-            <Combobox.List className={styles.list()}>
-              {(item: string) => <Combobox.Item key={item} value={item} className={styles.item()}>
-                <span className={styles.itemText()}>
-                  {item === CREATE_ITEM ? t("relation.create", { query: text })
-                    : item === CREATE_AND_EDIT_ITEM ? t("relation.createAndEdit") : optionLabel(options, item)}
-                </span>
-              </Combobox.Item>}
-            </Combobox.List>
-            <Combobox.Empty className={cn(textRoleVariants({ role: "meta" }), "px-2 py-3 empty:hidden")}>
-              {t("combobox.noOptions")}
-            </Combobox.Empty>
-          </Combobox.Popup>
-        </Combobox.Positioner>
-      </Combobox.Portal>
+      <Combobox.Popup anchor={boxRef} size={sizing.size}>
+        <Combobox.List>
+          {(item: string) => <Combobox.Item key={item} value={item} size={sizing.size}>
+            <Combobox.ItemText>
+              {item === CREATE_ITEM ? t("relation.create", { query: text })
+                : item === CREATE_AND_EDIT_ITEM ? t("relation.createAndEdit") : optionLabel(options, item)}
+            </Combobox.ItemText>
+          </Combobox.Item>}
+        </Combobox.List>
+        <Combobox.Empty />
+      </Combobox.Popup>
     </Combobox.Root>
   );
 }
@@ -193,7 +179,7 @@ export function Many2ManyCellEdit({
               <Chip tone="info" size="sm" className="min-w-0 shrink">
                 {optionLabel(options, selected[0])}
               </Chip>
-              {selected.length > 1 ? <span className="shrink-0 text-xs">+{selected.length - 1}</span> : null}
+              {selected.length > 1 ? <span className="shrink-0 text-12">+{selected.length - 1}</span> : null}
             </span>
           ) : widgetLabel(field, t("many2many.add"))}
         </SelectValue>

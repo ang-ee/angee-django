@@ -74,7 +74,7 @@ function CommandPaletteDemo() {
           </Command.Group>
         </Command.List>
       </Command>
-      <div className="border-t border-border-subtle px-3 py-2 text-xs text-fg-muted">
+      <div className="border-t border-border-subtle px-3 py-2 text-12 text-fg-muted">
         {selected}
       </div>
     </div>

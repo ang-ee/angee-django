@@ -11,12 +11,12 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.db import models
 from rebac import current_actor
 from strawberry import auto
 from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 
-from angee.base.mixins import CreationKeyConflict, StaleRevisionError
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -42,11 +42,14 @@ from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.messaging.schema import MessageType
+from angee.models import CreationKeyConflict, StaleRevisionError
 from angee.money.schema import CurrencyType
 from angee.parties.schema import PartyType
+from angee.projects.models import Project as ProjectModel
 from angee.projects.schema import MilestoneType, ProjectType, TaskType
 from angee.proposals.inputs import RoundTemplate, TopicTemplate
 from angee.proposals.models import AnswerVisibility, PassAudience, QuestionAudience, RoundOpeningPolicy
+from angee.proposals.models import Round as RoundModel
 from angee.spaces.schema import SpaceGroupType
 
 Round = apps.get_model("proposals", "Round")
@@ -402,6 +405,13 @@ class ProjectAttentionFields:
     questions_waiting_for_me: int = question_attention_field(Project)
     questions_passed_on: int = question_attention_field(Project, passed_on=True)
 
+    @strawberry_django.field(graphql_type=ProposalRoundType | None)
+    @staticmethod
+    def active_proposal_round(parent: strawberry.Parent[ProjectModel]) -> models.QuerySet[RoundModel]:
+        """Leave native authorization and optimizer passes on the selected round queryset."""
+
+        return Round.objects.active_for_project(parent)
+
 
 @strawberry_django.type(Project, name="ProjectType", extend=True)
 class ProjectProposalsExtension(ProjectAttentionFields):
@@ -409,20 +419,12 @@ class ProjectProposalsExtension(ProjectAttentionFields):
 
     source_proposal: ProposalType | None = actor_scoped_to_one("source_proposal")
 
-    @strawberry_django.field
-    def active_proposal_round(self) -> ProposalRoundType | None:
-        return Round.objects.active_for_project(self)
-
 
 @strawberry_django.type(Project, name="ConsoleProjectType", extend=True)
 class ConsoleProjectProposalsExtension(ProjectAttentionFields):
     """Contribute the track relation to the console project node."""
 
     source_proposal: ConsoleProposalType | None = actor_scoped_to_one("source_proposal")
-
-    @strawberry_django.field
-    def active_proposal_round(self) -> ProposalRoundType | None:
-        return Round.objects.active_for_project(self)
 
 
 @strawberry_django.type(Answer)
@@ -479,9 +481,10 @@ def resolve_proposal_clarification(
     """Resolve a question through its round's management verb."""
 
     question = authorized_permission_target(info, Task, task, "write")
-    if question.clarification_round_id is None:
+    round = question.clarification_round
+    if round is None:
         raise ValidationError({"task": "Choose a clarification question."})
-    round = question.clarification_round.with_actor(current_actor())
+    round = round.with_actor(current_actor())
     result = round.resolve_clarification(question, expected_revision=expected_revision)
     return ActionResult(ok=True, message="Question resolved.", id=result.sqid)
 
@@ -625,12 +628,12 @@ class ProposalActionMutation:
         audience: QuestionAudience = QuestionAudience("default"),
         recipient: PublicID | None = None,
         responders: bool = False,
-        client_creation_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> ActionResult:
         """Return only the question id, including replays after surrender."""
         row = authorized_permission_target(info, Round, round, "ask")
         task = row.ask(
-            title, body, audience, _clarification_recipient(info, recipient, responders), client_creation_key
+            title, body, audience, _clarification_recipient(info, recipient, responders), idempotency_key
         )
         return ActionResult(ok=True, message="Question asked.", id=task.sqid)
 

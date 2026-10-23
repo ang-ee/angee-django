@@ -22,7 +22,7 @@ from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import current_actor
 
-from angee.base.actors import actor_user_id
+from angee.actors import actor_user_id
 
 
 class InboxCoverage(BaseModel):
@@ -152,7 +152,7 @@ class MessageInbox:
             .untrashed()
             .filter(status__in=queryset.model.PUBLISHED_STATUSES)
             .exclude(thread__modality="public_thread")
-            .for_feed()
+            .for_feed(all_copies=True)
         )
         self.handles = self.collection("parties", "Handle").with_sender_name()
         self.parties = self.collection("parties", "Party")
@@ -278,6 +278,8 @@ class MessageInbox:
                 raise ValueError("Handle unavailable.")
             rows = self.involving_handles(rows, self.handles.filter(pk=handle.pk))
         if search.starred:
+            if self.user_id is None:
+                return rows.none()
             stars = apps.get_model("messaging", "MessageStar").objects.filter(user_id=self.user_id)
             rows = rows.filter(pk__in=Subquery(stars.values("message_id")))
         parts = self.parts.filter(message_id=OuterRef("pk"))
@@ -344,17 +346,25 @@ class MessageInbox:
     def results(self, coverage: InboxCoverage, search: InboxSearch, *, sender: str = "", circle: str = "") -> Any:
         """The one intersection used by conversation rows, counts and selection status."""
 
-        return self.matching(self.scoped(self.coverage(coverage), sender=sender, circle=circle), search)
+        scoped = self.scoped(self.coverage(coverage), sender=sender, circle=circle)
+        return self.matching(scoped, search).canonical()
 
     def _conversation_rows(self, rows: Any) -> Any:
-        # An unreadable thread is not an exposed grouping identity. Its readable
-        # messages remain independently reachable as standalone sections.
-        return rows.annotate(
+        # A conversation groups under the readable survivor of its thread's
+        # redirect. An unreadable thread is not an exposed grouping identity: its
+        # readable messages remain independently reachable as standalone sections.
+        # Redirects are flattened to one hop, so the survivor and the row's own thread
+        # are each one primary-key probe of the readable inbox threads.
+        return rows.alias(
+            _survivor_visible=Exists(self.threads.filter(pk=rows.survivor_id("thread__", ref=OuterRef))),
+            _thread_visible=Exists(self.threads.filter(pk=OuterRef("thread_id"))),
+        ).annotate(
             _conversation=Case(
-                When(thread_id__in=Subquery(self.threads.order_by().values("pk")), then=F("thread_id")),
+                When(_survivor_visible=True, then=rows.survivor_id("thread__")),
+                When(_thread_visible=True, then=F("thread_id")),
                 default=-F("pk"),
                 output_field=models.BigIntegerField(),
-            )
+            ),
         )
 
     def conversations(self, rows: Any, *, page: int = 1, size: int = 25, oldest: bool = False) -> InboxPage:
@@ -417,7 +427,11 @@ class MessageInbox:
         return message
 
     def target_parts(self, target: str) -> Any:
-        """Authorize an exact file or shared-text target through an eligible use."""
+        """Authorize a file through Storage, or shared text through an eligible use.
+
+        A readable file can have no message uses; its Related collection is empty.
+        Fragments have no independent read gate, so require an eligible message.
+        """
 
         kind, _, public_id = target.partition(":")
         if kind == "file":
@@ -429,7 +443,7 @@ class MessageInbox:
             parts = self.parts.filter(fragment__sqid=public_id)
         else:
             raise ValueError("Unknown Related target.")
-        if not parts.exists():
+        if kind == "fragment" and not parts.exists():
             raise ValueError("Related content unavailable.")
         return parts
 

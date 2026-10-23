@@ -24,7 +24,10 @@ interface OptimisticPreferences {
   generation: object;
 }
 
-/** Optimistic display and rollback for one slice of the runtime preference document. */
+/** Optimistic display and rollback for one slice of the runtime preference document.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function usePreferenceSlice<TValue>(
   key: string,
   read: (preferences: RuntimeUserPreferences) => TValue,

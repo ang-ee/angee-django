@@ -260,16 +260,24 @@ class InboxConversationGroups(InboxGroups):
     def page(self, *, page: int = 1, size: int = 25) -> InboxGroupPage:
         result = super().page(page=page, size=size)
         keys = [int(cast(str, row.value)) for row in result.rows]
-        titles = self.inbox.threads.filter(pk__in=[key for key in keys if key > 0]).conversation_labels()
+        threads = self.inbox.threads.filter(pk__in=[key for key in keys if key > 0])
+        titles = threads.conversation_labels()
+        context = {thread.pk: thread for thread in threads.only("pk", "platform", "channel_id")}
+        accounts = dict(self.inbox.collection("integrate", "Integration").filter(
+            pk__in=[thread.channel_id for thread in context.values() if thread.channel_id],
+        ).values_list("pk", "display_name"))
         rows = []
         for row in result.rows:
             key = int(cast(str, row.value))
             owner = self.inbox.threads.model if key > 0 else self.inbox.messages.model
             kind = "thread" if key > 0 else "message"
+            thread = context.get(key)
             rows.append(replace(
                 row,
                 value=f"{kind}:{owner.public_id_from_pk(abs(key))}",
                 label=titles.get(key, "") if key > 0 else "Standalone message",
+                platform=thread.platform if thread else "",
+                account=accounts.get(thread.channel_id, "") if thread else "",
             ))
         return replace(result, rows=rows)
 

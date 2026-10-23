@@ -4,10 +4,13 @@ import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { tv } from "../lib/variants";
 
+/**
+ * @kind token
+ */
 export const logStreamVariants = tv({
   slots: {
     root: "flex min-h-0 flex-col overflow-hidden rounded-6 border border-border-subtle bg-inset",
-    viewport: "min-h-0 flex-1 overflow-auto p-3 font-mono text-xs leading-5 text-fg",
+    viewport: "min-h-0 flex-1 overflow-auto p-3 font-mono text-12 leading-5 text-fg",
     line: "whitespace-pre-wrap break-all",
     empty: "text-fg-muted",
   },
@@ -30,6 +33,7 @@ export interface LogStreamProps
  * the bottom). The owner of "tail a growing line buffer" — compose it over any
  * subscription that accumulates string lines rather than hand-rolling a scroll
  * box per consumer.
+ * @kind fragment
  */
 export const LogStream = React.forwardRef<HTMLDivElement, LogStreamProps>(
   function LogStream(

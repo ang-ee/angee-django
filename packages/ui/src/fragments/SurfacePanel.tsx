@@ -12,6 +12,9 @@ export interface SurfacePanelProps {
   children: React.ReactElement;
 }
 
+/**
+ * @kind fragment
+ */
 export function SurfacePanel({
   title,
   summary,
@@ -76,6 +79,7 @@ export interface SettingsShellProps {
  * their sections: a settings column composes sections, so an embedded view's
  * controls belong beside it — never portaled to the layout's page band, where
  * two sections would stack two bands.
+ * @kind page
  */
 export function SettingsShell({
   maxWidth,
@@ -109,6 +113,7 @@ export interface SettingsSectionProps {
  * A card-less titled section for settings/admin surfaces: an `<h2>` heading with
  * an optional description, followed by content. Unlike `SurfacePanel` /
  * `DetailSection`, it adds no card chrome — the wrapped view brings its own.
+ * @kind fragment
  */
 export function SettingsSection({
   title,

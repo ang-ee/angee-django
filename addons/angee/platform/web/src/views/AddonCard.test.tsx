@@ -30,6 +30,13 @@ vi.mock("@angee/ui", async (importOriginal) => {
     useAuthoredResourceMutation: mocks.resourceMutation,
     useRelationOptions: () => ({ options: [] }),
     useToast: () => mocks.toast,
+    // The shared settle: fire, then toast the outcome the way the owner does.
+    useActionResultRun: () => async (fire: () => Promise<{ ok?: boolean; message?: string } | null | undefined>) => {
+      const outcome = await fire();
+      if (outcome?.ok) mocks.toast.success({ title: outcome.message });
+      else mocks.toast.danger({ title: outcome?.message });
+      return outcome ?? undefined;
+    },
     // Mirror the real (memoized) translator so the namespace bundle resolves to English.
     useNamespaceT: (_namespace: string, messages: Record<string, string>) =>
       useCallback(

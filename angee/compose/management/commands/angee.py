@@ -6,10 +6,11 @@ import subprocess
 import sys
 import time
 from argparse import SUPPRESS
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, cast
 
+from django.apps import apps
 from django.core.management import call_command, get_commands, load_command_class
 from django.core.management.base import (
     BaseCommand,
@@ -17,8 +18,11 @@ from django.core.management.base import (
     CommandParser,
 )
 from django.db import OperationalError, connections
+from django.db.models.signals import post_migrate
 
 from angee.compose.runtime import Runtime
+
+_ANALYZE_RECEIVER = "angee.provision.analyze_migrated"
 
 
 class Command(BaseCommand):
@@ -66,6 +70,10 @@ class Command(BaseCommand):
             help="Seconds to wait for the default database (default: 60).",
         )
         provision.add_argument("--post-build", action="store_true", help=SUPPRESS)
+        provision.add_argument(
+            "--after-if-installed", action="append", default=[], metavar="COMMAND",
+            help="Run an installed addon's management command after provisioning (repeatable).",
+        )
         provision.set_defaults(handler=self._handle_provision)
 
     def handle(self, *args: Any, **options: Any) -> None:
@@ -117,7 +125,9 @@ class Command(BaseCommand):
            and populated column drops fail without prompting or writing. Every
            provision defers system checks until migrations and permission sync
            reconcile persisted state with the newly emitted model graph.
-        4. ``migrate --noinput --skip-checks`` with checks deferred on every provision.
+        4. ``migrate --noinput --skip-checks`` with checks deferred on every provision,
+           then PostgreSQL ``ANALYZE`` of the tables of every app it migrated forward:
+           neither Django nor autovacuum gathers statistics for a changed schema.
         5. ``reconcile_permissions`` — prune stale package-managed REBAC schema
            only after identity migrations have preserved moved rows.
         6. ``rebac --skip-checks sync --yes`` (``--force-overwrite`` when
@@ -142,7 +152,13 @@ class Command(BaseCommand):
         steps = self._provision_plan(options)
         if options["post_build"]:
             for step in steps[1:]:
-                self._run_step(step)
+                if step[0] == "migrate":
+                    self._migrate_and_analyze(step)
+                else:
+                    self._run_step(step)
+            for command in options.get("after_if_installed", ()):
+                if command in get_commands():
+                    self._run_step([command])
             return
 
         self._wait_for_database(options["wait_db"])
@@ -151,6 +167,8 @@ class Command(BaseCommand):
         for option in ("demo", "force_rebac", "bootstrap_admin"):
             if options[option]:
                 child.append(f"--{option.replace('_', '-')}")
+        for command in options.get("after_if_installed", ()):
+            child.extend(("--after-if-installed", command))
         result = subprocess.run(child, check=False)
         if result.returncode != 0:
             raise CommandError(f"angee provision: post-build commands failed (exit {result.returncode})")
@@ -220,6 +238,50 @@ class Command(BaseCommand):
                 self.stdout.write(f"angee provision: waiting for database ({attempt}/{seconds})...")
                 time.sleep(1)
         raise CommandError(f"angee provision: database did not accept connections within {seconds}s: {last_error}")
+
+    def _migrate_and_analyze(self, step: list[str]) -> None:
+        """Run the migrate step, then refresh planner statistics of the tables it changed.
+
+        An added or altered column has no statistics until ``ANALYZE`` runs, and
+        autovacuum analyzes on row churn, not schema changes, so a large table can
+        keep planning on estimates that are orders of magnitude off.
+        """
+
+        applied: list[tuple[Any, bool]] = []
+
+        def record(sender: Any, plan: list[tuple[Any, bool]] | None = None, **kwargs: Any) -> None:
+            # migrate sends the same plan once per app; keep the first.
+            if plan and not applied:
+                applied.extend(plan)
+
+        post_migrate.connect(record, weak=False, dispatch_uid=_ANALYZE_RECEIVER)
+        try:
+            self._run_step(step)
+        finally:
+            post_migrate.disconnect(dispatch_uid=_ANALYZE_RECEIVER)
+        connection = connections["default"]
+        if connection.vendor != "postgresql" or not applied:
+            return
+        tables = self._analyzed_tables(applied, connection.introspection.table_names())
+        if not tables:
+            return
+        self.stdout.write(self.style.MIGRATE_HEADING(f"angee provision: analyze {len(tables)} migrated tables"))
+        with connection.cursor() as cursor:
+            cursor.execute(f"ANALYZE {', '.join(connection.ops.quote_name(table) for table in tables)}")
+
+    @staticmethod
+    def _analyzed_tables(plan: list[tuple[Any, bool]], existing: Iterable[str]) -> list[str]:
+        """Return the existing tables of every app the plan migrates forward, sorted."""
+
+        labels = {migration.app_label for migration, backwards in plan if not backwards}
+        present = set(existing)
+        return sorted(
+            model._meta.db_table
+            for label in labels
+            if label in apps.app_configs
+            for model in apps.get_app_config(label).get_models(include_auto_created=True)
+            if model._meta.managed and model._meta.db_table in present
+        )
 
     def _run_step(self, step: list[str]) -> None:
         """Run one command in the current registry with its CLI check policy.

@@ -8,6 +8,9 @@ import {
 import { tv, type VariantProps } from "../lib/variants";
 import { Toggle, type ToggleProps } from "./toggle";
 
+/**
+ * @kind token
+ */
 export const toggleGroupVariants = tv({
   slots: {
     root:
@@ -17,6 +20,10 @@ export const toggleGroupVariants = tv({
   },
   variants: {
     variant: {
+      pills: {
+        root: "flex-wrap gap-1.5",
+        item: "rounded-full border border-border-subtle bg-sheet px-3 data-[pressed]:border-brand data-[pressed]:bg-brand data-[pressed]:text-on-brand",
+      },
       segmented: {
         root: "gap-0.5 rounded-6 border border-border-subtle bg-inset p-0.5",
         item: "rounded-6 border border-transparent data-[pressed]:bg-sheet data-[pressed]:shadow-xs",
@@ -73,6 +80,9 @@ export type ToggleGroupRootProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner ToggleGroup
+ */
 export const ToggleGroupRoot = React.forwardRef<
   HTMLDivElement,
   ToggleGroupRootProps
@@ -105,6 +115,9 @@ export type ToggleGroupItemProps = Omit<
     className?: string;
   };
 
+/**
+ * @owner ToggleGroup
+ */
 export const ToggleGroupItem = React.forwardRef<
   HTMLButtonElement,
   ToggleGroupItemProps
@@ -128,6 +141,9 @@ export const ToggleGroupItem = React.forwardRef<
 });
 ToggleGroupItem.displayName = "ToggleGroupItem";
 
+/**
+ * @kind primitive
+ */
 export const ToggleGroup = Object.assign(ToggleGroupRoot, {
   Root: ToggleGroupRoot,
   Item: ToggleGroupItem,
@@ -155,6 +171,9 @@ export type SegmentedControlProps<Value extends string = string> = Omit<
   ) => void;
 };
 
+/**
+ * @kind primitive
+ */
 export function SegmentedControl<Value extends string = string>({
   options,
   value,

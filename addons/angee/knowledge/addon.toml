@@ -10,24 +10,14 @@ dependencies = [
   "markdown-it-py>=4.2",
 ]
 
+[[migrations]]
+name = "retire_creation_keys"
+app_label = "knowledge"
+module = "runtime_migrations.retire_creation_keys"
+
 [resources]
 demo = [
   { path = "resources/demo/010_knowledge.vault.yaml", depends_on = "iam:resources/demo/010_iam.user.yaml", adopt = ["owner", "name"] },
   { path = "resources/demo/020_knowledge.page.yaml", depends_on = "resources/demo/010_knowledge.vault.yaml", adopt = ["vault", "title"] },
   { path = "resources/demo/030_knowledge.markdown_page.yaml", depends_on = "resources/demo/020_knowledge.page.yaml", adopt = ["vault", "title"] },
 ]
-
-[[migrations]]
-name = "markdown_page_child"
-app_label = "knowledge"
-module = "runtime_migrations.markdown_page_child"
-
-[[migrations]]
-name = "markdown_page_history"
-app_label = "knowledge"
-module = "runtime_migrations.markdown_page_history"
-
-[[migrations]]
-name = "history_changeset"
-app_label = "knowledge"
-module = "runtime_migrations.history_changeset"

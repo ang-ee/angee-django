@@ -13,7 +13,7 @@ import { type ErrorReportingInput, startErrorReporting } from "./error-reporting
 import { assertBrand } from "./menus";
 
 /** A top-level menu root as selection reads it; its label and icon stand in for a brand it does not declare. */
-export type SelectableRoot = Pick<ChromeMenuNode, "id" | "displayLabel" | "iconName" | "home" | "brand" | "theme">;
+export type SelectableRoot = Pick<ChromeMenuNode, "id" | "displayLabel" | "iconName" | "home" | "brand" | "theme" | "railExpanded">;
 
 /** What selects the app: the page's `?app=` and hostname, `ANGEE_UI.shell` and the composed menu roots. */
 export interface SelectAppInput {
@@ -29,6 +29,8 @@ export interface SelectAppInput {
  * with the shell's brand and theme. No choice is stored. A root id is the
  * one-root app; a named app takes its own brand, theme and home, else its first
  * rail root's. An unknown `?app=` is reported and falls back.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function selectApp({ search, hostname, shell = {}, roots }: SelectAppInput): RuntimeSelection {
   const diagnostics: string[] = [];
@@ -60,6 +62,8 @@ export function selectApp({ search, hostname, shell = {}, roots }: SelectAppInpu
  * app, an `ANGEE_UI.shell.apps` name its declared rail. Unset facts come from
  * the first rail root, whose brand defaults to its label and icon; an unset
  * theme falls back to the shell's. Undefined when `key` names neither.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function appSelection(
   key: string,
@@ -79,6 +83,7 @@ export function appSelection(
   const inherited = `menu root "${first.id}"`;
   const theme = app?.theme ?? first.theme ?? shell.theme;
   const home = app?.home ?? first.home;
+  const railExpanded = app?.railExpanded ?? first.railExpanded;
   const sources: Partial<Record<RuntimeSelectionField, string>> = {
     app: by,
     rail: declared,
@@ -86,18 +91,23 @@ export function appSelection(
   };
   if (theme !== undefined) sources.theme = app?.theme !== undefined ? declared : first.theme !== undefined ? inherited : "ANGEE_UI.shell.theme";
   if (home !== undefined) sources.home = app?.home !== undefined ? declared : inherited;
+  if (railExpanded !== undefined) sources.railExpanded = app?.railExpanded !== undefined ? declared : inherited;
   return {
     app: key,
     rail,
     brand: app?.brand ?? first.brand ?? { name: first.displayLabel, mark: first.iconName },
     ...(theme !== undefined ? { theme } : {}),
     ...(home !== undefined ? { home } : {}),
+    ...(railExpanded !== undefined ? { railExpanded } : {}),
     sources,
     diagnostics: [],
   };
 }
 
-/** Refuse a malformed `ANGEE_UI.shell`, which would otherwise select the wrong app silently. */
+/** Refuse a malformed `ANGEE_UI.shell`, which would otherwise select the wrong app silently.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function assertShellSettings(shell: unknown): asserts shell is ShellSettings {
   const mapping = (value: unknown, where: string, keys?: readonly string[]): Record<string, unknown> => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${where} must be a mapping.`);
@@ -111,12 +121,15 @@ export function assertShellSettings(shell: unknown): asserts shell is ShellSetti
   const facts = (value: Record<string, unknown>, where: string): void => {
     if (value.brand !== undefined) assertBrand(where, value.brand);
     if (value.theme !== undefined) text(value.theme, `${where}.theme`);
+    if (value.railExpanded !== undefined && typeof value.railExpanded !== "boolean") {
+      throw new Error(`${where}.railExpanded must be true or false.`);
+    }
   };
   const settings = mapping(shell, "ANGEE_UI.shell", ["brand", "theme", "apps", "hosts"]);
   facts(settings, "ANGEE_UI.shell");
   for (const [name, value] of Object.entries(mapping(settings.apps ?? {}, "ANGEE_UI.shell.apps"))) {
     const where = `ANGEE_UI.shell.apps.${name}`;
-    const app = mapping(value, where, ["rail", "brand", "theme", "home"]);
+    const app = mapping(value, where, ["rail", "brand", "theme", "home", "railExpanded"]);
     const rail = app.rail;
     if (!Array.isArray(rail) || !rail.length || !rail.every((id) => typeof id === "string" && id)) {
       throw new Error(`${where}.rail must be a non-empty list of menu root ids.`);
@@ -144,7 +157,10 @@ export interface BootAppInput<Schemas> {
   errorReporting?: ErrorReportingInput | undefined;
 }
 
-/** Load generated metadata before synchronous app composition and route creation. */
+/** Load generated metadata before synchronous app composition and route creation.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export async function bootApp<Schemas>({
   target,
   loadSchemas,

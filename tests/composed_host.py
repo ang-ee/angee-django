@@ -241,6 +241,163 @@ def model_snapshot() -> dict[str, Any]:
     return snapshot
 
 
+def reset_migration_history_report() -> dict[str, Any]:
+    """Exercise a disposable composed history against an unchanged schema."""
+
+    from io import StringIO
+    from unittest.mock import patch
+
+    from django.apps import apps
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+    from django.db import connection
+    from django.db.migrations.autodetector import MigrationAutodetector
+    from django.db.migrations.executor import MigrationExecutor
+    from django.db.migrations.recorder import MigrationRecorder
+    from django.db.migrations.state import ProjectState
+
+    from angee.compose.runtime import Runtime
+
+    runtime = Runtime.from_django()
+    labels = tuple(sorted(runtime.labels))
+    call_command("makemigrations", *labels, interactive=False, include_header=False, verbosity=0)
+    # A fresh initial need not have the same key as the stack's applied one.
+    for label in labels:
+        initial = runtime.runtime_dir / label / "migrations" / "0001_initial.py"
+        source = initial.read_text().replace("'0001_initial'", "'0001_previous'")
+        initial.rename(initial.with_name("0001_previous.py"))
+        initial.with_name("0001_previous.py").write_text(source)
+
+    try:
+        call_command("reset_migration_history", skip_checks=True, verbosity=0)
+    except CommandError as error:
+        pending_error = str(error)
+    else:
+        raise AssertionError("reset accepted unapplied composed migrations")
+
+    call_command("migrate", interactive=False, skip_checks=True, verbosity=0)
+    field = apps.get_model("alpha", "Source")._meta.get_field("name")
+    original_length = field.max_length
+    field.max_length = original_length + 1
+    try:
+        try:
+            call_command("reset_migration_history", skip_checks=True, verbosity=0)
+        except CommandError as error:
+            drift_error = str(error)
+        else:
+            raise AssertionError("reset accepted model drift")
+    finally:
+        field.max_length = original_length
+
+    call_command(
+        "makemigrations",
+        labels[0],
+        empty=True,
+        name="history_probe",
+        interactive=False,
+        include_header=False,
+        verbosity=0,
+    )
+    call_command("migrate", interactive=False, skip_checks=True, verbosity=0)
+    recorder = MigrationRecorder(connection)
+    old_rows = sorted(recorder.migration_qs.filter(app__in=labels).values_list("app", "name"))
+    noncomposed_before = list(recorder.migration_qs.exclude(app__in=labels).order_by("pk").values())
+
+    def migration_sources() -> dict[Path, bytes]:
+        return {
+            path: path.read_bytes()
+            for label in labels
+            for path in (runtime.runtime_dir / label / "migrations").glob("*.py")
+        }
+
+    original_sources = migration_sources()
+    original_records = list(recorder.migration_qs.order_by("pk").values())
+    failure_rollback = {}
+    for phase in ("generation", "recording"):
+        original = call_command if phase == "generation" else MigrationRecorder.record_unapplied
+
+        def fail_after_write(*args, **kwargs):
+            original(*args, **kwargs)
+            raise RuntimeError("injected reset failure")
+
+        target = "angee.compose.runtime.call_command" if phase == "generation" else (
+            "django.db.migrations.recorder.MigrationRecorder.record_unapplied"
+        )
+        with patch(target, autospec=True, side_effect=fail_after_write):
+            try:
+                runtime.reset_migration_history()
+            except RuntimeError as error:
+                if str(error) != "injected reset failure":
+                    raise
+            else:
+                raise AssertionError(f"reset did not reach the {phase} failure")
+        failure_rollback[phase] = (
+            migration_sources() == original_sources
+            and list(recorder.migration_qs.order_by("pk").values()) == original_records
+        )
+        MigrationExecutor(connection).loader.check_consistent_history(connection)
+
+    output = StringIO()
+    call_command(
+        "reset_migration_history",
+        skip_checks=True,
+        verbosity=0,
+        stdout=output,
+    )
+
+    new_rows = sorted(recorder.migration_qs.filter(app__in=labels).values_list("app", "name"))
+    noncomposed_after = list(recorder.migration_qs.exclude(app__in=labels).order_by("pk").values())
+    files = {
+        label: sorted(
+            path.name
+            for path in (runtime.runtime_dir / label / "migrations").glob("*.py")
+            if path.name != "__init__.py"
+        )
+        for label in labels
+    }
+    executor = MigrationExecutor(connection)
+    executor.loader.check_consistent_history(connection)
+    targets = tuple(node for label in labels for node in executor.loader.graph.leaf_nodes(label))
+    changes = MigrationAutodetector(
+        executor.loader.project_state(),
+        ProjectState.from_apps(apps),
+    ).changes(
+        graph=executor.loader.graph,
+        trim_to_apps=set(labels),
+        convert_apps=set(labels),
+    )
+    # This temporary host has no dependency-group document; isolate the migration
+    # check from the source checkout's unrelated project contract.
+    runtime.project_dir = runtime.runtime_dir.parent
+    runtime.check()
+    reset_sources = migration_sources()
+    reset_records = list(recorder.migration_qs.order_by("pk").values())
+    runtime.reset_migration_history()
+    replay_unchanged = (
+        migration_sources() == reset_sources
+        and list(recorder.migration_qs.order_by("pk").values()) == reset_records
+    )
+    alpha = executor.loader.disk_migrations["alpha", "0001_initial"]
+    return {
+        "labels": labels,
+        "pending_error": pending_error,
+        "drift_error": drift_error,
+        "old_rows": old_rows,
+        "new_rows": new_rows,
+        "noncomposed_unchanged": noncomposed_before == noncomposed_after,
+        "external_dependency_applied": ("external", "0001_initial") in recorder.applied_migrations(),
+        "failure_rollback": failure_rollback,
+        "replay_unchanged": replay_unchanged,
+        "files": files,
+        "plan_empty": executor.migration_plan(targets) == [],
+        "changes_empty": changes == {},
+        "runtime_check": True,
+        "declarations": len(runtime.runtime_migrations().plan()),
+        "alpha_dependencies": alpha.dependencies,
+        "command_output": output.getvalue().splitlines(),
+    }
+
+
 def main() -> None:
     """Write one JSON report after the fresh host has completed Django startup."""
 
@@ -259,18 +416,22 @@ def main() -> None:
         action="store_true",
         help="Exclude showcase addons from the composed host profile.",
     )
-    parser.add_argument("--action", choices=("resources", "snapshot", "state", "tests", "schemas"), default="resources")
+    parser.add_argument(
+        "--action",
+        choices=("resources", "snapshot", "state", "tests", "schemas", "reset-migrations"),
+        default="resources",
+    )
     parser.add_argument("--test-label", action="append", default=[])
     parser.add_argument("--test-postgresql", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.test_postgresql and args.action != "tests":
         parser.error("--test-postgresql is available only for native test runs")
-    from angee.base.changesets import changeset
+    from angee.changesets import changeset
 
     boundary = (
         nullcontext()
-        if args.action == "tests"
+        if args.action in {"tests", "reset-migrations"}
         else changeset(fresh=True, activity="system", change_reason=f"manage.{args.action}")
     )
     with boundary:
@@ -296,8 +457,8 @@ def run(args: argparse.Namespace) -> None:
         from django.test import TransactionTestCase
         from django.test.runner import DiscoverRunner
 
-        from angee.base.changesets import changeset
-        from angee.parties.testing.fixtures import load_statement_sources
+        from angee.changesets import changeset
+        from angee.provenance.testing import load_statement_sources
 
         class ComposedTestRunner(DiscoverRunner):
             """Prepare the generated host's schema before Django checks its models."""
@@ -330,7 +491,8 @@ def run(args: argparse.Namespace) -> None:
                                 # schema its flush emptied, so the principal bootstrap finds it synced
                                 # and only loads the Rule/Seed rows instead of syncing a second time.
                                 if isinstance(test, TransactionTestCase):
-                                    load_statement_sources()
+                                    load_statement_sources("parties")
+                                    load_statement_sources("messaging")
 
                             setattr(test, "setUp", set_up)
 
@@ -368,6 +530,9 @@ def run(args: argparse.Namespace) -> None:
             + serialized
             + ").items()})\n"
         )
+        return
+    if args.action == "reset-migrations":
+        args.output.write_text(json.dumps(reset_migration_history_report(), indent=2, sort_keys=True) + "\n")
         return
     if args.action == "schemas":
         from angee.graphql.schema import GraphQLSchemas

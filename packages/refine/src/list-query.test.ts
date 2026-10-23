@@ -30,3 +30,35 @@ test("native provider preserves compiled predicates, order, and pagination", asy
   expect(request?.query).toContain("messages_aggregate: message_stats");
   expect(print(meta.gqlQuery)).toContain("display_name");
 });
+
+test("native list selections bind context arguments without changing response fields", async () => {
+  let request: { query: string; variables: Record<string, unknown> } | undefined;
+  const provider = createAngeeHasuraDataProvider({
+    url: "https://example.invalid/graphql",
+    auth: (fetch) => fetch,
+    fetch: async (_url, options) => {
+      request = JSON.parse(String(options?.body));
+      return new Response(JSON.stringify({ data: {
+        bank_accounts: [{ id: "bank_1", verification_state: "VERIFIED" }],
+        bank_accounts_aggregate: { aggregate: { count: 1 } },
+      } }), { headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const target = {
+    root: "bank_accounts", aggregateRoot: "bank_accounts_aggregate",
+    filterType: "BankAccountBoolExp", orderType: "BankAccountOrderBy",
+  };
+  const meta = listQueryMeta(target, ["id", "verification_state"], undefined, undefined, [{
+    path: "verification_state",
+    arguments: [{ name: "company_id", type: "ID!", value: "company_1" }],
+  }]);
+
+  await provider.getList({
+    resource: "bank_accounts", filters: [], sorters: [],
+    pagination: { currentPage: 1, pageSize: 20, mode: "server" }, meta,
+  });
+
+  expect(request?.variables).toMatchObject({ selection_0_0: "company_1", limit: 20, offset: 0 });
+  expect(request?.query).toContain("verification_state(company_id: $selection_0_0)");
+  expect(request?.query).toContain("$selection_0_0: ID!");
+});

@@ -15,7 +15,7 @@ import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { defaultWidgets } from "../../widgets";
 import { FORM_CONTAINERS, FormView } from "./FormView";
-import { useFormViewSave, type FormSubmit, type FormViewSaveSurface } from "./use-form-view-save";
+import { acknowledgeFormSubmit, useFormViewSave, type FormSubmit, type FormViewSaveSurface } from "./use-form-view-save";
 import { Group, type FieldDescriptor } from "../page";
 
 const formFields: readonly FieldDescriptor[] = [{ name: "title", label: "Title" }];
@@ -57,6 +57,7 @@ async function fixture(options: {
   resourceMetadata?: DataResourceMetadata;
   revision?: number;
   submit?: FormSubmit;
+  onSaved?: () => void;
   lines?: readonly Row[];
   isCreate?: boolean;
   create?: () => Promise<{ data: Row }>;
@@ -101,7 +102,7 @@ async function fixture(options: {
     surface = useFormViewSave({
       resource: resource.modelLabel, id: options.isCreate ? null : "doc-1", isCreate: options.isCreate ?? false,
       dataResource: resource, modelMetadata: model, formFields, fieldByName, refineFields,
-      submit: options.isCreate ? undefined : submit, t: (key) => key,
+      submit: options.isCreate ? undefined : submit, onSaved: options.onSaved, t: (key) => key,
     });
     const array = useFieldArray({
       control: surface.form.control as unknown as Control<{ lines: Row[] }>, name: "lines", keyName: "rhfKey",
@@ -426,6 +427,46 @@ test("semantic no-op line saves preserve a later edit while the request is pendi
   await act(async () => { resolve({ id: "doc-1", title: "Original", lines: initialLines }); await saving; });
   expect((f.surface().form.getValues("lines") as Row[])[0]?.quantity).toBe("11");
   expect(f.surface().formIsDirty).toBe(true);
+});
+
+test.each(["none", "stay before save", "stay after save"])("an acknowledged canonical line save clears the leave guard after completion (%s)", async (navigation) => {
+  let accept!: () => void;
+  let leavingAfterSave: Promise<boolean> | undefined;
+  const acceptedLines = [{ ...initialLines[0], quantity: 11 }, ...initialLines.slice(1)];
+  const accepted = { id: "doc-1", title: "Original", lines: acceptedLines, amount_total: "353.64" };
+  const f = await fixture({
+    submit: async (_data, context) => {
+      await new Promise<void>((done) => { accept = done; });
+      return acknowledgeFormSubmit(accepted, { ...context.values, lines: acceptedLines });
+    },
+    onSaved: () => { leavingAfterSave = f.surface().requestLeave(); },
+  });
+  edit("a.quantity", "11");
+  let saving!: Promise<void>;
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.submit).toHaveBeenCalledOnce());
+  let pendingLeave: Promise<boolean> | undefined;
+  if (navigation !== "none") {
+    pendingLeave = f.surface().requestLeave();
+    await screen.findByRole("button", { name: "Stay" });
+    if (navigation === "stay before save") {
+      fireEvent.click(screen.getByRole("button", { name: "Stay" }));
+      await expect(pendingLeave).resolves.toBe(false);
+    }
+  }
+  f.setRecord(accepted);
+  await act(async () => { accept(); await saving; });
+  expect(f.surface().form.getValues("lines")).toEqual(acceptedLines);
+  expect(f.surface().formIsDirty).toBe(false);
+  await expect(leavingAfterSave).resolves.toBe(true);
+  if (navigation === "stay after save") {
+    // A confirmation opened before acceptance remains a pending user decision;
+    // its presence alone does not mean the saved form is still dirty.
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Stay" }));
+    await expect(pendingLeave).resolves.toBe(false);
+  }
+  expect(screen.queryByRole("alertdialog")).toBeNull();
 });
 
 test("reordered remote lines keep dirty cells attached to their public row IDs", async () => {

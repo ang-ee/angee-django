@@ -34,16 +34,11 @@ contact its comments name, is that feed's assertion, ranked below a person's.
 committed `discovery_finished(sender=type(bridge), instance=bridge)` signal. Each
 record is historical when its sent timestamp is absent, precedes the horizon, or
 the feed has no horizon yet. History and activity streams therefore classify
-their records independently. The addon-owned `feed_live_since` migration adds the
-field and stamps existing bound feeds in the same upgrade provision. The following
-`feed_live_since_ready` migration removes horizons from pending/failed discovery
-generations and stamps only ready connections, preserving the original migration
-body. Connections predating discovery fields become established generation zero.
-Landing repairs
+their records independently. Landing repairs
 a bound, discovery-ready feed's missing horizon before classifying its next record,
 using the completed discovery time when available. NULL never means everything live.
 
-`MessagePublic.reply_to_comment(*, body, actor, local=None, creation_key=None)`
+`MessagePublic.reply_to_comment(*, body, actor, local=None, idempotency_key=None)`
 owns feed reply policy on the shared Message row. It composes
 `reply_state()` under the comment's row lock on insertion, after replay, excluding
 other runs and native platform answers. The same owner predicate serves workflow
@@ -51,14 +46,14 @@ eligibility; possibly accepted and SENT outbound deliveries still count after lo
 trash because trash does not retract a public reply. Other discarded and failed
 replies do not. Reply preparation composes
 `Message.objects.compose_reply` with the final hold state at insertion and native
-creation-key replay. The actor needs readable context and channel `reply`.
+idempotency replay. The actor needs readable context and channel `reply`.
 Unreadable comments raise `PermissionDenied`. New attempts on answered comments
 raise `CommentAnswered`; matching replays return their existing reply first.
 `Feed.reply_hold` is operator-editable hours: null holds for approval indefinitely,
 positive hours schedule a held draft, and zero queues immediate delivery. Replays
 preserve the original hold and settlement. `local` is trusted Python provenance,
 never an agent GraphQL argument. Retained replies advance thread counters on
-insertion; queueing and creation-key replay never increment again. Replaying a
+insertion; queueing and idempotency replay never increment again. Replaying a
 discarded receipt returns its row or an explicit validation refusal.
 
 `FeedBackend.deliver` owns publication order and error classification. Providers
@@ -109,21 +104,11 @@ client for project-wide quotas), and `quota_reset_timezone` with the reset IANA 
 The shared `Quota` owner atomically enforces the current configured limit, leaving
 the reply reserve for polling; local midnight periods honor DST. `quota_limit` is
 read from the requesting feed for every check and never persisted onto the shared
-row; the ledger's legacy `quota_limit` is historical data. Each debit opens the period
-once; historical NULL-scope ledgers are never reopened. Retry-After parsing belongs
-to `FeedBackend.retry_after(response)`.
+row. Each debit opens the required provider scope's period once. Retry-After parsing
+belongs to `FeedBackend.retry_after(response)`.
 
-The scoped-ledger upgrade starts new scope rows; legacy NULL-scope rows do not
-contain the provider budget identity needed for a reliable runtime backfill.
-On upgrade day, usage already charged to those legacy rows does not reduce the
-new scoped allowance, so that day's configured budget can be spent twice. Upgrade
-at the provider's reset boundary or account for that overlap operationally.
-The nullable integration anchor is irreversible after an anchor has been deleted:
-a schema rollback to the old non-nullable FK cannot preserve a NULL-anchor row.
-Use a forward deployment or restore the pre-upgrade database when reverting;
-do not drop the shared usage ledger to make a reverse migration succeed.
-Deleting the original integration authorization anchor preserves a shared scope's
-ledger and usage; remaining spenders continue against that same budget.
+The required integration is the ledger's authorization anchor and is protected
+from deletion while its quota periods remain.
 
 Re-observation of the `active_thread_days` window (default 30 days) catches edits,
 moderation changes, hides and deletes. Declare it as its own event-feed

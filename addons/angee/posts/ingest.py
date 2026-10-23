@@ -77,7 +77,7 @@ def _overlay_engagement(posts: list[ParsedPost], messages: list[Any], *, owner_i
     for message, post in landed:
         _write_public_payload(message, post)
         if post.metrics is not None:
-            metrics_model.objects.upsert(message=message, metrics=post.metrics, owner_id=owner_id)
+            metrics_model.objects.upsert(message=message, metrics=post.metrics, created_by_id=owner_id)
 
     handles = _resolve_reaction_handles(landed, handle_model, owner_id)
     reaction_model.objects.attribute(

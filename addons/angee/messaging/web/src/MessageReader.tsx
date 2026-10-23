@@ -2,20 +2,24 @@ import * as React from "react";
 import { useAuthoredMutation } from "@angee/refine";
 import { senderAvatarUrl, senderDisplayName } from "@angee/parties";
 import {
-  Alert,
   Avatar,
   Button,
+  ErrorBanner,
   Glyph,
   MessagePartsView,
   PreviewPane,
-  RelativeTime,
   avatarInitials,
   cn,
+  formatDateTime,
+  useResourceRecordHrefLookup,
   type MessagePart,
 } from "@angee/ui";
 
-import { SetMessageStarredDocument, type MessageReaderData } from "./documents";
+import { SetMessageStarredDocument, type MessageReaderData, type MessageReplyData } from "./documents";
 import { useMessagingT } from "./i18n";
+import { MessageSourceCopies } from "./MessageSourceCopies";
+import { StarButton } from "./StarButton";
+import { MessageReplyQuote } from "./MessageReplyQuote";
 
 // The envelope roles listed under the sender, in header order.
 const RECIPIENT_ROLES = ["TO", "CC", "BCC"] as const;
@@ -34,6 +38,8 @@ export interface MessageReaderProps {
   renderPartActions?: (part: MessagePart) => React.ReactNode;
   /** The host's commands, after the star in the header. */
   actions?: React.ReactNode;
+  /** Open the quoted parent in the host's conversation context. */
+  onOpenReply?: (message: MessageReplyData) => void;
   /** The host's content after the body. */
   children?: React.ReactNode;
 }
@@ -49,9 +55,11 @@ export function MessageReader({
   activePartId,
   renderPartActions,
   actions,
+  onOpenReply,
   children,
 }: MessageReaderProps): React.ReactElement {
   const t = useMessagingT();
+  const recordHref = useResourceRecordHrefLookup();
   const [setStarred, starState] = useAuthoredMutation(SetMessageStarredDocument, { invalidateModels: STAR_MODELS });
   const [starError, setStarError] = React.useState<string>();
   const recipientLabels = { TO: t("message.to"), CC: t("message.cc"), BCC: t("message.bcc") };
@@ -68,7 +76,7 @@ export function MessageReader({
             <div className="flex min-w-0 items-baseline gap-2">
               <span className="truncate text-13 font-semibold">{sender}</span>
               {address && address !== sender ? (
-                <span className="truncate text-2xs text-fg-muted">{address}</span>
+                <span className="truncate text-12 text-fg-muted">{address}</span>
               ) : null}
             </div>
             {RECIPIENT_ROLES.map((role) => {
@@ -77,7 +85,7 @@ export function MessageReader({
                 .map((participant) => senderDisplayName(participant.handle))
                 .filter(Boolean);
               return names.length ? (
-                <div key={role} className="truncate text-2xs text-fg-muted">
+                <div key={role} className="truncate text-12 text-fg-muted">
                   {recipientLabels[role]} {names.join(", ")}
                 </div>
               ) : null;
@@ -86,29 +94,27 @@ export function MessageReader({
           {/* The date, star and host actions wrap below the sender as one group rather
               than overlap it when the column is narrow. */}
           <div className="ml-auto flex shrink-0 items-start gap-3">
-            <RelativeTime
-              className="whitespace-nowrap pt-0.5 text-2xs text-fg-muted"
-              value={message.sent_at ?? message.created_at}
-            />
-            <Button
-              size="iconSm"
-              variant={message.starred ? "secondary" : "ghost"}
-              aria-label={t(message.starred ? "message.unstar" : "message.star")}
-              aria-pressed={message.starred}
+            {/* The read date is a fact of the record: absolute, like every facts line. */}
+            <time className="whitespace-nowrap pt-0.5 text-12 text-fg-muted" dateTime={message.sent_at ?? message.created_at}>
+              {formatDateTime(message.sent_at ?? message.created_at)}
+            </time>
+            <StarButton
+              starred={Boolean(message.starred)}
               disabled={starState.fetching}
-              onClick={() => {
+              onToggle={() => {
                 setStarError(undefined);
                 void setStarred({ id: message.id, starred: !message.starred }).catch((error: unknown) =>
                   setStarError(error instanceof Error ? error.message : String(error)),
                 );
               }}
-            >
-              <Glyph name="star" />
-            </Button>
+            />
             {actions}
           </div>
         </header>
-        {starError ? <Alert tone="danger">{starError}</Alert> : null}
+        <ErrorBanner description={starError ?? null} />
+        {message.parent ? <MessageReplyQuote message={message.parent}
+          href={onOpenReply ? undefined : recordHref("messaging.Message", message.parent.id)}
+          onOpen={onOpenReply ? () => onOpenReply(message.parent!) : undefined} /> : null}
         <MessagePartsView
           parts={message.parts}
           activePartId={activePartId ?? previewPartId}
@@ -117,6 +123,7 @@ export function MessageReader({
         />
         {message.parts.length === 0 ? <p className="whitespace-pre-wrap text-13">{message.preview}</p> : null}
         {children}
+        <MessageSourceCopies messageId={message.id} channelName={message.channel?.display_name} />
       </article>
       {preview && previewUrl ? (
         <aside aria-label={t("message.attachmentPreview")} className="min-w-0 space-y-3">

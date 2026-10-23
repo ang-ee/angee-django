@@ -25,6 +25,14 @@
       "import": "./src/index.ts"
     },
     "./styles.css": "./src/styles/index.css",
+    "./catalog": {
+      "types": "./src/catalog.ts",
+      "import": "./src/catalog.ts"
+    },
+    "./tokens": {
+      "types": "./src/token-names.ts",
+      "import": "./src/token-names.ts"
+    },
     "./dashboard": {
       "types": "./src/dashboard/index.ts",
       "import": "./src/dashboard/index.ts"
@@ -400,6 +408,14 @@
         "default": "./dist/index.js"
       },
       "./styles.css": "./dist/styles/index.css",
+      "./catalog": {
+        "types": "./dist/catalog.d.ts",
+        "default": "./dist/catalog.js"
+      },
+      "./tokens": {
+        "types": "./dist/token-names.d.ts",
+        "default": "./dist/token-names.js"
+      },
       "./dashboard": {
         "types": "./dist/dashboard/index.d.ts",
         "default": "./dist/dashboard/index.js"

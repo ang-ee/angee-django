@@ -31,9 +31,25 @@ import {
   type RuntimeUserPreferences,
 } from "../runtime/runtime";
 
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const APPEARANCE_PREFERENCE_KEY = "appearance";
+/**
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export const APPEARANCE_CACHE_KEY = "angee:appearance";
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const APPEARANCE_CACHE_SCHEMA = 1;
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const APPEARANCE_CACHE_LIMIT = 128 * 1024;
 
 export interface AppearancePreferences {
@@ -98,6 +114,10 @@ export interface AppearancePreferenceRead {
   rawOptions?: unknown;
 }
 
+/**
+ * @kind null
+ * @reason Provider infrastructure: Appearance context.
+ */
 export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children: ReactNode; host?: HostAppearanceDefaults }): ReactNode {
   const runtime = useAppRuntime();
   const auth = useRuntimeAuth();
@@ -344,16 +364,26 @@ function resolveAppearance(preferences: AppearancePreferences, notice: Appearanc
   return { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, effectiveTokens, effectiveOptions, notice };
 }
 
+/**
+ * @owner AppearanceProvider
+ */
 export function useAppearance(): AppearanceState {
   const value = useContext(AppearanceContext);
   if (!value) throw new Error("Appearance is unavailable: render within AppearanceProvider.");
   return value;
 }
 
+/**
+ * @owner AppearanceProvider
+ */
 export function useOptionalAppearance(): AppearanceState | null {
   return useContext(AppearanceContext);
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function readAppearancePreferences(preferences: RuntimeUserPreferences): AppearancePreferenceRead {
   const raw = preferences[APPEARANCE_PREFERENCE_KEY];
   if (raw === undefined) return { value: EMPTY_PREFERENCES, notice: null, writable: true, hasRawOptions: false };
@@ -372,6 +402,10 @@ export function readAppearancePreferences(preferences: RuntimeUserPreferences): 
   };
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function writeAppearancePreferences(preferences: RuntimeUserPreferences, appearance: AppearancePreferences | (Omit<AppearancePreferences, "options"> & { options?: unknown }) | undefined): RuntimeUserPreferences {
   if (appearance === undefined) {
     const { [APPEARANCE_PREFERENCE_KEY]: _appearance, ...rest } = preferences;
@@ -380,6 +414,10 @@ export function writeAppearancePreferences(preferences: RuntimeUserPreferences, 
   return { ...preferences, [APPEARANCE_PREFERENCE_KEY]: appearance };
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function applyAppearanceRoot({ themeId, colorScheme, tokens, target }: { themeId: string | null; colorScheme: ColorScheme; tokens?: Partial<Record<ThemeTokenName, string>>; target?: Document }): void {
   if (typeof document === "undefined" && !target) return;
   const root = (target ?? document).documentElement;
@@ -391,12 +429,19 @@ export function applyAppearanceRoot({ themeId, colorScheme, tokens, target }: { 
   for (const [name, value] of Object.entries(tokens ?? {})) if (value !== undefined) root.style.setProperty(name, value);
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function clearAppearanceCache(): void {
   if (typeof window === "undefined") return;
   try { window.localStorage.removeItem(APPEARANCE_CACHE_KEY); } catch { /* storage is disposable */ }
 }
 
-/** Read the actor bound to a current, bounded appearance bootstrap cache entry. */
+/** Read the actor bound to a current, bounded appearance bootstrap cache entry.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function appearanceCacheActorId(encoded: string | null): string | null {
   if (!encoded || encoded.length > APPEARANCE_CACHE_LIMIT) return null;
   try {

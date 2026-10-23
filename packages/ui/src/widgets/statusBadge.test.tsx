@@ -3,7 +3,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { statusBadgeWidget } from "./statusBadge";
+import { StatusBadge, statusBadgeWidget } from "./statusBadge";
 import { AppRuntimeProvider } from "../runtime/runtime";
 
 describe("statusBadge widget tone", () => {
@@ -11,15 +11,15 @@ describe("statusBadge widget tone", () => {
     cleanup();
   });
 
-  const Badge = statusBadgeWidget.read;
+  const Chip = statusBadgeWidget.read;
 
   test("keeps contributed vocabulary scoped to its app and honors field overrides", () => {
     render(<>
       <AppRuntimeProvider runtime={{ statusTones: { reviewed: "accent" } }}>
-        <Badge value="REVIEWED" field={{ options: [{ value: "REVIEWED", label: "Contributed" }] }} />
-        <Badge value="REVIEWED" field={{ tone: { REVIEWED: "danger" }, options: [{ value: "REVIEWED", label: "Overridden" }] }} />
+        <Chip value="REVIEWED" field={{ options: [{ value: "REVIEWED", label: "Contributed" }] }} />
+        <Chip value="REVIEWED" field={{ tone: { REVIEWED: "danger" }, options: [{ value: "REVIEWED", label: "Overridden" }] }} />
       </AppRuntimeProvider>
-      <Badge value="reviewed" field={{ options: [{ value: "reviewed", label: "Other app" }] }} />
+      <Chip value="reviewed" field={{ options: [{ value: "reviewed", label: "Other app" }] }} />
     </>);
     expect(screen.getByText("Contributed").className).toContain("bg-accent-soft");
     expect(screen.getByText("Overridden").className).toContain("bg-danger-soft");
@@ -29,11 +29,11 @@ describe("statusBadge widget tone", () => {
   test("colors known status values via the widget convention", () => {
     render(
       <>
-        <Badge
+        <Chip
           value="active"
           field={{ options: [{ value: "active", label: "Active" }] }}
         />
-        <Badge
+        <Chip
           value="draft"
           field={{ options: [{ value: "draft", label: "Draft" }] }}
         />
@@ -46,11 +46,11 @@ describe("statusBadge widget tone", () => {
   test("colors integration connection lifecycle values", () => {
     render(
       <>
-        <Badge
+        <Chip
           value="CONNECTED"
           field={{ options: [{ value: "CONNECTED", label: "Connected" }] }}
         />
-        <Badge
+        <Chip
           value="DISCONNECTED"
           field={{ options: [{ value: "DISCONNECTED", label: "Disconnected" }] }}
         />
@@ -64,7 +64,7 @@ describe("statusBadge widget tone", () => {
     // The read side serializes the UPPERCASE member name; the convention's
     // lowercase vocabulary must still match it.
     render(
-      <Badge
+      <Chip
         value="ACTIVE"
         field={{ options: [{ value: "ACTIVE", label: "Active" }] }}
       />,
@@ -74,7 +74,7 @@ describe("statusBadge widget tone", () => {
 
   test("an explicit <Column tone> map overrides the convention", () => {
     render(
-      <Badge
+      <Chip
         value="active"
         field={{
           options: [{ value: "active", label: "Active" }],
@@ -89,7 +89,7 @@ describe("statusBadge widget tone", () => {
     // A StateField column reads the UPPERCASE member name; the `<Column tone>`
     // map keys it the same way (matching cellContent / BoardView's exact lookup).
     render(
-      <Badge
+      <Chip
         value="ACTIVE"
         field={{
           options: [{ value: "ACTIVE", label: "Active" }],
@@ -101,7 +101,7 @@ describe("statusBadge widget tone", () => {
   });
 
   test("the badge renders an authored option label rather than its enum member", () => {
-    render(<Badge value="HIGH" field={{ options: [{ value: "high", label: "Urgent" }], tone: { HIGH: "warning" } }} />);
+    render(<Chip value="HIGH" field={{ options: [{ value: "high", label: "Urgent" }], tone: { HIGH: "warning" } }} />);
     expect(screen.getByText("Urgent").className).toContain("bg-warning-soft");
     expect(screen.queryByText("HIGH")).toBeNull();
   });
@@ -110,7 +110,7 @@ describe("statusBadge widget tone", () => {
     // Unlike a plain cellContent/BoardView cell (which falls to neutral on a
     // miss), the badge layers its convention over a partial `<Column tone>` map.
     render(
-      <Badge
+      <Chip
         value="pending"
         field={{
           options: [{ value: "pending", label: "Pending" }],
@@ -123,7 +123,7 @@ describe("statusBadge widget tone", () => {
 
   test("an unknown value with no override falls back to the brand tone", () => {
     render(
-      <Badge
+      <Chip
         value="bespoke"
         field={{ options: [{ value: "bespoke", label: "Bespoke" }] }}
       />,
@@ -133,10 +133,10 @@ describe("statusBadge widget tone", () => {
 
   test("renders the pill, dot, and text field displays from one badge owner", () => {
     render(<>
-      <Badge value="ACTIVE" field={{ statusDisplay: "pill", options: [{ value: "ACTIVE", label: "Pill status" }] }} />
-      <Badge value="STOPPED" field={{ statusDisplay: "pill", options: [{ value: "STOPPED", label: "Neutral pill" }] }} />
-      <Badge value="RUNNING" field={{ statusDisplay: "dot", options: [{ value: "RUNNING", label: "Dot status" }] }} />
-      <Badge value="BESPOKE" field={{ statusDisplay: "text", options: [{ value: "BESPOKE", label: "Text status" }] }} />
+      <Chip value="ACTIVE" field={{ statusDisplay: "pill", options: [{ value: "ACTIVE", label: "Pill status" }] }} />
+      <Chip value="STOPPED" field={{ statusDisplay: "pill", options: [{ value: "STOPPED", label: "Neutral pill" }] }} />
+      <Chip value="RUNNING" field={{ statusDisplay: "dot", options: [{ value: "RUNNING", label: "Dot status" }] }} />
+      <Chip value="BESPOKE" field={{ statusDisplay: "text", options: [{ value: "BESPOKE", label: "Text status" }] }} />
     </>);
 
     const pill = screen.getByText("Pill status");
@@ -153,7 +153,7 @@ describe("statusBadge widget tone", () => {
     expect(dot.className).toContain("bg-transparent");
     expect(dot.className).toContain("text-inherit");
     expect(dot.className).not.toContain("text-success-text");
-    expect(dot.className).not.toContain("h-tag-h");
+    expect(dot.className).toContain("h-auto");
     expect(dot.firstElementChild?.className).toContain("bg-success");
     expect(dot.firstElementChild?.className).toContain("size-2");
 
@@ -180,5 +180,10 @@ describe("statusBadge widget tone", () => {
 
     expect(screen.getByRole("combobox", { name: "Status" })).toBeTruthy();
     expect(screen.getByText("Draft")).toBeTruthy();
+  });
+
+  test("a hint behind the pill is its native tooltip", () => {
+    render(<AppRuntimeProvider runtime={{}}><StatusBadge value="protected" title="Cannot be deleted">Required</StatusBadge></AppRuntimeProvider>);
+    expect(screen.getByText("Required").closest("[title]")?.getAttribute("title")).toBe("Cannot be deleted");
   });
 });

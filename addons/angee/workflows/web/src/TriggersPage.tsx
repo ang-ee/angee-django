@@ -35,7 +35,7 @@ export function TriggersList({ workflowId }: { workflowId?: string }) {
       <Column field="enabled" header={t("trigger.enabled")} widget="boolean" />
       <Column field="disabled_reason" header={t("trigger.disabledReason")} />
     </List>
-    <Form returning={["enabled", "source", "source_model", "can_edit", "enable_preview.grants", "enable_preview.run_readers"]} readOnlyWhen={(row) => row.can_edit !== true}
+    <Form eyebrow={t("trigger.title")} returning={["enabled", "source", "source_model", "can_edit", "enable_preview.grants", "enable_preview.run_readers"]} readOnlyWhen={(row) => row.can_edit !== true}
       deleteVisibleWhen={(row) => row.can_edit === true}>
       <Field name="display_name" title readOnly />
       <Group columns={2}>

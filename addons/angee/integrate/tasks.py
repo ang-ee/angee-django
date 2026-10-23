@@ -119,8 +119,8 @@ def ensure_bridge_sessions(timestamp: int | None = None) -> dict[str, Any]:
                 continue
             bridges = model._default_manager.of_concrete_type().ready_for_work().filter(
                 **{f"{field.name}__in": live_keys},
-                lifecycle=str(model.Lifecycle.CONNECTED),
-                runtime_status=str(IntegrationRuntimeStatus.OK),
+                lifecycle=model.Lifecycle.CONNECTED,
+                runtime_status=IntegrationRuntimeStatus.OK,
             ).order_by("pk")
             for bridge in bridges:
                 impl = bridge.live_impl

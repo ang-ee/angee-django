@@ -12,7 +12,6 @@ from django.db.models import F
 from rebac import system_context, to_subject_ref
 from strawberry import auto
 
-from angee.base.identity import public_subject_ref
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -30,6 +29,7 @@ from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_labels, user_label, user_public_id
 from angee.iam.permissions import request_from_info
+from angee.identity import public_subject_ref
 from angee.projects.schema import DroppedReason, TaskType
 from angee.spaces.schema import SpaceGroupType
 
@@ -83,8 +83,7 @@ class WorkStageType(AngeeNode):
     position: auto
     category: auto
     rule_owned: auto
-    conceals: auto
-    on_path: bool = strawberry_django.field(only=["conceals", "category"])
+    on_path: bool = strawberry_django.field(only=["category"])
     created_at: auto
     updated_at: auto
 
@@ -246,16 +245,16 @@ def decline_task(
 
 @action_guard("Remove task failed.")
 def remove_task(info: strawberry.Info, task: PublicID, expected_revision: int, reason: str = "") -> ActionResult:
-    """Conceal a writable task through its stage owner, recording an optional reason."""
+    """Trash a removable task, recording its native removal reason."""
 
-    target = authorized_permission_target(info, Task, task, "write")
+    target = authorized_permission_target(info, Task, task, "delete")
     target.remove(reason=reason, expected_revision=expected_revision)
     return ActionResult(ok=True, message="Task removed.", id=target.sqid)
 
 
 @action_guard("Restore task failed.")
 def restore_task(info: strawberry.Info, task: PublicID, expected_revision: int) -> ActionResult:
-    """Return a removed task to the stage it held before removal, as a ``restore`` holder."""
+    """Restore a task from shared trash as a ``restore`` holder."""
 
     target = authorized_permission_target(info, Task, task, "restore")
     target.restore(expected_revision=expected_revision)
@@ -295,7 +294,7 @@ class RemovedTaskType:
 
 @strawberry.type
 class WorkRemovedTaskQuery:
-    """The Removed list of concealed tasks, for the readers who may restore them."""
+    """The Removed list of trashed tasks, for the readers who may restore them."""
 
     @strawberry.field
     def removed_tasks(
@@ -305,11 +304,7 @@ class WorkRemovedTaskQuery:
         parent: PublicID | None = None,
         limit: int = 100,
     ) -> list[RemovedTaskType]:
-        """Return concealed tasks the reader holds ``restore`` on, in a readable queue or under a readable parent.
-
-        Concealment keeps these rows unreadable; only their removal facts leave
-        this resolver, one row per task the reader may bring back.
-        """
+        """Return trash the reader may restore, scoped to a readable queue or parent."""
 
         user = getattr(request_from_info(info), "user", None)
         if user is None or not getattr(user, "is_authenticated", False):
@@ -323,9 +318,8 @@ class WorkRemovedTaskQuery:
                 return []
             scope[name] = owner
         rows = list(Task.removed_for(user, **scope)[: max(1, min(limit, 100))])
-        records = Task.removal_records(row.pk for row in rows)
         labels = user_display_labels(
-            (getattr(records.get(row.pk), "updated_by_id", None) for row in rows),
+            (row.trashed_by_id for row in rows),
             request=request_from_info(info),
         )
         return [
@@ -334,9 +328,9 @@ class WorkRemovedTaskQuery:
                 title=row.title,
                 revision=row.revision,
                 parent=to_public_id(Task, row.parent_id),
-                removed_at=getattr(records.get(row.pk), "history_date", None),
-                removed_by_label=labels.get(getattr(records.get(row.pk), "updated_by_id", None)),
-                removal_reason=str(getattr(records.get(row.pk), "history_change_reason", None) or ""),
+                removed_at=row.trashed_at,
+                removed_by_label=labels.get(row.trashed_by_id),
+                removal_reason=row.trash_reason,
             )
             for row in rows
         ]
@@ -506,7 +500,7 @@ _STAGE_LINES = HasuraLines(
     field="stages",
     model=Stage,
     node=WorkStageType,
-    writable=("name", "category", "tone", "position", "rule_owned", "conceals"),
+    writable=("name", "category", "tone", "position", "rule_owned"),
     position_field="position",
     defaults={"category": "unstarted", "tone": "neutral"},
 )
@@ -607,15 +601,14 @@ _STAGE_RESOURCE = hasura_model_resource(
         "position",
         "category",
         "rule_owned",
-        "conceals",
         "created_at",
         "updated_at",
     ],
     sortable=["queue", "position", "name", "created_at", "updated_at"],
     aggregatable=["id", "position"],
     groupable=["queue", "tone", "category"],
-    insertable=["queue", "name", "tone", "position", "category", "rule_owned", "conceals"],
-    updatable=["name", "tone", "position", "category", "rule_owned", "conceals"],
+    insertable=["queue", "name", "tone", "position", "category", "rule_owned"],
+    updatable=["name", "tone", "position", "category", "rule_owned"],
     field_id_decode={"queue": public_pk_decoder(Queue)},
     write_backend=AngeeHasuraWriteBackend(Stage, public_id_fields=("queue",)),
 )

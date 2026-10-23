@@ -30,6 +30,7 @@ from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.models import merge_json_state
 from angee.integrate.states import (
     LinkStatus,
+    StreamDefinition,
     StreamDirection,
     StreamKind,
     StreamPhase,
@@ -44,7 +45,6 @@ from angee.integrate.streams import (
     PartitionFailure,
     RecordChange,
     SemanticError,
-    StreamDefinition,
     StreamPage,
     WriteBackResult,
     advance_stream,
@@ -58,7 +58,7 @@ from angee.integrate.streams import (
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.backends import ChannelBackend, ParsedMessage, ParsedPart
 from angee.messaging.testing.models import Channel, Message
-from tests.conftest import make_integration
+from tests.conftest import current_stream, make_integration
 from tests.stream_adapters import applied_history, failure_state
 
 
@@ -196,7 +196,7 @@ def test_baseline_adoption_preserves_established_bases_and_delete_conflicts(
     direction: StreamDirection,
     adopted: bool,
 ) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, direction=direction)
+    stream = current_stream(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, direction=direction)
     row = AppliedRecord.objects.create(key="one", payload={"name": "local"})
     if prior_revision:
         link = RecordLink.objects.observe(stream, "one", target=row)
@@ -208,7 +208,6 @@ def test_baseline_adoption_preserves_established_bases_and_delete_conflicts(
         "one",
         {"name": "remote"},
         "" if tombstone else "remote",
-        "local",
         "v2",
         target=row,
         tombstone=tombstone,
@@ -244,7 +243,7 @@ def test_baseline_adoption_preserves_established_bases_and_delete_conflicts(
 
 @pytest.mark.parametrize("tombstone", [False, True])
 def test_repeated_page_identity_uses_earlier_revision_or_conflict(stream_bridge: Channel, tombstone: bool) -> None:
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
     )
     row = AppliedRecord.objects.create(key="one", payload={"name": "local"})
@@ -252,14 +251,13 @@ def test_repeated_page_identity_uses_earlier_revision_or_conflict(stream_bridge:
         "one",
         {"name": "remote"},
         "" if tombstone else "remote",
-        "local",
         target=row,
         tombstone=tombstone,
         mapped_payload={"name": "remote"},
         projection=row.payload,
     )
     second = RecordChange(
-        "one", {"name": "newer"}, "newer", "local", target=row, mapped_payload={"name": "newer"}, projection=row.payload
+        "one", {"name": "newer"}, "newer", target=row, mapped_payload={"name": "newer"}, projection=row.payload
     )
     adapter = MemoryAdapter(pages=[StreamPage((first, second), {})])
 
@@ -284,7 +282,7 @@ def test_repeated_page_identity_uses_earlier_revision_or_conflict(stream_bridge:
 def test_baseline_completion_during_extraction_retries_without_adopting(
     stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
     )
     row = AppliedRecord.objects.create(key="one", payload={"name": "local"})
@@ -292,7 +290,6 @@ def test_baseline_completion_during_extraction_retries_without_adopting(
         "one",
         {"name": "remote"},
         "remote",
-        "local",
         "v1",
         target=row,
         mapped_payload={"name": "remote"},
@@ -310,7 +307,7 @@ def test_baseline_completion_during_extraction_retries_without_adopting(
 
     with monkeypatch.context() as patch:
         patch.setattr(stream, "has_completed_baseline", complete_on_another_handle)
-        with pytest.raises(RuntimeError, match="Stream state changed during extraction; retry the page"):
+        with pytest.raises(RuntimeError, match="Stream state changed during external work; retry the operation"):
             advance_stream(stream, adapter)
 
     row.refresh_from_db()
@@ -349,9 +346,7 @@ def test_baseline_completion_during_extraction_retries_without_adopting(
 def test_extraction_contract_is_checked_before_page_application(
     stream_bridge: Channel, reconcile: bool, page: Any, message: str
 ) -> None:
-    stream = SyncStream.objects.current(
-        stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, reconcile_interval=timedelta(0)
-    )
+    stream = current_stream(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, reconcile_interval=timedelta(0))
     adapter = MemoryAdapter(pages=[page])
 
     with pytest.raises(AdapterContractError, match=message):
@@ -371,7 +366,7 @@ def test_invalid_write_result_never_promotes_record_bases(stream_bridge: Channel
         def write_back(self, link: Any, projection: Any, *, expected_version: str) -> Any:
             return None
 
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
     )
     link = RecordLink.objects.observe(stream, "person:1")
@@ -380,11 +375,7 @@ def test_invalid_write_result_never_promotes_record_bases(stream_bridge: Channel
     adapter = InvalidWriteAdapter(
         pages=[
             StreamPage(
-                (
-                    RecordChange(
-                        "person:1", {}, "base", "changed", "v1", mapped_payload={}, projection={"value": "changed"}
-                    ),
-                ),
+                (RecordChange("person:1", {}, "base", "v1", mapped_payload={}, projection={"value": "changed"}),),
                 {"offset": 1},
             )
         ],
@@ -405,7 +396,7 @@ def test_invalid_write_result_never_promotes_record_bases(stream_bridge: Channel
 
 @pytest.mark.parametrize("trigger", ["invalid_cursor", "stream_flag", "page_flag"])
 def test_epoch_reset_retains_identity_and_reverifies_baseline(stream_bridge: Channel, trigger: str) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
     link = RecordLink.objects.observe(stream, "person:1")
     RecordLink.objects.promote(
         link,
@@ -436,7 +427,6 @@ def test_epoch_reset_retains_identity_and_reverifies_baseline(stream_bridge: Cha
                     "person:1",
                     {"name": "Ada"},
                     "base",
-                    "base",
                     mapped_payload={"name": "Ada"},
                     projection={"name": "Ada"},
                 ),
@@ -465,7 +455,7 @@ def test_native_sync_rejects_stalled_pages_and_repeated_resets(
             StreamPage((), {}, exhausted=False),
         ]
     )
-    monkeypatch.setattr(type(stream_bridge), "backend", property(lambda self: adapter))
+    monkeypatch.setattr(type(stream_bridge), "capability_impl", property(lambda self: adapter))
 
     with pytest.raises(BridgeSyncError, match="records: Integration operation failed") as refused:
         sync_bridge(stream_bridge)
@@ -477,7 +467,7 @@ def test_native_sync_rejects_stalled_pages_and_repeated_resets(
 
 
 def test_sweep_counts_absence_then_retains_confirmed_tombstone(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge,
         "contacts",
         kind=StreamKind.RECORD_REPLICA,
@@ -492,7 +482,7 @@ def test_sweep_counts_absence_then_retains_confirmed_tombstone(stream_bridge: Ch
     assert finish_sweep(stream, adapter) == 1
     missing.refresh_from_db()
     assert (missing.absence_count, missing.status) == (1, LinkStatus.UNAVAILABLE)
-    adapter.remote["present"] = replace(adapter.remote["present"], local_hash="present", projection={})
+    adapter.remote["present"] = replace(adapter.remote["present"], projection={})
     assert finish_sweep(stream, adapter) == 1
     missing.refresh_from_db()
     present.refresh_from_db()
@@ -506,13 +496,11 @@ def test_sweep_counts_absence_then_retains_confirmed_tombstone(stream_bridge: Ch
 def test_mapping_evidence_change_reapplies_unchanged_source(
     stream_bridge: Channel, changed_evidence: dict[str, Any]
 ) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
     record = RecordChange("person:1", {"name": "Ada"}, "source", mapped_payload={"name": "Ada"})
     adapter = MemoryAdapter(pages=[StreamPage((record,), {"page": 1})])
     advance_stream(stream, adapter)
-    adapter.pages = [
-        StreamPage((replace(record, local_hash="source", **changed_evidence, projection={"name": "Ada"}),), {"page": 2})
-    ]
+    adapter.pages = [StreamPage((replace(record, **changed_evidence, projection={"name": "Ada"}),), {"page": 2})]
     assert advance_stream(stream, adapter).count == 1
     assert adapter.applied == ["person:1", "person:1"]
     assert applied_history().count() == 2
@@ -527,7 +515,7 @@ def test_unchanged_redelivery_snapshots_only_what_changed(
 ) -> None:
     """Unchanged facts keep the base: the observation is the delivery's snapshot, and a
     new remote version that observation marked OBSERVED is restored to CURRENT in a second."""
-    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
     record = RecordChange("person:1", {"name": "Ada"}, "source", remote_version="v1", mapped_payload={"name": "Ada"})
     adapter = MemoryAdapter(pages=[StreamPage((record,), {"page": 1})])
     advance_stream(stream, adapter)
@@ -545,7 +533,7 @@ def test_unchanged_redelivery_snapshots_only_what_changed(
 
 
 def test_adapter_cannot_promote_before_the_driver(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
 
     class PromotingAdapter(MemoryAdapter):
         def apply_record(self, stream: Any, record: Any) -> ApplyResult:
@@ -572,7 +560,7 @@ def test_adapter_cannot_promote_before_the_driver(stream_bridge: Channel) -> Non
 
 
 def test_sweep_imports_unseen_keys_and_resumes_after_failed_page(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge,
         "contacts",
         kind=StreamKind.RECORD_REPLICA,
@@ -622,7 +610,7 @@ def test_sweep_imports_unseen_keys_and_resumes_after_failed_page(stream_bridge: 
 
 
 def test_sweep_without_read_keys_resumes_bounded_baseline_without_moving_delta_cursor(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge,
         "contacts",
         kind=StreamKind.RECORD_REPLICA,
@@ -672,7 +660,7 @@ def test_sweep_without_read_keys_resumes_bounded_baseline_without_moving_delta_c
 
 
 def test_visibility_hooks_run_in_transaction_once_per_status_transition(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge,
         "contacts",
         kind=StreamKind.RECORD_REPLICA,
@@ -701,14 +689,14 @@ def test_visibility_hooks_run_in_transaction_once_per_status_transition(stream_b
     for _ in range(4):
         finish_sweep(stream, adapter, page_bound=1)
     assert absent == [("person:1", LinkStatus.UNAVAILABLE), ("person:1", LinkStatus.TOMBSTONE)]
-    adapter.pages = [StreamPage((replace(record, local_hash="source", projection={}),), {"page": 2})]
+    adapter.pages = [StreamPage((replace(record, projection={}),), {"page": 2})]
     assert advance_stream(stream, adapter).count == 0
     assert revalidated == [("person:1", LinkStatus.CURRENT)]
     assert applied_history().count() == 1
 
 
 def test_absence_hook_failure_rolls_back_transition_and_cursor_before_retry(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge,
         "contacts",
         kind=StreamKind.RECORD_REPLICA,
@@ -750,7 +738,7 @@ def test_absence_hook_failure_rolls_back_transition_and_cursor_before_retry(stre
 
 
 def test_sweep_children_follow_parent_presence_and_absence(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge,
         "contacts",
         kind=StreamKind.RECORD_REPLICA,
@@ -782,7 +770,7 @@ def test_sweep_children_follow_parent_presence_and_absence(stream_bridge: Channe
 
 
 def test_child_failure_rescans_and_reapplies_parent_identity(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
     record = RecordChange("parent", {}, "parent", mapped_payload={})
     adapter = ReadKeysAdapter(pages=[StreamPage((record,), {"page": 1})])
     advance_stream(stream, adapter)
@@ -792,7 +780,7 @@ def test_child_failure_rescans_and_reapplies_parent_identity(stream_bridge: Chan
         child.record_failure(kind=SyncFailureKind.MISSING_DEPENDENCY, code="child_dependency", source_hash="child"),
         retry_at=timezone.now(),
     )
-    adapter.remote = {"parent": replace(record, local_hash="parent", projection={})}
+    adapter.remote = {"parent": replace(record, projection={})}
     begin_stream_cycle(stream, adapter, page_bound=1)
     assert adapter.reads == [("parent",)]
     assert adapter.applied == ["parent", "parent"]
@@ -804,7 +792,7 @@ def test_child_failure_rescans_and_reapplies_parent_identity(stream_bridge: Chan
 
 
 def test_prepare_page_runs_once_before_record_savepoints_and_transport_is_refused(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "events")
+    stream = current_stream(stream_bridge, "events")
     events: list[str] = []
     prepared_depth = -1
 
@@ -831,7 +819,7 @@ def test_prepare_page_runs_once_before_record_savepoints_and_transport_is_refuse
 
 
 def test_stale_peer_beyond_tombstone_retention_requires_baseline(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge,
         "contacts",
         kind=StreamKind.RECORD_REPLICA,
@@ -847,7 +835,7 @@ def test_stale_peer_beyond_tombstone_retention_requires_baseline(stream_bridge: 
 
 
 def test_infrastructure_failure_rolls_back_domain_page_and_cursor(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "events", cursor={"offset": 0})
+    stream = current_stream(stream_bridge, "events", cursor={"offset": 0})
     adapter = MemoryAdapter(
         pages=[StreamPage(("first", "broken"), {"offset": 2})],
         infrastructure_key="broken",
@@ -861,7 +849,7 @@ def test_infrastructure_failure_rolls_back_domain_page_and_cursor(stream_bridge:
 
 
 def test_semantic_failure_quarantines_one_row_and_continues_page(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "events")
+    stream = current_stream(stream_bridge, "events")
     adapter = MemoryAdapter(pages=[StreamPage(("poison", "healthy"), {"offset": 2})], semantic_key="poison")
     result = advance_stream(stream, adapter)
     stream.refresh_from_db()
@@ -891,7 +879,7 @@ def test_keyed_event_refusals_with_one_code_stay_distinct(stream_bridge: Channel
                 raise SemanticError("invalid_name", details={"reason": "refused"})
             return super().apply_record(stream, record)
 
-    stream = SyncStream.objects.current(stream_bridge, "events")
+    stream = current_stream(stream_bridge, "events")
     pages = [StreamPage(("poison-a", "poison-b"), {"offset": 2}), StreamPage(("poison-a",), {"offset": 3})]
     adapter = KeyedAdapter(pages=pages)
     first = advance_stream(stream, adapter)
@@ -943,7 +931,7 @@ def test_data_error_quarantines_record_after_savepoint_rollback(
 
         monkeypatch.setattr(stream_driver, "_resolve_applied", fail_settlement)
 
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge,
         "records",
         "inbox",
@@ -998,7 +986,7 @@ def test_finish_page_runs_after_every_applied_link_is_promoted(stream_bridge: Ch
                 for link in RecordLink.objects.filter(stream=stream).order_by("external_key")
             )
 
-    stream = SyncStream.objects.current(stream_bridge, "records", "inbox", kind=StreamKind.RECORD_REPLICA)
+    stream = current_stream(stream_bridge, "records", "inbox", kind=StreamKind.RECORD_REPLICA)
     before = stream.cursor
     records = tuple(RecordChange(key, {"name": key}, key, mapped_payload={"name": key}) for key in ("a", "b"))
     advance_stream(stream, FinishAdapter(pages=[StreamPage(records, {"offset": 2})]))
@@ -1022,7 +1010,7 @@ def test_message_metadata_refusal_quarantines_record_and_continues_page(stream_b
                 {"offset": 3},
             )
 
-    stream = SyncStream.objects.current(stream_bridge, "messages", "inbox")
+    stream = current_stream(stream_bridge, "messages", "inbox")
     result = advance_stream(stream, MessageAdapter(stream_bridge))
 
     assert result.count == 2
@@ -1047,7 +1035,7 @@ def test_message_metadata_refusal_quarantines_record_and_continues_page(stream_b
 def test_identity_rescan_resolves_current_remote_state_without_advancing_stream(
     stream_bridge: Channel, status: str, tombstone: bool
 ) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
     adapter = ReadKeysAdapter(
         pages=[
             StreamPage(
@@ -1068,7 +1056,6 @@ def test_identity_rescan_resolves_current_remote_state_without_advancing_stream(
                     "person:1",
                     {"name": "invalid"},
                     "invalid",
-                    "base",
                     mapped_payload={"name": "invalid"},
                     projection={"name": "base"},
                 ),
@@ -1106,7 +1093,6 @@ def test_identity_rescan_resolves_current_remote_state_without_advancing_stream(
             "person:1",
             payload,
             "" if tombstone else "corrected",
-            "base",
             tombstone=tombstone,
             mapped_payload=payload,
             projection={"name": "base"},
@@ -1141,13 +1127,18 @@ def test_identity_rescan_skips_an_identity_another_attempt_healed_while_it_read(
                 begin_stream_cycle(stream, self)
             return records
 
-    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
     base = RecordChange("person:1", {"name": "base"}, "base", mapped_payload={"name": "base"})
     adapter = RacingAdapter(pages=[StreamPage((base,), {"page": 1})])
     advance_stream(stream, adapter)
     # The local projection is the applied base the adapter read, as a pull-only replica's is.
     changed = RecordChange(
-        "person:1", {"name": "v2"}, "v2", "base", mapped_payload={"name": "v2"}, projection={"name": "base"}
+        "person:1",
+        {"name": "v2"},
+        "v2",
+        "base",
+        mapped_payload={"name": "v2"},
+        projection={"name": "base"},
     )
     adapter.semantic_key = "person:1"
     adapter.pages = [StreamPage((changed,), {"page": 2})]
@@ -1173,7 +1164,7 @@ def test_identity_rescan_skips_an_identity_another_attempt_healed_while_it_read(
 
 
 def test_changed_remote_failure_defers_older_quarantine_for_the_same_identity(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
     adapter = ReadKeysAdapter(
         pages=[StreamPage((RecordChange("poison", {}, "old", mapped_payload={}),), {"page": 1})],
         semantic_key="poison",
@@ -1203,7 +1194,7 @@ def test_changed_remote_failure_defers_older_quarantine_for_the_same_identity(st
 
 
 def test_identity_rescan_rolls_back_all_records_on_infrastructure_failure(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, cursor={"page": 8})
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, cursor={"page": 8})
     for key in ("first", "z-broken"):
         link = RecordLink.objects.observe(stream, key)
         failure_state(
@@ -1236,7 +1227,7 @@ def test_identity_rescan_rolls_back_all_records_on_infrastructure_failure(stream
 
 
 def test_identity_rescan_without_read_keys_requests_and_records_baseline(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
     record = RecordChange("poison", {"name": "invalid"}, "invalid", mapped_payload={"name": "invalid"})
     adapter = MemoryAdapter(pages=[StreamPage((record,), {"page": 1})], semantic_key="poison")
     failure = advance_stream(stream, adapter)
@@ -1278,7 +1269,7 @@ def test_identity_rescan_without_read_keys_requests_and_records_baseline(stream_
 
 
 def test_event_feed_failures_never_trigger_rescan_or_baseline(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "events")
+    stream = current_stream(stream_bridge, "events")
     adapter = ReadKeysAdapter(pages=[StreamPage(("poison",), {"offset": 1})], semantic_key="poison")
     failure = advance_stream(stream, adapter)
     for failure_row in [
@@ -1310,9 +1301,7 @@ def test_quarantine_backoff_grows_and_caps_without_generation_inflation(
 ) -> None:
     now = timezone.now()
     monkeypatch.setattr(timezone, "now", lambda: now)
-    stream = SyncStream.objects.current(
-        stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, reconcile_interval=interval
-    )
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, reconcile_interval=interval)
     record = RecordChange("poison", {"name": "invalid"}, "invalid", mapped_payload={"name": "invalid"})
     adapter = ReadKeysAdapter(
         pages=[StreamPage((record,), {"page": 1})], semantic_key="poison", remote={"poison": record}
@@ -1358,7 +1347,7 @@ def test_quarantine_backoff_grows_and_caps_without_generation_inflation(
 
 @pytest.mark.parametrize("status", [SyncFailureStatus.OPEN, SyncFailureStatus.RETRY])
 def test_both_changed_conflict_requires_resolution_before_pull_or_push(stream_bridge: Channel, status: str) -> None:
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
     )
     adapter = ReadKeysAdapter(
@@ -1374,7 +1363,6 @@ def test_both_changed_conflict_requires_resolution_before_pull_or_push(stream_br
         "person:1",
         {"name": "remote edit"},
         "remote",
-        "local",
         mapped_payload={"name": "remote edit"},
         projection={"value": "local"},
     )
@@ -1409,7 +1397,6 @@ def test_both_changed_conflict_requires_resolution_before_pull_or_push(stream_br
                     "person:1",
                     {"name": "base"},
                     "base",
-                    "local",
                     mapped_payload={"name": "base"},
                     projection={"value": "local"},
                 ),
@@ -1439,7 +1426,7 @@ def test_both_changed_conflict_requires_resolution_before_pull_or_push(stream_br
 
 
 def test_page_reloads_conflicts_recorded_during_conditional_write(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
     )
     link = RecordLink.objects.observe(stream, "one")
@@ -1457,11 +1444,7 @@ def test_page_reloads_conflicts_recorded_during_conditional_write(stream_bridge:
             return super().write_back(link, projection, expected_version=expected_version)
 
     adapter = RacingAdapter(
-        pages=[
-            StreamPage(
-                (RecordChange("one", {}, "base", "local", mapped_payload={}, projection={"value": "local"}),), {}
-            )
-        ]
+        pages=[StreamPage((RecordChange("one", {}, "base", mapped_payload={}, projection={"value": "local"}),), {})]
     )
 
     result = advance_stream(stream, adapter)
@@ -1485,7 +1468,7 @@ def test_page_reloads_conflicts_recorded_during_conditional_write(stream_bridge:
 def test_push_writes_each_record_against_its_bases_as_they_are_now(stream_bridge: Channel) -> None:
     """A link moved since its batch loaded (here by a concurrent keep-local) is written against its new version."""
 
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
     )
     for key in ("one", "two"):
@@ -1513,7 +1496,7 @@ def test_push_writes_each_record_against_its_bases_as_they_are_now(stream_bridge
 
 
 def test_write_back_origin_is_recognized_on_next_pull(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge,
         "contacts",
         kind=StreamKind.RECORD_REPLICA,
@@ -1535,7 +1518,6 @@ def test_write_back_origin_is_recognized_on_next_pull(stream_bridge: Channel) ->
                         "person:1",
                         {"name": "before"},
                         "base",
-                        "changed",
                         "v1",
                         {"name": "after"},
                         mapped_payload={"name": "before"},
@@ -1561,7 +1543,6 @@ def test_write_back_origin_is_recognized_on_next_pull(stream_bridge: Channel) ->
                     "person:1",
                     {"name": "after"},
                     "changed",
-                    "changed",
                     "v2",
                     mapped_payload={"name": "after"},
                     projection={"name": "after"},
@@ -1576,7 +1557,7 @@ def test_write_back_origin_is_recognized_on_next_pull(stream_bridge: Channel) ->
 
 
 def test_event_feeds_apply_without_replica_links(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "events")
+    stream = current_stream(stream_bridge, "events")
     adapter = MemoryAdapter(pages=[StreamPage(("message:1", "message:2"), {"next": "end"})])
     assert advance_stream(stream, adapter).count == 2
     assert AppliedRecord.objects.count() == 2
@@ -1585,7 +1566,8 @@ def test_event_feeds_apply_without_replica_links(stream_bridge: Channel) -> None
 
 
 def test_sync_bridge_deadline_partial_page_is_not_a_repeated_cursor(
-    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch,
+    stream_bridge: Channel,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clock = [0.0]
 
@@ -1600,7 +1582,7 @@ def test_sync_bridge_deadline_partial_page_is_not_a_repeated_cursor(
     adapter = BudgetAdapter(pages=[page, page])
     stream_bridge.config = {"sync_time_budget": 1}
     monkeypatch.setattr(stream_driver, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
     with system_context(reason="test budget partial page"):
         assert sync_bridge(stream_bridge) == 2
     assert adapter.extracted == 2
@@ -1634,7 +1616,7 @@ def test_event_feed_accepts_message_with_noncopyable_timezone(stream_bridge: Cha
             )
             return ApplyResult(target=row)
 
-    stream = SyncStream.objects.current(stream_bridge, "messages", "INBOX")
+    stream = current_stream(stream_bridge, "messages", "INBOX")
     adapter = MessageAdapter(pages=[StreamPage((message,), {"uid": 1})])
     assert advance_stream(stream, adapter).count == 1
     stream.refresh_from_db()
@@ -1688,7 +1670,7 @@ def test_seed_cutover_locks_bridge_before_stream(stream_bridge: Channel, monkeyp
         pytest.skip("Bridge cutover row-lock ordering requires PostgreSQL.")
     stream_bridge.cursor = {"legacy": 1}
     stream_bridge.save(update_fields=["cursor"])
-    SyncStream.objects.current(stream_bridge, "records")
+    current_stream(stream_bridge, "records")
     manager_class = type(SyncStream.objects)
     lock_current = manager_class.lock_current
 
@@ -1731,7 +1713,7 @@ def test_seed_cutover_locks_bridge_before_stream(stream_bridge: Channel, monkeyp
 def test_stream_rejects_non_json_cursors_before_applying(
     stream_bridge: Channel, boundary: str, cursor: dict[Any, Any]
 ) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "events")
+    stream = current_stream(stream_bridge, "events")
     with pytest.raises(AdapterContractError, match="plain finite JSON"):
         if boundary == "definition":
 
@@ -1777,7 +1759,7 @@ def test_parallel_partitions_close_each_adapter_once_even_after_failure(
             adapters.append(adapter)
         return adapter
 
-    monkeypatch.setattr(Channel, "backend", property(backend))
+    monkeypatch.setattr(Channel, "capability_impl", property(backend))
     stream_bridge.config = {**stream_bridge.config, "sync_parallelism": 2, "sync_time_budget": 60}
     stream_bridge.save(update_fields=["config"])
     if failed_partition:
@@ -1855,10 +1837,12 @@ def test_partition_failure_preserves_safe_cause_logs_once_and_replaces_healthy_p
         monkeypatch.setattr(
             stream_driver,
             "_drain_partition",
-            lambda bridge, definition, deadline: stream_driver._drain(bridge, bridge.backend, definition, deadline),
+            lambda bridge, definition, deadline: stream_driver._drain(
+                bridge, bridge.capability_impl, definition, deadline
+            ),
         )
 
-    monkeypatch.setattr(Channel, "backend", property(lambda row: PartitionAdapter(sync_parallelism=2)))
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda row: PartitionAdapter(sync_parallelism=2)))
     stream_bridge.config = {"sync_parallelism": 2 if execution == "pool" else 1, "sync_time_budget": 60}
     stream_bridge.save(update_fields=["config"])
     with pytest.raises(BridgeSyncError) as refused:
@@ -1914,7 +1898,7 @@ def test_partition_data_error_persists_safe_stream_partition_and_reason(
         def finish_page(self, stream: Any, page: StreamPage, outcomes: Any) -> None:
             raise DataError("secret database payload")
 
-    monkeypatch.setattr(Channel, "backend", property(lambda row: DataAdapter(pages=[StreamPage(("one",), {})])))
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda row: DataAdapter(pages=[StreamPage(("one",), {})])))
     with pytest.raises(BridgeSyncError) as refused:
         stream_bridge.run_sync(now=timezone.now())
 
@@ -1946,7 +1930,7 @@ def test_bridge_reports_and_logs_each_failed_partition(
                 raise IntegrationError("Login refused.")
             raise RuntimeError("private vendor payload")
 
-    monkeypatch.setattr(Channel, "backend", property(lambda row: RefusedAdapter()))
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda row: RefusedAdapter()))
     with pytest.raises(BridgeSyncError) as refused:
         stream_bridge.run_sync(now=timezone.now())
     assert refused.value.public_message == ("contacts (a): Login refused.; contacts (b): Integration operation failed.")
@@ -2002,7 +1986,7 @@ def test_json_merge_preserves_concurrent_partition_writes(stream_bridge: Channel
 
 
 def test_due_semantic_rescan_never_overwrites_concurrent_local_changes(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
     adapter = ReadKeysAdapter(
         pages=[StreamPage((RecordChange("one", {"name": "base"}, "base", mapped_payload={"name": "base"}),), {})]
     )
@@ -2014,7 +1998,6 @@ def test_due_semantic_rescan_never_overwrites_concurrent_local_changes(stream_br
             "one",
             {"name": "remote"},
             "remote",
-            "local",
             mapped_payload={"name": "remote"},
             projection={"value": "local"},
         )
@@ -2036,7 +2019,7 @@ def test_due_semantic_rescan_never_overwrites_concurrent_local_changes(stream_br
 def test_failed_conflict_reread_keeps_quarantine(
     stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch, keep: str
 ) -> None:
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
     )
     SyncStream.objects.advance(stream, {}, exhausted=True)
@@ -2048,7 +2031,7 @@ def test_failed_conflict_reread_keeps_quarantine(
             raise OperationalError("remote offline")
 
     adapter = UnavailableAdapter()
-    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
     with pytest.raises(OperationalError, match="remote offline"):
         failure.resolve_conflict(keep=keep)
     link.refresh_from_db()
@@ -2065,7 +2048,7 @@ def test_conflict_choice_requires_a_completed_apply_or_conditional_write(
 
     from angee.integrate.streams import RemoteRejected
 
-    stream = SyncStream.objects.current(
+    stream = current_stream(
         stream_bridge,
         "contacts",
         kind=StreamKind.RECORD_REPLICA,
@@ -2094,14 +2077,13 @@ def test_conflict_choice_requires_a_completed_apply_or_conditional_write(
                 "one",
                 {"name": "remote"},
                 "remote",
-                "local",
                 "v2",
                 mapped_payload={"name": "remote"},
                 projection={"value": "local"},
             )
         }
     )
-    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+    monkeypatch.setattr(Channel, "capability_impl", property(lambda self: adapter))
     keep = "local"
     if failure == "new_remote_version":
         adapter.candidates = (LocalChange("one", {"name": "local"}),)
@@ -2122,7 +2104,7 @@ def test_conflict_choice_requires_a_completed_apply_or_conditional_write(
 
 
 def test_stale_cursor_reset_cannot_overwrite_successor_progress(stream_bridge: Channel) -> None:
-    retired = SyncStream.objects.current(stream_bridge, "events", cursor={"old": 1})
+    retired = current_stream(stream_bridge, "events", cursor={"old": 1})
     first = reset_stream(retired, cursor={"new": 1}).stream
     SyncStream.objects.advance(first, {"new": 2})
     late = reset_stream(retired, cursor={"stale": 9}).stream
@@ -2133,9 +2115,7 @@ def test_stale_cursor_reset_cannot_overwrite_successor_progress(stream_bridge: C
 
 
 def test_reconcile_pulse_rejects_a_checkpoint_changed_during_transport(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(
-        stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, reconcile_interval=timedelta(0)
-    )
+    stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, reconcile_interval=timedelta(0))
 
     class RacingAdapter(ReadKeysAdapter):
         def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:

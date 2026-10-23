@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import {
-  EmptyState, Glyph, NavLink, PrimaryPanePublisher, SessionRail, SessionRailItem, Skeleton, StatusDot, buttonVariants, useStatusTone, useRouteHref, useRouteRecordId, useRouteSearch, routeSearchParam, updateRouteSearch } from "@angee/ui";
+  EmptyState, Glyph, LoadingPanel, NavLink, PrimaryPanePublisher, SessionRail, SessionRailItem, SkeletonText, StatusDot, buttonVariants, useStatusTone, useRouteHref, useRouteRecordId, useRouteSearch, routeSearchParam, updateRouteSearch } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
 import { type AgentChatView } from "../documents";
@@ -84,11 +84,7 @@ export function AgentSessionsPage(): React.ReactElement {
     if (loading) {
       return (
         <SessionRail label={t("sessions.railLabel")} busy>
-          {Array.from({ length: 4 }, (_, index) => (
-            <li key={index} className="px-2 py-1.5">
-              <Skeleton className="h-5" />
-            </li>
-          ))}
+          <li className="px-2 py-1.5"><SkeletonText lines={4} /></li>
         </SessionRail>
       );
     }
@@ -100,7 +96,7 @@ export function AgentSessionsPage(): React.ReactElement {
         label={t("sessions.railLabel")}
         className="h-auto max-h-[40%] shrink-0"
         action={
-          <NavLink className={buttonVariants({ variant: "ghost", size: "sm" })} href={agentsHref} variant="inline">
+          <NavLink className={buttonVariants({ variant: "ghost", size: "sm" })} href={agentsHref} variant="unstyled">
             <Glyph name="plus" />
             {t("sessions.new")}
           </NavLink>
@@ -130,9 +126,7 @@ export function AgentSessionsPage(): React.ReactElement {
     return (
       <>
         <PrimaryPanePublisher node={rail} />
-        <div className="min-w-0 flex-1 p-3">
-          <Skeleton className="h-full" />
-        </div>
+        <LoadingPanel />
       </>
     );
   }
@@ -147,7 +141,7 @@ export function AgentSessionsPage(): React.ReactElement {
           title={t("agent.noRunningAgent")}
           description={t("agent.chatUnavailable")}
           actions={
-            <NavLink className={buttonVariants({ variant: "primary", size: "sm" })} href={agentsHref} variant="inline">
+            <NavLink className={buttonVariants({ variant: "primary", size: "sm" })} href={agentsHref} variant="unstyled">
               {t("agent.setupAssistant")}
             </NavLink>
           }

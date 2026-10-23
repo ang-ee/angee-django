@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from datetime import timedelta
 from typing import Any
 
@@ -12,16 +12,17 @@ from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from angee.base.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
+from angee.identity import public_id_of
 from angee.integrate.impl import AdapterContractError, BridgeImpl
+from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge
 from angee.integrate.net import AddressResolutionError
 from angee.integrate.states import StreamPhase, SyncFailureKind
 from angee.integrate.streams import advance_stream, begin_stream_cycle, open_stream
 from angee.workflows.context import StepContext
 from angee.workflows.decision_steps import DecisionStep
-from angee.workflows.steps import Retryable, RetryPolicy, Settlement, Step, StepMode, Superseded
+from angee.workflows.steps import Retryable, RetryPolicy, Settlement, Step, StepMode, Superseded, Wait
 
 
 class StreamReference(BaseModel):
@@ -113,7 +114,9 @@ class StreamStage(Step[StreamStageInput, StreamStageOutput, None]):
     def run(self, ctx: StepContext) -> Settlement:
         """Apply exactly one bounded page with integrate's page/cursor transaction."""
         bridge = _bridge_subject(ctx)
-        with _stream_io(ctx, bridge) as adapter:
+        with bridge_io(ctx, bridge) as adapter:
+            if isinstance(adapter, Wait):
+                return adapter
             if ctx.state.get("progress") is None:
                 stream = _pull_only(open_stream(bridge, ctx.input.key, ctx.input.partition, adapter))
             else:
@@ -159,9 +162,10 @@ class Rescan(Step[CoverageInput, StreamStageOutput, RescanConfig]):
         index = ctx.state.get("rescan_index", 0)
         stream = streams[index]
         page = None
-        with _stream_io(ctx, bridge) as adapter:
-            if stream.phase != StreamPhase.BASELINE:
-                stream = begin_stream_cycle(stream, adapter, page_bound=ctx.config.rescan_bound)
+        with bridge_io(ctx, bridge) as adapter:
+            if isinstance(adapter, Wait):
+                return adapter
+            stream = begin_stream_cycle(stream, adapter, page_bound=ctx.config.rescan_bound)
             if stream.resync_required or stream.phase == StreamPhase.BASELINE:
                 page = advance_stream(stream, adapter, page_bound=ctx.config.rescan_bound)
         if page is not None:
@@ -251,18 +255,28 @@ def _bridge_subject(ctx: StepContext) -> Bridge:
 
 
 @contextmanager
-def _stream_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl]:
-    """Fence transport and classify infrastructure failures for native retries.
+def bridge_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl | Wait]:
+    """Serialize single-partition adapters and fence one bounded IO operation.
+
+    A cap of exactly one uses the bridge's existing sync/webhook lock across
+    partitions and workflow runs. Contention waits without marking an effect or
+    charging retry budget; callers return the yielded native Wait unchanged.
+    Other caps retain native map scheduling rather than promising a semaphore.
 
     A host that does not resolve is retried too: a resolver that is briefly offline
     answers "no such host" on some platforms (macOS), and a host that truly has no
     address still fails once the step's attempts run out.
     """
-    ctx.heartbeat()
-    ctx.begin_effect()
     try:
-        with closing(bridge.backend) as adapter:
-            yield adapter
+        with closing(bridge.capability_impl) as adapter:
+            lock = bridge_advisory_lock(bridge) if adapter.sync_parallelism == 1 else nullcontext(True)
+            with lock as acquired:
+                if not acquired:
+                    yield ctx.wait(until=ctx.now + timedelta(seconds=1), state=ctx.state)
+                    return
+                ctx.heartbeat()
+                ctx.begin_effect()
+                yield adapter
     except AddressResolutionError as error:
         raise Retryable("The bridge host could not be resolved.") from error
     except (

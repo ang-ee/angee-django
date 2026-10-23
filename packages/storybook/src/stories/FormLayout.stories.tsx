@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, FieldRow, FormActions, FormFooter, FormGrid, Input, Textarea } from "@angee/ui";
+import { Button, FieldControl, FieldLabel, FieldRoot, FormActions, FormFooter, FormGrid, Textarea } from "@angee/ui";
 
 const meta = {
   title: "Forms/FormLayout",
@@ -15,18 +15,22 @@ export const TwoColumnGrid: Story = {
   render: () => (
     <div className="mx-auto max-w-3xl space-y-5 rounded-6 border border-border-subtle bg-sheet p-6">
       <FormGrid columns="two">
-        <FieldRow label="First name" required>
-          <Input defaultValue="Sofia" />
-        </FieldRow>
-        <FieldRow label="Last name" required>
-          <Input defaultValue="Marin" />
-        </FieldRow>
-        <FieldRow label="Email" meta="Notifications" span="full">
-          <Input type="email" defaultValue="sofia@example.com" />
-        </FieldRow>
-        <FieldRow label="Bio" span="full">
-          <Textarea rows={3} placeholder="A short description…" />
-        </FieldRow>
+        <FieldRoot>
+          <FieldLabel variant="eyebrow" required>First name</FieldLabel>
+          <FieldControl defaultValue="Sofia" />
+        </FieldRoot>
+        <FieldRoot>
+          <FieldLabel variant="eyebrow" required>Last name</FieldLabel>
+          <FieldControl defaultValue="Marin" />
+        </FieldRoot>
+        <FieldRoot span="full">
+          <FieldLabel variant="eyebrow" meta="Notifications">Email</FieldLabel>
+          <FieldControl type="email" defaultValue="sofia@example.com" />
+        </FieldRoot>
+        <FieldRoot span="full">
+          <FieldLabel variant="eyebrow">Bio</FieldLabel>
+          <FieldControl render={<Textarea rows={3} placeholder="A short description…" />} />
+        </FieldRoot>
       </FormGrid>
       <FormActions>
         <Button variant="ghost" size="sm">
@@ -47,18 +51,22 @@ export const GridAreas: Story = {
         columns="two"
         areas={["title title", "owner status", "summary summary"]}
       >
-        <FieldRow area="title" label="Title" required>
-          <Input defaultValue="Q3 review brief" />
-        </FieldRow>
-        <FieldRow area="owner" label="Owner">
-          <Input defaultValue="Sofia" />
-        </FieldRow>
-        <FieldRow area="status" label="Status">
-          <Input defaultValue="Active" />
-        </FieldRow>
-        <FieldRow area="summary" label="Summary">
-          <Textarea rows={3} defaultValue="Quarterly operational review." />
-        </FieldRow>
+        <FieldRoot area="title">
+          <FieldLabel variant="eyebrow" required>Title</FieldLabel>
+          <FieldControl defaultValue="Q3 review brief" />
+        </FieldRoot>
+        <FieldRoot area="owner">
+          <FieldLabel variant="eyebrow">Owner</FieldLabel>
+          <FieldControl defaultValue="Sofia" />
+        </FieldRoot>
+        <FieldRoot area="status">
+          <FieldLabel variant="eyebrow">Status</FieldLabel>
+          <FieldControl defaultValue="Active" />
+        </FieldRoot>
+        <FieldRoot area="summary">
+          <FieldLabel variant="eyebrow">Summary</FieldLabel>
+          <FieldControl render={<Textarea rows={3} defaultValue="Quarterly operational review." />} />
+        </FieldRoot>
       </FormGrid>
     </div>
   ),
@@ -69,9 +77,10 @@ export const FooterWithNote: Story = {
     <div className="mx-auto max-w-3xl rounded-6 border border-border-subtle bg-sheet">
       <div className="p-6">
         <FormGrid columns="one">
-          <FieldRow label="Title">
-            <Input defaultValue="Q3 review brief" />
-          </FieldRow>
+          <FieldRoot>
+            <FieldLabel variant="eyebrow">Title</FieldLabel>
+            <FieldControl defaultValue="Q3 review brief" />
+          </FieldRoot>
         </FormGrid>
       </div>
       <FormFooter border="top" surface="sheet" note="Unsaved changes" className="px-6 py-3">

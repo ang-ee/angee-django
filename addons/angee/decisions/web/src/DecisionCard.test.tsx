@@ -32,6 +32,19 @@ test("choices reset with the revision and an accepted answer remains locked unti
   expect(document.activeElement?.textContent).toContain("Chose: Accept");
 });
 
+test("a refusal summary shows overlapping form and field messages once while retaining distinct errors", async () => {
+  const duplicate = "Choose only one value for due date.";
+  const distinct = "Choose an invoice date before the due date.";
+  decide.mockResolvedValue({ decide: { ok: false, message: duplicate,
+    validation_errors: { due_date: [duplicate], invoice_date: [distinct] },
+  } });
+  render(<Provider><DecisionCard decision={decisionFixture()} /></Provider>);
+  fireEvent.click(screen.getByRole("radio", { name: /^Accept/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  expect(await screen.findByText(`${duplicate} ${distinct}`)).toBeTruthy();
+  expect((screen.getByRole("button", { name: "Confirm" }) as HTMLButtonElement).disabled).toBe(false);
+});
+
 const contact = testDataResource("contacts.Contact", {
   recordRepresentation: "name", roots: { aggregate: "contacts_aggregate" },
   typeNames: { filter: "contacts_bool_exp", order: "contacts_order_by" },
@@ -194,7 +207,7 @@ test("a record action uses its human alternative label", () => {
 });
 
 test("a concerned record carries its evidence tab and page into the canonical link", () => {
-  const reference = { model: "storage.File", id: "fil_source", label: "Source file", tab: "preview", page: 2, search: { previewPage: "fil_source:2" } };
+  const reference = { model: "storage.File", id: "fil_source", label: "Source file", tab: "preview", search: { previewPage: "fil_source:2" } };
   const decision = decisionFixture({
     records: [{ id: "dcr_source", record_model: reference.model, record_id: reference.id }],
     context: { references: [reference] },
@@ -206,4 +219,24 @@ test("a concerned record carries its evidence tab and page into the canonical li
   }}><DecisionCard decision={decision} /></AppRuntimeProvider></Provider>);
   expect(screen.getByRole("link", { name: "Source file" }).getAttribute("href")).toBe("/storage/fil_source?recordTab=preview&previewPage=fil_source%3A2");
   expect(screen.queryByRole("button", { name: "Source file" })).toBeNull();
+});
+
+test("the decision's page shows an answered question's alternatives with the chosen one marked, its context and its records", () => {
+  const decision = decisionFixture({
+    is_open: false, verdict: ["accept"], verdict_label: "Accept and archive", answered_at: "2026-10-04T10:00:00Z",
+    answered_by: { display_name: "Reviewer" },
+    context: { reason: "The supplier sent this bill twice.", references: [], facts: [
+      { pointer: "/number", label: "Bill number", value: "SYN-9311", authority: "source", evidence: [] },
+    ] },
+  });
+  render(<Provider><DecisionCard decision={decision} detail /></Provider>);
+  expect(screen.getByText("Chose: Accept and archive")).toBeTruthy();
+  expect(screen.getByText("The supplier sent this bill twice.")).toBeTruthy();
+  const alternatives = screen.getByRole("list", { name: "Alternatives, the chosen one marked" });
+  expect(within(alternatives).getAllByRole("listitem")).toHaveLength(2);
+  expect(within(alternatives).getByText("Accept and archive")).toBeTruthy();
+  expect(within(alternatives).getByText("Proposed name")).toBeTruthy();
+  expect(screen.getByText("Bill number")).toBeTruthy();
+  expect(screen.queryByRole("radio")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
 });

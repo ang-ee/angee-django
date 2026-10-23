@@ -79,7 +79,7 @@ export function CaptureNeedAction({
         submitLabel={t("capture.submit")}
         submittingLabel={t("capture.submitting")}
         errorFallback={t("capture.error")}
-        parseValues={parseCaptureNeedValues}
+        parseValues={(values) => parseCaptureNeedValues(values, t("capture.importanceRequired"))}
         onSubmit={async (values) =>
           actionFormSubmitResult(await capture({
             target: {
@@ -96,15 +96,16 @@ export function CaptureNeedAction({
 
 function parseCaptureNeedValues(
   values: MutationDialogValues,
+  importanceMessage: string,
 ): CaptureNeedValues {
   return {
     body: mutationDialogValueCodecs.requiredString(values.body, "body"),
     party: mutationDialogValueCodecs.string(values.party),
-    importance: importanceValue(values.importance),
+    importance: importanceValue(values.importance, importanceMessage),
   };
 }
 
-function importanceValue(value: unknown): CaptureNeedValues["importance"] {
+function importanceValue(value: unknown, message: string): CaptureNeedValues["importance"] {
   if (value === "NORMAL" || value === "IMPORTANT") return value;
-  throw new TypeError("A need importance is required.");
+  throw new TypeError(message);
 }

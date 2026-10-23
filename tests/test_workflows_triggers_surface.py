@@ -14,7 +14,6 @@ from rebac import (
     write_relationships,
 )
 
-from angee.base.scoping import system_queryset
 from angee.integrate.schema import ConsoleImplChoicesQuery
 from angee.integrate.testing.integration import Integration
 from angee.resources.testing.models import Resource
@@ -64,7 +63,7 @@ def test_native_trigger_crud_and_actions_keep_activation_server_owned(trigger_su
     assert inserted["enabled"] is False
     assert inserted["disabled_reason"] == "" and inserted["source_model"] == "knowledge.Vault"
     assert inserted["can_edit"] is True
-    trigger = system_queryset(Trigger).get(sqid=inserted["id"])
+    trigger = Trigger.system_queryset().get(sqid=inserted["id"])
     read = "query { trigger { id can_edit } }"
     for reader in (viewer, starter):
         assert result_data(execute_schema(schema, read, user=reader))["trigger"] == [
@@ -78,7 +77,7 @@ def test_native_trigger_crud_and_actions_keep_activation_server_owned(trigger_su
     assert result_data(execute_schema(schema, enable, {"id": trigger.sqid}, user=editor))[
         "enable_workflow_trigger"
     ]["ok"]
-    trigger = system_queryset(Trigger).get(pk=trigger.pk)
+    trigger = Trigger.system_queryset().get(pk=trigger.pk)
     assert trigger.enabled and trigger.workflow.user_id != editor.pk
     for name in ("trigger_insert_input", "trigger_set_input"):
         fields = schema._schema.get_type(name).fields
@@ -95,14 +94,14 @@ def test_native_trigger_crud_and_actions_keep_activation_server_owned(trigger_su
     assert result_data(execute_schema(schema, disable, {"id": trigger.sqid}, user=editor))[
         "disable_workflow_trigger"
     ]["ok"]
-    trigger = system_queryset(Trigger).get(pk=trigger.pk)
+    trigger = Trigger.system_queryset().get(pk=trigger.pk)
     assert not trigger.enabled
     result_data(execute_schema(schema, edit, {"id": trigger.sqid}, user=editor))
-    assert system_queryset(Trigger).get(pk=trigger.pk).condition == {"name": {"_eq": "Ready"}}
+    assert Trigger.system_queryset().get(pk=trigger.pk).condition == {"name": {"_eq": "Ready"}}
     result_data(execute_schema(schema, """mutation($id: String!) {
       delete_trigger_by_pk(id: $id) { id }
     }""", {"id": trigger.sqid}, user=editor))
-    assert not system_queryset(Trigger).filter(pk=trigger.pk).exists()
+    assert not Trigger.system_queryset().filter(pk=trigger.pk).exists()
 
 
 def test_enable_preview_discloses_grants_and_run_readers_only_to_enablers(trigger_surface):
@@ -269,7 +268,7 @@ def test_resolved_model_and_title_share_source_owner_without_row_queries(
     }
     counts = []
     for count in (1, 5):
-        for _ in range(count - system_queryset(Trigger).count()):
+        for _ in range(count - Trigger.system_queryset().count()):
             Trigger.objects.with_actor(editor).create(
                 workflow=workflow, source="record_changed", model_label=model_label, condition=expected["condition"],
             )
@@ -317,7 +316,7 @@ def test_trigger_ledger_origin_and_filters_require_operator_visibility(trigger_s
     Trigger.objects.enable(trigger, actor=editor)
     TriggerEvent.objects.record_change(Vault, record)
     Trigger.objects.drain()
-    event = system_queryset(TriggerEvent).get(trigger=trigger)
+    event = TriggerEvent.system_queryset().get(trigger=trigger)
     assert event.admitted_at is not None, event.rejection
     run = event.started_run
     assert run.origin == "trigger" and run.trigger_event_id == event.pk and run.run_as_id == workflow.user_id
@@ -377,7 +376,7 @@ def test_trigger_ledger_redacts_unreadable_source_identity_and_filter_oracles(tr
     )
     Trigger.objects.enable(trigger, actor=editor)
     TriggerEvent.objects.record_change(Vault, record)
-    event = system_queryset(TriggerEvent).get(trigger=trigger)
+    event = TriggerEvent.system_queryset().get(trigger=trigger)
     query = """query($model: String!, $record: String!) {
       triggerevent { id record_model record_id evaluated_at admitted_at }
       by_model: triggerevent(where: {record_model: {_eq: $model}}) { id }
@@ -424,7 +423,7 @@ def test_trigger_ledger_reference_guard_batches_source_reads(trigger_surface):
     query = "{ triggerevent { record_model record_id } }"
     counts = []
     for count in (1, 5):
-        for index in range(system_queryset(TriggerEvent).count(), count):
+        for index in range(TriggerEvent.system_queryset().count(), count):
             TriggerEvent.objects.record_change(Vault, vault_for(source_owner, name=f"Private source {index}"))
         result_data(execute_schema(schema, query, user=editor))
         with CaptureQueriesContext(connection) as queries:
@@ -451,15 +450,15 @@ def test_resource_installs_trigger_disabled(trigger_surface, tmp_path, execution
     (tmp_path / source).write_text(yaml.safe_dump({"rows": [{"xref": "trigger", "fields": fields}]}))
     result = Resource.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     assert result.created == 2
-    trigger = system_queryset(Trigger).get()
+    trigger = Trigger.system_queryset().get()
     assert not trigger.enabled and trigger.disabled_reason == ""
     Trigger.objects.enable(trigger, actor=execution[0])
     unchanged = Resource.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     assert unchanged.skipped == 2
-    assert system_queryset(Trigger).get(pk=trigger.pk).enabled
+    assert Trigger.system_queryset().get(pk=trigger.pk).enabled
     fields["condition"] = {"name": {"_eq": "Ready"}}
     (tmp_path / source).write_text(yaml.safe_dump({"rows": [{"xref": "trigger", "fields": fields}]}))
     replaced = Resource.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     assert replaced.updated == 1
-    trigger = system_queryset(Trigger).get(pk=trigger.pk)
+    trigger = Trigger.system_queryset().get(pk=trigger.pk)
     assert not trigger.enabled

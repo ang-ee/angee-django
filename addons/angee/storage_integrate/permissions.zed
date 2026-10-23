@@ -1,7 +1,7 @@
 // Authorization schema for the storage-integrate addon.
 // @rebac_package: storage_integrate
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 definition storage_integrate/mount {
     relation integration: integrate/integration // rebac:field=integration_ptr
@@ -11,4 +11,5 @@ definition storage_integrate/mount {
     permission read = integration->read + admin->member
     permission write = integration->write + admin->member
     permission delete = integration->write + admin->member
+    permission write__owner = integration->transfer
 }

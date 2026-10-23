@@ -12,15 +12,20 @@ import {
   type Tone,
 } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
+import { cn } from "../lib/cn";
+import { Button } from "./button";
+import { Tooltip } from "./tooltip";
 
-/** A tinted status glyph speaks in feedback tones (+ a `muted` quiet state). */
+/** A tinted status glyph speaks in feedback tones (+ the `muted` quiet tone). */
 export type StatusIconTone = FeedbackIntent | "muted";
 
-const STATUS_ICON_TONE_CLASSES = Object.fromEntries([
-  ...FEEDBACK_INTENTS.map((tone) => [tone, toneText(tone)] as const),
-  ["muted", "text-fg-muted"] as const,
-]) as Record<StatusIconTone, string>;
+const STATUS_ICON_TONE_CLASSES = Object.fromEntries(
+  [...FEEDBACK_INTENTS, "muted" as const].map((tone) => [tone, toneText(tone)] as const),
+) as Record<StatusIconTone, string>;
 
+/**
+ * @kind token
+ */
 export const statusIconVariants = tv({
   base: "inline-flex shrink-0 items-center justify-center rounded-full [&_.glyph]:shrink-0 [&>svg]:shrink-0",
   variants: {
@@ -41,9 +46,12 @@ export const statusIconVariants = tv({
 // shared `toneSolidBg` owner). Neutral keeps the muted gray — a near-black solid
 // would read as a bullet, not a status.
 const STATUS_DOT_TONES = Object.fromEntries(
-  TONES.map((tone) => [tone, tone === "neutral" ? "bg-fg-muted" : toneSolidBg(tone)]),
+  TONES.map((tone) => [tone, tone === "neutral" ? "bg-fg-muted" : tone === "muted" ? "bg-fg-subtle" : toneSolidBg(tone)]),
 ) as Record<Tone, string>;
 
+/**
+ * @kind token
+ */
 export const statusDotVariants = tv({
   base: "inline-flex shrink-0 rounded-full",
   variants: {
@@ -63,10 +71,6 @@ export const statusDotVariants = tv({
 type StatusIconRecipeProps = VariantProps<typeof statusIconVariants>;
 type StatusDotRecipeProps = VariantProps<typeof statusDotVariants>;
 
-export type StatusIconSize = NonNullable<StatusIconRecipeProps["size"]>;
-export type StatusDotTone = NonNullable<StatusDotRecipeProps["tone"]>;
-export type StatusDotSize = NonNullable<StatusDotRecipeProps["size"]>;
-
 export type StatusIconProps = Omit<
   React.HTMLAttributes<HTMLSpanElement>,
   "className" | "color"
@@ -77,6 +81,9 @@ export type StatusIconProps = Omit<
     label?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const StatusIcon = React.forwardRef<HTMLSpanElement, StatusIconProps>(
   function StatusIcon(
     { className, icon, tone = "info", label, size = "sm", ...props },
@@ -110,6 +117,56 @@ export const StatusIcon = React.forwardRef<HTMLSpanElement, StatusIconProps>(
 );
 StatusIcon.displayName = "StatusIcon";
 
+export interface StatusIconItem {
+  key: string;
+  /** The complete accessible meaning, including the status, not just the subject. */
+  label: string;
+  description?: string;
+  /** Supplied by the status owner; the group never infers a result from missing items. */
+  tone: StatusIconTone;
+  icon?: StatusIconProps["icon"];
+}
+
+export interface StatusIconGroupProps {
+  label: string;
+  items: readonly StatusIconItem[];
+  className?: string;
+  /** Makes each status a keyboard-accessible action, such as opening its evidence. */
+  onSelect?: (key: string) => void;
+}
+
+/** A compact row of independently labelled outcomes; colors always accompany glyphs and text.
+ * @owner StatusIcon
+ */
+export function StatusIconGroup({ label, items, className, onSelect }: StatusIconGroupProps): React.ReactElement {
+  return (
+    <span role="group" aria-label={label} className={cn("inline-flex flex-wrap items-center gap-1", className)}>
+      {items.map((item) => (
+        <Tooltip key={item.key} label={
+          <span className="grid gap-1">
+            <span>{item.label}</span>
+            {item.description ? <span className="font-normal">{item.description}</span> : null}
+          </span>
+        }>
+          {onSelect ? (
+            <Button variant="ghost" size="iconSm" aria-label={item.label} onClick={() => onSelect(item.key)}>
+              <StatusIcon tone={item.tone} icon={item.icon} />
+            </Button>
+          ) : (
+            <StatusIcon
+              tone={item.tone}
+              icon={item.icon}
+              label={item.label}
+              tabIndex={0}
+              className="m-1 outline-none focus-visible:focus-ring"
+            />
+          )}
+        </Tooltip>
+      ))}
+    </span>
+  );
+}
+
 export type StatusDotProps = Omit<
   React.HTMLAttributes<HTMLSpanElement>,
   "className" | "color"
@@ -120,6 +177,9 @@ export type StatusDotProps = Omit<
     tone?: Tone;
   };
 
+/**
+ * @kind primitive
+ */
 export const StatusDot = React.forwardRef<HTMLSpanElement, StatusDotProps>(
   function StatusDot({ className, label, size = "md", tone = "neutral", ...props }, ref) {
     return (

@@ -332,7 +332,7 @@ function GanttBar<TData = unknown>({
     },
     className: cn(
       "group/gantt-bar-group text-fg @container relative flex w-full min-w-0 cursor-pointer touch-none items-center gap-1.5 overflow-hidden rounded-4 px-1.5 py-0.5 text-start leading-normal select-none",
-      "focus-visible:ring-ring/50 outline-none focus-visible:ring-2",
+      "focus-visible:ring-border-focus/50 outline-none focus-visible:ring-2",
       // the unfilled remainder has to be legible on its own - at /12 a bar
       // with a progress fill read as a floating segment with no basement
       "bg-(--gantt-event-color)/20 hover:bg-(--gantt-event-color)/30",
@@ -363,7 +363,7 @@ function GanttBar<TData = unknown>({
             data-slot="gantt-bar-milestone"
             className={cn(
               "size-2.5 shrink-0 rotate-45 rounded-[2px] border border-(--gantt-event-color) bg-(--gantt-event-color)/80",
-              isSelected && "ring-ring/50 ring-2"
+              isSelected && "ring-border-focus/50 ring-2"
             )}
           />
         )}

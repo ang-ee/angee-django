@@ -1,4 +1,6 @@
 export {
+  ResourcePaneFooter,
+  type ResourcePagerProps,
   ResourceToolbar,
   ResourceViewSwitcher,
   type ResourceToolbarCustomFilterChip,

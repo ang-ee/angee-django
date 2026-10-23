@@ -18,8 +18,7 @@ from strawberry.extensions import FieldExtension
 from strawberry.types.field import StrawberryField
 from strawberry_django.fields.field import StrawberryDjangoField
 
-from angee.base.permissions import effective_rebac_definition
-from angee.base.scoping import aggregate_scoped_queryset, read_scoped_queryset, system_queryset
+from angee.permissions import effective_rebac_definition, require_rebac_queryset
 
 _ACTOR = "_angee_permission_actor"
 
@@ -67,7 +66,8 @@ def held_permissions(
     ):
         annotations = permission_annotations(owner, names)
         values = (
-            system_queryset(owner).filter(pk=record.pk).annotate(**annotations).values(*annotations).first()
+            require_rebac_queryset(owner).system_context(reason="graphql.permissions")
+            .filter(pk=record.pk).annotate(**annotations).values(*annotations).first()
             or {}
         )
     return frozenset(name for name in names if values.get(f"_angee_permission_{name}"))
@@ -125,8 +125,11 @@ def _permission_annotation(model: type[models.Model], name: str, info: Any = Non
 
 def permission_expression(queryset: models.QuerySet[Any], name: str) -> models.Exists:
     """Project one permission using the target queryset's actor and native scope."""
-    queryset = read_scoped_queryset(queryset.model, relation_actor(queryset), action=name)
-    return models.Exists(aggregate_scoped_queryset(queryset).filter(pk=models.OuterRef("pk")))
+    actor = relation_actor(queryset)
+    if actor is None:
+        return models.Exists(queryset.model._base_manager.none())
+    scoped = require_rebac_queryset(queryset.model).with_actor(actor).with_action(name).scoped_for_aggregate()
+    return models.Exists(scoped.filter(pk=models.OuterRef("pk")))
 
 
 def permissions_field(names: Iterable[str]) -> Any:

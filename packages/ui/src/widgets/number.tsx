@@ -83,6 +83,15 @@ function NumberCell({ value }: WidgetRenderProps<NumericWidgetValue>): ReactElem
   return <span className={textRoleVariants({ numeric: true })}>{formatNumber(value, { useGrouping: false, maximumFractionDigits: 20 }) || "—"}</span>;
 }
 
+function PercentRead({ value }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
+  const text = formatNumber(value, { style: "unit", unit: "percent", maximumFractionDigits: 2 });
+  // An exact calculation can retain an unbounded percentage as a Decimal
+  // infinity string. Keep that fact visible without changing numeric formatting's
+  // general policy of omitting invalid or non-finite inputs.
+  const infinity = value === Infinity || value === -Infinity || value === "Infinity" || value === "-Infinity";
+  return <span className={textRoleVariants({ role: "value", numeric: true })}>{text || (infinity ? String(value) : "")}</span>;
+}
+
 export const integerWidget = {
   edit: IntegerEdit,
   read: NumberRead,
@@ -93,6 +102,12 @@ export const floatWidget = {
   edit: FloatEdit,
   read: NumberRead,
   cell: NumberCell,
+} satisfies WidgetDefinition<NumericWidgetValue>;
+
+/** Read percentage points (65.687 means 65.69%), retaining the exact source value. */
+export const percentWidget = {
+  read: PercentRead,
+  cell: PercentRead,
 } satisfies WidgetDefinition<NumericWidgetValue>;
 
 function normaliseNumber(value: NumericWidgetValue | undefined): number | null {

@@ -8,12 +8,15 @@ and explicit database alias expected by already-materialized migrations.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from rebac import ObjectRef, RelationshipTuple
 from rebac.models import active_relationship_model
+
+if TYPE_CHECKING:
+    from rebac.models import Relationship, RelationshipRegistry
 
 _DENORMALIZED_FIELDS = frozenset(
     {
@@ -50,12 +53,12 @@ def _field_names(model: type[models.Model]) -> frozenset[str]:
     return frozenset(field.name for field in model._meta.local_fields)
 
 
-def _require_field(
+def _require_field[F: models.Field](
     model: type[models.Model],
     name: str,
-    field_type: type[models.Field],
+    field_type: type[F],
     **attributes: Any,
-) -> models.Field:
+) -> F:
     field = model._meta.get_field(name)
     if not isinstance(field, field_type) or any(
         getattr(field, attribute) != expected for attribute, expected in attributes.items()
@@ -374,8 +377,10 @@ def retarget_historical_resource(
         if storage == "denormalized":
             if rows.filter(subject_type=old.resource_type, subject_id=old.resource_id).exists():
                 raise ImproperlyConfigured("A historical resource used as a subject cannot be retargeted.")
+            # The exact historical schema gate above proves the upstream field contract.
+            denormalized = cast("models.Manager[Relationship]", rows)
             old_rows = (
-                rows.select_for_update()
+                denormalized.select_for_update()
                 .filter(
                     resource_type=old.resource_type,
                     resource_id=old.resource_id,
@@ -384,7 +389,7 @@ def retarget_historical_resource(
             )
             for row in old_rows:
                 duplicate = (
-                    rows.select_for_update()
+                    denormalized.select_for_update()
                     .filter(
                         resource_type=new.resource_type,
                         resource_id=new.resource_id,
@@ -438,23 +443,27 @@ def retarget_historical_resource(
             if old_value and not new_value:
                 resources.filter(pk=new_row.pk).update(**{field: old_value})
 
-        old_rows = rows.select_for_update().filter(resource_fk_id=old_row.pk).order_by("pk")
-        for row in old_rows:
-            duplicate = (
-                rows.select_for_update()
+        registered = cast("models.Manager[RelationshipRegistry]", rows)
+        registry_rows = registered.select_for_update().filter(resource_fk_id=old_row.pk).order_by("pk")
+        for registry_row in registry_rows:
+            registry_duplicate = (
+                registered.select_for_update()
                 .filter(
                     resource_fk_id=new_row.pk,
-                    relation=row.relation,
-                    subject_fk_id=row.subject_fk_id,
-                    optional_subject_relation=row.optional_subject_relation,
-                    caveat_name=row.caveat_name,
+                    relation=registry_row.relation,
+                    subject_fk_id=registry_row.subject_fk_id,
+                    optional_subject_relation=registry_row.optional_subject_relation,
+                    caveat_name=registry_row.caveat_name,
                 )
                 .first()
             )
-            if duplicate is not None:
-                if duplicate.caveat_context != row.caveat_context or duplicate.expires_at != row.expires_at:
+            if registry_duplicate is not None:
+                if (
+                    registry_duplicate.caveat_context != registry_row.caveat_context
+                    or registry_duplicate.expires_at != registry_row.expires_at
+                ):
                     raise ImproperlyConfigured("Historical resource retargeting found conflicting grant facts.")
-                rows.filter(pk=row.pk)._raw_delete(using)
+                rows.filter(pk=registry_row.pk)._raw_delete(using)
             else:
-                rows.filter(pk=row.pk).update(resource_fk_id=new_row.pk)
+                rows.filter(pk=registry_row.pk).update(resource_fk_id=new_row.pk)
         resources.filter(pk=old_row.pk)._raw_delete(using)

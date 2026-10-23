@@ -20,3 +20,4 @@ export {
 export { useRefineNotificationProvider } from "./refine-notification";
 export { errorMessage } from "./error-message";
 export { useBusyRun, type BusyRun } from "./use-busy-run";
+export { useSecretReveal, type RevealedSecret, type SecretRevealOptions } from "./secret-reveal";

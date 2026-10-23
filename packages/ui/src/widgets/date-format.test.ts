@@ -9,8 +9,10 @@ import {
   formatDateStorage,
   formatDateTime,
   formatDateTimeStorage,
-  formatDuration,
+  formatDayLabel,
+  formatMonth,
   formatRelativeTime,
+  formatTime,
   formatTimeInput,
   setHumanDateLocale,
   valueLabel,
@@ -29,14 +31,39 @@ describe("date formatting", () => {
     expect(formatDateRange("2026-09-29", "2026-10-24", { now, locale: fr })).toBe("29 sept. – 24 oct.");
   });
 
-  test("formats elapsed time and duration through their locale owners", () => {
+  test("formats elapsed time through its locale owners", () => {
     const now = new Date(2026, 8, 30, 12);
     const earlier = new Date(2026, 8, 30, 10);
     expect(formatRelativeTime(earlier, { now, locale: enUS })).toBe("about 2 hours ago");
     expect(formatRelativeTime(earlier, { now, locale: fr })).toContain("2 heures");
-    expect(formatDuration(2.5, "week", { locale: enUS })).toBe("2.5 wk");
-    expect(formatDuration(2.5, "week", { locale: enUS, style: "full" })).toBe("2.5 weeks");
-    expect(formatDuration(2.5, "week", { locale: fr, style: "full" })).toContain("2,5");
+  });
+
+  test("formats clock times and month buckets", () => {
+    expect(formatTime("2026-06-18T13:45:00", { locale: enUS })).toBe("1:45 PM");
+    expect(formatTime(new Date("2026-06-18T13:45:12Z"), { locale: "fr-FR", timeZone: "UTC" })).toBe("13:45");
+    expect(formatMonth("2026-09-01", { locale: enUS })).toBe("September 2026");
+    expect(formatMonth("2026-09-01", { locale: "fr-FR" })).toBe("septembre 2026");
+    expect(formatTime(null)).toBe("");
+    expect(formatMonth("")).toBe("");
+  });
+
+  test("labels day buckets as today, yesterday, a weekday, then the date", () => {
+    const now = new Date(2026, 8, 30, 12);
+    expect(formatDayLabel(new Date(2026, 8, 30, 8), { now, locale: enUS })).toBe("Today");
+    expect(formatDayLabel(new Date(2026, 8, 29, 23), { now, locale: enUS })).toBe("Yesterday");
+    expect(formatDayLabel(new Date(2026, 8, 28, 9), { now, locale: enUS })).toBe("Monday");
+    expect(formatDayLabel(new Date(2026, 8, 23, 9), { now, locale: enUS })).toBe("Sep 23");
+    expect(formatDayLabel(new Date(2025, 8, 23, 9), { now, locale: enUS })).toBe("Sep 23, 2025");
+    expect(formatDayLabel(new Date(2026, 8, 29, 23), { now, locale: "fr-FR" })).toBe("Hier");
+    expect(formatDayLabel(new Date(2026, 9, 1, 9), { now, locale: enUS })).toBe("Oct 1");
+    expect(formatDayLabel("bad", { now })).toBe("");
+  });
+
+  test("day buckets follow the requested time zone", () => {
+    const now = new Date("2026-09-30T12:00:00Z");
+    const instant = new Date("2026-09-30T02:00:00Z");
+    expect(formatDayLabel(instant, { now, locale: enUS, timeZone: "UTC" })).toBe("Today");
+    expect(formatDayLabel(instant, { now, locale: enUS, timeZone: "America/Los_Angeles" })).toBe("Yesterday");
   });
 
   test("accepts a fixed app language tag without consulting the browser locale", () => {
@@ -44,7 +71,6 @@ describe("date formatting", () => {
     expect(formatDate("2026-09-29", { now, locale: "fr-FR" })).toBe("29 sept.");
     expect(formatDateRange("2026-09-29", "2026-10-24", { now, locale: "fr-FR" })).toBe("29 sept. – 24 oct.");
     expect(formatRelativeTime(new Date(2026, 8, 30, 10), { now, locale: "fr-FR" })).toContain("il y a 2 heures");
-    expect(formatDuration(2.5, "week", { locale: "fr-FR", style: "full" })).toContain("2,5");
   });
 
   test("uses the runtime language by default and lets an explicit locale win", () => {
@@ -53,7 +79,7 @@ describe("date formatting", () => {
     expect(formatDate("2026-09-29", { now })).toBe("29 sept.");
     expect(formatDateRange("2026-09-29", "2026-10-24", { now })).toBe("29 sept. – 24 oct.");
     expect(formatRelativeTime(new Date(2026, 8, 30, 10), { now })).toContain("il y a 2 heures");
-    expect(formatDuration(2.5, "week", { style: "full" })).toContain("2,5");
+    expect(formatDayLabel(new Date(2026, 8, 30, 8), { now })).toBe("Aujourd’hui");
     expect(formatDate("2026-09-29", { now, locale: enUS })).toBe("Sep 29");
   });
 
@@ -88,7 +114,6 @@ describe("date formatting", () => {
     expect(formatDateTime(new Date(Number.NaN))).toBe("");
     expect(formatDateRange("2026-09-29", null, { now: new Date(2026, 8, 30) })).toBe("Sep 29");
     expect(formatRelativeTime("bad")).toBe("");
-    expect(formatDuration(Number.NaN, "week")).toBe("");
     expect(dateFromValue("not a date")).toBeNull();
     expect(valueLabel(new Date(Number.NaN))).toBe("");
   });

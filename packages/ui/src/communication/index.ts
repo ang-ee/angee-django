@@ -1,23 +1,29 @@
-export { Chatter, type ChatterProps } from "./Chatter";
+export { Chatter, useActiveChatterView, type ChatterProps } from "./Chatter";
 export { StepList, type StepListItem } from "./StepList";
-// Retired with django-reversion; the export stays so consumer imports compile until angee 0.4.0.
-export { RevisionsTab, type RevisionsTabProps } from "./RevisionsTab";
-export { CHATTER_CONTAINERS } from "./chatter-containers";
 export {
-  useRecordPeek,
-  useRecordPeekContext,
-  type RecordPeekOpen,
-  type RecordPeekOpenOptions,
-  type RecordPeekReference,
-} from "./record-peek";
+  TIMELINE_SCOPE_ALL,
+  TIMELINE_SCOPE_NEEDS_ME,
+  TimelineRail,
+  type TimelineRailEntry,
+  type TimelineRailKind,
+  type TimelineRailProps,
+} from "./TimelineRail";
+export { PaneLabel, PaneLabelAction, PaneLabelPopover, PaneRow, PaneRows, ScopeChip, type PaneLabelProps, type PaneRowProps, type ScopeChipProps } from "./pane-list";
+export { CHATTER_CONTAINERS, RELATED_GROUPS_CONTAINER, RELATED_TAB_ID } from "./chatter-containers";
+export { RelatedPane, RelatedCountProbe, useRelatedGroups } from "./RelatedPane";
 export {
   ChatterProvider,
   CHATTER_TAB_SEARCH_KEY,
+  CHATTER_TARGET_SEARCH_KEY,
+  CHATTER_FOCUS_SEARCH_KEY,
+  CHATTER_FROM_SEARCH_KEY,
   useChatter,
   useChatterContent,
   type ChatterContent,
   type ChatterContextValue,
+  type ChatterOpenOptions,
   type ChatterProviderProps,
+  type ChatterSelection,
   type ChatterTab,
   type ChatterTabId,
 } from "./chatter-context";
@@ -28,7 +34,6 @@ export {
   ChatCommandItem,
   ChatCommandList,
   ChatHeader,
-  ChatHeaderAction,
   ChatTypingIndicator,
   ContextBlock,
   MessageReasoningFrame,
@@ -42,7 +47,6 @@ export {
   type ChatCommandEmptyProps,
   type ChatCommandItemProps,
   type ChatCommandListProps,
-  type ChatHeaderActionProps,
   type ChatHeaderProps,
   type ChatTypingIndicatorProps,
   type ContextBlockProps,
@@ -62,7 +66,7 @@ export {
   MessageRow,
   ReactionBar,
   ReactionPicker,
-  reactionsFromGroups,
+  useReactionGroups,
   messageComposerInputClassName,
   type MessageActionsProps,
   type MessageAttachmentChipProps,
@@ -79,6 +83,5 @@ export {
   type Reaction,
   type ReactionBarProps,
   type ReactionGroup,
-  type ReactionGroupCopy,
   type ReactionPickerProps,
 } from "./message";

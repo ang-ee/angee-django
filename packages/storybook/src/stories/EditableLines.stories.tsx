@@ -168,7 +168,7 @@ function EditableLinesDemo() {
             lines={lines}
             primaryFields={["label"]}
           />
-          <pre aria-label="Live line values" className="overflow-auto rounded-8 bg-inset p-3 text-xs text-fg">
+          <pre aria-label="Live line values" className="overflow-auto rounded-8 bg-inset p-3 text-12 text-fg">
             {JSON.stringify(liveLines, null, 2)}
           </pre>
         </div>

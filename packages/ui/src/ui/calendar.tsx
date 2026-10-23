@@ -11,6 +11,9 @@ import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { sectionEyebrowVariants } from "./section-eyebrow";
 
+/**
+ * @kind token
+ */
 export const calendarVariants = tv({
   slots: {
     root: "relative p-2",
@@ -47,14 +50,14 @@ export const calendarVariants = tv({
     disabled: "[&_button]:cursor-not-allowed [&_button]:text-fg-subtle",
     rangeStart: "[&_button]:rounded-r-none",
     rangeMiddle:
-      "[&_button]:rounded-none [&_button]:bg-brand-soft [&_button]:text-brand-soft-text",
+      "[&_button]:rounded-none [&_button]:selected",
     rangeEnd: "[&_button]:rounded-l-none",
   },
   variants: {
     size: {
       sm: {
         weekday: "h-btn-sm",
-        day: "size-btn-sm text-xs",
+        day: "size-btn-sm text-12",
         dayButton: "size-btn-sm",
       },
       md: "",
@@ -66,13 +69,15 @@ export const calendarVariants = tv({
 });
 
 export type CalendarRecipeProps = VariantProps<typeof calendarVariants>;
-export type CalendarSize = NonNullable<CalendarRecipeProps["size"]>;
 export type CalendarClassNames = DayPickerClassNames;
 export type CalendarProps = DayPickerProps &
   CalendarRecipeProps & {
     classNames?: Partial<CalendarClassNames>;
   };
 
+/**
+ * @kind token
+ */
 export function calendarClassNames(
   props?: CalendarRecipeProps,
 ): Partial<CalendarClassNames> {
@@ -147,6 +152,9 @@ function CalendarChevron({
   );
 }
 
+/**
+ * @kind primitive
+ */
 export function Calendar({
   classNames,
   components,

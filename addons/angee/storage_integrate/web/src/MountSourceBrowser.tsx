@@ -7,12 +7,16 @@ import {
   Button,
   ErrorBanner,
   Glyph,
-  Input,
+  InlineEmpty,
   LoadingPanel,
+  PaneRow,
+  PaneRows,
+  SearchInput,
   cn,
   errorMessage,
   mutationDialogValueCodecs,
   textRoleVariants,
+  useDebouncedText,
   type DescriptorFieldControlProps,
 } from "@angee/ui";
 import * as React from "react";
@@ -46,14 +50,11 @@ export function MountSourceBrowser({
   const t = useStorageIntegrateT();
   const currentValue = mutationDialogValueCodecs.string(value) ?? "";
   const [token, setToken] = React.useState(currentValue);
-  const [manualToken, setManualToken] = React.useState(currentValue);
-
-  React.useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setToken(manualToken.trim());
-    }, BROWSE_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [manualToken]);
+  // The typed location is a draft until the debounce commits it as the browsed token.
+  const manual = useDebouncedText(token, (next) => {
+    setToken(next.trim());
+    onChange("");
+  }, BROWSE_DEBOUNCE_MS);
 
   const variables = React.useMemo<BrowseVariables>(
     () => ({
@@ -68,7 +69,6 @@ export function MountSourceBrowser({
   const navigate = React.useCallback(
     (nextToken: string) => {
       setToken(nextToken);
-      setManualToken(nextToken);
       onChange("");
     },
     [onChange],
@@ -103,18 +103,16 @@ export function MountSourceBrowser({
       </div>
 
       {result?.supports_manual_token ? (
-        <Input
+        <SearchInput
           id={id}
           aria-labelledby={labelledBy}
           aria-describedby={describedBy}
           invalid={invalid}
           placeholder={t("mount.browse.manualHint")}
-          value={manualToken}
+          value={manual.draft}
           disabled={readOnly}
-          onChange={(event) => {
-            setManualToken(event.currentTarget.value);
-            onChange("");
-          }}
+          onChange={(event) => { manual.setDraft(event.currentTarget.value); manual.commit(event.currentTarget.value); }}
+          onClear={() => { manual.setDraft(""); manual.commit(""); }}
         />
       ) : null}
 
@@ -174,47 +172,24 @@ function LocationList({
     return <LoadingPanel density="inline" message={t("mount.browse.loading")} />;
   }
   if (entries.length === 0) {
-    return <ListHint>{t("mount.browse.empty")}</ListHint>;
+    return <InlineEmpty icon="folder" label={t("mount.browse.empty")} />;
   }
+  // Each location is a pane row; opening a navigable one browses into it.
   return (
-    <ul className="flex max-h-72 flex-col gap-1 overflow-auto">
+    <PaneRows className="max-h-72 overflow-auto">
       {entries.map((entry) => {
         const reason = displayBlockedReason(entry, t);
+        const navigable = !readOnly && entry.is_navigable;
         return (
           <li key={entry.token}>
-            <button
-              type="button"
-              disabled={readOnly || !entry.is_navigable}
-              onClick={() => onNavigate(entry.token)}
-              className="flex w-full items-center gap-3 rounded-6 border border-border bg-sheet px-3 py-2 text-left outline-none transition-colors hover:border-border-strong focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <Glyph decorative name="folder" className="shrink-0 text-fg-muted" />
-              <span className="min-w-0 flex-1 truncate text-13 text-fg">
-                {entry.label}
-              </span>
-              {!entry.is_mountable && reason ? (
-                <span className="max-w-64 truncate text-12 text-fg-muted">
-                  {reason}
-                </span>
-              ) : null}
-              <Glyph
-                decorative
-                name="chevron-right"
-                className="shrink-0 text-fg-muted"
-              />
-            </button>
+            <PaneRow icon="folder" title={entry.label} detail={!entry.is_mountable && reason ? reason : undefined}
+              label={navigable ? t("mount.browse.open") : undefined}
+              verb={navigable ? t("mount.browse.open") : undefined}
+              onOpen={navigable ? () => onNavigate(entry.token) : undefined} />
           </li>
         );
       })}
-    </ul>
-  );
-}
-
-function ListHint({ children }: { children: React.ReactNode }): React.ReactElement {
-  return (
-    <p className={cn(textRoleVariants({ role: "meta" }), "px-1 py-3")}>
-      {children}
-    </p>
+    </PaneRows>
   );
 }
 

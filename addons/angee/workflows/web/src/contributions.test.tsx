@@ -3,12 +3,12 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ShellPageTestProviders } from "@angee/app/testing";
 import { createUiTestProviders } from "@angee/ui/testing";
-import { createRouteHref, type ChatterViewContext } from "@angee/ui";
+import { createRouteHref } from "@angee/ui";
 import type { DocumentType } from "@angee/gql/console";
 import type { CustomParams } from "@refinedev/core";
 
-import { DecisionRunOrigin, decisionRunOrigin, recordTimelineTab } from "./contributions";
-import { DecisionWaitingRunsDocument } from "./documents.console";
+import { DecisionRunOrigin, decisionRunOrigin } from "./contributions";
+import { DecisionStepsDocument } from "./documents.console";
 
 vi.mock("@angee/decisions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/decisions")>()),
@@ -19,9 +19,9 @@ const { Provider, clearClients, clients } = createUiTestProviders({
   apiUrl: "test://workflow-origin", queryClientConfig: { defaultOptions: { queries: { retry: false } } },
 });
 afterEach(() => { cleanup(); clearClients(); });
-type WaitingRuns = DocumentType<typeof DecisionWaitingRunsDocument>;
-const visible: WaitingRuns = { steprun: [{ id: "wsr_review", node_label: "Review document", map_index: 0, is_mapped: false,
-  run: { id: "wfr_review", display_name: "Record review" },
+type WaitingRuns = DocumentType<typeof DecisionStepsDocument>;
+const visible: WaitingRuns = { steprun: [{ id: "wsr_review", node_label: "Review document", map_index: 0, is_mapped: false, status: "WAITING",
+  run: { id: "wfr_review", display_name: "Record review · 2026-10-03 10:00", version: { workflow: { display_name: "Record review" } } },
 }] };
 
 function origin(data: WaitingRuns = visible, error = false, pending = false) {
@@ -36,13 +36,14 @@ function origin(data: WaitingRuns = visible, error = false, pending = false) {
   return { ...result, custom };
 }
 
-test("decision origin asks for the current decision and links its waiting run and step", async () => {
+test("decision origin asks for the current decision and links the run and step that asked it", async () => {
   const { custom } = origin();
   expect((await screen.findByRole("link", { name: "Record review" })).getAttribute("href")).toBe("/workflows/runs/wfr_review");
+  expect(screen.getByText(/Asked in/)).toBeTruthy();
   expect(screen.getByText(/· Review document$/)).toBeTruthy();
   expect(screen.queryByText(/\[0\]/)).toBeNull();
   expect(custom.mock.calls[0]?.[0].meta?.gqlVariables).toEqual({ decision: "dcn_review" });
-  expect(custom.mock.calls[0]?.[0].meta?.gqlQuery).toBe(DecisionWaitingRunsDocument);
+  expect(custom.mock.calls[0]?.[0].meta?.gqlQuery).toBe(DecisionStepsDocument);
   const query = clients.flatMap((client) => client.getQueryCache().getAll())
     .find((entry) => entry.meta?.angeeRecords);
   expect(query?.meta?.angeeRecords).toEqual([{ model: "decisions.Decision", id: "dcn_review" }]);
@@ -52,7 +53,7 @@ test("decision origin asks for the current decision and links its waiting run an
 
 test("mapped waiting rows show item zero without inferring mapping from the node key", async () => {
   origin({ steprun: visible.steprun.map((step) => ({ ...step, is_mapped: true })) });
-  expect(await screen.findByText(/· Review document \[0\]/)).toBeTruthy();
+  expect(await screen.findByText(/· Review document · 1$/)).toBeTruthy();
 });
 
 test("the optional decision origin occupies no space while loading", () => {
@@ -61,8 +62,8 @@ test("the optional decision origin occupies no space while loading", () => {
   expect(screen.queryByRole("status")).toBeNull();
 });
 
-test.each([{ steprun: [] }, { steprun: [{ id: "wsr_hidden", node_label: "Hidden", map_index: 0, is_mapped: false, run: null }] }])(
-  "decisions without a visible waiting run render no contribution: %j", async ({ steprun }) => {
+test.each([{ steprun: [] }, { steprun: [{ id: "wsr_hidden", node_label: "Hidden", map_index: 0, is_mapped: false, status: "WAITING" as const, run: null }] }])(
+  "decisions without a visible asking run render no contribution: %j", async ({ steprun }) => {
     const { container, custom } = origin({ steprun });
     await vi.waitFor(() => expect(custom).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(container.textContent).toBe(""));
@@ -74,29 +75,6 @@ test("failed origin reads show the shared error surface", async () => {
   expect(await screen.findByText("Waiting runs are unavailable.")).toBeTruthy();
 });
 
-const runsTab = recordTimelineTab.content;
-
-test("the record contribution only mounts for identified records", () => {
-  const context: ChatterViewContext = { pathname: "/notes/nte_7", params: { id: "nte_7" },
-    route: { name: "notes.record", path: "/notes/$id", viewType: "notes/note", canonicalLabel: "notes.Note" },
-    view: { kind: "record", type: "notes/note", sqid: "nte_7" },
-  };
-  expect(runsTab.when?.(context)).toBe(true);
-  expect(runsTab.when?.({ ...context, view: { kind: "list", type: "notes/note" } })).toBe(false);
-  expect(runsTab.when?.({ ...context, route: undefined })).toBe(false);
-  for (const model of ["Workflow", "WorkflowVersion", "WorkflowRun", "StepRun", "StepAttempt", "StepRecord", "Trigger", "TriggerEvent"]) {
-    expect(runsTab.when?.({ ...context, route: { ...context.route!, canonicalLabel: `workflows.${model}` } })).toBe(false);
-  }
-  expect(runsTab.render?.({ ...context, route: undefined })).toBeNull();
-});
-
-test("the contextual contribution is labeled as Timeline through the record aside", () => {
-  render(<>{runsTab.label}</>);
-  expect(screen.getByText("Timeline")).toBeTruthy();
-  expect(runsTab.aliases).toBeUndefined();
-  expect(recordTimelineTab.sequence).toBe(40);
-});
-
-test("the decision origin child renders the waiting-run origin", () => {
+test("the decision origin child renders the asking-run origin", () => {
   expect(decisionRunOrigin).toMatchObject({ content: { type: DecisionRunOrigin } });
 });

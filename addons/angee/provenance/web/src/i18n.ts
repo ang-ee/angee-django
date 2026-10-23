@@ -2,11 +2,12 @@ import { createNamespaceT } from "@angee/ui";
 
 // English fallback strings for the provenance addon's own copy, under the
 // `provenance` namespace. Enum tokens (`history.activity.*`, `history.action.*`,
-// `history.statement.*`) are keyed by the lower-case wire token of the owner's
-// choices; field labels come from the resource metadata, not from here.
+// `history.statement.*`, `history.sourceKind.*`) label the authored history
+// projection; field labels come from the subject resource metadata.
 export const enProvenanceMessages: Record<string, string> = {
-  "history.title": "History",
-  "history.openTab": "Open history",
+  "fieldProvenance.source": "Source",
+  "fieldProvenance.correction": "Correction",
+  "fieldProvenance.unverified": "Unverified",
   "history.loading": "Loading history",
   "history.unavailable": "History is unavailable",
   "history.noRecordTitle": "No record selected",
@@ -14,6 +15,15 @@ export const enProvenanceMessages: Record<string, string> = {
   "history.emptyTitle": "No history yet",
   "history.emptyDescription": "Changes to this record will appear here with who made them and why.",
   "history.system": "System",
+  "history.sourceKind.person": "Person",
+  "history.sourceKind.systemOfRecord": "System of record",
+  "history.sourceKind.directory": "Directory",
+  "history.sourceKind.network": "Network",
+  "history.sourceKind.import": "Import",
+  "history.sourceKind.seed": "Seed",
+  "history.sourceKind.document": "Document",
+  "history.sourceKind.extraction": "Extraction",
+  "history.sourceKind.rule": "Rule",
   "history.details": "Details",
   "history.changes_one": "{count} field changed",
   "history.changes_other": "{count} fields changed",
@@ -33,11 +43,11 @@ export const enProvenanceMessages: Record<string, string> = {
   "history.revertConfirm.title": "Revert this change?",
   "history.revertConfirm.body":
     "The record returns to the state before this change. Later changes to the same rows refuse the revert; the revert is recorded as a new entry.",
-  "history.newer": "Newer",
-  "history.older": "Older",
+  "history.pagerUnit": "changes",
   "history.action.create": "Created",
   "history.action.update": "Updated",
   "history.action.delete": "Deleted",
+  "history.action.other": "Changed",
   "history.activity.manual": "edited",
   "history.activity.pull": "synced in",
   "history.activity.push": "synced out",
@@ -46,12 +56,15 @@ export const enProvenanceMessages: Record<string, string> = {
   "history.activity.revert": "reverted",
   "history.activity.seed": "seeded",
   "history.activity.system": "system write",
+  "history.activity.run": "ran",
+  "history.activity.other": "changed",
   "history.outcome.failure": "Failed",
   "history.statement.asserted": "asserted",
   "history.statement.applied": "applied",
   "history.statement.withdrawn": "withdrawn",
   "history.statement.quarantined": "quarantined",
   "history.statement.deprecated": "deprecated",
+  "history.statement.other": "recorded",
   "history.statement.confidence": "confidence {confidence}",
 };
 

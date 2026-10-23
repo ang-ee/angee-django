@@ -10,7 +10,7 @@ from django.db import DataError, OperationalError, connection
 from django.db.models.functions import Now
 from rebac import system_context
 
-from angee.base.scoping import system_queryset
+from angee.graphql.publishing import change_published
 from angee.workflows import managers
 from angee.workflows import runner as runner_module
 from angee.workflows.managers import StepRunQuerySet, WorkflowRunQuerySet
@@ -26,12 +26,12 @@ pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("
 
 def retained_step(run, key="entry"):
     """Read the actual execution row without changing the body's requester."""
-    return system_queryset(StepRun).get(run=run, node_key=key)
+    return StepRun.system_queryset().get(run=run, node_key=key)
 
 
 def terminal_fields(run):
     """Observe the run fields that terminal cleanup must leave immutable."""
-    return system_queryset(WorkflowRun).filter(pk=run.pk).values(
+    return WorkflowRun.system_queryset().filter(pk=run.pk).values(
         "status", "outcome", "output", "error", "finished_at",
     ).get()
 
@@ -76,7 +76,7 @@ def test_active_settlement_data_error_closes_attempt_and_can_be_retried(executio
     step.refresh_from_db()
     assert settlements == ["done", "fail"]
     assert step.status == StepRunStatus.FAILED
-    attempt = system_queryset(StepAttempt).get(step_run=step)
+    attempt = StepAttempt.system_queryset().get(step_run=step)
     assert attempt.result == "failed" and attempt.finished_at is not None
     assert attempt.error == "DataError: Result cannot be stored" and "DataError" in attempt.stacktrace
     assert terminal_fields(run)["status"] == RunStatus.FAILED
@@ -121,7 +121,7 @@ def test_attempt_diagnostics_are_sanitized_to_their_declared_column_bounds(execu
     workflow = load_workflow(document("entry"), key="bounded_diagnostics", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     assert runner.execute(retained_step(run).pk)
-    attempt = system_queryset(StepAttempt).get(step_run__run=run)
+    attempt = StepAttempt.system_queryset().get(step_run__run=run)
     for name, bound in bounds.items():
         value = getattr(attempt, name)
         assert len(value) == bound and "\x00" not in value
@@ -154,8 +154,8 @@ def test_database_settlement_operational_error_rolls_back_claim_for_redelivery(
     with pytest.raises(OperationalError, match="Retry the DATABASE transaction"):
         runner.execute(step.pk)
     assert retained_step(run).status == StepRunStatus.READY
-    assert not system_queryset(StepAttempt).filter(step_run=step).exists()
-    assert system_queryset(Workflow).get(pk=workflow.pk).name != "Body transaction"
+    assert not StepAttempt.system_queryset().filter(step_run=step).exists()
+    assert Workflow.system_queryset().get(pk=workflow.pk).name != "Body transaction"
     monkeypatch.setattr(StepRunQuerySet, "settle", original)
     assert runner.execute(step.pk)
     assert terminal_fields(run)["status"] == RunStatus.SUCCEEDED
@@ -200,7 +200,7 @@ def test_effect_marker_controls_retryable_body_failures(execution, register_step
         StepRun.objects.retry_step(step, actor=actor, accept_duplicate=True)
     assert runner.execute(step.pk)
     assert acknowledgements == [False, not idempotent]
-    attempts = list(system_queryset(StepAttempt).filter(step_run=step).order_by("number"))
+    attempts = list(StepAttempt.system_queryset().filter(step_run=step).order_by("number"))
     assert attempts[0].effect_started_at is not None
     assert attempts[1].acknowledged_by_id == (None if idempotent else actor.pk)
     assert terminal_fields(run)["status"] == RunStatus.SUCCEEDED
@@ -228,7 +228,7 @@ def test_retry_checks_earlier_effect_markers_after_an_unmarked_failed_attempt(ex
     assert runner.execute(step.pk)
     StepRun.objects.retry_step(step, actor=actor, accept_duplicate=True)
     assert runner.execute(step.pk)
-    assert system_queryset(StepAttempt).get(step_run=step, number=2).effect_started_at is None
+    assert StepAttempt.system_queryset().get(step_run=step, number=2).effect_started_at is None
     with pytest.raises(ValidationError, match="duplicate"):
         StepRun.objects.retry_step(step, actor=actor)
     StepRun.objects.retry_step(step, actor=actor, accept_duplicate=True)
@@ -303,8 +303,8 @@ def test_expired_attempt_rejects_every_context_fence_before_reaping(execution, r
     step = retained_step(run)
     assert runner.execute(step.pk) is False
     assert len(checked) == 4
-    assert not system_queryset(StepRecord).filter(step_run=step).exists()
-    attempt = system_queryset(StepAttempt).get(step_run=step)
+    assert not StepRecord.system_queryset().filter(step_run=step).exists()
+    attempt = StepAttempt.system_queryset().get(step_run=step)
     assert attempt.effect_started_at is None and attempt.finished_at is None
     assert runner.reap() == 1
     assert retained_step(run).output == {"error": "The attempt deadline expired."}
@@ -388,9 +388,9 @@ def test_cancel_abandoned_failed_run_closes_open_siblings_without_changing_termi
     assert terminal_fields(run) == snapshot
     assert retained_step(run, "sibling").status == StepRunStatus.CANCELED
     assert retained_step(run, "failed").status == StepRunStatus.FAILED
-    assert not system_queryset(StepAttempt).filter(step_run__run=run, finished_at__isnull=True).exists()
+    assert not StepAttempt.system_queryset().filter(step_run__run=run, finished_at__isnull=True).exists()
     if sibling_status == "running":
-        assert system_queryset(StepAttempt).get(step_run=sibling).result == "superseded"
+        assert StepAttempt.system_queryset().get(step_run=sibling).result == "superseded"
 
 
 @pytest.mark.parametrize("result", ["failed", "superseded", "succeeded"])
@@ -413,7 +413,7 @@ def test_artifacts_commit_only_with_successful_attempt_evidence(execution, regis
         def run(self, ctx):
             evidence = ctx.record(ctx.run, label="Result evidence")
             assert evidence.pk is None
-            assert not system_queryset(StepRecord).filter(step_run=ctx.step_run).exists()
+            assert not StepRecord.system_queryset().filter(step_run=ctx.step_run).exists()
             if result == "failed":
                 return ctx.fail("The work failed")
             if result == "superseded":
@@ -426,30 +426,35 @@ def test_artifacts_commit_only_with_successful_attempt_evidence(execution, regis
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step = retained_step(run)
     assert runner.execute(step.pk) is (result != "superseded")
-    assert system_queryset(StepRecord).filter(step_run=step).count() == (1 if result == "succeeded" else 0)
+    assert StepRecord.system_queryset().filter(step_run=step).count() == (1 if result == "succeeded" else 0)
     if result == "superseded":
         assert len(publications) == after_cancel[0]
 
 
-def test_reprocess_origin_is_present_at_its_first_change_publication(execution, monkeypatch):
+def test_reprocess_origin_is_present_at_its_first_change_publication(execution):
     """Observers never receive a replacement run whose admission still looks manual."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key="published_reprocess_origin", actor=actor)
     predecessor = WorkflowRun.objects.start(workflow, actor=actor)
     assert runner.execute(retained_step(predecessor).pk)
     observations = []
-    original = runner_module.publish_change
 
-    def observe(run, **kwargs):
+    def observe(sender, payload, **kwargs):
+        run = payload.instance
         observations.append((
-            run.pk, run.origin, run.reprocess_of_id,
-            system_queryset(WorkflowRun).get(pk=run.pk).reprocess_of_id,
+            payload.action, run.pk, run.origin, run.reprocess_of_id,
+            WorkflowRun.system_queryset().get(pk=run.pk).reprocess_of_id,
         ))
-        return original(run, **kwargs)
 
-    monkeypatch.setattr(runner_module, "publish_change", observe)
-    replacement = WorkflowRun.objects.reprocess(predecessor, actor=actor)
-    assert observations == [(replacement.pk, "reprocess", predecessor.pk, predecessor.pk)]
+    change_published.connect(observe, sender=WorkflowRun)
+    try:
+        replacement = WorkflowRun.objects.reprocess(predecessor, actor=actor)
+    finally:
+        change_published.disconnect(observe, sender=WorkflowRun)
+    assert observations == [
+        (action, replacement.pk, "reprocess", predecessor.pk, predecessor.pk)
+        for action in ("create", "update")
+    ]
 
 
 def test_cancel_authorizes_once_before_acquiring_the_run_lock(execution, monkeypatch):
@@ -491,7 +496,7 @@ def test_heartbeat_preserves_the_absolute_worker_settlement_window(execution, re
         def run(self, ctx):
             with system_context(reason="test elapsed worker execution time"):
                 StepAttempt.objects.filter(pk=ctx.attempt.pk).update(started_at=Now() - timedelta(seconds=70))
-            started_at = system_queryset(StepAttempt).get(pk=ctx.attempt.pk).started_at
+            started_at = StepAttempt.system_queryset().get(pk=ctx.attempt.pk).started_at
             ctx.heartbeat()
             assert ctx.now < ctx.step_run.deadline_at <= started_at + timedelta(seconds=90)
             return ctx.done(ctx.input)

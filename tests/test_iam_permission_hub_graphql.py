@@ -531,7 +531,7 @@ def test_iam_overview_privileged_grants_on_registry_relationship_storage(
     """Privileged-grant filtering works on the FK-backed registry relationship store.
 
     Composed projects default to ``REBAC_LOCAL_BACKEND_STORAGE = "registry"``
-    (``angee.base`` autoconfig), where the denormalized relationship field names
+    (``angee`` autoconfig), where the denormalized relationship field names
     exist only through the storage mode's queryset kwargs translation — a filter
     built from Q objects bypasses it and fails live while the bare test settings
     (denormalized store) stay green.

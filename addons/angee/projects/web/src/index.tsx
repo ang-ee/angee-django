@@ -1,6 +1,5 @@
 import type { BaseAddonRoute } from "@angee/app";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import { recordCarriesThreads } from "@angee/messaging";
 import type { BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { Briefcase, ClipboardCheck, Kanban, ListChecks } from "lucide-react";
@@ -95,14 +94,17 @@ const projects = defineBaseAddon({
   i18n: { projects: enProjectsMessages },
   widgets: { "projects.phase": { read: ProjectPhaseControl, edit: ProjectPhaseControl } },
   containers: {
-    // Record tasks attach to the record's thread, so only record types that carry thread
-    // attachments offer them, beside their comments and history.
+    // A task's line on the Timeline opens the Tasks tab.
+    "timeline#kinds": {
+      "projects.task": { content: { label: "Tasks", icon: "project-task", tone: "info", verb: "Open in Tasks", target: { tab: "projects.tasks", focus: "task" } } },
+    },
+    // The direct subject declaration determines which records take tasks.
     "record#aside": {
       "projects.tasks": {
-        sequence: 15,
+        sequence: 20,
         content: {
-          label: "Tasks", icon: "project-task", aliases: ["tasks"],
-          when: recordCarriesThreads,
+          when: (context) => context.route?.recordEdges?.includes(TASK_MODEL) ?? false,
+          label: "Tasks", icon: "project-task",
           render: (context) => <RecordTasksPane context={context} />,
         },
       },

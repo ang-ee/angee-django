@@ -118,7 +118,8 @@ def _render_stack_manifest(
 
     Runs the template passes in dependency order: inline the shared-body include,
     strip comments, bind ``{% set %}`` variables, expand the celery ``{% for %}``
-    loop, evaluate nested/inline conditionals, then substitute the remaining
+    loop, evaluate nested/inline conditionals, evaluate the queue worker's
+    ``{{ var|split:…|length * n }}`` product, then substitute the remaining
     ``{{ var }}`` interpolations.
     """
 
@@ -127,6 +128,7 @@ def _render_stack_manifest(
     text = _render_jinja_set_tags(text, variables)
     text = _render_for_loops(text, variables)
     text = _render_conditionals(text, variables)
+    text = _render_length_products(text, variables)
     for key, value in variables.items():
         text = text.replace(f"{{{{ {key} }}}}", value)
     assert "{{" not in text, text
@@ -134,6 +136,18 @@ def _render_stack_manifest(
     rendered = yaml.safe_load(text)
     assert isinstance(rendered, dict)
     return rendered
+
+
+_LENGTH_PRODUCT = re.compile(r'{{\s*(\w+)\|split:"([^"]*)"\|length\s*\*\s*(\d+)\s*}}')
+
+
+def _render_length_products(text: str, variables: dict[str, str]) -> str:
+    """Evaluate pongo2 ``{{ var|split:"sep"|length * n }}``: ``var``'s item count times ``n``."""
+
+    return _LENGTH_PRODUCT.sub(
+        lambda match: str(len(variables.get(match.group(1), "").split(match.group(2))) * int(match.group(3))),
+        text,
+    )
 
 
 def _inline_includes(manifest_path: Path) -> str:
@@ -1023,7 +1037,7 @@ def _run_probe_command(tmp_path: Path, manage_source: str) -> subprocess.Complet
         history = apps.get_model("notes", "Note").history.get()
         assert history.changeset_id == context.pk
         assert history.history_change_reason == context.change_reason == "manage.captureprobe"
-        assert context.actor == ""
+        assert context.actor_ref == ""
         assert context.activity == "system"
         assert context.state == "closed"
         assert context.outcome == "success"
@@ -1578,7 +1592,7 @@ def test_readiness_is_owned_by_long_running_http_and_django_services() -> None:
     assert framework["services"]["frontend"]["ready"] == FRONTEND_READY
     assert instance["services"]["django"]["ready"] == DJANGO_READY
 
-    for name in ("celery-worker", "celery-whatsapp"):
+    for name in ("celery-worker", "celery-queues"):
         assert framework["services"][name]["after"] == ["provision", "redis"]
         assert instance["services"][name]["after"] == ["provision", "redis"]
     assert framework["services"]["frontend"]["after"] == ["django", "codegen"]
@@ -1968,9 +1982,13 @@ def test_production_provision_loads_no_demo_data() -> None:
     """Production serving runs with DEBUG off, where demo data is refused; development loads it."""
 
     production = _render_dev_stack(_runtime_mode="docker", serve_mode="production")["jobs"]["provision"]
-    assert production["command"][-1].endswith("python manage.py angee provision --force-rebac")
+    assert production["command"][-1].endswith(
+        "python manage.py angee provision --force-rebac",
+    )
     development = _render_dev_stack(_runtime_mode="docker")["jobs"]["provision"]
-    assert development["command"][-1].endswith("python manage.py angee provision --demo --force-rebac")
+    assert development["command"][-1].endswith(
+        "python manage.py angee provision --demo --force-rebac",
+    )
 
 
 def test_localhost_production_frontend_needs_no_edge_lookup() -> None:
@@ -2005,7 +2023,7 @@ def test_every_stack_leases_its_process_compose_control_port() -> None:
 def test_secret_key_is_mode_invariant() -> None:
     """Both modes declare the secret-key secret and run Django on it.
 
-    Encrypted-at-rest fields (angee.base EncryptedField) derive their Fernet key
+    Encrypted-at-rest fields (angee EncryptedField) derive their Fernet key
     from SECRET_KEY, so re-rendering a stack from process to docker (or back)
     must never rotate the effective key: both modes declare the same generated
     `secret-key` (the env-file backend reuses the existing .env value) and pin
@@ -2109,13 +2127,14 @@ def test_dev_stack_local_processes_do_not_depend_on_container_services() -> None
         assert not dependencies & container_services, name
 
 
-def test_celery_queue_workers_render_in_both_modes() -> None:
-    """`celery_queues` renders one dedicated `celery-<queue>` worker per entry.
+def test_celery_queues_share_one_queue_worker_in_both_modes() -> None:
+    """`celery_queues` renders one `celery-queues` worker that consumes every entry.
 
     The queue worker inherits the celery block's env/command owner (no duplicated
-    stack facts) and isolates long-lived addon tasks on a threads pool: `-Q <queue>`
+    stack facts) and isolates long-lived addon tasks on a threads pool: `-Q <queues>`
     is the routing contract an addon like messaging_integrate_whatsapp dispatches to.
-    A blank input (the default) renders no extra service.
+    A live session holds one thread, so the pool keeps 8 threads per queue while the
+    app loads once. A blank input (the default) renders no extra service.
     """
 
     for render in (_render_dev_stack, _render_dev_docker_stack, _render_local_stack):
@@ -2124,34 +2143,38 @@ def test_celery_queue_workers_render_in_both_modes() -> None:
         assert stack["services"]["celery-worker"]["stop_grace_period"] == "30s"
 
     dev = _render_dev_stack(celery_queues="whatsapp")
-    dev_service = dev["services"]["celery-whatsapp"]
+    dev_service = dev["services"]["celery-queues"]
     assert dev_service["runtime"] == "local"
     assert dev_service["stop_grace_period"] == "30s"
     command = dev_service["command"]
     assert command[command.index("-Q") + 1] == "whatsapp"
     assert command[command.index("--pool") + 1] == "threads"
+    assert command[command.index("--concurrency") + 1] == "8"
     # Queue workers never embed beat: one scheduler per stack.
     assert "--beat" not in command
     # The queue worker shares the shared block's env owner verbatim.
     assert dev_service["env"] == dev["services"]["celery-worker"]["env"]
 
     dev_docker = _render_dev_docker_stack(celery_queues="whatsapp")
-    dev_docker_service = dev_docker["services"]["celery-whatsapp"]
+    dev_docker_service = dev_docker["services"]["celery-queues"]
     assert dev_docker_service["runtime"] == "container"
     assert "uv sync --inexact && exec celery" in dev_docker_service["command"][-1]
     assert "worker -Q whatsapp --pool threads --concurrency 8" in dev_docker_service["command"][-1]
     assert dev_docker_service["env"] == dev_docker["services"]["celery-worker"]["env"]
 
     local = _render_local_stack(celery_queues="whatsapp")
-    local_service = local["services"]["celery-whatsapp"]
+    local_service = local["services"]["celery-queues"]
     assert local_service["runtime"] == "container"
     exec_line = local_service["command"][-1]
     assert "worker -Q whatsapp --pool threads --concurrency 8" in exec_line
     assert local_service["image"] == local["services"]["celery-worker"]["image"]
 
-    # Two queues render two workers; the shared worker stays untouched.
-    two = _render_dev_stack(celery_queues="whatsapp,voice")
-    assert {"celery-whatsapp", "celery-voice", "celery-worker"} <= set(two["services"])
+    # More queues join the same worker with 8 threads each; the shared worker stays untouched.
+    five = _render_dev_stack(celery_queues="whatsapp,telegram,signal,matrix,discord")
+    assert {name for name in five["services"] if name.startswith("celery-")} == {"celery-worker", "celery-queues"}
+    command = five["services"]["celery-queues"]["command"]
+    assert command[command.index("-Q") + 1] == "whatsapp,telegram,signal,matrix,discord"
+    assert command[command.index("--concurrency") + 1] == "40"
 
 
 _BACKEND_DSN = "https://backend@sentry.example.invalid/1"

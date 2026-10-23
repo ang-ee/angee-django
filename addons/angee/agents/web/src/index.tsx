@@ -1,6 +1,6 @@
 import type { BaseAddonRoute } from "@angee/app";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import type { BaseMenuItem } from "@angee/ui";
+import { useActiveChatterView, type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { Box, Cpu, GitBranch, LayoutTemplate, Server, Sparkles, Wrench } from "lucide-react";
 
@@ -80,8 +80,7 @@ const agentsMenu: readonly BaseMenuItem[] = [
   },
 ];
 
-// The side-chatter entry the addon contributes as the global chatter "agents" tab (below),
-// bound to the active page's view, to chat with the user's agent about what they're viewing.
+// The shell drawer keeps its sessions mounted while the active view changes.
 export { AgentChatterPane };
 
 const agents = defineBaseAddon({
@@ -102,13 +101,18 @@ const agents = defineBaseAddon({
     "inference-model": Box,
   },
   containers: {
-    "record#aside": {
+    "shell#drawers-right": {
       "agents.chat": {
-        sequence: 0,
-        content: { label: "Agents", icon: "agent", aliases: ["agents"], render: ({ view }) => <AgentChatterPane view={view} /> },
+        sequence: 10,
+        content: { title: "Agents", icon: "agent", render: () => <AgentDrawer /> },
       },
     },
   },
 });
 
 export default agents;
+
+function AgentDrawer() {
+  const { view } = useActiveChatterView();
+  return <AgentChatterPane view={view} />;
+}

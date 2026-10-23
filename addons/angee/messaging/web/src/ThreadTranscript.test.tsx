@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { formatDayLabel } from "@angee/ui";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ThreadTranscript } from "./ThreadTranscript";
@@ -16,6 +18,7 @@ vi.mock("@tanstack/react-virtual", () => ({
     getVirtualItems: () =>
       Array.from({ length: count }, (_, index) => ({ index, key: index, start: index * 96, size: 96 })),
     measureElement: () => {},
+    scrollToIndex: (...args: unknown[]) => mocks.scrollToIndex(...args),
   }),
 }));
 
@@ -25,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   hasMore: false,
   queryCalls: [] as Array<Record<string, unknown>>,
   fetchOlder: vi.fn(),
+  scrollToIndex: vi.fn(),
   useThreadMessageFeed: vi.fn(),
   error: null as Error | null,
   fetching: false,
@@ -36,13 +40,20 @@ vi.mock("@angee/ui", async (importOriginal) => {
     ...actual,
     useNamespaceT:
       (_namespace: string, messages: Record<string, string>) =>
-      (key: string) =>
-        messages[key] ?? key,
+      (key: string, values?: Record<string, unknown>) =>
+        (messages[key] ?? key).replace(/\{(\w+)\}/g, (_, name: string) => String(values?.[name] ?? `{${name}}`)),
+    // The jump-to-date control is the runtime's date widget; the suite stands in a plain field for it.
+    useResolvedWidget: (key: string) => key === "date" ? {
+      edit: ({ value, onChange, field }: { value: unknown; onChange?: (next: unknown) => void; field?: { label?: string } }) => (
+        <input aria-label={field?.label} value={typeof value === "string" ? value : ""}
+          onChange={(event) => onChange?.(event.target.value || null)} />
+      ),
+    } : undefined,
   };
 });
 
 vi.mock("./thread-message-feed", () => ({ useThreadMessageFeed: mocks.useThreadMessageFeed }));
-
+vi.mock("./MessageSourceCopies", () => ({ MessageSourceCopies: () => null }));
 
 function message(overrides: Partial<ThreadTranscriptRow> = {}): ThreadTranscriptRow {
   return {
@@ -74,6 +85,7 @@ beforeEach(() => {
   mocks.hasMore = false;
   mocks.queryCalls = [];
   mocks.fetchOlder.mockReset();
+  mocks.scrollToIndex.mockReset();
   mocks.useThreadMessageFeed.mockReset();
   mocks.error = null;
   mocks.fetching = false;
@@ -93,6 +105,54 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("ThreadTranscript", () => {
+  test("shows the reply author and opens the quoted parent through the host", () => {
+    const parent = {
+      id: "msg_parent", preview: "Meet at Casa Cosecha.", message_type: "COMMENT" as const,
+      sender: { ...message().sender!, display_name: "Dane" }, thread: { id: "thr_1" },
+    };
+    mocks.transcriptRows = [message({ parent })];
+    const openReply = vi.fn();
+    const changeAnchor = vi.fn();
+
+    render(<ThreadTranscript threadId="thr_1" anchor="message:msg_1" onOpenReply={openReply} onAnchorChange={changeAnchor} />);
+
+    const quote = screen.getByRole("button", { name: /Replying to Dane Meet at Casa Cosecha/ });
+    expect(quote.closest("li")?.getAttribute("aria-current")).toBe("true");
+    expect(mocks.scrollToIndex).toHaveBeenCalledWith(0, { align: "center" });
+    fireEvent.click(quote);
+    expect(openReply).toHaveBeenCalledWith(parent);
+    fireEvent.click(screen.getByRole("button", { name: "Latest messages" }));
+    expect(changeAnchor).toHaveBeenCalledWith("");
+  });
+
+  test("a quoted parent in the same thread uses the native transcript anchor", () => {
+    mocks.transcriptRows = [message({ parent: {
+      id: "msg_parent", preview: "Earlier message", message_type: "COMMENT", sender: null, thread: { id: "thr_1" },
+    } })];
+    const changeAnchor = vi.fn();
+    render(<ThreadTranscript threadId="thr_1" onAnchorChange={changeAnchor} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Replying to message Earlier message/ }));
+    expect(changeAnchor).toHaveBeenCalledWith("message:msg_parent");
+  });
+
+  test("a conversation opens at the latest turn while history remains top-down", () => {
+    mocks.transcriptRows = [message(), message({ id: "msg_2", feed_order_key: "v1:0002" })];
+    const view = render(<ThreadTranscript threadId="thr_1" />);
+    expect(mocks.scrollToIndex).toHaveBeenCalledWith(1, { align: "end" });
+    view.unmount();
+    mocks.scrollToIndex.mockClear();
+    render(<ThreadTranscript threadId="thr_1" order="history" />);
+    expect(mocks.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  test("restarts native anchor positioning when StrictMode replays a cached conversation", () => {
+    mocks.transcriptRows = [message()];
+    render(<StrictMode><ThreadTranscript threadId="thr_1" anchor="message:msg_1" /></StrictMode>);
+    expect(mocks.scrollToIndex).toHaveBeenCalledTimes(2);
+    expect(mocks.scrollToIndex).toHaveBeenLastCalledWith(0, { align: "center" });
+  });
+
   test("renders inbound, outbound, and internal turns with their distinct treatments", () => {
     mocks.transcriptRows = [
       message({ id: "in", direction: "INBOUND", parts: [{ role: "BODY", fragment: { text: "Inbound hello" }, file: null }] as never }),
@@ -230,7 +290,8 @@ describe("ThreadTranscript", () => {
       message({ id: "z", feed_order_key: "v1:0001", parts: [{ role: "BODY", fragment: { text: "Oldest" }, file: null }] as never }),
     ];
     render(<ThreadTranscript threadId="thr_1" />);
-    const items = screen.getAllByRole("listitem");
+    // The transcript's own rows (each wraps its feed row), in reading order.
+    const items = Array.from(screen.getByRole("list", { name: "Conversation transcript" }).querySelectorAll(":scope > li"));
     expect(items[0]?.textContent).toContain("Oldest");
     expect(items[1]?.textContent).toContain("Newest");
   });
@@ -253,7 +314,7 @@ test("day separators and date anchors share the explicitly selected timezone", (
   ];
   const onAnchorChange = vi.fn();
   render(<ThreadTranscript threadId="thr_1" order="history" timezone="America/New_York" onAnchorChange={onAnchorChange} />);
-  const day = new Intl.DateTimeFormat(undefined, { timeZone: "America/New_York" }).format(new Date("2026-07-02T00:30:00Z"));
+  const day = formatDayLabel("2026-07-02T00:30:00Z", { timeZone: "America/New_York" });
   expect(screen.getAllByText(day)).toHaveLength(1);
   fireEvent.change(screen.getByLabelText("Jump to date"), { target: { value: "2026-07-01" } });
   expect(onAnchorChange).toHaveBeenCalledWith("date:2026-07-01@America/New_York");

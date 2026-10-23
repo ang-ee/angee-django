@@ -41,7 +41,7 @@ class LocalFolderBackend(FileSystemStorage, StorageBackend):
         del name
         raise OSError("external folder storage is read-only")
 
-    def url(self, name: str) -> str:
+    def url(self, name: str | None) -> str:
         """Refuse public URLs; external bytes are served through Angee's proxy."""
 
         del name

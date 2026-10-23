@@ -17,6 +17,7 @@ import {
 } from "../resource/model-metadata-defaults";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
+import { relationSelectedOption } from "../relation/relation-options";
 import { textWidget } from "../../widgets/text";
 import { useUiT } from "../../i18n";
 import {
@@ -85,6 +86,7 @@ export interface FieldDescriptorControlProps {
  * Render one declarative page field through the widget registry. FormView and
  * dialog forms share this owner so field descriptors resolve widgets, labels,
  * and options the same way wherever an addon renders mutation inputs.
+ * @kind surface
  */
 export function FieldDescriptorControl(props: FieldDescriptorControlProps): React.ReactElement {
   const model = useModelMetadata(props.resource ?? "");
@@ -98,6 +100,7 @@ export function FieldDescriptorControl(props: FieldDescriptorControlProps): Reac
   if (relation && (!field.widget || field.widget === "many2one")) return <RelationFieldWidget
     value={relationValueId(props.value) || null} onChange={props.onChange} onCommit={props.onCommit}
     readOnly={props.readOnly || props.disabled} relation={relation} filters={field.filters} where={props.where}
+    selectedOption={relationSelectedOption(props.value, relation.labelField)}
     aria-label={ariaLabel} controlRef={props.controlRef} controlProps={props.controlProps} />;
   if (relationList) return <RelationMultiFieldWidget
     value={Array.isArray(props.value) ? props.value : []} onChange={props.onChange} onCommit={props.onCommit}

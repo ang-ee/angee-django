@@ -1,7 +1,7 @@
 import { holdsPermission } from "@angee/metadata";
 import {
-  Avatar, Button, EmptyState, FieldDescriptorControl, FormView, Glyph, Skeleton, SkeletonStatus, Textarea, avatarInitials,
-  errorMessage, useRuntimeAuth, useRuntimeViewAs,
+  Avatar, Button, Card, CardContent, CardHeader, EmptyState, FieldDescriptorControl, FormView, Glyph, InlineEmpty, InlineTextAction, LoadingPanel,
+  avatarInitials, errorMessage, textRoleVariants, useRuntimeAuth, useRuntimeViewAs,
 } from "@angee/ui";
 import * as React from "react";
 
@@ -29,9 +29,7 @@ export function ProposalStatements({ proposals, loading = false, labels }: Propo
     <FormView.SectionHeading label={labels?.heading ?? t("comparison.statementHeading")}
       hint={labels?.hint ?? t("comparison.statementHint")}
       audience={labels?.audience ?? t("comparison.statementAudience")} />
-    {loading && !proposals.length ? <SkeletonStatus label={t("comparison.loading")} className="grid gap-3">
-      <Skeleton className="h-28 w-full" /><Skeleton className="h-28 w-full" />
-    </SkeletonStatus> : null}
+    {loading && !proposals.length ? <LoadingPanel message={t("comparison.loading")} density="inline" /> : null}
     {!loading && !proposals.length ? <EmptyState title={t("comparison.empty.title")}
       description={t("comparison.empty.description")} /> : null}
     <div className="grid gap-3">
@@ -39,21 +37,23 @@ export function ProposalStatements({ proposals, loading = false, labels }: Propo
         const own = proposalIsOwn(proposal, user?.id);
         const editable = own && holdsPermission(proposal, "write") && !preview.viewAs && !preview.pending;
         const name = proposalColumnLabel(proposal, t("comparison.responder"));
-        return <article key={proposal.id} className="rounded-8 border border-border-subtle bg-sheet p-4">
-          <div className="mb-3 flex items-center gap-2">
+        return <Card key={proposal.id} render={<article />}>
+          <CardHeader className="flex-row items-center gap-2">
             <Avatar size="sm" initials={avatarInitials(name)} alt={name} />
-            <span className="text-13 font-semibold text-fg">{name}</span>
-            <span className="ml-auto text-xs text-fg-muted">
+            <span className={textRoleVariants({ role: "title" })}>{name}</span>
+            <span className={textRoleVariants({ role: "caption", className: "ml-auto" })}>
               {own ? t("comparison.statementPrivate") : t("comparison.statementAudience")}
             </span>
-          </div>
-          {editable
-            ? <EditableStatement proposal={proposal} />
-            : isEmptyComparisonValue(proposal.statement)
-              ? <p className="text-13 text-fg-muted">{t("comparison.statementEmpty")}</p>
-              : <FieldDescriptorControl field={{ name: "statement", widget: "markdown.preview" }}
-                  value={proposal.statement} row={proposal} readOnly />}
-        </article>;
+          </CardHeader>
+          <CardContent className="pt-0">
+            {editable
+              ? <EditableStatement proposal={proposal} />
+              : isEmptyComparisonValue(proposal.statement)
+                ? <InlineEmpty label={t("comparison.statementEmpty")} />
+                : <FieldDescriptorControl field={{ name: "statement", widget: "markdown.preview" }}
+                    value={proposal.statement} row={proposal} readOnly />}
+          </CardContent>
+        </Card>;
       })}
     </div>
   </section>;
@@ -64,33 +64,28 @@ function EditableStatement({ proposal }: { proposal: ComparisonProposal }): Reac
   const writer = useComparisonStatementWrite();
   const empty = isEmptyComparisonValue(proposal.statement);
   const [editing, setEditing] = React.useState(empty);
-  const [body, setBody] = React.useState(String(proposal.statement ?? ""));
   const [failure, setFailure] = React.useState<string | null>(null);
-  const prompt = t("comparison.statementPrompt");
   if (!editing) return <div className="flex items-start justify-between gap-2">
     <FieldDescriptorControl field={{ name: "statement", widget: "markdown.preview" }}
       value={proposal.statement} row={proposal} readOnly />
     <Button type="button" variant="ghost" size="iconSm"
       aria-label={t("comparison.statementEdit")}
-      onClick={() => { setBody(String(proposal.statement ?? "")); setFailure(null); setEditing(true); }}>
+      onClick={() => setEditing(true)}>
       <Glyph decorative name="pencil" />
     </Button>
   </div>;
-  return <form className="space-y-2" onSubmit={(event) => {
-    event.preventDefault();
-    if (!body.trim() || writer.pending) return;
-    void writer.save(proposal, body.trim())
-      .then(() => { setFailure(null); setEditing(false); })
-      .catch((error) => setFailure(errorMessage(error, t("comparison.statementError"))));
-  }}>
-    <Textarea value={body} onChange={(event) => setBody(event.target.value)}
-      aria-label={prompt} placeholder={prompt} rows={4} />
-    <div className="flex items-center gap-2">
-      <Button type="submit" variant="primary" size="sm" loading={writer.pending}
-        disabled={!body.trim() || writer.pending}>{t("comparison.statementSave")}</Button>
-      {!empty ? <Button type="button" variant="ghost" size="sm" disabled={writer.pending}
-        onClick={() => setEditing(false)}>{t("comparison.cancel")}</Button> : null}
-    </div>
-    {failure ? <p role="alert" className="text-xs text-danger-text">{failure}</p> : null}
-  </form>;
+  return <InlineTextAction multiline open value={String(proposal.statement ?? "")} inputLabel={t("comparison.statementPrompt")}
+    placeholder={t("comparison.statementPrompt")} rows={4} busy={writer.pending} submitLabel={t("comparison.statementSave")}
+    submitVariant="primary" submitUnchanged error={failure}
+    onSubmit={async (body) => {
+      try {
+        await writer.save(proposal, body);
+        setFailure(null);
+        setEditing(false);
+      } catch (error) {
+        setFailure(errorMessage(error, t("comparison.statementError")));
+        return false;
+      }
+    }}
+    onCancel={() => { if (!empty) setEditing(false); }} />;
 }

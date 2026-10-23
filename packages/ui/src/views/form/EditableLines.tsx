@@ -12,7 +12,7 @@ import {
 import { Glyph } from "../../chrome/Glyph";
 import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
-import { Badge } from "../../ui/badge";
+import { Chip } from "../../ui/chip";
 import { Button } from "../../ui/button";
 import { relationValueId, type WidgetControlProps } from "../../widgets/types";
 import { RowsListView } from "../resource/RowsListView";
@@ -94,6 +94,7 @@ type LineViewRow = { id: string; index: number; value: Row };
  * A row the backend locks (`lines.lockField`) is a system row: the list shows a lock
  * in place of its reorder handle, it carries a "System" marker, it offers no duplicate
  * or remove, and its locked cells are read-only while its other cells stay editable.
+ * @kind surface
  */
 export function EditableLines({
   control, setValue, name, lines, parentRow, readOnly, footer, rowErrors,
@@ -200,7 +201,7 @@ export function EditableLines({
             )}
           />
           {messages.map((message, index) => (
-            <p key={index} className="mt-1 text-xs text-danger-text">{message}</p>
+            <p key={index} className="mt-1 text-12 text-danger-text">{message}</p>
           ))}
         </div>;
       },
@@ -223,7 +224,7 @@ export function EditableLines({
       id: "system", field: "system", header: t("lines.system"), headerVisuallyHidden: true,
       sortable: false, hideable: false,
       render: (row) => unlocked(row) ? null : (
-        <Badge tone="neutral" density="compact" title={t("lines.systemHint")}>{t("lines.system")}</Badge>
+        <Chip tone="neutral" title={t("lines.systemHint")}>{t("lines.system")}</Chip>
       ),
     });
   }
@@ -259,7 +260,7 @@ export function EditableLines({
       </Button>}
     />
     {described.length > 0 ? (
-      <dl className="grid gap-1 px-2 pt-2 text-xs text-fg-muted">
+      <dl className="grid gap-1 px-2 pt-2 text-12 text-fg-muted">
         {described.map(({ name, label, description }) => (
           <div key={name}>
             <dt className="inline font-medium text-fg-2">{label}</dt>{": "}

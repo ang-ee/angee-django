@@ -12,6 +12,8 @@ import type {
  * Normalize text into a URL-safe slug: lowercased, with runs of non-alphanumerics
  * collapsed to a single hyphen and the edges trimmed. Used for the auto-derive from
  * a source field (e.g. a record's title) — see FormView's slug derivation.
+ * @kind null
+ * @reason Format utility: converts data to display or storage text.
  */
 export function slugify(value: unknown): string {
   return String(value ?? "")

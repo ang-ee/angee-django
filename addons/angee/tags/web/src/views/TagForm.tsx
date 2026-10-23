@@ -7,7 +7,7 @@ const TAG_MODEL = "tags.Tag";
 
 /**
  * The tag form, shared by the Tags page and a relation picker's "Create “…”":
- * the name as its title, its colour and any scope-specific fields
+ * the name as its title, its colour, its shared attention-category flag and any scope-specific fields
  * (`tags.tags#fields`), and, on a saved tag only, its archive flag.
  */
 function TagForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
@@ -18,6 +18,7 @@ function TagForm({ resource: _resource, ...props }: RegisteredFormProps): React.
       <Field name="name" title />
       <Group label={t("form.details")} columns={2}>
         <Field name="color" label={t("col.color")} />
+        <Field name="attention" label={t("col.attention")} />
         {containerContents(scopeFieldEntries)}
       </Group>
       <Group savedOnly>

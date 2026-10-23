@@ -5,7 +5,7 @@ import { developmentMode } from "../lib/development-mode";
 import { orderById, positionSiblings } from "../lib/position";
 import type { BuiltInResourceViewKind } from "../views/resource/model/capabilities";
 import type { ResourceViewKindCapabilities } from "../views/resource/model/capabilities";
-import type { ChatterTabContent, DrawerContribution, DrawerEdge } from "./contracts";
+import type { ChatterTabContent, DrawerContribution, DrawerEdge, TimelineKindContent, RelatedGroupContent } from "./contracts";
 import { isPresent, sessionPermitted, useAppRuntime } from "./runtime";
 
 /**
@@ -37,8 +37,12 @@ export interface ContainerKinds {
   /** Non-modal drawers docked on the console's right or bottom edge. */
   "drawers-right": DockedDrawerContent;
   "drawers-bottom": DockedDrawerContent;
-  /** Chatter aside tabs. */
+  /** Context-aside tabs and drill-ins. */
   aside: ChatterTabContent;
+  /** How a timeline kind presents (`timeline#kinds`), declared by the kind's owner. */
+  kinds: TimelineKindContent;
+  /** The Links tab's groups (`related#groups`, `<model>#groups`), declared by each edge's owner. */
+  groups: RelatedGroupContent;
   /**
    * Renderable children of addon pages' own containers, declared on the
    * owner's node: toolbar verbs (`messaging.channels#toolbar`), dashboard
@@ -208,6 +212,10 @@ export interface ContainerScope {
 
 const warnedAddresses = new Set<string>();
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const EMPTY_CONTAINERS: ComposedContainers = { declared: {}, children: {}, rules: {}, removed: [], provenance: {}, diagnostics: [] };
 
 /**
@@ -215,6 +223,8 @@ export const EMPTY_CONTAINERS: ComposedContainers = { declared: {}, children: {}
  * stories and tests. An app composes its addons' containers through
  * `@angee/app`, which validates and layers them. A child's owner is its id's
  * namespace.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function containersFromChildren(
   core: readonly CoreContainer[],
@@ -238,7 +248,10 @@ export function containersFromChildren(
 }
 const EMPTY_SCOPE: ContainerScope = { apps: [], routes: [] };
 
-/** Split an address into its node and container name. */
+/** Split an address into its node and container name.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function containerName(address: string): string {
   const at = address.indexOf("#");
   if (at <= 0 || at === address.length - 1) throw new Error(`Container address "${address}" must be "node#name".`);
@@ -272,7 +285,10 @@ export interface ResolveContainerOptions {
   permitted?: readonly string[];
 }
 
-/** A record's models for a container, most general first: its MTI parent, then itself. */
+/** A record's models for a container, most general first: its MTI parent, then itself.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function modelChain(canonical: string | null | undefined, model: string | null | undefined): readonly string[] {
   return [...new Set([canonical, model].filter((label): label is string => Boolean(label)))];
 }
@@ -309,6 +325,8 @@ function containerAddresses(composed: ComposedContainers, address: string, model
  * Every child the layers declared for a record's container, in id order and before
  * any narrowing, `when`, `hide` or presence. An owner whose default depends on whether
  * a child is declared at all (not on whether the page admits it) reads this.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function composedContainerChildren<TContent = unknown>(
   composed: ComposedContainers,
@@ -322,6 +340,10 @@ export function composedContainerChildren<TContent = unknown>(
   return orderById([...byId.values()]) as readonly ComposedContainerChild<TContent>[];
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function resolveContainer<TContent = unknown>(
   composed: ComposedContainers,
   address: string,
@@ -404,6 +426,8 @@ export function resolveContainer<TContent = unknown>(
  * from the runtime, presence from the session's identity, the models and row
  * from the rendering owner. Memoize `models` and `impls`; a fresh array each
  * render recomputes the list.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function useContainer<TContent = unknown>(
   address: string,
@@ -422,7 +446,9 @@ export function useContainer<TContent = unknown>(
   );
 }
 
-/** The drawers docked on one edge (`shell#drawers-<edge>`), in composed order. */
+/** The drawers docked on one edge (`shell#drawers-<edge>`), in composed order.
+ * @owner DrawerRail
+ */
 export function useDrawers(edge: DrawerEdge): readonly DrawerContribution[] {
   const children = useContainer<DockedDrawerContent>(`shell#drawers-${edge}`);
   return useMemo(

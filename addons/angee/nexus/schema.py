@@ -10,12 +10,11 @@ from django.apps import apps
 from rebac import current_actor
 from strawberry import auto
 
-from angee.base.actors import actor_user_id
+from angee.actors import actor_user_id
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.messaging.schema import MessageFeedPage, MessageFeedRevalidation
 from angee.nexus.inbox_schema import NexusInboxQuery
 from angee.parties.schema import PartyType
 
@@ -23,7 +22,6 @@ Tie = apps.get_model("nexus", "Tie")
 Cadence = apps.get_model("nexus", "Cadence")
 Party = apps.get_model("parties", "Party")
 Circle = apps.get_model("parties", "Circle")
-Message = apps.get_model("messaging", "Message")
 
 
 def _viewer_user_id() -> Any | None:
@@ -190,105 +188,6 @@ class NexusQuery:
             due_count=overview.due_count,
         )
 
-    @strawberry.field
-    def party_message_feed(
-        self,
-        party_id: strawberry.ID,
-        search: str = "",
-        before_cursor: str | None = None,
-        after_cursor: str | None = None,
-        through_cursor: str | None = None,
-        limit: int = 50,
-    ) -> MessageFeedPage:
-        """Page a readable party's currently authorized inbox messages."""
-
-        party = require_instance_for_id(
-            Party,
-            party_id,
-            queryset=Party.objects.all().scoped(),
-            not_found="party not found",
-        )
-        return MessageFeedPage.from_scope(
-            Message.objects.inbox().involving_parties((party,)),
-            scope=("party", str(party.sqid)),
-            search=search,
-            before_cursor=before_cursor,
-            after_cursor=after_cursor,
-            through_cursor=through_cursor,
-            limit=limit,
-        )
-
-    @strawberry.field
-    def circle_message_feed(
-        self,
-        circle_id: strawberry.ID,
-        search: str = "",
-        before_cursor: str | None = None,
-        after_cursor: str | None = None,
-        through_cursor: str | None = None,
-        limit: int = 50,
-    ) -> MessageFeedPage:
-        """Page readable circle members' currently authorized inbox messages."""
-
-        circle = require_instance_for_id(
-            Circle,
-            circle_id,
-            queryset=Circle.objects.all().scoped(),
-            not_found="circle not found",
-        )
-        parties = Party.objects.all().scoped().in_circle(circle)
-        return MessageFeedPage.from_scope(
-            Message.objects.inbox().involving_parties(parties),
-            scope=("circle", str(circle.sqid)),
-            search=search,
-            before_cursor=before_cursor,
-            after_cursor=after_cursor,
-            through_cursor=through_cursor,
-            limit=limit,
-        )
-
-    @strawberry.field
-    def party_message_feed_revalidate(
-        self,
-        party_id: strawberry.ID,
-        ids: list[strawberry.ID],
-        search: str = "",
-    ) -> MessageFeedRevalidation:
-        """Revalidate loaded messages against this party's current visible edges."""
-
-        party = require_instance_for_id(
-            Party,
-            party_id,
-            queryset=Party.objects.all().scoped(),
-            not_found="party not found",
-        )
-        return MessageFeedRevalidation.from_scope(
-            Message.objects.inbox().involving_parties((party,)),
-            ids,
-            search=search,
-        )
-
-    @strawberry.field
-    def circle_message_feed_revalidate(
-        self,
-        circle_id: strawberry.ID,
-        ids: list[strawberry.ID],
-        search: str = "",
-    ) -> MessageFeedRevalidation:
-        """Revalidate loaded messages against currently visible circle members."""
-
-        circle = require_instance_for_id(
-            Circle,
-            circle_id,
-            queryset=Circle.objects.all().scoped(),
-            not_found="circle not found",
-        )
-        parties = Party.objects.all().scoped().in_circle(circle)
-        return MessageFeedRevalidation.from_scope(
-            Message.objects.inbox().involving_parties(parties),
-            ids,
-            search=search,
-        )
 
 
 _TIE_RESOURCE = hasura_model_resource(

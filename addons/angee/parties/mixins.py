@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 
-from angee.base.mixins import Statement, StatementsMixin
+from angee.models import Statement, StatementsMixin, TimestampMixin
+
+if TYPE_CHECKING:
+    from angee.parties.models import Party
 
 
 class PartyAspectMixin(StatementsMixin):
@@ -19,13 +22,14 @@ class PartyAspectMixin(StatementsMixin):
     class Meta:
         abstract = True
 
-    def lock_statement_subject(self, members: Mapping[str, Any], *, using: str) -> Any:
-        for manager in self.party.statement_managers():
-            manager.db_manager(using).lock_subject(manager.instance, {})
-        return super().lock_statement_subject(members, using=using)
+    def lock_subject(self, members: Mapping[str, Any] | None = None) -> Any:
+        """Lock the owning Party before this dependent aspect subject."""
+
+        self.party.lock_subject()
+        return super().lock_subject(members)
 
 
-class MembershipDecisionMixin(models.Model):
+class MembershipDecisionMixin(TimestampMixin):
     """Plain roster decisions, independent of assertion provenance."""
 
     confidence = models.FloatField(default=1.0, validators=(MinValueValidator(0), MaxValueValidator(1)))
@@ -55,6 +59,8 @@ class MembershipDecisionMixin(models.Model):
 
 class PartyStatementMixin(Statement):
     """Party stances break equal-trust ties toward the party with a human-given name."""
+
+    statement_subject_model: type[Party]
 
     class Meta:
         abstract = True

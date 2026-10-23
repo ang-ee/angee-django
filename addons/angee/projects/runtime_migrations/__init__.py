@@ -1,1 +1,1 @@
-"""Projects-owned runtime migrations."""
+"""Self-contained upgrade transitions copied into composed runtime history."""

@@ -131,7 +131,7 @@ also accepts non-user REBAC subjects.
 converts it to the FK's Python type and returns no user for other subject types.
 
 **Changeset** — attribution for one logical write, owned by
-[`changeset()`](../angee/base/changesets.py) and stored by the
+[`changeset()`](../angee/changesets.py) and stored by the
 [provenance addon](../addons/angee/provenance/models.py).
 
 **Action / activity** — action uses FHIR AuditEvent's C/U/D verbs; activity
@@ -148,7 +148,7 @@ distinct history events.
 `statements = StatementRecords(aspects=…)` gets a typed `<Model>Statement` table
 beside its history table, read through the subject like history rows and
 written only by `statements.set()` and the status verbs
-([owner](../angee/base/mixins.py)).
+([owner](../angee/models/statements.py)).
 
 **Aspect** — a declared field group of a canonical model, optionally with a
 typed member (a Handle, a counterparty), carrying its survivorship strategy and
@@ -156,8 +156,7 @@ source precedence. The aspect is the unit of resolution; a value field belongs
 to exactly one aspect, and consumer donors contribute aspects additively.
 
 **Survivorship** — how an aspect's asserted normal-rank statements resolve onto
-the operational row: `SOURCE_PRIORITY`, `MOST_RECENT(date_field)`,
-`MOST_COMPLETE`, `HIGHEST_TRUST` (MDM names). Preferred person statements always
+the operational row through `SOURCE_PRIORITY`. Preferred person statements always
 precede it; the winner is marked **applied** and its values materialise on the
 row. A re-derivation, never a migration, when a knob flips.
 
@@ -270,8 +269,19 @@ model (`MergeableMixin.merge`, the shared `merge_records` verb). Each
 *reference* to a merged record, meaning a foreign key or a record edge pointing
 at it, follows its merge policy: move to the survivor, keep pointing at the
 merged record, or block the merge. The merged record is then retired
-(`retire_merged`, a delete by default). A resource's `mergeable` says the verb
-serves it.
+(`retire_merged`): kept as a redirect to the survivor (`merged_into`, trashed on
+a trash owner) when the model, its trash owner or the references naming it
+retain it, otherwise deleted. A resource's `mergeable` says the verb serves it.
+An actor merges through `merge`; system work folds through `fold`, inside the
+caller's changeset.
+
+**Canonical record** — the operational survivor a redirect resolves to
+(`MergeableMixin.canonical()`, `objects.canonical()`): the one row readers,
+writers and counts address once its duplicates are merged. A merged record stays
+as evidence and reads as *merged into* its canonical record. A queryset's
+`canonical()` keeps a retained redirect whose survivor that queryset does not
+reach (an actor's read, a channel filter), so a reader who can see only the copy
+still sees the record.
 
 **Resource query** — the executable query contract of a data resource. The
 backend finalizes `DataResourceQuery` against the composed schema; frontend
@@ -349,7 +359,7 @@ read, created, changed, deleted or called. Admission inputs use the same relatio
 with no step. Readers see record identities through their current read scope.
 
 **Derived-from evidence** — a frozen fact or source link admitted through
-`angee.base.evidence`'s standing-read check. Decisions, run inputs and
+`angee.evidence`'s standing-read check. Decisions, run inputs and
 extraction retain their own edges to this shared source identity.
 
 ## Decisions
@@ -383,7 +393,7 @@ documents, facts and revisions against an explicit file or message target.
 that participates in identity, communication, and relationship facts.
 
 **Handle** — a normalized contact point such as an email address or account.
-The Handle's owner records the **control** fact (who may act through it), while
+The Handle's controller records the **control** fact (who may act through it), while
 **PartyStatement** records the **identity** fact (`aspect="handle"`, typed Handle
 member); neither fact implies the other. A **suggestion** is an asserted
 normal statement below 0.5 confidence: it awaits review and never decides which
@@ -406,9 +416,12 @@ It remains canonical for tracked or free-text, time-bounded counterparties;
 its asserted values live in its own statement table. Address is likewise a
 canonical, referencable subject with independently retained source assertions.
 
-**same_as** — a symmetric identity statement on an ordered Party pair.
-Preferred no-value keeps both directions separate. Preferred value awaits a
-merge action whose input chooses the survivor; survivorship never merges rows.
+**same_as** — a symmetric identity statement on an ordered pair of records of
+one model (Party, and messaging's Thread and Message). Preferred no-value keeps
+both directions separate and refuses their merge. For a Party a preferred value
+awaits a merge action whose input chooses the survivor; survivorship never
+merges rows. For a channel copy of a message or thread the applied statement
+itself folds the newer copy into the older as a retained redirect.
 The pointing model's **merge_contract** owns statement union and retained
 supersession through the existing reference dispatcher.
 

@@ -222,7 +222,8 @@ function emitAppModule(runtimeDir, manifest, schemaNames, addonSources, installe
     "",
     `export const composedAddons = [${addonValues}] as const;`,
     `export const composedThemeDefinitions = [${installedThemes.packages.map((_pkg, index) => `...canonicalThemes${index}`).join(", ")}].sort((left, right) => left.id.localeCompare(right.id));`,
-    "const contributedThemeDefinitions = composedAddons.flatMap((addon) => (addon.themes ?? []).map((entry) => \"definition\" in entry ? entry.definition : entry)).sort((left, right) => left.id.localeCompare(right.id));",
+    // Only an addon package contributes themes; the deployment layer never does.
+    `const contributedThemeDefinitions = [${addonPackages.map((_pkg, index) => `addon${index}`).join(", ")}].flatMap((addon) => (addon.themes ?? []).map((entry) => "definition" in entry ? entry.definition : entry)).sort((left, right) => left.id.localeCompare(right.id));`,
     "if (contributedThemeDefinitions.length !== composedThemeDefinitions.length || contributedThemeDefinitions.some((definition, index) => definition !== composedThemeDefinitions[index])) {",
     "  throw new Error(\"Composed theme contributions must reference their package's canonical ./themes definitions in id order.\");",
     "}",

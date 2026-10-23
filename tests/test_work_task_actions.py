@@ -26,11 +26,11 @@ class TaskActionTests(WorkCase):
     def run_verb(self, task, verb):
         """Run ``verb`` as the owner and roll it back; return whether it was admitted and changed the row."""
 
-        before = type(task)._base_manager.values_list("stage_id", "status").get(pk=task.pk)
+        before = type(task)._base_manager.values_list("stage_id", "status", "is_trashed").get(pk=task.pk)
         try:
             with actor_context(self.owner), transaction.atomic():
                 getattr(self.as_user(task), verb)(*ARGUMENTS.get(verb, ()))
-                after = type(task)._base_manager.values_list("stage_id", "status").get(pk=task.pk)
+                after = type(task)._base_manager.values_list("stage_id", "status", "is_trashed").get(pk=task.pk)
                 raise _Rollback(after != before)
         except _Rollback as outcome:
             return True, outcome.args[0]
@@ -80,8 +80,21 @@ class TaskActionTests(WorkCase):
         with actor_context(self.owner):
             self.as_user(task).promote_to_project()
         self.assertNotIn("remove", self.offered(task))
-        with actor_context(self.owner), self.assertRaisesMessage(ValidationError, "A promoted task cannot be removed."):
-            self.as_user(task).remove()
+        for verb in ("remove", "trash"):
+            with (
+                actor_context(self.owner),
+                self.assertRaisesMessage(ValidationError, "A promoted task cannot be removed."),
+            ):
+                getattr(self.as_user(task), verb)()
+        task.refresh_from_db()
+        self.assertFalse(task.is_trashed)
+
+    def test_assignee_write_does_not_offer_or_admit_removal(self):
+        task = self.task("Doing", assignee=self.assignee)
+        self.assertTrue(self.scoped(task, self.assignee, "write"))
+        self.assertNotIn("remove", self.offered(task, user=self.assignee))
+        with actor_context(self.assignee), self.assertRaises(PermissionDenied):
+            self.as_user(task, self.assignee).remove()
 
     def test_missing_queue_stages_withhold_the_verbs_that_need_them(self):
         task = self.task("Doing")

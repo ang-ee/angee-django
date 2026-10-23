@@ -2,23 +2,7 @@ import type { DocumentType } from "@angee/gql/console";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  ActionTrigger,
-  Button,
-  DialogBackdrop,
-  DialogBody,
-  DialogContent,
-  DialogFooter,
-  DialogPortal,
-  DialogRoot,
-  DialogTitle,
-  ErrorBanner,
-  FieldControl,
-  FieldLabel,
-  FieldRoot,
-  useActionResultMutation,
-  useRecordChromeActionMutation,
-  useRecordChromeContext,
-  type RecordChromeContext,
+  ActionTrigger, Button, DialogBackdrop, DialogBody, DialogContent, DialogFooter, DialogPortal, DialogRoot, DialogTitle, ErrorBanner, FieldControl, FieldLabel, FieldRoot, FormRoot, useActionResultMutation, useRecordChromeActionMutation, useRecordChromeContext, type RecordChromeContext,
 } from "@angee/ui";
 import * as React from "react";
 
@@ -265,7 +249,7 @@ export function PairingDialog({
       <DialogPortal>
         <DialogBackdrop />
         <DialogContent>
-          <form onSubmit={(event) => void submit(event)}>
+          <FormRoot onSubmit={(event) => void submit(event)}>
             <DialogTitle>{t("channel.pairing.title")}</DialogTitle>
             {/* The body swaps live as channelChanged refetches; announce transitions. */}
             <DialogBody aria-live="polite">
@@ -337,7 +321,7 @@ export function PairingDialog({
                 {t("channel.pairing.done")}
               </Button>
             </DialogFooter>
-          </form>
+          </FormRoot>
         </DialogContent>
       </DialogPortal>
     </DialogRoot>

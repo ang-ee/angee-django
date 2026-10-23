@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from django.test.utils import isolate_apps
 
-from angee.base.fields import FractionalRankField
+from angee.fields import FractionalRankField
 from angee.projects.models import Task as AbstractTask
 
 

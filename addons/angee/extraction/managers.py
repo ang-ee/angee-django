@@ -5,22 +5,15 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, models, transaction
 from rebac import generic_target, system_context, to_subject_ref
 
-from angee.base.actors import actor_user_id
-from angee.base.evidence import EvidenceReference, readable_records
-from angee.base.identity import public_id_of
-from angee.base.jsonschema import validate
-from angee.base.mixins import AppendOnlyQuerySet
-from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.refs import record_ref_for
-from angee.base.scoping import read_scoped_queryset, system_queryset
-from angee.base.serialization import canonical_json_sha256, strip_null_bytes
+from angee.actors import actor_user_id
+from angee.evidence import EvidenceReference, readable_records
 from angee.extraction.acquisition import ExtractionConfig, PageCarrier, PartCarrier, PreparedDocument, prepare_pages
 from angee.extraction.contracts import (
     CorrectionBinding,
@@ -32,28 +25,42 @@ from angee.extraction.contracts import (
 )
 from angee.extraction.enums import ExtractionErrorCode, ExtractionRole, ExtractionStatus
 from angee.extraction.pointers import json_pointer_value, result_selectors
+from angee.identity import public_id_of
+from angee.jsonschema import validate
+from angee.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet
+from angee.refs import record_ref_for
+from angee.serialization import canonical_json_sha256, strip_null_bytes
+
+if TYPE_CHECKING:
+    from angee.extraction.models import Extraction
 
 
 class StaleExtraction(ValidationError):
     """The requested revision is no longer the lineage head."""
 
 
-class EvidenceQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
+class EvidenceQuerySet[EvidenceT: models.Model](AppendOnlyQuerySet[EvidenceT], AngeeQuerySet[EvidenceT]):
     """Close generic insertion as well as edits and deletion."""
 
     def validate_insert(self) -> None:
         raise ValueError("Extraction evidence can only be inserted by its retention owner.")
 
 
-EvidenceManager: Any = AngeeManager.from_queryset(EvidenceQuerySet)
+EvidenceManager = AngeeManager.from_queryset(EvidenceQuerySet)
 
 
-class ExtractionManager(EvidenceManager):
+class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
     """Retain evidence after actor, schema, source and identity validation."""
 
     def prepare_pages(
-        self, files: Sequence[Any], message_parts: Sequence[Any], *, profile: Any,
-        config: ExtractionConfig, actor: Any, heartbeat: Any,
+        self,
+        files: Sequence[Any],
+        message_parts: Sequence[Any],
+        *,
+        profile: Any,
+        config: ExtractionConfig,
+        actor: Any,
+        heartbeat: Any,
     ) -> PreparedDocument:
         """Acquire bounded carriers through the extraction domain owner."""
         return prepare_pages(files, message_parts, profile=profile, config=config, actor=actor, heartbeat=heartbeat)
@@ -132,16 +139,24 @@ class ExtractionManager(EvidenceManager):
             if (source.file is None) == (source.message_part is None):
                 raise ValidationError("A source requires exactly one file or message part.")
             if not (
-                source.file is not None and target._meta.label == "storage.File" and source.file.pk == target.pk
-                or source.file is not None and target._meta.label == "messaging.Message"
-                and system_queryset(target.parts.model).filter(message_id=target.pk, file_id=source.file.pk).exists()
-                or source.message_part is not None and target._meta.label == "messaging.Message"
+                source.file is not None
+                and target._meta.label == "storage.File"
+                and source.file.pk == target.pk
+                or source.file is not None
+                and target._meta.label == "messaging.Message"
+                and target.parts.model.system_queryset().filter(message_id=target.pk, file_id=source.file.pk).exists()
+                or source.message_part is not None
+                and target._meta.label == "messaging.Message"
                 and source.message_part.message_id == target.pk
                 # A file delivered by a message keeps that message's parts as context.
-                or source.message_part is not None and target._meta.label == "storage.File"
-                and system_queryset(source.message_part._meta.model).filter(
-                    message_id=source.message_part.message_id, file_id=target.pk,
-                ).exists()
+                or source.message_part is not None
+                and target._meta.label == "storage.File"
+                and source.message_part._meta.model.system_queryset()
+                .filter(
+                    message_id=source.message_part.message_id,
+                    file_id=target.pk,
+                )
+                .exists()
             ):
                 raise ValidationError("Every source must be the extraction target or belongs to the extraction target.")
         readable_records(tuple(source.evidence_reference for source in sources), (actor,))
@@ -161,9 +176,10 @@ class ExtractionManager(EvidenceManager):
             ExtractionRole.RECOGNITION in roles and recognition_model is None
         ):
             raise ValidationError("Extraction reported use of an unconfigured inference model.")
-        profile_type = self.model.impl_field("profile").resolve_class(profile)
+        profile_type = self.model.profile.field.resolve_class(profile)
         if (
-            profile_config is not None and "evidence_layout" in profile_config
+            profile_config is not None
+            and "evidence_layout" in profile_config
             and profile_config["evidence_layout"] != profile_type.evidence_layout.model_dump()
         ):
             raise ValidationError("The selected profile owns its evidence layout.")
@@ -182,7 +198,7 @@ class ExtractionManager(EvidenceManager):
         for pointer, claims in result.claims.items():
             try:
                 json_pointer_value(result.value, pointer)
-            except (KeyError, ValueError):
+            except KeyError, ValueError:
                 raise ValidationError("A claim names an absent fact.") from None
             if not isinstance(claims, list) or any(
                 not isinstance(c, dict)
@@ -202,15 +218,17 @@ class ExtractionManager(EvidenceManager):
         source_values = []
         for source in sources:
             target_ref = generic_target(source.record)
-            source_values.append({
-                "position": source.source_position,
-                "file_id": source.file.pk if source.file is not None else None,
-                "message_part_id": source.message_part.pk if source.message_part is not None else None,
-                "content_type_id": target_ref.content_type.pk,
-                "object_id": target_ref.object_id,
-                "content_hash": source.content_hash,
-                "mime_type": source.mime_type,
-            })
+            source_values.append(
+                {
+                    "position": source.source_position,
+                    "file_id": source.file.pk if source.file is not None else None,
+                    "message_part_id": source.message_part.pk if source.message_part is not None else None,
+                    "content_type_id": target_ref.content_type.pk,
+                    "object_id": target_ref.object_id,
+                    "content_hash": source.content_hash,
+                    "mime_type": source.mime_type,
+                }
+            )
         reference = record_ref_for(target)
         lineage_identity = canonical_json_sha256(
             {
@@ -246,7 +264,7 @@ class ExtractionManager(EvidenceManager):
             outcome["stage"] = failure.stage if failure is not None else None
         page_values = []
         file_model = self.model._meta.apps.get_model("storage.File")
-        readable_files = read_scoped_queryset(file_model, actor)
+        readable_files = file_model.objects.with_actor(actor).with_action("read")
         for page in pages:
             carrier = None
             if page.image_file_id:
@@ -305,8 +323,15 @@ class ExtractionManager(EvidenceManager):
             created_by_id=actor_user_id(to_subject_ref(actor)),
         )
         return self._retain(
-            values, source_values, page_values, part_values, base, identity_mapping, retired_identities,
-            actor=actor, part_carriers=part_carriers,
+            values,
+            source_values,
+            page_values,
+            part_values,
+            base,
+            identity_mapping,
+            retired_identities,
+            actor=actor,
+            part_carriers=part_carriers,
         )
 
     def _retain(
@@ -348,9 +373,10 @@ class ExtractionManager(EvidenceManager):
                 raise ValidationError("A retained source hold cannot remap or retire identities.")
             if base is not None and (previous is None or previous.pk != base.pk):
                 raise StaleExtraction("The extraction base is no longer current.")
-            authority = previous
+            authority: Extraction | None = previous
             if (
-                previous is not None and previous.outcome["kind"] != ExtractionStatus.SUCCEEDED
+                previous is not None
+                and previous.outcome["kind"] != ExtractionStatus.SUCCEEDED
                 and previous.document_map
             ):
                 authority = self._successful_identity_authority(previous)
@@ -370,14 +396,17 @@ class ExtractionManager(EvidenceManager):
                         stage="correspondence",
                     )
             if previous is not None and values["outcome"]["kind"] == ExtractionStatus.FAILED:
+                assert authority is not None
                 document_map, retired = previous.document_map, previous.retired_identities
                 values["outcome"]["identity_correspondence"] = {
                     "last_known_revision": authority.revision,
                     "expected_base_id": public_id_of(authority),
                 }
             if (
-                base is not None and authority is not None
-                and values["outcome"]["kind"] == ExtractionStatus.SUCCEEDED and not correction
+                base is not None
+                and authority is not None
+                and values["outcome"]["kind"] == ExtractionStatus.SUCCEEDED
+                and not correction
             ):
                 self._preserve_authority(values, parts, authority, base, document_map, retirement)
             if values["outcome"]["kind"] == ExtractionStatus.SUCCEEDED:
@@ -399,12 +428,14 @@ class ExtractionManager(EvidenceManager):
                 first_file_id = next((source["file_id"] for source in sources if source["file_id"]), None)
                 drive_id = (
                     str(file_model._base_manager.select_related("drive").get(pk=first_file_id).drive.sqid)
-                    if first_file_id else ""
+                    if first_file_id
+                    else ""
                 )
                 for position, part in enumerate(parts):
                     carrier = (
-                        part_carriers[position] if part_carriers else
-                        PartCarrier.retain(DocumentPart(**part), actor=actor, drive_id=drive_id)
+                        part_carriers[position]
+                        if part_carriers
+                        else PartCarrier.retain(DocumentPart(**part), actor=actor, drive_id=drive_id)
                     )
                     file = file_model._base_manager.get(sqid=carrier.file_id)
                     recovered = carrier.read(file)
@@ -442,9 +473,7 @@ class ExtractionManager(EvidenceManager):
         }
         outcome = values["outcome"]
         result = authority.preserve_authority(
-            Result(
-                values["result"], retained_parts, outcome["claims"], provider_metadata=outcome["document"]
-            ),
+            Result(values["result"], retained_parts, outcome["claims"], provider_metadata=outcome["document"]),
             identity_mapping=mapping,
             retired_identities=retirement,
             claim_part_positions=positions,
@@ -587,7 +616,7 @@ class ExtractionManager(EvidenceManager):
             raise PermissionDenied("Read access to retained evidence and its sources is required.")
         return row
 
-    def _successful_identity_authority(self, head: Any) -> Any:
+    def _successful_identity_authority(self, head: Extraction) -> ExtractionT:
         """Match copied identities against their successful facts, never a held candidate."""
         row = (
             self.model._base_manager.filter(
@@ -658,15 +687,27 @@ class ExtractionManager(EvidenceManager):
 
     def _correction_records(self, decision: Any, *, actor: Any, binding: CorrectionBinding) -> tuple[Any, Any]:
         """Check the caller-owned authority and revision parent against concern links."""
-        if any(type(ref.public_id) is not str or type(ref.revision) is not int or ref.revision < 1
-               for ref in (binding.authority, binding.revision_parent)):
+        if any(
+            type(ref.public_id) is not str or type(ref.revision) is not int or ref.revision < 1
+            for ref in (binding.authority, binding.revision_parent)
+        ):
             raise ValidationError("The decision caller supplied an invalid correction binding.")
-        original = self.model.objects.with_actor(actor).filter(
-            sqid=binding.authority.public_id, revision=binding.authority.revision,
-        ).first()
-        parent = self.model.objects.with_actor(actor).filter(
-            sqid=binding.revision_parent.public_id, revision=binding.revision_parent.revision,
-        ).first()
+        original = (
+            self.model.objects.with_actor(actor)
+            .filter(
+                sqid=binding.authority.public_id,
+                revision=binding.authority.revision,
+            )
+            .first()
+        )
+        parent = (
+            self.model.objects.with_actor(actor)
+            .filter(
+                sqid=binding.revision_parent.public_id,
+                revision=binding.revision_parent.revision,
+            )
+            .first()
+        )
         if original is None or parent is None:
             raise ValidationError("The correction names an absent or inaccessible extraction revision.")
         self._require_correction_parent(original, parent)
@@ -697,10 +738,7 @@ class ExtractionManager(EvidenceManager):
         decisions = self.model._meta.apps.get_model("decisions.Decision")
         with transaction.atomic():
             decision = decisions.objects.with_actor(actor).get(pk=decision_id)
-            if (
-                decision.kind != expected_action
-                or decision.verdict != [expected_choice]
-            ):
+            if decision.kind != expected_action or decision.verdict != [expected_choice]:
                 raise ValidationError("The correction decision has another chosen alternative.")
             original, parent = self._correction_records(decision, actor=actor, binding=binding)
             self._require_target_write(original.target, actor)
@@ -777,8 +815,13 @@ class ExtractionManager(EvidenceManager):
             outcome["request_digest"] = canonical_json_sha256(request)
             sources = list(
                 original.sources.values(
-                    "position", "file_id", "message_part_id", "content_type_id", "object_id",
-                    "content_hash", "mime_type",
+                    "position",
+                    "file_id",
+                    "message_part_id",
+                    "content_type_id",
+                    "object_id",
+                    "content_hash",
+                    "mime_type",
                 )
             )
             parts = [asdict(part) for part in original.document_parts()]
@@ -807,13 +850,17 @@ class ExtractionManager(EvidenceManager):
             raise ValidationError("The reviewed correction is not the direct retained successor.")
         retained = decisions.objects.with_actor(actor).get(pk=successor.correction_decision_id)
         original = self.model.objects.with_actor(actor).get(
-            sqid=correction.original_extraction_id, revision=correction.original_revision,
+            sqid=correction.original_extraction_id,
+            revision=correction.original_revision,
         )
         parent = self.model.objects.with_actor(actor).get(
-            sqid=correction.revision_parent_extraction_id, revision=correction.revision_parent_revision,
+            sqid=correction.revision_parent_extraction_id,
+            revision=correction.revision_parent_revision,
         )
         original, parent = self._correction_records(
-            retained, actor=actor, binding=CorrectionBinding(original.reference, parent.reference),
+            retained,
+            actor=actor,
+            binding=CorrectionBinding(original.reference, parent.reference),
         )
         if (
             str(retained.sqid) != correction.decision_id

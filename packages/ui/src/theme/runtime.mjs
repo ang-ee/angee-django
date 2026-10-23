@@ -3,7 +3,8 @@ export const THEME_CONTRACT_VERSION = 1;
 export const THEME_ID_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
 export const THEME_TOKEN_NAMES = Object.freeze([
   "--surface-canvas", "--surface-sheet", "--surface-sheet-2", "--surface-rail",
-  "--surface-rail-hi", "--surface-popover", "--surface-inset", "--text-primary",
+  "--surface-rail-hi", "--surface-rail-hover", "--surface-kbd-on-rail", "--border-kbd-on-rail",
+  "--surface-popover", "--surface-inset", "--text-primary",
   "--text-secondary", "--text-muted", "--text-subtle", "--text-inverse",
   "--text-on-rail", "--text-on-rail-mut", "--text-on-rail-hi", "--text-on-brand",
   "--text-link", "--border-subtle", "--border-default", "--border-strong",
@@ -20,9 +21,11 @@ export const THEME_TOKEN_NAMES = Object.freeze([
   "--font-family-mono", "--elevation-xs", "--elevation-sm", "--elevation-md",
   "--elevation-lg", "--elevation-popover", "--r-2", "--r-4", "--r-6", "--r-8", "--r-10", "--r-12",
   "--r-full", "--rail-w", "--topbar-h", "--breadcrumbbar-h", "--controlpanel-h", "--chatter-w",
-  "--control-h-sm", "--control-h-md", "--control-h-lg",
+  "--control-h-xs", "--control-h-sm", "--control-h-md", "--control-h-lg",
   "--fw-regular", "--fw-medium", "--fw-semibold", "--fw-bold",
-  "--fs-15", "--lh-15", "--fs-18", "--lh-18", "--fs-22", "--lh-22",
+  "--fs-11", "--lh-11", "--fs-12", "--lh-12", "--fs-13", "--lh-13", "--fs-14", "--lh-14",
+  "--fs-15", "--lh-15", "--fs-16", "--lh-16", "--fs-18", "--lh-18", "--fs-22", "--lh-22",
+  "--fs-28", "--lh-28", "--fs-34", "--lh-34",
   "--chart-1", "--chart-2", "--chart-3", "--chart-4", "--chart-5", "--chart-6", "--chart-7", "--chart-8",
   "--chart-other", "--chart-surface",
   "--dur-fast", "--dur-base", "--dur-slow", "--ease",

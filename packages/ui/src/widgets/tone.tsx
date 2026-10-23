@@ -1,7 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
 
 import { isTone, type Tone } from "../lib/tones";
-import { Badge } from "../ui/badge";
+import { Chip } from "../ui/chip";
 import { selectWidget } from "./select";
 import { optionLabel, optionToken, type WidgetDefinition, type WidgetRenderProps } from "./types";
 
@@ -12,7 +12,7 @@ function toneOf(value: unknown): Tone {
 }
 
 function ToneChip({ value, children }: { value: unknown; children: ReactNode }): ReactElement {
-  return <Badge tone={toneOf(value)} density="compact" shape="pill">{children}</Badge>;
+  return <Chip tone={toneOf(value)}>{children}</Chip>;
 }
 
 function ToneRead({ value, field }: WidgetRenderProps<string>): ReactElement {

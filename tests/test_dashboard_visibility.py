@@ -3,6 +3,7 @@
 import pytest
 from django.apps import apps
 from django.core.exceptions import ValidationError
+from rebac import anonymous_actor
 
 from angee.dashboards.models import canonical_dashboard_snapshot, widget_visibility_answers
 from angee.projects.testing import (
@@ -23,31 +24,32 @@ def test_declared_related_scope_resolves_real_queue_field(monkeypatch):
     assert apps.get_model("work.Queue") is projects_models.Queue
     seen = []
 
-    class ReadableQueues:
-        def filter(self, **lookup):
-            assert lookup == {"slug__in": ["incoming"]}
-            return self
+    queryset_class = type(projects_models.Queue._default_manager.get_queryset())
+    native_with_actor = queryset_class.with_actor
 
-        def values_list(self, key, flat):
-            assert (key, flat) == ("slug", True)
-            return ["incoming"]
+    def readable(queryset, actor):
+        seen.append((queryset.model, actor))
+        return native_with_actor(queryset, actor)
 
-    def readable(model, actor):
-        seen.append((model, actor))
-        return ReadableQueues()
+    def slugs(queryset, key, flat):
+        assert (key, flat) == ("slug", True)
+        assert queryset.model is projects_models.Queue
+        assert any(
+            lookup.lookup_name == "in" and lookup.lhs.target.name == "slug" and lookup.rhs == ["incoming"]
+            for lookup in queryset.query.where.children
+        )
+        return ["incoming"]
 
-    monkeypatch.setattr("angee.dashboards.models.read_scoped_queryset", readable)
-    actor = object()
+    monkeypatch.setattr(queryset_class, "with_actor", readable)
+    monkeypatch.setattr(queryset_class, "values_list", slugs)
+    actor = anonymous_actor()
     assert widget_visibility_answers(
         [{"resource": "projects.Task", "key": "queue__slug", "value": "incoming"}], actor
     ) == [True]
     assert seen == [(projects_models.Queue, actor)]
 
 
-def test_declared_task_queue_scope_validates_in_a_widget_snapshot(monkeypatch):
-    monkeypatch.setattr(
-        "angee.dashboards.models.read_scoped_queryset", lambda model, _actor: model._base_manager.none(),
-    )
+def test_declared_task_queue_scope_validates_in_a_widget_snapshot():
     snapshot = canonical_dashboard_snapshot({
         "schemaVersion": 1,
         "columns": 12,

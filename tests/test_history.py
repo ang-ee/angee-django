@@ -11,6 +11,14 @@ from tests.conftest import create_user
 from tests.core_persistence import OwnedRow
 
 
+class OwnedRowProxy(OwnedRow):
+    """A tracked proxy exercising the concrete table's history owner."""
+
+    class Meta:
+        proxy = True
+        app_label = "scopedemo"
+
+
 @pytest.fixture(params=("registry", "denormalized"))
 def history_permissions(db, settings, request):
     """Use the existing persistence probe with a deliberately unreadable title."""
@@ -60,3 +68,15 @@ def test_delete_snapshot_retains_stored_value_and_rolls_back(history_permissions
     assert history.get(history_type="-").title == "Stored secret"
     assert not history.model._meta.get_field("title").null
     assert not OwnedRow._base_manager.filter(pk=row_pk).exists()
+
+
+def test_proxy_queryset_delete_uses_concrete_history_owner(history_permissions):
+    """A proxy delete snapshots the concrete table instead of refusing tracked writes."""
+
+    actor = create_user("proxy-history-owner")
+    with actor_context(actor):
+        row = OwnedRow.objects.create(title="Tracked through proxy")
+        deleted, _ = OwnedRowProxy.objects.filter(pk=row.pk).delete()
+
+    assert deleted == 1
+    assert OwnedRow.history.filter(id=row.pk, history_type="-").exists()

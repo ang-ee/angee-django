@@ -2,13 +2,23 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { Button } from "../../ui/button";
 import type { Tone } from "../../lib/tones";
-import { Badge } from "../../ui/badge";
+import { Chip } from "../../ui/chip";
+import { Tooltip } from "../../ui/tooltip";
+import { RecordReference } from "../relation/RecordReference";
+import { Glyph } from "../../chrome/Glyph";
+import { useUiT } from "../../i18n";
 
 export interface RecordFieldMark {
   field: string;
   label: string;
   tone: Tone;
-  onReveal: () => void;
+  /** Hover copy naming the source that supplied this field value. */
+  origin?: string;
+  /** A resource-backed saved record the mark opens through its registered route. */
+  target?: { model: string; id: string };
+  icon?: string;
+  /** An owner-supplied reveal action, such as opening a decision pane. */
+  onReveal?: () => void;
 }
 export interface ActiveRecordForm {
   model: string;
@@ -32,7 +42,10 @@ const Dispatch = createContext<{
   setForm: (owner: symbol, form: ActiveRecordForm | null) => void;
 } | null>(null);
 
-/** Shared by the form and its pane; carries presentation only, never record values. */
+/** Shared by the form and its pane; carries presentation only, never record values.
+ * @kind null
+ * @reason Provider infrastructure: RecordFieldMarks context.
+ */
 export function RecordFieldMarksProvider({ children }: { children: ReactNode }) {
   const [revealed, setRevealed] = useState<RevealedField | null>(null);
   const [publications, setPublications] = useState(new Map<symbol, readonly MarkPublication[]>());
@@ -54,6 +67,9 @@ export function RecordFieldMarksProvider({ children }: { children: ReactNode }) 
   return <Dispatch.Provider value={dispatch}><State.Provider value={state}>{children}</State.Provider></Dispatch.Provider>;
 }
 
+/**
+ * @owner FormView
+ */
 export function useRecordFieldMarks(publications: readonly MarkPublication[]) {
   const bridge = useContext(Dispatch);
   const publish = bridge?.publish;
@@ -64,8 +80,14 @@ export function useRecordFieldMarks(publications: readonly MarkPublication[]) {
   }, [publish, publications]);
 }
 
+/**
+ * @owner FormView
+ */
 export function useRevealedRecordField() { return useContext(State)?.revealed; }
 
+/**
+ * @owner FormView
+ */
 export function useActiveRecordForm() { return useContext(State)?.form ?? null; }
 
 export function usePublishActiveRecordForm(form: ActiveRecordForm | null) {
@@ -78,28 +100,64 @@ export function usePublishActiveRecordForm(form: ActiveRecordForm | null) {
   }, [setForm, form]);
 }
 
-export function useRecordFieldMark(field: string) {
+export function useRecordFieldMarksForField(field: string) {
   const bridge = useContext(State);
   const setRevealed = useContext(Dispatch)?.setRevealed;
   const record = useRecordChromeContextMaybe();
-  const publication = bridge?.marks.find((item) => item.id === record?.recordId
-    && item.model.toLowerCase() === record.canonicalResource.toLowerCase());
-  const mark = publication?.marks.find((item) => item.field === field);
-  const reveal = useCallback(() => {
-    if (mark && publication) {
-      setRevealed?.({ model: publication.model, id: publication.id, field });
-      mark.onReveal();
-    }
-  }, [setRevealed, field, mark, publication]);
-  return mark ? { ...mark, reveal } : null;
+  return useMemo(() => (bridge?.marks.flatMap((publication) => {
+    if (publication.id !== record?.recordId
+      || !record
+      || publication.model.toLowerCase() !== record.canonicalResource.toLowerCase()) return [];
+    return publication.marks.filter((mark) => mark.field === field).map((mark) => ({
+      ...mark,
+      reveal: mark.onReveal ? () => {
+        setRevealed?.({ model: publication.model, id: publication.id, field });
+        mark.onReveal?.();
+      } : undefined,
+    }));
+  }) ?? []), [bridge?.marks, field, record, setRevealed]);
 }
 
-/** Every native form field placement uses the same reveal control. */
-export function RecordFieldMarkButton({ field, label }: { field: string; label?: ReactNode }) {
-  const mark = useRecordFieldMark(field);
-  if (!mark) return null;
-  return <Button type="button" variant="ghost" size="sm" className="h-auto px-1 py-0" onClick={mark.reveal}
-    aria-label={`${mark.label}: ${typeof label === "string" ? label : field}`}>
-    <Badge tone={mark.tone} density="compact">{mark.label}</Badge>
-  </Button>;
+/** Every native form field placement composes attention, provenance, and access marks once.
+ * @kind fragment
+ */
+export function RecordFieldMarkControl({ field, label, restricted = false }: {
+  field: string;
+  label?: ReactNode;
+  restricted?: boolean;
+}) {
+  const t = useUiT();
+  const published = useRecordFieldMarksForField(field);
+  const marks: readonly RecordFieldMark[] = restricted
+    ? [...published, { field, label: t("form.restricted"), tone: "neutral", icon: "lock" }]
+    : published;
+  if (!marks.length) return null;
+  return <>
+    {marks.map((mark, index) => (
+      <RecordFieldMarkItem key={`${mark.label}:${index}`} mark={mark} field={field} label={label} />
+    ))}
+  </>;
+}
+
+function RecordFieldMarkItem({ mark, field, label }: {
+  mark: RecordFieldMark & { reveal?: () => void };
+  field: string;
+  label?: ReactNode;
+}) {
+  const ariaLabel = `${mark.label}: ${typeof label === "string" ? label : field}`;
+  const badge = <Chip tone={mark.tone}>
+    {mark.icon ? <Glyph decorative name={mark.icon} /> : null}{mark.label}
+  </Chip>;
+  let control: ReactNode;
+  if (mark.target) {
+    control = <RecordReference {...mark.target} label={badge} />;
+  } else if (mark.reveal) {
+    control = <Button type="button" variant="ghost" size="sm" className="h-auto px-1 py-0"
+      onClick={mark.reveal} aria-label={ariaLabel}>{badge}</Button>;
+  } else {
+    control = <span aria-label={ariaLabel}>{badge}</span>;
+  }
+  return mark.origin
+    ? <Tooltip label={mark.origin}><span className="inline-flex" tabIndex={mark.target || mark.reveal ? undefined : 0}>{control}</span></Tooltip>
+    : control;
 }

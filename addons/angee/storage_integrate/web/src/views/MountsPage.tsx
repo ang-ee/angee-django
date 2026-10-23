@@ -1,5 +1,5 @@
 import { IntegrationSyncColumns } from "@angee/integrate";
-import { Column, List, ResourceList, ContainerOutlet, useContainer } from "@angee/ui";
+import { ActionMenu, Column, List, ResourceList, ContainerOutlet, containerHasContent, useContainer } from "@angee/ui";
 import * as React from "react";
 
 import { MOUNT_MODEL } from "../documents";
@@ -17,13 +17,17 @@ export function MountsPage(): React.ReactElement {
       placement="inline"
       routed
       hideCreate
-      toolbarActions={<ContainerOutlet entries={toolbarEntries} />}
+      toolbarActions={containerHasContent(toolbarEntries) ? (
+        <ActionMenu label={t("mount.connect.menu")} glyph="plus" variant="primary" size="sm">
+          <ContainerOutlet entries={toolbarEntries} />
+        </ActionMenu>
+      ) : null}
     >
       <List resource={MOUNT_MODEL}>
         <Column field="display_name" header={t("mount.name")} />
         <Column field="mode" />
         <Column field="lifecycle" widget="statusBadge" />
-        <Column field="runtime_status" />
+        <Column field="runtime_status" widget="statusBadge" />
         {IntegrationSyncColumns({ fields: ["sync_stage", "last_sync_completed_at"] })}
       </List>
     </ResourceList>

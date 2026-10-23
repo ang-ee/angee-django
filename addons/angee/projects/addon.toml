@@ -14,7 +14,13 @@ depends_on = [
   "angee.scheduling",
   "angee.storage",
   "angee.tags",
+  "angee.timeline",
 ]
+
+[[migrations]]
+name = "retire_creation_keys"
+app_label = "projects"
+module = "runtime_migrations.retire_creation_keys"
 
 [resources]
 master = [{ path = "resources/master/010_projects.activitytype.yaml", adopt = "key" }]
@@ -24,13 +30,3 @@ demo = [
   { path = "resources/demo/030_projects.task.yaml", depends_on = ["resources/demo/010_projects.project.yaml", "resources/demo/020_projects.milestone.yaml", "work:resources/demo/012_work.stage.yaml"] },
   { path = "resources/demo/031_projects.task.yaml", depends_on = "resources/demo/030_projects.task.yaml" },
 ]
-
-[[migrations]]
-name = "history_changeset"
-app_label = "projects"
-module = "runtime_migrations.history_changeset"
-
-[[migrations]]
-name = "record_tasks"
-app_label = "projects"
-module = "runtime_migrations.record_tasks"

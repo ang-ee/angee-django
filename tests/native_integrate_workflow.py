@@ -15,7 +15,7 @@ from django.test import TransactionTestCase
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
-from angee.base.fields import SqidField
+from angee.fields import SqidField
 from angee.jobs.enqueue import celery_app
 from angee.workflows.context import StepContext
 from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run

@@ -76,7 +76,9 @@ export interface GraphEditorProps {
 const DEFAULT_NODE_STYLE = graphNodeStyle("var(--border-strong)", "neutral", { height: 100 });
 const EMPTY_SELECTION: GraphEditorSelection = { nodes: [], link: null };
 
-/** Controlled graph editing. Connection policy and every data mutation belong to the caller. */
+/** Controlled graph editing. Connection policy and every data mutation belong to the caller.
+ * @kind surface
+ */
 export function GraphEditor({
   nodes, links, layout, layoutOptions, canLink, onLink, onUnlink, onDelete, onLayoutChange, onLayoutResolved,
   onInsertOnLink, onAddFromPort, nodeActions, status, nodeStyles, ariaLabel, className, initialView, miniMap,
@@ -109,6 +111,9 @@ export function GraphEditor({
   const [draft, setDraft] = React.useState<{ link: GraphEditorLink; previous?: GraphEditorLink } | null>(null);
   const selected = nodes.filter((node) => selection.nodes.includes(node.id));
   const selectedLink = links.find((link) => selection.link && linkId(link) === linkId(selection.link));
+  const nodeReadOnly = (id: string) => nodes.find((node) => node.id === id)?.readOnly === true;
+  const linkReadOnly = (link: GraphEditorLink) => nodeReadOnly(link.from) || nodeReadOnly(link.to);
+  const editableSelected = selected.filter((node) => !node.readOnly);
   const styles = React.useMemo(() => Object.fromEntries(nodes.map((node) => [
     node.kind, nodeStyles?.[node.kind] ?? DEFAULT_NODE_STYLE,
   ])), [nodeStyles, nodes]);
@@ -132,11 +137,13 @@ export function GraphEditor({
 
   function allowed(link: GraphEditorLink): boolean {
     return !readOnly && !links.some((entry) => linkId(entry) === linkId(link))
+      && !linkReadOnly(link)
       && Boolean(nodes.find((node) => node.id === link.from)?.ports.some((port) => port.id === link.port))
       && nodes.some((node) => node.id === link.to) && canLink(link.from, link.port, link.to);
   }
   function connect(link: GraphEditorLink, previous?: GraphEditorLink): void {
     if (!allowed(link) || (previous && !links.some((entry) => linkId(entry) === linkId(previous)))) return;
+    if (previous && linkReadOnly(previous)) return;
     if (previous && linkId(previous) === linkId(link)) return;
     if (previous) onUnlink(previous);
     onLink(link);
@@ -149,8 +156,8 @@ export function GraphEditor({
   }
   function deleteSelection(): void {
     if (readOnly) return;
-    if (selected.length) onDelete(selected.map((node) => node.id));
-    if (selectedLink) onUnlink(selectedLink);
+    if (editableSelected.length) onDelete(editableSelected.map((node) => node.id));
+    if (selectedLink && !linkReadOnly(selectedLink)) onUnlink(selectedLink);
   }
   const nodeLabel = (id: string) => {
     const node = nodes.find((entry) => entry.id === id);
@@ -184,7 +191,8 @@ export function GraphEditor({
         <Button type="button" size="sm" onClick={autoLayout} disabled={readOnly || !nodes.length}>
           {t("graph.autoLayout")}
         </Button>
-        <Button type="button" size="sm" onClick={deleteSelection} disabled={readOnly || (!selected.length && !selectedLink)}>
+        <Button type="button" size="sm" onClick={deleteSelection}
+          disabled={readOnly || (!editableSelected.length && (!selectedLink || linkReadOnly(selectedLink)))}>
           {t("graph.deleteSelected")}
         </Button>
       </div>
@@ -201,7 +209,10 @@ export function GraphEditor({
         nodesDraggable={!readOnly}
         onNodesSelect={(entries) => select({ nodes: entries.map((node) => node.id) })}
         onEdgeSelect={(edge) => select({ link: edge?.meta?.link ?? null })}
-        onNodesPositionChange={(positions) => { if (!readOnly) onLayoutChange({ ...resolvedLayout, ...positions }); }}
+        onNodesPositionChange={(positions) => { if (!readOnly) onLayoutChange({
+          ...resolvedLayout,
+          ...Object.fromEntries(Object.entries(positions).filter(([id]) => !nodeReadOnly(id))),
+        }); }}
         onConnect={readOnly ? undefined : (connection) => connect(connectionLink(connection))}
         isValidConnection={(connection) => allowed(connectionLink(connection))}
         onReconnect={readOnly ? undefined : (edge, connection) => connect(connectionLink(connection), edge.meta?.link)}
@@ -233,7 +244,7 @@ export function GraphEditor({
                   type="button"
                   key={action.id}
                   size="sm"
-                  disabled={readOnly || action.disabled}
+                  disabled={readOnly || node.readOnly || action.disabled}
                   aria-label={t("graph.actionNode", { action: typeof action.label === "string" ? action.label : action.id, node: nodeLabel(node.id) })}
                   onClick={() => action.onSelect(node)}
                 >
@@ -241,7 +252,7 @@ export function GraphEditor({
                 </Button>
               ))}
               <Button
-                type="button" size="sm" disabled={readOnly}
+                type="button" size="sm" disabled={readOnly || node.readOnly}
                 aria-label={t("graph.deleteNode", { node: nodeLabel(node.id) })}
                 onClick={() => onDelete([node.id])}
               >
@@ -254,14 +265,14 @@ export function GraphEditor({
                 <Button
                   type="button"
                   size="sm"
-                  disabled={readOnly}
+                  disabled={readOnly || node.readOnly}
                   aria-label={t("graph.connectPort", { port: port.label ?? port.id, node: nodeLabel(node.id) })}
                   onClick={() => setDraft({ link: { from: node.id, port: port.id, to: "" } })}
                 >
                   {t("graph.connect")}
                 </Button>
                 <Button
-                  type="button" size="sm" disabled={readOnly}
+                  type="button" size="sm" disabled={readOnly || node.readOnly}
                   aria-label={t("graph.addPort", { port: port.label ?? port.id, node: nodeLabel(node.id) })}
                   onClick={() => {
                     const position = suggestedPosition(node.id);
@@ -286,14 +297,14 @@ export function GraphEditor({
                 })}
               </span>
               <Button
-                type="button" size="sm" disabled={readOnly}
+                type="button" size="sm" disabled={readOnly || linkReadOnly(link)}
                 aria-label={t("graph.reconnectLink", linkVars(link))}
                 onClick={() => setDraft({ link, previous: link })}
               >
                 {t("graph.reconnect")}
               </Button>
               <Button
-                type="button" size="sm" disabled={readOnly || !nodes.some((node) => node.id === link.from)}
+                type="button" size="sm" disabled={readOnly || linkReadOnly(link) || !nodes.some((node) => node.id === link.from)}
                 aria-label={t("graph.insertLink", linkVars(link))}
                 onClick={() => {
                   const position = suggestedPosition(link.from);
@@ -305,7 +316,7 @@ export function GraphEditor({
                 {t("graph.insert")}
               </Button>
               <Button
-                type="button" size="sm" disabled={readOnly}
+                type="button" size="sm" disabled={readOnly || linkReadOnly(link)}
                 aria-label={t("graph.deleteLink", linkVars(link))}
                 onClick={() => onUnlink(link)}
               >

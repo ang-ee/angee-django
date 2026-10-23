@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import { RowsListView, defineRowAction, type ListColumn } from "@angee/ui";
+import { RowsListView, defineRowAction, titleCase, type ListColumn } from "@angee/ui";
 
 import { RevokeWorkflowTriggerGrantDocument, TriggerGrantsDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
@@ -24,7 +24,7 @@ export function TriggerGrantsTab({ recordId }: { recordId: string }) {
     ...grant, id: `${grant.resource_type}:${grant.resource_id}#${grant.relation}`,
   })), [trigger?.grants]);
   const columns = useMemo<readonly ListColumn<GrantRow>[]>(() => [
-    { field: "target_label", header: t("trigger.grantTarget"), render: (row) => row.target_label || row.target_kind },
+    { field: "target_label", header: t("trigger.grantTarget"), render: (row) => row.target_label || titleCase(row.target_kind) },
     { field: "relation", header: t("trigger.grantRelation") },
   ], [t]);
   const actions = useMemo(() => [defineRowAction({

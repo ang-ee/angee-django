@@ -47,7 +47,8 @@ describe("IAM grants page", () => {
     }>;
     expect(columns.map((column) => column.field)).toEqual([
       "subject_label",
-      "role",
+      "role_name",
+      "caveat_name",
       "namespace",
     ]);
     expect(columns.some((column) => column.header === "")).toBe(false);

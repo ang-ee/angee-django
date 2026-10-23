@@ -172,7 +172,7 @@ class AsyncioLiveSession(LiveChannelSession, ABC):
             if self._is_logged_out(error):
                 self.events.put(("logged_out", None))
             else:
-                self.outcome_error = error
+                self.events.put(("error", error))
                 logger.exception(
                     "%s connection for channel %s crashed.",
                     self.live_impl.label,

@@ -10,6 +10,10 @@ import type { Tone } from "../lib/tones";
 
 export type ChromeMenuGroup = "domain" | "platform";
 export type ChromeMenuStatus = "active" | "future";
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export const SETTINGS_MENU_ENTRY_DESCRIPTOR = {
   id: "settings",
   group: "platform",
@@ -49,6 +53,8 @@ export interface ChromeMenuExtra {
   brand?: RuntimeBrand;
   /** The installed theme a person who chose none sees when the app is selected. Only on a root. */
   theme?: string;
+  /** Desktop rail expansion until the person chooses otherwise. Only on a selected root. */
+  railExpanded?: boolean;
 }
 
 export interface BaseMenuItem extends MenuItem, ChromeMenuExtra {
@@ -135,6 +141,10 @@ function isExternalTarget(target: string): boolean {
   return target.startsWith("//") || /^[A-Za-z][A-Za-z\d+.-]*:/.test(target);
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export class ChromeMenuNode implements ChromeMenuItem {
   id: string;
   label?: string;
@@ -160,6 +170,7 @@ export class ChromeMenuNode implements ChromeMenuItem {
   home?: string;
   brand?: RuntimeBrand;
   theme?: string;
+  railExpanded?: boolean;
   requires?: string;
   /** An included app shown without an entry of its own (logical tree only); still an app for words and rules (G-8). */
   flatten?: boolean;
@@ -248,6 +259,10 @@ export class ChromeMenuNode implements ChromeMenuItem {
   }
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export class MenuTree {
   readonly roots: readonly ChromeMenuNode[];
   readonly byId: ReadonlyMap<string, ChromeMenuNode>;
@@ -513,6 +528,10 @@ function scopesApp(item: ChromeMenuNode): boolean {
   return item.isApp || item.flatten === true;
 }
 
+/**
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function buildMenuTree(
   items: readonly ChromeMenuItem[],
 ): MenuTree {

@@ -47,6 +47,7 @@ export type ActionResultRun = (
  * verbs (`useActionMutation`'s mutate already resolves the outcome) alike.
  * The mutation hook keeps owning cache invalidation; refresh work belongs in
  * the `fire` closure.
+ * @owner ActionTrigger
  */
 export function useActionResultRun(
   options: ActionResultRunOptions = {},

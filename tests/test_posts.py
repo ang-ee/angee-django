@@ -30,11 +30,12 @@ from rebac import (
     write_relationships,
 )
 
-from angee.base.mixins import SourceKind, StatementSourceMixin
+from angee.actors import source_kind_for
 from angee.integrate import scheduler
 from angee.integrate.testing.integration import Integration
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.messaging.testing.models import Channel, Handle, Message, MessageEdge, Reaction, Thread
+from angee.models import SourceKind
 from angee.posts.backends import ParsedMetrics, ParsedPost, ParsedReaction
 from angee.posts.ingest import land_posts
 from angee.posts.models import ThreadPublic
@@ -83,7 +84,7 @@ def test_a_feed_is_an_import_statement_source(posts_tables: None) -> None:
     with system_context(reason="test feed statement source"):
         feed = _feed("import-source")
         integration = Integration._base_manager.get(pk=feed.pk)
-    assert StatementSourceMixin.kind_for(to_subject_ref(integration)) == SourceKind.IMPORT
+    assert source_kind_for(to_subject_ref(integration)) == SourceKind.IMPORT
 
 
 def _post(
@@ -126,6 +127,9 @@ def test_feed_is_a_channel_with_one_concrete_bridge_kind(posts_tables: None) -> 
         assert Feed._meta.parents[Channel].primary_key
         assert channel.backend_class == "feed"
         assert channel.backend.category == "feed"
+        assert type(feed.backend) is type(channel.backend)
+        assert feed.feed_backend.key == "stub"
+        assert type(feed.capability_impl) is type(feed.feed_backend)
         assert feed.feed_backend_class == "stub"
         assert feed.live_implementation_field() is None
         assert integration.concrete_capability() == feed
@@ -159,9 +163,15 @@ def test_due_feed_is_queued_once_as_feed(posts_tables: None, monkeypatch: pytest
 
     scheduler.enqueue_due_bridges(now=_AT + timedelta(hours=1))
 
-    assert queued == [("posts.Feed", feed.pk)], list(Feed._base_manager.filter(pk=feed.pk).values(
-        "concrete_type__model", "lifecycle", "discovery_generation", "discovery_retry_at", "discovery_completed_at",
-    ))
+    assert queued == [("posts.Feed", feed.pk)], list(
+        Feed._base_manager.filter(pk=feed.pk).values(
+            "concrete_type__model",
+            "lifecycle",
+            "discovery_generation",
+            "discovery_retry_at",
+            "discovery_completed_at",
+        )
+    )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -179,10 +189,7 @@ def test_integration_feed_children_prefetch_in_fixed_queries(posts_tables: None)
                 .with_concrete_children(actor=admin, exposed_model_labels={"posts.Feed"})
                 .order_by("pk")
             )
-            targets = [
-                row.concrete_children(actor=admin, exposed_model_labels={"posts.Feed"})[1][0]
-                for row in rows
-            ]
+            targets = [row.concrete_children(actor=admin, exposed_model_labels={"posts.Feed"})[1][0] for row in rows]
         return len(queries), targets
 
     one_count, first = read_targets()
@@ -205,7 +212,9 @@ def test_quota_consume_debits_the_budget(posts_tables: None) -> None:
     with system_context(reason="test quota consume"):
         integration = _feed("quota-debit")
         period = Quota.objects.open_period(
-            integration=integration, scope=f"test:integration:{integration.pk}", now=_AT,
+            integration=integration,
+            scope=f"test:integration:{integration.pk}",
+            now=_AT,
         )
         assert Quota.objects.consume(period=period, units=3000, limit=10000, now=_AT) is True
         ledger = Quota._base_manager.get(integration=integration)
@@ -222,7 +231,9 @@ def test_quota_consume_refuses_when_exhausted_and_leaves_ledger_untouched(posts_
     with system_context(reason="test quota exhaustion"):
         integration = _feed("quota-exhaustion")
         period = Quota.objects.open_period(
-            integration=integration, scope=f"test:integration:{integration.pk}", now=_AT,
+            integration=integration,
+            scope=f"test:integration:{integration.pk}",
+            now=_AT,
         )
         assert Quota.objects.consume(period=period, units=6000, limit=10000, now=_AT) is True
         # 6000 + 5000 > 10000 → refused, ledger stays at the prior 6000.
@@ -248,10 +259,14 @@ def test_quota_openers_converge_on_the_window_boundary(
     with system_context(reason="test quota concurrent openers"):
         integration = _feed("quota-concurrent-openers")
         first = Quota.objects.open_period(
-            integration=integration, scope=f"test:integration:{integration.pk}", now=first_at,
+            integration=integration,
+            scope=f"test:integration:{integration.pk}",
+            now=first_at,
         )
         second = Quota.objects.open_period(
-            integration=integration, scope=f"test:integration:{integration.pk}", now=second_at,
+            integration=integration,
+            scope=f"test:integration:{integration.pk}",
+            now=second_at,
         )
         assert Quota.objects.consume(period=first, units=3000, limit=10000, now=first_at) is True
         assert Quota.objects.consume(period=second, units=4000, limit=10000, now=second_at) is True
@@ -284,7 +299,9 @@ def test_quota_consume_uses_the_backend_gated_lock_contract(
     with system_context(reason="test quota lock contract"):
         integration = _feed("quota-lock-contract")
         period = Quota.objects.open_period(
-            integration=integration, scope=f"test:integration:{integration.pk}", now=_AT,
+            integration=integration,
+            scope=f"test:integration:{integration.pk}",
+            now=_AT,
         )
         assert Quota.objects.consume(period=period, units=1, limit=10, now=_AT) is True
         ledger = Quota._base_manager.get(integration=integration)
@@ -300,7 +317,9 @@ def test_quota_read_derives_from_its_integration(posts_tables: None) -> None:
     with system_context(reason="test quota integration access"):
         integration = _feed("quota-integration-access")
         quota = Quota.objects.open_period(
-            integration=integration, scope=f"test:integration:{integration.pk}", now=_AT,
+            integration=integration,
+            scope=f"test:integration:{integration.pk}",
+            now=_AT,
         )
     assert quota.created_by_id is None
 
@@ -345,7 +364,7 @@ def test_merging_two_handles_that_follow_a_feed_keeps_one_follow_spanning_both(p
         earliest = kept.started_at - timedelta(days=30)
         FeedFollow._base_manager.filter(pk=moved.pk).update(started_at=earliest)
 
-        Handle.objects.merge(alias, into=kept_handle)
+        kept_handle.fold([alias])
 
         follows = list(FeedFollow._base_manager.filter(feed=feed))
     assert [(row.pk, row.handle_id, row.started_at, row.ended_at) for row in follows] == [
@@ -612,3 +631,20 @@ def test_post_metrics_read_derives_from_the_message(posts_tables: None) -> None:
         visible = PostMetrics.objects.filter(pk=row.pk).exists()
 
     assert visible is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_post_metrics_snapshot_keeps_its_creator(posts_tables: None) -> None:
+    """A later snapshot overwrites the counters but never the row's creator."""
+
+    del posts_tables
+    feed = _feed("metrics-creator")
+    StubFeedBackend.queue(feed, [_post("p1", metrics=ParsedMetrics(view_count=1))])
+    later = create_user("metrics-later-writer")
+    with system_context(reason="test metrics creator"):
+        feed.sync()
+        message = Message._base_manager.get(external_id="p1")
+        row = PostMetrics.objects.upsert(message=message, metrics=ParsedMetrics(view_count=5), created_by_id=later.pk)
+
+    assert feed.owner_id is not None
+    assert (row.view_count, row.created_by_id) == (5, feed.owner_id)

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from io import StringIO
+
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from rebac import system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
@@ -30,7 +33,7 @@ def test_handle_upsert_collision_refreshes_existing_row(composed_tables: None, m
 
 @pytest.mark.django_db(transaction=True)
 def test_stale_owner_repair_unowns_a_handle_a_suggestion_decided(composed_tables: None) -> None:
-    """A handle a suggestion owned under the old resolution rule is re-resolved once."""
+    """The explicit command re-resolves a stale owner once."""
     del composed_tables
     owner = get_user_model().objects.create_user(username="stale-owner-repair-owner")
     with system_context(reason="stale owner fixture"):
@@ -40,11 +43,14 @@ def test_stale_owner_repair_unowns_a_handle_a_suggestion_decided(composed_tables
         Handle._base_manager.filter(pk=handle.pk).update(party=party)
         Party._base_manager.filter(pk=party.pk).update(handle_count=1)
 
-        repaired = Handle.objects.resolve_stale_owners()
+    output = StringIO()
+    call_command("resolve_stale_owners", stdout=output)
+    with system_context(reason="stale owner repeat"):
         repeated = Handle.objects.resolve_stale_owners()
         handle.refresh_from_db()
         party.refresh_from_db()
-    assert (repaired, repeated) == (1, 0)
+    assert output.getvalue() == "Resolved 1 stale handle owner(s).\n"
+    assert repeated == 0
     assert handle.party_id is None
     assert party.handle_count == 0
 

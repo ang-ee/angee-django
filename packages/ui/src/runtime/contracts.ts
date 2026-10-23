@@ -17,7 +17,7 @@ export interface RuntimeBrand {
 }
 
 /** A field of the selected app; each records where it came from. */
-export type RuntimeSelectionField = "app" | "rail" | "brand" | "theme" | "home";
+export type RuntimeSelectionField = "app" | "rail" | "brand" | "theme" | "home" | "railExpanded";
 
 /**
  * The app the deployment selected, by `?app=` or by hostname: the roots its rail
@@ -33,6 +33,8 @@ export interface RuntimeSelection {
   theme?: string;
   /** The route name `/` lands on; unset lands on the rail's first app. */
   home?: string;
+  /** Desktop rail expansion until the person chooses otherwise; unset defaults to expanded. */
+  railExpanded?: boolean;
   /** Where each field came from, named the way a person fixing it finds it. */
   sources: Readonly<Partial<Record<RuntimeSelectionField, string>>>;
   /** Why a requested app was not selected, such as an unknown `?app=`. */
@@ -174,10 +176,15 @@ export interface ChatterRoute {
   name: string;
   path: string;
   viewType: string;
+  /** The canonical REBAC resource type, when this route's model declares one. */
+  resourceType?: string | null;
   modelLabel?: string;
   canonicalLabel?: string;
-  /** The model's resource `recordEdges`: edge model labels (`storage.FileAttachment`) its records can carry. */
+  /** The model's resource `recordEdges`: edge model labels (`storage.FileAttachment`) its records can
+   *  carry, plus `<label>:<role>` for each role of a role-bearing edge (`messaging.ThreadAttachment:chatter`). */
   recordEdges?: readonly string[];
+  /** Whether the canonical resource keeps native provenance history. */
+  history?: boolean;
   recordParam?: string;
 }
 
@@ -201,10 +208,57 @@ export interface ChatterTabContent {
   count?: number;
   useCount?: (context: ChatterViewContext) => number | undefined;
   panelClassName?: string;
-  render?: (context: ChatterViewContext) => ReactNode;
-  /** Earlier ids a `?chatterTab=` link may still carry, kept for one release. */
-  aliases?: readonly string[];
+  /**
+   * In the tab strip (the default), or a drill-in: reached from a line with a
+   * `target` (the object's public id), shown in the strip's place with a way
+   * back, addressable through the URL. Layers admit drill-ins like any child.
+   */
+  strip?: boolean;
+  /** What a drill-in's target names: the model the id belongs to. */
+  target?: { model: string };
+  render?: (context: ChatterViewContext, selection?: ChatterSelection) => ReactNode;
 }
+
+/** What a tab was opened with: a drill-in's object and an optional focus inside it. */
+export interface ChatterSelection {
+  target?: string;
+  focus?: string;
+}
+
+/**
+ * How a timeline kind presents: a `timeline#kinds` child declared by the addon
+ * whose Python source implements the kind, under the kind's id.
+ */
+export interface TimelineKindContent {
+  label: ReactNode;
+  icon: string;
+  tone?: "info" | "success" | "warning" | "danger" | "muted";
+  /** The one verb a line of this kind carries. */
+  verb: ReactNode;
+  /** Where the verb leads: a drill-in tab (with the line's target and an optional focus kind), or the target's page. */
+  target: { tab: string; focus?: string } | { page: true };
+}
+
+/**
+ * One group of the Links tab: a `related#groups` child (every record view) or
+ * `<model>#groups` child (that model's pages), declared by the addon that owns
+ * the edge. The group lists rows that link to their records and offers at most
+ * one verb (upload, bind); the Links tab shows when any group is eligible.
+ */
+export interface RelatedGroupContent {
+  when?: (context: ChatterViewContext) => boolean;
+  /** Eligible only where the record's metadata declares this edge. */
+  edge?: { model: string };
+  label: ReactNode;
+  /** Rows the group has on this record, for the tab's count and the group's label. */
+  useCount?: (context: ChatterViewContext) => number | undefined;
+  /** Whether the group offers its one verb (upload, bind) on this record; a group with neither rows nor a verb is absent. */
+  useVerb?: (context: ChatterViewContext) => boolean;
+  /** One component owns the action and rows; label(action?) supplies the counted PaneLabel. */
+  render: (context: ChatterViewContext, label: RelatedGroupLabel) => ReactNode;
+}
+
+export type RelatedGroupLabel = (action?: ReactNode) => ReactNode;
 
 /**
  * A file-preview renderer contributed at build time; merges by `id` (fail-fast

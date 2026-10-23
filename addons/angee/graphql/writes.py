@@ -5,23 +5,18 @@ from __future__ import annotations
 from typing import TypeVar
 
 from django.db import models
+from rebac.managers import RebacManager
 
-from angee.base.scoping import write_scoped_queryset
 from angee.graphql.ids import PublicID, instance_for_id
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
 def write_queryset(model: type[_ModelT]) -> models.QuerySet[_ModelT]:
-    """Return a write-scoped target queryset with row scope and full field values.
+    """Keep native row authorization while disabling field redaction for writes."""
 
-    Both mutation apply steps and delete-preview history need to load the
-    in-memory instance with field-read redaction disabled while preserving
-    REBAC row scope. REBAC models expose this as ``for_write()``; plain Django
-    models have no field redaction and use their default manager.
-    """
-
-    return write_scoped_queryset(model)
+    manager = model._default_manager
+    return manager.for_write() if isinstance(manager, RebacManager) else manager.all()
 
 
 def instance_for_write(model: type[_ModelT], id: PublicID) -> _ModelT | None:

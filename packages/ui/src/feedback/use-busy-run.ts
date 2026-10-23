@@ -10,6 +10,7 @@ export interface BusyRun {
 /**
  * Wrap rendered async action handlers so a surface gets one busy flag plus a
  * post-success callback, such as a list or tree refetch.
+ * @owner ActionTrigger
  */
 export function useBusyRun(onChanged?: () => void): BusyRun {
   const [inFlight, setInFlight] = useState(0);

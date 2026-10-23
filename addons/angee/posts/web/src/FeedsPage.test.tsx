@@ -76,7 +76,7 @@ vi.mock("@angee/ui", async () => {
     ReactionBar: ({ reactions }: { reactions: readonly { reaction: string; count: number }[] }) => (
       <div>{reactions.map((reaction) => `${reaction.reaction}:${reaction.count}`).join(",")}</div>
     ),
-    reactionsFromGroups: actual.reactionsFromGroups,
+    useReactionGroups: actual.useReactionGroups,
     registerForm: actual.registerForm,
     ResourceList: (props: Record<string, unknown>) => {
       pageMocks.resourceProps = props;

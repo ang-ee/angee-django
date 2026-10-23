@@ -18,7 +18,9 @@ import { ContainerOutlet, containerHasContent } from "@angee/ui/lib/container-ou
 import { safeRedirectPath } from "./safe-redirect";
 import { UsernamePasswordForm } from "./UsernamePasswordForm";
 
-/** The login page's containers: sign-in methods and password help. */
+/** The login page's containers: sign-in methods and password help.
+ * @kind contribution
+ */
 export const LOGIN_CONTAINERS: readonly CoreContainer[] = [
   { address: "auth.login#method" },
   { address: "auth.login#password-help" },
@@ -46,6 +48,9 @@ export interface LoginPageProps {
   backgroundImageUrl?: string;
 }
 
+/**
+ * @kind page
+ */
 export function LoginPage({
   brand,
   methods,
@@ -156,7 +161,7 @@ export function LoginPage({
           {loginMethods ? (
             <div className="mb-5">
               {loginMethods}
-              <div className="mt-5 flex items-center gap-3 text-xs text-fg-muted">
+              <div className="mt-5 flex items-center gap-3 text-12 text-fg-muted">
                 <span className="h-px flex-1 bg-border-subtle" aria-hidden />
                 <span>{t("auth.orUsePassword")}</span>
                 <span className="h-px flex-1 bg-border-subtle" aria-hidden />
@@ -198,7 +203,7 @@ function LoginBrandPanel({
                 : "translate-y-0 opacity-100 blur-0",
             )}
           >
-            <p className="mb-5 text-xs font-semibold uppercase tracking-[0.18em] text-n-0/72">
+            <p className="mb-5 text-12 font-semibold uppercase tracking-[0.18em] text-n-0/72">
               {slide.eyebrow}
             </p>
             <h1 className="max-w-[13ch] text-5xl font-semibold leading-[1.02] text-n-0 xl:text-6xl">

@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -14,16 +13,14 @@ from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
-from angee.base.identity import public_id_of
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.identity import public_id_of
 from angee.messaging import session as messaging_session
 from angee.messaging.session import LiveChannelSession
 from angee.messaging.testing.models import Handle, Party, Person
-from angee.parties import signals as parties_signals
 from angee.parties.backends import AvatarReport, ParsedPhoto
 from tests.conftest import File, SchemaAddon, execute_schema, result_data
 from tests.test_storage import (  # noqa: F401 -- the image drive avatars land on
-    EVERYONE_VIEWS,
     PNG_BYTES,
     SVG_BYTES,
     drive,
@@ -106,69 +103,6 @@ def test_a_report_lands_where_upsert_lands_when_its_external_id_and_value_name_d
     with system_context(reason="test reported avatar convergence read"):
         assert Handle._base_manager.get(pk=phone.pk).avatar_id is not None
         assert Handle._base_manager.get(pk=lid.pk).avatar_id is None
-
-
-def test_avatars_stored_before_the_image_drive_move_onto_it_once_and_leave_the_old_rows(
-    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """One deduplicated onto a user's own file moves off it; a refused one keeps its pointer and never fails migrate."""
-
-    owner = _user("avatar-rehome-owner")
-    with system_context(reason="test legacy avatars"):
-        # Before the image drive, a contact photo deduplicated onto any file with its bytes.
-        private = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=owner.pk)
-        refused = File.objects.ingest_bytes(SVG_BYTES, filename="old.svg", owner_id=owner.pk)
-        shared = Person._base_manager.create(display_name="Ada", avatar=private, created_by=owner)
-        scripted = Person._base_manager.create(display_name="Grace", avatar=refused, created_by=owner)
-
-    assert Party.objects.rehome_avatars() == 1
-    with system_context(reason="test legacy avatars read"):
-        moved = Party._base_manager.get(pk=shared.pk).avatar
-        assert File.objects.images().filter(pk=moved.pk).exists()
-        assert moved.content_hash == private.content_hash and moved.pk != private.pk
-        untouched = File._base_manager.get(pk=private.pk)
-        assert (untouched.drive_id, untouched.owner_id, untouched.is_trashed) == (private.drive_id, owner.pk, False)
-        assert Party._base_manager.get(pk=scripted.pk).avatar_id == refused.pk
-    assert "1 party avatars remain off the image drive" in caplog.text
-
-    assert Party.objects.rehome_avatars() == 0
-    # The post-migrate receiver runs it for the parties app only, and a refused row never fails it.
-    parties_signals._rehome_avatars(app_config=SimpleNamespace(label="parties"), using="default")
-    parties_signals._rehome_avatars(app_config=SimpleNamespace(label="storage"), using="default")
-
-    # Any failure in a row, a storage outage included, leaves that party for the next run.
-    with system_context(reason="test legacy avatars again"):
-        Party._base_manager.filter(pk=shared.pk).update(avatar=private)
-
-    def outage(*_args: Any, **_kwargs: Any) -> bytes:
-        raise RuntimeError("storage unavailable")
-
-    monkeypatch.setattr(File, "read_image", outage)
-    assert Party.objects.rehome_avatars() == 0
-    with system_context(reason="test legacy avatars kept"):
-        assert Party._base_manager.get(pk=shared.pk).avatar_id == private.pk
-
-    # The receiver never fails a migrate, and waits until storage's tables exist.
-    rehome = Mock(side_effect=RuntimeError("database unavailable"))
-    monkeypatch.setattr(type(Party.objects), "rehome_avatars", rehome)
-    parties_signals._rehome_avatars(app_config=SimpleNamespace(label="parties"), using="default")
-    assert rehome.call_count == 1
-    monkeypatch.setattr(parties_signals, "has_table", lambda _using, model: model._meta.model_name != "file")
-    parties_signals._rehome_avatars(app_config=SimpleNamespace(label="parties"), using="default")
-    assert rehome.call_count == 1
-
-
-def test_every_migrate_leaves_the_image_drive_granted_with_no_avatar_to_move(
-    image_drive: Any,  # noqa: F811 -- imported shared fixture
-) -> None:
-    """A drive provisioned before its grant gains it on the deploy's migrate, before any avatar arrives."""
-
-    with system_context(reason="test image drive grant at migrate"):
-        image_drive.revoke_record_access(EVERYONE_VIEWS.relation, EVERYONE_VIEWS.subject)
-        assert image_drive.direct_record_access() == ()
-    parties_signals._rehome_avatars(app_config=SimpleNamespace(label="parties"), using="default")
-    with system_context(reason="test image drive grant at migrate read"):
-        assert image_drive.direct_record_access() == (EVERYONE_VIEWS,)
 
 
 def test_a_party_shows_its_own_avatar_else_its_strongest_readable_handles() -> None:
@@ -262,10 +196,11 @@ def test_the_people_list_shows_avatars_with_nested_fields_in_a_bounded_number_of
             rows = result_data(execute_schema(schema, query, user=owner))["people"]
         return len(queries.captured_queries), rows
 
-    # A first execution fills process-wide caches, such as the content types the compiled scopes name.
-    execute_schema(schema, query, user=owner)
-    one, rows = count_for(1, 0)
-    three, rows = count_for(2, 1)
+    # A first page fills process-wide caches, such as the content types the compiled scopes
+    # name once rows exist (a party's read reaches the record tasks about it).
+    count_for(1, 0)
+    one, rows = count_for(1, 1)
+    three, rows = count_for(2, 2)
     assert three == one
     assert {row["id"]: row["display_avatar"]["id"] for row in rows} == shown
     for row in rows:
@@ -322,13 +257,15 @@ def test_a_handle_merge_gives_the_kept_handle_the_alias_avatar_only_when_it_has_
     alias_avatar, own_avatar = _avatar(PNG_BYTES), _avatar(GIF_BYTES)
     Handle.objects.set_avatar(alias, alias_avatar)
     with system_context(reason="test handle merge avatar fill"):
-        kept = Handle.objects.merge(alias, into=phone)
+        kept = phone.fold([alias])
     assert kept.pk == phone.pk and kept.avatar_id == alias_avatar.pk
 
     with system_context(reason="test handle merge avatar keep"):
         second_alias = Handle.objects.upsert(platform="whatsapp", value="113352894324898@lid", created_by_id=owner.pk)
     Handle.objects.set_avatar(second_alias, own_avatar)
     with system_context(reason="test handle merge avatar keep merge"):
-        kept = Handle.objects.merge(second_alias, into=phone)
+        kept = phone.fold([second_alias])
     assert kept.avatar_id == alias_avatar.pk
-    assert not Handle._base_manager.filter(pk__in=(alias.pk, second_alias.pk)).exists()
+    assert set(
+        Handle._base_manager.filter(pk__in=(alias.pk, second_alias.pk)).values_list("merged_into_id", flat=True)
+    ) == {phone.pk}

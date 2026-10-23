@@ -19,7 +19,7 @@ export const iconTileVariants = tv({
   variants: {
     size: {
       sm: "size-6 [&_.glyph]:size-3.5 [&>svg]:size-3.5",
-      md: "size-7 [&_.glyph]:size-3.5 [&>svg]:size-3.5",
+      md: "size-control-xs [&_.glyph]:size-3.5 [&>svg]:size-3.5",
       lg: "size-8 [&_.glyph]:size-4 [&>svg]:size-4",
     },
     tone: ICON_TILE_TONES,
@@ -31,8 +31,6 @@ export const iconTileVariants = tv({
 });
 
 export type IconTileRecipeProps = VariantProps<typeof iconTileVariants>;
-export type IconTileSize = NonNullable<IconTileRecipeProps["size"]>;
-export type IconTileTone = NonNullable<IconTileRecipeProps["tone"]>;
 
 export type IconTileProps = Omit<
   React.HTMLAttributes<HTMLSpanElement>,

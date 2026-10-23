@@ -17,11 +17,72 @@ from angee.messaging.inbox_transcript import InboxTranscript
 from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part, Participant, Party, Thread
 from angee.nexus.inbox import NexusInboxNavigator, NexusInboxNavigatorOptions
 from tests.conftest import execute_schema, make_integration, result_data
+from tests.test_messaging import _storage_drive
 from tests.test_nexus import _schema
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
 User = get_user_model()
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def test_same_named_conversations_keep_identity_and_show_source_context():
+    owner = User.objects.create_user(username="explorer-conversation-context")
+    account = make_integration(owner.username, model=Channel, owner=owner)
+    with system_context(reason="seed distinct same-named conversations"):
+        title = Fragment.objects.upsert(text="Same person", created_by_id=owner.pk)
+        threads = [Thread._base_manager.create(
+            created_by=owner, channel=account, title=title, platform="email",
+        ) for _ in range(2)]
+        for index, thread in enumerate(threads):
+            Message._base_manager.create(
+                created_by=owner, channel=account, thread=thread, status="synced",
+                sent_at=T0 + timedelta(days=index),
+            )
+    with actor_context(owner):
+        inbox = Message.objects.all().explorer()
+        groups = InboxResults(inbox, inbox.messages, InboxResultOptions()).groups("conversation").page()
+        assert groups.count == 2
+        assert [row.value for row in groups.rows] == [f"thread:{thread.sqid}" for thread in reversed(threads)]
+        assert [row.label for row in groups.rows] == ["Same person", "Same person"]
+        assert [row.latest for row in groups.rows] == [T0 + timedelta(days=1), T0]
+        assert all(row.platform == "email" and row.account == account.display_name for row in groups.rows)
+
+
+def test_file_backlinks_allow_empty_files_and_deduplicate_authorized_messages(tmp_path):
+    owner = User.objects.create_user(username="explorer-file-uses")
+    other = User.objects.create_user(username="explorer-file-hidden")
+    account = make_integration(owner.username, model=Channel, owner=owner)
+    hidden_account = make_integration(other.username, model=Channel, owner=other)
+    File = apps.get_model("storage", "File")
+    with system_context(reason="seed readable file without message uses"):
+        drive = _storage_drive(tmp_path, owner=owner)
+        file = File.objects.create(drive=drive, created_by=owner, filename="brief.pdf", content_hash="a" * 64)
+    target = f"file:{file.sqid}"
+    with actor_context(owner):
+        empty = InboxRelated(Message.objects.all().explorer(), target).page()
+        assert (empty.rows, empty.count, empty.message_count) == ([], 0, 0)
+    with system_context(reason="seed repeated, hidden and draft file uses"):
+        messages = [Message._base_manager.create(
+            created_by=other if index == 2 else owner,
+            channel=hidden_account if index == 2 else account,
+            status="draft" if index == 3 else "synced", sent_at=T0 + timedelta(days=index),
+        ) for index in range(4)]
+        for message in messages:
+            for position in range(2):
+                Part._base_manager.create(
+                    created_by=message.created_by, message=message, file=file,
+                    name="original-brief.pdf", disposition="attachment", position=position,
+                )
+    with actor_context(owner):
+        related = InboxRelated(Message.objects.all().explorer(), target, str(messages[0].sqid))
+        assert related.summary().count == 2
+        first, second = related.page(size=1), related.page(page=2, size=1)
+        assert (first.count, first.message_count) == (2, 2)
+        assert [row.message.pk for row in [*first.rows, *second.rows]] == [messages[1].pk, messages[0].pk]
+        assert all(row.part.file_id == file.pk for row in [*first.rows, *second.rows])
+    with actor_context(other):
+        with pytest.raises(ValueError, match="Related content unavailable"):
+            InboxRelated(Message.objects.all().explorer(), target).page()
 
 
 def test_circle_groups_deduplicate_confirmed_subtrees_and_keep_empty_circles():

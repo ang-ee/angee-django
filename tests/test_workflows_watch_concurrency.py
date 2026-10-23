@@ -8,7 +8,6 @@ import pytest
 from django.db import connection, transaction
 from rebac import actor_context
 
-from angee.base.scoping import system_queryset
 from angee.workflows import tasks
 from angee.workflows.runner import runner
 from angee.workflows.steps import Wait
@@ -69,7 +68,7 @@ def test_two_native_saves_during_watch_planning_wake_once(watched_source, regist
         second.result(timeout=10)
         step.refresh_from_db()
         assert (step.status, step.waiting_kind) == ("waiting", "record")
-        assert system_queryset(StepWatch).filter(step_run=step, pending=True).count() == 1
+        assert StepWatch.system_queryset().filter(step_run=step, pending=True).count() == 1
         deliveries = record_deliveries(sent)
         assert len(deliveries) == 2
         together = Barrier(2)
@@ -84,12 +83,12 @@ def test_two_native_saves_during_watch_planning_wake_once(watched_source, regist
     step.refresh_from_db()
     assert step.status == "ready"
     assert sum(name == "workflows.execute" for name, _ in sent) == 1
-    assert system_queryset(StepAttempt).filter(step_run=step).count() == 1
+    assert StepAttempt.system_queryset().filter(step_run=step).count() == 1
     assert runner.wake_records() == 0
     run_until(run)
     assert run.status == "succeeded" and run.output == {"value": 7}
-    assert system_queryset(StepAttempt).filter(step_run=step).count() == 2
-    assert not system_queryset(StepWatch).exists()
+    assert StepAttempt.system_queryset().filter(step_run=step).count() == 2
+    assert not StepWatch.system_queryset().exists()
 
 
 def test_native_save_racing_cancellation_cannot_resurrect_the_waiter(watched_source, register_step):
@@ -126,7 +125,7 @@ def test_native_save_racing_cancellation_cannot_resurrect_the_waiter(watched_sou
     assert run.status == "canceled"
     step.refresh_from_db()
     assert step.status == "canceled"
-    assert not system_queryset(StepWatch).exists()
+    assert not StepWatch.system_queryset().exists()
     deliveries = record_deliveries(sent)
     assert len(deliveries) == 1
     assert tasks.wake_records(**deliveries[0]) == runner.wake_records() == 0
@@ -156,7 +155,7 @@ def test_registration_rechecks_read_after_waiting_for_an_ownership_transfer(watc
                              subject_model=record._meta.label_lower)
     workflow.with_actor(admin).grant_record_access("starter", starter)
     run = start_run(workflow, actor=starter, subject=record, input={"value": 7})
-    step = system_queryset(StepRun).get(run=run)
+    step = StepRun.system_queryset().get(run=run)
 
     def transfer():
         with transaction.atomic(), actor_context(starter):
@@ -181,5 +180,5 @@ def test_registration_rechecks_read_after_waiting_for_an_ownership_transfer(watc
     assert not Vault.objects.with_actor(starter).filter(pk=record.pk).exists()
     step.refresh_from_db()
     assert step.status == "failed"
-    assert "Read access" in system_queryset(StepAttempt).get(step_run=step).error
-    assert not system_queryset(StepWatch).filter(step_run=step).exists()
+    assert "Read access" in StepAttempt.system_queryset().get(step_run=step).error
+    assert not StepWatch.system_queryset().filter(step_run=step).exists()

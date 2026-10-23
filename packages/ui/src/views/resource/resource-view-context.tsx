@@ -206,6 +206,10 @@ type ResourceViewNavigate = (options: {
   state: true;
 }) => Promise<void> | void;
 
+/**
+ * @kind null
+ * @reason Provider infrastructure: ResourceView context.
+ */
 export function ResourceViewProvider({
   children,
   initialState,
@@ -243,7 +247,10 @@ export function ResourceViewProvider({
   );
 }
 
-/** Mount under an ambient view when allowed, otherwise create the one state owner. */
+/** Mount under an ambient view when allowed, otherwise create the one state owner.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
 export function withResourceViewScope({
   ambient,
   resource,
@@ -472,6 +479,14 @@ function LocalResourceViewProvider({
   const [state, updateState] = useState(() =>
     createResourceViewState(initialState),
   );
+  const scope = stableSerialize([resource, baseFilter]);
+  const [previousScope, setPreviousScope] = useState(scope);
+  if (previousScope !== scope) {
+    // An external collection change starts a new window, retaining the user's
+    // search, ordering and page size. Reconcile before children issue reads.
+    setPreviousScope(scope);
+    updateState({ ...state, pagination: { ...state.pagination, pageIndex: 0 } });
+  }
   const defaultState = useMemo(() => createResourceViewState({ ...initialState, view: state.view }), [initialState, state.view]);
   const { value, selectionOwner } = useResourceViewContextValue({
     updateState,
@@ -804,6 +819,9 @@ function useResourceViewContextValue({
   return { value, selectionOwner };
 }
 
+/**
+ * @owner ResourceViewProvider
+ */
 export function useResourceView(): ResourceViewContextValue {
   const value = useContext(ResourceViewContext);
   if (!value) {
@@ -812,6 +830,9 @@ export function useResourceView(): ResourceViewContextValue {
   return value;
 }
 
+/**
+ * @owner ResourceViewProvider
+ */
 export function useResourceViewMaybe(): ResourceViewContextValue | null {
   return useContext(ResourceViewContext);
 }

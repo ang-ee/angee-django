@@ -11,7 +11,7 @@ import GanttSurface from "./gantt-surface";
 
 const drawing = vi.hoisted(() => ({ props: null as GanttProps | null }));
 vi.mock("./gantt", () => ({ Gantt: (props: GanttProps) => { drawing.props = props; return null; } }));
-vi.mock("./gantt-view", () => ({ GanttView: () => null }));
+vi.mock("./gantt-view", () => ({ GanttGrid: () => null }));
 vi.mock("./gantt-nav", () => ({
   GanttNav: () => null, GanttNavToday: () => null, GanttNavPrev: () => null,
   GanttNavNext: () => null, GanttTitle: () => null, GanttScaleSwitcher: () => null,

@@ -52,6 +52,7 @@ function FormComponentImpl({
  * Render a reusable form declaration standalone, or hand the same element to
  * `ResourceList` for page-level composition. Element constants are the reuse unit;
  * wrapper components hide the marker from the parser.
+ * @kind surface
  */
 export const Form = Object.assign(FormComponentImpl, {
   [PAGE_ELEMENT_SLOT]: "form" as const,

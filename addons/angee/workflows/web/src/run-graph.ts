@@ -6,7 +6,6 @@ import {
 import { toneColorVar } from "@angee/ui/lib/tones";
 import type { WorkflowRunGraphDocument } from "./documents.console";
 import { formatStepPage } from "./step-page";
-import { WORKFLOW_STEP_STATUS_TONES } from "./status-tones";
 
 export type RunGraphData = NonNullable<DocumentType<typeof WorkflowRunGraphDocument>["workflowrun_by_pk"]>["graph"];
 export type RunGraphNode = RunGraphData["nodes"][number];
@@ -29,7 +28,7 @@ export function projectRunGraph(graph: RunGraphData, selected: string | undefine
     const row = node.step_run;
     const kind = row ? optionToken(row.status) : "unreached";
     const label = row ? optionLabel(statusOptions, row.status) : t("run.graphPending");
-    status[node.key] = { label, tone: resolveTone(kind, WORKFLOW_STEP_STATUS_TONES) };
+    status[node.key] = { label, tone: resolveTone(kind) };
     const summary = node.body_key
       ? (row && row.map_total > 0 ? list.format([`${row.map_settled}/${row.map_total}`,
         ...node.item_counts.map(({ status, count }) => t("run.graphStatusCount", {
@@ -40,7 +39,7 @@ export function projectRunGraph(graph: RunGraphData, selected: string | undefine
     const page = row && current(node) && row.page_index > 0
       ? formatStepPage(row.page_index, t) : undefined;
     const detail = list.format([...(page ? [page] : []), ...(summary ? [summary] : [])]);
-    return { id: node.key, kind, title: node.label, kindLabel: node.step_label, code: node.key,
+    return { id: node.key, kind, title: node.label, kindLabel: node.step_label,
       highlighted: current(node), selected: node.key === selected, detail,
       ariaLabel: list.format([node.label, optionTextLabel(label, kind), ...(detail ? [detail] : [])]),
       ports: node.outcomes.map(({ outcome, label }) => ({ id: outcome, label })) };
@@ -51,7 +50,7 @@ export function projectRunGraph(graph: RunGraphData, selected: string | undefine
   }));
   const kinds = new Set(["unreached", ...statusOptions.map((option) => optionToken(option.value)), ...nodes.map((node) => node.kind)]);
   const nodeStyles = Object.fromEntries([...kinds].map((kind) => {
-    const tone = resolveTone(kind, WORKFLOW_STEP_STATUS_TONES);
+    const tone = resolveTone(kind);
     const border = ["unreached", "skipped", "canceled"].includes(kind)
       ? `color-mix(in srgb, ${toneColorVar(tone)} 40%, var(--surface-sheet))` : toneColorVar(tone);
     return [kind, graphNodeStyle(border, tone, { width: 244, height: 100,

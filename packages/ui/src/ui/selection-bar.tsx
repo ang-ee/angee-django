@@ -4,8 +4,11 @@ import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { Button, type ButtonProps } from "./button";
-import { CountBadge } from "./badge";
+import { CountBadge } from "./count-badge";
 
+/**
+ * @kind token
+ */
 export const selectionBarVariants = tv({
   slots: {
     root: "inline-flex h-10 max-w-full items-center gap-3 rounded-8 px-3 shadow-popover",
@@ -56,13 +59,6 @@ export const selectionBarVariants = tv({
 });
 
 type SelectionBarRecipeProps = VariantProps<typeof selectionBarVariants>;
-
-export type SelectionBarSurface = NonNullable<
-  SelectionBarRecipeProps["surface"]
->;
-export type SelectionBarPosition = NonNullable<
-  SelectionBarRecipeProps["position"]
->;
 export type SelectionBarActionTone = NonNullable<
   SelectionBarRecipeProps["actionTone"]
 >;
@@ -76,6 +72,9 @@ export type SelectionBarActionProps = Omit<
     tone?: SelectionBarActionTone;
   };
 
+/**
+ * @owner SelectionBar
+ */
 export const SelectionBarAction = React.forwardRef<
   HTMLElement,
   SelectionBarActionProps
@@ -111,6 +110,9 @@ export type SelectionBarProps = Omit<
     summary?: React.ReactNode;
   };
 
+/**
+ * @owner SelectionBar
+ */
 export const SelectionBarRoot = React.forwardRef<
   HTMLDivElement,
   SelectionBarProps
@@ -174,6 +176,9 @@ export const SelectionBarRoot = React.forwardRef<
 });
 SelectionBarRoot.displayName = "SelectionBar";
 
+/**
+ * @kind primitive
+ */
 export const SelectionBar = Object.assign(SelectionBarRoot, {
   Root: SelectionBarRoot,
   Action: SelectionBarAction,

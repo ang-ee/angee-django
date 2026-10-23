@@ -134,7 +134,9 @@ class PublicationCases(TransactionTestCase):
             # application SELECT containing the complete blocker predicate.
             self.assertEqual(len(queries), 4, queries.captured_queries)
             self.assertTrue(all('INSERT INTO "rebac_permissionauditevent"' in q["sql"] for q in queries[:3]))
-            self.assertEqual(queries[3]["sql"].upper().count("EXISTS("), 1)
+            # One EXISTS selects messages; its nested EXISTS follows the
+            # canonical (possibly merged) thread attachment for this record.
+            self.assertEqual(queries[3]["sql"].upper().count("EXISTS("), 2)
         before = self.Task._base_manager.filter(pk=question.pk).values().get()
         with actor_context(self.manager):
             with self.assertRaises(ClarificationWidenBlocked):
@@ -158,11 +160,12 @@ class PublicationCases(TransactionTestCase):
             self.as_user(question, self.manager).set_visibility("inherited")
         self.post(question, self.asker)
 
-    def test_asker_attributed_tracking_message_also_blocks_widening(self) -> None:
+    def test_an_askers_visibility_change_alone_does_not_block_widening(self) -> None:
+        # A field change is a history line, not a message: only an asker's message blocks widening.
         question = self.question(restricted=False)
         with actor_context(self.asker):
             self.as_user(question, self.asker).set_visibility("restricted")
-        with actor_context(self.manager), self.assertRaises(ClarificationWidenBlocked):
+        with actor_context(self.manager):
             self.as_user(question, self.manager).set_visibility("inherited")
 
     def test_other_threads_and_other_authors_do_not_block(self) -> None:
@@ -231,7 +234,7 @@ class PublicationCases(TransactionTestCase):
                 with actor_context(self.manager):
                     for method in (stale.message_post, stale.message_log):
                         with self.assertRaises(ClarificationWidenBlocked) as error:
-                            method("Must not be shared", creation_actor=to_subject_ref(self.manager))
+                            method("Must not be shared", idempotency_actor=to_subject_ref(self.manager))
                         self.assertEqual(error.exception.code, "HIDDEN_ASKER_IN_THREAD")
                 self.assertEqual(self.Message._base_manager.count(), before)
                 self.post(question, self.manager)

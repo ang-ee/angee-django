@@ -13,6 +13,9 @@ export type ErrorBannerProps = Omit<
   title?: React.ReactNode;
 };
 
+/**
+ * @kind fragment
+ */
 export const ErrorBanner = React.forwardRef<HTMLDivElement, ErrorBannerProps>(
   function ErrorBanner(
     {

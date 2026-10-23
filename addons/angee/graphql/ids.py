@@ -10,7 +10,7 @@ from django.db import models
 from strawberry.types import get_object_definition
 from strawberry_django.utils.typing import get_django_definition
 
-from angee.base.identity import (
+from angee.identity import (
     instance_from_public_id,
     public_data_id_field,
     public_id_for,

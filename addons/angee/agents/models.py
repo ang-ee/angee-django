@@ -18,13 +18,12 @@ from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
 from types import MappingProxyType
-from typing import Any, ClassVar, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import models, transaction
 from django.utils import timezone
 from pydantic_ai.messages import (
@@ -43,31 +42,43 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from rebac import SubjectRef, actor_context, system_context, to_subject_ref
 from rebac.mixins import RebacModelBase
 
+from angee.actors import instance_actor
 from angee.agents.backends import InferenceBackend
 from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
 from angee.agents.deployments import InferenceDeploymentIdentity
+from angee.agents.reader_role import sync_resource_reader_role
 from angee.agents.resources import AgentResource
 from angee.agents.runners import TurnOutcome
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
-from angee.base.actors import instance_actor
-from angee.base.fields import DiagnosticTextField, StateField
-from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin, OwnerMixin
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
-from angee.base.scoping import lock_if_supported
-from angee.base.transitions import StateTransitions, save_state, transition
+from angee.fields import DiagnosticTextField, StateField
 from angee.graphql.events import ChangeRelatedRecord
 from angee.iam.service_users import sync_service_user
+from angee.impl import ImplClassField, ImplDefaultsMixin
 from angee.integrate.models import IntegrationCreateMode
 from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey, record_lock_key
+from angee.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
+    AuditMixin,
+    HistoryMixin,
+    OwnerMixin,
+    StateTransitions,
+    role_anchor,
+    save_state,
+    transition,
+)
 from angee.operator.daemon import OperatorInstanceKind, WorkspaceStatus
 from angee.resources.mixins import ResourceLoadMixin
 
+if TYPE_CHECKING:
+    from angee.integrate.models import Credential
 
-class InferenceModelUse(models.TextChoices, StrEnum):
+
+class InferenceModelUse(models.TextChoices):
     """What an inference model is used for (mirrors the LLM catalogue's model use)."""
 
     CHAT = "chat", "Chat"
@@ -311,8 +322,8 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
     """
 
     runtime = True
-    extends = "integrate.Integration"
-    integration_create_mode = IntegrationCreateMode.FORM
+    extends: ClassVar[str | None] = "integrate.Integration"
+    integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.FORM
 
     backend_class = ImplClassField(
         InferenceBackend,
@@ -378,10 +389,10 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
         )
 
 
-class InferenceModelManager(AngeeManager):
+class InferenceModelManager[ModelT: InferenceModel](AngeeManager[ModelT]):
     """Manager owning catalogue sync and selection of authorized deployments."""
 
-    def usable(self, actor: Any, role: str, *, uses: Collection[InferenceModelUse]) -> tuple[Any, ...]:
+    def usable(self, actor: Any, role: str, *, uses: Collection[InferenceModelUse]) -> tuple[ModelT, ...]:
         """Return readable, approved, callable models with catalogue defaults first."""
 
         models = []
@@ -762,6 +773,14 @@ class MCPServer(AuditMixin, AngeeDataModel):
             entry["headers"] = {"Authorization": f"Bearer ${{{bearer_env}}}"}
         return entry
 
+    def require_credential(self) -> Credential:
+        """Return the configured credential for operations that require authentication."""
+
+        credential = self.credential
+        if credential is None:
+            raise ValidationError({"credential": "This MCP server has no authentication credential."})
+        return credential
+
     def bearer_for(self, agent: Agent) -> str:
         """Return the bearer ``agent`` presents to this MCP server.
 
@@ -777,7 +796,7 @@ class MCPServer(AuditMixin, AngeeDataModel):
 
         if self.placement == MCPPlacement.INTERNAL:
             return f"{agent.sqid}.{self._bearer_digest(agent)}"
-        return str(self.credential.secret_value())
+        return str(self.require_credential().secret_value())
 
     def accepts_bearer_digest(self, agent: Agent, digest: str) -> bool:
         """Whether ``digest`` is the per-agent bearer digest this server mints for ``agent``.
@@ -799,7 +818,7 @@ class MCPServer(AuditMixin, AngeeDataModel):
         HMAC-SHA256 over the agent's stable public sqid.
         """
 
-        secret = str(self.credential.secret_value())
+        secret = str(self.require_credential().secret_value())
         return hmac.new(secret.encode(), agent.sqid.encode(), hashlib.sha256).hexdigest()
 
     @staticmethod
@@ -852,7 +871,7 @@ class MCPTool(AuditMixin, AngeeDataModel):
         return self.name
 
 
-class Agent(ResourceLoadMixin, OwnerMixin, AngeeDataModel):
+class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     """An agent definition (or, when ``is_template``, an agent template).
 
     The operator renders an agent into a workspace from ``workspace_template`` and a
@@ -861,7 +880,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, AngeeDataModel):
     into the workspace, and the model's API credential into the service. ``service`` and
     ``workspace`` hold the operator instance names once rendered.
 
-    Ownership is transferable (:class:`~angee.base.mixins.OwnerMixin`). An agent
+    Ownership is transferable (:class:`~angee.models.OwnerMixin`). An agent
     installed before any user exists loads without an owner until an
     administrator transfers it, and deleting the owner clears it, leaving the
     agent to platform administrators.
@@ -940,9 +959,9 @@ class Agent(ResourceLoadMixin, OwnerMixin, AngeeDataModel):
     )
     """Observed run state (:class:`RuntimeStatus`) — the colored dot; ``ERROR`` pairs
     with ``last_error``. Set by the render flow; the daemon owns the live truth."""
-    last_error: str = DiagnosticTextField(blank=True)
+    last_error = DiagnosticTextField(blank=True)
     """The reason ``runtime_status`` is ``ERROR`` — the last failed operation."""
-    conflict_kind: OperatorInstanceKind | None = StateField(
+    conflict_kind = StateField(
         choices_enum=OperatorInstanceKind, null=True, blank=True, db_index=False
     )
     """Kind of the conflicting instance: the one the daemon refused to create because it exists.
@@ -1030,7 +1049,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, AngeeDataModel):
         with transaction.atomic():
             persisted = None
             if not creating and should_check_name:
-                persisted = lock_if_supported(type(self)._base_manager.filter(pk=self.pk), no_key=True).values(
+                persisted = type(self)._base_manager.filter(pk=self.pk).lock_if_supported(no_key=True).values(
                     "name", *_READER_POLICY_FIELDS,
                 ).first()
             renamed = not creating and should_check_name and (persisted or {}).get("name") != self.name
@@ -1048,9 +1067,6 @@ class Agent(ResourceLoadMixin, OwnerMixin, AngeeDataModel):
                 after = type(self)._base_manager.filter(pk=self.pk).values(*_READER_POLICY_FIELDS).first()
                 explicit = after != {field: persisted[field] for field in _READER_POLICY_FIELDS}
             if creating or explicit:
-                # Source discovery precedes concrete auth models required by MCP.
-                from angee.agents.grants import sync_resource_reader_role
-
                 # Read the persisted policy: a partial save can omit edited fields.
                 sync_resource_reader_role(type(self)._base_manager.get(pk=self.pk))
 
@@ -1160,8 +1176,14 @@ class Agent(ResourceLoadMixin, OwnerMixin, AngeeDataModel):
         """Project active execution across all sessions without exposing transcripts."""
 
         session_model = cls._meta.get_field("sessions").related_model
-        turn_model = session_model._meta.get_field("turns").related_model
-        return models.Exists(turn_model.system_queryset().active().filter(session__agent_id=models.OuterRef("pk")))
+        if session_model is None or not issubclass(session_model, AgentSession):
+            raise ImproperlyConfigured(f"{cls._meta.label}.sessions must target an AgentSession model.")
+        return models.Exists(
+            session_model.turn_model()
+            .objects.system_context(reason="agents.agent.active_turns")
+            .active()
+            .filter(session__agent_id=models.OuterRef("pk"))
+        )
 
     def delete_blocker(self) -> str | None:
         """Require teardown and stopped turns before deleting the agent and its sessions."""
@@ -1680,7 +1702,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, AngeeDataModel):
         bearer (:meth:`mcp_secrets`) under it (the value never appears in the file or the browser).
         """
 
-        return f"agent-{self.sqid}-mcp-{server.credential.sqid}"
+        return f"agent-{self.sqid}-mcp-{server.require_credential().sqid}"
 
     def mcp_bearer_env(self, server: MCPServer) -> str:
         """Return the container env var carrying one MCP server's bearer for this agent.
@@ -1693,7 +1715,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, AngeeDataModel):
         container runtimes/shells that reject or fold lowercase env names.
         """
 
-        return f"ANGEE_MCP_BEARER_{server.credential.sqid.upper()}"
+        return f"ANGEE_MCP_BEARER_{server.require_credential().sqid.upper()}"
 
     def mcp_secrets(self) -> dict[str, str]:
         """Return ``{secret_name: bearer_value}`` for every credentialed MCP server.
@@ -1709,7 +1731,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, AngeeDataModel):
         for server, secret_name in self._addressable_mcp_servers():
             if not secret_name:
                 continue
-            server.credential.ensure_fresh()
+            server.require_credential().ensure_fresh()
             secrets[secret_name] = server.bearer_for(self)
         return secrets
 
@@ -1806,10 +1828,10 @@ class Agent(ResourceLoadMixin, OwnerMixin, AngeeDataModel):
         return model.credential
 
 
-class AgentSessionManager(AngeeManager):
+class AgentSessionManager[SessionT: AgentSession](AngeeManager[SessionT]):
     """Create conversations under the caller's native REBAC create gate."""
 
-    def start(self, agent: Any, *, owner: Any, context: Mapping[str, Any], actor: Any = None) -> Any:
+    def start(self, agent: Any, *, user: Any, context: Mapping[str, Any], actor: Any = None) -> Any:
         """Start an idle conversation with a callable, running in-process agent.
 
         The admission lock orders starts with teardown's session scan. Native
@@ -1824,7 +1846,7 @@ class AgentSessionManager(AngeeManager):
             blocker = locked.chat_blocker()
             if blocker:
                 raise ValidationError({"agent": blocker})
-            return self.with_actor(actor).create(agent=locked, owner=owner, context=dict(context))
+            return self.with_actor(actor).create(agent=locked, user=user, context=dict(context))
 
     def close_for_agent_as_system(self, agent: Any) -> None:
         """Close an agent's sessions as part of its authorized in-process teardown."""
@@ -1850,21 +1872,25 @@ class AgentSession(AuditMixin, AngeeDataModel):
     A pending turn retained across a rebuild runs first when the user next posts.
     A session left awaiting approval is released through Stop or Close. If an
     after-commit settlement signal is lost, the turn stays parked until Stop.
-    Delete authority derives from the agent, independently of session ownership.
+    Delete authority derives from the agent, independently of the session's user.
     """
 
     runtime = True
 
     sqid_prefix = "ase_"
     agent = models.ForeignKey("agents.Agent", on_delete=models.CASCADE, related_name="sessions")
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="agent_sessions")
+    # A session is its user's own conversation, not a transferable grant root: deleting
+    # the user deletes it, and refuses while one of its turns still runs.
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, editable=False, on_delete=models.CASCADE, related_name="+",
+    )
     title = models.CharField(max_length=200, blank=True)
     context = models.JSONField(default=dict, blank=True)
     """The view from which this conversation was started, independent of its turns."""
     status = StateField(choices_enum=SessionStatus, default=SessionStatus.IDLE)
     replay_state = models.JSONField(default=list, blank=True)
     usage = models.JSONField(default=dict, blank=True)
-    last_error: str = DiagnosticTextField(blank=True)
+    last_error = DiagnosticTextField(blank=True)
 
     status_transitions = StateTransitions(
         status,
@@ -1893,6 +1919,15 @@ class AgentSession(AuditMixin, AngeeDataModel):
     )
 
     objects = AgentSessionManager()
+
+    @classmethod
+    def turn_model(cls) -> type[AgentTurn]:
+        """Return this session's configured turn model, enforcing the execution contract."""
+
+        model = cls._meta.get_field("turns").related_model
+        if model is None or not issubclass(model, AgentTurn):
+            raise ImproperlyConfigured(f"{cls._meta.label}.turns must target an AgentTurn model.")
+        return model
 
     class Meta:
         """Django model options for persisted agent sessions."""
@@ -2130,7 +2165,7 @@ class AgentSession(AuditMixin, AngeeDataModel):
         self._transition_fields = {"last_error"}
 
 
-class AgentTurnQuerySet(AngeeQuerySet[Any]):
+class AgentTurnQuerySet[TurnT: AgentTurn](AngeeQuerySet[TurnT]):
     """Turn scopes shared by session execution and transport callers."""
 
     def open(self) -> Self:
@@ -2142,6 +2177,9 @@ class AgentTurnQuerySet(AngeeQuerySet[Any]):
         """Select claimed work, including a turn parked on approval."""
 
         return self.filter(status__in=ACTIVE_TURN_STATUSES)
+
+
+_AgentTurnManager = AngeeManager.from_queryset(AgentTurnQuerySet)
 
 
 class AgentTurn(AuditMixin, AngeeDataModel):
@@ -2159,7 +2197,7 @@ class AgentTurn(AuditMixin, AngeeDataModel):
     updates = models.JSONField(default=list, blank=True)
     text = models.TextField(blank=True)
     usage = models.JSONField(default=dict, blank=True)
-    error: str = DiagnosticTextField(blank=True)
+    error = DiagnosticTextField(blank=True)
 
     status_transitions = StateTransitions(
         status,
@@ -2179,7 +2217,7 @@ class AgentTurn(AuditMixin, AngeeDataModel):
         },
     )
 
-    objects = AngeeManager.from_queryset(AgentTurnQuerySet)()
+    objects = _AgentTurnManager()
 
     class Meta:
         """Django model options for agent turns."""
@@ -2224,7 +2262,7 @@ class AgentTurn(AuditMixin, AngeeDataModel):
     def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
         """Name the session without loading its guarded relation, including on delete."""
 
-        model = self._meta.get_field("session").remote_field.model
+        model = type(self).session.field.related_model
         return (ChangeRelatedRecord(model._meta.label, model.public_id_from_pk(self.session_id)),)
 
     def delete_blocker(self) -> str | None:

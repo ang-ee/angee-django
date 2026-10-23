@@ -1,5 +1,7 @@
 import * as React from "react";
-import { rowPublicId, useModelMetadata } from "@angee/metadata";
+import { rowPublicId, rowValueAtPath, useModelMetadata, type Row } from "@angee/metadata";
+import { EMPTY_VALUE } from "../lib/empty-value";
+import { enumValueLabel } from "../lib/labels";
 import * as v from "valibot";
 import { MetricTile } from "../fragments/MetricStrip";
 import { ErrorBanner } from "../fragments/ErrorBanner";
@@ -18,6 +20,7 @@ import { useAppRuntime } from "../runtime/runtime";
 import { useUiT } from "../i18n";
 import type { ColumnDescriptor } from "../views/page";
 import { cellContent } from "../views/resource/list-body/cell-utils";
+import { StatusBadge } from "../widgets/statusBadge";
 import { useResourceRecordHrefLookup, useRouteHref } from "../runtime/runtime";
 
 function DataState({ data, children, skeleton }: DashboardWidgetRenderProps & { children: React.ReactNode; skeleton: React.ReactNode }): React.ReactElement {
@@ -39,6 +42,7 @@ function StatWidget(props: DashboardWidgetRenderProps): React.ReactElement {
         format={{ maximumFractionDigits: 2 }}
         label={<span className="sr-only">{props.spec.title}</span>}
         numericValue={props.data.value ?? undefined}
+        detail={typeof props.spec.options.detail === "string" ? props.spec.options.detail : undefined}
         suffix={suffix}
         value="—"
         valueSize="lg"
@@ -48,7 +52,10 @@ function StatWidget(props: DashboardWidgetRenderProps): React.ReactElement {
 }
 
 function BarWidget(props: DashboardWidgetRenderProps): React.ReactElement {
-  return <DataState {...props} skeleton={<><Skeleton className="h-4 w-1/3" /><Skeleton className="h-6 w-4/5" /><Skeleton className="h-6 w-3/5" /><Skeleton className="h-6 w-2/5" /></>}><DashboardBars points={props.data.series} title={props.spec.title} /></DataState>;
+  return <DataState {...props} skeleton={<><Skeleton className="h-4 w-1/3" /><Skeleton className="h-6 w-4/5" /><Skeleton className="h-6 w-3/5" /><Skeleton className="h-6 w-2/5" /></>}>
+    <DashboardBars points={props.data.series} title={props.spec.title}
+      orientation={props.spec.options.orientation === "vertical" ? "vertical" : "horizontal"} />
+  </DataState>;
 }
 
 function DonutWidget(props: DashboardWidgetRenderProps): React.ReactElement {
@@ -78,7 +85,17 @@ function TableWidget(props: DashboardWidgetRenderProps): React.ReactElement {
     if (!parsed.success) return { columns: [], error: new v.ValiError(parsed.issues) };
     const columns = (parsed.output ?? defaultColumns).map(({ path, label }) => {
       const queryField = props.data.queryFields[path];
-      const column: ColumnDescriptor = { field: queryField?.row?.path ?? path, header: fieldLabel(path, metadata?.fields[path], label ?? titleCase(path)), queryField };
+      const field = queryField?.row?.path ?? path;
+      const enumValues = (queryField ?? metadata?.fields[path])?.kind === "enum" ? (queryField ?? metadata?.fields[path])?.values : undefined;
+      const column: ColumnDescriptor = {
+        field, header: fieldLabel(path, metadata?.fields[path], label ?? titleCase(path)), queryField,
+        // A status value reads as the one status pill, never as a plain word.
+        ...(enumValues ? { render: (row: Row) => {
+          const value = rowValueAtPath(row, field);
+          return value == null || value === "" ? EMPTY_VALUE : <StatusBadge value={String(value)}
+            options={enumValues.map((item) => ({ value: item.value, label: enumValueLabel(item) }))} />;
+        } } : {}),
+      };
       return { path, column };
     });
     return { columns, error: null };
@@ -114,18 +131,20 @@ function AuthoredWidget(props: DashboardWidgetRenderProps): React.ReactElement {
   return <>{props.authored ?? <InlineEmpty label={t("widget.authoredUnavailable")} />}</>;
 }
 
-function ResourceViewWidget({ spec, hostedView: View, onCountChange }: DashboardWidgetRenderProps): React.ReactElement {
+function ResourceViewWidget({ spec, hostedView: View, onCountChange, pageScope }: DashboardWidgetRenderProps): React.ReactElement {
   const t = useDashboardT();
   const { resourceViews } = useAppRuntime();
   const preset = spec.data.shape === "resourceView" ? resourceViews[spec.data.preset] : undefined;
   if (!preset || !["list", "gantt"].includes(preset.view ?? "list") || !View) {
     return <ErrorBanner description={t("widget.viewUnavailable")} />;
   }
-  return <ResourceViewProvider key={preset.id} resource={preset.resource} scope="local" presetIds={[preset.id]} initialState={resourceViewPresetDefaults(undefined, preset)}>
+  return <ResourceViewProvider key={preset.id} resource={preset.resource} scope="local"
+    baseFilter={pageScope?.resource === preset.resource ? pageScope.filter : undefined}
+    presetIds={[preset.id]} initialState={resourceViewPresetDefaults(undefined, preset)}>
     <View
       presentation="embedded"
       scope="inherit"
-      chrome={{ heading: false, search: true, pager: false }}
+      chrome={{ heading: false, search: true, pager: spec.options.pager === true }}
       onListStateChange={(state) => onCountChange?.(state.total ?? null)}
     />
   </ResourceViewProvider>;

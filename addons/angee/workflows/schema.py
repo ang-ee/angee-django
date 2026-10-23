@@ -17,11 +17,8 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.queryset import run_type_get_queryset
 
-from angee.base.identity import public_id_for
-from angee.base.impl import resolve_all_impl_classes
-from angee.base.models import record_display_label
-from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.decisions.schema import DecisionType
+from angee.evidence import readable_evidence
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
@@ -43,6 +40,9 @@ from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
+from angee.identity import public_id_for
+from angee.impl import resolve_all_impl_classes
+from angee.models import record_display_label
 from angee.workflows.definition import Body, Definition, Issue
 from angee.workflows.models import RunGraphNode
 from angee.workflows.states import RunOrigin, StepRunStatus, WaitingKind
@@ -66,12 +66,12 @@ Decision = apps.get_model("decisions", "Decision")
 DecisionRecord = apps.get_model("decisions", "DecisionRecord")
 _RUN_POLICY_VERSION = Prefetch(
     "version",
-    queryset=system_queryset(WorkflowVersion).only("document"),
+    queryset=WorkflowVersion.system_queryset().only("document"),
     to_attr="policy_version",
 )
 _STEP_POLICY_VERSION = Prefetch(
     "run__version",
-    queryset=system_queryset(WorkflowVersion).only("document"),
+    queryset=WorkflowVersion.system_queryset().only("document"),
     to_attr="policy_version",
 )
 
@@ -137,14 +137,11 @@ class WorkflowRunType(RecordReferenceNode):
     origin: RunOrigin
     @strawberry_django.field(only=["input", "version_id"])
     def input(self, info: strawberry.Info) -> JSON:
-        """Keep non-reference input while checking marked sources at read time."""
+        """Keep non-reference input and check each source's declared model read policy."""
         run = cast(Any, self)
-        evidence = read_scoped_queryset(StepRecord, request_from_info(info).user)
-        readable: set[tuple[str, str]] = set()
-        for row in with_record_reference_access(evidence.filter(run_id=run.pk)):
-            if row._angee_record_readable:
-                readable.add((row.record_model_label.lower(), row.record_public_id))
-        return run.policy_version.definition.redacted_input(run.input, readable)
+        definition = run.policy_version.definition
+        readable = readable_evidence(definition.input_evidence(run.input), request_from_info(info).user)
+        return definition.redacted_input(run.input, {(ref.model.lower(), ref.id) for ref in readable})
     output: JSON
     outcome: auto
     outcome_label: str = strawberry_django.field(
@@ -179,6 +176,12 @@ class WorkflowRunType(RecordReferenceNode):
     subject_id: PublicID | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_id, only=["subject_content_type_id", "subject_object_id"],
     )
+
+    @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"], prefetch_related=["subject"])
+    def subject_label(self, info: strawberry.Info) -> str | None:
+        """The subject's own label (a file name, a message subject), for lists that name the run by what it ran on."""
+        subject = cast(Any, self).subject
+        return str(subject) if subject is not None else None
 
 
 @strawberry.type
@@ -440,7 +443,7 @@ class TriggerType(AngeeNode):
             model = model_for_resource_type(resource_type)
             if model is None or not model._meta.managed:
                 continue
-            visible = read_scoped_queryset(model, actor)
+            visible = model.objects.with_actor(actor)
             ids = [str(row.resource_id) for row in rows if row.resource_type == resource_type]
             for target in visible.filter(pk__in=ids):
                 labels[(resource_type, str(target.pk))] = record_display_label(target)
@@ -814,10 +817,11 @@ class WorkflowDraftAcknowledgement:
 
 @strawberry.type
 class WorkflowPublication:
-    """Publication number and readable dependents returned by its owner."""
+    """Published version facts needed to refresh the authoring projection."""
 
     number: int
     dependents: list[str]
+    document: JSON
 
 
 @strawberry.type
@@ -858,7 +862,11 @@ class WorkflowStudioMutation:
             expected_revision=expected_revision,
             actor=request_from_info(info).user,
         )
-        return WorkflowPublication(number=published.version.number, dependents=list(published.dependents))
+        return WorkflowPublication(
+            number=published.version.number,
+            dependents=list(published.dependents),
+            document=published.version.document,
+        )
 
 
 _RESOURCES = (
@@ -899,27 +907,29 @@ class RecordTimelineQuery:
     @strawberry_django.field
     def record_timeline(
         self, info: strawberry.Info, records: list[TimelineRecordInput], include_runs: bool = True,
+        run_limit: int = 20,
     ) -> RecordTimelineSelectionType:
         """One read for a record or selection, through the record and run owners."""
         if len(records) > 100:
             raise ValidationError("A timeline selection accepts at most 100 records.")
+        run_limit = max(1, min(run_limit, 100))
         actor = request_from_info(info).user
         concerned = []
         for reference in records:
             model = apps.get_model(reference.model)
-            record = require_instance_for_id(model, str(reference.id), queryset=read_scoped_queryset(model, actor))
+            record = require_instance_for_id(model, str(reference.id), queryset=model.objects.with_actor(actor))
             concerned.append(record)
         targets = {generic_target(record): record for record in concerned}
-        run_query = WorkflowRun.objects.with_actor(actor).about(concerned, limit=20)
+        run_query = WorkflowRun.objects.with_actor(actor).about(concerned, limit=run_limit)
         runs = list(run_type_get_queryset(
             run_query.order_by("-created_at", "-pk"),
             WorkflowRunType, info,
         ).select_related("parent_step").prefetch_related("records", Prefetch(
-            "trigger_event", queryset=with_record_reference_access(read_scoped_queryset(TriggerEvent, actor)),
+            "trigger_event", queryset=with_record_reference_access(TriggerEvent.objects.with_actor(actor)),
         ))) if include_runs else []
         has_runs = bool(runs) if include_runs else run_query.exists()
         decisions = list(Decision.objects.with_actor(actor).open_for(*concerned).prefetch_related(Prefetch(
-            "records", queryset=with_record_reference_access(read_scoped_queryset(DecisionRecord, actor)),
+            "records", queryset=with_record_reference_access(DecisionRecord.objects.with_actor(actor)),
         )))
         by_run = {run.pk: run for run in runs}
         result = []
@@ -936,10 +946,11 @@ class RecordTimelineQuery:
                         break
                     selected.add(run.pk)
             canonical = target.content_type.model_class()
+            assert canonical is not None
             result.append(RecordTimelineType(
                 record_model=canonical._meta.label,
                 record_id=PublicID(public_id_for(canonical, target.object_id)),
-                runs=list(reversed([run for run in runs if run.pk in selected][:20])),
+                runs=list(reversed([run for run in runs if run.pk in selected][:run_limit])),
                 decisions=[decision for decision in decisions if any(
                     (link.content_type_id, link.object_id) == (target.content_type.pk, target.object_id)
                     for link in decision.records.all())],

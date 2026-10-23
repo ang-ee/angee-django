@@ -11,10 +11,9 @@ from django.db import models
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 
-from angee.base.mixins import (
-    AuditMixin,
-    CreationKeyMixin,
-    CreationKeyQuerySet,
+from angee.models import (
+    AngeeModel,
+    AngeeQuerySet,
     HistoryMixin,
     ImmutableFieldsMixin,
     ItemOwnershipMixin,
@@ -25,7 +24,6 @@ from angee.base.mixins import (
     TrashMixin,
     TrashQuerySet,
 )
-from angee.base.models import AngeeModel, AngeeQuerySet
 from angee.testing.permissions import install_permission_schema
 
 
@@ -76,15 +74,6 @@ class OwnedRow(OwnerMixin, HistoryMixin, AngeeModel):
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/owned_row"
         base_manager_name = "_angee_base"
-
-
-class CreationRow(CreationKeyMixin, AuditMixin):
-    title = models.CharField(max_length=40, default="original")
-    objects = CreationKeyQuerySet.as_manager()
-
-    class Meta:
-        app_label = "scopedemo"
-        constraints = [CreationKeyMixin.creation_key_constraint()]
 
 
 class ReceiptRow(ImmutableFieldsMixin):

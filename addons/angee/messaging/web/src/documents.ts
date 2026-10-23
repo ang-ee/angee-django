@@ -16,10 +16,11 @@ export const DiscardHeldDraftsDocument = graphql(`
 export const CHANNEL_MODEL = "messaging.Channel";
 /** The edge a record carries its chatter and source conversations through. */
 export const THREAD_ATTACHMENT_MODEL = "messaging.ThreadAttachment";
+/** The `recordEdges` entry of a type that keeps chatter: the edge's chatter role, which only threaded models carry. */
+export const THREAD_CHATTER_EDGE = `${THREAD_ATTACHMENT_MODEL}:chatter`;
 
-// The models a record thread reads: the live-refresh keys for the thread/history
-// queries and the invalidation set every chatter mutation republishes. One owner,
-// shared by both chatter panes.
+// Messaging-owned read dependencies and mutation invalidation keys. The shared
+// useRecordThreadQuery also observes the parent record's ledger refreshes.
 export const READ_MODELS = [
   "parties.Handle",
   "messaging.Thread",
@@ -29,13 +30,6 @@ export const READ_MODELS = [
   "messaging.ThreadNotification",
   "messaging.Reaction",
   "messaging.MessageStar",
-] as const;
-
-// The count probe only depends on receipt-moving rows and messages; it avoids
-// the wider thread payload's followers, notifications, and handles.
-export const RECORD_UNREAD_COUNT_MODELS = [
-  "messaging.Message",
-  "messaging.ThreadFollower",
 ] as const;
 
 /** Typed projection rendered by the Message record's structural parts list. */
@@ -122,16 +116,29 @@ export const MessagePartFields = graphql(`
   }
 `);
 
-/** What `MessageReader` presents: the envelope header, the body parts and their files. */
+/** One level of actor-readable reply context, shared by readers and transcripts. */
+export const MessageReplyFields = graphql(`
+  fragment MessageReplyFields on MessageType {
+    id
+    preview
+    message_type
+    sender { ...MessageSenderFields }
+    thread { id }
+  }
+`);
+
+/** What `MessageReader` presents: the envelope, reply context, body parts and files. */
 export const MessageReaderFields = graphql(`
   fragment MessageReaderFields on MessageType {
     id
+    channel { id display_name }
     title
     preview
     sent_at
     created_at
     starred
     sender { ...MessageSenderFields }
+    parent { ...MessageReplyFields }
     participants {
       id
       role
@@ -246,14 +253,6 @@ export const RecordMessageFields = graphql(`
     reaction_groups {
       ...RecordReactionGroupFields
     }
-    tracking_values {
-      id
-      position
-      field_name
-      field_label
-      old_display
-      new_display
-    }
     parts {
       ...MessagePartFields
     }
@@ -265,9 +264,11 @@ export const RecordMessageFields = graphql(`
 export const TranscriptMessageFields = graphql(`
   fragment TranscriptMessageFields on MessageType {
     id
+    channel { id display_name }
     feed_order_key
     direction
     preview
+    parent { ...MessageReplyFields }
     message_type
     sent_at
     created_at
@@ -291,9 +292,11 @@ export const ThreadTranscriptDocument = graphql(`
     $throughCursor: String
     $afterCursor: String
     $anchor: String! = ""
+    $allCopies: Boolean! = false
   ) {
     thread_message_feed(
       thread_id: $threadId
+      all_copies: $allCopies
       before_cursor: $beforeCursor
       through_cursor: $throughCursor
       after_cursor: $afterCursor
@@ -310,13 +313,30 @@ export const ThreadTranscriptDocument = graphql(`
 `);
 
 export const ThreadTranscriptRevalidateDocument = graphql(`
-  query MessagingThreadTranscriptRevalidate($threadId: ID!, $ids: [ID!]!) {
-    thread_message_feed_revalidate(thread_id: $threadId, ids: $ids) {
+  query MessagingThreadTranscriptRevalidate($threadId: ID!, $ids: [ID!]!, $allCopies: Boolean! = false, $anchor: String! = "") {
+    thread_message_feed_revalidate(thread_id: $threadId, ids: $ids, all_copies: $allCopies, anchor: $anchor) {
       messages {
         ...TranscriptMessageFields
       }
       absent_ids
     }
+  }
+`);
+
+export const MessageSourceCopiesDocument = graphql(`
+  query MessagingMessageSourceCopies($id: ID!) {
+    message_source_copies(id: $id) {
+      ...TranscriptMessageFields
+      external_id
+      permissions
+      channel { id display_name }
+    }
+  }
+`);
+
+export const IdentifyMessageSourceCopyDocument = graphql(`
+  mutation MessagingIdentifyMessageSourceCopy($left: ID!, $right: ID!, $same: Boolean!) {
+    identify_message_source_copy(left: $left, right: $right, same: $same)
   }
 `);
 
@@ -445,12 +465,6 @@ export const RecordSourceThreadsDocument = graphql(`
 
 export type RecordSourceThreadRow = DocumentType<typeof RecordSourceThreadsDocument>["record_source_threads"][number];
 
-export const RecordThreadUnreadCountDocument = graphql(`
-  query MessagingRecordThreadUnreadCount($modelLabel: String!, $recordId: ID!) {
-    record_thread_unread_count(model_label: $modelLabel, record_id: $recordId)
-  }
-`);
-
 export const PostRecordMessageDocument = graphql(`
   mutation MessagingPostRecordMessage(
     $modelLabel: String!
@@ -461,7 +475,7 @@ export const PostRecordMessageDocument = graphql(`
     $attachmentIds: [ID!] = []
     $recipientUserIds: [ID!] = []
     $autofollowRecipients: Boolean = false
-    $clientCreationKey: String = null
+    $idempotencyKey: String = null
   ) {
     post_record_message(
       input: {
@@ -474,7 +488,7 @@ export const PostRecordMessageDocument = graphql(`
         recipient_user_ids: $recipientUserIds
         autofollow_recipients: $autofollowRecipients
       }
-      client_creation_key: $clientCreationKey
+      idempotency_key: $idempotencyKey
     ) {
       error
       error_code
@@ -757,39 +771,14 @@ export const SetRecordFollowingDocument = graphql(`
   }
 `);
 
-// History reads only retained system updates. Ordinary conversation, follower,
-// and recipient payloads remain owned by Comments; tasks about the record by projects.
-export const RecordHistoryThreadDocument = graphql(`
-  query MessagingRecordHistoryThread($modelLabel: String!, $recordId: ID!) {
-    record_thread(
-      input: {
-        model_label: $modelLabel
-        record_id: $recordId
-        message_types: ["AUTO_COMMENT", "NOTIFICATION"]
-        message_limit: 100
-      }
-    ) {
-      error
-      error_code
-      message_result_count
-      messages {
-        ...RecordMessageFields
-      }
-    }
-  }
-`);
-
 export type ThreadTranscriptRow =
   DocumentType<typeof ThreadTranscriptDocument>["thread_message_feed"]["messages"][number];
 export type PartListRow = DocumentType<typeof MessagingPartListRow>;
 export type MessageReaderData = DocumentType<typeof MessageReaderFields>;
+export type MessageReplyData = DocumentType<typeof MessageReplyFields>;
 
 export type RecordThreadPayload = DocumentType<typeof RecordThreadDocument>["record_thread"];
-export type RecordHistoryThreadPayload =
-  DocumentType<typeof RecordHistoryThreadDocument>["record_thread"];
 export type RecordMessageRow = NonNullable<RecordThreadPayload["messages"]>[number];
-export type RecordHistoryMessageRow = NonNullable<RecordHistoryThreadPayload["messages"]>[number];
-export type RecordNotificationRow = NonNullable<RecordThreadPayload["notifications"]>[number];
 export type SuggestedRecipientRow =
   NonNullable<RecordThreadPayload["suggested_recipients"]>[number];
 export type RecipientUserRow =

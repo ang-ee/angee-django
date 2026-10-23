@@ -1,9 +1,8 @@
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Card, CardContent, EmptyState, LazyBoundary, buttonVariants, cn, textRoleVariants, useRouteHref } from "@angee/ui";
+import { EmptyState, LazyBoundary, LoadingPanel, NavLink, buttonVariants, useRouteHref } from "@angee/ui";
 
 import type { ChatterView } from "@angee/ui/runtime";
-import { Link } from "@tanstack/react-router";
 
 import { useAgentsT } from "../i18n";
 import {
@@ -15,20 +14,20 @@ import { KeptAliveAgents, useOpenedAgents } from "./useOpenedAgents";
 import { useRunningAgents } from "./useRunningAgents";
 
 // The chat surface is the addon's heaviest tree (assistant-ui + streamdown /
-// react-markdown). It's referenced eagerly here — the chatter contribution is
+// react-markdown). It's referenced eagerly here — the drawer contribution is
 // registered at boot — so lazy-mount it through the shared `LazyBoundary`, the way
 // the spotlight and lazy widgets do, keeping streamdown out of the boot bundle and
-// in its own chunk loaded only when the user opens the agents chatter.
+// in its own chunk loaded only when the user opens the agents drawer.
 const AgentChat = React.lazy(() =>
   import("./AgentChat").then((module) => ({ default: module.AgentChat })),
 );
 
 /**
- * The side-chatter entry: resolves the agent that serves the user (their running agent) and
+ * The docked agent drawer resolves the agent that serves the user (their running agent) and
  * renders the live ACP chat bound to the open record, so the agent sees what the user is
  * looking at and can read/edit it through its MCP tools. Shows a call-to-action when the user
- * has no running agent. The agents addon contributes it as the global chatter "agents"
- * tab, driven by the active page's `view`.
+ * has no running agent. The agents addon contributes it as a shell drawer,
+ * driven by the active page's `view`.
  *
  * The chooser in the chat bar switches between the user's running agents: the effective
  * selection is derived — only the user's explicit pick is state, defaulting to the
@@ -79,7 +78,7 @@ export function AgentChatterPane({
   const { openedIds } = useOpenedAgents({ selectedId });
 
   if (loading) {
-    return <PaneMessage>{t("chat.resolving")}</PaneMessage>;
+    return <LoadingPanel message={t("chat.resolving")} />;
   }
   if (session === null) {
     return (
@@ -88,14 +87,11 @@ export function AgentChatterPane({
         title={t("agent.noRunningAgent")}
         description={t("agent.chatUnavailable")}
         actions={
-          <Link
-            className={buttonVariants({ variant: "primary", size: "sm" })}
-            to={routeHref("agents.agents")}
-          >
+          // A link wearing the button recipe: the shared idiom for a navigating verb.
+          <NavLink className={buttonVariants({ variant: "primary", size: "sm" })} href={routeHref("agents.agents")} variant="unstyled">
             {t("agent.setupAssistant")}
-          </Link>
+          </NavLink>
         }
-        className="min-h-48 p-4"
       />
     );
   }
@@ -108,9 +104,9 @@ export function AgentChatterPane({
         const rosterAgent = agents.find((agent) => agent.id === id);
         const runtimeClass = rosterAgent?.runtime_class
           ?? (id === resolved.agent_id ? resolved.runtime_class : undefined);
-        if (runtimeClass === undefined) return <PaneMessage>{t("chat.resolving")}</PaneMessage>;
+        if (runtimeClass === undefined) return <LoadingPanel message={t("chat.resolving")} />;
         return (
-          <LazyBoundary pending={<PaneMessage>{t("chat.resolving")}</PaneMessage>}>
+          <LazyBoundary pending={<LoadingPanel message={t("chat.resolving")} />}>
             <AgentChat
               agentId={id}
               view={liveView}
@@ -137,14 +133,4 @@ function normalizeAgentChatView(view: ChatterView | AgentChatView): AgentChatVie
     ...(view.sqids ? { sqids: [...view.sqids] } : {}),
     ...(view.params ? { params: { ...view.params } } : {}),
   };
-}
-
-function PaneMessage({ children }: { children: React.ReactNode }): React.ReactElement {
-  return (
-    <Card>
-      <CardContent>
-        <p className={cn(textRoleVariants({ role: "meta" }), "leading-relaxed")}>{children}</p>
-      </CardContent>
-    </Card>
-  );
 }

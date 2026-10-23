@@ -44,7 +44,8 @@ from slack_sdk.http_retry import (
     default_retry_handlers,
 )
 
-from angee.integrate.streams import CursorInvalid, StreamDefinition, StreamPage
+from angee.integrate.states import StreamDefinition
+from angee.integrate.streams import CursorInvalid, StreamPage
 from angee.messaging.backends import ChannelBackend, MediaItem, ParsedMessage
 from angee.messaging_integrate_slack.identity import parsed_message, response_data
 
@@ -587,11 +588,17 @@ class SlackChannelBackend(ChannelBackend):
         return self._backfill_floor()
 
     def _backfill_floor(self) -> str:
-        """Return the configured time floor shared by initial history and thread retention."""
+        """Return the configured time floor shared by initial history and thread retention.
+
+        The floor is measured from the sync's own clock (the start the bridge recorded for this
+        attempt), so a poll is deterministic for the moment it was asked for; outside a sync the
+        wall clock serves.
+        """
 
         configured_days = self._config().get("backfill_days")
         days = max(0, int(_DEFAULT_BACKFILL_DAYS if configured_days is None else configured_days))
-        return f"{(datetime.now(tz=UTC) - timedelta(days=days)).timestamp():.6f}"
+        clock = self.bridge.last_sync_started_at or datetime.now(tz=UTC)
+        return f"{(clock - timedelta(days=days)).timestamp():.6f}"
 
     def _batch_size(self) -> int:
         """Return the bounded number of parsed messages emitted per call."""

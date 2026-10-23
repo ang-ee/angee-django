@@ -30,3 +30,4 @@ export {
   isJsonMime,
   isTextOrCodeMime,
 } from "./model";
+export { MIME_KINDS, mimeKind, useMimeLabel, type MimeKind } from "./mime-label";

@@ -1,5 +1,6 @@
 import type { BaseMenuItem, ChromeMenuExtra, ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
 import type { HiddenMenuItem, MenuItem, RemovedMenuItem, RuntimeBrand } from "@angee/ui/runtime";
+import { isQueryFilter, type QueryFilter } from "@angee/metadata";
 
 import { positionSiblings } from "@angee/ui/lib/position";
 
@@ -23,10 +24,12 @@ export interface MenuEntry extends Omit<MenuItem, "id" | "children">, Omit<Chrom
    * Borrow a page: a route of this addon or one it depends on, aliased under the
    * node's app as a route named after the node (`<id>`, and `<id>.record` for the
    * route's record child) that reuses the route's page, model and detail. The
-   * source app keeps its own page; the node's `defaultResourceView` and
-   * `recordMatch` go onto the alias.
+   * source app keeps its own page; the node's `defaultResourceView`,
+   * `defaultFilter` and `recordMatch` go onto the alias.
    */
   mount?: string;
+  /** Initial editable list filter applied only to this mounted view. */
+  defaultFilter?: QueryFilter;
   /**
    * The URL path mounts use. On an app (a node declared at the top of the rail)
    * it is the base its mounts live under, `/<id>` by default; on a mount it is
@@ -54,11 +57,14 @@ export interface MenuEntry extends Omit<MenuItem, "id" | "children">, Omit<Chrom
 export type MenuDeclarations = Readonly<Record<string, MenuEntry>>;
 
 /** One item of the legacy declaration list; like a dict entry, it may borrow a page. */
-export interface MenuDeclarationItem extends BaseMenuItem, Pick<MenuEntry, "mount" | "path" | "recordMatch"> {
+export interface MenuDeclarationItem extends BaseMenuItem, Pick<MenuEntry, "mount" | "path" | "recordMatch" | "defaultFilter"> {
   children?: readonly MenuDeclarationItem[];
 }
 
-/** Whether an addon authored its menus as the legacy declaration list rather than the dict. */
+/** Whether an addon authored its menus as the legacy declaration list rather than the dict.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
 export function isMenuDeclarationList(
   menus: readonly MenuDeclarationItem[] | MenuDeclarations | undefined,
 ): menus is readonly MenuDeclarationItem[] {
@@ -89,6 +95,7 @@ export interface MenuMount {
   by: string;
   recordMatch?: NonNullable<AddonRoute["recordMatch"]>;
   defaultResourceView?: string;
+  defaultFilter?: QueryFilter;
 }
 
 export interface CompiledMenus {
@@ -111,12 +118,12 @@ export interface CompiledMenus {
   diagnostics: readonly string[];
 }
 
-/** What an app root says about itself when it is selected: where it lands, its identity, its theme. */
-const ROOT_FIELDS = ["home", "brand", "theme"] as const satisfies readonly (keyof MenuEntry)[];
+/** What an app root says about itself when it is selected: its landing, identity and display defaults. */
+const ROOT_FIELDS = ["home", "brand", "theme", "railExpanded"] as const satisfies readonly (keyof MenuEntry)[];
 const DECLARATION_FIELDS = [
   "label", "route", "params", "defaultResourceView", "to", "icon", "requires",
   "description", "group", "status", "tone", "personal", "parent", "sequence", "before", "after", ...ROOT_FIELDS,
-  "mount", "path", "recordMatch",
+  "mount", "path", "recordMatch", "defaultFilter",
 ] as const satisfies readonly (keyof MenuEntry)[];
 const OPERATION_FIELDS = ["include", "remove", "hide", "only", "force"] as const satisfies readonly (keyof MenuEntry)[];
 type EntryKey = (typeof DECLARATION_FIELDS)[number] | (typeof OPERATION_FIELDS)[number];
@@ -127,7 +134,7 @@ const ENTRY_KEYS: ReadonlySet<string> = new Set<string>([...DECLARATION_FIELDS, 
 /** Fields a node carries; `badge` arrives only through the legacy list. */
 type Field = (typeof DECLARATION_FIELDS)[number] | "badge" | "hide" | "remove" | "flatten";
 /** Resolution-only fields, never emitted on a compiled item; a mount becomes a `route` to its alias. */
-const RESOLUTION_FIELDS: readonly Field[] = ["parent", "sequence", "before", "after", "hide", "remove", "mount", "path", "recordMatch"];
+const RESOLUTION_FIELDS: readonly Field[] = ["parent", "sequence", "before", "after", "hide", "remove", "mount", "path", "recordMatch", "defaultFilter"];
 
 interface Node {
   id: string;
@@ -236,7 +243,7 @@ function validateEntry(layer: string, id: string, entry: unknown): asserts entry
   };
   if (value.include !== undefined) strings("include", value.include);
   if (value.only !== undefined) strings("only", value.only);
-  for (const key of ["remove", "hide", "personal", "force"] as const) {
+  for (const key of ["remove", "hide", "personal", "force", "railExpanded"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "boolean") throw new Error(`${where}: ${key} must be true or false.`);
   }
   // Addons only narrow (G-14); the deployment may force an `only`, and says so.
@@ -250,6 +257,9 @@ function validateEntry(layer: string, id: string, entry: unknown): asserts entry
     if (value[key] !== undefined && typeof value[key] !== "string") throw new Error(`${where}: ${key} must be a string.`);
   }
   if (value.brand !== undefined) assertBrand(where, value.brand);
+  if (value.defaultFilter !== undefined && !isQueryFilter(value.defaultFilter)) {
+    throw new Error(`${where}: defaultFilter must be a filter mapping.`);
+  }
   const match = value.recordMatch as { field?: unknown; equals?: unknown } | null | undefined;
   const equals = match?.equals;
   if (match !== undefined && (typeof match !== "object" || match === null || typeof match.field !== "string"
@@ -283,6 +293,9 @@ function declareLegacy(
   if (!id) throw new Error(`Addon "${layer}" declares a menu item without id or route; menu id defaults require one of them.`);
   const { id: _id, children, parentId, ...rest } = item;
   if (rest.brand !== undefined) assertBrand(`Menu item "${id}" of "${layer}"`, rest.brand);
+  if (rest.railExpanded !== undefined && typeof rest.railExpanded !== "boolean") {
+    throw new Error(`Menu item "${id}" of "${layer}": railExpanded must be true or false.`);
+  }
   const owner = parent ?? parentId;
   if (id !== layer && !id.startsWith(`${layer}.`)) {
     diagnostics.push(`Addon "${layer}" declares menu item "${id}" outside its namespace ("${layer}" or "${layer}.…").`);
@@ -334,6 +347,7 @@ function resolve(
     }
     if (node.fields.mount === undefined) {
       if (node.fields.recordMatch !== undefined) throw new Error(`Menu item "${node.id}" sets recordMatch, which only a mount claims.`);
+      if (node.fields.defaultFilter !== undefined) throw new Error(`Menu item "${node.id}" sets defaultFilter, which only a mount owns.`);
       if (node.fields.path !== undefined && !node.declaredRoot) {
         throw new Error(`Menu item "${node.id}" sets path, which only an app or a mount has.`);
       }
@@ -369,6 +383,7 @@ function resolve(
       by: node.setBy.mount!,
       ...(node.fields.recordMatch ? { recordMatch: node.fields.recordMatch as NonNullable<MenuMount["recordMatch"]> } : {}),
       ...(typeof node.fields.defaultResourceView === "string" ? { defaultResourceView: node.fields.defaultResourceView } : {}),
+      ...(node.fields.defaultFilter !== undefined ? { defaultFilter: node.fields.defaultFilter as QueryFilter } : {}),
     };
   });
 

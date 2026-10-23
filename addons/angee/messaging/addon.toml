@@ -6,7 +6,7 @@ description = "Threads, messages, and channel bridges that ingest and deliver ma
 keywords = ["messaging", "channels", "chat"]
 category = "Data"
 # django.contrib.postgres backs the Fragment full-text SearchVectorField/GinIndex.
-depends_on = ["angee.iam", "angee.parties", "angee.integrate", "angee.resources", "angee.storage", "angee.tags", "django.contrib.contenttypes", "django.contrib.postgres"]
+depends_on = ["angee.timeline", "angee.provenance", "angee.iam", "angee.parties", "angee.integrate", "angee.resources", "angee.storage", "angee.tags", "django.contrib.contenttypes", "django.contrib.postgres"]
 dependencies = [
   "django-anymail>=15.1",
   # Classify Anymail's chained HTTP-ESP transport failures (email delivery).
@@ -14,48 +14,17 @@ dependencies = [
   "urllib3>=2.2",
 ]
 
+[[migrations]]
+name = "retire_creation_keys"
+app_label = "messaging"
+module = "runtime_migrations.retire_creation_keys"
+
 [resources]
+install = [
+  { path = "resources/install/030_provenance.rule.yaml", adopt = "key" },
+  { path = "resources/install/040_source_identity_grants.yaml", kind = "grants", depends_on = ["resources/install/030_provenance.rule.yaml"] },
+]
 master = []
 # Activity types moved to angee.projects. On a stack without it, the drop guard lets
 # the catalog rows messaging's resource files seeded go with the removed model.
 retired_models = ["messaging.ActivityType"]
-
-[[migrations]]
-name = "follower_party"
-app_label = "messaging"
-module = "runtime_migrations.follower_party"
-
-[[migrations]]
-name = "notification_read_at"
-app_label = "messaging"
-module = "runtime_migrations.notification_read_at"
-
-[[migrations]]
-name = "owner_column"
-app_label = "messaging"
-module = "runtime_migrations.owner_column"
-
-[[migrations]]
-name = "channel_ownerless"
-app_label = "messaging"
-module = "runtime_migrations.channel_ownerless"
-
-[[migrations]]
-name = "activity_type_key"
-app_label = "messaging"
-module = "runtime_migrations.activity_type_key"
-
-[[migrations]]
-name = "channel_sync_status"
-app_label = "messaging"
-module = "runtime_migrations.channel_sync_status"
-
-[[migrations]]
-name = "message_trash"
-app_label = "messaging"
-module = "runtime_migrations.message_trash"
-
-[[migrations]]
-name = "participant_thread_identity"
-app_label = "messaging"
-module = "runtime_migrations.participant_thread_identity"

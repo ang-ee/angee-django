@@ -8,6 +8,7 @@ export const enStorageMessages: Record<string, string> = {
   "record.loading": "Loading attached files",
   "record.loadingDrives": "Loading upload destinations",
   "record.empty": "No files attached",
+  "attachedTo.loading": "Loading attached records",
   "upload.retry": "Retry",
   // Browser-level loading and empty states.
   "loading": "Loading files…",
@@ -23,9 +24,11 @@ export const enStorageMessages: Record<string, string> = {
   "preview.loading": "Loading preview",
   "preview.loadError": "Could not load this preview.",
   "preview.decoding": "Decoding photo",
-  "preview.pdfPage": "Page {page} of {total}",
+  "preview.pages": "Pages",
   "preview.pdfPrev": "Previous page",
   "preview.pdfNext": "Next page",
+  "preview.fetchFailed": "The file could not be fetched ({status}).",
+  "preview.decodeFailed": "The photo could not be decoded.",
 
   // Primary-pane folder navigator landmark.
   "nav.label": "Files",
@@ -34,6 +37,14 @@ export const enStorageMessages: Record<string, string> = {
   "drive.label": "Drive",
   "drive.placeholder": "Select a drive",
   "drive.searchPlaceholder": "Search drives…",
+  "drive.unnamed": "Untitled drive",
+  "drive.create.name": "Name",
+  "drive.create.slug": "Slug",
+  "drive.create.slugPlaceholder": "assets",
+  "drive.create.backend": "Backend",
+  "drive.create.prefix": "Prefix",
+  "drive.create.prefixPlaceholder": "optional key prefix",
+  "drive.create.description": "Description",
 
   // Folder delete confirm + inline folder controls.
   "folder.deleteTitle": 'Delete "{name}"?',
@@ -43,7 +54,15 @@ export const enStorageMessages: Record<string, string> = {
   "folder.delete": "Delete folder",
   "folder.nameLabel": "Folder name",
   "folder.save": "Save",
-  "newFolder.button": "New folder",
+  "new.menu": "New",
+  "new.folder": "Folder",
+  "new.upload": "Upload",
+  "file.eyebrow": "File",
+  "file.facts": "{type} · {size} · uploaded {date} by {by}",
+  "file.factsAnonymous": "{type} · {size} · uploaded {date}",
+  "file.inTrash": "In trash",
+  "file.trashTitle": 'Move "{name}" to the trash?',
+  "file.trashBody": "You can restore it from the drive's Trash.",
   "newFolder.placeholder": "Folder name",
   "newFolder.nameLabel": "New folder name",
   "newFolder.create": "Create",
@@ -56,6 +75,7 @@ export const enStorageMessages: Record<string, string> = {
   "list.emptyUpload": "Drop files here or use Upload.",
   "list.empty": "No files here yet",
   "upload.button": "Upload",
+  "upload.chooseFiles": "Choose files",
   "upload.dropOverlay": "Drop to upload",
   "upload.heading": "Uploads",
   "upload.clearFinished": "Clear finished",
@@ -80,11 +100,6 @@ export const enStorageMessages: Record<string, string> = {
   "file.download": "Download",
   "file.restore": "Restore",
   "file.trash": "Trash",
-  "file.detailsTab": "Details",
-  "file.unknownType": "Unknown type",
-  // File preview pane header subtitle: mime label · formatted size (formatSize
-  // already carries the unit, e.g. "1.4 MB").
-  "file.subtitle": "{type} · {size}",
 
   // File detail record form — section + field labels.
   "file.details": "Details",
@@ -92,12 +107,6 @@ export const enStorageMessages: Record<string, string> = {
   "file.author": "Uploaded by",
   "file.stage": "Stage",
   "file.visibility": "Audience",
-
-  // File-row stage badge.
-  "stage.ready": "Ready",
-  "stage.uploading": "Uploading",
-  "stage.failed": "Failed",
-  "stage.unknown": "Unknown",
 
   // File-list column headers.
   "column.name": "Name",

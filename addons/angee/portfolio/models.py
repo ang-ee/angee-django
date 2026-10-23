@@ -9,10 +9,9 @@ upstream rows only when this addon is composed.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.apps import apps
-from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -23,16 +22,23 @@ from rebac import (
     system_context,
 )
 
-from angee.base.fields import FractionalRankField, StateField
-from angee.base.mixins import AuditMixin, HierarchyMixin
-from angee.base.models import (
+from angee.fields import FractionalRankField, StateField
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
+    AngeeQuerySet,
+    AuditMixin,
+    HierarchyMixin,
+    HierarchyQuerySet,
+    HistoryMixin,
+    OwnerMixin,
     role_anchor,
 )
-from angee.base.refs import MergePolicy, RecordRefMixin
-from angee.base.scoping import bind_actor, system_queryset
+from angee.refs import MergePolicy, RecordRefMixin
 from angee.resources.mixins import ResourceLoadMixin
+
+if TYPE_CHECKING:
+    from angee.projects.models import Project
 
 
 class ProductLifecycle(models.TextChoices):
@@ -91,10 +97,10 @@ class ReleaseStatus(models.TextChoices):
     DROPPED = "dropped", "Dropped"
 
 
-class ProductManager(AngeeManager):
+class ProductManager[ProductT: Product](AngeeManager[ProductT]):
     """Own the idempotent Project-to-Product maturation write."""
 
-    def from_project(self, project: models.Model) -> models.Model:
+    def from_project(self, project: Project) -> ProductT:
         """Return the one Product promoted from ``project`` with provenance.
 
         Promotion deliberately requires both Project write and ``portfolio_admin``:
@@ -109,10 +115,11 @@ class ProductManager(AngeeManager):
                 locked_project = type(project).objects.lock_if_supported().get(pk=project.pk)
                 existing = self.filter(originated_from_id=project.pk).first()
             if existing is not None:
-                bind_actor(existing, actor)
+                if actor is not None:
+                    existing.with_actor(actor)
                 return existing
 
-            verified_actor = self.check_create()
+            verified_actor, _ = self.effective_actor(strict=True)
             product = self.model(
                 name=locked_project.title,
                 body=locked_project.body,
@@ -120,18 +127,18 @@ class ProductManager(AngeeManager):
                 originated_from_id=locked_project.pk,
             )
             product.full_clean(validate_unique=False, validate_constraints=False)
-            product.sudo(reason="portfolio.product.promote_from_project")
             try:
                 with transaction.atomic():
-                    product.save()
+                    product = self.insert(product)
             except IntegrityError:
                 with system_context(reason="portfolio.product.promote_from_project.concurrent_lookup"):
                     product = self.get(originated_from_id=project.pk)
-            bind_actor(product, verified_actor)
+            if verified_actor is not None:
+                product.with_actor(verified_actor)
             return product
 
 
-class Product(AuditMixin, AngeeDataModel):
+class Product(OwnerMixin, HistoryMixin, AngeeDataModel):
     """A perpetual subject passing through phases rather than toward fulfillment."""
 
     runtime = True
@@ -139,13 +146,6 @@ class Product(AuditMixin, AngeeDataModel):
 
     name = models.CharField(max_length=240)
     body = models.TextField(blank=True, default="")
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="owned_portfolio_products",
-    )
     lifecycle = StateField(choices_enum=ProductLifecycle, default=ProductLifecycle.IDEA)
     originated_from = models.ForeignKey(
         "projects.Project",
@@ -171,27 +171,31 @@ class Product(AuditMixin, AngeeDataModel):
             ),
         )
 
+    # Promotion lineage stays on the original retained identity.
+    merge_policies = {"originated_from": MergePolicy.KEEP}
+
     def __str__(self) -> str:
         """Return the Product name."""
 
         return self.name
 
 
-class Initiative(HierarchyMixin, AuditMixin, AngeeDataModel):
+class InitiativeQuerySet[InitiativeT: Initiative](HierarchyQuerySet[InitiativeT], AngeeQuerySet[InitiativeT]):
+    """Initiative hierarchy writes use the shared saved-row contract."""
+
+
+_InitiativeManager = AngeeManager.from_queryset(InitiativeQuerySet)
+
+
+class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     """A tree-shaped long-horizon intent whose pushes can be fulfilled."""
 
     runtime = True
     sqid_prefix = "ini_"
+    objects = _InitiativeManager()
 
     name = models.CharField(max_length=240)
     body = models.TextField(blank=True, default="")
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="owned_portfolio_initiatives",
-    )
     status = StateField(choices_enum=InitiativeStatus, default=InitiativeStatus.PROPOSED)
     health = StateField(
         choices_enum=InitiativeHealth,
@@ -337,11 +341,11 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             return
         with system_context(reason="portfolio.initiative_project.validate_ancestry"):
             # A retained relation may predate a reparenting; validate the current path.
-            initiative_model = self._meta.get_field("initiative").related_model
+            initiative_model = type(self).initiative.field.related_model
             initiative = initiative_model._base_manager.get(pk=self.initiative_id)
-            placements = type(self).objects.filter(project_id=self.project_id).exclude(pk=self.pk)
+            placements = type(self).system_queryset().filter(project_id=self.project_id).exclude(pk=self.pk)
             if lock:
-                project_model = self._meta.get_field("project").related_model
+                project_model = type(self).project.field.related_model
                 project_model.objects.lock_if_supported().filter(pk=self.project_id).exists()
                 placements = placements.lock_if_supported()
             conflict = placements.filter(
@@ -385,7 +389,8 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             )
             for target, health, body in targets:
                 if update_model._base_manager.filter(
-                    **generic_target(target).lookups(update_model, "target"), body=body,
+                    **generic_target(target).lookups(update_model, "target"),
+                    body=body,
                 ).exists():
                     continue
                 report = update_model(
@@ -398,7 +403,7 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                 report.sudo(reason="portfolio.demo.report").save()
 
 
-class UpdateManager(AngeeManager):
+class UpdateManager[UpdateT: Update](AngeeManager[UpdateT]):
     """Own target validation and health-report creation.
 
     ``permissions.zed`` backs the update's ``project`` and ``initiative``
@@ -410,23 +415,23 @@ class UpdateManager(AngeeManager):
     def report(
         self,
         *,
-        target: models.Model,
+        target: Project | Initiative,
         health: str | UpdateHealth,
         body: str = "",
-    ) -> models.Model:
+    ) -> UpdateT:
         """Create one report on a Project or Initiative; its ``create`` requires write on the target."""
 
         if target.pk is None:
             raise ValidationError({"target": "A saved project or initiative is required."})
         self.model.validate_target(target)
         with transaction.atomic():
-            locked_target = system_queryset(type(target), lock=("self",)).get(pk=target.pk)
+            locked_target = type(target).system_queryset(lock=("self",)).get(pk=target.pk)
             report = self.model(health=health, body=body, **generic_target(locked_target).lookups(self.model, "target"))
             report.full_clean(validate_unique=False, validate_constraints=False)
             return self.insert(report)
 
 
-class Update(AuditMixin, RecordRefMixin, AngeeDataModel):
+class Update(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     """A required-health report on a Project or Initiative, never a Product."""
 
     merge_policy = MergePolicy.MOVE
@@ -528,7 +533,7 @@ class Update(AuditMixin, RecordRefMixin, AngeeDataModel):
         return f"{self.record_model_label}:{self.record_public_id} {self.health}"
 
 
-class Release(AuditMixin, AngeeDataModel):
+class Release(HistoryMixin, AuditMixin, AngeeDataModel):
     """The named artifact a ship Project leaves on a Product timeline."""
 
     runtime = True
@@ -571,21 +576,21 @@ class ProjectPortfolio(models.Model):
     project-side.
     """
 
-    extends = "projects.Project"
+    extends: ClassVar[str | None] = "projects.Project"
 
-    hasura_readable_fields = (
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = (
         "product",
         "health",
         "health_updated_at",
         "priority",
         "sort_order",
     )
-    hasura_filterable_fields = hasura_readable_fields
-    hasura_sortable_fields = hasura_readable_fields
-    hasura_aggregatable_fields = ("priority", "sort_order")
-    hasura_groupable_fields = ("product", "health", "priority")
-    hasura_insertable_fields = ("product", "priority", "sort_order")
-    hasura_updatable_fields = hasura_insertable_fields
+    hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_sortable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_aggregatable_fields: ClassVar[tuple[str, ...]] = ("priority", "sort_order")
+    hasura_groupable_fields: ClassVar[tuple[str, ...]] = ("product", "health", "priority")
+    hasura_insertable_fields: ClassVar[tuple[str, ...]] = ("product", "priority", "sort_order")
+    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_insertable_fields
 
     product = models.ForeignKey(
         "portfolio.Product",
@@ -621,7 +626,7 @@ class ProjectPortfolio(models.Model):
             ),
         )
 
-    def promote_to_product(self) -> models.Model:
+    def promote_to_product(self) -> Product:
         """Return the one Product matured from this Project."""
 
         product_model = apps.get_model("portfolio", "Product")
@@ -631,16 +636,16 @@ class ProjectPortfolio(models.Model):
 class TaskPortfolio(models.Model):
     """Same-row release attribution folded into ``projects.Task``."""
 
-    extends = "projects.Task"
+    extends: ClassVar[str | None] = "projects.Task"
 
-    hasura_readable_fields = ("release",)
-    hasura_filterable_fields = hasura_readable_fields
-    hasura_sortable_fields = hasura_readable_fields
-    hasura_aggregatable_fields: tuple[str, ...] = ()
-    hasura_groupable_fields = hasura_readable_fields
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = ("release",)
+    hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_sortable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_aggregatable_fields: ClassVar[tuple[str, ...]] = ()
+    hasura_groupable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
     # Projected as an object by the portfolio type extension.
-    hasura_insertable_fields = hasura_readable_fields
-    hasura_updatable_fields = hasura_readable_fields
+    hasura_insertable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
+    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
 
     release = models.ForeignKey(
         "portfolio.Release",

@@ -1,5 +1,37 @@
 # Messaging contracts
 
+Record chatter and source conversations have different identity. Chatter folds
+through core `MergeableMixin`: the retired thread redirects to its survivor,
+while its messages, follower occurrences and history stay on their physical rows.
+The current record owns read and post admission. Messaging contributes comments,
+its existing composer, and linked source conversations to the framework Activity
+stream; provenance contributes record history independently through the same owner.
+
+Source threads and messages remain channel occurrences. A native `same_as` pair
+statement is the identity fact, and applying it folds the newer copy into the
+older through core `MergeableMixin` as a retained redirect (`merged_into`): no
+message, member, cursor or part moves, so reply, correction, delivery, unread
+cursors and provider purge always address the physical occurrence. Readers
+collapse copies through `canonical()`, which keeps showing a copy whose survivor
+the reader cannot reach, so an account that sees only its own channel still sees
+the message. Show source copies lists the survivor and every readable copy with
+its channel and reply transport. The `messaging.source_identity` rule asserts an
+RFC Message-ID match after the envelope commits (account-local chat/provider ids
+are never compared); people confirm or keep copies separate through the same
+statement, and a kept-separate decision splits the redirect and refuses a later
+fold. The pair rule principal is granted read and write on threads and messages
+like the parties statement sources.
+
+An authoritative source audience correction uses
+`Message.objects.correct_source_thread(message, channel=..., expected_thread=..., thread=...)`.
+The native owner compares the locked previous thread, requires the envelope and
+both threads to belong to that channel, and refuses locally authored messages.
+It preserves content and repairs participants and both physical thread counters.
+`ingest(..., explicit_thread=..., expected_thread=...)` composes the same command
+with envelope ingestion; absent the exact precondition, changing an explicit
+source thread remains refused. Historical ingestion suppresses live message
+events while retaining native content history and counter updates.
+
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
 [`backends.py`](backends.py). Acceptance settles the existing row to `sent` and
@@ -52,14 +84,9 @@ workers cannot enforce the worker time limits on which the lease depends.
 If sync has already ingested a reconciled provider identity in the same channel,
 that provider row remains visible. `record_delivery` retains the local attempt
 as a trashed SENT audit row, with `delivery_conflict` pointing to the provider id;
-its creation key and provenance survive without a second visible row or count.
+its idempotency key and provenance survive without a second visible row or count.
 Advisory task locks reduce contention; the row claim is authoritative. This is
 at-most-once recovery of an uncertain effect, not an exactly-once provider guarantee.
-
-Drain workers before migrating this delivery contract. A pre-upgrade worker's
-in-flight send has no persisted claim, so the upgraded sweep can re-dispatch it
-and publish a duplicate. Stop new dispatch, drain active workers, migrate, then
-start workers on the upgraded code.
 
 Email uses the provider's definite refusal evidence: SMTP 4xx retries and SMTP
 5xx fails; connection failure before SMTP sending retries. Once sending begins,

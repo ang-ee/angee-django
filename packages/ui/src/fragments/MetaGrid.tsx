@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import { EMPTY_VALUE } from "../lib/empty-value";
+
 import { tv } from "../lib/variants";
 import { SectionEyebrow } from "../ui/section-eyebrow";
 import {
@@ -34,6 +36,9 @@ export type MetaSectionProps = Omit<
   headingLevel?: 2 | 3 | 4 | 5 | 6;
 };
 
+/**
+ * @kind token
+ */
 export const metaGridVariants = tv({
   slots: {
     grid:
@@ -42,8 +47,11 @@ export const metaGridVariants = tv({
   },
 });
 
+/**
+ * @kind fragment
+ */
 export const MetaGrid = React.forwardRef<HTMLDListElement, MetaGridProps>(
-  function MetaGrid({ className, emptyValue = "-", rows, ...props }, ref) {
+  function MetaGrid({ className, emptyValue = EMPTY_VALUE, rows, ...props }, ref) {
     const styles = metaGridVariants();
 
     return (
@@ -70,6 +78,9 @@ export const MetaGrid = React.forwardRef<HTMLDListElement, MetaGridProps>(
 );
 MetaGrid.displayName = "MetaGrid";
 
+/**
+ * @kind fragment
+ */
 export const MetaSection = React.forwardRef<HTMLElement, MetaSectionProps>(
   function MetaSection({ children, className, title, headingLevel = 3, ...props }, ref) {
     const styles = metaGridVariants();

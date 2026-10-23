@@ -3,6 +3,7 @@ import {
   type DescriptorField,
   type ValidationErrors,
   type MutationDialogValues,
+  useRouteHref,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
@@ -15,7 +16,7 @@ import type {
   WorkspaceCreateInput,
 } from "../../data/types";
 import { useOperatorT } from "../../i18n";
-import { workspaceDetailPath } from "../../lib/paths";
+
 
 export interface WorkspaceCreateDialogProps {
   open: boolean;
@@ -29,6 +30,7 @@ export function WorkspaceCreateDialog({
 }: WorkspaceCreateDialogProps): React.ReactElement {
   const t = useOperatorT();
   const navigate = useNavigate();
+  const routeHref = useRouteHref();
   const { snapshot } = useOperatorSnapshot({ templates: true });
   // The detail view resolves its record from the workspaces snapshot; the
   // post-create navigation must not race the next snapshot push (see submit).
@@ -117,7 +119,7 @@ export function WorkspaceCreateDialog({
       validate={validate}
       onSubmit={submit}
       onSubmitted={(workspace) => {
-        void navigate({ to: workspaceDetailPath(workspace.name) });
+        void navigate({ to: routeHref("operator.workspaces.detail", { name: workspace.name }) });
       }}
       size="lg"
       placement="prompt"

@@ -1,15 +1,5 @@
 import {
-  Alert,
-  Button,
-  ErrorBanner,
-  LabeledDescriptorField,
-  LoadingPanel,
-  deserializeFormSpec,
-  formSpecInitialValues,
-  useAppRuntime,
-  type FormSpecFieldDescriptor,
-  type WidgetMap,
-  type WidgetFocusTarget,
+  Alert, Button, Code, ErrorBanner, FieldLabel, FieldRoot, FormRoot, Input, LabeledDescriptorField, LoadingPanel, deserializeFormSpec, formSpecInitialValues, textRoleVariants, useAppRuntime, type FormSpecFieldDescriptor, type WidgetFocusTarget, type WidgetMap,
 } from "@angee/ui";
 import * as React from "react";
 
@@ -166,19 +156,17 @@ function LoadedPublicWebform({
       <Alert ref={successRef} tabIndex={-1} tone="success" title={<Heading>{description.success.title ?? t("webform.successTitle")}</Heading>}>
         <p>{description.success.body ?? t(showReceipt ? "webform.successBody" : "webform.successBodyNoReceipt")}</p>
         {showReceipt ? (
-          <div className="mt-3 rounded-6 bg-inset px-3 py-2 font-mono text-xs text-fg" data-testid="webform-receipt">
-            {receiptId}
-          </div>
+          <Code className="mt-3 block" data-testid="webform-receipt">{receiptId}</Code>
         ) : null}
       </Alert>
     );
   }
 
   return (
-    <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
+    <FormRoot className="grid gap-4" onSubmit={(event) => void submit(event)}>
       <header className="space-y-1">
-        <Heading className="text-xl font-semibold text-fg">{description.title}</Heading>
-        <p className="text-13 text-fg-muted">{t(showReceipt ? "webform.intro" : "webform.introNoReceipt")}</p>
+        <Heading className={textRoleVariants({ role: "display" })}>{description.title}</Heading>
+        <p className={textRoleVariants({ role: "description" })}>{t(showReceipt ? "webform.intro" : "webform.introNoReceipt")}</p>
       </header>
       {fields.map((field) => (
         <LabeledDescriptorField
@@ -203,9 +191,9 @@ function LoadedPublicWebform({
         />
       ))}
       {description.honeypot_field ? (
-        <div className="hidden" aria-hidden="true">
-          <label htmlFor={honeypotId}>{t("webform.website")}</label>
-          <input
+        <FieldRoot className="hidden" aria-hidden="true">
+          <FieldLabel htmlFor={honeypotId}>{t("webform.website")}</FieldLabel>
+          <Input
             id={honeypotId}
             name={description.honeypot_field}
             tabIndex={-1}
@@ -213,7 +201,7 @@ function LoadedPublicWebform({
             value={honeypot}
             onChange={(event) => setHoneypot(event.currentTarget.value)}
           />
-        </div>
+        </FieldRoot>
       ) : null}
       <ErrorBanner
         title={nonFieldErrors.length ? error : undefined}
@@ -226,7 +214,7 @@ function LoadedPublicWebform({
       <Button type="submit" variant="primary" loading={submitting} loadingText={t("webform.submitting")}>
         {t("webform.submit")}
       </Button>
-    </form>
+    </FormRoot>
   );
 }
 

@@ -1,13 +1,8 @@
-import { Combobox as BaseCombobox } from "@base-ui/react/combobox";
 import { useMemo, type ReactElement, type ReactNode } from "react";
 
-import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
-import { cn } from "../lib/cn";
-import { PORTALED_CONTROL_LAYER } from "../ui/popover";
-import { selectVariants } from "../ui/select";
-import { textRoleVariants } from "../ui/text";
-import { widgetControlSurface, widgetControlPresentationProps } from "../ui/widget-control";
+import { Combobox } from "../ui/combobox";
+import { widgetControlPresentationProps } from "../ui/widget-control";
 import { widgetLabel } from "./label";
 import {
   canonicalOptionValue,
@@ -37,11 +32,11 @@ function ComboboxEdit({
   const values = useMemo(() => options.map((option) => option.value), [options]);
   const selected = canonicalOptionValue(options, value) ?? null;
   const { presentation, ...controlProps } = field?.controlProps ?? ({} as Partial<WidgetControlProps>);
-  const cellProps = widgetControlPresentationProps(presentation);
-  const styles = selectVariants(cellProps);
+  const sizing = widgetControlPresentationProps(presentation);
+  const invalid = controlProps["aria-invalid"] === true;
 
   return (
-    <BaseCombobox.Root
+    <Combobox.Root
       items={values}
       value={selected}
       readOnly={readOnly}
@@ -54,75 +49,37 @@ function ComboboxEdit({
         optionMatches(optionValue, labels.get(optionValue), query)
       }
     >
-      <BaseCombobox.Trigger
+      <Combobox.Trigger
         ref={controlRef}
         {...controlProps}
         aria-label={widgetLabel(field, t("combobox.label"))}
-        className={styles.trigger({
-          className: widgetControlSurface({
-            focus: "visible",
-            surface: "inset",
-            ...cellProps,
-            invalid: controlProps["aria-invalid"],
-            readOnly,
-            disabled: "data",
-          }),
-        })}
+        presentation={presentation}
+        invalid={invalid}
+        readOnly={readOnly}
       >
-        <BaseCombobox.Value>
-          {(selected) => (
-            <span className={styles.value()}>
-              {labels.get(String(selected ?? "")) ??
-                widgetLabel(field, t("combobox.selectOption"))}
-            </span>
-          )}
-        </BaseCombobox.Value>
-        <BaseCombobox.Icon data-widget-affordance="" className={styles.icon()}>
-          <Glyph name="chevron-down" />
-        </BaseCombobox.Icon>
-      </BaseCombobox.Trigger>
-      <BaseCombobox.Portal>
-        <BaseCombobox.Positioner className={PORTALED_CONTROL_LAYER} sideOffset={4}>
-          <BaseCombobox.Popup className={styles.content()}>
-            <label className="flex h-8 items-center gap-2 border-b border-border-subtle px-2 text-fg-muted">
-              <Glyph name="search" className="shrink-0" />
-              <BaseCombobox.Input
-                aria-label={t("combobox.searchOptions")}
-                className="min-w-0 flex-1 border-0 bg-transparent text-13 text-fg outline-none placeholder:text-fg-muted"
-                placeholder={t("combobox.search")}
-              />
-            </label>
-            <BaseCombobox.List className={styles.list()}>
-              {(optionValue: string) => {
-                const option = byValue.get(optionValue);
-                if (!option) return null;
-                return (
-                  <BaseCombobox.Item
-                    key={option.value}
-                    value={option.value}
-                    disabled={option.disabled}
-                    className={styles.item()}
-                  >
-                    <span className={styles.itemText()}>{option.label}</span>
-                    <BaseCombobox.ItemIndicator className={styles.indicator()}>
-                      <Glyph name="check" />
-                    </BaseCombobox.ItemIndicator>
-                  </BaseCombobox.Item>
-                );
-              }}
-            </BaseCombobox.List>
-            <BaseCombobox.Empty
-              className={cn(
-                textRoleVariants({ role: "meta" }),
-                "px-2 py-3",
-              )}
-            >
-              {t("combobox.noOptions")}
-            </BaseCombobox.Empty>
-          </BaseCombobox.Popup>
-        </BaseCombobox.Positioner>
-      </BaseCombobox.Portal>
-    </BaseCombobox.Root>
+        <Combobox.Value>
+          {(selected) =>
+            labels.get(String(selected ?? "")) ?? widgetLabel(field, t("combobox.selectOption"))}
+        </Combobox.Value>
+        <Combobox.Icon />
+      </Combobox.Trigger>
+      <Combobox.Popup size={sizing.size}>
+        <Combobox.Search />
+        <Combobox.List>
+          {(optionValue: string) => {
+            const option = byValue.get(optionValue);
+            if (!option) return null;
+            return (
+              <Combobox.Item key={option.value} value={option.value} disabled={option.disabled} size={sizing.size}>
+                <Combobox.ItemText>{option.label}</Combobox.ItemText>
+                <Combobox.ItemIndicator />
+              </Combobox.Item>
+            );
+          }}
+        </Combobox.List>
+        <Combobox.Empty />
+      </Combobox.Popup>
+    </Combobox.Root>
   );
 }
 

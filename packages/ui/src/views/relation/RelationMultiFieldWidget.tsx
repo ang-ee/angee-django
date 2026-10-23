@@ -66,6 +66,7 @@ export interface RelationMultiFieldWidgetProps {
  * record's route, and never query the option list. `FormView` and
  * `EditableLines` use it for a `kind: "list"` field whose relation target
  * resolved (`relationListFieldInfo`).
+ * @kind contribution
  */
 export function RelationMultiFieldWidget({
   value,

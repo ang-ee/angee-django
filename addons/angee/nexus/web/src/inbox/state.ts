@@ -1,15 +1,6 @@
 import { useCallback, useMemo } from "react";
-import { useNavigate } from "@tanstack/react-router";
-import {
-  Filter,
-  routeSearchParam,
-  updateRouteSearch,
-  useRouteSearch,
-  type ResourceViewFilter,
-  type ResourceViewState,
-  mergeResourceViewSearch,
-  resourceViewStateToSearch,
-} from "@angee/ui";
+import { useNavigate, useRouter } from "@tanstack/react-router";
+import { Filter, localTimeZone, mergeResourceViewSearch, resourceViewStateToSearch, routeSearchParam, updateRouteSearch, useRouteSearch, type ResourceViewFilter, type ResourceViewState } from "@angee/ui";
 import {
   InboxFilter,
   NAVIGATOR_LENSES,
@@ -58,7 +49,7 @@ export const RELATED_TAB = "nexus-related";
 /** Translate the native collection filter to the Messaging input contract. */
 export function inboxQuery(
   filter: ResourceViewFilter,
-  timezone = Intl.DateTimeFormat().resolvedOptions().timeZone,
+  timezone = localTimeZone(),
 ) {
   const value = new InboxFilter(filter);
   return { coverage: value.coverage(timezone), search: value.search() };
@@ -72,6 +63,7 @@ export type InboxScope = ReturnType<typeof inboxQuery> & {
 export function useInboxNavigation() {
   const search = useRouteSearch();
   const navigate = useNavigate();
+  const router = useRouter();
   const patch = useCallback(
     (values: Record<string, string | undefined>, replace = false) => {
       void navigate({ to: ".", search: updateRouteSearch(values), replace });
@@ -79,22 +71,22 @@ export function useInboxNavigation() {
     [navigate],
   );
   const connect = useCallback(
-    (related: string, relatedFrom: string) =>
-      patch({
-        related,
-        relatedFrom,
-        "r.page": undefined,
-        "r.filter": undefined,
-        "r.sort": undefined,
-        "r.group": undefined,
-        "r.then": undefined,
-        "r.pageSize": undefined,
-        "r.view": undefined,
-        "r.mode": undefined,
-        "r.anchor": undefined,
+    (related?: string, relatedFrom?: string) =>
+      void navigate({
+        to: ".",
+        search: (current: Record<string, unknown>) => mergeResourceViewSearch(
+          updateRouteSearch({ related, relatedFrom })(current), {}, "r",
+        ),
       }),
-    [patch],
+    [navigate],
   );
+  const read = useCallback((message: string, part?: string) => patch({ message, part }), [patch]);
+  const conversation = useCallback((thread: string, message?: string) => patch({
+    thread,
+    at: message ? `message:${message}` : undefined,
+    message: undefined,
+    part: undefined,
+  }), [patch]);
   const param = (key: string) => routeSearchParam(search, key) ?? "";
   return useMemo(
     () => ({
@@ -110,6 +102,7 @@ export function useInboxNavigation() {
       part: param("part"),
       related: param("related"),
       relatedFrom: param("relatedFrom"),
+      href: (values: Record<string, string | undefined>) => router.buildLocation({ to: ".", search: updateRouteSearch(values) }).href,
       patch,
       changeNavigator: (finder: NavigatorLens, state: ResourceViewState) => {
         const filter =
@@ -154,15 +147,11 @@ export function useInboxNavigation() {
             ),
         });
       },
-      read: (message: string, part?: string) => patch({ message, part }),
-      conversation: (thread: string, message?: string) =>
-        patch({
-          thread,
-          at: message ? `message:${message}` : undefined,
-          message: undefined,
-          part: undefined,
-        }),
-      back: () => patch({ message: undefined, part: undefined }),
+      read,
+      conversation,
+      /** Read a match in its complete conversation; standalone messages use the inspector. */
+      openInContext: (message: { id: string; thread?: { id: string } | null }) =>
+        message.thread ? conversation(message.thread.id, message.id) : read(message.id),
       results: () =>
         patch({
           thread: undefined,
@@ -181,25 +170,12 @@ export function useInboxNavigation() {
           part: undefined,
         }),
       connect,
-      /** A file previews in Related as the pinned target, beside the message that used it. */
+      /** A file previews in Links as the pinned target, beside the message that used it. */
       previewFile: (file: string, message: string) =>
         connect(`file:${file}`, message),
-      closeRelated: () =>
-        patch({
-          related: undefined,
-          relatedFrom: undefined,
-          "r.page": undefined,
-          "r.filter": undefined,
-          "r.sort": undefined,
-          "r.group": undefined,
-          "r.then": undefined,
-          "r.pageSize": undefined,
-          "r.view": undefined,
-          "r.mode": undefined,
-          "r.anchor": undefined,
-        }),
+      closeRelated: () => connect(),
     }),
-    [search, patch, connect, navigate],
+    [search, patch, connect, read, conversation, navigate, router],
   );
 }
 export type InboxNavigation = ReturnType<typeof useInboxNavigation>;

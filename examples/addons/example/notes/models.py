@@ -5,18 +5,19 @@ from __future__ import annotations
 from typing import Any
 
 from django.conf import settings
+from django.contrib.contenttypes.fields import GenericRelation
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from rebac import ObjectRef
 
-from angee.base.fields import StateField
-from angee.base.mixins import (
+from angee.fields import StateField
+from angee.messaging.models import ThreadedModelMixin
+from angee.models import (
+    AngeeDataModel,
     AuditMixin,
     HistoryMixin,
     OwnerMixin,
 )
-from angee.base.models import AngeeDataModel
-from angee.messaging.models import ThreadedModelMixin
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 
 
@@ -58,6 +59,7 @@ class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, Angee
     reviewer = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
     )
+    file_attachments = GenericRelation("storage.FileAttachment", related_query_name="note")
 
     class Meta:
         """Django model options."""

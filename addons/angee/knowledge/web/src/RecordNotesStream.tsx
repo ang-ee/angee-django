@@ -1,7 +1,7 @@
 import { holdsPermission } from "@angee/metadata";
 import { RecordThreadStream, type StreamChildItem, type StreamCreateAction } from "@angee/messaging";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
-import { ErrorBanner, Skeleton, SkeletonStatus, type ChatterTabContent, type ContainerChild } from "@angee/ui";
+import { ErrorBanner, Skeleton, SkeletonStatus, SkeletonText, errorMessage, type ChatterTabContent, type ContainerChild } from "@angee/ui";
 import { useMemo, type ReactElement } from "react";
 
 import { recordPagesTarget, type RecordPagesTarget } from "./RecordPagesPane";
@@ -61,9 +61,9 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
   const [bind] = useAuthoredMutation(KnowledgeBindRecord, { invalidateModels: [RECORD_BINDING_MODEL] });
 
   if (bindings.isPending && !bindings.data) return <SkeletonStatus label={t("notes.loading")} className="space-y-3 p-4">
-    <Skeleton className="h-9" /><Skeleton className="h-16" /><Skeleton className="h-16" />
+    <Skeleton size="lg" /><SkeletonText lines={2} size="lg" /><SkeletonText lines={2} size="lg" />
   </SkeletonStatus>;
-  if (bindings.error && !bindings.data) return <ErrorBanner description={bindings.error.message} />;
+  if (bindings.error && !bindings.data) return <ErrorBanner description={errorMessage(bindings.error, t("notes.loadError"))} />;
 
   const items: StreamChildItem[] = (bindings.data?.record_knowledge_bindings ?? [])
     .flatMap((binding): StreamChildItem[] => binding.page_detail ? [{
@@ -102,7 +102,7 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
   } : undefined;
 
   return <>
-    {vaultQuery.error && canBind ? <ErrorBanner description={vaultQuery.error.message} /> : null}
+    {vaultQuery.error && canBind ? <ErrorBanner description={errorMessage(vaultQuery.error, t("notes.vaultError"))} /> : null}
     <RecordThreadStream heading={{
       label: heading?.label ?? t("notes.heading"),
       hint: items.length ? heading?.hint : undefined,

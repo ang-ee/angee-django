@@ -7,8 +7,6 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, Field
 
-from angee.base.evidence import FactAuthority
-from angee.base.identity import public_id_of
 from angee.decisions.contracts import (
     DecisionContext,
     DecisionFact,
@@ -16,6 +14,8 @@ from angee.decisions.contracts import (
     DecisionRecordReference,
     DecisionRequest,
 )
+from angee.evidence import FactAuthority
+from angee.identity import public_id_of
 from angee.parties.backends import ParsedAddress
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.steps import Settlement, Step
@@ -104,7 +104,7 @@ class IdentityReview(DecisionStep[IdentityInput, IdentityOutput, IdentityReviewC
         if any(getattr(proposed.address, name) for name in apps.get_model("parties", "Address").objects.components):
             alternatives.append({"key": "address", "label": "Add the proposed address", "outcome": "applied"})
         if proposed.handle.statement_id:
-            statement = identity.party.statements.readable(ctx.actor).from_public_id(proposed.handle.statement_id)
+            statement = identity.party.statements.for_reader(ctx.actor).from_public_id(proposed.handle.statement_id)
             if statement is None:
                 raise ValidationError("The proposed handle assertion is not readable on this Party.")
             records.append(statement.handle)

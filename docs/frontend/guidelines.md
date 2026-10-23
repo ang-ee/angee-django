@@ -77,6 +77,14 @@ public vault id. See the [knowledge addon](../../addons/angee/knowledge/README.m
 - Layering and unconsumed-owner guardrails are Vitest checks over the locked
   package graph. Do not add a boundary-lint dependency without updating
   [the opinionated stack](../stack.md) and the manifests together.
+- **Guards.** The UX component ontology is executable: `packages/app/src/ux-ontology-guard.ts`
+  (run by the architecture guardrails test over every addon and consumer root) fails on raw
+  `<button>`/`<input>`/`<select>`/`<textarea>`/`<table>`/`<dialog>`/`<form>` elements, lucide
+  icons rendered outside the manifest `icons` block, hand-spelled selected surfaces, deleted
+  class names and raw pixel or control sizes, `toLocale*`/`Intl` formatters and literal
+  date-fns patterns, imports of deleted owners, local `tv()` recipes beside a composed owner,
+  and local status→tone maps. An exception is an allowlist entry with the file, the rule and
+  the owner-level reason, never a workaround in the addon.
 
 ### One-way rules
 
@@ -117,6 +125,70 @@ bundle is rejected by [`composeAddons`](../../packages/app/src/define-addon.ts).
 Use the owning addon's namespace with `createNamespaceT`; do not override
 shared UI copy through an addon bundle.
 
+## Component ontology
+
+The [public catalog](../../packages/ui/src/catalog.ts) assigns one UX kind to
+each shipped component and its owner-specific hooks. The
+[Library overview](../../packages/storybook/src/stories/Library.stories.tsx) (story id `library-overview--default`)
+renders the owners; the
+[composition report](../../packages/storybook/src/stories/Composition.stories.tsx) (story id `reports-composition--default`)
+shows their dependencies.
+
+| Kind | Meaning |
+|---|---|
+| `token` | A named value or recipe: text role, tone, fill, radius, spacing, control height, elevation, motion, glyph, or a class recipe binding them. Each runtime export is counted once; there is no separate recipe category. |
+| `primitive` | One interactive or layout element with its recipe, usually wrapping Base UI: Button, Chip, Tabs, Toolbar, Select, Input, Avatar, Tree, Pager, Dialog or Menu. |
+| `fragment` | A data-free piece with fixed anatomy composed from primitives: PaneRow, PaneLabel, EmptyState, ErrorBanner, DefinitionPair, MetaGrid, status badge, RecordReference or RelativeTime. |
+| `region` | A chrome composition owning a shell place: record header, command band, aside head, pane toolbar band, explorer pane, reader, drawer rail, top bar, breadcrumb or control band. |
+| `surface` | A data-bound view: FormView, ListView, BoardView, Gantt, Dashboard, TreeView, Chatter or its panes. |
+| `page` | A shared design-system shape composing regions and surfaces: record, explorer, console, settings or hero page. An addon's routed page is a route instance that composes this shape. |
+| `contribution` | What addons add through containers: verbs, chrome controls, aside tabs, drill-ins, related groups, timeline kinds, widgets, sections or columns. |
+
+**The design system owns tokens, primitives, fragments, regions and pages.**
+Addons own contributions and surface content. An addon needing a missing owner
+first identifies the shell place or shared anatomy, searches the existing
+catalog and container contracts, and brings the concrete gap and intended
+composition to the framework owner. Extend that owner or contribute through its
+container. A new owner belongs in `@angee/ui` (or app composition in
+`@angee/app`) with its story and catalog entry, never as an addon-local copy.
+Addon route instances awaiting the lane-2 page shapes appear in the composition
+report as “composes no page shape yet”; they are information, not ownership
+violations.
+
+**The shipped owner is the only Storybook authority.** Authoritative stories
+render real `@angee/ui`, `@angee/app` shell owners and shipped addon components,
+with fixture data and providers. They never invent substitute anatomy. A study
+needing its own markup belongs under `Explorations/<YYYY-MM-DD> <name>` (a
+`packages/storybook/src/explorations/` folder with its own story glob in
+`.storybook/main.mjs`; none exists today), names the ruling it fed and its
+superseding owner, and is deleted once that owner exists. Explorations sort last
+and never enter the Library or the shipped composition tree.
+
+The `@angee/ui/catalog` subpath audits runtime exports, including aliases; the
+root entry does not load it. Type-only exports are contracts, not rendered
+components. Declarations own `@kind` and the closed `@region` shell place;
+`@owner` lets hooks, parts and values follow their rendered owner. Nonvisual
+transport, schema, runtime and provider infrastructure needs an explicit
+`@reason` for `kind: null`. Upstream re-exports remain attributed to the local
+re-exporting file. `@deprecated` marks deletion candidates; other exports are
+stable.
+
+The [generator](../../packages/storybook/scripts/catalog.mjs) reads these facts
+through TypeScript, reports independent owners of the same shell place, and
+derives story links only from CSF `meta.component` or `parameters.owner`.
+Missing coverage stays `null` and is visible in the Library. This lane omits
+`composes`; the composition graph carries the inventory edges separately.
+`recipeAxes(recipe)` reads native tailwind-variants metadata for specimens.
+The guard regenerates and diffs the catalog, so shape-valid but stale facts fail.
+
+Token owners are visible in the live sheets:
+[type roles](../../packages/storybook/src/stories/TypeRoles.stories.tsx) (story id `foundations-type-roles--default`),
+[tones and fills](../../packages/storybook/src/stories/TonesAndFills.stories.tsx) (story id `foundations-tones-and-fills--default`),
+[geometry](../../packages/storybook/src/stories/GeometryTokens.stories.tsx) (story id `foundations-radius-spacing-and-control-heights--default`)
+and [glyphs](../../packages/storybook/src/stories/Glyphs.stories.tsx) (story id `foundations-glyphs--default`).
+The unused tokens and unresolved classes the inventory found were deleted or
+repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
+
 ## Rules
 
 - Python ships schema and operations. TypeScript ships UX.
@@ -139,7 +211,10 @@ shared UI copy through an addon bundle.
   `documents.public.ts` → public. An op must live in a `documents*.ts` file (the
   codegen glob does not scan inline ops), and a console op placed in a
   `documents.public.ts` (or vice versa) fails codegen loudly against the wrong
-  schema. An opaque `JSON`-scalar value is parsed at its domain owner with a
+  schema. Optional schema contributions keep their documents and UI registrations
+  in the contributing addon's web package, so hosts without it never scan those
+  operations; see [OIDC sign-in](../../addons/angee/iam_integrate_oidc/web/src/index.ts).
+  An opaque `JSON`-scalar value is parsed at its domain owner with a
   valibot schema (`safeParse`), never asserted into an application shape; a
   recursive shape a declarative schema cannot express may wrap its type guard
   in `v.custom`, keeping the parse boundary in the schema.
@@ -217,7 +292,8 @@ shared UI copy through an addon bundle.
 - **An app root declares itself; the deployment selects the app.** A
   top-level menu root is an app. It may declare `home` (a route name inside
   the root), `brand` (`{ name, mark }`, with `mark` a registered glyph; it
-  defaults to the root's label and icon) and `theme` (an installed theme id).
+  defaults to the root's label and icon), `theme` (an installed theme id), and
+  `railExpanded` (the desktop rail's default expansion).
   They layer like any menu field, so a dependent addon or `ANGEE_UI.menus`
   overrides them, and an included app drops them. The deployment's
   `ANGEE_UI.shell` selects what the console shows; products never name
@@ -234,7 +310,7 @@ shared UI copy through an addon bundle.
 
   [`selectApp`](../../packages/app/src/boot-app.tsx) takes `?app=<root id |
   apps name>`, else the hostname's `hosts` entry, else nothing; no choice is
-  stored. A root id is the one-root app with the root's home, brand and theme.
+  stored. A root id is the one-root app with the root's home, brand, theme and rail default.
   A named app takes its own, else its first rail root's; an unset theme falls
   back to `shell.theme`. Nothing selected shows every root with `shell.brand`
   and `shell.theme`. An unknown `?app=` warns in development and falls back.
@@ -249,7 +325,10 @@ shared UI copy through an addon bundle.
   guarded: only a menu `remove` makes a page unavailable. Rail, login, public
   mark and document title read the selected brand through `useRuntimeBrand`;
   shell components hard-code no identity. The selected theme is the appearance
-  default, and the person's own choice still wins.
+  default, and the person's own choice still wins. The rail likewise takes its
+  selected app's `railExpanded` default only when no expansion preference is saved;
+  undeclared, it starts expanded at desktop widths. Visiting a route without
+  selecting an app does not apply that app's rail default.
   `/` signs in like the `console` layout, then lands by [`landingTarget`](../../packages/ui/src/chrome/app-rail-model.ts).
   A selected app lands on its home, else on its rail's first app. Otherwise
   `/` lands on the person's saved home page, their rail default, the first app
@@ -316,23 +395,41 @@ shared UI copy through an addon bundle.
   navigator publication plus the root loading/empty gate; addons provide row
   projection, route transitions, DnD policy, and domain actions. Context another
   addon owns beside a page's list is that addon's pane component, published with
-  `usePrimaryPane` rather than stacked as a second list:
-  the [workflows record timeline](../../addons/angee/workflows/web/src/timeline-pane.tsx)
-  publishes its left-side timeline this way. Page tests use
+  `usePrimaryPane` rather than stacked as a second list. The left pane never
+  describes the record (see the shell's regions below). Page tests use
   `ShellPageTestProviders`, `PrimaryPaneTestHost`, and `ChatterTabsTestHost`
   from `@angee/app/testing` instead of hand-rolled shell provider wrappers.
-- Chatter publishers compose by owner for their mounted lifetime. Panels mount
-  lazily when first visited and then remain mounted for that record, so a shared
-  `useRecordPeek` Records tab provides an explicit preview opened from main
-  content, not link following from a pane, without discarding draft input in
-  another panel; unmounting the temporary peek must leave other publishers'
-  tabs and composer intact. Chatter stays in the shell's right pane. Consumers
-  do not mount their own chatter. Its tabs are `record#aside` and
-  `<model>#aside` children, narrowed by the layers for the current app and
-  route before tabs mount (see [Chatter](#chatter)); a container nobody narrows
-  keeps all its children, including under a selected app. Public and sign-in
-  routes belong to no app. A tab declared at `record#aside` appears only on
-  record views. See the [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
+- **The shell has four regions, each with a test.** The left pane is the
+  explorer: trees, collection lists in split placement, session rails, smart
+  views and the record pager; it changes which record is in the middle and
+  never says anything about the record. The middle is the subject: the form,
+  its body sections, the statusbar and the primary toolbar. The right pane is
+  the context aside: what is around the record (its Timeline, Discussion,
+  Tasks, Related), a page's selection inspector, and drill-ins; it may act on
+  the record's process (answer, stop, revert, comment) or lead to a related
+  record, and it is never a second middle: on a record page it never edits the
+  record's content (a studio page's selection inspector edits the selection,
+  because there the canvas is the subject and the inspector its editor). The
+  drawers are tools: session-scoped and record-independent (agents, logs). A
+  candidate that fails its region's test belongs elsewhere. Related records
+  navigate the middle and the explorer keeps the place; the aside drills in for
+  a bounded question about one object in the record's context (this run, this
+  changeset, this decision, this conversation) and links to the object's page
+  for the open-ended work. Aside publishers compose by owner for their mounted lifetime:
+  panels mount when first visited and stay mounted for that record, so draft
+  input survives switching tabs. Consumers do not mount their own aside. Its
+  tabs are `record#aside` and `<model>#aside` children, narrowed by the layers
+  for the current app and route before tabs mount (see
+  [Context aside](#context-aside)); a container nobody narrows keeps all its
+  children, including under a selected app. Public and sign-in routes belong
+  to no app. A `record#aside` child appears only on model-backed record views;
+  a route whose param names no model has no aside. See the
+  [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
+  Shipped examples: [command band](../../packages/storybook/src/stories/CommandBand.stories.tsx) (story id `page-commandband--default`),
+  [record header](../../packages/storybook/src/stories/RecordHeader.stories.tsx) (story id `fragments-recordheader--default`),
+  [context aside](../../packages/storybook/src/stories/Chatter.stories.tsx) (story id `communication-chatter--default`),
+  [explorer pane](../../packages/storybook/src/stories/ScopedExplorerPane.stories.tsx) (story id `views-scopedexplorerpane--pane`),
+  and [tool drawers](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--drawers`).
 - Human-in-the-loop queues use the resource page shell for filtering, grouping,
   paging, record selection, and URL state.
 - **Routed page components are code-split.** In an addon manifest give each
@@ -397,10 +494,105 @@ shared UI copy through an addon bundle.
   existing FormSpec descriptors, and keep absent defaults distinct from explicit
   `false`, zero, or empty values.
 - Color is two orthogonal axes (`lib/tones.ts` is the owner): `tone` (the palette
-  — `neutral`/`brand`/`info`/`success`/`warning`/`danger`) × `variant`/fill
-  (`solid`/`soft`/`surface`/`outline`/`ghost`). Drive recipe color through
-  `toneClass(tone, fill)`; never hand-type a soft/solid tone triple, and never use
-  the retired `default`/`error` names (they are `neutral`/`danger`).
+  — `neutral`/`muted`/`brand`/`accent`/`info`/`success`/`warning`/`danger`/`purple`/`pink`)
+  × `variant`/fill (`solid`/`soft`/`surface`/`outline`/`ghost`). `muted` is the quiet
+  tone for inert and not-yet states (planned steps, idle rows); no component keeps a
+  private muted treatment. Drive recipe color through `toneClass(tone, fill)`; never
+  hand-type a soft/solid tone triple, and never use the retired `default`/`error`
+  names (they are `neutral`/`danger`).
+- **One pill: `Chip`** (`ui/chip.tsx`): tone × fill × size (`micro`/`sm`/`md`) ×
+  shape, a status `mark` (`dot`/`icon`) and a `pressed` toggle mode that renders a
+  `<button aria-pressed>` (scope chips, reactions, type filters). `CountBadge`
+  (`ui/count-badge.tsx`) is the one numeric count pill (tab counts, overlay counts on
+  icon buttons and app tiles, tree counts) and formats through `formatNumber`.
+  `Badge` and `Tag` no longer exist. A status value renders through `StatusBadge`
+  (`widgets/statusBadge.tsx`), never a local label or tone map. Owner stories:
+  [pills](../../packages/storybook/src/stories/Chip.stories.tsx) (story id `primitives-chip--playground`) and
+  [count pills](../../packages/storybook/src/stories/CountBadge.stories.tsx) (story id `primitives-countbadge--default`).
+- **One toolbar: `Toolbar`** (`ui/toolbar.tsx`, Base UI, roving focus) is the root of
+  every bar: `ControlBand` and so `CommandBand`, the `PaneToolbar` band, the full
+  `ResourceToolbar`, `PageToolbar`, `ChatBar`. `Toolbar.Button` is the one `Button`
+  recipe registered with the bar; a bar never spells its own row or button chrome.
+  Owner stories: [command band](../../packages/storybook/src/stories/CommandBand.stories.tsx) (story id `page-commandband--default`),
+  [control band](../../packages/storybook/src/stories/ControlBand.stories.tsx) (story id `page-controlband--default`) and
+  [toolbars](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--toolbars`).
+- **One icon button: `Button` at `iconSm`/`iconMd`/`iconLg`** (a ghost `iconSm`, 28px,
+  is every pane, band and header control) with `pressed` (`aria-pressed` + the selected
+  treatment) and `badge` (a `CountBadge` on the corner: needs you, unread). The three
+  `form#chrome` controls, pane toolbar descriptors, the aside search toggle and the
+  dashboard widget controls all render it; `PaneToolbarIconButton`, `ChatHeaderAction`
+  and the `icon` button variant no longer exist. `SelectionBarAction` remains the one
+  wrapper, because the selection bar's surface recolours the button. Owner story:
+  [icon controls](../../packages/storybook/src/stories/Button.stories.tsx) (story id `primitives-button--icon-controls`).
+- **One verb menu: `ActionMenu` + `ActionTrigger`** (`toolbars/ActionMenu.tsx`) behind
+  every `⋮`: the record band, row menus, `PaneToolbarMenu` (descriptor items and
+  radio groups over the same owner), the visible-fields menu, the dashboard widget
+  menu, the collapsed statusbar. Field choices inside such a menu stay native items;
+  verbs are `ActionTrigger`s. Every fire → toast flow settles through
+  `useActionResultRun`; row verbs included. Owner story:
+  [action menu](../../packages/storybook/src/stories/ActionMenu.stories.tsx) (story id `toolbars-actionmenu--default`).
+- **Time is absolute; relative time is a live header's.** Every list, row, facts
+  line and period title formats through `date-format.ts`: `formatDate`,
+  `formatDateTime`, `formatTime` (a row whose day label already names the day),
+  `formatDayLabel` (Today, Yesterday, a weekday, then the date — every day
+  separator: `PaneLabel` in `TimelineRail`, `MessageDaySeparator`, list date
+  groups) and `formatMonth`. A row or facts line renders its stamp through the
+  `AbsoluteTime` fragment (the clock time, the day or both, with the full stamp
+  as the tooltip); `MessageRow` and `StepList` compose it. `RelativeTime` /
+  `formatRelativeTime` belong only to
+  a header whose value keeps moving while the page is open (a chat, a running
+  job). Never `toLocale*`, never a date-fns `format` with a literal pattern,
+  never a raw ISO string as user text. Numbers and counts format through
+  `formatNumber`; JSON through `formatJson` (`widgets/json-format.ts`).
+- **One option list with a query: `Combobox`** (`ui/combobox.tsx`, Base UI) — a
+  `field`-shaped trigger or a `Chips` row with an inline `Input` and a `caret`
+  trigger, one `Popup` on the control layer, `Search` as the popup head, and a
+  `List`/`Item`/`Empty` sharing the `Select` recipe. The `combobox` and
+  `many2many` widgets and the resource `SearchBox` compose it; `Command` (cmdk)
+  stays the palette's engine. `SearchInput` is the one standalone search field
+  (toolbars, pickers, the app chooser). Owner story:
+  [combobox](../../packages/storybook/src/stories/Combobox.stories.tsx) (story id `primitives-combobox--default`).
+- **One label: `FieldLabel`** (`ui/field.tsx`), `standard` in dialogs and
+  settings, `variant="eyebrow"` on the form sheet, with `meta` for a compact
+  note at its end; `FieldRoot` takes `span`/`area` to sit in a `FormGrid`.
+  `RequiredMark` and `OptionalHint` live beside it. `Label` and `FieldRow` no
+  longer exist. Owner story:
+  [field label](../../packages/storybook/src/stories/FieldLabel.stories.tsx) (story id `primitives-fieldlabel--default`).
+- **One indentation: `depthIndent`** (`ui/tree.tsx`) computes every nested row's
+  inset (`Tree`, grouped lists, the gantt sidebar); `DeletePreviewTree` is a
+  `Tree` over the delete preview. **One prose: `Markdown`**
+  (`widgets/markdown-prose.tsx`) renders every read-only markdown surface, the
+  file preview included. `Avatar` renders every initials circle (`userRef`,
+  `ownerCell`). `TimelineView`, `TimelineEntry`, `Divider`, `TextInput`,
+  `DebouncedSearchInput`, `PopoverInput` and `ToolbarInput` no longer exist.
+  Owner stories: [avatar stack](../../packages/storybook/src/stories/Avatar.stories.tsx) (story id `primitives-avatar--stack`) and
+  [tree with an insertion row](../../packages/storybook/src/stories/TreeView.stories.tsx) (story id `views-treeview--insertion`).
+- **One pager: `Pager`** (`ui/pager.tsx`) in `range` mode (lists) or `record` mode
+  ("n / N" over a navigator's order; `RecordPager` is that mode behind a `nav`), with
+  `formatNumber` as its default. A pane list's pager footer is `ResourcePaneFooter`.
+  Owner story: [pager](../../packages/storybook/src/stories/Pager.stories.tsx) (story id `primitives-pager--default`).
+- **A disabled reason is a tooltip.** A band verb that cannot run carries its
+  `disabledReason` as a `Tooltip` and stays focusable while disabled; a menu item
+  keeps the reason as its description row inside the menu (links stay usable). The
+  band never renders reason sentences. Owner stories:
+  [record action bar](../../packages/storybook/src/stories/RecordActionBar.stories.tsx) (story id `views-recordactionbar--default`) and
+  [tooltip](../../packages/storybook/src/stories/Tooltip.stories.tsx) (story id `primitives-tooltip--default`).
+- **The pane row's verb is a control beside the row**, not text inside its button
+  or link: `PaneRow.verb` as a node renders the pane's own button or link next to the
+  row's control, revealed on hover or focus; a string is a hint of what the row opens.
+  The aside's scope overflow is the pane menu's radio group (`PaneToolbarMenu
+  groups`), with the active overflow kind shown as a clearable scope chip, never a
+  native `<select>` or an "N more" button. Owner stories:
+  [pane rows and labels](../../packages/storybook/src/stories/PaneRow.stories.tsx) (story id `communication-panerow--default`) and
+  [timeline rail](../../packages/storybook/src/stories/TimelineRail.stories.tsx) (story id `communication-timelinerail--default`).
+- **One selected surface: the `selected` utility** (`styles/index.css`), composed
+  through variants — `data-[pressed]:selected`, `aria-[current=true]:selected`,
+  `data-[active]:selected` — by trees, toggles, tabs, pagers, section nav, pane rows
+  and pressed chips. Never spell `bg-brand-soft text-brand-soft-text` by hand.
+- **One in-flow list message: `ListStatusMessage`** (`fragments/ListStatusMessage.tsx`)
+  for a group's error or empty note inside a table, board or pane list; `ErrorBanner`,
+  `EmptyState` and `InlineEmpty` own every other error and empty surface. Owner story:
+  [list status message](../../packages/storybook/src/stories/ListStatusMessage.stories.tsx) (story id `fragments-liststatusmessage--default`).
 - **Status → tone is owned once** by
   [`statusTone`](../../packages/ui/src/widgets/status-tones.ts). Framework defaults
   contain only neutral vocabulary. Addons contribute product values through
@@ -415,7 +607,7 @@ shared UI copy through an addon bundle.
   colors one column without claiming a global status word; its option label
   remains the displayed text. Bare enum columns use `statusBadge`, and scalar
   stages can declare it. A field's backend `status_display` metadata selects the
-  `pill` (default), `dot`, or `text` Badge recipe everywhere that field renders;
+  `pill` (default), `dot`, or `text` `StatusBadge` display everywhere that field renders;
   `<Column statusDisplay>` and `<Field statusDisplay>` are explicit authored
   overrides; there is no separate dot widget. A run
   state — stopped/running/error/warning — therefore uses the dot display (grey/green/red/amber);
@@ -560,7 +752,7 @@ shared UI copy through an addon bundle.
   `GanttViewSpec.lane` selects its own fields and returns a linked title, optional
   secondary line, named people, and a short note after the last scheduled bar.
   Empty parts are omitted; the lane heading uses the lane resource vocabulary.
-  Human dates, ranges, relative times and durations come from the shared
+  Human dates, ranges and times come from the shared
   [`date-format`](../../packages/ui/src/widgets/date-format.ts) owner. The app
   runtime i18n provider sets the default language for pure formatters; explicit
   locales override it. Gantt passes its configured time zone to date ranges
@@ -633,10 +825,19 @@ shared UI copy through an addon bundle.
   with the addon. Add `fill` when it should use the measured hero width; the
   widget receives `field.fill` and `field.containerWidth`. Do not repeat that
   state as another strip.
-  Keep the one metadata-owned subtitle line and place operational fields in a
-  collapsed Details group when their create-default behavior must remain available.
+  The resource's `contextFields` metadata owns the facts line beneath the title:
+  name fields whose native read widgets should render there (relation labels,
+  money with its declared currency field, dates), separated by middle dots.
+  `FormView` and `ResourceList` accept the same prop as an explicit override.
+  The framework appends readable `created_by` and `updated_by` attribution,
+  preferring each audit field's existing `*_label` projection;
+  public ids and raw created/updated timestamps appear only in developer mode.
+  `contextLine` remains the deliberate custom-rendering escape hatch. Place
+  operational fields in a collapsed Details group when their create-default
+  behavior must remain available.
   Projects exports its [standard declarations](../../addons/angee/projects/README.md)
   so consumer routes compose the same forms, lists and record tabs.
+  See the shipped [FormView hero](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--forms`).
 - **Statusbar steps are projections of owner facts.** `StatusbarSteps` renders only
   steps declared on the path, and a side or terminal state as one muted chip.
   Server-owned transitions declare `selectable` from eligible choices, and the
@@ -649,9 +850,10 @@ shared UI copy through an addon bundle.
   inherited by concrete child forms; contribute once at the owning model. Declare `requiredFields` for the tab's `visibleWhen` predicate,
   which evaluates the loaded record and the form's data resource; fields omitted
   by a child projection are read from the canonical resource. A tab for every
-  record kind is a `form#sections` child gated on the resource fact it reads,
-  as the provenance [History tab](../../addons/angee/provenance/web/src/index.tsx)
-  is on `resource.history`. Inside the panel, use
+  record kind is a `form#sections` child gated on the resource fact it reads.
+  Changes are Timeline lines and the changeset drill-in; attached work is the
+  Links tab; neither is a saved-record section.
+  Inside a section panel, use
   `useRecordChromeContext()` and scope a related collection with a base filter
   on a `presentation="embedded"` list, which brings compact chrome and local
   state. The model's Hasura resource owns filter/order/group/facet capabilities;
@@ -666,7 +868,29 @@ shared UI copy through an addon bundle.
   [FormView](../../packages/ui/src/views/form/form-view-surface.ts) selects
   required fields from the resolved children; authored fields and passive chrome
   remain host-owned.
-- **Record verbs compose the shared action owner.** A verb in the toolbar is a
+- **Record verbs compose the shared action owner.** The primary toolbar is
+  reserved for the subject model's lifecycle transitions, the ones its statusbar
+  explains (post, cancel); secondary lifecycle verbs and model-owned utilities
+  (pay, reverse, send, PDF, merge, download) live in the overflow menu; a
+  capability contributed to another model (run a workflow, rate, generate a
+  delivery, read a file again) uses that model's overflow menu, never its
+  toolbar. Classify an action by the subject it changes and its semantic owner:
+  a bridge addon implementing an inherited lifecycle (connect a channel) is not
+  a foreign capability because it lives in another package. Process drill-ins
+  expose the verbs of the inspected run, decision or changeset (answer, stop,
+  retry, revert); collection controls stay with their collection. Every
+  placement composes the shared action owner, projected permission/admission,
+  the dirty/pending gate and the applicable confirmation. `form#chrome` carries
+  the record-header controls that are about the record rather than verbs on it:
+  marks and status, Share and the effective-access explanation, Follow, Needs
+  you. Those controls mutate only their own metadata (grants, visibility,
+  subscriptions); they never execute a business lifecycle or change content.
+  Grants, effective readers and followers are three facts: a direct tuple is
+  not effective access, a reader is not a subscriber, and following or being
+  made a recipient never grants access. There is no Access aside tab and
+  grants are not a Related group; a model's own audience and role adapters
+  (visibility, responders, rosters) compose the same Share owner. A verb
+  in the toolbar is a
   `#actions` child and one in the overflow menu a `#actions-menu` child; either
   may render [RecordActionBar](../../packages/ui/src/views/form/RecordActionBar.tsx)
   with server-gated descriptors. [Record chrome](../../packages/ui/src/views/form/use-form-view-record-chrome.ts)
@@ -677,6 +901,11 @@ shared UI copy through an addon bundle.
   never a client copy of the server rule. RecordActionBar confirms every
   `danger` verb that runs on click: its `confirm` copy in the danger tone, or the
   standard copy titled by the verb. Declare `confirm` only for domain copy.
+  See the shipped [record action bar](../../packages/storybook/src/stories/RecordActionBar.stories.tsx) (story id `views-recordactionbar--default`) and
+  [command band](../../packages/storybook/src/stories/CommandBand.stories.tsx) (story id `page-commandband--default`).
+  A read-only inspector with only secondary actions composes `ActionMenu` and
+  `RecordChrome` in `RecordHeader.actions`; it does not reserve an empty command
+  band. Collection and transcript controls remain in their owning pane toolbar.
 - **Trash composes the shared owner.** A resource whose metadata marks a field
   `trashable` gets Trash and Restore from [the trash module](../../packages/ui/src/views/resource/trash.tsx):
   `useTrashActions` for record forms, `useTrashRowActions` for lists, and
@@ -694,14 +923,29 @@ shared UI copy through an addon bundle.
   The [shared widget](../../packages/ui/src/widgets/visibility.tsx) uses record
   chrome's server choices, revision and action gate; [Task fields](../../addons/angee/projects/web/src/task-actions.tsx)
   and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
-- **Records use one timeline pane.** Workflows contributes `RecordTimeline`
-  to `record#aside`; pages choose left or right with `useRecordTimelinePane`.
-  The same `DecisionCard` serves the inbox, record and record-set timeline.
-  Forms consume the shared field-mark bridge; marks reveal the corresponding
-  card. Lists may opt into the decisions attention column and filter.
-  Eager attention selects the timeline for records with runs and opens it for
-  waiting decisions; the tab count uses the same read. Run, step and question
-  change feeds retain concern identities for scoped invalidation, without polling.
+- **Records have one chronology.** The timeline addon owns the `Timeline`
+  tab and the `timeline` read, which pages a SQL `UNION ALL` of native source
+  queries behind one cursor. Each addon contributes a Python
+  [timeline kind](../../addons/angee/timeline/kinds.py) and a `timeline#kinds` presentation (label,
+  glyph, verb, target). A line is a pointer: one sentence, actor, time, one
+  verb, never a body, never an action. A run folds its decisions and changes
+  into its line; the run drill-in shows one run with its own Stop. The same
+  `DecisionCard` serves the inbox and the run drill-in. Forms consume the
+  shared field-mark bridge; a mark's "View change" opens the changeset
+  drill-in with the field highlighted. Needs-you and Follow are record-header
+  controls computed by their owners across the record, independent of what the
+  Timeline has loaded. Lists may opt into `attentionColumn`, which combines
+  open decisions and tags marked for attention in one badge cluster. An
+  attention tag's normalized name is its `statusTones` key, declared once by
+  the addon that owns that vocabulary; there is no attention-column tone map.
+  Owner changes invalidate related records through their declared change feeds
+  after commit; the timeline fragment subscribes to its exact record,
+  with no list of foreign source models. Batched authored reads carry the same
+  exact-record interests as singleton reads, without polling.
+- **Unreadable projected fields remain legible as restrictions.** A record row's
+  existing `redacted_fields` ledger lets `RecordFieldMarkControl` show the field
+  label and a lock without its value. Compose that projection; never issue a
+  field-by-field permission query or render a misleading empty value.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
   "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the
@@ -778,7 +1022,8 @@ shared UI copy through an addon bundle.
   with lazy branches, concrete indices and literal keys; schema owners resolve references.
 - A labeled control is a page element or a `FieldRoot`. Reach for `FieldRoot` /
   `FieldLabel` (the stacked label-over-control owner, e.g. for an ephemeral
-  composer not bound to a model record) before hand-rolling a `<label>` wrapper.
+  composer not bound to a model record) before hand-rolling a `<label>` wrapper;
+  `FieldRoot.Control` is the bound input when the form is not a FormView.
   A native input pairs `FieldLabel htmlFor` with the control `id`; a button-trigger
   control (a `Select`) labels via `FieldLabel nativeLabel={false} render={<span/>}`
   + the control's `aria-labelledby`.
@@ -893,15 +1138,13 @@ Any other key alters a child an addon this one depends on declared:
 `remove: true` takes it out at composition, `hide: true` hides it at render and
 `hide: false` shows again what a dependency hid. The framework's own children
 are every addon's to adjust. Two unrelated layers setting one field fail.
-[Messaging](../../addons/angee/messaging/web/src/index.tsx) replaces the
-framework's placeholder chatter tabs this way:
+[Messaging](../../addons/angee/messaging/web/src/index.tsx) contributes the
+presentation of the timeline kinds its Python source implements:
 
 ```tsx
-"record#aside": {
-  "chatter.comments": { remove: true },
-  "chatter.history": { remove: true },
-  "messaging.comments": recordCommentsTab({ submitKey, aliases: ["comments"] }),
-  // messaging.history, messaging.sources …
+"timeline#kinds": {
+  "messaging.comment": { content: { label: "Comments", icon: "comments", verb: "Discussion", target: { tab: "messaging.discussion", focus: "message" } } },
+  "messaging.conversation": { content: { label: "Conversations", icon: "channel", verb: "Open conversation", target: { tab: "messaging.conversation" } } },
 },
 ```
 
@@ -940,7 +1183,7 @@ containers: {
   "form#chrome": { only: ["iam.share-record"] },
   "shell#drawers-bottom": { only: [] },
   "record#aside": [
-    { only: ["messaging.comments", "messaging.history", "storage.files"] },
+    { only: ["timeline.rail", "related"] },
     { only: [], when: { route: "projects.my-work" } },
   ],
 },
@@ -1004,11 +1247,13 @@ the toolbar through `RecordChromeContext.toolbarHost`
 | `form#rail` | `FormView.RailGroup` beside a saved record's tabs | `ReactNode` |
 | `form#actions` | record verbs in a saved form's toolbar | `ReactNode` |
 | `form#actions-menu` | record verbs in a saved form's overflow menu | `ReactNode` |
-| `form#chrome` | passive record chrome at the toolbar's right edge | `ReactNode` |
+| `form#chrome` | record-header controls at the toolbar's right edge: marks, status, Share, Follow, Needs you | `ReactNode` |
 | `resource#views` | view kinds a collection's switcher offers | `ResourceViewKindContent` |
 | `resource#utilities` | collection utilities beside a resource view's toolbar | `ReactNode` |
 | `resource#search` | separate controls over the list search model; page shortcuts are `page.*` extras | `SearchShortcut` |
-| `record#aside` | chatter tabs | `ChatterTabContent` |
+| `record#aside` | context-aside tabs (`strip: true`) and drill-ins (`strip: false`, with a target) | `ChatterTabContent` |
+| `timeline#kinds` | presentation of a timeline kind a Python source implements | `TimelineKindContent` |
+| `related#groups`, `<model>#groups` | one group of the Links tab per edge: rows that link to their records and one verb | `RelatedGroupContent` |
 | `shell#notices` | notices below the console navigation | `ReactNode` |
 | `shell#user-menu` | user-menu items between the theme item and sign-out | `ReactNode` |
 | `shell#drawers-right`, `shell#drawers-bottom` | non-modal drawers docked on that edge | `DockedDrawerContent` |
@@ -1022,28 +1267,173 @@ Addons own theirs, such as `messaging.channels#toolbar`,
 `parties.overview#items`, `appearance.settings#tools`, `decisions#origin`
 and `iam#access-visibility`.
 
-### Chatter
+### Context aside
 
-The chatter aside's tabs are children of `record#aside` and `<model>#aside`. A
-`record#aside` tab shows on record views; a model-level tab shows on that
+Owner stories: [Chatter and its panes](../../packages/storybook/src/stories/Chatter.stories.tsx) (story id `communication-chatter--default`),
+[timeline rail](../../packages/storybook/src/stories/TimelineRail.stories.tsx) (story id `communication-timelinerail--default`),
+[related pane](../../packages/storybook/src/stories/RelatedPane.stories.tsx) (story id `communication-relatedpane--default`),
+[step list](../../packages/storybook/src/stories/StepList.stories.tsx) (story id `communication-steplist--default`),
+[pane toolbar band](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--pane-toolbar`),
+and [pane rows and labels](../../packages/storybook/src/stories/PaneRow.stories.tsx) (story id `communication-panerow--default`).
+
+The context aside is the shell's right region: what is around the record. Its
+children are `record#aside` and `<model>#aside` contributions. A `record#aside`
+child shows on saved model-backed record views; the shared create-route sentinel
+does not identify a record. A model-level child shows on that
 model's pages and may narrow itself further with its content's `when`. A
-`ChatterTabContent` carries `label`, `icon` and `render`, and optionally
-`when`, `count`/`useCount`, `panelClassName` and `aliases`. The framework
-declares placeholder `chatter.comments` and `chatter.history` tabs until an
-addon that supplies the real ones removes them, as messaging does. Tab ids are
-namespaced like every child; `aliases` keeps a tab's former id working in
-`?chatterTab=` links for one release.
+`ChatterTabContent` carries `label`, `icon`, `render` and `strip`, and
+optionally `when`, `count`/`useCount`, `target` and `panelClassName`. Every
+pane renders into the shell's `PaneToolbar` band (scope · selector · search ·
+actions · overflow; back and title first on a drill-in) instead of its own
+header row; the same band heads explorer panes on the left.
+Collections in these panes keep their native resource query/state owner and use
+`ListView.renderPaneRow` for pointer rows and explicit `pane` for compact
+selector and scope chrome. Row anatomy does not select a toolbar: omit `pane`
+to keep the standard resource toolbar and its pager. With `pane`, the shared
+toolbar publishes search, chips, ordering, grouping and utilities into the pane
+band and the collection pager goes below the rows. `search.box: true` exposes
+the same search control below the compact band. Group expansion and paging
+remain owned by the resource collection in either presentation.
 
-A tab that lists one polymorphic edge (files, pages, source conversations)
-shows only where the record's type can carry it: its `when` checks the edge's
-model label in `context.route.recordEdges`, the resource metadata the backend
-derives from each edge's schema target relations. Never let a pane report the
-edge "unavailable" or offer writes on a type whose schema declares no arm.
+**Four tabs are in the strip, in this order**, each only where its capability
+exists. A tab serves a recurring record-wide job (reading what happened,
+talking, planning, finding what is linked), including its empty state and first
+action; everything that answers a bounded question about one object is a
+drill-in:
+
+| id | seq | shows when | holds | owner |
+|---|---|---|---|---|
+| `timeline.rail` | 10 | the view is a model-backed record with at least one eligible kind | one chronology, newest first, one line per event, scope chips with counts | timeline |
+| `messaging.discussion` | 20 | the model composes the chatter thread (`messaging.ThreadAttachment:chatter` in `recordEdges`) and the body is not itself the conversation | the record's thread: comments, internal notes, emails sent from here, the composer | messaging |
+| `projects.tasks` | 30 | `projects.Task` in `recordEdges` and the body does not own the task plan | tasks about the record in Planned and Done scopes, schedule and assign | projects |
+| `related` | 40 | at least one `related#groups` or `<model>#groups` child is eligible | groups Files (upload), Pages (bind), Sources (external links), Conversations (source threads); Attached to on files; Backlinks and Bound to on pages | framework tab; storage, knowledge, integrate, messaging own the groups |
+
+A tab earns the strip by creating things; everything else is a **drill-in**: a
+`record#aside` child with `strip: false` that renders one object named by its
+`target` (a run, a changeset, a decision, a conversation). The rail opens it
+with `setActiveTab(id, { from, target })`; the shell shows "‹ Timeline" above
+it, keeps a return stack with filters, window, scroll and focus, writes
+`chatterTab`, `chatterTarget`, `chatterFocus` and `chatterFrom` to the URL, and
+shows an unavailable state with Back when the target cannot be read. Hiding a
+destination from the strip never unregisters its drill-in. The record's own
+state belongs in the header and sheet; a drill-in acts on the record's process
+(answer, stop, revert) and never edits its content.
+
+Messaging's [`messaging.conversation`](../../addons/angee/messaging/web/src/index.tsx)
+drill-in targets a `ThreadAttachment`. Its pane resolves the thread through the
+authorized `record_source_threads` read and composes `ThreadTranscript`.
+Conversation rows in Links continue linking to the thread page.
+Message matches open the full conversation at the selected message; inspecting
+the message record is a separate secondary action. Messaging's
+[`MessageReplyQuote`](../../addons/angee/messaging/web/src/MessageReplyQuote.tsx)
+renders the access-checked parent in readers, transcripts and record discussions.
+Readers and transcripts navigate quotes through the host when retaining an
+explorer scope, or through the same-thread anchor or native record link.
+
+A tab that lists one polymorphic edge (files, pages, sources, the chatter
+thread, tasks) shows only where the record's type can carry it: Links groups
+declare `edge.model`; other tabs check it in `when`. The framework checks the
+edge's model label in `context.route.recordEdges`, the resource
+metadata the backend derives from each edge's schema target relations. Timeline
+sources use the same fact to decline unsupported records; workflow run evidence
+accepts any canonical REBAC record. Never let a pane report the edge
+"unavailable" or offer writes on a type whose schema declares no arm. A section
+with neither rows nor a verb is absent, not empty.
+
+Mount count hooks in independent keyed readers. Route and permission changes
+can change the eligible groups while the aside stays mounted; aggregating hooks
+in a loop changes their order. The [Related count owner](../../packages/ui/src/communication/RelatedPane.tsx)
+sums the results published by each group reader.
+
+Each `related#groups` child (or `<model>#groups` for one model's pages) is one
+group of the framework's Links tab, declared by the addon that owns the edge.
+Use **Backlinks** for incoming references, such as pages citing a record or
+messages using a file. The tab includes both directions; the existing `related`
+tab id and `related#groups` contribution addresses remain stable.
+The tab draws the group's label, count and action; the group supplies its rows
+through the shared pane row anatomy:
+
+```ts
+interface RelatedGroupContent {
+  when?: (context: ChatterViewContext) => boolean;
+  edge?: { model: string };
+  label: ReactNode;
+  useCount?: (context: ChatterViewContext) => number | undefined;
+  useVerb?: (context: ChatterViewContext) => boolean;
+  render: (context: ChatterViewContext, label: (action?: ReactNode) => ReactNode) => ReactNode;
+}
+```
+
+A group with neither rows nor a verb is absent, not empty. `useVerb` is the
+presence rule, including write restrictions such as view-as. `render(context,
+label)` returns one component with local state. It calls `label(action)` for the
+framework's counted `PaneLabel` and places its row content in a sibling `li`.
+Only when `useVerb` is true does the label show the action. Compose
+`PaneLabelPopover` for a small Upload or Bind picker; the component's upload or
+mutation state survives the popover closing. Count and presence probes never
+mount that component or its write state.
+
+`edge.model` makes a group eligible only when that exact model is declared in
+the route's `recordEdges`; `when` adds optional narrowing. Addons own role claims
+through typed content extending `RelatedGroupContent` and use
+`useRelatedGroups(context)` to find eligible siblings after model scope,
+container narrowing and `when`. A generic group excludes those roles from both its
+rows and count; a role-specific group lists its own role. Knowledge's generic
+Pages group therefore includes `related` and unclaimed roles while a Contract
+group owns `contract`, without counting that binding twice.
+
+**Every pane list composes one row anatomy** (`PaneRow`, `PaneRows`,
+`PaneLabel`, `PaneLabelAction`, `PaneLabelPopover` in `@angee/ui`): glyph or avatar, `title · detail`, a right meta, a muted
+second line and an optional secondary control, on the 13/12 scale; a row is a link when its
+target has a page and a button when it opens something beside it. Rows without
+either remain non-interactive. `PaneRow` composes `useInAppLink` for host navigation,
+preloading and native modified clicks. Reverse record pointers use
+`RecordReferenceRow`, supplying the list's references so labels share one bounded
+query per model without changing row order. A string `verb` describes the primary
+action in its tooltip; a node is an always visible secondary action beside the
+primary target. Supply `avatar` from the identity owner when a row represents a
+person; the shared Avatar owns image loading and initials fallback. Day and
+section labels sit above rows. Folded sections open from
+their label, or from a separate chevron when `PaneLabel.labelAction` supplies a
+navigable title. A pane
+never picks its own font size, card or header row.
+
+Each `timeline#kinds` child presents one kind a Python timeline kind
+implements; [the kind contract](../../addons/angee/timeline/kinds.py) owns its
+source models, source query, presentation and live attention predicate. The read
+combines owner querysets with SQL `UNION ALL`, applying the record's and each
+target owner's read policies before pagination. Published owner changes
+invalidate open record reads after commit:
+
+```ts
+interface TimelineKindContent {
+  label: string;
+  icon: string;
+  tone?: StatusIconTone;
+  verb: string;
+  target: { tab: string; focus?: string } | { page: true };
+}
+```
+
+The rail composes lines from the union read and these presentations. Semantic
+grouping (a run's decisions and changes counted on the run's line) is the
+read's: kinds name a fold target, and readable events on the same record are
+counted beneath lines targeting that row. Top-level lines page independently of
+their children. The rail owns day separators, filtering, keyset paging, loading,
+empty and error states. `target.focus`
+names the focus kind (`message`, `decision`, `field`), carried in `chatterFocus`;
+the target's public id travels in `chatterTarget`. A strip tab opened from a
+Timeline line receives the same `ChatterSelection` as a drill-in. The back strip
+is labelled with the origin tab's label. Follow subscribes to timeline kinds; the messaging
+tracking subtypes that mirrored provenance and workflows are retired.
 
 Tabs a page publishes with `useChatterContent` are runtime children of the same
-container. They follow the composed tabs and take the same narrowing. To keep
-the aside off a route, narrow `record#aside` with `only: []` under
-`when: { route }`. See the [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
+container (a selection inspector on a studio or graph page is the usual case).
+They follow the composed tabs and take the same narrowing. To keep the aside
+off a route, narrow `record#aside` with `only: []` under `when: { route }`.
+Agents use the shell's right drawer so conversation state survives navigation
+independently of the record aside. See the
+[Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
 
 ### Resource views
 
@@ -1240,7 +1630,7 @@ Hard-won traps — the wise learn from others' mistakes
   and editable lines alike. Both render it through `relationListFieldInfo` +
   `RelationMultiFieldWidget`: when editable, one field-shaped line holding the
   picked records as removable chips, an inline search over the related model
-  (Base UI's multiple `Combobox`) and a caret; linked chips when read-only. A
+  (the multiple `Combobox` primitive) and a caret; linked chips when read-only. A
   related model whose `color` field is a colour (`recordColorField`) fills its
   chips with each record's colour, in forms and list cells alike. Inline create
   derives from the related model's metadata by the same rule as the to-one picker
@@ -1450,7 +1840,10 @@ Hard-won traps — the wise learn from others' mistakes
   on an app root keeps the page on its own item there. The route projection
   publishes the winning `activeMenuId`; the Refine router binding uses that same
   destination for native breadcrumbs. Breadcrumbs occupy the sheet strip below
-  the top bar; pane toggles stay in the top bar. A route whose anchor and path
+  the top bar; pane toggles stay in the top bar. Explorers whose selected records
+  live in route search publish their ancestry with `useBreadcrumbTrail`; they
+  use the shell's existing breadcrumbs rather than adding Back/Open navigation
+  to the record toolbar. A route whose anchor and path
   fall in different places (an app and Settings, as when composition lifts the
   page its path nests under into Settings) fails composition
   ([`AppRouteProjection`](../../packages/app/src/resource-projection.ts)),
@@ -1555,13 +1948,26 @@ Hard-won traps — the wise learn from others' mistakes
   `text-<tone>-text` map or a phantom `text-brand-text` (use `text-brand` /
   `text-brand-soft-text`). A `*-text` token is a foreground color, never a
   background — use `toneSolidBg`/`bg-<tone>` for fills.
+- **One type scale, one name per size:** `text-2xs` (11), `text-12`, `text-13`,
+  `text-sm` (14), `text-15`, `text-base` (16), `text-lg` (18), `text-22`, `text-28`,
+  `text-34` — every step reads a public `--fs-*`/`--lh-*` theme token. Tailwind's
+  `text-xs` is not bridged; 12px is `text-12`. No arbitrary `text-[Npx]`.
+- **Control heights are tokens:** `h-control-xs` (28px) is the pane control — tabs,
+  toggles, pane toolbar buttons, tree rows, select triggers; `h-btn-sm/md/lg` are
+  26/30/36. Never a raw `h-7`/`size-7` on a control.
+- **Brand-adjacent tokens derive from `--brand`:** link, focus border, brand line,
+  brand tint and `--chart-1` follow a theme's brand without separate overrides; the
+  rail hover and kbd-on-rail overlays and the whole `--fs/--lh` scale are public
+  theme tokens (`THEME_TOKEN_NAMES`).
 - **One radius scale: `rounded-N`** (the pixel-token scale `2/4/6/8/10/12`). Do not
   introduce the legacy `rounded`/`rounded-sm|md|lg|xl` aliases in new or rewritten
   markup.
 - **Pane / Aside / primary-secondary / Panel — one name per concept.** A *Pane* is a
-  `SplitPanes` split region; an *Aside* is page side content (`PageAside`); *primary*/
-  *secondary* are the Workbench sidebars; a *Panel* is a content `Card`. Don't reuse
-  one term for another's concept across components, props, or slots.
+  `SplitPanes` split region; an *Aside* is the Chatter in the shell's secondary pane,
+  whose tabs are `record#aside` children or page tabs published with
+  `useChatterContent`; *primary*/*secondary* are the Workbench sidebars; a *Panel* is
+  a content `Card`. Don't reuse one term for another's concept across components,
+  props, or slots.
 
 - **Message projections have one owner.** A peer addon that lists messages spreads
   the fragments messaging exports (sender, parts + file + mime, reaction groups,
@@ -1587,8 +1993,11 @@ Hard-won traps — the wise learn from others' mistakes
   snapshot lift.
 - **Graph + inspector pages use the shell panes.** Navigator to the primary pane,
   inspector to the secondary pane, as `iam` schema page does; an in-content
-  `SplitPanes` with a hand-rolled `<aside>` is the copy. `PageAside`/`RailPanel`
-  own asides.
+  `SplitPanes` or `Workbench` with its own inspector is the copy. A Chatter tab's
+  children render straight into the panel, which owns scroll and padding while the
+  pane owns width, border and background; `RailPanel` owns the inspector card. Lay
+  out a bounded graph — the selection or a capped neighbourhood — never a whole
+  schema: Dagre holds the main thread for minutes at around two thousand nodes.
 - **A connect action is one ceremony.** Pass the button as `MutationDialog.trigger`
   so the dialog owns open state, reset and native focus pairing. Addons retain
   vendor pairing and source selection.

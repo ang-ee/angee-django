@@ -17,6 +17,8 @@ import {
   BreadcrumbContentLinks,
   useBreadcrumbLeafLabel,
   useBreadcrumbCollectionLink,
+  useBreadcrumbTrail,
+  type BreadcrumbItem,
 } from "./Breadcrumb";
 import type { ChromeMenuItem } from "./menu-tree";
 import { ChromePlaceProvider } from "./refine-menu";
@@ -39,6 +41,20 @@ afterEach(() => {
 });
 
 describe("Breadcrumb", () => {
+  test("query-selected records publish ancestry through the existing breadcrumb owner", async () => {
+    const items = [
+      { label: "Inbox", href: "/inbox?platform=email" },
+      { label: "Ada", href: "/inbox?platform=email&sender=ada" },
+      { label: "Renewals", href: "/inbox?platform=email&sender=ada&thread=renewals" },
+      { label: "Message" },
+    ];
+    renderBreadcrumb({ items, path: "/inbox?platform=email&sender=ada&message=one" });
+    const breadcrumb = await screen.findByRole("navigation", { name: "Breadcrumb" });
+    await waitFor(() => expect(breadcrumb.textContent).toBe("Inbox/Ada/Renewals/Message"));
+    expect(within(breadcrumb).getAllByRole("link").map((link) => link.getAttribute("href")))
+      .toEqual(items.slice(0, -1).map((item) => item.href));
+    expect(within(breadcrumb).getByText("Message").getAttribute("aria-current")).toBe("page");
+  });
   test("content navigation stays stable across trail updates and follows the latest trail", () => {
     const navigate = vi.fn();
     let follow: InAppNavigator | undefined;
@@ -176,11 +192,13 @@ describe("Breadcrumb in a console place", () => {
 });
 
 function renderBreadcrumb({
+  items,
   leafLabel,
   collection,
   menus,
   path = "/notes/first",
 }: {
+  items?: readonly BreadcrumbItem[];
   leafLabel?: string;
   collection?: { to: string; href: string };
   menus?: readonly ChromeMenuItem[];
@@ -189,6 +207,7 @@ function renderBreadcrumb({
   const trail = (
     <BreadcrumbLabelProvider>
       <Breadcrumb />
+      {items ? <PublishedTrail items={items} /> : null}
       {leafLabel ? <BreadcrumbLeaf label={leafLabel} /> : null}
       {collection ? <CollectionLink {...collection} /> : null}
     </BreadcrumbLabelProvider>
@@ -203,6 +222,11 @@ function renderBreadcrumb({
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   render(<RouterProvider router={router} />);
+}
+
+function PublishedTrail({ items }: { items: readonly BreadcrumbItem[] }): null {
+  useBreadcrumbTrail(items);
+  return null;
 }
 
 function BreadcrumbLeaf({ label }: { label: string }): null {

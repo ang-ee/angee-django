@@ -43,6 +43,11 @@ describe("storage preview providers", () => {
     expect(resolvePreviewProvider(providers, "image/png")?.id).toBe("base.image");
   });
 
+  test("catalogued XML and JSON use the formatted built-in text renderers", () => {
+    expect(resolvePreviewProvider(providers, "text/xml")?.id).toBe("base.text");
+    expect(resolvePreviewProvider(providers, "application/json")?.id).toBe("base.json");
+  });
+
   test("a .HEIC file whose server mime is unknown still routes to the decoder", () => {
     // libmagic does not always recognise HEIC and stores octet-stream;
     // `PreviewPane` derives the mime via `displayMime`, which recovers it from

@@ -1,4 +1,4 @@
-"""Concrete probes for :class:`~angee.base.refs.RecordRefMixin` targets and edges, and for merge moves."""
+"""Concrete probes for :class:`~angee.refs.RecordRefMixin` targets and edges, and for merge moves."""
 
 from __future__ import annotations
 
@@ -7,9 +7,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models.functions import Lower
 
-from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeModel
-from angee.base.refs import RecordRefMixin
+from angee.models import AngeeModel, SqidMixin
+from angee.refs import RecordRefMixin
 
 
 class RecordRefTypedTarget(SqidMixin, AngeeModel):
@@ -40,6 +39,7 @@ class RecordRefPlainTarget(SqidMixin, models.Model):
 class RecordRefTargetEdge(RecordRefMixin, models.Model):
     """Concrete target edge used by record-ref tests."""
 
+    on_target_delete = models.CASCADE
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
     object_id = models.PositiveBigIntegerField()
     target = GenericForeignKey("content_type", "object_id")
@@ -53,6 +53,7 @@ class RecordRefTargetEdge(RecordRefMixin, models.Model):
 class RecordRefSubjectEdge(RecordRefMixin, models.Model):
     """Concrete subject edge used by record-ref tests."""
 
+    on_target_delete = models.PROTECT
     subject_content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
     subject_object_id = models.PositiveBigIntegerField()
     subject = GenericForeignKey("subject_content_type", "subject_object_id")
@@ -79,6 +80,7 @@ class RecordRefCustomEdge(RecordRefMixin, models.Model):
 class RecordRefNullableEdge(RecordRefMixin, models.Model):
     """Concrete nullable edge used by empty-reference tests."""
 
+    on_target_delete = models.SET_NULL
     content_type = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.CASCADE, related_name="+")
     object_id = models.PositiveBigIntegerField(null=True, blank=True)
     target = GenericForeignKey("content_type", "object_id")

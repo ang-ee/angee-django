@@ -45,26 +45,6 @@ export const enIamMessages: Record<string, string> = {
   "users.rename.lastName": "Last name",
   "users.rename.error": "The account could not be renamed.",
 
-  // OAuth login methods (the public sign-in slot).
-  "login.loadingOptions": "Loading sign-in options…",
-  "login.providersUnavailable": "Sign-in providers unavailable",
-  "login.passwordStillAvailable":
-    "Username and password sign-in is still available.",
-  "login.continueWith": "Continue with {provider}",
-  "login.startFailed": "Sign-in could not start",
-  "login.startError": "Could not start sign-in.",
-
-  // OAuth callback page.
-  "callback.completing": "Completing sign-in…",
-  "callback.confirming": "Your session is being confirmed.",
-  "callback.signInFailed": "Could not sign in",
-  "callback.backToSignIn": "Back to sign in",
-  "callback.completeError": "Could not complete sign-in.",
-  "callback.browserOnly":
-    "The sign-in callback can only be completed in a browser.",
-  "callback.missingInfo":
-    "The sign-in callback is missing required information.",
-
   // Overview dashboard — metric band.
   "overview.metric.users": "Users",
   "overview.metric.roles": "Roles",
@@ -95,14 +75,14 @@ export const enIamMessages: Record<string, string> = {
   "overview.namespaces.grantCount": "{count} grants",
   "overview.namespaces.empty": "No roles defined.",
   "overview.unassigned.title": "Users without direct roles",
+  "overview.unassigned.user": "User",
   "overview.unassigned.summary": "{count} users; access through groups and record grants may still apply.",
   "overview.unassigned.empty": "Every user has a direct role.",
-
-  // OIDC sign-in providers page — form-section labels and the discover action.
 
   // Grants page.
   "grants.column.subject": "Recipient",
   "grants.column.role": "Role",
+  "grants.column.condition": "Condition",
   "grants.column.namespace": "Namespace",
   "grants.revoke.title": "Revoke role?",
   "grants.revoke.body": "Revoke {role} from {subject}?",
@@ -152,12 +132,12 @@ export const enIamMessages: Record<string, string> = {
   "roles.legacy": "Legacy grant",
 
   // Relationships page.
-  "relationships.column.resourceRef": "Resource Ref",
-  "relationships.column.subjectRef": "Subject Ref",
-  "relationships.column.resourceType": "Resource Type",
+  "relationships.column.resourceRef": "Resource ref",
+  "relationships.column.subjectRef": "Subject ref",
+  "relationships.column.resourceType": "Resource type",
   "relationships.column.resourceId": "Resource ID",
   "relationships.column.relation": "Relation",
-  "relationships.column.subjectType": "Subject Type",
+  "relationships.column.subjectType": "Subject type",
   "relationships.column.subjectId": "Subject ID",
   "relationships.column.caveat": "Caveat",
 
@@ -167,10 +147,9 @@ export const enIamMessages: Record<string, string> = {
   "schema.searchPlaceholder": "Search schema",
   "schema.resourceTypesLabel": "Resource types",
   "schema.noMatches": "No matching resource types.",
-  "schema.permissionGraph": "Permission Graph",
+  "schema.permissionGraph": "Permission graph",
   "schema.nodeCount": "{count} nodes",
   "schema.inspector": "Inspector",
-  "schema.noneSelected": "No resource type selected.",
   "schema.relations": "Relations",
   "schema.permissions": "Permissions",
   "schema.noSubjects": "No subjects",

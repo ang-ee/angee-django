@@ -14,6 +14,7 @@ export {
   Breadcrumb,
   BreadcrumbLabelProvider,
   useBreadcrumbLeafLabel,
+  useBreadcrumbTrail,
   useBreadcrumbItems,
   useBreadcrumbCollectionLink,
   type BreadcrumbItem,

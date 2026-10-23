@@ -221,6 +221,12 @@
   category: code
   label: XML
   icon_key: code
+- xref: code_xml_text
+  # libmagic's spelling for XML content: the same family under its second registered name.
+  mime_type: text/xml
+  category: code
+  label: XML
+  icon_key: code
 - xref: code_yaml
   mime_type: application/yaml
   category: code

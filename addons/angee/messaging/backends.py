@@ -25,11 +25,12 @@ from typing import Any, ClassVar
 
 from django.apps import apps
 
-from angee.base.mixins import SourceKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
-from angee.integrate.streams import ApplyResult, SemanticError, StreamDefinition, StreamPage
+from angee.integrate.states import StreamDefinition
+from angee.integrate.streams import ApplyResult, SemanticError, StreamPage
+from angee.models import SourceKind
 
 INLINE_MEDIA_PREFIXES = ("image/", "video/", "audio/")
 
@@ -76,6 +77,9 @@ class ParsedHandle:
     external_id: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     """Source-owned identity evidence used to refresh the resolved Handle."""
+    confidence: float | None = None
+    """An adapter's typed identification confidence (1.0 identifies the account); ``None``
+    lets parties infer it from the platform and external id (``ConnectionHandle``)."""
 
 
 @dataclass(frozen=True)

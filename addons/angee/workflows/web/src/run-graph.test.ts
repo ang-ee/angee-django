@@ -3,7 +3,7 @@ import { createAngeeI18nInstance, statusTone, type Tone, type UiTranslate } from
 import { enWorkflowsMessages } from "./i18n";
 import { projectRunGraph, RUN_GRAPH_EDGE_STYLES } from "./run-graph";
 import { mappedRunGraphFixture, runGraphFixture, stepRunFixture, stepRunResourceFixture } from "./testing";
-import { WORKFLOW_STEP_STATUS_TONES, WORKFLOW_STATUS_TONES } from "./status-tones";
+import { WORKFLOW_STATUS_TONES } from "./status-tones";
 import { formatStepPage } from "./step-page";
 
 const i18n = createAngeeI18nInstance({ workflows: enWorkflowsMessages });
@@ -18,7 +18,7 @@ test("map summaries use full counts and attempts, with separate selection and cu
   const projection = projectRunGraph(mappedRunGraphFixture(), "reviews", options);
   const node = projection.nodes[0]!;
   expect(node).toMatchObject({ id: "reviews", kind: "waiting", title: "Review items", kindLabel: "Map",
-    code: "reviews", selected: true, highlighted: true, ports: [{ id: "done", label: "Done" }, { id: "error", label: "Needs attention" }] });
+    selected: true, highlighted: true, ports: [{ id: "done", label: "Done" }, { id: "error", label: "Needs attention" }] });
   expect(projection.status.reviews).toEqual({ label: "Waiting", tone: "warning" });
   expect(typeof node.detail).toBe("string");
   expect(node.detail).toBe(new Intl.ListFormat("en", { style: "short", type: "unit" })
@@ -28,7 +28,7 @@ test("map summaries use full counts and attempts, with separate selection and cu
   expect(node.ariaLabel).toContain(String(node.detail));
   expect(Object.fromEntries(Object.entries(projection.nodeStyles).map(([kind, style]) => [kind, style.badgeTone])))
     .toEqual({ unreached: "neutral", ready: "success", running: "success", waiting: "warning",
-      succeeded: "success", failed: "danger", canceled: "warning", skipped: "info" });
+      succeeded: "success", failed: "danger", canceled: "neutral", skipped: "neutral" });
 });
 
 test("unreached nodes and empty maps remain visible without inventing a step row", () => {
@@ -89,17 +89,17 @@ test("waiting pages stay secondary, and canceled nodes anchor while settled runs
   expect(projectRunGraph(runGraphFixture(stepRunFixture({ status: "SUCCEEDED" })), undefined, options).anchorNodeId).toBeUndefined();
 });
 
-test("unreached, skipped and canceled nodes have distinct muted borders", () => {
+test("unreached, skipped and canceled nodes share the framework's muted neutral border", () => {
   const styles = projectRunGraph(runGraphFixture(), undefined, options).nodeStyles;
   expect(styles.unreached?.badgeTone).toBe("neutral");
-  expect(styles.skipped?.badgeTone).toBe("info");
-  expect(styles.canceled?.badgeTone).toBe("warning");
-  expect(new Set([styles.unreached?.borderColor, styles.skipped?.borderColor, styles.canceled?.borderColor]).size).toBe(3);
+  expect(styles.skipped?.badgeTone).toBe("neutral");
+  expect(styles.canceled?.badgeTone).toBe("neutral");
+  expect(styles.unreached?.borderColor).not.toBe(styles.ready?.borderColor);
 });
 
-test.each([["CANCELED", "warning"], ["SKIPPED", "info"]] as const)(
+test.each([["CANCELED", "neutral"], ["SKIPPED", "neutral"]] as const)(
   "%s has the same step tone for native enum badges and graph tokens", (status, tone) => {
-    expect(options.resolveTone(status, WORKFLOW_STEP_STATUS_TONES)).toBe(tone);
+    expect(options.resolveTone(status)).toBe(tone);
     const projection = projectRunGraph(runGraphFixture(stepRunFixture({ status })), undefined, options);
     expect(projection.status.inspect?.tone).toBe(tone);
     expect(projection.nodeStyles[projection.nodes[0]!.kind]?.badgeTone).toBe(tone);

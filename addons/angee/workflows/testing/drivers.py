@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from django.apps import apps
 from django.conf import settings
+from django.db.models import Model
 from django.db.models.signals import post_save
 from rebac import system_context
 
@@ -38,7 +39,7 @@ def capture_tasks(*, error: Exception | None = None) -> Iterator[list[tuple[str,
 
 @contextmanager
 def observe(model: type[Any]) -> Iterator[list[Any]]:
-    """Collect committed change publications for one concrete model."""
+    """Collect local owner change publications for one concrete model."""
     published: list[Any] = []
 
     def collect(sender: type[Any], payload: Any, **kwargs: Any) -> None:
@@ -52,7 +53,7 @@ def observe(model: type[Any]) -> Iterator[list[Any]]:
 
 
 @contextmanager
-def trigger_source(model: type[Any], *, connect: bool = False) -> Iterator[None]:
+def trigger_source(model: type[Model], *, connect: bool = False) -> Iterator[None]:
     """Scope a declared test source's native save receiver when requested."""
     if not issubclass(model, RecordChangedOptIn):
         raise ValueError(f"{model._meta.label} must inherit RecordChangedOptIn.")

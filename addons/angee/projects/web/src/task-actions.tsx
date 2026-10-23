@@ -12,6 +12,7 @@ import {
   useActionResultRun,
   useRecordAction,
   useRecordActionMutation,
+  useResourceRecordHref,
   type ActionDescriptor,
   type RowActionDeclaration,
   type StringIdRow,
@@ -58,7 +59,7 @@ export function useTaskRowActions<
         label: t("task.action.complete"),
         icon: "check",
         variant: "ghost",
-        visible: (row) => taskStatus(row) === "open",
+        visible: (row) => recordStatus(row) === "open",
         pendingPolicy: "active-row",
         onSelect: (row) => complete(row.id),
       }),
@@ -68,7 +69,7 @@ export function useTaskRowActions<
         label: t("task.action.reopen"),
         icon: "activity",
         variant: "ghost",
-        visible: (row) => taskStatus(row) !== "open",
+        visible: (row) => recordStatus(row) !== "open",
         pendingPolicy: "active-row",
         onSelect: (row) => reopen(row.id),
       }),
@@ -81,6 +82,10 @@ export interface TaskFormSelection {
   groups?: readonly ("placement" | "assignment" | "details")[];
   verbs?: readonly ("complete" | "drop" | "reopen" | "promote")[];
   contextLine?: FormProps["contextLine"];
+  /** Compact read-only extras the host adds to the record header (a card in `RecordHeader.extra`). */
+  headerExtras?: FormProps["headerExtras"];
+  /** The eyebrow above the title: the record's kind and container. */
+  eyebrow?: FormProps["eyebrow"];
   returning?: FormProps["returning"];
   /**
    * The statusbar: the task's own `status` (default), or another owner's field
@@ -150,7 +155,8 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
       icon="projects" run={promote} /> : null}
   </>;
   return (
-    <Form resource={TASK_MODEL} contextLine={selection.contextLine} returning={selection.returning}>
+    <Form resource={TASK_MODEL} contextLine={selection.contextLine} headerExtras={selection.headerExtras}
+      eyebrow={selection.eyebrow ?? t("task.eyebrow")} returning={selection.returning}>
       <Field name="title" title />
       <Field name="allowed_visibility" hidden readOnly />
       <Field name="task_actions" hidden readOnly />
@@ -193,11 +199,19 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
 
 /** Whether the row's lifecycle is open, whatever the status casing it carries. */
 export function isOpenTask(record: { status?: unknown }): boolean {
-  return taskStatus(record) === "open";
+  return recordStatus(record) === "open";
 }
 
-function taskStatus(record: { status?: unknown }): string {
+/** A record's lifecycle word as the server spells it, lower-cased and trimmed, for the project
+ * and task rules that read it. */
+export function recordStatus(record: { status?: unknown }): string {
   return String(record.status ?? "").trim().toLowerCase();
+}
+
+/** The task collections' row link: the canonical task route, or none when the route is absent. */
+export function useTaskRowHref(): ((row: StringIdRow) => string) | undefined {
+  const recordHref = useResourceRecordHref(TASK_MODEL);
+  return recordHref ? (row) => recordHref(row.id, row) ?? "" : undefined;
 }
 
 export function dropReason(options: readonly WidgetOption[], value: unknown): string {

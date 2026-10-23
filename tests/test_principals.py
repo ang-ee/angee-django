@@ -10,8 +10,8 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, system_context, to_subject_ref
 
+from angee.actors import actor_user_id
 from angee.agents.testing.models import Agent
-from angee.base.actors import actor_user_id
 
 User = get_user_model()
 
@@ -97,7 +97,7 @@ def test_agent_full_save_without_name_change_does_not_touch_service_user(
     def unexpected_sync(agent: object) -> None:
         raise AssertionError("A no-op full save must not reconcile reader membership.")
 
-    monkeypatch.setattr("angee.agents.grants.sync_resource_reader_role", unexpected_sync)
+    monkeypatch.setattr("angee.agents.models.sync_resource_reader_role", unexpected_sync)
 
     user_table = User._meta.db_table
     with CaptureQueriesContext(connection) as captured:

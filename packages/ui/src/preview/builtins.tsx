@@ -79,6 +79,7 @@ export interface ImagePreviewSurfaceProps {
  * image is taller than the viewport the content grows and scrolling still
  * begins at the image's top edge instead of centering that edge above the
  * reachable scroll range.
+ * @kind surface
  */
 export function ImagePreviewSurface({
   src,
@@ -108,7 +109,7 @@ function TextPreview({ file, mime }: PreviewProviderProps): ReactElement {
   return (
     <FileText url={file.url}>
       {(text) => (
-        <pre className="h-full overflow-auto bg-sheet p-4 font-mono text-13 leading-relaxed text-fg-2">
+        <pre className="h-full whitespace-pre-wrap break-words overflow-auto bg-sheet p-4 font-mono text-13 leading-relaxed text-fg-2">
           {isJsonMime(mime) ? prettyJson(text) : text}
         </pre>
       )}
@@ -149,6 +150,7 @@ function prettyJson(text: string): string {
  * always resolves against these (plus any addon-contributed providers from the
  * runtime), so they need no registration. An addon adds more renderers — or
  * overrides one of these at a higher priority — through its manifest `previews`.
+ * @kind contribution
  */
 export const builtinPreviewProviders: readonly PreviewProvider[] = [
   { id: "base.image", mime: "image/*", component: ImagePreview },

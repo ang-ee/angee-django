@@ -72,4 +72,13 @@ describe("SessionRail", () => {
     fireEvent.click(button);
     expect(select).toHaveBeenCalledTimes(1);
   });
+
+  test("a busy rail with no rows draws its own skeleton rows, an idle empty rail its hint", () => {
+    const { rerender } = render(<SessionRail label="Rooms" busy busyCount={3} empty="Start a room." />);
+    expect(screen.getByRole("list").getAttribute("aria-busy")).toBe("true");
+    expect(screen.getAllByRole("listitem", { hidden: true })).toHaveLength(3);
+    expect(screen.queryByText("Start a room.")).toBeNull();
+    rerender(<SessionRail label="Rooms" empty="Start a room." />);
+    expect(screen.getByText("Start a room.")).toBeTruthy();
+  });
 });

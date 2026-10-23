@@ -16,7 +16,7 @@ definition scopedemo/doc {
 definition messaging/thread {
     relation chatter_record: chatterdemo/doc // rebac:field={"path":"attachments__chatterdemo_chatterdoc","filters":{"attachments__role":"chatter"}}
 
-    permission read = chatter_record->read
+    permission read_granted = chatter_record->read
 }
 
 // Account actions follow the bound team's live roster. Preview authority stays
@@ -77,6 +77,10 @@ definition messaging/thread_attachment {
     relation chatter_doc: chatterdemo/doc // rebac:field=target
 
     permission target_write = chatter_doc->write
-    permission record_read = chatter_doc->read
-    permission record_write = chatter_doc->write
+}
+
+definition projects/task {
+    relation subject_chatter_doc: chatterdemo/doc // rebac:field=subject
+    permission subject_read = subject_chatter_doc->read
+    permission subject_write = subject_chatter_doc->write
 }

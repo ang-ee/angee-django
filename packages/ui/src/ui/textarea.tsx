@@ -4,12 +4,15 @@ import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { widgetControlSurfaceVariants, widgetControlPresentationProps } from "./widget-control";
 
+/**
+ * @kind token
+ */
 export const textareaVariants = tv({
   extend: widgetControlSurfaceVariants,
   base: "w-full text-fg placeholder:text-fg-subtle",
   variants: {
     size: {
-      sm: "px-2 py-1 text-xs leading-snug",
+      sm: "px-2 py-1 text-12 leading-snug",
       md: "px-2 py-1.5 text-13 leading-snug",
       lg: "px-3 py-2 text-sm leading-snug",
     },
@@ -27,9 +30,6 @@ export const textareaVariants = tv({
 
 type TextareaRecipeProps = VariantProps<typeof textareaVariants>;
 
-export type TextareaSize = NonNullable<TextareaRecipeProps["size"]>;
-export type TextareaResize = NonNullable<TextareaRecipeProps["resize"]>;
-
 export type TextareaProps = Omit<
   React.TextareaHTMLAttributes<HTMLTextAreaElement>,
   "className" | "color"
@@ -38,6 +38,9 @@ export type TextareaProps = Omit<
     className?: string;
   };
 
+/**
+ * @kind primitive
+ */
 export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
   function Textarea(
     {

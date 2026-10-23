@@ -61,7 +61,7 @@ describe("WorkspaceSources", () => {
 
     expect(await screen.findByText("Sources")).toBeTruthy();
     expect(screen.getByText("notes")).toBeTruthy();
-    expect(screen.getByText("+2 / -1")).toBeTruthy();
+    expect(screen.getByText("↑2 ↓1")).toBeTruthy();
     expect(screen.getByText("/workspace")).toBeTruthy();
   });
 });

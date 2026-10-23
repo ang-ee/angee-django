@@ -10,7 +10,6 @@ from django.core.exceptions import ImproperlyConfigured, PermissionDenied, Valid
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from angee.agents.models import InferenceModelUnavailable
-from angee.base.impl import resolve_impl_class
 from angee.extraction.acquisition import (
     ExtractionConfig,
     ExtractionRequestConfig,
@@ -29,6 +28,7 @@ from angee.extraction.enums import ExtractionRole, ExtractionStatus
 from angee.extraction.inference import RETAINED_CARRIER_UNAVAILABLE, TransientInferenceError, map_parts, recognize_page
 from angee.extraction.managers import StaleExtraction
 from angee.extraction.profiles import ExtractionProfile, UnconfiguredExtractionProfile
+from angee.impl import resolve_impl_class
 from angee.workflows.maps import MapItem
 from angee.workflows.steps import Done, Retryable, RetryPolicy, Step, StepMode
 
@@ -124,9 +124,7 @@ class PreparePagesStep(_IOStep, Step[ExtractionSourceInput, PreparePagesOutput, 
         ctx.load(apps.get_model(value.target_model), value.target_id)
         files = [ctx.load(apps.get_model("storage.File"), public_id) for public_id in value.files]
         parts = [ctx.load(apps.get_model("messaging.Part"), public_id) for public_id in value.message_parts]
-        profile = (
-            apps.get_model("extraction.Extraction").impl_field("profile").resolve_class(ctx.config.profile)()
-        )
+        profile = apps.get_model("extraction.Extraction").profile.field.resolve_class(ctx.config.profile)()
         profile.parse_config(ctx.config.profile_config)
         prepared = apps.get_model("extraction.Extraction").objects.prepare_pages(
             files, parts, profile=profile, config=ctx.config.acquisition, actor=ctx.actor, heartbeat=ctx.heartbeat,
@@ -285,7 +283,7 @@ class ProcessEvidenceStep(_IOStep, Step[ProcessEvidenceInput, ProcessEvidenceOut
             ctx.heartbeat()
             restored_parts.append(carrier.restore(ctx))
         parts = tuple(restored_parts)
-        profile = model.impl_field("profile").resolve_class(ctx.config.profile)()
+        profile = model.profile.field.resolve_class(ctx.config.profile)()
         profile_config = profile.normalize_config(ctx.config.profile_config)
         failure = None
         try:
