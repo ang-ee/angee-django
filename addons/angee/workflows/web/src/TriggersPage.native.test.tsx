@@ -64,6 +64,9 @@ test("a new embedded trigger preserves the workflow default in its native create
   const dialog = await screen.findByRole("dialog");
   fireEvent.change(await within(dialog).findByLabelText("Subject model"), { target: { value: "notes.note" } });
   expect(await within(dialog).findByRole("combobox", { name: "Filter field" })).toBeTruthy();
+  const source = within(dialog).getByRole("combobox", { name: "Source" });
+  const condition = within(dialog).getByRole("heading", { name: "Condition" });
+  expect(source.compareDocumentPosition(condition) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(within(dialog).queryByText("Select a record model to edit its condition.")).toBeNull();
   fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
   await waitFor(() => expect(requests.some(({ query }) => query.includes("insert_trigger_one"))).toBe(true));

@@ -1,4 +1,5 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
+import { Field, Group } from "@angee/ui";
 import { createElement } from "react";
 import { Redo2, Workflow } from "lucide-react";
 import { lazyRouteComponent } from "@tanstack/react-router";
@@ -39,6 +40,15 @@ export default defineBaseAddon({
     "workflows.triggers": { parent: "workflows.studio", label: "Triggers", icon: "activity", route: "workflows.triggers" },
   },
   containers: {
+    [`${TRIGGER_MODEL}#sections`]: {
+      "workflows.trigger-condition": {
+        sequence: 30,
+        content: createElement(Group, {
+          label: { namespace: "workflows", key: "trigger.condition", fallback: enWorkflowsMessages["trigger.condition"] },
+          columns: 1,
+        }, createElement(Field, { name: "condition", label: false, widget: "angee.workflows.condition", defaultValue: {} })),
+      },
+    },
     "form#actions-menu": { "workflows.run-workflow": { sequence: 40, content: createElement(RunWorkflowRecordActions) } },
     // Runs on the Timeline: one line per run, opening the run drill-in.
     "timeline#kinds": {

@@ -799,6 +799,10 @@ class _RelationFilterExtension(FieldExtension):
         return await next_(source, info, **kwargs)
 
     def prepare(self, info: strawberry.Info, where: Any) -> Any:
+        return self.prepare_queryset(self.source(info), where)
+
+    def prepare_queryset(self, queryset: models.QuerySet[Any], where: Any) -> Any:
+        """Resolve a fresh input tree under the executing queryset's actor."""
         comparisons: dict[str, list[Any]] = {}
         positive: list[tuple[Any, str, Any]] = []
 
@@ -829,7 +833,7 @@ class _RelationFilterExtension(FieldExtension):
 
         prepared = adapt(where)
         if comparisons:
-            actor = relation_actor(self.source(info))
+            actor = relation_actor(queryset)
             for name, items in comparisons.items():
                 operands = [
                     (item, field.name, getattr(item, field.name))
@@ -969,48 +973,37 @@ def _aggregate_queryset(
 
 
 def _relation_scalar_queryset(
-    model: type[models.Model],
-    source: Callable[[strawberry.Info], models.QuerySet[Any]],
+    queryset: models.QuerySet[Any],
     paths: Iterable[str],
-) -> Callable[[strawberry.Info], models.QuerySet[Any]]:
+) -> models.QuerySet[Any]:
     """Make relation-path filters and ordering see the same redacted SQL values."""
 
-    scalar_paths = []
+    expressions = {}
     for path in sorted(set(paths)):
         if "." in path:
             continue
         try:
-            field = require_field_for_path(model, path)
+            field = require_field_for_path(queryset.model, path)
         except FieldPathError:
             continue
-        if is_to_one_relation(field) or ("__" in path and not field.is_relation):
-            scalar_paths.append(path)
-    if not scalar_paths:
-        return source
-
-    def get_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-        queryset = source(info)
-        expressions = {}
-        for path in scalar_paths:
-            field = require_field_for_path(model, path)
-            expression = actor_scoped_relation_expression(queryset, path)
-            if is_to_one_relation(field):
-                assert isinstance(field, (models.ForeignObject, ForeignObjectRel))
-                target = field.target_field
-                # A target PK may itself be an MTI parent link. Django's
-                # get_col resolves that chain to its actual scalar field;
-                # cloning the link would leave an unbound relation field.
-                output = target.get_col(target.model._meta.db_table).output_field.clone()
-                output.null = False  # SQL NOT must preserve UNKNOWN for redacted NULLs.
-                output.register_lookup(_RelationExact)
-                output.register_lookup(_RelationIn)
-                expression = models.ExpressionWrapper(expression if expression is not None else models.F(path), output)
-            if expression is not None:
-                alias = _relation_axis_alias(path) if field.is_relation else path
-                expressions[alias] = _scalar_alias_expression(queryset, expression)
-        return queryset.alias(**expressions) if expressions else queryset
-
-    return get_queryset
+        if not (is_to_one_relation(field) or ("__" in path and not field.is_relation)):
+            continue
+        expression = actor_scoped_relation_expression(queryset, path)
+        if is_to_one_relation(field):
+            assert isinstance(field, (models.ForeignObject, ForeignObjectRel))
+            target = field.target_field
+            # A target PK may itself be an MTI parent link. Django's
+            # get_col resolves that chain to its actual scalar field;
+            # cloning the link would leave an unbound relation field.
+            output = target.get_col(target.model._meta.db_table).output_field.clone()
+            output.null = False  # SQL NOT must preserve UNKNOWN for redacted NULLs.
+            output.register_lookup(_RelationExact)
+            output.register_lookup(_RelationIn)
+            expression = models.ExpressionWrapper(expression if expression is not None else models.F(path), output)
+        if expression is not None:
+            alias = _relation_axis_alias(path) if field.is_relation else path
+            expressions[alias] = _scalar_alias_expression(queryset, expression)
+    return queryset.alias(**expressions) if expressions else queryset
 
 
 def _group_by_expression_provider(
@@ -1572,16 +1565,17 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     # Scope membership is intentionally testable without reading the container.
     # It never changes the actor scope of the root rows or their projections.
     relation_paths = tuple(path for path in relation_paths if path not in container_scopes)
-    source_read_queryset = _relation_scalar_queryset(model, get_queryset or _model_queryset(model), relation_paths)
-    source_aggregate = (
-        _relation_scalar_queryset(model, get_aggregate_queryset, relation_paths)
-        if get_aggregate_queryset is not None
-        else _aggregate_queryset(source_read_queryset)
-    )
+    read_source = get_queryset or _model_queryset(model)
+    source_aggregate = get_aggregate_queryset or _aggregate_queryset(read_source)
+
+    def source_read_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
+        return _relation_scalar_queryset(read_source(info), relation_paths)
+
     if unknown := expressions.keys() - set(filterable):
         raise ImproperlyConfigured(f"Filter expressions must be declared filterable: {sorted(unknown)}")
 
     def prepare_filters(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+        queryset = _relation_scalar_queryset(queryset, relation_paths)
         if issubclass(node, RecordReferenceNode) or record_ref_requires_read:
             queryset = with_record_reference_access(queryset)
         queryset = with_filter_aliases(queryset)
@@ -1602,7 +1596,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         return queryset.alias(**aliases) if aliases else queryset
 
     def read_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-        return prepare_filters(source_read_queryset(info))
+        return prepare_filters(read_source(info))
 
     def aggregate_source(info: strawberry.Info) -> models.QuerySet[Any]:
         return prepare_filters(source_aggregate(info))
@@ -1732,15 +1726,18 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         for graphql_field in get_object_definition(resource.query, strict=True).fields:
             if any(argument.python_name == "where" for argument in graphql_field.arguments):
                 graphql_field.extensions.insert(0, adapter)
+    relation_filter = None
     if any(isinstance(decoder, _RelationIDDecoder) for decoder in (field_id_decode or {}).values()):
         assert resource.filter_type is not None
         filter_type = adapter.combined if adapter is not None else resource.filter_type
+        relation_filter = _RelationFilterExtension(field_id_decode, read_queryset, filter_type, relation_filter_aliases)
         for graphql_field in get_object_definition(resource.query, strict=True).fields:
             if any(argument.python_name == "where" for argument in graphql_field.arguments):
-                source = read_queryset if graphql_field.graphql_name == resource.list_root else aggregate_source
-                graphql_field.extensions.append(_RelationFilterExtension(
-                    field_id_decode, source, filter_type, relation_filter_aliases,
-                ))
+                graphql_field.extensions.append(
+                    relation_filter if graphql_field.graphql_name == resource.list_root else _RelationFilterExtension(
+                        field_id_decode, aggregate_source, filter_type, relation_filter_aliases,
+                    )
+                )
     if lines is not None:
         resource = _attach_lines_save(resource, node=node, lines=lines, write_backend=active_write_backend)
 
@@ -1750,9 +1747,24 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             where = adapter.map_arguments({"where": where})["where"]
         predicate = where_to_q(
             where, id_column=id_column, id_decode=id_decode,
-            field_decoders=field_id_decode, lookups=filter_lookups,
+            # Validate operators now; related identities require the executing
+            # queryset's actor and are resolved afresh when the filter is used.
+            field_decoders={
+                name: decoder for name, decoder in field_id_decode.items()
+                if not isinstance(decoder, _RelationIDDecoder)
+            }, lookups=filter_lookups,
         )
-        return lambda queryset: prepare_filters(queryset).filter(predicate)
+
+        def apply(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+            active = predicate
+            if relation_filter is not None:
+                active = where_to_q(
+                    relation_filter.prepare_queryset(queryset, where), id_column=id_column, id_decode=id_decode,
+                    field_decoders=field_id_decode, lookups=filter_lookups,
+                )
+            return prepare_filters(queryset).filter(active)
+
+        return apply
 
     return attach_hasura_resource_metadata(
         resource,
