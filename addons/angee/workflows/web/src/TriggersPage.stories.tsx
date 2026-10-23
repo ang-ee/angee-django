@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
+import { composeAddons } from "@angee/app";
 import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
 import { createRouteHref, defaultWidgets, JsonValueSchema } from "@angee/ui";
 import { TriggerCondition } from "./TriggerCondition";
@@ -8,6 +9,7 @@ import { TriggersList } from "./TriggersPage";
 import { TRIGGER_MODEL } from "./triggers";
 import { triggerEventFixture, triggerEventResourceFixture, triggerFixture, triggerMessageResourceFixture, triggerNoteResourceFixture, triggerResourceFixture } from "./trigger-testing";
 import { runResourceFixture, userResourceFixture, workflowResourceFixture } from "./testing";
+import addon from "./index";
 
 export default { title: "Workflows/Triggers", parameters: { layout: "fullscreen" }, excludeStories: ["TriggerStory"] };
 export const Trigger = { render: () => <TriggerStory /> };
@@ -18,6 +20,9 @@ const RequestSchema = v.object({ query: v.string(), variables: v.optional(v.reco
 export type TriggerRequest = v.InferOutput<typeof RequestSchema>;
 const documents = { console: operationDocuments };
 const runtime = {
+  containers: composeAddons([{ id: addon.id, containers: {
+    [`${TRIGGER_MODEL}#sections`]: addon.containers?.[`${TRIGGER_MODEL}#sections`] ?? {},
+  } }], { canonicalModelLabel: (model) => model }).containers,
   widgets: { ...defaultWidgets, "angee.workflows.condition": { read: TriggerCondition, edit: TriggerCondition } },
   routeHref: createRouteHref([
     { name: "workflows.triggers", path: "/workflows/triggers" },

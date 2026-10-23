@@ -414,19 +414,26 @@ class MessageTriggerTests(TransactionTestCase):
     def test_channel_scope_resource_composes_relation_write_filter_and_read(self):
         """The satellite's field declaration extends the canonical resource input."""
         schema = GraphQLSchemas.from_discovery().build("console")
-        query = """mutation($workflow: ID!, $channel: ID!) {
-          insert_trigger_one(object: {workflow: $workflow, channel: $channel, source: "message_ingested"}) {
+        condition = {"channel": {"_eq": str(self.channel.sqid)}}
+        query = """mutation($workflow: ID!, $channel: ID!, $condition: JSON!) {
+          insert_trigger_one(object: {
+            workflow: $workflow, channel: $channel, source: "message_ingested", condition: $condition
+          }) {
             id channel { id }
           }
         }"""
         with actor_context(self.admin):
             result = schema.execute_sync(
-                query, variable_values={"workflow": self.workflow.sqid, "channel": self.channel.sqid},
+                query, variable_values={
+                    "workflow": self.workflow.sqid, "channel": self.channel.sqid, "condition": condition,
+                },
                 context_value=SimpleNamespace(request=SimpleNamespace(user=self.admin)),
             )
         self.assertIsNone(result.errors, result.errors)
         self.assertEqual(result.data["insert_trigger_one"]["channel"]["id"], self.channel.sqid)
         trigger_id = result.data["insert_trigger_one"]["id"]
+        trigger = Trigger.objects.with_actor(self.admin).get(sqid=trigger_id)
+        self.assertEqual(trigger.condition, condition)
         with actor_context(self.admin):
             filtered = schema.execute_sync(
                 """query($channel: String!) {
@@ -446,3 +453,9 @@ class MessageTriggerTests(TransactionTestCase):
             )
         self.assertIsNone(hidden.errors, hidden.errors)
         self.assertEqual(hidden.data["trigger_by_pk"], {"id": trigger_id, "channel": None})
+        Trigger.objects.enable(trigger, actor=self.admin)
+        message = self.ingest()
+        self.assertEqual(Trigger.objects.drain(), 1)
+        event = TriggerEvent.system_queryset().get(trigger=trigger)
+        self.assertTrue(event.admitted_at)
+        self.assertEqual(event.record_object_id, message.pk)

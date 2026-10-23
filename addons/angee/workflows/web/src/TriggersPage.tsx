@@ -45,7 +45,6 @@ export function TriggersList({ workflowId }: { workflowId?: string }) {
         <Field name="source_model" label={t("trigger.resolvedModel")} readOnly showWhen={(row) => Boolean(row.source_model) && !row.model_label} />
         <Field name="enabled" label={t("trigger.enabled")} readOnly widget="boolean" />
       </Group>
-      <Field name="condition" label={t("trigger.condition")} widget="angee.workflows.condition" defaultValue={{}} />
       <Field name="disabled_reason" label={t("trigger.disabledReason")} readOnly widget="textarea" showWhen={(row) => Boolean(row.disabled_reason)} />
       <Action id="enable" label={t("trigger.enable")} placement="toolbar" primary
         visibleWhen={(row) => row.can_edit === true && row.enabled === false && row.enable_preview != null}
