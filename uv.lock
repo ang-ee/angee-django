@@ -897,7 +897,7 @@ addons = [
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "slack-sdk", specifier = ">=3.43.0" },
     { name = "strawberry-django-aggregates", git = "https://github.com/ang-ee/strawberry-django-aggregates.git?rev=0f374854d19b2709b6d77ae872090ab2a751f1dc" },
-    { name = "strawberry-django-hasura", specifier = ">=0.14.0" },
+    { name = "strawberry-django-hasura", git = "https://github.com/ang-ee/strawberry-django-hasura.git?rev=4e1c2da2bcbbc90cc586fef3db8d70f5cd6ccfc0" },
     { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=273bf0456d914d4df535222c4cbae73dff46a376" },
     { name = "strawberry-graphql-django", git = "https://github.com/ang-ee/strawberry-django.git?rev=091238ecd4ae07798ef12e9eb24281540da41ced" },
     { name = "tablib", specifier = ">=3" },
@@ -2878,16 +2878,12 @@ dependencies = [
 [[package]]
 name = "strawberry-django-hasura"
 version = "0.14.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/ang-ee/strawberry-django-hasura.git?rev=4e1c2da2bcbbc90cc586fef3db8d70f5cd6ccfc0#4e1c2da2bcbbc90cc586fef3db8d70f5cd6ccfc0" }
 dependencies = [
     { name = "django" },
     { name = "strawberry-django-aggregates" },
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/54/b4/e81561811354d9d45f6866834010b2abddf0dc7171ad776a2199ac819e7f/strawberry_django_hasura-0.14.0.tar.gz", hash = "sha256:118596bb2be2d6bd916ea6c0610717e91640b85a8036e6f8e52cb35fa56f3616", size = 160370, upload-time = "2026-10-05T14:56:44.625Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2b/07/d8b6e613066c671d767cd2558c23d4cfd88a705ff5e3e64c4baeef1c5483/strawberry_django_hasura-0.14.0-py3-none-any.whl", hash = "sha256:f9d452f8f17ece6155c3fe60c8efca2ccd570dbac72160c7fdf5bff6ca725157", size = 69152, upload-time = "2026-10-05T14:56:43.46Z" },
 ]
 
 [[package]]

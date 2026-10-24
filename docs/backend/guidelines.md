@@ -199,6 +199,9 @@ Use these owners instead of maintaining another contract in an addon:
   `only`, `select_related`, `prefetch_related`, and `annotate` hints. Computed
   fields promote their model-owned aliases through native `annotate` hints only
   when selected; filter/order aliases stay unselected until the SQL uses them.
+  Build computed filter expressions only for aliases referenced by the resolved
+  native predicate, shared by requests and stored conditions. Preparing an unused
+  expression still costs Python work even when Django omits it from SQL.
   See [the Hasura adapter](../../addons/angee/graphql/data/hasura.py) and
   [workflow decision fields](../../addons/angee/workflows/schema.py).
   Dependencies include inherited `AngeeNode.display_name`: bind its existing
