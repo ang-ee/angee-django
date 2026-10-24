@@ -1511,6 +1511,11 @@ submit and upload paths. The app resets actor-bound queries on enter and exit;
 change subscriptions stay closed during preview because WebSockets retain their
 handshake actor. See [the provider](../../packages/app/src/providers/view-as.ts).
 
+Composed toolbar workflows save through `context.form.submitForm()`. It runs
+native form validation and returns the acknowledged record, or `null` when no
+save was accepted. Await that result before starting a dependent record action;
+never infer success from dirty state or replace the form's save pipeline.
+
 `FormView` treats an existing record as read-only when its resource has no update
 root and the caller supplies no custom submit handler. A create-only resource can
 still open a creation form. Fixtures must declare the write operations they intend

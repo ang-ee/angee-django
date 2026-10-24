@@ -7865,6 +7865,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useAggregateOperation",
+    "source": "packages/ui/src/views/resource/resource-operations.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: resolves the generated aggregate document and target for a resource.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useAppRuntime",
     "source": "packages/ui/src/runtime/runtime.ts",
     "kind": null,

@@ -1,5 +1,6 @@
 """Configured Files destination for operator-published archive bytes."""
 
+import logging
 import stat
 from pathlib import Path
 from typing import Any, cast
@@ -10,6 +11,8 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from rebac import system_context
 
 from angee.serialization import canonical_json_sha256
+
+logger = logging.getLogger(__name__)
 
 
 def archive_mount(*, required: bool = True, lock: bool = False) -> Any:
@@ -41,19 +44,36 @@ def archive_mount_signature(mount: Any) -> str:
 
 def validate_archive_destination(mount: Any, *, stack_root: str) -> Path:
     """Bind the read-only Files destination to the authenticated operator root."""
-    backend_class, backend_config = mount.backend.storage_backend_spec()
-    if (mount.drive.prefix or mount.drive.backend.backend_class != backend_class
-            or mount.drive.backend.resolved_config() != backend_config):
+    try:
+        backend_class, backend_config = mount.backend.storage_backend_spec()
+        drive_config = mount.drive.backend.resolved_config()
+        root = Path(str(backend_config["root"]))
+        expected = Path(stack_root) / "backups" / "archives"
+        matches_root = root.resolve(strict=True) == expected.resolve(strict=True)
+    except (ValidationError, ImproperlyConfigured, OSError):
+        # Mount validation is admin infrastructure: its native diagnostics name
+        # private roots. Both discovery and capture expose only repair guidance.
+        logger.warning("Backup archive destination validation failed.", exc_info=True)
+        raise ValidationError(
+            "The backup archive destination is unavailable. Ask an administrator to check "
+            "the reference Mount configuration and folder access."
+        ) from None
+    if mount.drive.prefix or mount.drive.backend.backend_class != backend_class or drive_config != backend_config:
         raise ValidationError("The backup Files destination has drifted from its reference Mount.")
-    root = Path(str(backend_config["root"]))
-    expected = Path(stack_root) / "backups" / "archives"
-    if not Path(stack_root).is_absolute() or root.resolve(strict=True) != expected.resolve(strict=True):
+    if not Path(stack_root).is_absolute() or not matches_root:
         raise ValidationError("The backup Mount must reference this operator stack's archive directory.")
     return root
 
 
 def validate_archive_file(root: Path, *, filename: str, size_bytes: int) -> None:
     """Check bounded local metadata; the operator owns completed byte verification."""
-    info = (root / filename).lstat()
+    try:
+        info = (root / filename).lstat()
+    except OSError:
+        logger.warning("Backup archive file metadata validation failed.", exc_info=True)
+        raise ValidationError(
+            "The completed backup archive is unavailable. Ask an administrator to check "
+            "the archive file and its folder access."
+        ) from None
     if not stat.S_ISREG(info.st_mode) or info.st_size != size_bytes:
         raise ValidationError("The completed archive is not a regular file matching the operator receipt size.")

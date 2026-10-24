@@ -420,7 +420,7 @@ test("semantic no-op line saves preserve a later edit while the request is pendi
   let resolve!: (row: Row) => void;
   const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })) });
   act(() => f.surface().form.setValue<string>("lines.0.quantity", "10", { shouldDirty: true }));
-  let saving!: Promise<void>;
+  let saving!: Promise<Row | null>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.submit).toHaveBeenCalledTimes(1));
   edit("a.quantity", "11");
@@ -442,7 +442,7 @@ test.each(["none", "stay before save", "stay after save"])("an acknowledged cano
     onSaved: () => { leavingAfterSave = f.surface().requestLeave(); },
   });
   edit("a.quantity", "11");
-  let saving!: Promise<void>;
+  let saving!: Promise<Row | null>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.submit).toHaveBeenCalledOnce());
   let pendingLeave: Promise<boolean> | undefined;
@@ -565,7 +565,7 @@ test("a delayed existing-line save keeps later cells and rebases the next atomic
   let resolve!: (value: Row) => void;
   const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })) });
   edit("a.label", "Submitted alpha");
-  let saving!: Promise<void>;
+  let saving!: Promise<Row | null>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.submit).toHaveBeenCalledTimes(1));
   edit("a.label", "Later alpha");
@@ -588,7 +588,7 @@ test("a new line receives its saved ID normally while post-submission scalar edi
   const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })) });
   const newLine = { label: "Delta", quantity: 40, position: 3 };
   f.append(newLine);
-  let saving!: Promise<void>;
+  let saving!: Promise<Row | null>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.submit).toHaveBeenCalledTimes(1));
   edit("title", "Later title");
@@ -611,7 +611,7 @@ test.each([true, false])("concurrent edits to a newly saved line remain intact a
   const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })) });
   const newLine = { label: "Delta", quantity: 40, position: 3 };
   f.append(newLine);
-  let saving!: Promise<void>;
+  let saving!: Promise<Row | null>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.submit).toHaveBeenCalledTimes(1));
   edit("undefined.label", "Later delta");
