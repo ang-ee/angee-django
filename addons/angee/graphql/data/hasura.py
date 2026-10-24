@@ -43,7 +43,7 @@ from strawberry_django_hasura import (
 from strawberry_django_hasura import (
     hasura_resource as build_hasura_resource,
 )
-from strawberry_django_hasura.filtering import where_to_q
+from strawberry_django_hasura.filtering import filter_queryset, where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
 from angee.changesets import (
@@ -799,10 +799,13 @@ class _RelationFilterExtension(FieldExtension):
         return await next_(source, info, **kwargs)
 
     def prepare(self, info: strawberry.Info, where: Any) -> Any:
-        return self.prepare_queryset(self.source(info), where)
+        return self._prepare(where, lambda: self.source(info))
 
     def prepare_queryset(self, queryset: models.QuerySet[Any], where: Any) -> Any:
         """Resolve a fresh input tree under the executing queryset's actor."""
+        return self._prepare(where, lambda: queryset)
+
+    def _prepare(self, where: Any, source: Callable[[], models.QuerySet[Any]]) -> Any:
         comparisons: dict[str, list[Any]] = {}
         positive: list[tuple[Any, str, Any]] = []
 
@@ -833,7 +836,7 @@ class _RelationFilterExtension(FieldExtension):
 
         prepared = adapt(where)
         if comparisons:
-            actor = relation_actor(queryset)
+            actor = relation_actor(source())
             for name, items in comparisons.items():
                 operands = [
                     (item, field.name, getattr(item, field.name))
@@ -1472,6 +1475,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     A ``filter_expressions`` provider receives the target queryset so actor-aware
     expressions work for requests and stored filters alike. Its output field is
     inspected on an empty queryset at composition; it must perform no row reads.
+    Execution prepares each expression only when the translated predicate uses
+    it; providers return self-contained expressions over the supplied queryset.
     That field's ``null`` states whether the filter can match NULL: a total
     predicate such as ``BooleanField()`` advertises neither nullability nor
     ``isNull``, while a subquery that can find no row declares ``null=True``.
@@ -1574,14 +1579,18 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     if unknown := expressions.keys() - set(filterable):
         raise ImproperlyConfigured(f"Filter expressions must be declared filterable: {sorted(unknown)}")
 
-    def prepare_filters(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+    def prepare_queryset(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
         queryset = _relation_scalar_queryset(queryset, relation_paths)
         if issubclass(node, RecordReferenceNode) or record_ref_requires_read:
             queryset = with_record_reference_access(queryset)
-        queryset = with_filter_aliases(queryset)
+        return with_filter_aliases(queryset)
+
+    def prepare_filters(queryset: models.QuerySet[Any], predicate: models.Q) -> models.QuerySet[Any]:
+        """Build only expressions referenced by the native, resolved predicate."""
+        selected = predicate.referenced_base_fields
         aliases: dict[str, BaseExpression] = {}
         for name, expression in expressions.items():
-            if name in model_filter_aliases:
+            if name not in selected or name in model_filter_aliases:
                 continue
             if callable(expression):
                 expression = expression(queryset)
@@ -1591,15 +1600,13 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
                     default=models.Value(None), output_field=expression.output_field,
                 )
             aliases[name] = expression
-        # Django aliases enter SQL only when referenced. This also covers
-        # variable inputs and aggregates whose resolver is below the root field.
         return queryset.alias(**aliases) if aliases else queryset
 
     def read_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-        return prepare_filters(read_source(info))
+        return prepare_queryset(read_source(info))
 
     def aggregate_source(info: strawberry.Info) -> models.QuerySet[Any]:
-        return prepare_filters(source_aggregate(info))
+        return prepare_queryset(source_aggregate(info))
 
     model_filters = tuple(field for field in filterable if field not in expressions)
     # Native Hasura aliases cannot shadow a model field (or contain path
@@ -1682,6 +1689,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         field_id_decode=field_id_decode,
         get_queryset=read_queryset,
         get_aggregate_queryset=aggregate_source,
+        prepare_filter_queryset=prepare_filters,
         write_backend=resource_write_backend,
         id_decode=id_decode,
         id_column=id_column,
@@ -1730,12 +1738,12 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     if any(isinstance(decoder, _RelationIDDecoder) for decoder in (field_id_decode or {}).values()):
         assert resource.filter_type is not None
         filter_type = adapter.combined if adapter is not None else resource.filter_type
-        relation_filter = _RelationFilterExtension(field_id_decode, read_queryset, filter_type, relation_filter_aliases)
+        relation_filter = _RelationFilterExtension(field_id_decode, read_source, filter_type, relation_filter_aliases)
         for graphql_field in get_object_definition(resource.query, strict=True).fields:
             if any(argument.python_name == "where" for argument in graphql_field.arguments):
                 graphql_field.extensions.append(
                     relation_filter if graphql_field.graphql_name == resource.list_root else _RelationFilterExtension(
-                        field_id_decode, aggregate_source, filter_type, relation_filter_aliases,
+                        field_id_decode, source_aggregate, filter_type, relation_filter_aliases,
                     )
                 )
     if lines is not None:
@@ -1762,7 +1770,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
                     relation_filter.prepare_queryset(queryset, where), id_column=id_column, id_decode=id_decode,
                     field_decoders=field_id_decode, lookups=filter_lookups,
                 )
-            return prepare_filters(queryset).filter(active)
+            return filter_queryset(prepare_queryset(queryset), active, prepare_queryset=prepare_filters)
 
         return apply
 
