@@ -105,11 +105,16 @@ class BackupQuery:
         return strawberry.ID(str(mount.drive.sqid))
 
     @strawberry.field
-    def preview_backup_plan(self, id: PublicID) -> BackupPreviewType:
-        plan = resolve_action_target(BackupPlan, id, reason="operator_backup.preview")
-        data = plan.preview()
+    def preview_backup_plan(
+        self, info: strawberry.Info, id: PublicID | None = None, selection: JSON | None = None,
+    ) -> BackupPreviewType:
+        """Discover a new draft or a saved plan under its native capability."""
+        actor = session_user(info)
+        plan = (resolve_action_target(BackupPlan, id, reason="operator_backup.preview")
+                if id is not None else BackupPlan(owner=actor))
+        data = plan.preview(actor=actor, selection=selection)
         return BackupPreviewType(
-            version=1, discovered_at=timezone.now(), selection=plan.snapshot()["selection"],
+            version=1, discovered_at=timezone.now(), selection=data["selection"],
             resources=[BackupResourceType(
                 group=BackupResourceGroup(row["group"]), name=str(row["name"]),
                 status=BackupResourceStatus(row["status"]),
@@ -126,9 +131,11 @@ class BackupMutation:
 
     @strawberry.mutation
     @action_guard("Start backup failed.", camel_case_keys=False)
-    def run_backup_plan(self, info: strawberry.Info, id: PublicID, request_key: str) -> ActionResult:
+    def run_backup_plan(
+        self, info: strawberry.Info, id: PublicID, request_key: str, expected_selection: JSON | None = None,
+    ) -> ActionResult:
         plan = resolve_action_target(BackupPlan, id, reason="operator_backup.run")
-        run = plan.start(session_user(info), request_key=request_key)
+        run = plan.start(session_user(info), request_key=request_key, expected_selection=expected_selection)
         return ActionResult(ok=True, message="Backup started.", id=strawberry.ID(str(run.sqid)))
 
 

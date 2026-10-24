@@ -349,6 +349,7 @@ export {
   type UseBulkDeleteResult,
 } from "./resource/useBulkDelete";
 export {
+  useAggregateOperation,
   useDeletePreviewOperation,
   useDeleteWithPreview,
   type ResourceOperation,

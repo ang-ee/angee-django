@@ -5,7 +5,6 @@ import { ActionFormProvider, AppRuntimeProvider, Button, DescriptorFieldList, To
 import { BackupSelectionField } from "./BackupSelection";
 import { defaultBackupSelection, type BackupSelection } from "./selection";
 
-vi.mock("./BackupDiscovery", () => ({ BackupDiscovery: () => null }));
 afterEach(cleanup);
 
 test.each([["All discovered", "all"], ["None", "none"]])("changing Selected to %s saves no inactive names", async (label, mode) => {
@@ -28,6 +27,13 @@ test.each([["All discovered", "all"], ["None", "none"]])("changing Selected to %
   const option = await screen.findByRole("option", { name: label });
   fireEvent.pointerDown(option, { pointerType: "mouse" });
   fireEvent.click(option);
+  // Switching native category tabs must retain the same parent field draft.
+  expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Databases", "Services", "Workspaces", "Source repositories", "Storage"]);
+  fireEvent.click(screen.getByRole("tab", { name: "Services" }));
+  expect(await screen.findByRole("group", { name: "Services" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: "Storage" }));
+  expect(await screen.findByRole("group", { name: "Storage" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(saved).toHaveBeenCalledOnce());
   expect(saved.mock.calls[0]?.[0].selection.databases).toEqual({ mode, names: [], exclude: ["analytics"] });

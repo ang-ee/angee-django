@@ -43,3 +43,9 @@ export function applyInventorySelection(selection: BackupSelection, resources: r
   }
   return next;
 }
+
+/** Accept only a validated operator snapshot of the current review draft. */
+export function matchingPreviewSelection(snapshot: unknown, selection: BackupSelection): BackupSelection | null {
+  const parsed = v.safeParse(BackupSelectionSchema, snapshot);
+  return parsed.success && JSON.stringify(parsed.output) === JSON.stringify(selection) ? parsed.output : null;
+}

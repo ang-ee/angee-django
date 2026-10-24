@@ -16,11 +16,10 @@ const preview: BackupPreview = {
 };
 function mount(props: Partial<Parameters<typeof BackupDiscoveryView>[0]> = {}) {
   const onChange = vi.fn();
-  const discover = vi.fn();
   const element = <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ToastProvider>
-    <BackupDiscoveryView preview={preview} selection={defaultBackupSelection()} pending={false} canDiscover discover={discover} onChange={onChange} {...props} />
+    <BackupDiscoveryView preview={preview} selection={defaultBackupSelection()} pending={false} onChange={onChange} {...props} />
   </ToastProvider></AppRuntimeProvider>;
-  return { ...render(element), onChange, discover };
+  return { ...render(element), onChange };
 }
 
 test("shows unknown source sizes and unavailable reasons without inventing archive estimates", async () => {
@@ -44,20 +43,19 @@ test("native checked inventory rows edit exclusions in the existing form draft",
   expect(onChange.mock.calls[0]?.[0].databases.exclude).toEqual(["primary"]);
 });
 
-test.each([
-  { state: "pending", pending: true, canDiscover: true, label: "Discovering…" },
-  { state: "unsaved", pending: false, canDiscover: false, label: "Discover & estimate" },
-])("$state forms cannot start discovery", ({ pending, canDiscover, label }) => {
-  const { discover } = mount({ pending, canDiscover });
-  const button = screen.getByRole("button", { name: label });
+test("pending inventory cannot apply checked selections", async () => {
+  const { onChange } = mount({ pending: true });
+  const row = (await screen.findByText("primary")).closest("tr")!;
+  fireEvent.click(within(row).getByRole("checkbox"));
+  const button = await screen.findByRole("button", { name: "Exclude checked" });
   expect(button.hasAttribute("disabled")).toBe(true);
   fireEvent.click(button);
-  expect(discover).not.toHaveBeenCalled();
+  expect(onChange).not.toHaveBeenCalled();
 });
 
 test("changed selections mark the old snapshot stale", () => {
   const selection = defaultBackupSelection();
   selection.storage.mode = "none";
   mount({ selection });
-  expect(screen.getByRole("status").textContent).toMatch(/earlier selection/);
+  expect(screen.getByRole("status").textContent).toMatch(/Updating discovery/);
 });

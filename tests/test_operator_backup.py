@@ -466,3 +466,262 @@ def test_post_send_transport_failure_retries_stable_capture_without_private_diag
     assert requests[0] == requests[1]
     assert requests[0]["request_id"] == run.sqid
     assert Backup.system_queryset().filter(execution=run).count() == 1
+
+
+@pytest.fixture
+def discovery_calls(backup_env, monkeypatch):
+    calls = []
+
+    def discover(self, *, selection):
+        calls.append(selection)
+        return {"resources": [], "estimated_bytes": 0, "has_unknown_sizes": False}
+
+    monkeypatch.setattr(OperatorDaemon, "backup_preview", discover)
+    return calls
+
+
+def test_unsaved_discovery_requires_candidate_create_and_never_persists(backup_env, discovery_calls):
+    from angee.operator_backup import schema as backup_schema
+    from tests.conftest import addon_schema, execute_schema, result_data
+
+    env = backup_env
+    count = BackupPlan.system_queryset().count()
+    schema = addon_schema(backup_schema.schemas, "console")
+    result = result_data(execute_schema(schema, """query($selection: JSON!) {
+        preview_backup_plan(selection: $selection) { selection estimated_bytes }
+    }""", {"selection": {"storage": {"mode": "none"}}}, user=env.actor))["preview_backup_plan"]
+    assert result["selection"] == BackupSelection(storage={"mode": "none"}).model_dump(mode="json")
+    assert discovery_calls == [result["selection"]]
+    assert result["estimated_bytes"] == "0"
+    assert BackupPlan.system_queryset().count() == count
+    assert not WorkflowRun.system_queryset().exists()
+    assert not env.calls
+
+
+@pytest.mark.parametrize("role", ["owner", "runner", "outsider"])
+def test_plan_roles_do_not_authorize_new_draft_discovery(backup_env, discovery_calls, role):
+    from angee.operator_backup import schema as backup_schema
+    from tests.conftest import addon_schema, execute_schema
+
+    env = backup_env
+    actor = create_user(f"draft-{role}")
+    if role == "owner":
+        with system_context(reason="test draft owner authority"):
+            env.plan.owner = actor
+            env.plan.save()
+    elif role == "runner":
+        env.plan.with_actor(env.actor).grant_record_access("runner", actor)
+    result = execute_schema(addon_schema(backup_schema.schemas, "console"),
+                            "{ preview_backup_plan { selection } }", user=actor)
+    assert result.errors
+    assert not discovery_calls
+    assert not WorkflowRun.system_queryset().exists()
+
+
+def test_saved_runner_discovers_canonical_draft_without_changing_saved_intent(backup_env, discovery_calls):
+    from angee.operator_backup import schema as backup_schema
+    from tests.conftest import addon_schema, execute_schema, result_data
+
+    env = backup_env
+    runner = create_user("saved-draft-runner")
+    env.plan.with_actor(env.actor).grant_record_access("runner", runner)
+    original = env.plan.snapshot()
+    schema = addon_schema(backup_schema.schemas, "console")
+    result = result_data(execute_schema(schema, """query($id: ID!, $selection: JSON!) {
+        preview_backup_plan(id: $id, selection: $selection) { selection }
+    }""", {"id": str(env.plan.sqid), "selection": {"sources": {"mode": "none"}}},
+        user=runner))["preview_backup_plan"]
+    assert discovery_calls == [result["selection"]]
+    assert result["selection"]["sources"] == {"mode": "none", "names": [], "exclude": [], "policy": "bundle"}
+    env.plan.refresh_from_db()
+    assert env.plan.snapshot() == original
+    assert not env.calls
+    assert not WorkflowRun.system_queryset().exists()
+
+
+def test_discovery_validates_selection_and_destination_before_operator_inventory(backup_env, discovery_calls, settings):
+    from django.core.exceptions import ImproperlyConfigured
+
+    env = backup_env
+    with pytest.raises(ValidationError, match="selection"):
+        env.plan.preview(actor=env.actor, selection={"version": 2})
+    with system_context(reason="test discovery destination drift"):
+        env.mount.drive.prefix = "wrong-prefix"
+        env.mount.drive.save()
+    with pytest.raises(ValidationError, match="drifted"):
+        env.plan.preview(actor=env.actor)
+    settings.ANGEE_OPERATOR_BACKUP_MOUNT_DRIVE = "missing-archive-mount"
+    with pytest.raises(ImproperlyConfigured, match="reference local-folder Mount"):
+        env.plan.preview(actor=env.actor)
+    assert not discovery_calls
+    assert not env.calls
+
+
+def test_reviewed_selection_guard_refuses_edits_but_replays_original_intent(backup_env):
+    env = backup_env
+    reviewed = env.plan.snapshot()["selection"]
+    with system_context(reason="test concurrent plan edit after review"):
+        env.plan.selection = {"storage": {"mode": "none"}}
+        env.plan.save()
+    with pytest.raises(ValidationError, match="selection changed"):
+        env.plan.start(env.actor, request_key="reviewed", expected_selection=reviewed)
+    assert not WorkflowRun.system_queryset().exists()
+    current = env.plan.snapshot()["selection"]
+    run = env.plan.start(env.actor, request_key="reviewed", expected_selection=current)
+    with system_context(reason="test plan edit after admission"):
+        env.plan.selection = reviewed
+        env.plan.save()
+    assert env.plan.start(env.actor, request_key="reviewed", expected_selection=current).pk == run.pk
+    with pytest.raises(ValidationError, match="selection changed"):
+        env.plan.start(env.actor, request_key="reviewed", expected_selection=reviewed)
+    assert WorkflowRun.system_queryset().count() == 1
+    assert WorkflowRun.system_queryset().get(pk=run.pk).input["selection"] == current
+
+
+def test_existing_related_queries_link_plan_to_native_runs_and_backups(backup_env):
+    from angee.operator_backup import schema as backup_schema
+    from angee.workflows import schema as workflows_schema
+    from tests.conftest import addon_schema, execute_schema, result_data
+
+    env = backup_env
+    run = env.plan.start(env.actor, request_key="related")
+    run_until(run)
+    schema = addon_schema(backup_schema.schemas, "console", workflows_schema.schemas)
+    result = result_data(execute_schema(schema, """query($id: String!, $record: ID!) {
+        backups(where: {plan: {_eq: $id}}) { id plan execution file }
+        record_timeline(records: [{model: "operator_backup.BackupPlan", id: $record}]) {
+            records { runs { id } }
+        }
+    }""", {"id": str(env.plan.sqid), "record": str(env.plan.sqid)}, user=env.actor))
+    assert result["backups"][0]["plan"] == str(env.plan.sqid)
+    assert result["backups"][0]["execution"] == str(run.sqid)
+    assert result["backups"][0]["file"]
+    assert result["record_timeline"]["records"][0]["runs"] == [{"id": str(run.sqid)}]
+
+
+def test_native_admission_refuses_plan_edit_after_review_guard(backup_env, monkeypatch):
+    env = backup_env
+    reviewed = env.plan.snapshot()["selection"]
+    original = BackupPlan.admit_run
+
+    def edit_before_admission(self, run):
+        with system_context(reason="test edit between review guard and native admission"):
+            BackupPlan.system_queryset().filter(pk=self.pk).update(selection={"storage": {"mode": "none"}})
+        self.refresh_from_db()
+        original(self, run)
+
+    monkeypatch.setattr(BackupPlan, "admit_run", edit_before_admission)
+    with pytest.raises(ValidationError, match="preserve the admitted plan snapshot"):
+        env.plan.start(env.actor, request_key="admission-race", expected_selection=reviewed)
+    assert not WorkflowRun.system_queryset().exists()
+    assert not env.calls
+
+
+def test_run_mutation_projects_review_mismatch_as_action_validation(backup_env):
+    from angee.operator_backup import schema as backup_schema
+    from tests.conftest import addon_schema, execute_schema, result_data
+
+    env = backup_env
+    result = result_data(execute_schema(addon_schema(backup_schema.schemas, "console"), """
+        mutation($id: ID!, $selection: JSON!) {
+            run_backup_plan(id: $id, request_key: "stale-review", expected_selection: $selection) {
+                ok validation_errors
+            }
+        }
+    """, {"id": str(env.plan.sqid), "selection": {"storage": {"mode": "none"}}},
+        user=env.actor))["run_backup_plan"]
+    assert result["ok"] is False
+    assert "expected_selection" in result["validation_errors"]
+    assert not WorkflowRun.system_queryset().exists()
+
+
+@pytest.mark.parametrize("failure", ["disappeared", "unreadable"])
+def test_delegated_discovery_hides_private_destination_validation(
+    backup_env, discovery_calls, monkeypatch, caplog, failure,
+):
+    from angee.operator_backup import schema as backup_schema
+    from angee.storage_integrate import mounts
+    from tests.conftest import addon_schema, execute_schema
+
+    env = backup_env
+    runner = create_user(f"private-root-{failure}")
+    env.plan.with_actor(env.actor).grant_record_access("runner", runner)
+    if failure == "disappeared":
+        env.root.rmdir()
+    else:
+        native_access = mounts.os.access
+        monkeypatch.setattr(
+            mounts.os, "access", lambda path, mode: False if path == env.root else native_access(path, mode),
+        )
+    result = execute_schema(addon_schema(backup_schema.schemas, "console"), """query($id: ID!) {
+        preview_backup_plan(id: $id) { selection resources { name } }
+    }""", {"id": str(env.plan.sqid)}, user=runner)
+    assert result.errors
+    messages = " ".join(error.message for error in result.errors)
+    assert "Ask an administrator" in messages
+    assert "reference Mount configuration and folder access" in messages
+    assert result.errors[0].original_error.__cause__ is None
+    assert result.errors[0].original_error.__suppress_context__ is True
+    assert str(env.root) not in str([error.formatted for error in result.errors])
+    assert str(env.root) in caplog.text  # Original infrastructure diagnostics stay server-side.
+    assert not discovery_calls
+    assert not env.calls
+
+
+def test_capture_uses_same_safe_destination_validation_boundary(backup_env, caplog):
+    from angee.workflows.testing.models import StepAttempt
+
+    env = backup_env
+    env.root.rmdir()
+    run = env.plan.start(env.actor, request_key="private-missing-root")
+    run_until(run)
+    assert run.status == "failed"
+    step = run.step_runs.with_actor(env.actor).get(node_key="capture")
+    assert "Ask an administrator" in step.failure_reason
+    assert str(env.root) not in str(step.output)
+    attempts = StepAttempt.system_queryset().filter(step_run=step).values("error", "stacktrace")
+    assert str(env.root) not in str(list(attempts))
+    assert str(env.root) in caplog.text
+    assert not env.calls
+    assert not Backup.system_queryset().exists()
+
+
+@pytest.mark.parametrize("failure", ["disappeared", "unreadable"])
+def test_capture_hides_private_archive_metadata_failure_after_operator_receipt(
+    backup_env, monkeypatch, caplog, failure,
+):
+    from pathlib import Path
+
+    from angee.workflows.testing.models import StepAttempt
+
+    env = backup_env
+    if failure == "disappeared":
+        poll = OperatorDaemon.job_run
+
+        def remove_after_receipt(self, operation_id):
+            receipt = poll(self, operation_id)
+            (env.root / f"{operation_id}.zip").unlink()
+            return receipt
+
+        monkeypatch.setattr(OperatorDaemon, "job_run", remove_after_receipt)
+    else:
+        native_stat = Path.lstat
+
+        def deny_archive_metadata(path, *args, **kwargs):
+            if path.parent == env.root and path.suffix == ".zip":
+                raise PermissionError(f"Archive metadata denied: {path}")
+            return native_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "lstat", deny_archive_metadata)
+    run = env.plan.start(env.actor, request_key=f"private-archive-{failure}")
+    run_until(run)
+    assert run.status == "failed"
+    step = run.step_runs.with_actor(env.actor).get(node_key="capture")
+    assert "completed backup archive is unavailable" in step.failure_reason
+    assert str(env.root) not in str(step.output)
+    attempts = StepAttempt.system_queryset().filter(step_run=step).values("error", "stacktrace")
+    assert str(env.root) not in str(list(attempts))
+    assert str(env.root) in caplog.text
+    assert len(env.calls) == 1  # The operator accepted capture before local metadata became unavailable.
+    assert not Backup.system_queryset().exists()
+    assert not File.system_queryset().filter(drive=env.mount.drive).exists()

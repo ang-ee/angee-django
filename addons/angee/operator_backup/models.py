@@ -20,7 +20,7 @@ from angee.models import (
     OwnerMixin,
 )
 from angee.operator.daemon import OperatorDaemon
-from angee.operator_backup.archives import archive_mount
+from angee.operator_backup.archives import archive_mount, validate_archive_destination
 from angee.operator_backup.contracts import (
     BackupSelection,
     BackupTarget,
@@ -60,20 +60,26 @@ class BackupPlan(RunSubject, OwnerMixin, HistoryMixin, AngeeDataModel):
     def __str__(self) -> str:
         return self.name
 
-    def snapshot(self) -> dict[str, Any]:
-        """Freeze authored intent before admitting a run."""
-        return CaptureInput.model_validate({"selection": self.selection, "target_stack": self.target_stack,
+    def snapshot(self, *, selection: object | None = None) -> dict[str, Any]:
+        """Canonicalize stored or draft intent without changing the plan."""
+        selected = self.selection if selection is None else selection
+        validate_selection(selected)
+        return CaptureInput.model_validate({"selection": selected, "target_stack": self.target_stack,
                                             "destination": self.destination}).model_dump(mode="json")
 
-    def preview(self) -> dict[str, Any]:
-        """Discover only after checking this plan's execution capability."""
-        self.require_access("run")
-        snapshot = self.snapshot()
-        archive_mount()
-        return OperatorDaemon.from_settings().backup_preview(selection=snapshot["selection"])
+    def preview(self, *, actor: Any = None, selection: object | None = None) -> dict[str, Any]:
+        """Discover an authorized draft without persisting it or dispatching capture."""
+        self.require_access("create" if self._state.adding else "run", actor)
+        snapshot = self.snapshot(selection=selection)
+        mount = archive_mount()
+        daemon = OperatorDaemon.from_settings()
+        validate_archive_destination(mount, stack_root=daemon.stack_root())
+        return {**daemon.backup_preview(selection=snapshot["selection"]), "selection": snapshot["selection"]}
 
-    def start(self, actor: Any, *, request_key: str) -> Any:
-        """Admit one request, preserving its original snapshot on replay."""
+    def start(
+        self, actor: Any, *, request_key: str, expected_selection: object | None = None,
+    ) -> Any:
+        """Admit reviewed intent, preserving its original snapshot on replay."""
         self.require_access("run", actor)
         if not request_key or len(request_key) > 128:
             raise ValidationError({"request_key": "Use a nonempty request key of at most 128 characters."})
@@ -87,8 +93,13 @@ class BackupPlan(RunSubject, OwnerMixin, HistoryMixin, AngeeDataModel):
                 runs = apps.get_model("workflows", "WorkflowRun").objects
                 key = f"backup:{self.pk}:{request_key}"
                 existing = runs.filter(request_key=key).first()
-                return runs.start(workflow, actor=actor, subject=plan,
-                                  input=existing.input if existing is not None else snapshot, request_key=key)
+                admitted = existing.input if existing is not None else snapshot
+                if expected_selection is not None and (
+                    plan.snapshot(selection=expected_selection)["selection"] != admitted["selection"]
+                ):
+                    raise ValidationError({"expected_selection":
+                                           "The plan selection changed. Discover and review it again before capture."})
+                return runs.start(workflow, actor=actor, subject=plan, input=admitted, request_key=key)
 
     def admit_run(self, run: Any) -> None:
         """Permit only the declared capture workflow under the initiating actor."""

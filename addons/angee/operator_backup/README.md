@@ -8,6 +8,13 @@ source, and storage group through `all`, `selected`, or `none`, followed by
 exclusions. Source policy defaults to portable `bundle`; `fetch_published` must
 be supported and proven safe by the operator or discovery reports it unsupported.
 
+`preview_backup_plan` accepts an optional plan ID and draft selection. A new
+unsaved draft requires the plan candidate's create permission; an existing plan
+requires its run permission. Draft selection is validated and echoed canonically
+without saving a plan, changing its selection, or starting a workflow. Discovery
+checks that the configured reference Mount matches the authenticated operator
+stack before reading its inventory.
+
 The operator owns discovery, source size estimates, capture, and its durable
 `backups/archives` directory. Source estimates are not compressed archive size
 predictions. Unknown sizes, exclusions, and unsupported resources remain visible.
@@ -22,9 +29,12 @@ including after application database loss. The Files backend serves downloads;
 no operator credentials or source filesystem paths reach the console preview.
 
 `Back up now` starts the installed `operator_backup_capture` workflow with a
-frozen plan input and caller request key. Its IO step idempotently dispatches
-and polls the native operator operation. The operator verifies ZIP entries and
-hashes the archive before atomic publication; Django trusts that authenticated
+frozen plan input and caller request key. Callers can pass `expected_selection`
+to refuse capture if the persisted selection differs from the reviewed draft.
+A repeated request key compares against its original frozen selection. Native
+workflow admission locks the subject and refuses an intervening edit. Its IO
+step idempotently dispatches and polls the native operator operation. The operator
+verifies ZIP entries and hashes the archive before atomic publication; Django trusts that authenticated
 receipt and checks the local regular file's size and configured destination.
 The reference Mount must match the authenticated operator stack root's
 `backups/archives` directory; its drive backend, root and empty prefix must agree
@@ -46,6 +56,11 @@ A failed publication can use native in-place Retry after its destination is
 repaired, preserving the completed archive. The singleton
 `backup_destination_drive` query
 resolves the configured Files location once rather than once per listed plan.
+
+The shared workflow Runs group already lists attempts in each plan's Links
+aside through the native subject and retained record evidence. Completed archives
+are queried through the existing `Backup.plan` relation; no parallel run or
+relationship model is needed.
 
 Archives and completed evidence are retained. Schedules and cold restore
 execution are intentionally deferred; the versioned manifest retains recovery
