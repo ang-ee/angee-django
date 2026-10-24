@@ -4,7 +4,7 @@ Runs check-free (``requires_system_checks = []``) because its whole job is to cl
 the stale ``Schema*`` rows that would otherwise fail ``rebac.E009`` and block every
 checked command. The provision lifecycle runs it after ``migrate`` and before
 permission sync, once identity migrations have preserved moved rows. The prune
-itself lives in :mod:`angee.platform.permissions`.
+itself lives in :mod:`angee.permissions`.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError
 
-from angee.platform.permissions import PermissionSchemaReconcileError, reconcile_permission_schema
+from angee.permissions import PermissionSchemaReconcileError, reconcile_permission_schema
 
 
 class Command(BaseCommand):

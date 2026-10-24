@@ -799,13 +799,12 @@ data through REBAC, never a queryset bypass.
   denied: scoped lists omit those rows; point checks raise `PermissionDepthExceeded`.
   Deeper hierarchies need PostgreSQL (default 16). [Base autoconfig](../../angee/autoconfig.py)
   owns the defaults; explicit environment values take precedence over project settings.
-- If a removed or renamed definition in an otherwise composed package fails
-  `rebac.E009`, run the check-free `reconcile_permissions` first; it prunes stale
-  package-managed schema rows before `makemigrations` / `rebac sync` can run.
-- When an addon removes its last REBAC resource, keep an empty package-owned
-  `permissions.zed` with a bumped schema revision until old package-managed rows
-  have been pruned; deleting the file makes `rebac sync` skip the package and
-  strand stale definitions in existing databases.
+- Core [`reconcile_permissions`](../../angee/management/commands/reconcile_permissions.py)
+  prunes stale package-managed schema through [`angee.permissions`](../../angee/permissions.py),
+  independently of optional addons. Provision runs it check-free after migrations
+  preserve identity changes and before `rebac sync` and system checks. Use that
+  sequence when removing or renaming definitions, removing an addon, or deleting
+  its last `permissions.zed` file; `rebac sync` alone skips absent declarations.
 
 ## Pitfalls
 
