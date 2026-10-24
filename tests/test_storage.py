@@ -1823,3 +1823,22 @@ def test_storage_preview_does_not_mint_download_urls(
         assert "errors" not in data
         assert data["data"]["files_by_pk"]["url"].startswith("/storage/download/")
         mint.assert_called_once()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_size_graphql_roundtrips_exact_bigint_beyond_javascript_precision(drive: Any, settings: Any) -> None:
+    """Native upstream BigInt carries large file sizes through both upload and read."""
+    schema = addon_schema(storage_schema.schemas, "public")
+    settings.ROOT_URLCONF = "angee.storage.urls"
+    size = 9_007_199_254_740_993
+    result = result_data(execute_schema(schema, """mutation($input: FileUploadBeginInput!) {
+        file_upload_begin(input: $input) { error file { id size_bytes } }
+    }""", {"input": {"filename": "large.zip", "size_bytes": str(size), "drive": str(drive.sqid)}},
+        user=drive.alice))["file_upload_begin"]
+    assert result["error"] is None
+    assert result["file"]["size_bytes"] == str(size)
+    assert File.system_queryset().get(sqid=result["file"]["id"]).size_bytes == size
+    resource = next(item for item in schema.angee_resources if item.model_label == "storage.File")
+    size_field = next(field for field in resource.fields if field.name == "size_bytes")
+    assert size_field.scalar == "BigInt"
+    assert "size_bytes: BigInt!" in schema.as_str()

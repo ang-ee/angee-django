@@ -101,7 +101,7 @@ export function useStorageUpload(
           input: {
             filename: file.name,
             mime_type: file.type || DEFAULT_MIME,
-            size_bytes: file.size,
+            size_bytes: String(file.size),
             drive: target.driveId || null,
             drive_slug: target.driveSlug ?? "",
             folder: target.folderId ?? null,
@@ -143,7 +143,7 @@ export function useStorageUpload(
           input: {
             file: payload.file?.id ?? "",
             content_hash: contentHash,
-            size_bytes: file.size,
+            size_bytes: String(file.size),
           },
         });
         const result = finalized?.file_upload_finalize;

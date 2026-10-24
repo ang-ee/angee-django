@@ -916,7 +916,7 @@ function file(
     id,
     filename,
     title: "",
-    size_bytes: 128,
+    size_bytes: "128",
     content_hash: "hash",
     upload_state: "ready",
     visibility: "inherited",

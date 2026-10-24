@@ -619,6 +619,7 @@ class ExtcontribRole(Role):
 # Every installed backing needs its concrete model before native database setup.
 from angee.nexus.testing import models as nexus_models  # noqa: E402, F401
 from angee.operator.testing import models as operator_models  # noqa: E402, F401
+from angee.operator_backup.testing import models as operator_backup_models  # noqa: E402, F401
 from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401
 from angee.projects.testing import models as projects_models  # noqa: E402, F401
 from angee.provenance.testing import load_statement_sources  # noqa: E402

@@ -1,0 +1,19 @@
+_meta:
+  model: workflows.Workflow
+rows:
+  - xref: capture
+    fields:
+      key: operator_backup_capture
+      name: Manual stack backup
+      subject_model: operator_backup.backupplan
+      publish: true
+      draft:
+        nodes:
+          capture:
+            step: operator_backup_capture
+            next: {done: publish}
+          publish:
+            step: operator_backup_publish
+            input: {from: capture}
+        results:
+          - {from: publish}

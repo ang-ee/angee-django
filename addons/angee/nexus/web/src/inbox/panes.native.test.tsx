@@ -48,7 +48,7 @@ function fixture(pane: "navigator" | "results" | "related", initialSearch = "") 
       id: content ? "file:attachment" : "result-one", latest: message.sent_at, count: 2, part_count: content ? 2 : 0,
       message: { ...message, title: `Message page ${variables.page}` },
       part: content ? { id: "part-one", name: "Report.pdf", role: "BODY" } : null,
-      file: content ? { id: "attachment", filename: "Report.pdf", url: "/report.pdf", mime_type: { mime_type: "application/pdf" }, size_bytes: 20 } : null,
+      file: content ? { id: "attachment", filename: "Report.pdf", url: "/report.pdf", mime_type: { mime_type: "application/pdf" }, size_bytes: "20" } : null,
       fragment: null,
     }] } } };
     if (document === InboxRelatedTarget) return { data: { inbox_related_target: {

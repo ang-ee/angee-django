@@ -5,6 +5,7 @@ import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
+import { isNumericString } from "../lib/format-number";
 import { jsonValueFromUnknown } from "../widgets/json-value";
 import { datetimeWidget } from "../widgets/datetime";
 import { filterOperatorLabel } from "../views/resource/utils/labels";
@@ -23,7 +24,7 @@ export interface FilterClauseField {
   label: React.ReactNode;
   group?: string;
   type?: FilterClauseFieldType;
-  /** Query input scalar; preserves exact Decimal and structured JSON operands. */
+  /** Query input scalar; preserves exact BigInt and Decimal strings and structured JSON operands. */
   scalar?: string;
   options?: readonly FilterClauseChoice[];
   operators?: readonly FilterClauseOperator[];
@@ -114,6 +115,7 @@ export function FilterClauseRow({ fields, value, onChange, onSubmit, error, read
           ) : (
             <Input size="sm" type={structured ? "text" : inputType(field)}
               step={field.type === "number" ? field.scalar === "Int" ? 1 : "any" : undefined}
+              inputMode={!structured && field.scalar === "BigInt" ? "numeric" : !structured && field.scalar === "Decimal" ? "decimal" : undefined}
               value={valueProps.value} readOnly={readOnly}
               aria-label={valueProps["aria-label"]} aria-describedby={valueProps["aria-describedby"]}
               aria-invalid={valueProps["aria-invalid"]} placeholder={t("resourceToolbar.value")}
@@ -217,6 +219,7 @@ function structuredOperand(operator: FilterClauseOperator, scalar?: string): boo
     || scalar === "JSON" && ["exact", "ne", "gt", "gte", "lt", "lte"].includes(operator);
 }
 function inputType(field: FilterClauseField): string {
+  if (field.scalar === "BigInt" || field.scalar === "Decimal") return "text";
   return field.type === "number" || field.type === "date" ? field.type : "text";
 }
 function coerceValue(field: FilterClauseField, value: string, operator: FilterClauseOperator): FilterValue | undefined {
@@ -227,7 +230,10 @@ function coerceValue(field: FilterClauseField, value: string, operator: FilterCl
   if (!trimmed) return undefined;
   if (structuredOperand(operator, field.scalar)) return jsonValueFromUnknown(JSON.parse(trimmed));
   if (field.type === "number") {
-    if (field.scalar === "Decimal") return trimmed;
+    if (field.scalar === "BigInt") {
+      try { BigInt(trimmed); return trimmed; } catch { return undefined; }
+    }
+    if (field.scalar === "Decimal") return isNumericString(trimmed) ? trimmed : undefined;
     const number = Number(trimmed);
     return Number.isFinite(number) ? number : undefined;
   }

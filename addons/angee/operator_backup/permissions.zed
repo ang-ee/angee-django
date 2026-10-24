@@ -1,0 +1,25 @@
+// @rebac_package: operator_backup
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+definition operator_backup/plan {
+    relation owner: auth/user // rebac:field=owner
+    relation viewer: auth/user | auth/group#member
+    relation runner: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+    permission create = admin->member
+    permission read = owner + viewer + runner + admin->member
+    permission run = runner + admin->member
+    permission write = admin->member
+    permission share = admin->member
+    permission transfer = admin->member
+    permission write__owner = transfer
+    permission delete = admin->member
+}
+
+definition operator_backup/backup {
+    relation plan: operator_backup/plan // rebac:field=plan
+    relation admin: angee/role // rebac:const=admin
+    permission create = admin->member
+    permission read = plan->read + admin->member
+}
