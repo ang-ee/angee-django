@@ -779,3 +779,15 @@ test("field-scoped clear and change detection traverse AND branches", () => {
     }).conjunctions(),
   ).toThrow("AND predicates");
 });
+
+test("BigInt wire integers filter and sort exactly beyond Number precision", () => {
+  const query = ResourceQuery.forRows({ fields: { size: { scalar: "BigInt" } } });
+  const large = "9007199254740993";
+  const small = "9007199254740992";
+  expect(query.matches({ size: large }, { size: { exact: large } })).toBe(true);
+  expect(query.matches({ size: small }, { size: { exact: large } })).toBe(false);
+  expect(query.matches({ size: large }, { size: { gt: small } })).toBe(true);
+  expect(query.comparator("size")!({ size: small }, { size: large })).toBe(-1);
+  expect(() => query.filterFrom({ size: { exact: 9007199254740992 } })).toThrow("exact integer");
+  expect(() => query.filterFrom({ size: { exact: "1.5" } })).toThrow("exact integer");
+});

@@ -206,7 +206,7 @@ export function formFieldsFromMetadata(
 
 function formFieldDescriptor(field: ModelFieldMetadata): FieldDescriptor {
   const widget = defaultWidgetForModelField(field);
-  return widget ? { name: field.name, widget } : { name: field.name };
+  return { name: field.name, ...(widget ? { widget } : {}), ...(field.scalar ? { scalar: field.scalar } : {}) };
 }
 
 const ENUM_OPTION_WIDGETS = new Set([
@@ -344,6 +344,7 @@ export function fieldsWithMetadataDefaults(
       // A parent record's generated update cannot write another model's fields.
       ...(resolved && field.name.includes(".") ? { readOnly: true } : {}),
       ...(widget !== field.widget ? { widget } : {}),
+      ...(field.scalar === undefined && fieldMetadata?.scalar ? { scalar: fieldMetadata.scalar } : {}),
       label: fieldLabel(field.name, fieldMetadata, field.label),
       ...(field.currencyField === undefined && fieldMetadata?.currencyField
         ? { currencyField: fieldMetadata.currencyField }

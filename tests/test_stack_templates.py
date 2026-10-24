@@ -749,7 +749,7 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     stack = _render_local_stack()
 
     assert "vite" not in stack["services"]
-    assert set(stack["jobs"]) == {"provision", "operator-schema", "frontend-build"}
+    assert set(stack["jobs"]) == {"backup-database", "provision", "operator-schema", "frontend-build"}
     assert "frontend-build" not in stack["services"]
     assert "caddy" in stack["services"]
     assert stack["template"]["active"].endswith("/templates/stacks/local")
@@ -1089,12 +1089,29 @@ def test_dev_stack_declares_generated_graphql_type_dependencies() -> None:
     }
 
 
+def test_stack_backup_captures_only_the_declared_database() -> None:
+    """Capture is opt-in per database; physical cluster state stays excluded."""
+
+    for stack in (_render_dev_stack(), _render_dev_docker_stack(), _render_local_stack()):
+        capture = stack["jobs"]["backup-database"]
+        assert capture["capture"] == {
+            "group": "databases", "name": "angee", "output": "database.dump", "exclude_persist": ["pgdata"],
+        }
+        assert capture["env"]["PGDATABASE"] == stack["services"]["django"]["env"]["DATABASE_URL"]
+        command = capture["command"][-1]
+        assert 'pg_dump --dbname "$PGDATABASE" --format=custom --no-owner --no-acl' in command
+        assert "pg_restore --list" in command
+        assert "pg_dumpall" not in command
+        assert stack["persist"]["pgdata"]["backup"] == "exclude"
+        assert all("backup-database" not in service.get("after", []) for service in stack["services"].values())
+
+
 def test_dev_stack_has_explicit_lifecycle_job_graph() -> None:
     """Framework dependency, provision, schema, and codegen jobs declare their order."""
 
     stack = _render_dev_stack()
 
-    assert set(stack["jobs"]) == {"deps", "provision", "operator-schema", "codegen"}
+    assert set(stack["jobs"]) == {"backup-database", "deps", "provision", "operator-schema", "codegen"}
     assert stack["jobs"]["provision"]["command"] == [
         "sh",
         "-c",
@@ -1497,7 +1514,7 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert stack["sources"]["framework"]["path"] == "workspaces/src/angee"
     assert stack["workspaces"]["src"] == {"template": "workspaces/src"}
 
-    assert set(stack["jobs"]) == {"deps", "provision", "operator-schema", "codegen"}
+    assert set(stack["jobs"]) == {"backup-database", "deps", "provision", "operator-schema", "codegen"}
     operator_svc = stack["services"]["operator"]
     assert operator_svc["runtime"] == "container"
     assert operator_svc["image"] == "ghcr.io/ang-ee/angee-operator:latest"

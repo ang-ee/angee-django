@@ -16,6 +16,7 @@ from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
+from strawberry_django_aggregates import BigInt
 
 from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
 from angee.graphql.capabilities import permissions_field
@@ -120,7 +121,7 @@ class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     filename: auto
     title: auto
     content_hash: auto
-    size_bytes: auto
+    size_bytes: BigInt
     metadata: JSON
     upload_state: auto
     visibility: auto
@@ -231,7 +232,7 @@ class FileUploadBeginInput:
 
     filename: str
     mime_type: str = strawberry.field(name="mime_type", default="")
-    size_bytes: int = strawberry.field(name="size_bytes", default=0)
+    size_bytes: BigInt = strawberry.field(name="size_bytes", default=BigInt(0))
     drive: PublicID | None = None
     drive_slug: str = strawberry.field(name="drive_slug", default="")
     folder: PublicID | None = None
@@ -264,7 +265,7 @@ class FileUploadFinalizeInput:
 
     file: PublicID
     content_hash: str = strawberry.field(name="content_hash")
-    size_bytes: int = strawberry.field(name="size_bytes")
+    size_bytes: BigInt = strawberry.field(name="size_bytes")
 
 
 @strawberry.type

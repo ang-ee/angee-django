@@ -388,12 +388,26 @@ def test_operator_cannot_retry_a_routed_failure(execution, register_step):
         StepRun.objects.retry_step(failed, actor=actor)
 
 
-def test_operator_wait_can_retry_even_when_the_node_declares_an_error_edge(execution, settings):
-    """Infrastructure waits never took the error edge and remain retryable in place."""
+@pytest.mark.parametrize("manual_retry", [True, False])
+def test_operator_wait_can_retry_even_when_the_node_declares_an_error_edge(
+    execution, settings, register_step, manual_retry,
+):
+    """Delivery waits retain native recovery independently of execution-retry policy."""
     actor, _ = execution
     settings.ANGEE_WORKFLOW_MAX_DISPATCHES = 1
+    calls = []
+
+    class DeliveryEcho(Echo):
+        key = "delivery_echo"
+        retry = RetryPolicy(manual=manual_retry)
+
+        def run(self, ctx):
+            calls.append(str(ctx.run.sqid))
+            return ctx.done(ctx.input)
+
+    register_step(DeliveryEcho)
     workflow = load_workflow({"nodes": {
-        "entry": {"step": "echo", "next": {"error": "recover"}},
+        "entry": {"step": DeliveryEcho.key, "next": {"error": "recover"}},
         "recover": {"step": "echo", "input": {"value": {"value": 1}}},
     }}, key="unrouted_operator_wait", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
@@ -401,12 +415,18 @@ def test_operator_wait_can_retry_even_when_the_node_declares_an_error_edge(execu
     with system_context(reason="test operator wait after lost delivery"):
         StepRun.objects.filter(pk=row.pk).update(dispatched_at=Now() - timedelta(seconds=61))
     assert runner.redispatch() == 1
-    assert step_row(run).waiting_kind == "error"
+    waiting = step_row(run)
+    assert waiting.waiting_kind == "error"
+    assert waiting.can_retry(actor)
+    assert not StepAttempt.system_queryset().filter(step_run=waiting).exists()
+    with pytest.raises(ValidationError, match="Only terminal"):
+        WorkflowRun.objects.reprocess(run, actor=actor)
 
     ready = StepRun.objects.retry_step(row, actor=actor)
 
-    assert ready.status == StepRunStatus.READY and ready.wait_reason == ""
+    assert ready.status == StepRunStatus.READY and ready.wait_reason == "" and ready.dispatches == 0
     assert runner.execute(row.pk)
+    assert calls == [str(run.sqid)]
     assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
     assert not StepAttempt.system_queryset().filter(step_run__run=run, step_run__node_key="recover").exists()
 
@@ -784,3 +804,38 @@ def test_late_io_result_data_error_stays_on_its_attempt(execution, register_step
     assert observed["status"] == RunStatus.FAILED
     assert WorkflowRun.system_queryset().filter(pk=run.pk).values(*observed).get() == observed
     assert not StepRun.system_queryset().filter(run=run, node_key="join").exists()
+
+
+def test_manual_retry_policy_preserves_failure_and_automatic_retry_bound(execution, register_step):
+    """Declining in-place recovery does not turn a real failure into success."""
+    actor, _ = execution
+    calls = []
+
+    class NewExecutionOnly(Echo):
+        key = "new_execution_only"
+        mode = StepMode.IO
+        effect_idempotent = True
+        retry = RetryPolicy(max_attempts=2, backoff=timedelta(), manual=False)
+
+        def run(self, ctx):
+            calls.append(str(ctx.run.sqid))
+            raise Retryable("A new execution is required after retries are exhausted.")
+
+    register_step(NewExecutionOnly)
+    workflow = load_workflow({"nodes": {"entry": {"step": NewExecutionOnly.key}}}, actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    run_until(run)
+    first = step_row(run)
+    assert first.status == "waiting"
+    assert runner.wake() == 1
+    run_until(run)
+    failed = step_row(run)
+    assert run.status == RunStatus.FAILED
+    assert failed.status == StepRunStatus.FAILED
+    assert len(calls) == 2 and calls[0] == calls[1]
+    assert run.version.definition.unrouted_failure([failed])
+    assert not failed.can_retry(actor)
+    with pytest.raises(ValidationError, match="Reprocess"):
+        StepRun.objects.retry_step(failed, actor=actor)
+    replacement = WorkflowRun.objects.reprocess(run, actor=actor)
+    assert replacement.pk != run.pk and replacement.reprocess_of_id == run.pk

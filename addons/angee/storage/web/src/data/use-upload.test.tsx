@@ -93,7 +93,7 @@ describe("useStorageUpload", () => {
       input: {
         filename: "note.txt",
         mime_type: "text/plain",
-        size_bytes: 5,
+        size_bytes: "5",
         drive: null,
         drive_slug: "",
         folder: null,
@@ -111,7 +111,7 @@ describe("useStorageUpload", () => {
       input: {
         file: "fil_draft",
         content_hash: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
-        size_bytes: 5,
+        size_bytes: "5",
       },
     });
     expect(onUploaded).toHaveBeenCalledWith([

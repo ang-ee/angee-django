@@ -689,6 +689,8 @@ class StepRun(AngeeDataModel):
             or self.status == StepRunStatus.FAILED and not definition.retry_allowed(self.node_key)
         ):
             return "This step cannot be retried in place."
+        if self.status == StepRunStatus.FAILED and not self.step.retry.manual:
+            return "Reprocess the workflow to start a new execution; this step cannot be retried in place."
         others = sorted(row.node_key for row in run.step_runs.all()
                         if row.pk != self.pk and definition.unrouted_failure([row]))
         return f"Other unrouted failures remain: {', '.join(others)}." if others else None

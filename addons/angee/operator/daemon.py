@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
+import httpx2
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
@@ -60,7 +61,10 @@ class OperatorDaemonError(RuntimeError):
 
     ``kind`` and ``name`` are the instance the daemon classified the failure as
     being about (its ``ErrorResponse`` fields); ``kind`` is ``None`` and ``name``
-    blank when the daemon named no workspace or service.
+    blank when the daemon named no workspace or service. ``code`` and ``cause``
+    retain the operator's native machine-readable refusal classification.
+    ``delivery_uncertain`` preserves a transport failure whose request may have
+    reached the operator. The caller owns whether its operation is safe to retry.
     """
 
     def __init__(
@@ -70,11 +74,17 @@ class OperatorDaemonError(RuntimeError):
         status_code: int | None = None,
         kind: OperatorInstanceKind | None = None,
         name: str = "",
+        code: str = "",
+        cause: str = "",
+        delivery_uncertain: bool = False,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.kind = kind
         self.name = name
+        self.code = code
+        self.cause = cause
+        self.delivery_uncertain = delivery_uncertain
 
     @staticmethod
     def from_response(method: str, url: str, status_code: int, body: bytes) -> OperatorDaemonError:
@@ -101,6 +111,8 @@ class OperatorDaemonError(RuntimeError):
             status_code=status_code,
             kind=OperatorInstanceKind.decode(fields.get("kind")),
             name=str(fields.get("name") or ""),
+            code=str(fields.get("code") or ""),
+            cause=str(fields.get("cause") or ""),
         )
 
     def names(self, kind: OperatorInstanceKind, name: str) -> bool:
@@ -387,6 +399,32 @@ class OperatorDaemon:
         payload = {"actor": actor, "service": service, "ttl": ttl}
         return cast(dict[str, Any], self._request("POST", f"{self._base()}/tokens/route", payload))
 
+    def stack_root(self) -> str:
+        """Read the authenticated daemon's owning filesystem root, server-side only."""
+        data = self._request("GET", f"{self._base()}/stack/status")
+        root = (data or {}).get("root")
+        if not isinstance(root, str) or not root:
+            raise OperatorDaemonError("The operator did not identify its stack root.")
+        return root
+
+    def backup_preview(self, *, selection: dict[str, Any]) -> dict[str, Any]:
+        """Discover stack-owned capture resources without executing a backup."""
+        return cast(dict[str, Any], self._request(
+            "POST", f"{self._base()}/backups/preview", {"version": 1, "selection": selection},
+        ))
+
+    def start_backup(self, *, request_id: str, selection: dict[str, Any]) -> dict[str, Any]:
+        """Idempotently submit one native backup operation by its stable run ID."""
+        return cast(dict[str, Any], self._request(
+            "POST", f"{self._base()}/backups", {"version": 1, "request_id": request_id, "selection": selection},
+        ))
+
+    def job_run(self, operation_id: str) -> dict[str, Any]:
+        """Read an operator-owned job operation, including its terminal artifact."""
+        return cast(dict[str, Any], self._request(
+            "GET", f"{self._base()}/job-runs/{quote(operation_id, safe='')}",
+        ))
+
     # --- Workspace file tools (the AddonInstaller's operator transport) ---------
     # The operator owns the deployment's files + rebuild lifecycle. These read/edit
     # one file under a stack source (e.g. ``app/settings.yaml``) over its file API
@@ -461,7 +499,12 @@ class OperatorDaemon:
                 timeout=timeout,
             )
         except RequestNotSentError as error:
-            raise OperatorDaemonError(error.public_message) from error
+            raise OperatorDaemonError(error.public_message, delivery_uncertain=False) from error
+        except httpx2.TransportError as error:
+            raise OperatorDaemonError(
+                "The operator connection failed after the request may have been sent; its outcome is uncertain.",
+                delivery_uncertain=True,
+            ) from error
         if not response.is_success:
             raise OperatorDaemonError.from_response(method, url, response.status_code, response.content)
         return response.json() if response.content else None

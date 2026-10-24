@@ -15,6 +15,12 @@ import type {
 import { schemaFieldMetadataFromDataResources } from "./artifact";
 
 describe("field metadata helpers", () => {
+  test("treats native BigInt as an exact numeric field", () => {
+    const field = resourceField({ name: "size_bytes", kind: "scalar", scalar: "BigInt" });
+    expect(defaultWidgetForModelField(field)).toBe("integer");
+    expect(filterFieldType("size_bytes", field)).toBe("number");
+  });
+
   test("treats Decimal as a number field with the numeric widget", () => {
     const field = resourceField({
       name: "amount",

@@ -1,0 +1,9 @@
+[addon]
+name = "angee.operator_backup"
+description = "Manual stack backups with durable workflow execution and storage evidence"
+keywords = ["operator", "backup", "storage"]
+category = "Platform"
+depends_on = ["angee.operator", "angee.workflows", "angee.storage_integrate", "angee.provenance"]
+
+[resources]
+install = ["resources/install/100_workflows.workflow.yaml"]

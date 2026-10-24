@@ -2,7 +2,7 @@ import * as React from "react";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  DropdownMenu, RecordActionBar, parseFormSpec, useActionOutcomeMutation, useActionResultRun,
+  DropdownMenu, RecordActionBar, createClientKey, parseFormSpec, useActionOutcomeMutation, useActionResultRun,
   useAppRuntime, useRecordChromeContext, type ActionDescriptor,
 } from "@angee/ui";
 import { modelChain } from "@angee/ui/runtime";
@@ -38,7 +38,7 @@ export function RunWorkflowRecordActions(): React.ReactElement | null {
       const submit = async (values: Record<string, unknown>) => {
         const outcome = await start(workflow.id, {
           subject: { model: chrome.resource, id: chrome.recordId }, input: values,
-          request_key: requestKey ??= crypto.randomUUID(),
+          request_key: requestKey ??= createClientKey(),
         });
         if (outcome?.ok) requestKey = undefined;
         // The dialog's schema fields live inside the mutation's JSON input envelope.

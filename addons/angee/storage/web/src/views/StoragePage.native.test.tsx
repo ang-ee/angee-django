@@ -37,7 +37,7 @@ const scope = { filter: { drive: { exact: "drive-a" }, is_trashed: { exact: fals
 const drive = { id: "drive-a", slug: "assets", name: "Assets" };
 function file(id: string, title: string) {
   return { id, title, filename: `${title}.bin`, url: "", drive: drive.id, folder: null,
-    is_trashed: false, upload_state: "ready", visibility: "inherited", size_bytes: 1, mime_type: null,
+    is_trashed: false, upload_state: "ready", visibility: "inherited", size_bytes: "1", mime_type: null,
     created_by_label: "", created_at: "2026-09-04T00:00:00Z", updated_at: "2026-09-05T00:00:00Z" };
 }
 function deferred<T>() {
@@ -171,7 +171,7 @@ test("All files starts with server folder grouping and a clean URL; changing the
   Element.prototype.getAnimations ??= () => [];
   const fields = { id: { scalar: "ID" }, title: { scalar: "String" }, filename: { scalar: "String" },
     created_by_label: { scalar: "String" }, upload_state: { scalar: "String" }, visibility: { scalar: "String" },
-    updated_at: { scalar: "DateTime" }, size_bytes: { scalar: "Int" }, is_trashed: { scalar: "Boolean" },
+    updated_at: { scalar: "DateTime" }, size_bytes: { scalar: "BigInt" }, is_trashed: { scalar: "Boolean" },
     drive: { scalar: "ID" }, folder: { scalar: "ID" }, "mime_type.label": { scalar: "String" },
   };
   const query = ResourceQuery.forRows({ fields }).contract;

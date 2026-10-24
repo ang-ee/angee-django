@@ -141,10 +141,12 @@ export function languageForFile(file: PreviewFile): string {
  * @kind null
  * @reason Format utility: converts data to display or storage text.
  */
-export function formatSize(bytes: number | null | undefined): string {
-  if (bytes == null || !Number.isFinite(bytes)) return "—";
+export function formatSize(bytes: number | string | null | undefined): string {
+  // Exact wire integers become approximate numbers only for human display.
+  const numeric = typeof bytes === "string" && bytes.trim() !== "" ? Number(bytes) : bytes;
+  if (typeof numeric !== "number" || !Number.isFinite(numeric)) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
+  let value = numeric;
   let unit = 0;
   while (value >= 1024 && unit < units.length - 1) {
     value /= 1024;

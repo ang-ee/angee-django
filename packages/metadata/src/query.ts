@@ -303,7 +303,7 @@ export class ResourceQuery {
   /** Client-owned text uses natural ordering; Decimal strings retain wire precision. */
   comparator(field: string): ((leftRow: unknown, rightRow: unknown) => number) | undefined {
     const scalar = this.fields[field]?.scalar;
-    if (scalar !== "Decimal" && scalar !== "String") return undefined;
+    if (scalar !== "Decimal" && scalar !== "BigInt" && scalar !== "String") return undefined;
     return (leftRow, rightRow) => {
       const left = this.value(field, leftRow), right = this.value(field, rightRow);
       if (left == null || right == null) return left === right ? 0 : left == null ? 1 : -1;
@@ -396,6 +396,10 @@ export class ResourceQuery {
       if (typeof value !== "number" || !Number.isFinite(value) || (scalar === "Int" && !Number.isInteger(value))) return fail(path, `expected ${scalar === "Int" ? "an integer" : "a finite number"}`);
       if (scalar === "Int" && (value < -(2 ** 31) || value > 2 ** 31 - 1)) return fail(path, "expected a signed 32-bit integer");
       return value;
+    }
+    if (scalar === "BigInt") {
+      if ((typeof value === "string" && value.trim() === "") || (typeof value !== "string" && !(typeof value === "number" && Number.isSafeInteger(value)))) return fail(path, "expected an exact integer");
+      try { return BigInt(value).toString(); } catch { return fail(path, "expected an exact integer"); }
     }
     if (scalar === "Decimal") {
       if ((typeof value === "number" && Number.isFinite(value)) || (typeof value === "string" && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value))) return String(value);
@@ -662,7 +666,7 @@ function matchesComparison(value: unknown, operator: FilterOperator, operand: Fi
     if (value == null) return value === right;
     if (scalar === "JSON") return JSON.stringify(jsonValue(value, path)) === JSON.stringify(jsonValue(right, path));
     if (scalar === "Date" || scalar === "DateTime") return temporalValue(value, scalar) === temporalValue(right, scalar);
-    if (scalar === "Decimal") return compareDecimal(value, right, path) === 0;
+    if (scalar === "Decimal" || scalar === "BigInt") return compareDecimal(value, right, path) === 0;
     return value === right;
   };
   if (operator === "isNull") return (value == null) === operand;
@@ -751,7 +755,7 @@ function validCalendarDate(value: string, scalar: string): boolean {
   return year >= 1 && month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1]! && !Number.isNaN(new Date(normalizeDate(value)).getTime());
 }
 function compareValues(left: unknown, right: unknown, scalar: string, path: string): number {
-  if (scalar === "Decimal") return compareDecimal(left, right, path);
+  if (scalar === "Decimal" || scalar === "BigInt") return compareDecimal(left, right, path);
   const comparable = (value: unknown): string | number => scalar === "Date" || scalar === "DateTime" ? temporalValue(value, scalar) : typeof value === "number" ? value : String(value);
   const a = comparable(left), b = comparable(right);
   return a < b ? -1 : a > b ? 1 : 0;

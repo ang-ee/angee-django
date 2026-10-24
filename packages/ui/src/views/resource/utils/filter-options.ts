@@ -92,6 +92,7 @@ export function buildFilterFields<TRow extends Row>(
       field: fieldName,
       label: fieldLabel(fieldName, metadata, column?.header),
       type: filterType,
+      scalar: capability.scalar,
       operators,
     });
   };
