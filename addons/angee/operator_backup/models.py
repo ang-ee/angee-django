@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, cast
 
 from django.apps import apps
@@ -19,7 +20,7 @@ from angee.models import (
     HistoryMixin,
     OwnerMixin,
 )
-from angee.operator.daemon import OperatorDaemon
+from angee.operator.daemon import OperatorDaemon, OperatorDaemonError
 from angee.operator_backup.archives import archive_mount, validate_archive_destination
 from angee.operator_backup.contracts import (
     BackupSelection,
@@ -30,6 +31,8 @@ from angee.operator_backup.contracts import (
 )
 from angee.workflows.states import RunStatus
 from angee.workflows.subjects import RunSubject
+
+logger = logging.getLogger(__name__)
 
 WORKFLOW_KEY = "operator_backup_capture"
 
@@ -73,8 +76,17 @@ class BackupPlan(RunSubject, OwnerMixin, HistoryMixin, AngeeDataModel):
         snapshot = self.snapshot(selection=selection)
         mount = archive_mount()
         daemon = OperatorDaemon.from_settings()
-        validate_archive_destination(mount, stack_root=daemon.stack_root())
-        return {**daemon.backup_preview(selection=snapshot["selection"]), "selection": snapshot["selection"]}
+        try:
+            validate_archive_destination(mount, stack_root=daemon.stack_root())
+            discovered = daemon.backup_preview(selection=snapshot["selection"])
+        except OperatorDaemonError as error:
+            logger.warning("Operator backup discovery did not complete (HTTP %s).", error.status_code)
+            raise ValidationError(
+                "Backup discovery could not finish communicating with the operator. Try discovery again. "
+                "If it keeps failing, ask an administrator to check operator availability, access, and "
+                "discovery diagnostics. No backup has started."
+            ) from None
+        return {**discovered, "selection": snapshot["selection"]}
 
     def start(
         self, actor: Any, *, request_key: str, expected_selection: object | None = None,
