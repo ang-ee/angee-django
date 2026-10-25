@@ -4,12 +4,12 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, ToastProvider, useActionForm, type RecordToolbarContext } from "@angee/ui";
 import { BackupWizard } from "./BackupWizard";
 import { defaultBackupSelection, type BackupSelection } from "./selection";
-const mocks = vi.hoisted(() => ({ queries: vi.fn(), save: vi.fn(), run: vi.fn(), pending: false, stale: false }));
+const mocks = vi.hoisted(() => ({ queries: vi.fn(), save: vi.fn(), run: vi.fn(), pending: false, stale: false, error: null as Error | null, refetch: vi.fn() }));
 vi.mock("@angee/refine", async (original) => ({ ...await original<typeof import("@angee/refine")>(),
   useAuthoredQuery: (_doc: unknown, variables: { id: string | null; selection: BackupSelection }, options: { enabled: boolean }) => {
     mocks.queries(variables, options.enabled);
     return { data: options.enabled ? { preview_backup_plan: { version: 1, discovered_at: "2026-10-24T12:00:00Z", selection: mocks.stale ? { ...variables.selection, storage: { mode: "all", names: [], exclude: [] } } : variables.selection,
-      estimated_bytes: "1", has_unknown_sizes: false, resources: [{ group: "DATABASES", name: "primary", status: "INCLUDED", reason: "", estimated_bytes: "1" }] } } : undefined, isFetching: mocks.pending, error: null };
+      estimated_bytes: "1", has_unknown_sizes: false, resources: [{ group: "DATABASES", name: "primary", status: "INCLUDED", reason: "", estimated_bytes: "1" }] } } : undefined, isFetching: mocks.pending, error: mocks.error, refetch: mocks.refetch };
   },
 }));
 let parentDraft: () => BackupSelection;
@@ -28,7 +28,7 @@ async function open() {
   fireEvent.click(screen.getByRole("button", { name: "Discover & estimate" }));
   return screen.findByRole("dialog");
 }
-beforeEach(() => { mocks.pending = false; mocks.stale = false; mocks.save.mockResolvedValue({ id: "bpl_saved" }); mocks.run.mockResolvedValue(true); });
+beforeEach(() => { mocks.pending = false; mocks.stale = false; mocks.error = null; mocks.save.mockResolvedValue({ id: "bpl_saved" }); mocks.run.mockResolvedValue(true); });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 test("opening discovers an unsaved current draft and Save plan never starts a capture", async () => {
   mount({ create: true });
@@ -89,5 +89,14 @@ test("an earlier selection snapshot cannot be accepted even through form submiss
   expect(save.hasAttribute("disabled")).toBe(true);
   fireEvent.submit(save.closest("form")!);
   await waitFor(() => expect(within(dialog).getAllByText("Updating discovery for the current selection…").length).toBeGreaterThan(0));
+  expect(mocks.save).not.toHaveBeenCalled(); expect(mocks.run).not.toHaveBeenCalled();
+});
+
+test("failed discovery cannot accept a cached preview and retry only rediscovers", async () => {
+  mocks.error = new Error("Discovery could not reach the operator.");
+  mount(); const dialog = await open();
+  for (const name of ["Save plan", "Save & back up"]) expect(within(dialog).getByRole("button", { name }).hasAttribute("disabled")).toBe(true);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Retry discovery" }));
+  expect(mocks.refetch).toHaveBeenCalledOnce();
   expect(mocks.save).not.toHaveBeenCalled(); expect(mocks.run).not.toHaveBeenCalled();
 });

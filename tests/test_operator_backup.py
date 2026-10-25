@@ -725,3 +725,75 @@ def test_capture_hides_private_archive_metadata_failure_after_operator_receipt(
     assert len(env.calls) == 1  # The operator accepted capture before local metadata became unavailable.
     assert not Backup.system_queryset().exists()
     assert not File.system_queryset().filter(drive=env.mount.drive).exists()
+
+
+@pytest.mark.parametrize("failure", ["timeout", "connection", "refused"])
+def test_discovery_transport_errors_project_safe_read_only_guidance(
+    backup_env, monkeypatch, settings, caplog, failure,
+):
+    from angee.integrate.http import HttpClient
+    from angee.operator_backup import schema as backup_schema
+    from tests.conftest import addon_schema, execute_schema
+
+    env = backup_env
+    settings.ANGEE_OPERATOR_URL = "http://operator"
+    settings.ANGEE_OPERATOR_TOKEN = "server-secret"
+    runner = create_user(f"discovery-transport-{failure}")
+    env.plan.with_actor(env.actor).grant_record_access("runner", runner)
+    requests = []
+
+    def fail_request(self, method, url, **kwargs):
+        requests.append((method, url))
+        private_detail = f"private source {env.root} token=server-secret"
+        if failure == "refused":
+            return httpx2.Response(403, json={"error": private_detail})
+        error = httpx2.ReadTimeout if failure == "timeout" else httpx2.ConnectError
+        raise error(private_detail)
+
+    monkeypatch.setattr(HttpClient, "request", fail_request)
+    result = execute_schema(addon_schema(backup_schema.schemas, "console"), """query($id: ID!) {
+        preview_backup_plan(id: $id) { selection }
+    }""", {"id": str(env.plan.sqid)}, user=runner)
+    assert result.errors
+    error = result.errors[0]
+    assert error.extensions["code"] == "VALIDATION"
+    assert "Try discovery again" in error.message
+    assert "No backup has started" in error.message
+    public = str([item.formatted for item in result.errors])
+    assert "uncertain" not in public.lower()
+    assert str(env.root) not in public and "server-secret" not in public
+    assert str(env.root) not in caplog.text and "server-secret" not in caplog.text
+    assert error.original_error.__cause__ is None and error.original_error.__suppress_context__ is True
+    assert len(requests) == 1 and requests[0][1].endswith("/backups/preview")
+    assert not WorkflowRun.system_queryset().exists()
+    assert not env.calls
+
+
+def test_discovery_transport_projection_preserves_permission_and_selection_refusals(backup_env, monkeypatch):
+    from angee.operator_backup import schema as backup_schema
+    from tests.conftest import addon_schema, execute_schema
+
+    env = backup_env
+    requests = []
+
+    def fail_status(self):
+        requests.append("status")
+        raise OperatorDaemonError("private operator root", delivery_uncertain=True)
+
+    monkeypatch.setattr(OperatorDaemon, "stack_root", fail_status)
+    schema = addon_schema(backup_schema.schemas, "console")
+    query = """query($id: ID!, $selection: JSON) {
+        preview_backup_plan(id: $id, selection: $selection) { selection }
+    }"""
+    outsider = create_user("discovery-no-permission")
+    denied = execute_schema(schema, query, {"id": str(env.plan.sqid)}, user=outsider)
+    assert denied.errors[0].extensions["code"] == "PERMISSION_DENIED"
+    invalid = execute_schema(schema, query, {"id": str(env.plan.sqid), "selection": {"version": 2}}, user=env.actor)
+    assert invalid.errors[0].extensions["code"] == "VALIDATION"
+    assert "Invalid backup selection" in invalid.errors[0].message
+    assert not requests
+    unavailable = execute_schema(schema, query, {"id": str(env.plan.sqid)}, user=env.actor)
+    assert "Try discovery again" in unavailable.errors[0].message
+    assert "private operator root" not in str([error.formatted for error in unavailable.errors])
+    assert requests == ["status"]
+    assert not env.calls

@@ -70,6 +70,6 @@ export function BackupWizard({ context, capture }: { context: RecordToolbarConte
     <p className="text-13 text-fg-muted">{t("captureContents")}</p>
     <ErrorBanner description={wizard.formError} />
     <BackupDiscoveryView preview={query.data?.preview_backup_plan} pending={query.isFetching} error={query.error}
-      selection={selection} readOnly={!writable || pending} onChange={(next) => wizard.form.setValue("selection", next)} />
+      selection={selection} readOnly={!writable || pending} onRetry={() => void query.refetch()} onChange={(next) => wizard.form.setValue("selection", next)} />
   </DialogForm>;
 }

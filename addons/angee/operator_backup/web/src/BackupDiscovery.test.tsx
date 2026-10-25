@@ -17,7 +17,7 @@ const preview: BackupPreview = {
 function mount(props: Partial<Parameters<typeof BackupDiscoveryView>[0]> = {}) {
   const onChange = vi.fn();
   const element = <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ToastProvider>
-    <BackupDiscoveryView preview={preview} selection={defaultBackupSelection()} pending={false} onChange={onChange} {...props} />
+    <BackupDiscoveryView preview={preview} selection={defaultBackupSelection()} pending={false} onChange={onChange} onRetry={vi.fn()} {...props} />
   </ToastProvider></AppRuntimeProvider>;
   return { ...render(element), onChange };
 }
@@ -30,6 +30,7 @@ test("shows unknown source sizes and unavailable reasons without inventing archi
   expect(screen.getByText("Included")).toBeTruthy();
   expect(screen.getByText("Unsupported")).toBeTruthy();
   expect(screen.getByText("Unknown")).toBeTruthy();
+  expect(screen.getByText("Known source bytes")).toBeTruthy();
   expect(screen.getByText(/Some source sizes are unknown/)).toBeTruthy();
   expect(screen.getByText(/ZIP compression and final archive size are not estimated/)).toBeTruthy();
 });
@@ -58,4 +59,13 @@ test("changed selections mark the old snapshot stale", () => {
   selection.storage.mode = "none";
   mount({ selection });
   expect(screen.getByRole("status").textContent).toMatch(/Updating discovery/);
+});
+
+test.each([undefined, { ...preview, resources: [] }])("failed discovery offers retry without the contradictory empty-state instruction", (cachedPreview) => {
+  const onRetry = vi.fn();
+  mount({ preview: cachedPreview, error: new Error("Discovery could not reach the operator."), onRetry });
+  expect(screen.getByRole("alert").textContent).toContain("Discovery could not reach the operator.");
+  expect(screen.queryByText("Discover the stack to review included, excluded, unsupported, and unavailable resources.")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Retry discovery" }));
+  expect(onRetry).toHaveBeenCalledOnce();
 });
