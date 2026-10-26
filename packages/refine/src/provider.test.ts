@@ -147,6 +147,23 @@ describe("Angee Hasura provider defaults", () => {
     });
   });
 
+  test.each([undefined, [], ["id"]])("keeps native cancellation lazy when normalizing projection %j", async (fields) => {
+    const readSignal = vi.fn(() => new AbortController().signal);
+    const meta = { fields, get signal() { return readSignal(); } };
+    const provider = createAngeeHasuraDataProvider({
+      url: "https://example.invalid/graphql", auth: (request) => request,
+      fetch: async () => jsonResponse({
+        channels: [{ id: "chn_1" }], channels_by_pk: { id: "chn_1" },
+        channels_aggregate: { aggregate: { count: 1 } },
+      }),
+    });
+    await provider.getList({ resource: "channels", meta });
+    await provider.getOne({ resource: "channels", id: "chn_1", meta });
+    await provider.getMany({ resource: "channels", ids: ["chn_1"], meta });
+    expect(readSignal).not.toHaveBeenCalled();
+    expect(meta.fields).toBe(fields);
+  });
+
   test("preserves explicit projections and authored list documents", async () => {
     const queries: string[] = [];
     const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
