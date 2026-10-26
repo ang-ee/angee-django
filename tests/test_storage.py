@@ -2,25 +2,30 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import importlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
+from threading import Event, get_ident
 from typing import Any
 from unittest.mock import patch
 
 import pytest
+from asgiref.sync import ThreadSensitiveContext, async_to_sync, sync_to_async
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import SuspiciousFileOperation, ValidationError
+from django.core.handlers.asgi import ASGIHandler
 from django.core.management import call_command
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
-from django.test import Client, RequestFactory
+from django.http import FileResponse
+from django.test import AsyncClient, AsyncRequestFactory, Client, RequestFactory
 from rebac import (
     RebacMixin,
     RelationshipTuple,
@@ -1246,11 +1251,146 @@ def test_proxy_download_sets_content_cache_headers_and_honors_etag(
     assert "immutable" not in failed_precondition.get("Cache-Control", "")
 
 
+@pytest.mark.parametrize("ending", ["complete", "disconnect", "error", "unstarted"])
+def test_proxy_download_streams_bounded_asgi_chunks_and_closes(
+    monkeypatch: pytest.MonkeyPatch, ending: str,
+) -> None:
+    """The native ASGI handler sends the first chunk before reading the rest."""
+
+    from angee.storage import views
+
+    payload = b"x" * (ASGIHandler.chunk_size * 3 + 7)
+    read_threads: list[int] = []
+    read_sizes: list[int] = []
+
+    class Stream(BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            read_threads.append(get_ident())
+            read_sizes.append(size)
+            if ending == "error" and len(read_sizes) == 2:
+                raise OSError("storage read failed")
+            return super().read(size)
+
+    stream = Stream(payload)
+    row = File(filename="archive.zip", content_hash="a" * 64, mime_type=None)
+    monkeypatch.setattr(FileManager, "for_download_token", lambda self, token: row)
+    monkeypatch.setattr(File, "open_stream", lambda self: stream)
+    request = AsyncRequestFactory().get("/storage/download/archive.zip?token=valid")
+    response = views.download(request, row.filename)
+    assert isinstance(response, FileResponse)
+    assert response.is_async
+    assert response["Content-Length"] == str(len(payload))
+    assert response["Content-Disposition"] == 'attachment; filename="archive.zip"'
+    assert response["Content-Type"] == "application/octet-stream"
+    assert response["ETag"] == '"' + "a" * 64 + '"'
+    assert not read_sizes
+    if ending == "unstarted":
+        response.close()
+        assert stream.closed
+        return
+
+    async def serve() -> None:
+        handler = ASGIHandler()
+        disconnected = asyncio.Event()
+        received_request = False
+        sent: list[bytes] = []
+        loop_thread = get_ident()
+
+        async def get_response(request: Any) -> FileResponse:
+            return response
+
+        async def receive() -> dict[str, Any]:
+            nonlocal received_request
+            if not received_request:
+                received_request = True
+                return {"type": "http.request", "body": b""}
+            await disconnected.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict[str, Any]) -> None:
+            if message["type"] != "http.response.body":
+                return
+            if not sent:
+                assert stream.tell() == ASGIHandler.chunk_size
+                assert read_sizes == [ASGIHandler.chunk_size]
+                assert read_threads[0] != loop_thread
+            sent.append(message.get("body", b""))
+            if ending == "disconnect":
+                disconnected.set()
+                await asyncio.Event().wait()
+
+        monkeypatch.setattr(handler, "get_response_async", get_response)
+        if ending == "error":
+            with pytest.raises(OSError, match="storage read failed"):
+                await handler(request.scope, receive, send)
+        else:
+            await handler(request.scope, receive, send)
+        if ending == "complete":
+            assert b"".join(sent) == payload
+        else:
+            assert sent == [payload[:ASGIHandler.chunk_size]]
+        assert stream.closed
+        assert all(size == ASGIHandler.chunk_size for size in read_sizes)
+        assert all(thread != loop_thread for thread in read_threads)
+
+    async_to_sync(serve)()
+
+
+def test_proxy_download_cancellation_waits_for_inflight_read_before_closing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canceling an awaited read queues cleanup behind that same worker's IO."""
+
+    from angee.storage import views
+
+    started, release = Event(), Event()
+    events: list[str] = []
+
+    class Stream(BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            events.append("read")
+            started.set()
+            assert release.wait(timeout=5)
+            events.append("read finished")
+            return super().read(size)
+
+        def close(self) -> None:
+            events.append("close")
+            super().close()
+
+    stream = Stream(b"archive bytes")
+    row = File(filename="archive.zip", content_hash="a" * 64, mime_type=None)
+    monkeypatch.setattr(FileManager, "for_download_token", lambda self, token: row)
+    monkeypatch.setattr(File, "open_stream", lambda self: stream)
+    request = AsyncRequestFactory().get("/storage/download/archive.zip?token=valid")
+    response = views.download(request, row.filename)
+
+    async def consume() -> None:
+        async with ThreadSensitiveContext():
+            iterator = aiter(response)
+            task = asyncio.create_task(anext(iterator))
+            try:
+                assert await asyncio.to_thread(started.wait, 5)
+                task.cancel()
+                await asyncio.sleep(0)
+                assert not stream.closed
+            finally:
+                release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert stream.closed
+            assert events == ["read", "read finished", "close"]
+            await sync_to_async(response.close)()
+
+    async_to_sync(consume)()
+
+
 SANDBOXED = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
 VIEWER = "default-src 'none'; media-src 'self'; style-src 'unsafe-inline'"
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("asgi", [False, True])
 @pytest.mark.parametrize(
     ("payload", "mime", "disposition", "policy"),
     [
@@ -1262,7 +1402,7 @@ VIEWER = "default-src 'none'; media-src 'self'; style-src 'unsafe-inline'"
     ],
 )
 def test_a_download_renders_images_and_viewer_types_in_place_and_nothing_script_capable(
-    drive: Any, settings: Any, payload: bytes, mime: str, disposition: str, policy: str
+    drive: Any, settings: Any, payload: bytes, mime: str, disposition: str, policy: str, asgi: bool,
 ) -> None:
     """Through the composed middleware every download is nosniff under a policy that runs nothing.
 
@@ -1278,13 +1418,16 @@ def test_a_download_renders_images_and_viewer_types_in_place_and_nothing_script_
     assert row.mime_type.mime_type == mime
     with actor_context(drive.alice):
         url = row.download_url()
-    response = Client().get(url)
+    get = async_to_sync(AsyncClient().get) if asgi else Client().get
+    response = get(url)
     assert response.status_code == 200
+    assert response.is_async is asgi
+    assert response["Content-Length"] == str(len(payload))
     assert response["Content-Disposition"].split(";", 1)[0] == disposition
     assert response["X-Content-Type-Options"] == "nosniff"
     assert response["Content-Security-Policy"] == policy
     response.close()
-    revalidated = Client().get(url, HTTP_IF_NONE_MATCH=response["ETag"])
+    revalidated = get(url, headers={"If-None-Match": response["ETag"]})
     assert revalidated.status_code == 304
     assert revalidated["Content-Security-Policy"] == policy
 

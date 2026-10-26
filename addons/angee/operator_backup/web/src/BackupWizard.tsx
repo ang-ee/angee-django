@@ -2,7 +2,7 @@ import { useState } from "react";
 import * as v from "valibot";
 import { holdsPermission, rowPublicId } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
-import { Button, DialogForm, ErrorBanner, invalidFormSubmit, useActionForm, useWatch, type RecordToolbarContext } from "@angee/ui";
+import { Button, DialogForm, ErrorBanner, invalidFormSubmit, optionToken, useActionForm, useWatch, type RecordToolbarContext } from "@angee/ui";
 import { BackupDiscoveryView } from "./BackupDiscovery";
 import type { BackupCapture } from "./capture";
 import { BackupPlanPreviewDocument } from "./documents";
@@ -26,6 +26,9 @@ export function BackupWizard({ context, capture }: { context: RecordToolbarConte
       if (!accepted || query.isFetching || query.error) {
         return invalidFormSubmit({ fieldErrors: {}, formErrors: [t("previewStale")] });
       }
+      if (intent === "backup" && unsupported) {
+        return invalidFormSubmit({ fieldErrors: {}, formErrors: [t("unsupportedSelection")] });
+      }
       let id = context.recordId;
       if (writable && parent) {
         parent.form.setValue("selection", accepted, { shouldDirty: true, shouldValidate: true });
@@ -44,6 +47,7 @@ export function BackupWizard({ context, capture }: { context: RecordToolbarConte
   const query = useAuthoredQuery(BackupPlanPreviewDocument, { id: context.recordId, selection }, {
     dataProviderName: "console", enabled: open, staleTime: 0, models: [PLAN_MODEL], errorNotification: false,
   });
+  const unsupported = query.data?.preview_backup_plan?.resources.some((resource) => optionToken(resource.status) === "unsupported") ?? false;
   const snapshot = matchingPreviewSelection(query.data?.preview_backup_plan?.selection, selection);
   const pending = wizard.submitting || capture.pending || Boolean(parent?.pending);
   const ready = Boolean(snapshot) && !query.isFetching && !query.error;
@@ -65,10 +69,10 @@ export function BackupWizard({ context, capture }: { context: RecordToolbarConte
     footer={<>
       <Button type="button" disabled={pending} onClick={() => setOpen(false)}>{t("cancel")}</Button>
       <Button type="button" disabled={!writable || !ready || pending} pending={wizard.submitting && wizard.form.getValues("intent") === "save"} onClick={() => submit("save")}>{t("savePlan")}</Button>
-      <Button type="button" variant="primary" disabled={!canRun || !ready || pending} pending={wizard.submitting && wizard.form.getValues("intent") === "backup"} onClick={() => submit("backup")}>{t(writable ? "saveAndBackup" : "run")}</Button>
+      <Button type="button" variant="primary" disabled={!canRun || !ready || unsupported || pending} pending={wizard.submitting && wizard.form.getValues("intent") === "backup"} onClick={() => submit("backup")}>{t(writable ? "saveAndBackup" : "run")}</Button>
     </>}>
     <p className="text-13 text-fg-muted">{t("captureContents")}</p>
-    <ErrorBanner description={wizard.formError} />
+    <ErrorBanner description={wizard.formError ?? (ready && unsupported ? t("unsupportedSelection") : null)} />
     <BackupDiscoveryView preview={query.data?.preview_backup_plan} pending={query.isFetching} error={query.error}
       selection={selection} readOnly={!writable || pending} onRetry={() => void query.refetch()} onChange={(next) => wizard.form.setValue("selection", next)} />
   </DialogForm>;

@@ -393,8 +393,13 @@ def test_operator_http_refusal_classification_retains_only_safe_workflow_guidanc
     assert run.status == ("waiting" if transient else "failed")
     assert step.attempt == 1
     if not transient:
-        assert "reprocess" in str(step.output).lower()
-        assert "availability" not in str(step.output).lower()
+        guidance = str(step.output).lower()
+        if status in {400, 422}:
+            assert "back up now on the plan" in guidance
+            assert "original selection" in guidance
+        else:
+            assert "reprocess" in guidance
+        assert "availability" not in guidance
     attempts = StepAttempt.system_queryset().filter(step_run=step).values("error", "stacktrace")
     evidence = str(step.output) + str(list(attempts))
     assert "/private/sensitive/path" not in evidence

@@ -1,6 +1,7 @@
 import { createNamespaceT } from "@angee/ui";
 export const enBackupMessages = {
   "savePlan": "Save plan", "saveAndBackup": "Save & back up", "cancel": "Cancel", "reviewFields": "Review the plan fields before continuing.", "captureFailed": "The backup could not be started. Review the reported error and retry.",
+  "unsupportedSelection": "This selection contains unsupported resources. Resolve the reported reasons or exclude those resources before backing up. You can still save this plan.",
   "retryDiscovery": "Retry discovery",
   "previewStale": "Updating discovery for the current selection…",
   "loadingDestination": "Loading destination…", "destinationUnavailable": "Destination files are unavailable or you do not have access.",

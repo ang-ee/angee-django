@@ -102,8 +102,9 @@ class Capture(Step[CaptureInput, CapturedArchive, None]):
                 )
             if status_code is not None and 400 <= status_code < 500 and status_code not in {408, 409, 425, 429}:
                 return ctx.fail(
-                    "The operator rejected this backup request. Review the plan's discovered resources "
-                    "and selection, then reprocess this workflow."
+                    "The operator rejected this backup request. Review and save the plan's discovered "
+                    "resources and selection, then use Back up now on the plan to start a new run. "
+                    "Reprocess repeats this run's original selection."
                 )
             raise Retryable(
                 "The operator is temporarily unavailable or busy. Automatic retries preserve this capture's "
