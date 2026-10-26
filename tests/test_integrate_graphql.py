@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
+import httpx2
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -25,6 +26,7 @@ from django.db.models.signals import post_save
 from django.test import RequestFactory, TestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from openai import DefaultHttpxClient, OpenAI
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -57,7 +59,7 @@ from tests.conftest import (
     result_data as _data,
 )
 from tests.stream_adapters import failure_state
-from tests.test_agents import InferenceProvider
+from tests.test_agents import InferenceModel, InferenceProvider
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -1266,6 +1268,115 @@ def test_test_connection_probes_the_credential_of_a_parent_integration(
         conn.save(update_fields=["credential"])
     result = _data(_execute(console_schema, mutation, {"id": _public_id(conn)}, user=admin))["test_connection"]
     assert result == {"ok": False, "message": "No credential is attached."}
+
+
+@pytest.mark.parametrize(
+    "backend_class, base_url, attached, populated",
+    [
+        ("openai", "http://inference.internal:8080/v1", False, True),
+        ("openai", "http://inference.internal:8080/v1", False, False),
+        ("ollama", "https://models.example.test/ollama/v1", False, True),
+        ("openai", "https://api.openai.com/v1", True, True),
+    ],
+)
+def test_test_connection_reads_the_concrete_provider_without_syncing_models(
+    composed_tables: None,
+    monkeypatch: Any,
+    backend_class: str,
+    base_url: str,
+    attached: bool,
+    populated: bool,
+) -> None:
+    """Parent-addressed diagnostics exercise SDK auth/transport without catalogue writes."""
+
+    admin = _platform_admin("provider-probe-admin")
+    provider = make_integration(
+        "provider-probe", model=InferenceProvider, backend_class=backend_class,
+        base_url=base_url, **({} if attached else {"credential": None}),
+    )
+    requests: list[httpx2.Request] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        if request.method == "GET":
+            return httpx2.Response(
+                200, json={"object": "list", "data": [{"id": "gpt-4.1", "object": "model"}] if populated else []},
+            )
+        assert request.url.path.endswith("/api/show")
+        return httpx2.Response(200, json={})
+
+    http_client = DefaultHttpxClient(transport=httpx2.MockTransport(handle))
+
+    def client(**kwargs: Any) -> OpenAI:
+        return OpenAI(**{**kwargs, "http_client": http_client, "max_retries": 0})
+
+    monkeypatch.setattr("openai.OpenAI", client)
+    monkeypatch.setattr("openai.DefaultHttpxClient", lambda **kwargs: http_client)
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-key-must-not-be-used")
+    with http_client:
+        result = _data(_execute(
+            _schema(), "mutation($id: ID!){ test_connection(id: $id){ ok message } }",
+            {"id": _public_id(provider)}, user=admin,
+        ))["test_connection"]
+
+    assert result == {"ok": True, "message": "Inference provider is reachable."}
+    assert str(requests[0].url) == f"{base_url}/models"
+    assert requests[0].headers["Authorization"] == f"Bearer {'x' if attached else 'not-required'}"
+    assert all(request.method == "GET" or request.url.path.endswith("/api/show") for request in requests)
+    with system_context(reason="test read provider catalogue"):
+        assert not InferenceModel.objects.filter(provider=provider).exists()
+
+
+@pytest.mark.parametrize("failure", [401, 503, "connection"])
+def test_test_connection_bounds_provider_transport_failures(
+    composed_tables: None, monkeypatch: Any, failure: int | str,
+) -> None:
+    """A real SDK failure is unsuccessful and never puts vendor diagnostics in the payload."""
+
+    admin = _platform_admin("provider-failure-admin")
+    provider = make_integration(
+        "provider-failure", model=InferenceProvider, backend_class="openai",
+        base_url="http://inference.internal:8080/v1", credential=None,
+    )
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        if failure == "connection":
+            raise httpx2.ConnectError("private transport diagnostic", request=request)
+        return httpx2.Response(int(failure), json={"error": {"message": "private vendor diagnostic"}})
+
+    with DefaultHttpxClient(transport=httpx2.MockTransport(handle)) as http_client:
+        monkeypatch.setattr(
+            "openai.OpenAI", lambda **kwargs: OpenAI(**kwargs, http_client=http_client, max_retries=0),
+        )
+        result = _data(_execute(
+            _schema(), "mutation($id: ID!){ test_connection(id: $id){ ok message } }",
+            {"id": _public_id(provider)}, user=admin,
+        ))["test_connection"]
+
+    assert result == {"ok": False, "message": "Connection test failed."}
+
+
+@pytest.mark.parametrize(
+    "backend_class, expected_message",
+    [("openai", "Connection test failed."), ("manual", "Manual inference has no connection to test.")],
+)
+def test_test_connection_does_not_claim_unsupported_provider_connectivity(
+    composed_tables: None, monkeypatch: Any, backend_class: str, expected_message: str,
+) -> None:
+    """Hosted OpenAI still requires owned auth; manual's local empty list is no handshake."""
+
+    admin = _platform_admin("provider-unavailable-admin")
+    provider = make_integration(
+        "provider-unavailable", model=InferenceProvider, backend_class=backend_class, credential=None,
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-key-must-not-be-used")
+    monkeypatch.setattr("openai.OpenAI", lambda **kwargs: pytest.fail("SDK client must not be constructed"))
+    result = _data(_execute(
+        _schema(), "mutation($id: ID!){ test_connection(id: $id){ ok message } }",
+        {"id": _public_id(provider)}, user=admin,
+    ))["test_connection"]
+
+    assert result == {"ok": False, "message": expected_message}
 
 
 def test_sync_integration_runs_for_an_admin(
