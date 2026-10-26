@@ -8,11 +8,15 @@ from typing import Any, Self, cast
 import strawberry
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.db import models
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_snake_case
 
+from angee.identity import public_id_of
+from angee.impl import ImplBase
 from angee.impl import ImplChoice as BaseImplChoice
 from angee.models import AngeeModel
+from angee.permissions import require_rebac_queryset
 
 
 @strawberry.type
@@ -39,6 +43,8 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
     auth-agnostic; the query owner authorizes administrators or the model's
     explicit ``can_read_impl_choices`` policy before calling it. Rowless callers
     authorize through their own record before requesting registry metadata.
+    Relation defaults use readable public identities; unavailable suggestions
+    are omitted without changing implementation-owned materialization defaults.
     """
 
     django_model = _model_for_label(model)
@@ -53,7 +59,24 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
         else:
             message = f"{django_model._meta.label} has no field {field!r}."
         raise ImproperlyConfigured(message) from error
-    return [ImplChoice.from_choice(choice) for choice in model_field.impl_choices()]
+    choices = [ImplChoice.from_choice(choice) for choice in model_field.impl_choices()]
+    for choice in choices:
+        defaults = cast(dict[str, Any], choice.defaults)
+        for name, value in tuple(defaults.items()):
+            try:
+                default_field = django_model._meta.get_field(name)
+            except FieldDoesNotExist:
+                continue
+            if default_field.many_to_one and isinstance(value, str):
+                related_model = cast(type[models.Model], default_field.related_model)
+                target = ImplBase.relation_default_queryset(
+                    default_field, value, queryset=require_rebac_queryset(related_model).scoped(),
+                ).first()
+                if target is None:
+                    del defaults[name]
+                else:
+                    defaults[name] = public_id_of(target)
+    return choices
 
 
 def can_read_impl_choices(model: str, field: str, actor: Any) -> bool:

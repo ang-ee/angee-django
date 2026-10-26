@@ -331,7 +331,7 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
         create_only=True,
     )
     """Registry key for the inference backend this provider uses."""
-    name = models.CharField(max_length=128)
+    name = models.CharField(max_length=128, blank=True)
     base_url = models.URLField(blank=True)
     """Base endpoint for OpenAI-compatible providers; blank uses the backend default."""
     config = models.JSONField(default=dict, blank=True)

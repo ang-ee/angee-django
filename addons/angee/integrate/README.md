@@ -188,16 +188,17 @@ runtime status.
 path consumes `CONNECT_RECORD_FIELDS`; existing callers may keep their own
 selection and supply `start({redirectUri, next})` without a row.
 
-Generic Hasura resources with an editable credential use
-`IntegrationWriteBackend`; authored patches use `apply_integration_patch_fields`.
-Generic patches resolve credential references through the caller's native write
-queryset, so hidden credentials are refused as not found. Authored console
-patches retain their administrator gate. Both dispatch attachment to the model
-owner.
+Integration capabilities use native Hasura resources with
+`IntegrationWriteBackend`. Its creation factory prepares implementation defaults
+before validation; updates dispatch connection, lifecycle, ownership and config
+changes through `Integration.prepare_patch`. Credential references resolve through
+the caller's native write queryset, so hidden credentials are refused as not
+found. Provider and VCS console writes retain their administrator gate while
+their forms inherit the generated resource's writable and required fields.
 
 `Integration`, `WebhookSubscription` and `ExternalAccount` compose `OwnerMixin`:
-`owner` is a column, never a stored tuple. Authored integration patches change it
-through `transfer_ownership`; generic Hasura resources never write the column. A
+`owner` is a column, never a stored tuple. An editable integration owner changes
+through `transfer_ownership`, including native Hasura patches. A
 platform-managed integration is inserted with `save(ownerless=True)`. An external
 account takes only the owner its linking verb names; that verb claims an unowned
 account, and disconnect releases only the caller's ownership. Its transfer is

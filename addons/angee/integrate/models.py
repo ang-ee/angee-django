@@ -32,6 +32,7 @@ import httpx2
 from deepdiff import DeepDiff
 from django.apps import apps
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
@@ -1063,7 +1064,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         if handler.kind == CredentialKind.OAUTH:
             raise ValueError("OAuth credentials are minted by the connect/login flow, not create_local_credential().")
         if not name:
-            raise ValueError("A provider-less credential requires a name.")
+            raise ValidationError({"name": "This field is required."})
         return self._assemble_values(handler, material, fields)
 
     def _assemble_values(
@@ -1603,6 +1604,20 @@ _IntegrationManagerBase = AngeeManager.from_queryset(IntegrationQuerySet)
 class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[IntegrationT]):
     """Keep a stable import identity for integration and bridge collection scopes."""
 
+    def create_capability(self, **fields: Any) -> IntegrationT:
+        """Prepare model-owned defaults and connection identity before native validation."""
+
+        instance = self.model(**fields)
+        actor, _sudo = self.effective_actor(strict=True)
+        if actor is not None:
+            instance.with_actor(actor)
+        instance.prepare_impl_defaults()
+        credential = instance.credential
+        if "account" not in fields and "account_id" not in fields and credential is not None:
+            instance.account = credential.external_account
+        instance.full_clean()
+        return self.get_queryset().insert(instance)
+
 
 def _save_lifecycle(instance: Integration, source: Any, target: Any, **kwargs: Any) -> None:
     """Acquire the final capability before the transition primitive locks its caller."""
@@ -2136,6 +2151,39 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         vendor_slug = getattr(getattr(self, "vendor", None), "slug", "?")
         return f"{vendor_slug}:{self.public_id}"
+
+    def prepare_patch(self, fields: Mapping[str, Any]) -> dict[str, Any]:
+        """Apply connection/state/ownership verbs before ordinary native field updates.
+
+        Values are Django-native field assignments, including FK attnames. The
+        write boundary resolves public references before dispatching here. The
+        caller holds the capability lock and an atomic transaction.
+        """
+
+        fields = dict(fields)
+        credential_id = fields.pop("credential_id", _UNSET)
+        if credential_id is not _UNSET:
+            actor = instance_actor(self)
+            credentials = apps.get_model("integrate", "Credential").objects.for_write()
+            accounts = apps.get_model("integrate", "ExternalAccount").objects.for_write()
+            if actor is not None:
+                credentials = credentials.with_actor(actor)
+                accounts = accounts.with_actor(actor)
+            credential = None if credential_id is None else credentials.get(pk=credential_id)
+            account_id = fields.pop("account_id", _UNSET)
+            account = account_id if account_id is _UNSET or account_id is None else accounts.get(pk=account_id)
+            self.concrete_capability().attach_connection(credential, account=account)
+            self.refresh_from_db()
+        if "lifecycle" in fields:
+            self.set_lifecycle(fields.pop("lifecycle"))
+        owner_id = fields.pop("owner_id", _UNSET)
+        if owner_id is not _UNSET:
+            owner = None if owner_id is None else get_user_model().objects.get(pk=owner_id)
+            self.transfer_ownership(owner)
+        if "config" in fields:
+            for name in self.apply_config_patch(fields.pop("config")):
+                fields[name] = cast(models.Field, self._meta.get_field(name)).value_from_object(self)
+        return fields
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Keep the grouping content type aligned with the row's concrete model."""

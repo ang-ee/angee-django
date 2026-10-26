@@ -1427,8 +1427,7 @@ def test_create_inference_provider_creates_child_row(composed_tables: None) -> N
     console = _schema()
     mutation = """
         mutation CreateProvider($vendor: ID!, $owner: ID!) {
-          create_inference_provider(
-            data: {
+          insert_inference_providers_one(object: {
               vendor: $vendor
               owner: $owner
               backend_class: "manual"
@@ -1455,7 +1454,7 @@ def test_create_inference_provider_creates_child_row(composed_tables: None) -> N
             },
             user=admin,
         )
-    )["create_inference_provider"]
+    )["insert_inference_providers_one"]
     assert created == {
         "name": "Provider",
         "base_url": "https://api.example.test",
@@ -1471,6 +1470,106 @@ def test_create_inference_provider_creates_child_row(composed_tables: None) -> N
         assert provider.backend_class == "manual"
 
 
+def test_native_provider_metadata_owns_required_inputs() -> None:
+    """The native create input requires vendor while model-defaulted fields stay optional."""
+
+    resource = next(item for item in _schema().angee_resources if item.model_label == "agents.InferenceProvider")
+    assert resource.required_create_fields == ("vendor",)
+    assert {"vendor", "owner", "name", "backend_class"} <= set(resource.create_fields)
+
+
+def test_native_provider_create_applies_defaults_before_validation(composed_tables: None) -> None:
+    """Omitted optional inputs retain model defaults and actor ownership."""
+
+    admin = _platform_admin("agt-provider-native-default-admin")
+    seed = make_integration("agt-provider-native-default")
+    created = _data(
+        _execute(
+            _schema(),
+            """mutation($vendor: ID!) {
+          insert_inference_providers_one(object: {vendor: $vendor}) { id name backend_class owner { id } }
+        }""",
+            {"vendor": str(seed.vendor.sqid)},
+            user=admin,
+        )
+    )["insert_inference_providers_one"]
+    assert created["name"] == "Manual"
+    assert created["backend_class"] == "MANUAL"
+    assert created["owner"]["id"] == str(admin.sqid)
+
+
+def test_native_provider_mutation_results_prepare_selected_annotations(composed_tables: None) -> None:
+    """Create, replay and update return the same native projection as record reads."""
+
+    admin = _platform_admin("agt-provider-native-result-admin")
+    seed = make_integration("agt-provider-native-result")
+    console = _schema()
+
+    def execute(query: str, variables: dict[str, Any]) -> Any:
+        return _execute(console, query, variables, user=admin)
+
+    create = """mutation($vendor: ID!) {
+      insert_inference_providers_one(
+        object: {vendor: $vendor, name: "Native result"}, idempotency_key: "native-result"
+      ) { id name stream_count can_resume can_connect vendor { id } owner { id } }
+    }"""
+    created = _data(execute(create, {"vendor": str(seed.vendor.sqid)}))["insert_inference_providers_one"]
+    assert created["stream_count"] == 0
+    assert created["can_resume"] is False
+    assert created["can_connect"] is False
+    assert created["vendor"]["id"] == str(seed.vendor.sqid)
+    replayed = _data(execute(create, {"vendor": str(seed.vendor.sqid)}))["insert_inference_providers_one"]
+    assert replayed == created
+    updated = _data(
+        execute(
+            """mutation($id: String!) {
+          update_inference_providers_by_pk(pk_columns: {id: $id}, _set: {name: "Updated native result"}) {
+            id name stream_count can_resume can_connect vendor { id } owner { id }
+          }
+        }""",
+            {"id": created["id"]},
+        )
+    )["update_inference_providers_by_pk"]
+    assert updated == {**created, "name": "Updated native result"}
+    with system_context(reason="test.agents.provider.native_result.verify"):
+        assert InferenceProvider.objects.filter(vendor=seed.vendor).count() == 1
+
+
+def test_native_provider_writes_remain_admin_only_for_owner(composed_tables: None) -> None:
+    """Native model ownership does not broaden the console's admin write policy."""
+
+    provider = _provider("agt-provider-native-owner")
+    console = _schema()
+    with system_context(reason="test.agents.provider.owner"):
+        owner = provider.owner
+    assert (
+        _execute(
+            console,
+            """mutation($id: String!) {
+          update_inference_providers_by_pk(pk_columns: {id: $id}, _set: {name: "Denied"}) { name }
+        }""",
+            {"id": str(provider.sqid)},
+            user=owner,
+        ).errors
+        is not None
+    )
+    assert (
+        _execute(
+            console,
+            """mutation($vendor: ID!) {
+          insert_inference_providers_one(object: {vendor: $vendor}) { id }
+        }""",
+            {"vendor": str(provider.vendor.sqid)},
+            user=owner,
+        ).errors
+        is not None
+    )
+    with system_context(reason="test.agents.provider.owner.verify"):
+        provider.refresh_from_db()
+        assert provider.name == "Provider"
+        assert InferenceProvider.objects.filter(vendor=provider.vendor).count() == 1
+
+
 def test_update_inference_provider_merges_config_and_removes_null_keys(composed_tables: None) -> None:
     """Untyped provider patches preserve unsent keys and delete explicit null values."""
 
@@ -1482,14 +1581,16 @@ def test_update_inference_provider_merges_config_and_removes_null_keys(composed_
         _execute(
             _schema(),
             """
-            mutation UpdateConfig($id: ID!) {
-              update_inference_provider(data: {id: $id, config: {retries: 3, obsolete: null}}) { config }
+            mutation UpdateConfig($id: String!) {
+              update_inference_providers_by_pk(
+                pk_columns: {id: $id}, _set: {config: {retries: 3, obsolete: null}}
+              ) { config }
             }
             """,
             {"id": _public_id(provider.sqid)},
             user=_platform_admin("agt-provider-config-patch-admin"),
         )
-    )["update_inference_provider"]
+    )["update_inference_providers_by_pk"]
 
     expected = {"endpoint": "https://example.test", "retries": 3}
     assert result == {"config": expected}
@@ -1523,8 +1624,10 @@ def test_update_inference_provider_backend_is_create_only(composed_tables: None)
             email="provider-update@example.test",
         )
     mutation = """
-        mutation UpdateProvider($id: ID!, $account: ID!) {
-          update_inference_provider(data: {id: $id, backend_class: "anthropic", account: $account}) {
+        mutation UpdateProvider($id: String!, $account: ID!) {
+          update_inference_providers_by_pk(
+            pk_columns: {id: $id}, _set: {backend_class: "anthropic", account: $account}
+          ) {
             backend_class
             name
             vendor { slug }

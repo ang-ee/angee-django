@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class OllamaInferenceBackend(OpenAIInferenceBackend):
-    """OpenAI-compatible inference served by a loopback-only Ollama endpoint.
+    """OpenAI-compatible inference served by a configured Ollama endpoint.
 
     ``keep_alive`` is provider deployment policy and rides the native request
     body. ``generation_limit`` supplies the OpenAI-compatible ``max_tokens``
@@ -35,11 +35,16 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
         "name": "Ollama",
     }
     default_base_url = "http://localhost:11434/v1"
-    requires_credential = False
     default_broker_name = "ollama"
     model_allow_prefixes: ClassVar[tuple[str, ...]] = ()
     model_deny_prefixes: ClassVar[tuple[str, ...]] = ()
     api_key_env: ClassVar[tuple[str, ...]] = ()
+
+    @property
+    def requires_credential(self) -> bool:
+        """Ollama deployments may run without authentication."""
+
+        return False
 
     def _client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
         """Build the sync SDK client with proxy inheritance disabled."""
@@ -58,7 +63,7 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
         asynchronous: bool,
     ) -> dict[str, Any]:
         kwargs = super()._client_kwargs(credential=credential)
-        self._validate_loopback_url(str(kwargs.get("base_url") or ""))
+        self._validate_endpoint_url(str(kwargs.get("base_url") or ""))
         # The SDK is an optional dependency, loaded once a client is bound, not
         # when the backend is catalogued.
         from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
@@ -68,8 +73,8 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
         return kwargs
 
     @staticmethod
-    def _validate_loopback_url(base_url: str) -> None:
-        """Reject credentials, redirects and non-loopback inference endpoints."""
+    def _validate_endpoint_url(base_url: str) -> None:
+        """Require an explicit HTTP endpoint without inline auth or request overrides."""
 
         try:
             parsed = urlsplit(base_url)
@@ -79,14 +84,14 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
             parsed = urlsplit("")
         if (
             parsed.scheme not in {"http", "https"}
-            or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+            or not parsed.hostname
             or not valid_port
             or parsed.username
             or parsed.password
             or parsed.query
             or parsed.fragment
         ):
-            raise ValueError("Ollama inference only connects to a loopback endpoint.")
+            raise ValueError("Ollama inference requires an HTTP(S) endpoint without credentials, query or fragment.")
 
     def request_settings(self, model_settings: ModelSettings | None) -> ModelSettings:
         """Map deployment keepalive and generation limits to the native SDK request."""

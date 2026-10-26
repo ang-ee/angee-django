@@ -74,65 +74,6 @@ export const ConnectInferenceProvider = graphql(`
   }
 `);
 
-// Updating a provider can change both its row and its discovered model catalogue;
-// keep the resource blast radius beside the verb that owns it.
-export const INFERENCE_PROVIDER_UPDATE_INVALIDATES = [
-  "agents.InferenceProvider",
-  "agents.InferenceModel",
-] as const;
-
-export const CreateInferenceProvider = graphql(`
-  mutation CreateInferenceProvider($data: InferenceProviderInput!) {
-    create_inference_provider(data: $data) {
-      id
-      display_name
-      name
-      owner { id }
-      backend_class
-      vendor { id }
-      credential { id display_name }
-      account { id display_name }
-      lifecycle
-      runtime_status
-      base_url
-      config
-      created_at
-      updated_at
-    }
-  }
-`);
-
-export const UpdateInferenceProvider = graphql(`
-  mutation UpdateInferenceProvider($data: InferenceProviderPatch!) {
-    update_inference_provider(data: $data) {
-      id
-      display_name
-      name
-      owner {
-        id
-      }
-      backend_class
-      vendor {
-        id
-      }
-      credential {
-        id
-        display_name
-      }
-      account {
-        id
-        display_name
-      }
-      lifecycle
-      runtime_status
-      base_url
-      config
-      created_at
-      updated_at
-    }
-  }
-`);
-
 // The view envelope for v1 context rendering and v2 session/prompt metadata.
 export interface AgentChatView extends Record<string, unknown> {
   kind: "record" | "list" | "dashboard";

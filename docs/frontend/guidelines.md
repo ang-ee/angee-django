@@ -1520,6 +1520,13 @@ still open a creation form. Fixtures must declare the write operations they inte
 to exercise. Record locking (`readOnlyWhen`) uses the server record, not unsaved
 form values.
 
+Native form saves refresh their resource queries and authored reads of that
+model; custom commands retain their mutation owner's invalidation. Declare
+other affected models through `invalidateModels`; the
+[shared save owner](../../packages/ui/src/views/form/use-form-view-save.ts)
+resolves their resource and authored-query invalidation. A dependency between
+read models is not a reason to replace generated CRUD with a custom mutation.
+
 A save whose normalized header and line values equal the server record sends no
 mutation. It resets the dirty-but-equivalent draft to those server values and
 clears the dirty state, including the editable lines.

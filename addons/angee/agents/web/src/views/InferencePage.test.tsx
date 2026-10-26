@@ -7,7 +7,8 @@ import { createRouteHref } from "@angee/ui/runtime";
 import agents from "../index";
 
 const mocks = vi.hoisted(() => ({
-  resourceMutationOptions: null as unknown,
+  formProps: null as Record<string, unknown> | null,
+  actionMutationOptions: null as unknown,
   connectNext: "",
   routeHref: vi.fn(),
 }));
@@ -18,7 +19,10 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   Column: () => null,
   Facet: () => null,
   Field: () => null,
-  Form: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  Form: ({ children, ...props }: { children?: ReactNode }) => {
+    mocks.formProps = props;
+    return <>{children}</>;
+  },
   Group: ({ children }: { children?: ReactNode }) => <>{children}</>,
   List: ({ children }: { children?: ReactNode }) => <>{children}</>,
   ResourceList: ({
@@ -39,14 +43,13 @@ vi.mock("@angee/ui", async (importOriginal) => ({
       {form ? <form.Component resource={form.resource} /> : null}
     </>
   ),
-  useAuthoredResourceMutation: (_document: unknown, options: unknown) => {
-    mocks.resourceMutationOptions = options;
-    return [vi.fn(), { fetching: false, error: null }];
-  },
   useEnumOptions: () => [],
   useImplPrefill: () => undefined,
   useRouteHref: () => mocks.routeHref,
-  useRecordActionMutation: () => [vi.fn(), { fetching: false, error: null }],
+  useRecordActionMutation: (_field: unknown, options: unknown) => {
+    mocks.actionMutationOptions = options;
+    return [vi.fn(), { fetching: false, error: null }];
+  },
 }));
 
 vi.mock("@angee/refine", async (importOriginal) => ({
@@ -87,8 +90,11 @@ describe("InferenceProvidersPage", () => {
     Object.assign(mocks.routeHref, { maybe: routeHref.maybe });
     render(<InferenceProvidersPage />);
 
-    expect(mocks.resourceMutationOptions).toEqual({
-      invalidateModels: ["agents.InferenceProvider", "agents.InferenceModel"],
+    expect(mocks.formProps).toMatchObject({
+      resource: "agents.InferenceProvider", invalidateModels: ["agents.InferenceModel"],
     });
+    expect(mocks.formProps).not.toHaveProperty("submit");
+    expect(mocks.formProps).not.toHaveProperty("createSubmit");
+    expect(mocks.actionMutationOptions).toEqual({ invalidateModels: ["agents.InferenceModel"] });
   });
 });

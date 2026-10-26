@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 import httpx2
 import pytest
-import strawberry
 import strawberry_django
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import close_old_connections, connections, transaction
@@ -35,8 +34,6 @@ from angee.integrate.schema import (
     IntegrationCredentialMutation,
     IntegrationWriteBackend,
     _attach_completed_integration,
-    apply_integration_patch_fields,
-    save_provided_fields,
 )
 from angee.integrate.session_runner import run_bridge_session_job
 from angee.integrate.signals import discovery_finished
@@ -139,22 +136,21 @@ def test_all_credential_attach_paths_enter_discovery(bridge, path):
         with actor_context(bridge.owner):
             if path == "mutation":
                 IntegrationCredentialMutation().attach_integration_credential(
-                    info, ConnectionBridge._meta.label,
-                    PublicID(public_id_of(bridge)), PublicID(public_id_of(credential)),
+                    info,
+                    ConnectionBridge._meta.label,
+                    PublicID(public_id_of(bridge)),
+                    PublicID(public_id_of(credential)),
                 )
             else:
-                IntegrationWriteBackend(ConnectionBridge).update(
-                    info, public_id_of(bridge),
+                IntegrationWriteBackend(ConnectionBridge, public_id_fields=("credential",)).update(
+                    info,
+                    public_id_of(bridge),
                     {"credential": public_id_of(credential), "display_name": "Operator label"},
                 )
     else:
         with system_context(reason="test credential write"):
             if path == "patch":
-                data = SimpleNamespace(
-                    vendor=strawberry.UNSET, owner=strawberry.UNSET, account=strawberry.UNSET,
-                    credential=public_id_of(credential), lifecycle=strawberry.UNSET,
-                )
-                apply_integration_patch_fields(bridge, data, reason="test connection patch")
+                bridge.prepare_patch({"credential_id": credential.pk})
             else:
                 bridge.pause()
                 bridge.connect(credential=credential)
@@ -166,12 +162,12 @@ def test_all_credential_attach_paths_enter_discovery(bridge, path):
 def test_combined_patch_preserves_other_values_and_starts_discovery_once(bridge):
     with system_context(reason="test combined connection patch"):
         before = bridge.discovery_generation
-        data = SimpleNamespace(
-            display_name="Operator label", vendor=strawberry.UNSET, owner=strawberry.UNSET,
-            account=strawberry.UNSET, credential=public_id_of(bridge.credential), lifecycle="connected",
+        info = connection_info(bridge)
+        IntegrationWriteBackend(ConnectionBridge, public_id_fields=("credential",)).update(
+            info,
+            public_id_of(bridge),
+            {"display_name": "Operator label", "credential": public_id_of(bridge.credential), "lifecycle": "connected"},
         )
-        fields = apply_integration_patch_fields(bridge, data, reason="test combined patch")
-        save_provided_fields(bridge, fields)
         bridge.refresh_from_db()
     assert bridge.display_name == "Operator label"
     assert bridge.discovery_generation == before + 1 and bridge.discovery_pending
@@ -496,7 +492,6 @@ def test_credential_only_attachment_settles_synchronously_without_a_task(sent_ta
         assert integration.discovery_ready and integration.discovery_completed_at is not None
         assert not integration.discovery_pending
     assert sent_tasks == []
-
 
 
 def test_same_lifecycle_preserves_discovery_and_poll_schedule(bridge, sent_tasks):
