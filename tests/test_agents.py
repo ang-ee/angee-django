@@ -20,8 +20,10 @@ import httpx
 import httpx2
 import pytest
 from anthropic.types import Message, TextBlock, Usage
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
+from openai import AsyncOpenAI, DefaultHttpxClient
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
@@ -341,11 +343,108 @@ def test_ollama_backend_owns_protocol_details_and_provider_identity() -> None:
 def test_openai_model_filtering_keeps_its_existing_prefix_policy() -> None:
     """Lifting the prefix data onto the class does not broaden OpenAI's catalogue."""
 
-    backend = OpenAIInferenceBackend(SimpleNamespace(config={}))
+    backend = OpenAIInferenceBackend(SimpleNamespace(config={}, base_url=""))
 
     assert backend._is_chat_model("gpt-4.1") is True
     assert backend._is_chat_model("llama3.2:latest") is False
     assert backend._is_chat_model("text-embedding-3-large") is False
+
+
+@pytest.mark.parametrize("base_url", ["", "https://api.openai.com/v1", "https://API.OpenAI.COM./v1/"])
+def test_openai_hosted_endpoints_require_owned_credentials(base_url: str, monkeypatch: Any) -> None:
+    """An ambient SDK key never substitutes for hosted-provider credentials."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-key-must-not-be-used")
+    backend = OpenAIInferenceBackend(SimpleNamespace(credential=None, base_url=base_url, config={}))
+    assert backend.requires_credential
+    with pytest.raises(ValueError, match="requires an attached credential"):
+        backend._client_kwargs()
+    with pytest.raises(ValueError, match="requires an attached credential"):
+        backend._async_client_kwargs()
+    assert not backend._is_chat_model("llama3.2:latest")
+
+
+@pytest.mark.parametrize("attached", [False, True])
+def test_openai_compatible_endpoint_binds_owned_auth_sync_and_async(attached: bool, monkeypatch: Any) -> None:
+    """Explicit compatible deployments use an attached key or a harmless SDK placeholder."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-key-must-not-be-used")
+    credential = (
+        SimpleNamespace(
+            kind=CredentialKind.STATIC_TOKEN,
+            ensure_fresh=lambda: None,
+            secret_value=lambda: "gateway-key",
+        )
+        if attached
+        else None
+    )
+    provider = SimpleNamespace(credential=credential, base_url="https://gateway.example.test/v1", config={})
+    backend = OpenAIInferenceBackend(provider)
+    expected_key = "gateway-key" if attached else "not-required"
+    assert not backend.requires_credential
+    client = backend.client()
+    try:
+        assert client.api_key == expected_key
+        assert str(client.base_url) == "https://gateway.example.test/v1/"
+    finally:
+        client.close()
+    captured = []
+
+    def async_client(**kwargs: Any) -> AsyncOpenAI:
+        captured.append(kwargs)
+        return AsyncOpenAI(**kwargs)
+
+    monkeypatch.setattr(backend, "_async_client_class", lambda: async_client)
+
+    async def bind() -> None:
+        async with backend.model("llama3.2:latest"):
+            pass
+
+    async_to_sync(bind)()
+    assert captured == [{"api_key": expected_key, "base_url": provider.base_url}]
+
+
+def test_openai_compatible_model_discovery_keeps_config_and_deny_policy(monkeypatch: Any) -> None:
+    """Compatible catalogues admit llama while explicit filters and deny rules still win."""
+
+    provider = SimpleNamespace(credential=None, base_url="https://gateway.example.test/v1", config={})
+    backend = OpenAIInferenceBackend(provider)
+    client = SimpleNamespace(
+        models=SimpleNamespace(
+            list=lambda: [
+                SimpleNamespace(id="llama3.2:latest"),
+                SimpleNamespace(id="text-embedding-3-large"),
+            ]
+        )
+    )
+    monkeypatch.setattr(backend, "client", lambda: client)
+    assert [spec.handle for spec in backend.list_models()] == ["llama3.2:latest", "openai/llama3.2:latest"]
+    provider.config = {"model_allow_prefixes": ["gpt-"]}
+    assert backend.list_models() == []
+    provider.config = {"model_allow_prefixes": [], "model_deny_prefixes": ["llama"]}
+    assert not backend._is_chat_model("llama3.2:latest")
+
+
+@pytest.mark.parametrize(
+    "base_url, ready", [("", False), ("https://api.openai.com/v1", False), ("https://gateway.example.test/v1", True)]
+)
+@pytest.mark.parametrize("renders_service", [False, True])
+def test_openai_endpoint_credential_policy_is_shared_with_agent_readiness(
+    base_url: str,
+    ready: bool,
+    renders_service: bool,
+) -> None:
+    """No-auth SDK deployments are ready only for runtimes that consume them in-process."""
+
+    provider = SimpleNamespace(credential=None, base_url=base_url, config={})
+    provider.backend = OpenAIInferenceBackend(provider)
+    agent = SimpleNamespace(
+        model_id=1,
+        model=SimpleNamespace(provider=provider),
+        runtime_backend=SimpleNamespace(renders_service=renders_service),
+        inference_credential_for_runtime=lambda: None,
+    )
+    assert AbstractAgent.inference_credential_ready(agent) is (ready and not renders_service)
 
 
 class _FakeModelPage:
@@ -620,15 +719,16 @@ def test_openai_backend_refresh_syncs_native_and_broker_models(
     assert models["gpt-4.2"].display_name == "gpt-4.2"
 
 
-def test_ollama_backend_lists_tagged_models_without_a_credential(monkeypatch: Any) -> None:
+@pytest.mark.parametrize("base_url", ["", "http://ollama.internal:11434/v1", "https://models.example.invalid/ollama/v1"])
+def test_ollama_backend_lists_tagged_models_without_a_credential(monkeypatch: Any, base_url: str) -> None:
     """Ollama uses its native show endpoint once per physical listed model."""
 
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handle(request: httpx.Request) -> httpx.Response:
+    def handle(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
-        if request.url.path == "/v1/models":
-            return httpx.Response(
+        if request.url.path.endswith("/v1/models"):
+            return httpx2.Response(
                 200,
                 json={
                     "object": "list",
@@ -639,12 +739,12 @@ def test_ollama_backend_lists_tagged_models_without_a_credential(monkeypatch: An
                     ],
                 },
             )
-        assert request.url.path == "/api/show"
+        assert request.url.path.endswith("/api/show")
         model_id = json.loads(request.content)["model"]
         if model_id == "nomic-embed-text:latest":
-            return httpx.Response(503, json={"error": "native metadata unavailable"})
+            return httpx2.Response(503, json={"error": "native metadata unavailable"})
         if model_id == "llama3.2:latest":
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "details": {"family": "llama"},
@@ -652,7 +752,7 @@ def test_ollama_backend_lists_tagged_models_without_a_credential(monkeypatch: An
                     "parameters": "temperature 0.8\nnum_ctx 32768",
                 },
             )
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "details": {},
@@ -663,19 +763,13 @@ def test_ollama_backend_lists_tagged_models_without_a_credential(monkeypatch: An
             },
         )
 
-    http_client = httpx.Client(transport=httpx.MockTransport(handle))
-    backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url="", config={}))
-    monkeypatch.setattr(
-        backend,
-        "_client_kwargs",
-        lambda **kwargs: {
-            "api_key": "not-required",
-            "base_url": "http://localhost:11434/v1",
-            "http_client": http_client,
-        },
-    )
-
-    specs = backend.list_models()
+    http_client = DefaultHttpxClient(transport=httpx2.MockTransport(handle), trust_env=False, follow_redirects=False)
+    backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url=base_url, config={}))
+    monkeypatch.setattr("openai.DefaultHttpxClient", lambda **kwargs: http_client)
+    try:
+        specs = backend.list_models()
+    finally:
+        http_client.close()
 
     assert [spec.handle for spec in specs] == [
         "llama3.2:latest",
@@ -693,12 +787,10 @@ def test_ollama_backend_lists_tagged_models_without_a_credential(monkeypatch: An
         "nomic-embed-text:latest",
         "qwen2.5-coder:7b",
     ]
-    assert [request.url.path for request in requests] == [
-        "/v1/models",
-        "/api/show",
-        "/api/show",
-        "/api/show",
-    ]
+    endpoint = base_url or OllamaInferenceBackend.default_base_url
+    assert [str(request.url) for request in requests] == (
+        [f"{endpoint}/models"] + [f"{endpoint.removesuffix('/v1')}/api/show"] * 3
+    )
     by_handle = {spec.handle: spec for spec in specs}
     assert by_handle["llama3.2:latest"].context_window == 131072
     assert by_handle["ollama/llama3.2:latest"].context_window == 131072
@@ -775,13 +867,16 @@ def test_openai_backend_can_configure_max_completion_tokens(composed_tables, inf
 
 
 @pytest.mark.django_db(transaction=True)
-def test_ollama_backend_translates_native_thinking_setting(composed_tables, inference_http):
+@pytest.mark.parametrize("base_url", ["", "http://ollama.internal:11434/v1", "https://models.example.invalid/ollama/v1"])
+def test_ollama_backend_translates_native_thinking_setting(composed_tables, inference_http, base_url):
     """Ollama maps deployment and analytical defaults onto its SDK request."""
 
     provider = _provider(
         "ollama-chat",
         backend_class="ollama",
         name="Ollama",
+        credential=None,
+        base_url=base_url,
         config={"keep_alive": "7m", "generation_limit": 2048},
     )
 
@@ -792,6 +887,7 @@ def test_ollama_backend_translates_native_thinking_setting(composed_tables, infe
     )
 
     requests, clients = inference_http
+    assert str(requests[-1].url) == f"{base_url or OllamaInferenceBackend.default_base_url}/chat/completions"
     payload = json.loads(requests[-1].content)
     assert payload["reasoning_effort"] == "none"
     assert payload["max_tokens"] == 2048
@@ -805,17 +901,19 @@ def test_ollama_backend_translates_native_thinking_setting(composed_tables, infe
 @pytest.mark.parametrize(
     "base_url",
     [
-        "https://example.invalid/v1",
+        "http:///v1",
         "ftp://localhost/v1",
         "http://user:pass@localhost/v1",
         "http://localhost/v1?token=secret",
         "http://localhost/v1#fragment",
+        "http://localhost:0/v1",
+        "http://localhost:65536/v1",
     ],
 )
-def test_ollama_backend_rejects_non_loopback_endpoints(base_url: str) -> None:
+def test_ollama_backend_rejects_invalid_endpoints(base_url: str) -> None:
     backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url=base_url, config={}))
 
-    with pytest.raises(ValueError, match="loopback endpoint"):
+    with pytest.raises(ValueError, match="HTTP.*endpoint"):
         backend._client_kwargs()
 
 
@@ -826,7 +924,7 @@ def test_ollama_backend_disables_environment_proxies_for_both_sdk_clients(
     # The backend imports the SDK's client hooks when it binds a client.
     monkeypatch.setattr("openai.DefaultHttpxClient", lambda **kwargs: calls.append(("sync", kwargs)) or object())
     monkeypatch.setattr("openai.DefaultAsyncHttpxClient", lambda **kwargs: calls.append(("async", kwargs)) or object())
-    backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url="http://127.0.0.1:11434/v1", config={}))
+    backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url="https://ollama.internal/v1", config={}))
 
     backend._client_kwargs()
     backend._async_client_kwargs()
