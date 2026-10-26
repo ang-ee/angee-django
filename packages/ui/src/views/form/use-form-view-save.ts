@@ -2,13 +2,15 @@ import * as React from "react";
 import {
   fieldUpdatable,
   holdsPermission,
+  useCanonicalResourceModelLabels,
+  useResourceInvalidates,
   refineResourceName,
   type DataResourceLinesMetadata,
   type DataResourceMetadata,
   type ModelMetadata,
   type Row,
 } from "@angee/metadata";
-import { publicGraphQLErrorsFromUnknown, useAngeeResourceSave, type MutationRootArguments } from "@angee/refine";
+import { invalidateAuthoredQueries, publicGraphQLErrorsFromUnknown, useAngeeResourceSave, type MutationRootArguments } from "@angee/refine";
 import {
   useInvalidate,
   useOne,
@@ -137,6 +139,8 @@ export interface UseFormViewSaveProps {
   onSaved?: (row: Row) => void;
   submit?: FormSubmit;
   createSubmit?: FormSubmit;
+  /** Additional model caches refreshed after an accepted save. */
+  invalidateModels?: readonly string[];
   /** Lock editing from persisted state; lifecycle actions remain independent. */
   readOnlyWhen?: (record: Row) => boolean;
   defaultSlugSource?: string;
@@ -196,6 +200,7 @@ export function useFormViewSave({
   onSaved,
   submit,
   createSubmit,
+  invalidateModels,
   readOnlyWhen,
   defaultSlugSource,
   onFieldInteractionStart,
@@ -257,6 +262,11 @@ export function useFormViewSave({
     return writable ? new Set(writable) : null;
   }, [formFields, isCreate, modelMetadata, submitOwner]);
   const queryClient = useQueryClient();
+  const canonicalInvalidateModels = useCanonicalResourceModelLabels(invalidateModels);
+  const dependentInvalidations = useResourceInvalidates(canonicalInvalidateModels);
+  const authoredInvalidateModels = React.useMemo(() => [...new Set([
+    ...(!submitOwner && dataResource ? [dataResource.modelLabel] : []), ...canonicalInvalidateModels,
+  ])], [dataResource, canonicalInvalidateModels, submitOwner]);
   const { keys } = useKeys();
   const { identifier } = useResourceParams({ resource: refineResource });
   const detailKey = React.useMemo(() => keys().data(dataResource?.schemaName ?? "default")
@@ -501,7 +511,13 @@ export function useFormViewSave({
           }
           result = savedFormSubmitResult(saved, t("form.genericSaveError"));
         }
-        if (isCreate && result.status === "ok") idempotencyKey.current = null;
+        if (result.status === "ok") {
+          if (isCreate) idempotencyKey.current = null;
+          await Promise.all([
+            ...dependentInvalidations.map((target) => invalidate(target)),
+            ...(authoredInvalidateModels.length ? [invalidateAuthoredQueries(queryClient, authoredInvalidateModels)] : []),
+          ]);
+        }
         return result;
       } catch (error) {
         if (isCreate && publicGraphQLErrorsFromUnknown(error).some((item) => item.extensions.code === "CREATION_KEY_CONFLICT")) {
@@ -512,6 +528,10 @@ export function useFormViewSave({
     },
     [
       customSubmit.mutateAsync,
+      authoredInvalidateModels,
+      dependentInvalidations,
+      invalidate,
+      queryClient,
       dataResource,
       mutationFields,
       updateRevision,

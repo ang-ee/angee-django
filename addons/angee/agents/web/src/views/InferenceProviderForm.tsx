@@ -18,7 +18,7 @@ function InferenceProviderForm({ resource: _resource, ...props }: RegisteredForm
   const backendClassPrefill = useImplPrefill(PROVIDER_MODEL, "backend_class", privateConfigReset);
 
   return (
-      <Form {...props} resource={PROVIDER_MODEL}>
+      <Form {...props} resource={PROVIDER_MODEL} invalidateModels={[MODEL_MODEL]}>
         <Field name="name" title />
         <Group label={t("inference.backend")} columns={2}>
           <Field name="owner" />

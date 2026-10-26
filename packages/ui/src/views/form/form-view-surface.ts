@@ -154,6 +154,8 @@ export interface UseFormViewSurfaceProps {
   onSaved?: (row: Row) => void;
   submit?: FormSubmit;
   createSubmit?: FormSubmit;
+  /** Additional model caches refreshed after an accepted save. */
+  invalidateModels?: readonly string[];
   /** Read-only policy evaluated on the saved record, never on the local draft. */
   readOnlyWhen?: (record: Row) => boolean;
   /** Called before a native field owner applies the first value in an interaction. */
@@ -249,6 +251,7 @@ export function useFormViewSurface({
   onSaved,
   submit,
   createSubmit,
+  invalidateModels,
   readOnlyWhen,
   onFieldInteractionStart,
   onFieldInteractionCommit,
@@ -672,6 +675,7 @@ export function useFormViewSurface({
     onSaved,
     submit,
     createSubmit,
+    invalidateModels,
     readOnlyWhen,
     onFieldInteractionStart,
     onFieldInteractionCommit,

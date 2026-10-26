@@ -12,9 +12,9 @@ import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, type RuntimeViewAs } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
-import type { TypedDocumentNode } from "@angee/refine";
+import { OperationDocumentsProvider, useAuthoredQuery, type TypedDocumentNode } from "@angee/refine";
 import gql from "graphql-tag";
-import type { MetaQuery } from "@refinedev/core";
+import { useList, type MetaQuery } from "@refinedev/core";
 import { defaultWidgets, type WidgetDefinition } from "../../widgets";
 import { BoundDescriptorField, BoundFormValue } from "./BoundDescriptorField";
 import { FormView } from "./FormView";
@@ -1393,4 +1393,90 @@ test("an outdated custom save result fails loudly without presenting a retry ban
   await act(async () => { await expect(f.surface().submitForm()).rejects.toThrow(/FormSubmitResult contract/); });
   expect(f.surface().saveError).toBeNull();
   expect(f.onSaved).not.toHaveBeenCalled();
+});
+
+
+const relatedSummary = gql`query RelatedSummary { summary }` as TypedDocumentNode<{ summary: string }, Record<string, never>>;
+const currentSummary = gql`query CurrentSummary { summary }` as TypedDocumentNode<{ summary: string }, Record<string, never>>;
+const createNoteCommand = gql`mutation CreateNote($data: NoteInput!) { create_note(data: $data) { id title } }` as TypedDocumentNode<{ create_note: Row }, { data: Row }>;
+
+test.each(["create", "update", "patch", "nested", "command", "rejected"] as const)("%s saves refresh declared native and authored caches only after acceptance", async (mode) => {
+  const related = testDataResource("catalog.Model");
+  const unrelated = testDataResource("catalog.Unrelated");
+  const formResource = mode === "nested" ? {
+    ...resource, roots: { ...resource.roots, save: "notes_save" },
+    linesResource: { field: "lines", modelLabel: "notes.Line", positionField: "position", fields: [{
+      name: "label", kind: "scalar" as const, scalar: "String", readable: true,
+      creatable: true, updatable: true, filterable: false, sortable: false, aggregatable: false, groupable: false, requiredOnCreate: false,
+    }] },
+  } : resource;
+  let title = "Before";
+  const getList = vi.fn(async () => ({ data: [{ id: "model-1", title }], total: 1 }));
+  const custom = vi.fn(async ({ meta }: { meta?: MetaQuery }) => {
+    if (meta?.gqlVariables && "data" in meta.gqlVariables) {
+      title = "After";
+      return { data: { create_note: { id: "note-1", title } } };
+    }
+    if (meta?.gqlVariables && "lines" in meta.gqlVariables) {
+      title = "After";
+      return { data: { notes_save: { id: "note-1", title, body: "", lines: [{ id: "line-1", label: "After" }] } } };
+    }
+    return { data: { summary: title } };
+  });
+  const write = vi.fn(async () => { title = "After"; return { data: { id: "note-1", title, body: "" } }; });
+  const client = createClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false }, mutations: { retry: false } } });
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  let surface!: FormViewSaveSurface;
+  let nativeTitle: unknown;
+  let authoredTitle: unknown;
+  let currentAuthoredTitle: unknown;
+  let unrelatedTitle: unknown;
+  function Probe() {
+    const list = useList({ resource: related.roots.list!, dataProviderName: "console" });
+    const other = useList({ resource: unrelated.roots.list!, dataProviderName: "console" });
+    const authored = useAuthoredQuery(relatedSummary, {}, { dataProviderName: "console", models: [related.modelLabel] });
+    const currentAuthored = useAuthoredQuery(currentSummary, {}, { dataProviderName: "console", models: [resource.modelLabel] });
+    const [command] = useAuthoredResourceMutation(createNoteCommand, { dataProviderName: "console", invalidateModels: [resource.modelLabel] });
+    currentAuthoredTitle = currentAuthored.data?.summary;
+    nativeTitle = list.result.data?.[0]?.title;
+    unrelatedTitle = other.result.data?.[0]?.title;
+    authoredTitle = authored.data?.summary;
+    surface = useFormViewSave({
+      resource: resource.modelLabel, id: mode === "create" || mode === "command" ? null : "note-1", isCreate: mode === "create" || mode === "command",
+      dataResource: formResource, modelMetadata: schemaFieldMetadataFromDataResources([formResource]).labels[resource.modelLabel]!,
+      formFields: fields, fieldByName, refineFields,
+      defaultValues: { title: "Before", body: "", deadline: "" },
+      invalidateModels: [related.modelLabel],
+      ...(mode === "rejected" ? { submit: async () => formSubmitError("Refused") } : {}),
+      ...(mode === "command" ? { createSubmit: async (data: Row) => savedFormSubmitResult((await command({ data }))?.create_note, "No record returned.") } : {}),
+      t: (key) => key,
+    });
+    return null;
+  }
+  render(<Provider resources={[formResource, related, unrelated]} queryClient={client} dataProvider={{
+    getList, custom, create: write, update: write, getOne: async () => ({ data: { id: "note-1", title, body: "", deadline: "", ...(mode === "nested" ? { lines: [{ id: "line-1", label: title }] } : {}) } }),
+  }}><RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><OperationDocumentsProvider documents={{ console: { saves: { [resource.modelLabel]: gql`mutation Save { notes_save { id } }` } } }}><Probe /></OperationDocumentsProvider></AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider></Provider>);
+  await waitFor(() => { expect(surface.loading).toBe(false); expect(nativeTitle).toBe("Before"); expect(authoredTitle).toBe("Before"); expect(currentAuthoredTitle).toBe("Before"); expect(unrelatedTitle).toBe("Before"); });
+  await act(async () => {
+    if (mode === "patch") await surface.applyPatch({ title: "After" });
+    else {
+      surface.form.setValue("title", "After", { shouldDirty: true });
+      if (mode === "nested") surface.form.setValue("lines", [{ id: "line-1", label: "After" }], { shouldDirty: true });
+      await surface.submitForm();
+    }
+  });
+  if (mode === "rejected") {
+    expect(surface.saveError).toBe("Refused");
+    expect(write).not.toHaveBeenCalled();
+    expect(getList).toHaveBeenCalledTimes(2);
+    expect(custom).toHaveBeenCalledTimes(2);
+  } else {
+    await waitFor(() => { expect(nativeTitle).toBe("After"); expect(authoredTitle).toBe("After"); expect(currentAuthoredTitle).toBe("After"); });
+    expect(write).toHaveBeenCalledTimes(mode === "nested" || mode === "command" ? 0 : 1);
+    expect(getList.mock.calls).toHaveLength(3);
+    expect(custom).toHaveBeenCalledTimes(mode === "nested" || mode === "command" ? 5 : 4);
+    // The command owns its own model refresh; the Form must not issue a second one.
+    expect(custom.mock.calls.filter(([params]) => params.meta?.gqlQuery === currentSummary)).toHaveLength(2);
+  }
+  expect(unrelatedTitle).toBe("Before");
 });
