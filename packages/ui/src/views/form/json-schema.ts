@@ -140,7 +140,7 @@ export function createJsonSchemaResolver<
     const candidate: unknown = structuredClone(values);
     if (validate(candidate)) return { values: candidate, errors: {} };
     const errors: FieldErrors<TValues> = {};
-    applyFormErrors<TValues, never>({ setError: (name, error) => { set(errors, name, { ...get(errors, name), ...error }); } },
+    applyFormErrors<TValues, never>({ setError: (name, error) => { set(errors, name, Object.assign({}, get(errors, name), error)); } },
       invalidFormSubmit(ajvValidationErrors(validate.errors, messageForError, translate)));
     return { values: {}, errors };
   };
