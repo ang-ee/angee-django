@@ -42,7 +42,9 @@ from rebac import system_context
 
 from angee.agents.backends import InferenceBackend
 from angee.agents.models import (
+    IMAGE_INFERENCE_MODEL_USES,
     INFERENCE_OUTPUT_TOOL,
+    TEXT_INFERENCE_MODEL_USES,
     InferenceModelStatus,
     InferenceModelUse,
     InferenceOutputError,
@@ -799,6 +801,97 @@ def test_ollama_backend_lists_tagged_models_without_a_credential(monkeypatch: An
     assert by_handle["nomic-embed-text:latest"].context_window == 0
     assert by_handle["qwen2.5-coder:7b"].context_window == 0
     assert all(spec.max_output_tokens == 0 for spec in specs)
+
+
+@pytest.mark.parametrize(
+    "capabilities, expected_use",
+    [
+        (["completion"], "chat"),
+        (["completion", "vision", "tools"], "multimodal"),
+        (["embedding"], "embedding"),
+        (["embedding", "vision"], "embedding"),
+        (["embedding", "completion"], "embedding"),
+        (None, ""),
+        ([], ""),
+        (["tools", "thinking"], ""),
+        (["vision"], ""),
+        ("completion", ""),
+        (["completion", {}], ""),
+    ],
+)
+def test_ollama_discovery_uses_native_capabilities_without_name_guesses(
+    monkeypatch: Any, capabilities: Any, expected_use: str,
+) -> None:
+    """Native modality reaches both handles; unknown metadata contributes no override."""
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "GET":
+            return httpx2.Response(200, json={"data": [{"id": "opaque-model:latest", "object": "model"}]})
+        return httpx2.Response(200, json={} if capabilities is None else {"capabilities": capabilities})
+
+    with DefaultHttpxClient(transport=httpx2.MockTransport(handle)) as http_client:
+        monkeypatch.setattr("openai.DefaultHttpxClient", lambda **kwargs: http_client)
+        backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url="", config={}))
+        specs = backend.list_models()
+
+    assert [spec.handle for spec in specs] == ["opaque-model:latest", "ollama/opaque-model:latest"]
+    assert [spec.model_use for spec in specs] == [expected_use, expected_use]
+    assert all(("model_use" in spec.upsert_defaults()) is bool(expected_use) for spec in specs)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ollama_refresh_repairs_alias_uses_and_preserves_curated_defaults(
+    composed_tables: None, monkeypatch: Any, settings: Any,
+) -> None:
+    """Native discovery repairs fallback candidates without changing preferred deployments."""
+
+    provider = _provider("ollama-capabilities", backend_class="ollama", credential=None)
+    with system_context(reason="test.agents.ollama.curated_models"):
+        glm = InferenceModel.objects.create(
+            provider=provider, name="glm-ocr:latest", model_use=InferenceModelUse.MULTIMODAL,
+            context_window=131072, config={"source": "ollama", "provider_model": "glm-ocr:latest"},
+        )
+        qwen = InferenceModel.objects.create(provider=provider, name="qwen2.5:latest", is_default=True)
+        InferenceModel.objects.create(provider=provider, name="ollama/glm-ocr:latest")
+        InferenceModel.objects.create(provider=provider, name="nomic-embed-text:latest")
+        InferenceModel.objects.create(provider=provider, name="ollama/nomic-embed-text:latest")
+    capabilities = {
+        "glm-ocr:latest": ["completion", "vision"],
+        "qwen2.5:latest": ["completion", "tools"],
+        "nomic-embed-text:latest": ["embedding"],
+    }
+    metadata = "native"
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "GET":
+            return httpx2.Response(200, json={"data": [{"id": name, "object": "model"} for name in capabilities]})
+        assert request.url.path.endswith("/api/show")
+        if metadata == "failed":
+            return httpx2.Response(503, json={"error": "metadata unavailable"})
+        if metadata == "missing":
+            return httpx2.Response(200, json={})
+        return httpx2.Response(200, json={"capabilities": capabilities[json.loads(request.content)["model"]]})
+
+    settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = None
+    with DefaultHttpxClient(transport=httpx2.MockTransport(handle)) as http_client:
+        monkeypatch.setattr("openai.DefaultHttpxClient", lambda **kwargs: http_client)
+        for metadata in ("native", "missing", "failed"):
+            assert provider.refresh_models() == 6
+            with system_context(reason="test.agents.ollama.refreshed_models"):
+                models = {model.name: model for model in InferenceModel.objects.filter(provider=provider)}
+            assert models[glm.name].pk == glm.pk
+            assert models[glm.name].context_window == 131072
+            assert models[glm.name].model_use == models[f"ollama/{glm.name}"].model_use == InferenceModelUse.MULTIMODAL
+            assert models["nomic-embed-text:latest"].model_use == InferenceModelUse.EMBEDDING
+            assert models["ollama/nomic-embed-text:latest"].model_use == InferenceModelUse.EMBEDDING
+            assert [model.name for model in models.values() if model.is_default] == [qwen.name]
+            mapping = InferenceModel.objects.usable(provider.owner, "mapping", uses=TEXT_INFERENCE_MODEL_USES)
+            recognition = InferenceModel.objects.usable(provider.owner, "recognition", uses=IMAGE_INFERENCE_MODEL_USES)
+            assert mapping[0].pk == qwen.pk
+            assert {model.name for model in mapping} == {
+                glm.name, f"ollama/{glm.name}", qwen.name, f"ollama/{qwen.name}",
+            }
+            assert {model.name for model in recognition} == {glm.name, f"ollama/{glm.name}"}
 
 
 @pytest.mark.django_db(transaction=True)

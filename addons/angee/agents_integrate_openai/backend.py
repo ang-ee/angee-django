@@ -92,7 +92,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
                 self._model_specs(
                     handle=model_id,
                     display_name=model_id,
-                    model_use=self._discovered_model_use(),
+                    model_use=str(discovery.get("model_use", "")),
                     context_window=int(discovery.get("context_window", 0) or 0),
                     config=config,
                 )
@@ -103,12 +103,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
         """Return optional native discovery facts for one listed physical model."""
 
         del client, model_id
-        return {}
-
-    def _discovered_model_use(self) -> str:
-        """Return the modality asserted by this provider's model listing."""
-
-        return "chat"
+        return {"model_use": "chat"}
 
     def _build_model(self, handle: str, client: Any) -> OpenAIChatModel:
         """Use native protocol conversion, including the configured token-limit field."""

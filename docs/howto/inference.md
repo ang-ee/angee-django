@@ -16,6 +16,11 @@ preserving configured model filters. Use the Ollama backend for Ollama's native
 discovery and request settings; its default is localhost, but its provider URL
 can point to a remote server.
 
+Ollama refresh updates model use from native `/api/show` capabilities for both
+catalogue handles: embedding models become Embedding, completion with vision
+becomes Multimodal, and text completion becomes Chat. When capabilities are
+unavailable or unrecognized, refresh preserves curated model uses.
+
 The integration's **Test connection** action reads the selected backend's live
 model catalogue without updating catalogue rows or generating inference. An
 empty catalogue still proves connectivity. The manual backend reports that it
