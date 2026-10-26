@@ -44,8 +44,10 @@ and publishes one immutable `Backup` per execution with the actual frozen
 operator manifest. File alone owns filename, content hash, byte count, and
 download authorization. Native workflow links and timeline retain progress and
 failed attempts; unsuccessful capture or publication creates no completed Backup.
-A terminal operator capture failure requires the workflow's **Reprocess** action:
-that preserves its frozen selection and creates a new capture identity.
+To repeat a terminal operator capture failure with the same selection, use the
+workflow's **Reprocess** action: it preserves the frozen selection and creates a
+new capture identity. To change what is included, edit and save the plan, then
+use **Back up now** on the plan. Reprocess never picks up later plan changes.
 Automatic transport retries resume the same operator identity up to the capture
 step's declared bound. Request validation, missing endpoint and access refusals
 fail immediately with safe configuration or selection guidance; temporary
