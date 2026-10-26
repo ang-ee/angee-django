@@ -522,23 +522,3 @@ test("authored singleton reads opt into native previous-data placeholders across
   await act(async () => { next.resolve({ data: { notes: [{ id: "two" }] } }); });
   await waitFor(() => expect(read.result.current.data?.notes[0]?.id).toBe("two"));
 });
-
-
-test("explicit discovery refetches on reopen despite the host freshness window", async () => {
-  const refreshed = deferred<{ data: Data }>();
-  const custom = vi.fn()
-    .mockResolvedValueOnce({ data: { notes: [{ id: "before" }] } })
-    .mockImplementationOnce(() => refreshed.promise);
-  const f = fixture(custom);
-  const read = renderHook(({ open }) => useAuthoredQuery(DOCUMENT, { id: "same" }, {
-    enabled: open, staleTime: 0,
-  }), { initialProps: { open: true }, wrapper: f.wrapper });
-  await waitFor(() => expect(read.result.current.data?.notes[0]?.id).toBe("before"));
-  read.rerender({ open: false });
-  read.rerender({ open: true });
-  await waitFor(() => expect(custom).toHaveBeenCalledTimes(2));
-  expect(read.result.current.isFetching).toBe(true);
-  await act(async () => { refreshed.resolve({ data: { notes: [{ id: "after" }] } }); });
-  await waitFor(() => expect(read.result.current.data?.notes[0]?.id).toBe("after"));
-  expect(read.result.current.isFetching).toBe(false);
-});

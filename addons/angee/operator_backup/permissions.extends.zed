@@ -1,7 +1,0 @@
-// @rebac_package: operator_backup
-// @rebac_schema_revision: 1
-
-definition storage/file {
-    relation backup: operator_backup/backup // rebac:field=backups
-    permission read = backup->read
-}

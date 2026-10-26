@@ -183,10 +183,3 @@ Resource rows supply `key`, `name`, `subject_model`, `draft` and `publish`.
 which uses the same draft and publication owners as direct calls. Tests compose
 the abstract sources through [`workflows.testing`](testing/__init__.py) and can
 execute those same manager verbs synchronously through its drivers.
-
-
-A step's `RetryPolicy` bounds automatic retries. `manual=False` additionally
-requires Reprocess after a step execution fails; it does not change automatic
-retries or failure propagation. Task-delivery exhaustion remains retryable in
-place because the execution has not failed and its workflow is still active. The native `StepRun.retry_blocker`
-policy owns the operator action and GraphQL eligibility together.

@@ -26,7 +26,6 @@ export function isToOneRelationField(
 const SCALAR_WIDGET: Readonly<Record<string, string>> = {
   Boolean: "switch",
   Int: "integer",
-  BigInt: "integer",
   Float: "float",
   Decimal: "float",
   DateTime: "datetime",
@@ -86,7 +85,6 @@ export function filterFieldType(
   if (
     field?.kind === "scalar" &&
     (field.scalar === "Int" ||
-      field.scalar === "BigInt" ||
       field.scalar === "Float" ||
       field.scalar === "Decimal")
   ) {

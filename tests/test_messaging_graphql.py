@@ -2609,7 +2609,7 @@ def test_record_chatter_post_with_attachment(composed_tables: None, tmp_path: Pa
             "fragment": None,
             "file": {
                 "filename": "brief.txt",
-                "size_bytes": str(len(b"Attachment body")),
+                "size_bytes": len(b"Attachment body"),
                 "mime_type": {"mime_type": "text/plain"},
             },
         },

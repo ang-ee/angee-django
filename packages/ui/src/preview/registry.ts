@@ -19,7 +19,7 @@ export interface PreviewFile {
   /** Content type (may be null/unknown). */
   mime?: string | null;
   /** Size in bytes. */
-  size?: number | string | null;
+  size?: number | null;
   /** Opaque renderer-specific payload. */
   metadata?: unknown;
 }

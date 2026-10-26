@@ -3,10 +3,9 @@
 from typing import Any
 
 import pytest
-from asgiref.sync import async_to_sync
 from django.core import signing
 from django.db import connection
-from django.test import AsyncRequestFactory, RequestFactory
+from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, generic_target, system_context, to_subject_ref
 from rebac.actors import NoActorResolvedError
@@ -200,10 +199,7 @@ def test_guarded_relation_rechecks_sudo_cache_and_reuses_actor_scoped_cache(
             assert factory("folder").base_resolver.wrapped_func(empty) is None
 
 
-@pytest.mark.parametrize("request_factory", [RequestFactory, AsyncRequestFactory])
-def test_download_bearer_rechecks_issuing_actor_before_conditional_response(
-    drive: Any, request_factory: type[RequestFactory],
-) -> None:
+def test_download_bearer_rechecks_issuing_actor_before_conditional_response(drive: Any) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
     reader = create_user("download-viewer")
     with actor_context(drive.alice):
@@ -214,18 +210,13 @@ def test_download_bearer_rechecks_issuing_actor_before_conditional_response(
     assert claims == {"file": str(row.sqid), "actor": str(public_subject_ref(to_subject_ref(reader)))}
     explicit = row.issue_download_token(actor=reader)
     assert signing.loads(explicit, salt=DOWNLOAD_TOKEN_SALT) == claims
-    request = request_factory().get(f"/download?token={token}")
+    request = RequestFactory().get(f"/download?token={token}")
     response = views.download(request, row.filename)
     assert response.status_code == 200
     etag = response["ETag"]
-
-    async def read_async() -> bytes:
-        return b"".join([chunk async for chunk in response])
-
-    body = async_to_sync(read_async)() if response.is_async else b"".join(response.streaming_content)
-    assert body == PNG_BYTES
+    assert b"".join(response.streaming_content) == PNG_BYTES
     response.close()
-    conditional = request_factory().get(f"/download?token={token}", headers={"If-None-Match": etag})
+    conditional = RequestFactory().get(f"/download?token={token}", HTTP_IF_NONE_MATCH=etag)
     assert views.download(conditional, row.filename).status_code == 304
     with actor_context(drive.alice):
         row.with_actor(drive.alice).revoke_record_access("viewer", reader)

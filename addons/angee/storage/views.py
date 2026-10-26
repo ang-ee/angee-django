@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Collection
+from collections.abc import Collection
 from typing import Literal
 
-from asgiref.sync import sync_to_async
 from django.apps import apps
-from django.core.handlers.asgi import ASGIRequest
 from django.http import FileResponse, HttpRequest, JsonResponse
 from django.http.response import HttpResponseBase
 from django.utils.cache import get_conditional_response, patch_cache_control, patch_vary_headers
@@ -112,19 +110,6 @@ def download(request: HttpRequest, filename: str) -> HttpResponseBase:
     response = FileResponse(
         stream, filename=row.filename, content_type=content_type, as_attachment=not renders_inline(content_type)
     )
-    if isinstance(request, ASGIRequest):
-        # Keep FileResponse's headers and resource closer, replacing only the
-        # sync iterator that Django otherwise buffers in full under ASGI.
-        async def stream_chunks() -> AsyncIterator[bytes]:
-            read = sync_to_async(stream.read)
-            try:
-                while chunk := await read(response.block_size):
-                    yield chunk
-            finally:
-                # Thread-sensitive IO serializes close after any canceled read.
-                await sync_to_async(stream.close)()
-
-        response.streaming_content = stream_chunks()
     return _download_cache_response(response, etag, content_type)
 
 

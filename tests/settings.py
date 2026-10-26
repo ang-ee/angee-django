@@ -90,7 +90,6 @@ INSTALLED_APPS = [
     "angee.integrate_github",
     "angee.messaging_integrate_imap",
     "angee.operator",
-    "angee.operator_backup",
     "angee.parties_integrate_carddav",
     "angee.platform_integrate_operator",
     "angee.resources.testing",

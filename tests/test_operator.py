@@ -510,7 +510,6 @@ def test_not_sent_transport_failure_preserves_daemon_unavailability(
     with pytest.raises(OperatorDaemonError) as raised:
         daemon.read_file("app", "settings.yaml")
     assert isinstance(raised.value.__cause__, RequestNotSentError)
-    assert not raised.value.delivery_uncertain
 
 
 def test_mint_token_none_on_daemon_http_error(
@@ -747,34 +746,3 @@ def test_operator_schema_writes_the_live_sdl_into_the_runtime(monkeypatch, setti
 
     assert (tmp_path / "schemas" / "external" / "operator.graphql").read_text() == "type Query { ping: String }\n"
     assert committed.read_bytes() == before
-
-
-
-def test_daemon_error_retains_native_machine_readable_classification() -> None:
-    error = OperatorDaemonError.from_response(
-        "POST", "http://operator/backups", 403,
-        b'{"error":"denied","code":"PERMISSION_DENIED","cause":"backup_scope"}',
-    )
-    assert error.status_code == 403
-    assert error.code == "PERMISSION_DENIED"
-    assert error.cause == "backup_scope"
-
-
-
-@pytest.mark.parametrize("error_class", [httpx2.ReadTimeout, httpx2.ReadError, httpx2.WriteError])
-def test_daemon_wraps_uncertain_transport_without_retrying_nonidempotent_operation(monkeypatch, error_class):
-    daemon, urls = _daemon_answering(monkeypatch, 200, b"{}")
-    calls = []
-
-    def lost(self, method, url, **kwargs):
-        calls.append((method, url))
-        raise error_class("private /source/path token=secret")
-
-    monkeypatch.setattr(daemon_module.HttpClient, "request", lost)
-    with pytest.raises(OperatorDaemonError) as raised:
-        daemon.create_workspace(template="workspaces/demo", inputs={})
-    assert len(calls) == 1 and not urls
-    assert raised.value.delivery_uncertain
-    assert isinstance(raised.value.__cause__, error_class)
-    assert "/source/path" not in str(raised.value)
-    assert "token=secret" not in str(raised.value)

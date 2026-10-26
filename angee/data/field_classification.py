@@ -21,7 +21,7 @@ RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list", "object"
 """Supported resource field kind names."""
 
 RESOURCE_FIELD_SCALARS = frozenset(
-    {"ID", "String", "Boolean", "Int", "BigInt", "Float", "Decimal", "DateTime", "Date", "UUID", "JSON"}
+    {"ID", "String", "Boolean", "Int", "Float", "Decimal", "DateTime", "Date", "UUID", "JSON"}
 )
 """Supported GraphQL scalar families in data-resource field metadata."""
 

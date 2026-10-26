@@ -134,8 +134,6 @@ export function optionTextLabel(
 
 /** Presentation facts shared by page descriptors and rendered widget fields. */
 export interface FieldPresentation {
-  /** Native wire scalar; exact numeric strings must never pass through Number. */
-  scalar?: string;
   /** IAM assignment-subject controls offer these native subject kinds. */
   /** Statusbar layout; the form slot may supply measured width at render time. */
   fill?: boolean;

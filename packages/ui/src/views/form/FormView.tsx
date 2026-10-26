@@ -212,11 +212,11 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     ? declaredActions.filter((action) => action.run || action.submit)
     : declaredActions;
   useBreadcrumbLeafLabel(
-    isCreate ? t("form.create") : titleText(
+    titleText(
       recordRepresentationValue(displayRecord, surface.modelMetadata),
       "",
     ) || null,
-    publishBreadcrumbLabel,
+    publishBreadcrumbLabel && !isCreate,
   );
   const awaitingRecord = !isCreate && displayRecord == null && loading;
   if (!isCreate && !awaitingRecord && displayRecord == null) {

@@ -37,7 +37,7 @@ const pdf = (n: number) => ({
   id: `part-${n}`, name: `renewal-${n}.pdf`, type: "application/pdf", position: n, role: "BODY",
   disposition: "ATTACHMENT", cid: "", parent: null, fragment: null,
   file: {
-    id: `file-${n}`, filename: `renewal-${n}.pdf`, title: "", size_bytes: "2048", url: `/storage/download/token-${n}/renewal-${n}.pdf`,
+    id: `file-${n}`, filename: `renewal-${n}.pdf`, title: "", size_bytes: 2048, url: `/storage/download/token-${n}/renewal-${n}.pdf`,
     mime_type: { mime_type: "application/pdf", label: "PDF" },
   },
 });

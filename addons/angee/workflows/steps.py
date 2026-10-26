@@ -47,12 +47,10 @@ class StepMode(StrEnum):
 
 @dataclass(frozen=True)
 class RetryPolicy:
-    """Automatic attempt bounds and whether operators may retry a retained step."""
+    """Maximum attempts and exponential delay after a failed attempt."""
 
     max_attempts: int = 1
     backoff: timedelta = timedelta(seconds=1)
-    manual: bool = True
-    """False requires a new run after execution failure, preserving retries of task-delivery waits."""
 
     def __post_init__(self) -> None:
         if self.max_attempts < 1 or self.backoff < timedelta():

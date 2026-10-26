@@ -68,8 +68,6 @@ export interface AuthoredQueryOptions extends AuthoredOperationOptions {
   records?: readonly { model: string; id: string }[];
   /** Models whose changes match only through their event's related records. */
   relatedModels?: readonly string[];
-  /** Native Query freshness interval; explicit discovery can opt out of the host cache window. */
-  staleTime?: number;
   /** Native TanStack Query polling policy for durable external operations. */
   refetchInterval?: number | false;
   /**
@@ -108,7 +106,6 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
   const result = useQuery({
     ...configured,
     enabled: options.enabled ?? true,
-    ...(options.staleTime === undefined ? {} : { staleTime: options.staleTime }),
     refetchInterval: options.refetchInterval,
   });
   useAuthoredLiveInterest(options.enabled ?? true, models);

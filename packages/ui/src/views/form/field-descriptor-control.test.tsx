@@ -4,8 +4,6 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, test, vi } from "vitest";
 
-import { testDataResource } from "@angee/metadata/testing";
-import { createUiTestProviders } from "../../testing";
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets, type WidgetFocusTarget, type WidgetRenderProps } from "../../widgets";
 import { FieldDescriptorControl } from "./field-descriptor-control";
@@ -98,19 +96,4 @@ describe("FieldDescriptorControl", () => {
     fireEvent.click(trigger);
     expect(screen.getByRole("option", { name: "Published" })).toBeTruthy();
   });
-});
-
-
-test("the descriptor passes its BigInt wire scalar through to the native exact editor", async () => {
-  const change = vi.fn();
-  const resource = testDataResource("files.File", { fields: [{ name: "size", kind: "scalar", scalar: "BigInt", readable: true,
-    aggregatable: false, creatable: true, updatable: true, requiredOnCreate: false }] });
-  const { Provider } = createUiTestProviders({ resources: [resource] });
-  render(<Provider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-    <FieldDescriptorControl resource="files.File" field={{ name: "size", label: "Exact size" }} value="9007199254740993" onChange={change} />
-  </AppRuntimeProvider></Provider>);
-  const input = await screen.findByRole("textbox", { name: "Exact size" }) as HTMLInputElement;
-  expect(input.value).toBe("9007199254740993");
-  fireEvent.change(input, { target: { value: "9007199254740995" } });
-  expect(change).toHaveBeenCalledWith("9007199254740995");
 });

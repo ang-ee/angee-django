@@ -1,7 +1,6 @@
-import { useEffect, type ReactElement } from "react";
+import type { ReactElement } from "react";
 
-import { Input } from "../ui/input";
-import { formatNumber, isNumericString } from "../lib/format-number";
+import { formatNumber } from "../lib/format-number";
 import { NumberField } from "../ui/number-field";
 import { textRoleVariants } from "../ui/text";
 import { widgetLabel } from "./label";
@@ -16,9 +15,7 @@ function IntegerEdit({
   field,
   readOnly,
   controlRef,
-  onValidityChange,
 }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
-  if (field?.scalar === "BigInt") return <ExactNumberEdit value={value} onChange={onChange} onCommit={onCommit} field={field} readOnly={readOnly} controlRef={controlRef} onValidityChange={onValidityChange} />;
   return (
     <NumberField
       presentation={field?.controlProps?.presentation}
@@ -50,9 +47,7 @@ function FloatEdit({
   field,
   readOnly,
   controlRef,
-  onValidityChange,
 }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
-  if (field?.scalar === "Decimal") return <ExactNumberEdit value={value} onChange={onChange} onCommit={onCommit} field={field} readOnly={readOnly} controlRef={controlRef} onValidityChange={onValidityChange} />;
   return (
     <NumberField
       presentation={field?.controlProps?.presentation}
@@ -72,23 +67,6 @@ function FloatEdit({
       )}
     />
   );
-}
-
-/** NumberField accepts JS numbers only; exact wire scalars compose the native text input. */
-function ExactNumberEdit({ value, onChange, onCommit, field, readOnly, controlRef, onValidityChange }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
-  const text = value == null ? "" : String(value);
-  let valid = text.trim() === "";
-  if (!valid && field?.scalar === "BigInt") {
-    try { BigInt(text); valid = true; } catch { /* Incomplete input remains editable. */ }
-  } else if (!valid) valid = isNumericString(text);
-  useEffect(() => {
-    onValidityChange?.(valid);
-    return () => onValidityChange?.(true);
-  }, [onValidityChange, valid]);
-  return <Input {...field?.controlProps} ref={controlRef} type="text"
-    inputMode={field?.scalar === "BigInt" ? "numeric" : "decimal"}
-    value={text} readOnly={readOnly} aria-label={widgetLabel(field, field?.scalar === "BigInt" ? "Integer" : "Decimal number")}
-    onChange={(event) => onChange?.(event.currentTarget.value)} onBlur={onCommit} />;
 }
 
 function NumberRead({
@@ -134,7 +112,8 @@ export const percentWidget = {
 
 function normaliseNumber(value: NumericWidgetValue | undefined): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  // Only number-valued Int/Float controls use this adapter; exact scalars stay strings.
+  // Decimal columns arrive as exact strings on the wire (the Decimal scalar);
+  // a numeric widget still renders and edits them as numbers.
   if (typeof value === "string" && value.trim() !== "") {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;

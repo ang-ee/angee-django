@@ -62,9 +62,3 @@ navigation, and the shared explorer keeps its mounted tree and selection.
 Folders compose the native hierarchy and transferable ownership, scoped to their
 drive. Files, folders and FileAttachment edges retain changeset history; a merge
 can restore an attachment's former target without moving the file's bytes.
-
-
-GraphQL byte counts use the locked aggregation library's native `BigInt` scalar:
-exact integer strings on input and output, including file sizes above 2 GiB.
-The shared size formatter converts to an approximate number only for human
-readable display. Persistence remains Django's positive bigint column.
