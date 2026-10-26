@@ -139,10 +139,12 @@ RUN corepack enable
 WORKDIR /opt/angee-web
 # Every @angee/* package (core + addon frontends), byte-identical to the wheel's JS.
 COPY --from=web-src /opt/angee-js ./packages
+COPY packages/scripts/pnpm-policy.cjs ./framework-install/pnpm-policy.cjs
+COPY packages/scripts/patches ./framework-install/patches
 # A workspace over the copied packages so `workspace:*` inter-deps resolve;
 # link-workspace-packages so a downstream project's `@angee/*: ^x` range still links
 # the baked package by name; auto-install-peers keeps a single React instance.
-RUN printf 'packages:\n  - "packages/*"\noverrides:\n  "@assistant-ui/react": 0.14.26\n  "@assistant-ui/core": 0.2.20\n  "@assistant-ui/store": 0.2.19\n  "@assistant-ui/tap": 0.9.3\n' > pnpm-workspace.yaml \
+RUN printf 'packages:\n  - "packages/*"\nglobalPnpmfile: framework-install/pnpm-policy.cjs\n' > pnpm-workspace.yaml \
  && printf '{"name":"@angee/web-runtime","private":true,"packageManager":"pnpm@11.1.3"}\n' > package.json \
  && printf 'link-workspace-packages=true\nprefer-workspace-packages=true\nauto-install-peers=true\n' > .npmrc \
  && pnpm install

@@ -302,18 +302,17 @@ describe("Gantt collection over native list data", () => {
     await waitFor(() => expect(drawing.props?.events).toHaveLength(MAX_PAGE_SIZE + 1));
     const catalogueRequests = f.getList.mock.calls.filter(([params]) => params.resource === "lanes");
     const cataloguePage = { mode: "server", currentPage: 2, pageSize: 10 };
-    // Native Query cancels the pending catalogue read during StrictMode's
-    // simulated unmount and starts it again; neither request may target page 1.
-    expect(catalogueRequests.map(([params]) => params.pagination)).toEqual(strict
-      ? [cataloguePage, cataloguePage]
-      : [cataloguePage]);
-    expect(catalogueRequests.map(([params]) => params.meta?.signal.aborted)).toEqual(strict ? [true, false] : [false]);
+    // This provider does not consume the signal, so StrictMode shares the
+    // pending catalogue read and keeps its requested page without cancellation.
+    expect(catalogueRequests).toHaveLength(1);
+    expect(catalogueRequests.map(([params]) => params.pagination)).toEqual([cataloguePage]);
+    expect(catalogueRequests.map(([params]) => params.meta?.signal.aborted)).toEqual([false]);
     expect(f.barRequests().map(([params]) => params.pagination)).toEqual([
       { mode: "server", currentPage: 1, pageSize: MAX_PAGE_SIZE },
       { mode: "server", currentPage: 2, pageSize: MAX_PAGE_SIZE },
     ]);
     expect(f.barRequests()[1]?.[0].meta?.gqlVariables).toEqual(f.barRequests()[0]?.[0].meta?.gqlVariables);
-    expect(f.getList).toHaveBeenCalledTimes(strict ? 4 : 3);
+    expect(f.getList).toHaveBeenCalledTimes(3);
     expect(f.state().state.pagination.pageIndex).toBe(1);
   });
 

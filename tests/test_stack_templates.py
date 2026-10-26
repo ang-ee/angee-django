@@ -2240,3 +2240,24 @@ def test_each_sentry_dsn_is_independent() -> None:
 
     assert _env_nodes(backend_only, "SENTRY_DSN") and not _env_nodes(backend_only, "VITE_SENTRY_DSN")
     assert _env_nodes(web_only, "VITE_SENTRY_DSN") and not _env_nodes(web_only, "SENTRY_DSN")
+
+
+def test_stack_install_roots_compose_the_shared_pnpm_policy() -> None:
+    workspace = yaml.safe_load((ROOT / "pnpm-workspace.yaml").read_text())
+    assert workspace["globalPnpmfile"] == "packages/scripts/pnpm-policy.cjs"
+    template = DEV_PNPM_WORKSPACE.read_text()
+    assert "globalPnpmfile: workspaces/src/angee/packages/scripts/pnpm-policy.cjs" in template
+    dockerfile = (ROOT / "Dockerfile").read_text()
+    assert "COPY packages/scripts/pnpm-policy.cjs ./framework-install/pnpm-policy.cjs" in dockerfile
+    assert "COPY packages/scripts/patches ./framework-install/patches" in dockerfile
+    assert "globalPnpmfile: framework-install/pnpm-policy.cjs" in dockerfile
+    for surface in [workspace, yaml.safe_load(template[template.index("allowBuilds:"):])]:
+        assert "overrides" not in surface
+        assert "packageExtensions" not in surface
+        assert "patchedDependencies" not in surface
+    for serve_mode in ["development", "production"]:
+        stack = _render_local_stack(serve_mode=serve_mode)
+        command = stack["jobs"]["frontend-build"]["command"][-1]
+        assert "pnpm config set packages" in command
+        assert "--json --location project" in command
+        assert "> pnpm-workspace.yaml" not in command
