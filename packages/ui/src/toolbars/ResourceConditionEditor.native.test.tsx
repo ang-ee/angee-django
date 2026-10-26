@@ -96,7 +96,8 @@ test("Boolean enum choices submit their typed false input instead of the native 
 test("unchanged Decimal comparisons preserve every digit", () => {
   const condition = { amount: { _eq: "9007199254740993.25" } };
   const onChange = scalarFixture(condition);
-  const operand = screen.getByRole("spinbutton", { name: "Filter value" }) as HTMLInputElement;
+  const operand = screen.getByRole("textbox", { name: "Filter value" }) as HTMLInputElement;
+  expect(operand.inputMode).toBe("decimal");
   expect(operand.value).toBe("9007199254740993.25");
   expect(operand.checkValidity()).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Apply" }));

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { ResourceQuery } from "@angee/metadata";
+import { ResourceQuery, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { buildFilterFields } from "../views/resource/resource-view-utils";
 import { useState } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -154,12 +154,14 @@ test.each([
   ["Decimal", "9007199254740993.125"],
 ])("a rendered %s query filter submits its exact string operand", (scalar, value) => {
   const query = ResourceQuery.forRows({ fields: { size: { scalar } } });
-  const fields = buildFilterFields([{ field: "size", header: "Size" }], [], null, query);
+  const fields = buildFilterFields([{ field: "size", header: "Size" }], [], null, schemaFieldMetadataFromDataResources([]), query);
   const onSubmit = vi.fn();
   render(<FilterClauseEditor fields={fields} onSubmit={onSubmit} />, { wrapper: Provider });
   const input = screen.getByLabelText("Filter value") as HTMLInputElement;
   expect(input.type).toBe("text");
+  expect(input.inputMode).toBe(scalar === "BigInt" ? "numeric" : "decimal");
   fireEvent.change(input, { target: { value } });
+  expect(input.checkValidity()).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
   expect(onSubmit).toHaveBeenCalledWith({ field: "size", operator: "exact", type: "number", value });
   expect(query.filterFrom({ size: { exact: value } })).toEqual({ size: { exact: value } });
