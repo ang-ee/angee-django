@@ -5,11 +5,13 @@ import strawberry
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
+from django.db.models.functions import Upper
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.graphql.data.hasura import _declared_aliases, _declared_filter_expressions, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.permissions import session_user
 from angee.models import AngeeDataModel
 from tests.composed_host import run_composed_tests
 from tests.conftest import create_user, execute_schema, make_addon, result_data
@@ -102,6 +104,62 @@ def test_alias_metadata_exposes_native_scalar_comparisons(alias_owner):
         assert str(graphql_filter.fields[alias].type) == "String_comparison_exp"
         assert resource.query.fields[alias].filter is not None
         assert resource.query.fields[alias].row is None
+
+
+@pytest.mark.parametrize("where", [
+    {"name": {"_eq": "Visible"}},
+    {"_and": [{"_not": {"upper_name": {"_eq": "OTHER"}}},
+              {"_or": [{"upper_name": {"_eq": "VISIBLE"}}, {"name": {"_eq": "Hidden"}}]}]},
+])
+def test_filter_providers_run_once_only_when_used_across_native_and_stored_reads(composed_tables, monkeypatch, where):
+    """Computed filters must not penalize ordinary reads or multiply preparation for aggregates."""
+    calls = []
+    sources = []
+
+    def upper_name(queryset):
+        calls.append("upper_name")
+        return Upper("name", output_field=models.CharField())
+
+    def unused(queryset):
+        calls.append("unused")
+        return models.Value(True)
+
+    def source(info):
+        sources.append(info.field_name)
+        return Scope.objects.with_actor(session_user(info))
+
+    viewer, other = create_user("lazy-filter-viewer"), create_user("lazy-filter-other")
+    with system_context(reason="lazy filter fixtures"):
+        visible = Scope.objects.create(name="Visible")
+        Scope.objects.create(name="Hidden")
+    write_relationships([RelationshipTuple(to_object_ref(visible), "direct_member", to_subject_ref(viewer))])
+    monkeypatch.setattr(Scope, "hasura_filter_expressions", {
+        "upper_name": upper_name, "unused": unused,
+    }, raising=False)
+    resource = build_resource(filterable=("id", "name", "parent"), groupable=("name",), get_queryset=source)
+    schemas = GraphQLSchemas([make_addon(schemas={"console": {"query": [resource.query], "types": resource.types}})])
+    schema = schemas.build("console")
+    calls.clear()  # Composition inspects output types; the contract below concerns executing reads.
+    query = """query($where: alias_scopes_bool_exp!) {
+      items: alias_scopes(where: $where) { name }
+      totals: alias_scopes_aggregate(where: $where) { aggregate { count } nodes { name } }
+      groups: alias_scopes_groups(where: $where, group_by: [{field: NAME}]) { key { name } aggregate { count } }
+      group_count: alias_scopes_groups_count(where: $where, group_by: [{field: NAME}])
+    }"""
+    assert result_data(execute_schema(schema, query, {"where": where}, user=viewer)) == {
+        "items": [{"name": "Visible"}],
+        "totals": {"aggregate": {"count": 1}, "nodes": [{"name": "Visible"}]},
+        "groups": [{"key": {"name": "Visible"}, "aggregate": {"count": 1}}],
+        "group_count": 1,
+    }
+    selected = "_and" in where
+    assert calls == ["upper_name"] * (5 if selected else 0)
+    assert len(sources) == 5  # Relation-free predicates need no extra source just to find an actor.
+    condition = schemas.resource_filter(Scope, where)
+    calls.clear()
+    assert list(condition(Scope.objects.with_actor(viewer)).values_list("pk", flat=True)) == [visible.pk]
+    assert not condition(Scope.objects.with_actor(other)).exists()
+    assert calls == ["upper_name"] * (2 if selected else 0)
 
 
 @pytest.mark.parametrize(("alias", "path", "diagnostic"), [
