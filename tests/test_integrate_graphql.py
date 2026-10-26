@@ -870,7 +870,7 @@ def test_vcs_bridge_create_maps_typed_config_errors_to_nested_field(
         _schema(),
         """
         mutation InvalidConfig($vendor: ID!, $owner: ID!) {
-          create_vcs_bridge(data: {
+          insert_vcs_bridges_one(object: {
             vendor: $vendor,
             owner: $owner,
             backend_class: "local",
@@ -1442,14 +1442,14 @@ def test_update_vcs_bridge_lifecycle_accepts_the_lowercase_value(
         _execute(
             console_schema,
             """
-            mutation($id: ID!) {
-              update_vcs_bridge(data: {id: $id, lifecycle: "disconnected"}) { lifecycle }
+            mutation($id: String!) {
+              update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: {lifecycle: "disconnected"}) { lifecycle }
             }
             """,
             {"id": _public_id(bridge)},
             user=admin,
         )
-    )["update_vcs_bridge"]
+    )["update_vcs_bridges_by_pk"]
     assert result["lifecycle"] == "DISCONNECTED"
     with system_context(reason="test.integrate.lifecycle.verify"):
         bridge.refresh_from_db()
@@ -1466,8 +1466,8 @@ def test_update_vcs_bridge_transfers_its_owner_and_keeps_the_patched_values(comp
         _execute(
             _schema(),
             """
-            mutation($id: ID!, $owner: ID!) {
-              update_vcs_bridge(data: {id: $id, owner: $owner, display_name: "Handed over"}) {
+            mutation($id: String!, $owner: ID!) {
+              update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: {owner: $owner, display_name: "Handed over"}) {
                 display_name
                 owner { username }
               }
@@ -1476,7 +1476,7 @@ def test_update_vcs_bridge_transfers_its_owner_and_keeps_the_patched_values(comp
             {"id": _public_id(bridge), "owner": str(successor.sqid)},
             user=admin,
         )
-    )["update_vcs_bridge"]
+    )["update_vcs_bridges_by_pk"]
     assert result == {"display_name": "Handed over", "owner": {"username": "owner-patch-successor"}}
     with system_context(reason="test.integrate.owner_patch.verify"):
         bridge.refresh_from_db()
@@ -1502,14 +1502,14 @@ def test_update_vcs_bridge_lifecycle_only_emits_one_state_save(composed_tables: 
             _execute(
                 console_schema,
                 """
-                mutation($id: ID!) {
-                  update_vcs_bridge(data: {id: $id, lifecycle: "paused"}) { lifecycle }
+                mutation($id: String!) {
+                  update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: {lifecycle: "paused"}) { lifecycle }
                 }
                 """,
                 {"id": _public_id(bridge)},
                 user=admin,
             )
-        )["update_vcs_bridge"]
+        )["update_vcs_bridges_by_pk"]
     finally:
         post_save.disconnect(capture_update_fields, sender=VcsBridge)
 
@@ -1530,18 +1530,53 @@ def test_update_vcs_bridge_lifecycle_accepts_the_graphql_enum_name(
         _execute(
             console_schema,
             """
-            mutation($id: ID!) {
-              update_vcs_bridge(data: {id: $id, lifecycle: "PAUSED"}) { lifecycle }
+            mutation($id: String!) {
+              update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: {lifecycle: "PAUSED"}) { lifecycle }
             }
             """,
             {"id": _public_id(bridge)},
             user=admin,
         )
-    )["update_vcs_bridge"]
+    )["update_vcs_bridges_by_pk"]
     assert result["lifecycle"] == "PAUSED"
     with system_context(reason="test.integrate.lifecycle_enum.verify"):
         bridge.refresh_from_db()
         assert str(bridge.lifecycle) == "paused"
+
+
+def test_native_vcs_writes_remain_admin_only_for_owner(composed_tables: None) -> None:
+    """Capability ownership cannot bypass the console's admin create/update policy."""
+
+    bridge = make_integration("native-vcs-owner", backend_class="stub", model=VcsBridge)
+    with system_context(reason="test.integrate.vcs.owner"):
+        owner = bridge.owner
+    console = _schema()
+    assert (
+        _execute(
+            console,
+            """mutation($id: String!) {
+          update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: {display_name: "Denied"}) { id }
+        }""",
+            {"id": str(bridge.sqid)},
+            user=owner,
+        ).errors
+        is not None
+    )
+    assert (
+        _execute(
+            console,
+            """mutation($vendor: ID!) {
+          insert_vcs_bridges_one(object: {vendor: $vendor}) { id }
+        }""",
+            {"vendor": str(bridge.vendor.sqid)},
+            user=owner,
+        ).errors
+        is not None
+    )
+    with system_context(reason="test.integrate.vcs.owner.verify"):
+        bridge.refresh_from_db()
+        assert bridge.display_name != "Denied"
+        assert VcsBridge.objects.filter(vendor=bridge.vendor).count() == 1
 
 
 def test_create_vcs_bridge_creates_child_row(
@@ -1557,8 +1592,7 @@ def test_create_vcs_bridge_creates_child_row(
             console_schema,
             """
             mutation CreateVcs($vendor: ID!, $owner: ID!) {
-              create_vcs_bridge(
-                data: {
+              insert_vcs_bridges_one(object: {
                   vendor: $vendor,
                   owner: $owner,
                   display_name: "Primary source host",
@@ -1579,7 +1613,7 @@ def test_create_vcs_bridge_creates_child_row(
             },
             user=admin,
         )
-    )["create_vcs_bridge"]
+    )["insert_vcs_bridges_one"]
 
     assert result == {
         "display_name": "Primary source host",
@@ -1608,14 +1642,14 @@ def test_update_vcs_bridge_merges_typed_config(
         _execute(
             _schema(),
             """
-            mutation UpdateConfig($id: ID!, $config: JSON!) {
-              update_vcs_bridge(data: {id: $id, config: $config}) { config }
+            mutation UpdateConfig($id: String!, $config: JSON!) {
+              update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: {config: $config}) { config }
             }
             """,
             {"id": _public_id(bridge.sqid), "config": {"local_name": name}},
             user=_platform_admin("vcs-config-patch-admin"),
         )
-    )["update_vcs_bridge"]
+    )["update_vcs_bridges_by_pk"]
 
     expected = {**original, "local_name": expected_name}
     assert result == {"config": expected}
@@ -1637,8 +1671,8 @@ def test_update_vcs_bridge_rejects_unknown_config_key_after_merge(composed_table
     result = _execute(
         _schema(),
         """
-        mutation InvalidConfig($id: ID!) {
-          update_vcs_bridge(data: {id: $id, config: {unknown_local_option: true}}) { id }
+        mutation InvalidConfig($id: String!) {
+          update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: {config: {unknown_local_option: true}}) { id }
         }
         """,
         {"id": _public_id(bridge.sqid)},
@@ -1667,8 +1701,8 @@ def test_update_vcs_bridge_rejects_backend_switch(
     result = _execute(
         console_schema,
         """
-            mutation UpdateVcs($id: ID!) {
-              update_vcs_bridge(data: {id: $id, display_name: "Mutated", backend_class: "local"}) {
+            mutation UpdateVcs($id: String!) {
+              update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: {display_name: "Mutated", backend_class: "local"}) {
                 id
               }
             }
@@ -1773,8 +1807,8 @@ def test_update_vcs_bridge_rejects_unknown_backend_class(
     result = _execute(
         console_schema,
         """
-        mutation UpdateVcs($id: ID!) {
-          update_vcs_bridge(data: {id: $id, backend_class: "none"}) {
+        mutation UpdateVcs($id: String!) {
+          update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: {backend_class: "none"}) {
             id
           }
         }
@@ -1784,7 +1818,9 @@ def test_update_vcs_bridge_rejects_unknown_backend_class(
     )
 
     assert result.errors is not None
-    assert result.errors[0].extensions == {"code": "INTERNAL"}
+    assert result.errors[0].extensions["code"] == "VALIDATION"
+    assert set(result.errors[0].extensions["validationErrors"]) == {"backend_class"}
+    assert result.errors[0].extensions["formErrors"] == []
     with system_context(reason="test.integrate.vcs_update_invalid_backend.verify"):
         bridge.refresh_from_db()
         assert bridge.backend_class == "stub"
@@ -1801,8 +1837,8 @@ def test_update_vcs_bridge_rejects_parent_impl_class(
     result = _execute(
         console_schema,
         """
-        mutation UpdateVcs($id: ID!) {
-          update_vcs_bridge(data: {id: $id, impl_class: "none"}) {
+        mutation UpdateVcs($id: String!) {
+          update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: {impl_class: "none"}) {
             id
           }
         }
@@ -2019,3 +2055,45 @@ def test_connect_completion_returns_account_switch_as_a_typed_result(
         "error_code": "account_switch_refused",
         "account": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("invalid", "field"),
+    [
+        ({"kind": ""}, "kind"),
+        ({"kind": "oauth"}, "kind"),
+        ({"name": ""}, "name"),
+        ({"private_key": ""}, "private_key"),
+    ],
+)
+def test_credential_creation_reports_field_errors_and_accepts_corrected_retry(
+    composed_tables: None,
+    invalid: dict[str, str],
+    field: str,
+) -> None:
+    admin = _platform_admin("credential-validation-admin")
+    schema = _schema()
+    query = """
+        mutation CreateCredential($data: CredentialInput!) {
+            create_credential(data: $data) { id display_name }
+        }
+    """
+    valid = {"name": "validation-retry", "kind": "ssh_key", "private_key": "synthetic-private-key"}
+    failure = _execute(schema, query, {"data": {**valid, **invalid}}, user=admin)
+    assert failure.errors is not None
+    assert len(failure.errors) == 1
+    extensions = failure.errors[0].extensions
+    assert extensions["code"] == "VALIDATION"
+    assert set(extensions["validationErrors"]) == {field}
+    assert extensions["formErrors"] == []
+    assert valid["private_key"] not in failure.errors[0].message
+    with system_context(reason="test refused credential creation"):
+        assert not Credential.objects.filter(user=admin).exists()
+
+    created = _data(_execute(schema, query, {"data": valid}, user=admin))["create_credential"]
+    assert created["display_name"] == valid["name"]
+    with system_context(reason="test corrected credential creation"):
+        assert Credential.objects.filter(user=admin).count() == 1
+        credential = Credential.objects.get(user=admin)
+        assert str(credential.sqid) == created["id"]
+        assert credential.reveal() == {"private_key": valid["private_key"]}

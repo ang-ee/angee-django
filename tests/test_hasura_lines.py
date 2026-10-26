@@ -32,7 +32,7 @@ from strawberry import auto
 from angee.graphql.data.hasura import HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
+from tests.conftest import SchemaAddon, create_platform_admin, create_user, execute_schema, result_data
 from tests.linesdemo.models import Document, DocumentLine, LineReceipt, PinnedLine, Product, Tag
 
 
@@ -201,7 +201,7 @@ mutation($pk: ID!, $patch: documents_set_input, $lines: [documents_lines_insert_
 def test_nested_insert_writes_parent_and_lines_atomically(composed_tables):
     """One insert mutation persists the document and its child lines."""
 
-    actor = create_user("author")
+    actor = create_platform_admin("author")
     result = execute_schema(
         _SCHEMA,
         _INSERT,
@@ -224,6 +224,32 @@ def test_nested_insert_writes_parent_and_lines_atomically(composed_tables):
         doc = Document.objects.get(title="Draft document")
         rows = list(doc.lines.order_by("position").values_list("label", "quantity", "position"))
     assert rows == [("Widget", 2, 0), ("Gadget", 5, 1)]
+
+
+def test_nested_insert_does_not_return_an_unreadable_created_row(composed_tables):
+    """Create authority does not grant read authority over the persisted payload."""
+
+    actor = create_user("unreadable-author")
+    result = execute_schema(
+        _SCHEMA,
+        _INSERT,
+        {
+            "object": {
+                "title": "Unreadable document",
+                "lines": {
+                    "data": [
+                        {"label": "Private line", "quantity": 1, "position": 0},
+                    ]
+                },
+            }
+        },
+        user=actor,
+    )
+    assert result.errors is not None
+    assert result.data is None or result.data.get("insert_documents_one") is None
+    with system_context(reason="test.lines.unreadable_create.verify"):
+        document = Document.objects.get(title="Unreadable document")
+        assert list(document.lines.values_list("label", flat=True)) == ["Private line"]
 
 
 def test_nested_insert_rolls_back_parent_on_line_failure(composed_tables):
@@ -692,7 +718,7 @@ def test_rich_lines_metadata_projects_enum_and_m2m_child_fields():
 def test_rich_nested_insert_persists_enum_and_m2m(composed_tables):
     """A nested insert writes the enum child (lowercase model value) and its M2M tags."""
 
-    actor = create_user("author")
+    actor = create_platform_admin("author")
     with system_context(reason="seed"):
         red = Tag.objects.create(name="Red")
         blue = Tag.objects.create(name="Blue")

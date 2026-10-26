@@ -234,6 +234,7 @@ export function useFormViewSave({
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const submittingRef = React.useRef(false);
+  const submitOwner = submit ?? (isCreate ? createSubmit : undefined);
   const requiredFieldNames = React.useMemo<ReadonlySet<string>>(() => {
     if (!isCreate) return new Set();
     const required = new Set(modelMetadata?.resource.requiredCreateFields ?? []);
@@ -244,17 +245,17 @@ export function useFormViewSave({
     );
   }, [formFields, isCreate, modelMetadata]);
   const writableFieldNames = React.useMemo<ReadonlySet<string> | null>(() => {
-    const writable = isCreate
-      ? modelMetadata?.resource.createFields
-      : submit
-        ? undefined
+    const writable = submitOwner
+      ? undefined
+      : isCreate
+        ? modelMetadata?.resource.createFields
         : modelMetadata
           ? formFields
               .map((field) => field.name)
               .filter((fieldName) => fieldUpdatable(modelMetadata, fieldName))
           : undefined;
     return writable ? new Set(writable) : null;
-  }, [formFields, isCreate, modelMetadata, submit]);
+  }, [formFields, isCreate, modelMetadata, submitOwner]);
   const queryClient = useQueryClient();
   const { keys } = useKeys();
   const { identifier } = useResourceParams({ resource: refineResource });
@@ -362,7 +363,6 @@ export function useFormViewSave({
       ? recordToValues(record, formFields, linesSeed(seedLineRows)) : emptyValues;
   }, [acknowledgedSource, emptyValues, formFields, isCreate, linesSeed, record, seedLineRows]);
   const recordUnavailable = !isCreate && record == null;
-  const submitOwner = submit ?? (isCreate ? createSubmit : undefined);
   const formReadOnly = React.useMemo(
     () =>
       readOnly ||

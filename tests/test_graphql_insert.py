@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 import strawberry
 import strawberry_django
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError
 from django.test import override_settings
@@ -143,6 +144,32 @@ def test_hasura_factory_companion_failure_rolls_back_document(monkeypatch: pytes
 
     assert result.errors
     assert isinstance(result.errors[0].original_error, IntegrityError)
+    assert FactoryDoc._base_manager.count() == 0
+    assert FactoryCompanion.objects.count() == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("hidden", (False, True), ids=("missing", "unreadable"))
+def test_hasura_rejected_relation_reports_its_field_without_disclosing_the_target(hidden: bool) -> None:
+    """An unavailable foreign key points to its input with the same safe refusal."""
+
+    call_command("rebac", "sync", verbosity=0)
+    actor = create_user("missing-scope-author")
+    with system_context(reason="test.field_validation.hidden_scope"):
+        scope = Scope.objects.create(name="Private scope")
+
+    result = execute_schema(
+        _FACTORY_SCHEMA,
+        _FACTORY_INSERT,
+        {"scope": scope.public_id if hidden else "missing-scope"},
+        user=actor,
+    )
+
+    assert result.errors
+    error = result.errors[0].original_error
+    assert isinstance(error, ValidationError)
+    assert error.message_dict == {"scope": ["The requested record was not found."]}
+    assert error.error_dict["scope"][0].code == "not_found"
     assert FactoryDoc._base_manager.count() == 0
     assert FactoryCompanion.objects.count() == 0
 

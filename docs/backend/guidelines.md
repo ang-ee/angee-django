@@ -1314,10 +1314,17 @@ and current contracts before applying a historical example to a new deployment.
 - **GraphQL authorization tests include a non-admin reader.** Admin-only tests
   neither pin deny-hard-fail behavior nor expose a leaked `sudo()` scope.
 - **`hasura_model_resource` create `full_clean`s the input, so model + input defaults must agree.**
-  Strawberry prepares one instance, calls `full_clean()`, and passes that same
-  instance to the manager's `insert()` (or native insert-only save when absent).
+  Strawberry prepares one instance and calls `full_clean()` before persistence;
+  the locked version then calls `manager.create(**kwargs)`, so that prepared
+  instance is not the saved instance. Do not depend on its identity surviving.
   Factory invariants needed by both ORM and GraphQL creation belong on the
   queryset's cooperative `insert()`, which ordinary `create()` also composes.
+  When creation needs preparation before validation, the existing
+  [`AngeeHasuraWriteBackend`](../../addons/angee/graphql/data/hasura.py) dispatches
+  to a model manager factory; keep native mutation envelopes, metadata and form
+  submission. [`IntegrationWriteBackend`](../../addons/angee/integrate/schema.py)
+  composes that seam for integration capabilities. Required fields and defaults
+  must come from the final input contract, never another list in a consumer form.
   Model-owned defaults belong in `clean()` and `save()`; see
   [`Cadence`](../../addons/angee/nexus/models.py). A required field defaulted by
   `clean()` uses `blank=True` so Django's preceding field validation can defer

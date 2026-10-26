@@ -26,6 +26,7 @@ from strawberry.extensions import FieldExtension
 from strawberry.types import get_object_definition
 from strawberry_django.fields.types import field_type_map
 from strawberry_django.mutations import resolvers as mutation_resolvers
+from strawberry_django.optimizer import optimizer
 from strawberry_django_aggregates import (
     default_operators_for,
     group_by_alias,
@@ -238,6 +239,37 @@ def _child_back_fk(parent_model: type[models.Model], relation: str) -> str:
     return field.name
 
 
+class _MutationResultExtension(FieldExtension):
+    """Use the active native optimizer to prepare the selected persisted row.
+
+    Hasura owns the mutation resolver while strawberry-django owns projection
+    hints. Match native mutation refetching through this resource's read scope,
+    including replayed creates, without changing write-backend persistence.
+    """
+
+    def __init__(self, source: Callable[[strawberry.Info], models.QuerySet[Any]]) -> None:
+        self.source = source
+
+    def refetch(self, row: Any, info: strawberry.Info) -> Any:
+        active = optimizer.get()
+        if row is None or active is None or not active.enabled.get():
+            return row
+        return active.optimize(self.source(info).filter(pk=row.pk), info).get()
+
+    def resolve(self, next_: Callable[..., Any], source: Any, info: strawberry.Info, **kwargs: Any) -> Any:
+        return self.refetch(next_(source, info, **kwargs), info)
+
+    async def resolve_async(
+        self,
+        next_: Callable[..., Awaitable[Any]],
+        source: Any,
+        info: strawberry.Info,
+        **kwargs: Any,
+    ) -> Any:
+        row = await next_(source, info, **kwargs)
+        return await sync_to_async(self.refetch)(row, info)
+
+
 class AngeeHasuraWriteBackend:
     """Authorized write backend for Angee Hasura resources.
 
@@ -364,13 +396,7 @@ class AngeeHasuraWriteBackend:
             patch = dict(patch)
             extensions = _pop_input_extensions(self.model, patch)
             if patch:
-                instance = mutation_resolvers.update(
-                    info,
-                    instance,
-                    self._decode_public_id_fields(patch),
-                    key_attr=PUBLIC_ID_FIELD_NAME,
-                    full_clean=True,
-                )
+                instance = self._update_row(info, instance, self._decode_public_id_fields(patch))
             elif (line_rows is not None or extensions) and isinstance(instance, OptimisticLockMixin):
                 # A document's revision covers its child set and extension values as well as its columns.
                 instance.save(update_fields={instance.REVISION_FIELD})
@@ -519,16 +545,21 @@ class AngeeHasuraWriteBackend:
                 instance.require_revision(expected_revision)
             data = dict(data)
             extensions = _pop_input_extensions(self.model, data)
-            instance = mutation_resolvers.update(
-                info,
-                instance,
-                self._decode_public_id_fields(data),
-                key_attr=PUBLIC_ID_FIELD_NAME,
-                full_clean=True,
-            )
+            instance = self._update_row(info, instance, self._decode_public_id_fields(data))
             if extensions:
                 instance.apply_input_extensions(**extensions)
             return instance
+
+    def _update_row(self, info: strawberry.Info, instance: Any, data: dict[str, Any]) -> Any:
+        """Update an authorized, locked row through strawberry-django's native resolver."""
+
+        return mutation_resolvers.update(
+            info,
+            instance,
+            data,
+            key_attr=PUBLIC_ID_FIELD_NAME,
+            full_clean=True,
+        )
 
     def delete(self, info: strawberry.Info, pk: str) -> Any | None:
         """Delete one public-id-addressed row and return the deleted instance."""
@@ -574,14 +605,16 @@ class AngeeHasuraWriteBackend:
                 field = owner_model._meta.get_field(key)
             except FieldDoesNotExist:
                 field = None
-            if getattr(field, "many_to_many", False):
-                instances = (
-                    tuple(_write_public_instance(related_model, item) for item in value) if value is not None else ()
-                )
-                out[key] = list(instances) if value is not None else None
-                continue
-            instance = _write_public_instance(related_model, value)
-            out[f"{key}_id"] = None if instance is None else instance.pk
+            try:
+                if getattr(field, "many_to_many", False):
+                    out[key] = (
+                        [_write_public_instance(related_model, item) for item in value] if value is not None else None
+                    )
+                    continue
+                instance = _write_public_instance(related_model, value)
+                out[f"{key}_id"] = None if instance is None else instance.pk
+            except ValidationError as error:
+                raise ValidationError({key: error}) from error
         return out
 
 
@@ -1748,6 +1781,12 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
                 )
     if lines is not None:
         resource = _attach_lines_save(resource, node=node, lines=lines, write_backend=active_write_backend)
+    result_roots = {resource.insert_one_root, resource.update_by_pk_root}
+    if lines is not None:
+        result_roots.add(f"{resource.name}_save")
+    for graphql_field in get_object_definition(resource.mutation, strict=True).fields:
+        if graphql_field.python_name in result_roots:
+            graphql_field.extensions.append(_MutationResultExtension(read_queryset))
 
     def compile_filter(where: Any) -> Callable[[Any], Any]:
         """Share this resource's native filter wiring with non-request consumers."""

@@ -5,13 +5,15 @@ import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
 import { Controller, useForm } from "react-hook-form";
-import { schemaFieldMetadataFromDataResources, type DataResourceMetadata, type ModelMetadata, type Row } from "@angee/metadata";
+import { schemaFieldMetadataFromDataResources, type DataResourceMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, type RuntimeViewAs } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
+import type { TypedDocumentNode } from "@angee/refine";
+import gql from "graphql-tag";
 import type { MetaQuery } from "@refinedev/core";
 import { defaultWidgets, type WidgetDefinition } from "../../widgets";
 import { BoundDescriptorField, BoundFormValue } from "./BoundDescriptorField";
@@ -26,6 +28,7 @@ import {
 import type { DescriptorField } from "./DescriptorFieldList";
 import type { FieldDescriptor, GroupDescriptor } from "../page";
 import type { RecordTabDescriptor } from "./form-view-surface";
+import { useAuthoredResourceMutation } from "../resource/authored-resource-mutation";
 
 const fields: readonly FieldDescriptor[] = [
   { name: "title", label: "Title" }, { name: "body", label: "Body" },
@@ -57,7 +60,6 @@ const resource = testDataResource("notes.Note", {
     creatable: true, updatable: true, requiredOnCreate: field.name === "deadline",
   })),
 });
-const model: ModelMetadata = schemaFieldMetadataFromDataResources([resource]).labels["notes.Note"]!;
 const { Provider, createClient, clearClients } = createUiTestProviders({ resources: [resource], apiUrl: "test://notes" });
 afterEach(() => { cleanup(); clearClients(); });
 
@@ -152,6 +154,7 @@ async function fixture(options: {
   readOnlyWhen?: (record: Row) => boolean;
   id?: string | null;
   submit?: FormSubmit;
+  createSubmit?: FormSubmit;
   mountedFields?: readonly string[];
   presenceValues?: boolean;
   relationValues?: boolean;
@@ -200,11 +203,12 @@ async function fixture(options: {
           creatable: false, updatable: false, aggregatable: false, requiredOnCreate: false,
         }],
       } : resource);
+  const formModel = schemaFieldMetadataFromDataResources([formResource]).labels["notes.Note"]!;
   function Probe({ recordId, mountedFields, viewFields, boundFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
     surface = useFormViewSave({
       resource: "notes.Note", id: recordId, isCreate: recordId === null,
-      dataResource: formResource, modelMetadata: model, formFields: viewFields, fieldByName, refineFields,
-      submit: options.submit, readOnlyWhen: options.readOnlyWhen, onSaved, t: (key) => key,
+      dataResource: formResource, modelMetadata: formModel, formFields: viewFields, fieldByName, refineFields,
+      submit: options.submit, createSubmit: options.createSubmit, readOnlyWhen: options.readOnlyWhen, onSaved, t: (key) => key,
       acknowledgedSource,
       onFieldInteractionStart: options.onFieldInteractionStart,
       onFieldInteractionCommit: options.onFieldInteractionCommit,
@@ -216,7 +220,7 @@ async function fixture(options: {
     ))}</>;
   }
   function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
-    return <Provider dataProvider={provider} queryClient={client}>
+    return <Provider resources={[formResource]} dataProvider={provider} queryClient={client}>
       <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, ...options.widgets },
         ...(options.preview ? { auth: { user: options.preview.currentUser, status: "authenticated", hasRole: () => false, viewAs: options.preview } } : {}),
       }}>
@@ -229,6 +233,7 @@ async function fixture(options: {
             title={options.title}
             acknowledgedSource={acknowledgedSource}
             submit={options.submit}
+            createSubmit={options.createSubmit}
             onFieldInteractionStart={options.onFieldInteractionStart}
             onFieldInteractionCommit={options.onFieldInteractionCommit}
             recordTabs={options.recordTabs}
@@ -769,6 +774,111 @@ test("custom create owners receive a retry-stable key that clears on acceptance"
   edit("title", "Two");
   await act(async () => f.surface().submitForm());
   expect(submit.mock.calls[2]?.[1].idempotencyKey).not.toBe(first);
+});
+
+test.each(["submit", "createSubmit"] as const)("%s owns custom create fields and receives corrected retry values without native insert capabilities", async (owner) => {
+  const submit = vi.fn<FormSubmit>().mockRejectedValueOnce(new Error("Create refused"))
+    .mockImplementation(async (data) => ({ status: "ok", data: { id: "note-1", ...data } }));
+  const f = await fixture({ id: null, [owner]: submit, resourceMetadata: {
+    ...resource, roots: { ...resource.roots, create: null, update: null },
+    createFields: [], requiredCreateFields: [],
+    fields: resource.fields?.map((field) => ({ ...field, creatable: false, updatable: false, requiredOnCreate: false })),
+  } });
+  f.rerender({ viewFields: [
+    { name: "title" }, { name: "parent", kind: "relation", widget: "many2one" },
+    { name: "secret" }, { name: "read_only", readOnly: true },
+    { name: "invisible", showWhen: () => false },
+  ] });
+  act(() => {
+    f.surface().form.setValue("title", "First", { shouldDirty: true });
+    f.surface().form.setValue("parent", { id: "parent-a" }, { shouldDirty: true });
+    f.surface().form.setValue("secret", "first", { shouldDirty: true });
+    f.surface().form.setValue("read_only", "Excluded", { shouldDirty: true });
+    f.surface().form.setValue("invisible", "Excluded", { shouldDirty: true });
+  });
+  await act(async () => f.surface().submitForm());
+  expect(submit).toHaveBeenCalledExactlyOnceWith({ title: "First", parent: "parent-a", secret: "first" }, expect.anything());
+  expect(f.surface().pending).toBe(false);
+  expect(f.surface().formIsDirty).toBe(true);
+  expect(f.onSaved).not.toHaveBeenCalled();
+  const key = submit.mock.calls[0]?.[1].idempotencyKey;
+  expect(key).toEqual(expect.any(String));
+  act(() => {
+    f.surface().form.setValue("title", "Corrected", { shouldDirty: true });
+    f.surface().form.setValue("parent", { id: "parent-b" }, { shouldDirty: true });
+    f.surface().form.setValue("secret", "second", { shouldDirty: true });
+  });
+  await act(async () => f.surface().submitForm());
+  expect(submit).toHaveBeenLastCalledWith({ title: "Corrected", parent: "parent-b", secret: "second" }, expect.objectContaining({ idempotencyKey: key }));
+  expect(f.update).not.toHaveBeenCalled();
+  expect(f.onSaved).toHaveBeenCalledOnce();
+  expect(f.surface().formIsDirty).toBe(false);
+  expect(f.surface().saveError).toBeNull();
+});
+
+test("native create submissions retain their resource-owned writable field restriction", async () => {
+  const f = await fixture({ id: null });
+  act(() => {
+    f.surface().form.setValue("title", "Native", { shouldDirty: true });
+    f.surface().form.setValue("parent", { id: "excluded-parent" }, { shouldDirty: true });
+    f.surface().form.setValue("summary", "Excluded", { shouldDirty: true });
+  });
+  await act(async () => f.surface().submitForm());
+  expect(f.update).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ variables: { title: "Native" } }));
+});
+
+test.each([
+  { name: "summary", label: "Summary" },
+  { name: "body", label: "Body", body: true, kind: "textarea" },
+  { name: "parent", label: "Parent", kind: "relation", widget: "many2one" },
+] satisfies FieldDescriptor[])("a form-owned authored mutation binds $name errors and retries corrected values without a duplicate notification", async (field) => {
+  const document = gql`mutation CreateNote($data: NoteInput!) { create_note(data: $data) { id } }` as TypedDocumentNode<{ create_note: Row }, { data: Row }>;
+  const corrected = field.name === "parent" ? "note-2" : "Corrected";
+  const custom = vi.fn().mockRejectedValueOnce({ graphQLErrors: [{
+    message: "Validation failed", extensions: { code: "VALIDATION", validationErrors: { [field.name]: ["Choose a different value."] }, formErrors: [] },
+  }] }).mockResolvedValue({ data: { create_note: { id: "note-1", [field.name]: corrected } } });
+  const notify = vi.fn();
+  const onSaved = vi.fn();
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  function NoteForm() {
+    const [create] = useAuthoredResourceMutation(document, { errorNotification: false });
+    const submit = React.useCallback<FormSubmit>(async (data) =>
+      savedFormSubmitResult((await create({ data }))?.create_note, "No record returned."), [create]);
+    return <FormView resource="notes.Note" id={null} fields={[{ ...field, description: "Field hint." }]} submit={submit} onSaved={onSaved} />;
+  }
+  render(<Provider resources={[{ ...resource, roots: { ...resource.roots, create: null }, createFields: [], requiredCreateFields: [] }]}
+    dataProvider={{ custom, getList: async () => ({ data: [{ id: "note-2" }], total: 1 }), getOne: async () => ({ data: { id: "note-2" } }) }}
+    notificationProvider={{ open: notify, close: vi.fn() }}>
+    <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <NoteForm />
+    </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
+  </Provider>);
+  const control = screen.getByRole(field.name === "parent" ? "button" : "textbox", { name: field.label });
+  if (field.name !== "parent") fireEvent.change(control, { target: { value: "Rejected" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  const message = await screen.findByText("Choose a different value.");
+  expect(message.closest("[data-layout]")?.contains(control)).toBe(true);
+  expect(control.getAttribute("aria-invalid")).toBe("true");
+  expect(message.id).not.toBe("");
+  const descriptionId = screen.getByText("Field hint.").id;
+  expect(control.getAttribute("aria-describedby")?.split(" ")).toEqual(expect.arrayContaining([message.id, descriptionId]));
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(notify).not.toHaveBeenCalled();
+  expect(onSaved).not.toHaveBeenCalled();
+  if (field.name === "parent") {
+    fireEvent.click(control);
+    fireEvent.click(await screen.findByRole("option", { name: "note-2" }));
+  } else {
+    fireEvent.change(control, { target: { value: corrected } });
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+  expect(custom).toHaveBeenLastCalledWith(expect.objectContaining({ payload: { data: { [field.name]: corrected } } }));
+  expect(screen.queryByText("Choose a different value.")).toBeNull();
+  expect(control.getAttribute("aria-invalid")).not.toBe("true");
+  expect(control.getAttribute("aria-describedby")).toBe(descriptionId);
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(notify).not.toHaveBeenCalled();
 });
 
 test("plain updates ignore save-only revision arguments and unexposed revision fields", async () => {
