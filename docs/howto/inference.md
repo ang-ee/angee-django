@@ -16,6 +16,11 @@ preserving configured model filters. Use the Ollama backend for Ollama's native
 discovery and request settings; its default is localhost, but its provider URL
 can point to a remote server.
 
+The integration's **Test connection** action reads the selected backend's live
+model catalogue without updating catalogue rows or generating inference. An
+empty catalogue still proves connectivity. The manual backend reports that it
+has no connection to test.
+
 For one request from synchronous Django code:
 
 ```python
