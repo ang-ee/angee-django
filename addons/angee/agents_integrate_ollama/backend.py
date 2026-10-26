@@ -133,13 +133,8 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
         result["extra_body"] = {"keep_alive": keep_alive}
         return cast(ModelSettings, result)
 
-    def _discovered_model_use(self) -> str:
-        """Leave modality to curated rows because Ollama's list omits it."""
-
-        return ""
-
     def _model_discovery(self, client: Any, model_id: str) -> dict[str, Any]:
-        """Read optional architecture facts from Ollama's native show endpoint."""
+        """Read native capabilities and architecture; absent facts preserve curated rows."""
 
         try:
             shown = client.with_options(max_retries=0).post(
@@ -152,12 +147,19 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
             return {}
         if not isinstance(shown, Mapping):
             return {}
+        capabilities = shown.get("capabilities")
+        model_use = ""
+        if isinstance(capabilities, list) and all(isinstance(value, str) for value in capabilities):
+            if "embedding" in capabilities:
+                model_use = "embedding"
+            elif "completion" in capabilities:
+                model_use = "multimodal" if "vision" in capabilities else "chat"
         context_window = self._architecture_context_window(shown)
         config: dict[str, Any] = {}
         num_ctx = self._configured_num_ctx(shown.get("parameters"))
         if num_ctx:
             config["ollama_num_ctx"] = num_ctx
-        return {"context_window": context_window, "config": config}
+        return {"model_use": model_use, "context_window": context_window, "config": config}
 
     @staticmethod
     def _architecture_context_window(shown: Mapping[str, Any]) -> int:
