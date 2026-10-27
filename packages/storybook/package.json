@@ -17,8 +17,7 @@
     "build": "NODE_OPTIONS=\"${NODE_OPTIONS:+$NODE_OPTIONS }--disable-warning=DEP0205\" storybook build -o storybook-static",
     "typecheck": "tsc --noEmit",
     "catalog:generate": "node scripts/catalog.mjs",
-    "catalog:check": "node --test scripts/catalog.test.mjs",
-    "composition:check": "node scripts/composition-report.mjs --check"
+    "catalog:check": "node --test scripts/catalog.test.mjs"
   },
   "dependencies": {
     "@angee/app": "workspace:*",

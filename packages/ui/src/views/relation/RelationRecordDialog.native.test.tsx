@@ -108,7 +108,7 @@ test("the single picker's create switches kinds, saves the chosen kind and selec
   const change = vi.fn();
   render(<Wrapper><RelationFieldWidget value={null} onChange={change} relation={partyRelation} aria-label="Party" /></Wrapper>);
 
-  fireEvent.click(screen.getByRole("button", { name: "Party" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Party" }));
   fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: "Ada" } });
   fireEvent.click(await screen.findByText("Create “Ada”"));
 

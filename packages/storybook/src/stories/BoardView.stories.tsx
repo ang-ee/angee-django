@@ -1,5 +1,5 @@
 import { testResourceQuery, testQueryField, testQueryAxis } from "@angee/metadata/testing";
-import { useMemo, useState, type ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type {
   AngeeSchemaMetadata,
@@ -8,7 +8,7 @@ import type {
 } from "@angee/metadata";
 import { ResourceList, type ListColumn } from "@angee/ui";
 
-import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
+import { jsonResponse, storySchema } from "./runtime-fixtures";
 
 interface TaskRow extends Row {
   id: string;
@@ -137,7 +137,7 @@ const metadata = {
 
 const meta = {
   title: "Views/BoardView",
-  parameters: { layout: "padded" },
+  parameters: { angeeFixture: () => ({ schemas: createBoardStorySchemas() }), layout: "padded" },
 } satisfies Meta;
 
 export default meta;
@@ -159,44 +159,41 @@ export const DeclaredCard: Story = {
 function BoardFixture({ withFold, withCard = false }: { withFold: boolean; withCard?: boolean }): ReactElement {
   const [recordId, setRecordId] = useState<string | undefined>(undefined);
   const [creating, setCreating] = useState(false);
-  const schemas = useMemo(createBoardStorySchemas, []);
   return (
-    <RuntimeFixture schemas={schemas}>
-      <div className="min-h-[520px] min-w-[980px]">
-        <ResourceList<TaskRow>
-          resource="pm.Task"
-          columns={columns}
-          formFields={[
-            { name: "title", label: "Task", title: true },
-            { name: "priority", label: "Priority" },
-            { name: "stage", label: "Stage", createOnly: true },
-            {
-              name: "sort_order",
-              label: "Order",
-              createOnly: true,
-            },
-          ]}
-          recordId={recordId}
-          creating={creating}
-          onSelect={(id) => {
-            setCreating(id === null);
-            setRecordId(id ?? undefined);
-          }}
-          onClose={() => {
-            setCreating(false);
-            setRecordId(undefined);
-          }}
-          placement="drawer"
-          defaultView="board"
-          boardCard={withCard ? { title: "title", fields: ["priority"] } : undefined}
-          laneSource={{
-            field: "stage",
-            rankField: "sort_order",
-            ...(withFold ? { foldField: "fold" } : {}),
-          }}
-        />
-      </div>
-    </RuntimeFixture>
+    <div className="min-h-[520px] min-w-[980px]">
+      <ResourceList<TaskRow>
+        resource="pm.Task"
+        columns={columns}
+        formFields={[
+          { name: "title", label: "Task", title: true },
+          { name: "priority", label: "Priority" },
+          { name: "stage", label: "Stage", createOnly: true },
+          {
+            name: "sort_order",
+            label: "Order",
+            createOnly: true,
+          },
+        ]}
+        recordId={recordId}
+        creating={creating}
+        onSelect={(id) => {
+          setCreating(id === null);
+          setRecordId(id ?? undefined);
+        }}
+        onClose={() => {
+          setCreating(false);
+          setRecordId(undefined);
+        }}
+        placement="drawer"
+        defaultView="board"
+        boardCard={withCard ? { title: "title", fields: ["priority"] } : undefined}
+        laneSource={{
+          field: "stage",
+          rankField: "sort_order",
+          ...(withFold ? { foldField: "fold" } : {}),
+        }}
+      />
+    </div>
   );
 }
 

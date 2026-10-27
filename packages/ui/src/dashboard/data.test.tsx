@@ -12,6 +12,8 @@ import type { WidgetSpec } from "./headless";
 const state = vi.hoisted(() => ({
   resource: null as DataResourceMetadata | null,
   list: vi.fn(),
+  aggregateOptions: vi.fn(),
+  groupOptions: vi.fn(),
   refetch: vi.fn(),
   aggregate: null as AggregateBucket | null,
 }));
@@ -22,8 +24,14 @@ vi.mock("@angee/metadata", async (importOriginal) => ({
 }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/refine")>(),
-  useAngeeAggregate: () => ({ aggregate: state.aggregate, fetching: false, error: null, updatedAt: null, refetch: state.refetch }),
-  useAngeeGroupBy: () => ({ buckets: [], totalCount: 0, fetching: false, error: null, updatedAt: null, refetch: state.refetch }),
+  useAngeeAggregate: (_target: unknown, options: unknown) => {
+    state.aggregateOptions(options);
+    return { aggregate: state.aggregate, fetching: false, error: null, updatedAt: null, refetch: state.refetch };
+  },
+  useAngeeGroupBy: (_target: unknown, options: unknown) => {
+    state.groupOptions(options);
+    return { buckets: [], totalCount: 0, fetching: false, error: null, updatedAt: null, refetch: state.refetch };
+  },
 }));
 vi.mock("../views/resource/resource-operations", () => ({
   useAggregateOperation: () => ({ target: null }),
@@ -98,4 +106,22 @@ test("a value measure is a heading count only for the count operation", () => {
   } } } });
   expect(result.current.value).toBe(42);
   expect(result.current.count).toBeNull();
+});
+
+test("dashboard refresh declarations reach native query adapters through unrelated renders", () => {
+  const widget: WidgetSpec = { ...spec, data: { shape: "rows", source: {
+    resource: "messaging.Message", refresh: { mode: "interval", seconds: 60 },
+  } } };
+  const { rerender } = renderHook(({ widget }) => useDashboardWidgetData(widget), { initialProps: { widget } });
+  for (const adapter of [state.list, state.aggregateOptions, state.groupOptions]) {
+    expect(adapter).toHaveBeenLastCalledWith(expect.objectContaining({ refetchInterval: 60_000 }));
+  }
+  rerender({ widget: { ...widget, title: "Unrelated title" } });
+  expect(state.list).toHaveBeenLastCalledWith(expect.objectContaining({ refetchInterval: 60_000 }));
+  rerender({ widget: { ...widget, data: { shape: "rows", source: {
+    resource: "messaging.Message", refresh: { mode: "manual" },
+  } } } });
+  for (const adapter of [state.list, state.aggregateOptions, state.groupOptions]) {
+    expect(adapter).toHaveBeenLastCalledWith(expect.objectContaining({ refetchInterval: false }));
+  }
 });
