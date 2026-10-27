@@ -811,7 +811,7 @@
     "graphql-tag": "^2.12.6",
     "i18next": "^26.3.2",
     "lucide-react": "^1.21.0",
-    "nuqs": "^2.5.0",
+    "nuqs": "^2.10.1",
     "react-day-picker": "^10.0.1",
     "react-hook-form": "^7.81.0",
     "react-markdown": "^10.1.0",

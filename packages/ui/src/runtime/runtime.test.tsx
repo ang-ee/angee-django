@@ -55,7 +55,7 @@ test("preview UI consumes auth identity, focuses entry and restores the picker o
   const rendered = render(createElement(AppRuntimeProvider, { runtime: { auth }, children }));
   expect(screen.getByRole("status").textContent).toContain("Previewing as Morgan");
   expect(screen.getByRole("status").textContent).toContain("Signed in as Alex");
-  expect(screen.getByRole("button", { name: "Preview as a person: Morgan" })).toBeTruthy();
+  expect(screen.getByRole("combobox", { name: "Preview as a person: Morgan" })).toBeTruthy();
   const exitButton = screen.getByRole("button", { name: "Exit preview" });
   expect(document.activeElement).toBe(exitButton);
   fireEvent.click(exitButton);
@@ -64,7 +64,7 @@ test("preview UI consumes auth identity, focuses entry and restores the picker o
     runtime: { auth: { ...auth, user: realUser, viewAs: { ...viewAs, viewAs: null, currentUser: realUser } } },
     children,
   }));
-  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Preview as a person" })));
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Preview as a person" })));
   expect(screen.queryByRole("status")).toBeNull();
   rendered.unmount();
 });

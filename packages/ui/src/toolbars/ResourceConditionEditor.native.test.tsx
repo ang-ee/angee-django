@@ -160,7 +160,7 @@ function fixture(initial: Record<string, unknown>, readOnly = false) {
 
 test("retained relation clauses resolve their label and use remote search before applying a public ID", async () => {
   const { onChange, getOne, getList } = fixture({ channel_id: { _eq: "channel-999" } });
-  const picker = await screen.findByRole("button", { name: "Filter value: Distant channel" });
+  const picker = await screen.findByRole("combobox", { name: "Filter value: Distant channel" });
   expect(getOne).toHaveBeenCalledWith(expect.objectContaining({ resource: "channels", id: "channel-999" }));
   expect(getList).not.toHaveBeenCalled();
   fireEvent.click(picker);
@@ -175,23 +175,23 @@ test("retained relation clauses resolve their label and use remote search before
   expect(onChange).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Apply" }));
   expect(onChange).toHaveBeenLastCalledWith({ channel_id: { _eq: "channel-next" } });
-  await screen.findByRole("button", { name: "Filter value: Other channel" });
+  await screen.findByRole("combobox", { name: "Filter value: Other channel" });
 });
 
 test("new relation clauses use the same lazy picker and persist the query-owned wire path", async () => {
   const { onChange, getOne, getList } = fixture({});
   expect(getOne).not.toHaveBeenCalled();
   expect(getList).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Filter value" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Filter value" }));
   fireEvent.click(await screen.findByRole("option", { name: "First channel" }));
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
   expect(onChange).toHaveBeenLastCalledWith({ channel_id: { _eq: "channel-first" } });
-  await screen.findByRole("button", { name: "Filter value: First channel" });
+  await screen.findByRole("combobox", { name: "Filter value: First channel" });
 });
 
 test("read-only retained relations resolve labels without loading or opening an option list", async () => {
   const { onChange, getList } = fixture({ channel_id: { _eq: "channel-999" } }, true);
-  const picker = await screen.findByRole("button", { name: "Filter value: Distant channel" });
+  const picker = await screen.findByRole("combobox", { name: "Filter value: Distant channel" });
   expect((picker as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(picker);
   expect(screen.queryByPlaceholderText("Search…")).toBeNull();
@@ -203,7 +203,7 @@ test("read-only retained relations resolve labels without loading or opening an 
 
 test("editing one comparison preserves another comparison on the same relation", async () => {
   const { onChange } = fixture({ channel_id: { _eq: "channel-999", _neq: "channel-next" } });
-  fireEvent.click(await screen.findByRole("button", { name: "Filter value: Distant channel" }));
+  fireEvent.click(await screen.findByRole("combobox", { name: "Filter value: Distant channel" }));
   fireEvent.click(await screen.findByRole("option", { name: "First channel" }));
   fireEvent.click(screen.getAllByRole("button", { name: "Apply" })[0]!);
   expect(onChange).toHaveBeenLastCalledWith({ _and: [
@@ -213,7 +213,7 @@ test("editing one comparison preserves another comparison on the same relation",
 
 test("editing an operator preserves negated groups and null checks round-trip without an operand", async () => {
   const { onChange } = fixture({ _not: { _or: [{ channel_id: { _eq: "channel-999" } }, { channel_id: { _is_null: false } }] } });
-  await screen.findByRole("button", { name: "Filter value: Distant channel" });
+  await screen.findByRole("combobox", { name: "Filter value: Distant channel" });
   const operators = screen.getAllByRole("combobox", { name: "Filter operator" });
   expect(operators.some((operator) => operator.textContent?.includes("is not empty"))).toBe(true);
   fireEvent.click(operators[0]!);

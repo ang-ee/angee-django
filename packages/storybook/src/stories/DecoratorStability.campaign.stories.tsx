@@ -6,6 +6,7 @@ import { useRouter } from "@tanstack/react-router";
 import { Button, Input, useAppearance } from "@angee/ui";
 
 import preview from "../../.storybook/preview";
+import { previewThemeId, themeGlobalValue } from "../theme-global";
 import { RoutedRuntimeFixture, jsonResponse, storyAppearance, storySchema } from "./runtime-fixtures";
 
 function DraftProbe({ label }: { label: string }) {
@@ -32,10 +33,10 @@ const meta = {
       <DraftProbe label={args.label} />
       <Button onClick={() => updateArgs({ label: "Updated" })}>Change label</Button>
       <Button onClick={() => updateGlobals({
-        themeId: globals.themeId === "angee.stock" ? "angee.angee" : "angee.stock",
+        themeId: themeGlobalValue(previewThemeId(globals.themeId) === "angee.stock" ? "angee.angee" : "angee.stock"),
         colorScheme: globals.colorScheme === "dark" ? "light" : "dark",
       })}>Change appearance</Button>
-      <output aria-label="Preview appearance">{String(globals.themeId)} / {String(globals.colorScheme)}</output>
+      <output aria-label="Preview appearance">{previewThemeId(globals.themeId)} / {String(globals.colorScheme)}</output>
     </div>;
   },
 } satisfies Meta<{ label: string }>;
@@ -43,11 +44,11 @@ const meta = {
 export default meta;
 
 export const PreservesState: StoryObj<typeof meta> = {
-  play: async ({ canvasElement }) => {
+  play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
     const draft = await canvas.findByRole("textbox", { name: "Draft" });
     await userEvent.type(draft, "Keep this draft");
-    await userEvent.click(canvas.getByRole("button", { name: "Count: 0" }));
+    await userEvent.click(canvas.getByRole("button", { name: `${args.label}: 0` }));
     await userEvent.click(canvas.getByRole("button", { name: "Change label" }));
     await canvas.findByRole("button", { name: "Updated: 1" });
     const [theme, scheme] = (canvas.getByLabelText("Preview appearance").textContent ?? "").split(" / ");
@@ -62,8 +63,8 @@ export const PreservesState: StoryObj<typeof meta> = {
     const values = preview.globalTypes?.themeId?.toolbar?.items?.map(
       (item) => typeof item === "string" ? item : item.value,
     ) ?? [];
-    await expect(values).toContain("angee.stock");
-    await expect(values).not.toContain("angee.brand");
+    await expect(values).toContain(themeGlobalValue("angee.stock"));
+    await expect(values).not.toContain("angee_2Ebrand");
     await expect(new Set(values).size).toBe(values.length);
   },
 };

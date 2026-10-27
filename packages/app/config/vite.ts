@@ -540,7 +540,8 @@ function angeeAppearancePlugin(payload: AppearanceBootstrapPayload): Plugin {
 }
 
 async function appearanceBootstrapScript(payload: AppearanceBootstrapPayload): Promise<string> {
-  const entry = "\0angee:appearance-bootstrap";
+  // Library entries are normalized to absolute paths before plugin resolution.
+  const entry = fileURLToPath(new URL("./appearance-bootstrap.virtual.js", import.meta.url));
   const runtime = fileURLToPath(import.meta.resolve("@angee/ui/theme-runtime"));
   // Vite owns dependency closure and minification; no second token validator or
   // function-source serializer lives in app configuration. Write nothing to disk.

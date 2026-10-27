@@ -92,7 +92,8 @@ the saved preference. Both leave the page ready for the next edit. Leaving with
 unsaved changes uses the standard navigation guard; confirmed departure discards
 the draft, and unmounting always restores the saved appearance. Read-only
 appearance opens no draft and offers neither action. The boot cache contains
-only saved values, so reloading restores the saved appearance.
+only saved values and both resolved scheme layers, so reloading restores the
+saved appearance even when the device's color scheme changed between visits.
 
 The three recovery verbs have distinct scopes: **Discard** restores the last
 saved appearance; **Restore theme defaults** edits the draft inside the

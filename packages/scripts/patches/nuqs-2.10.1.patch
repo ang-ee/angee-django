@@ -1,0 +1,20 @@
+--- a/dist/adapters/tanstack-router.js
++++ b/dist/adapters/tanstack-router.js
+@@ -11,7 +11,8 @@
+ 		structuralSharing: true
+ 	});
+ 	const resolvedPathname = useRouterState({ select: (state) => state.resolvedLocation?.pathname ?? state.location.pathname });
+-	const { navigate } = useRouter();
++	const router = useRouter();
++	const { navigate } = router;
+ 	const ownedPathnameRef = useRef(pathname);
+ 	const cachedSearchRef = useRef(search);
+ 	const isPathStable = pathname === resolvedPathname;
+@@ -21,6 +22,7 @@
+ 	}
+ 	const activeSearch = !isPathStable && ownedPathnameRef.current !== pathname ? cachedSearchRef.current : search;
+ 	return {
++		getSearchParamsSnapshot: () => new URLSearchParams(router.state.location.searchStr),
+ 		searchParams: useMemo(() => new URLSearchParams(Object.entries(activeSearch).flatMap(([key, value]) => {
+ 			if (Array.isArray(value)) return value.map((v) => [key, v]);
+ 			else if (typeof value === "object" && value !== null) return [[key, JSON.stringify(value)]];
