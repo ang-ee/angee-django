@@ -23,7 +23,7 @@ test("retains equal nested JSON values across object key order and replaces chan
 });
 
 test("keeps undefined distinct from null and JSON strings", () => {
-  const { result, rerender } = renderHook(({ value }: { value: unknown }) => useValueStable(value), {
+  const { result, rerender } = renderHook<unknown, { value: unknown }>(({ value }) => useValueStable(value), {
     initialProps: { value: undefined },
   });
   expect(result.current).toBeUndefined();
