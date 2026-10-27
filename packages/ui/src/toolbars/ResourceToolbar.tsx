@@ -7,7 +7,7 @@ import type * as React from "react";
 import type { ReactElement, ReactNode } from "react";
 import type { SortingState } from "@tanstack/react-table";
 import { ScopeChip } from "../communication/pane-list";
-import { PaneToolbar, PaneToolbarMenu, type PaneToolbarMenuRadioGroup, type PaneToolbarProps } from "../layouts/PaneToolbar";
+import { PaneToolbar, PaneToolbarMenu, type PaneToolbarMenuItem, type PaneToolbarMenuRadioGroup, type PaneToolbarProps } from "../layouts/PaneToolbar";
 import { SearchActiveLabel } from "../views/resource/search/SearchBox";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
@@ -45,7 +45,7 @@ export interface ResourceToolbarChrome {
 export interface ResourceToolbarProps {
   /** Pane chrome presents the same resource state in the host's shared band. */
   /** Pane presentation: the pane's selector and scope chips, plus radio groups the pane adds to the overflow menu. */
-  pane?: Pick<PaneToolbarProps, "selector" | "scope"> & { overflowGroups?: readonly PaneToolbarMenuRadioGroup[] };
+  pane?: Pick<PaneToolbarProps, "selector" | "scope"> & { overflowGroups?: readonly PaneToolbarMenuRadioGroup[]; overflowItems?: readonly PaneToolbarMenuItem[] };
   sortOptions?: readonly { value: string; label: string }[];
   sorting?: SortingState;
   onSortingChange?: (sorting: SortingState) => void;
@@ -185,7 +185,7 @@ function PaneResourceToolbar({ search, pane, searchDeclaration, modelMetadata, s
       {view && onViewChange && chrome?.viewSwitcher !== false ? <ResourceViewSwitcher view={view}
         kinds={availableViews} favorites={search.catalog.favorites} onFavoriteSelect={(favorite) => search.applyFavorite(favorite.id)}
         onViewChange={onViewChange} /> : null}{chrome?.viewSwitcher !== false ? viewSwitcher : null}</>}
-    overflow={<PaneToolbarMenu groups={groups} />} />
+    overflow={<PaneToolbarMenu groups={groups} items={pane?.overflowItems} />} />
     {expandedSearch ? <div className="border-b border-border-subtle px-2 py-2">
       <SearchControls search={search} shortcuts={shortcuts} box />
     </div> : null}</>;

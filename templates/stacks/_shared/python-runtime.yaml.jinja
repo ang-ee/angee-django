@@ -4,11 +4,11 @@
 {% else %}    runtime: container
     image: {{ django_image }}
     mounts:
-      - source://app:/app
-      - bind://./data:/app/data
-    workdir: /app
+      - source://app:{{ container_project_dir }}
+      - bind://./data:{{ container_project_dir }}/data
+    workdir: {{ container_project_dir }}
 {% endif %}    env:
-      ANGEE_PROJECT_DIR: {% if runtime_mode == "process" %}"."{% else %}/app{% endif %}
+      ANGEE_PROJECT_DIR: {% if runtime_mode == "process" %}"."{% else %}{{ container_project_dir }}{% endif %}
       DATABASE_URL: "{{ database_url }}"{% if pool_for_django and effective_serve_mode == "production" %}
       ANGEE_DB_POOL: "true"
       ANGEE_DB_POOL_MAX_SIZE: "{{ db_pool_max_size }}"

@@ -10,6 +10,7 @@ from django.conf import settings
 from django.db import models
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 
 from angee.models import (
     AngeeModel,
@@ -24,7 +25,6 @@ from angee.models import (
     TrashMixin,
     TrashQuerySet,
 )
-from angee.testing.permissions import install_permission_schema
 
 
 class RevisionRow(OptimisticLockMixin):
@@ -113,7 +113,7 @@ definition scopedemo/owned_row {
 
 @pytest.fixture
 def ownership_tables(db):
-    install_permission_schema(parse_zed(OWNERSHIP_SCHEMA))
+    install_schema(parse_zed(OWNERSHIP_SCHEMA))
     try:
         yield
     finally:

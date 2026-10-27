@@ -24,7 +24,7 @@ class BaseConfig(AppConfig):
         from django.db.models.signals import class_prepared, pre_delete
         from rebac.field_backing import canonical_model
 
-        from angee.refs import (
+        from angee.models.refs import (
             RecordRefMixin,
             delete_record_refs,
             record_ref_cleanup_edges_for_target,

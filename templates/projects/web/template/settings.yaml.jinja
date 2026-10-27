@@ -134,6 +134,9 @@ ANGEE_ADDON_DIRS:
   - "{BASE_DIR}/workspaces/src/angee-arp/addons"
 {% endif %}
 {% endif %}
+{% if framework_source_path and not framework_workspace and framework != "baked" %}
+  - "{BASE_DIR}/{{ framework_source_path }}/addons"
+{% endif %}
 ANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"
 # This root IS the stack (ANGEE_ROOT=.), so data lives at the stack's persist
 # `./data` directly — host processes (the process-compose dev stack) and the

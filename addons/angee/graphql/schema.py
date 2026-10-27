@@ -203,6 +203,7 @@ class AngeeSchema(strawberry.Schema):
         validation = validation_error(error.original_error)
         if validation is None:
             return
+        error.message = classify_error(validation).message
         field_errors: dict[str, list[str]] = {}
         form_errors: list[str] = []
         if hasattr(validation, "error_dict"):

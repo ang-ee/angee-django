@@ -43,6 +43,7 @@ from rebac import (
 )
 from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 
 from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.data import hasura_model_resource
@@ -52,7 +53,6 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.iam.permissions import session_user
 from angee.mcp import graphql as mcp_graphql
 from angee.mcp.graphql import ACTION_RESULT, GraphQLTool, _compile, execute_under_actor, register_graphql_tools
-from angee.testing.permissions import install_permission_schema
 from tests.conftest import SchemaAddon, create_user
 from tests.scopedemo.models import Scope, ScopedDoc
 
@@ -460,7 +460,7 @@ def test_mcp_reads_conceal_gated_fields_rows_totals_and_group_keys(
     reset_backend()
     active = backend()
     assert isinstance(active, LocalBackend)
-    install_permission_schema(parse_zed("""
+    install_schema(parse_zed("""
         definition auth/user {}
         definition scopedemo/scope {
             relation reader: auth/user

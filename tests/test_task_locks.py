@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import multiprocessing
 import uuid
-from multiprocessing.connection import Connection
 
 import psycopg
 import pytest
@@ -14,24 +13,7 @@ from psycopg import sql
 
 from angee.jobs import locks
 from angee.jobs.locks import LocalLockBackend, LockKey, _advisory_pair, record_lock_key, task_lock, task_lock_is_held
-
-
-def _hold_postgres_advisory_lock(
-    params: dict[str, object],
-    advisory_key: tuple[int, int],
-    pair: bool,
-    pipe: Connection,
-) -> None:
-    """Hold one native advisory lock until the parent process releases it."""
-
-    with psycopg.connect(**params, autocommit=True) as database, database.cursor() as cursor:
-        if pair:
-            cursor.execute("SELECT pg_advisory_lock(%s, %s)", advisory_key)
-        else:
-            combined = advisory_key[0] << 32 | advisory_key[1]
-            cursor.execute("SELECT pg_advisory_lock(%s)", (combined,))
-        pipe.send("held")
-        pipe.recv()
+from tests.task_lock_process import hold_postgres_advisory_lock
 
 
 def _postgres_process_params() -> dict[str, object]:
@@ -101,7 +83,7 @@ def test_postgres_advisory_probe_tracks_pair_lock_across_processes_only(key_kind
     for pair, expected_held in ((True, True), (False, False)):
         parent_pipe, child_pipe = context.Pipe()
         process = context.Process(
-            target=_hold_postgres_advisory_lock,
+            target=hold_postgres_advisory_lock,
             args=(params, advisory_key, pair, child_pipe),
         )
         process.start()

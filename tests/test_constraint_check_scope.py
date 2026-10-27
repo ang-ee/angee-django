@@ -14,9 +14,9 @@ from rebac.backends import reset_backend
 from rebac.errors import MissingActorError, PermissionDenied
 from rebac.models import PermissionAuditEvent
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 
 from angee.models import AngeeModel, OwnerMixin
-from angee.testing.permissions import install_permission_schema
 
 
 class GuardedUniqueRow(AngeeModel):
@@ -89,7 +89,7 @@ definition scopedemo/plain_row {
 
 @pytest.fixture
 def rows(db: Any) -> Any:
-    install_permission_schema(parse_zed(SCHEMA))
+    install_schema(parse_zed(SCHEMA))
     users = get_user_model().objects
     alice, bob = users.create_user(username="scope-alice"), users.create_user(username="scope-bob")
     with system_context(reason="test constraint scope seed"):

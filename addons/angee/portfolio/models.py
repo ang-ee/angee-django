@@ -31,10 +31,11 @@ from angee.models import (
     HierarchyMixin,
     HierarchyQuerySet,
     HistoryMixin,
+    MergePolicy,
     OwnerMixin,
+    RecordRefMixin,
     role_anchor,
 )
-from angee.refs import MergePolicy, RecordRefMixin
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:

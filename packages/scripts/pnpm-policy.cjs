@@ -32,6 +32,9 @@ module.exports = {
       }
       return {
         ...config,
+        // Source workspaces need prepare outputs even when dependencies are unchanged.
+        // pnpm's optimistic shortcut skips prepare and cannot detect missing dist files.
+        optimisticRepeatInstall: false,
         overrides: { ...config.overrides, ...policy.overrides },
         packageExtensions,
         patchedDependencies: { ...config.patchedDependencies, ...policy.patchedDependencies },

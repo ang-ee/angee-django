@@ -184,18 +184,15 @@ discovery and enabling it in `INSTALLED_APPS`.
 > instead. It runs on `pgvector/pgvector:pg17`, drives first start through a
 > provision job running
 > `manage.py angee provision --bootstrap-admin` (which bootstraps a generated `admin`
-> user), and serves the built SPA through Caddy. The one-command render uses the
-> operator's template-chain resolver (`ang-ee/angee-operator#39`); once that lands in a
-> released operator, `angee stack init` renders host + overlay in one step. The web
-> image rebuild depends on the published `hatch-angee` release that ships addon
-> `web/schema/` directories. Until those releases are available, use the two-copier-step
-> render below.
+> user), and serves the built SPA through Caddy. The operator's template-chain
+> resolver renders the project host and stack overlay in one command.
 
 ## Run a local stack
 
-Once the operator's chain resolver ships, one command renders host + stack. The
-default `framework=source` links the framework editable from a local checkout at
-container start, and `stack init` validates that source exists — so clone it first:
+One command renders host + stack. The default `framework=source` links the
+framework editable from a local checkout at container start. Initialization
+renders the configuration; clone the framework before provisioning or starting
+the stack:
 
 ```sh
 mkdir -p ~/.angee/sources
@@ -254,15 +251,5 @@ angee down --root ~/.angee
 mkdir -p ~/.angee/data
 mv ~/.angee/pgdata ~/.angee/data/pgdata
 angee stack update --root ~/.angee --template
-angee dev --root ~/.angee
-```
-
-Until then, render the two templates in sequence (the stack overlays the host),
-then bring it up. First start emits the local runtime, migrations, and GraphQL
-schemas before starting Django and the selected frontend ingress:
-
-```sh
-copier copy .../templates/projects/web ~/.angee
-copier copy --overwrite .../templates/stacks/local ~/.angee
 angee dev --root ~/.angee
 ```

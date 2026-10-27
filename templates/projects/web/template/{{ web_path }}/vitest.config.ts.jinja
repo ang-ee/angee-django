@@ -6,8 +6,8 @@ import { defineAngeeWebVitestConfig, gqlAliasFor } from "@angee/app/vitest";
 // does not read tsconfig `paths`, so the alias is supplied explicitly here — the
 // same shape this project declares in its tsconfig/vite. The shared web defaults
 // (refine aliases, DOM deps, test globs) come from `@angee/app/vitest`, reached
-// by package name so it resolves against an editable checkout or an installed
-// wheel alike — no sibling path.
+// by package name from either a source checkout or a published JavaScript
+// package — no sibling path.
 export default defineAngeeWebVitestConfig({
   gqlAlias: gqlAliasFor(
     fileURLToPath(new URL("../runtime/gql/", import.meta.url)),

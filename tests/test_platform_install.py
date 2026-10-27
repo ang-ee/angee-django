@@ -30,6 +30,7 @@ from rebac import system_context, to_object_ref
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.platform import models as platform_models
+from angee.platform.installer import AddonInstallerBackend
 from angee.platform.models import _preview_revision
 from tests.conftest import SchemaAddon, execute_schema
 from tests.conftest import create_platform_admin as _platform_admin
@@ -358,3 +359,49 @@ def _execute(schema: Any, query: str, variables: dict[str, Any] | None = None, *
     request = RequestFactory().post("/graphql/console/")
     request.user = user or AnonymousUser()
     return execute_schema(schema, query, variables, request=request)
+
+
+def test_change_preview_refuses_overridden_installed_apps(
+    project_settings_yaml: Path,
+    settings: Any,
+) -> None:
+    """Admission refuses YAML edits when another source owns effective roots."""
+
+    before = project_settings_yaml.read_text(encoding="utf-8")
+    settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset()
+
+    preview = Addon.objects.change_preview(_AVAILABLE_ADDON, "install")
+
+    assert preview.can_apply is False
+    assert preview.refusal == "INSTALLED_APPS is not controlled by a readable project settings.yaml."
+    assert project_settings_yaml.read_text(encoding="utf-8") == before
+
+
+class _RemoteInstallerBackend(AddonInstallerBackend):
+    """Expose remote desired roots without a local settings document."""
+
+    key = "remote"
+
+    def read_settings_text(self) -> str:
+        return "INSTALLED_APPS: [angee.platform]\n"
+
+
+@pytest.mark.parametrize("loaded, expected", [(frozenset({"angee.platform"}), False), (frozenset(), True)])
+def test_pending_changes_uses_configured_transport(
+    settings: Any,
+    tmp_path: Path,
+    monkeypatch: Any,
+    loaded: frozenset[str],
+    expected: bool,
+) -> None:
+    """Drift reads the selected transport even when no local YAML exists."""
+
+    settings.BASE_DIR = tmp_path
+    settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
+    settings.ANGEE_ADDON_INSTALLER_BACKEND = "remote"
+    settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES = {
+        "remote": "tests.test_platform_install._RemoteInstallerBackend",
+    }
+    monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: loaded)
+
+    assert Addon.objects.pending_changes() is expected

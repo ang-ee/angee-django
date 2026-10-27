@@ -2,7 +2,7 @@ import { Button, Glyph, useChatter, useRecordChromeContext, useUiT } from "@ange
 import * as React from "react";
 
 import { TIMELINE_FOCUS_NEEDS_ME, TIMELINE_TAB_ID } from "./RecordTimelinePane";
-import { useTimelinePages } from "./useTimelinePages";
+import { useTimelineFeed } from "./useTimelineFeed";
 
 /**
  * The record-header Needs you control: how many lines on this record wait on
@@ -14,8 +14,8 @@ export function NeedsYouChrome(): React.ReactElement | null {
   const record = useRecordChromeContext();
   const { setActiveTab, setCollapsed } = useChatter();
   const model = record.resource;
-  const [query] = useTimelinePages({ model, id: record.recordId });
-  const count = query?.data?.timeline.needs_me ?? 0;
+  const query = useTimelineFeed({ model, id: record.recordId });
+  const count = query.data?.pages[0]?.metadata?.needsMe ?? 0;
   if (!count) return null;
   const label = `${t("timeline.scope.needsMe")} · ${count}`;
   return (

@@ -30,6 +30,10 @@ Dependency changes must update this file in the same change.
   the stack root owns the install; never run `pnpm install` in a source slot.
   Standalone repository CI uses the repository workspace. Use pnpm at the owning
   root, not npm or yarn; see [Checks](checks.md) for execution contexts.
+  The shared [install policy](../packages/scripts/pnpm-policy.cjs) disables pnpm's
+  optimistic repeat-install shortcut so native package `prepare` scripts run
+  even when dependencies are unchanged. In particular, `@angee/metadata` owns
+  the compiled headless module consumed by plain Node code generation.
 - A dependency change is complete only when the concern row here and the owning
   Python/addon/package manifest plus the owning lockfile agree.
 
@@ -104,7 +108,7 @@ It has no task or scheduler dependency.
 | signal-cli >= 0.14.6 (system binary) | Signal linked-device protocol, encrypted account store, JSON-RPC receive stream, and attachment download | `messaging_integrate_signal` runs one native signal-cli child per channel on the dedicated `signal` queue and keeps its config under `ANGEE_DATA_DIR/signal/<sqid>`. Install the native Homebrew build on supported macOS hosts or the upstream `-Linux-native` release on Linux rather than adding a Python/JRE dependency. Pin the exact binary release in deployment, monitor upstream releases, and update inside Signal's roughly three-month client capability clock: an obsolete linked device can be remotely unlinked, and no version pin is durable indefinitely. `SIGNAL_CLI_BIN` may select the pinned executable path. |
 | matrix-nio[e2e] + vodozemac | Matrix client protocol and E2EE — password login, sync, lazy-member filters, authenticated media, Olm/Megolm decryption of encrypted rooms and attachments over the audited Rust vodozemac ratchets (wheels for every supported platform, no C toolchain) | `messaging_integrate_matrix` puppets one user's own Matrix account on the dedicated `matrix` queue and keeps nio's peewee crypto store under `ANGEE_DATA_DIR/matrix/<sqid>`. ISC + Apache-2.0. vodozemac owns the native cryptography; nio ships no cross-signing, so the addon's `recovery.py` ports mautrix's MPL-2.0 SSSS + self-signing round onto pycryptodome (`pycryptodome` and `unpaddedbase64` are declared directly because that module imports them). E2EE is mandatory and imports fail fast when its boundary is incomplete. |
 | cryptg | Native AES-IGE for MTProto — the encryption hot path | Declared directly rather than via Telethon's optional extra, so the maintained native implementation is locked instead of falling back to pure-Python `pyaes` on a long-lived ingester |
-| markdown-it-py | CommonMark tokenizer with source line spans (block token `.map`) | `knowledge` slices doc sections by heading without re-rendering — the `MarkdownPage` structure methods (`parse_outline`/`outline`, `section_range`, `spliced_section`, `spliced_unique`) shared by the `outline` read field and the section-anchored patch write |
+| markdown-it-py | CommonMark tokenizer with source line spans (block token `.map`) and native inline extension rules | `knowledge` slices doc sections by heading without re-rendering — the `MarkdownPage` structure methods (`parse_outline`/`outline`, `section_range`, `spliced_section`, `spliced_unique`) shared by the `outline` read field and the section-anchored patch write. `knowledge_integrate_notion` translates vendor tags through an inline rule while preserving Markdown code and escapes; Python's `HTMLParser` owns tag attributes. |
 | uv | Python dependency resolution and workspaces | Workspace layout |
 
 Money representation: money stays native — a `DecimalField` (default

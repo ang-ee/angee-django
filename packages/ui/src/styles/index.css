@@ -2,7 +2,7 @@
    @angee/ui — Tailwind 4 entry stylesheet.
 
    Imports tokens, binds the dark-mode variant to the canonical color-scheme
-   attribute (with a temporary legacy mirror), and
+   attribute, and
    bridges every semantic token into a Tailwind utility through the @theme
    block.
 
@@ -18,9 +18,8 @@
 @import "tw-animate-css";
 @import "./tokens.css";
 
-/* The canonical selector drives authored dark utilities. The legacy selector
-   remains for one compatibility cycle while consumers migrate. */
-@custom-variant dark (&:where([data-color-scheme="dark"], [data-color-scheme="dark"] *, [data-theme="dark"], [data-theme="dark"] *));
+/* The canonical color-scheme selector drives authored dark utilities. */
+@custom-variant dark (&:where([data-color-scheme="dark"], [data-color-scheme="dark"] *));
 
 @theme {
   /* ----------------------------------------------------------------

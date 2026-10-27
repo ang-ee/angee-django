@@ -11,9 +11,10 @@ function configured(config: unknown): unknown {
   `, hook, JSON.stringify(config)], { encoding: "utf8" }));
 }
 
-test("native install policy preserves consumer settings while enforcing framework dependency fixes", () => {
+test("native install policy preserves consumer settings while enforcing framework preparation and dependencies", () => {
   const config = {
     registry: "https://registry.example.invalid",
+    optimisticRepeatInstall: true,
     overrides: { "consumer-package": "1.0.0", "@assistant-ui/react": "9.0.0" },
     packageExtensions: {
       "consumer-package": { peerDependencies: { react: "*" } },
@@ -26,6 +27,7 @@ test("native install policy preserves consumer settings while enforcing framewor
   };
   expect(configured(config)).toEqual({
     registry: config.registry,
+    optimisticRepeatInstall: false,
     overrides: {
       "consumer-package": "1.0.0", "@assistant-ui/react": "0.14.26",
       "@assistant-ui/core": "0.2.20", "@assistant-ui/store": "0.2.19", "@assistant-ui/tap": "0.9.3",
@@ -46,6 +48,7 @@ test("native install policy preserves consumer settings while enforcing framewor
 
 test("native install policy accepts roots with no existing dependency policy", () => {
   expect(configured({})).toMatchObject({
+    optimisticRepeatInstall: false,
     overrides: { "@assistant-ui/react": "0.14.26" },
     packageExtensions: { "@refinedev/core@5.0.12": { dependencies: { graphql: "^16.14.0" } } },
     patchedDependencies: { "@refinedev/core@5.0.12": expect.stringContaining("refinedev-core-5.0.12.patch") },

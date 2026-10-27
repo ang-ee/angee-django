@@ -104,8 +104,10 @@ from angee.models import (
     AngeeUnscopedManager,
     AuditMixin,
     HistoryMixin,
+    MergePolicy,
     OwnerMixin,
     OwnerQuerySet,
+    RecordRefMixin,
     SourceKind,
     Statement,
     StatementLinkMixin,
@@ -115,11 +117,7 @@ from angee.models import (
     save_state,
     transition,
 )
-from angee.refs import (
-    MergePolicy,
-    RecordRefMixin,
-    generic_pointer_target,
-)
+from angee.refs import generic_pointer_target
 from angee.serialization import canonical_json
 
 logger = logging.getLogger(__name__)
@@ -2768,6 +2766,20 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         return self.capability_impl.source_url(link)
 
+    def source_label(self, link: Any) -> str:
+        """Delegate the remote label to the selected connector."""
+
+        return self.capability_impl.source_label(link)
+
+    @property
+    def open_failure_count(self) -> int:
+        """Unresolved failures of current epochs, independent of the last run's completion."""
+
+        streams = getattr(self, "open_sync_streams", None)
+        if streams is None:
+            streams = self.sync_streams.filter(state=StreamState.OPEN)
+        return sum(len(stream.sync_failures(open_only=True)) for stream in streams)
+
     @classmethod
     def live_implementation_field(cls) -> ImplClassField | None:
         """Return this bridge's explicitly declared live implementation field."""
@@ -4008,8 +4020,8 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeQuerySet[RecordLinkT]):
             "source_payload", "mapped_payload", "applied_base__source_payload"
         )
 
-    def with_open_failures(self) -> Self:
-        """Select open-state owners in stable order without their payloads."""
+    def with_open_failures(self, *, include_source: bool = False) -> Self:
+        """Select open-state owners; include retained sources only for their readable labels."""
         return (
             self.filter(Q(status=LinkStatus.FAILED) | Q(outbox_state__isnull=False))
             .order_by("pk")
@@ -4022,6 +4034,7 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeQuerySet[RecordLinkT]):
                 "outbox_state",
                 "outbox_retry_at",
                 "outbox_last_error",
+                *(("source_payload",) if include_source else ()),
             )
         )
 
@@ -4387,6 +4400,18 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
     def failure_stream(self) -> SyncStream:
         return self.stream
 
+    @property
+    def source_url(self) -> str | None:
+        """Provider URL projected through the connection's implementation."""
+
+        return cast(Bridge, self.stream.integration.concrete_capability()).source_url(self)
+
+    @property
+    def source_label(self) -> str:
+        """Provider-owned human label for this retained identity."""
+
+        return cast(Bridge, self.stream.integration.concrete_capability()).source_label(self)
+
     def _lock_sync_state(self) -> Self:
         """Follow a link's current epoch before fencing a retained failure mutation."""
         self.refresh_from_db(fields=("stream",))
@@ -4478,11 +4503,25 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
         details: Mapping[str, Any] | None = None,
         outbox: bool = False,
     ) -> SyncFailure:
-        """Retain an inbound slot or the latest refused conditional write."""
+        """Retain current failure evidence; older versions of the same problem close.
+
+        A link owns one remote identity, so a newer source or mapping supersedes
+        the same inbound problem. Conflicts still require an explicit decision;
+        stream-level failures may describe distinct events and keep their slots.
+        """
         if not outbox:
-            return super().record_failure(
-                kind=kind, code=code, source_hash=source_hash, mapping_version=mapping_version, details=details
-            )
+            with transaction.atomic():
+                locked = self._lock_sync_state()
+                for prior in locked.failures(open_only=True):
+                    if (
+                        prior.slot is not None and kind != SyncFailureKind.CONFLICT
+                        and (prior.kind, prior.code) == (kind, code)
+                        and (prior.source_hash, prior.mapping_version) != (source_hash, mapping_version)
+                    ):
+                        locked.resolve_failure(prior.slot)
+                return super().record_failure(
+                    kind=kind, code=code, source_hash=source_hash, mapping_version=mapping_version, details=details
+                )
         with transaction.atomic():
             locked = self._lock_sync_state()
             data = deepcopy(locked.outbox_last_error)

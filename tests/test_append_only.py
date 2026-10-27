@@ -67,14 +67,13 @@ def test_audit_foreign_keys_declare_serializable_materialized_nullification() ->
 
 
 def test_historical_audit_imports_preserve_field_migration_state() -> None:
-    from angee.base.mixins import audit_set_null
     from angee.models.audit import AuditMixin as NativeAuditMixin
     from angee.models.audit import retained_set_null as native_delete
     from angee.models.ownership import AuditMixin as HistoricalAuditMixin
     from angee.models.ownership import retained_set_null as historical_delete
 
     assert HistoricalAuditMixin is NativeAuditMixin
-    assert audit_set_null is historical_delete is native_delete is retained_set_null
+    assert historical_delete is native_delete is retained_set_null
     state = ModelState.from_model(RetainedEvidence)
     historical_state = state.clone()
     for name in ("created_by", "updated_by"):

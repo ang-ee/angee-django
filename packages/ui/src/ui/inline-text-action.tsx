@@ -5,6 +5,7 @@ import { cn } from "../lib/cn";
 import { Button, type ButtonSize, type ButtonVariant } from "./button";
 import { FormRoot } from "./form";
 import { ErrorBanner } from "../fragments/ErrorBanner";
+import { errorMessage } from "../feedback/error-message";
 import { Input, type InputSize } from "./input";
 import { Textarea } from "./textarea";
 
@@ -26,7 +27,7 @@ export interface InlineTextActionProps
   /**
    * Receives the already-trimmed, non-empty value. A returned promise keeps the
    * editor open and busy until it settles; `false` or a rejection keeps it open
-   * (the caller shows the failure through `error`).
+   * (a rejection displays the failure; `false` lets the caller supply `error`).
    */
   onSubmit: (value: string) => void | boolean | Promise<void | boolean>;
   onCancel?: () => void;
@@ -104,6 +105,8 @@ export function InlineTextAction({
   const [draft, setDraft] = React.useState(value);
   const [showRequired, setShowRequired] = React.useState(false);
   const [settling, setSettling] = React.useState(false);
+  const [submitError, setSubmitError] = React.useState<string>();
+  const failure = error ?? submitError;
   const busy = externalBusy || settling;
   const messageId = React.useId();
 
@@ -129,6 +132,7 @@ export function InlineTextAction({
   const cancel = React.useCallback(() => {
     setDraft(value);
     setShowRequired(false);
+    setSubmitError(undefined);
     setEditing(false);
     onCancel?.();
   }, [onCancel, setEditing, value]);
@@ -137,6 +141,7 @@ export function InlineTextAction({
     if (disabled || busy) return;
     setDraft(value);
     setShowRequired(false);
+    setSubmitError(undefined);
     setEditing(true);
   }, [busy, disabled, setEditing, value]);
 
@@ -171,7 +176,7 @@ export function InlineTextAction({
         density="compact"
         aria-busy={busy || undefined}
         aria-label={inputLabel}
-        className={cn(multiline ? "flex-wrap items-center gap-2" : "items-center gap-1", formClassName)}
+        className={cn("items-center", multiline ? "gap-2" : "gap-1", (multiline || Boolean(failure)) && "flex-wrap", formClassName)}
         onBlur={(event) => {
           if (multiline) return;
           const nextTarget = event.relatedTarget;
@@ -180,6 +185,7 @@ export function InlineTextAction({
         }}
         onFormSubmit={() => {
           if (disabled || busy) return;
+          setSubmitError(undefined);
           if (!trimmed) {
             setShowRequired(true);
             inputRef.current?.focus();
@@ -195,13 +201,18 @@ export function InlineTextAction({
             setShowRequired(false);
             setEditing(false);
           };
-          const result = onSubmit(trimmed);
-          if (result instanceof Promise) {
-            setSettling(true);
-            void result.then(settled, () => undefined).finally(() => setSettling(false));
-            return;
+          const rejected = (caught: unknown) => setSubmitError(errorMessage(caught, t("form.saveFailed")));
+          try {
+            const result = onSubmit(trimmed);
+            if (result instanceof Promise) {
+              setSettling(true);
+              void result.then(settled, rejected).finally(() => setSettling(false));
+              return;
+            }
+            settled(result);
+          } catch (caught) {
+            rejected(caught);
           }
-          settled(result);
         }}
       >
         {multiline ? (
@@ -213,7 +224,7 @@ export function InlineTextAction({
             disabled={disabled || busy}
             invalid={invalid}
             aria-label={inputLabel}
-            aria-describedby={invalid ? messageId : error ? errorId : undefined}
+            aria-describedby={invalid ? messageId : failure ? errorId : undefined}
             className={cn("w-full", inputClassName)}
             onChange={(event) => {
               setDraft(event.currentTarget.value);
@@ -239,7 +250,7 @@ export function InlineTextAction({
             disabled={disabled || busy}
             invalid={invalid}
             aria-label={inputLabel}
-            aria-describedby={invalid ? messageId : undefined}
+            aria-describedby={invalid ? messageId : failure ? errorId : undefined}
             className={inputClassName}
             onChange={(event) => {
               setDraft(event.currentTarget.value);
@@ -273,7 +284,7 @@ export function InlineTextAction({
             {requiredMessage ?? t("inlineText.required")}
           </span>
         ) : null}
-        {error ? <ErrorBanner id={errorId} description={error} className="basis-full" /> : null}
+        {failure ? <ErrorBanner id={errorId} description={failure} className="basis-full" /> : null}
       </FormRoot>
     </div>
   );

@@ -48,6 +48,7 @@ from angee.knowledge.models import MarkdownPage as AbstractMarkdownPage
 from angee.knowledge.models import Page as AbstractPage
 from angee.knowledge.models import RecordBinding as AbstractRecordBinding
 from angee.knowledge.models import Vault as AbstractVault
+from angee.knowledge_integrate_notion.models import NotionConnection as AbstractNotionConnection
 from angee.messaging.testing import models as messaging_models  # noqa: F401 -- register messaging test models
 from angee.messaging.testing.models import Channel
 from angee.platform.models import Addon as AbstractAddon
@@ -238,6 +239,15 @@ class MarkdownPage(AbstractMarkdownPage, Page):
         app_label = "knowledge"
         db_table = "test_knowledge_markdown_page"
         rebac_resource_type = "knowledge/markdown_page"
+
+
+class NotionConnection(AbstractNotionConnection, Integration):
+    """Native Notion integration child for source-addon contract tests."""
+
+    class Meta(AbstractNotionConnection.Meta):
+        abstract = False
+        app_label = "knowledge_integrate_notion"
+        db_table = "test_knowledge_notion_connection"
 
 
 class VcsBridge(AbstractVcsBridge, Integration):

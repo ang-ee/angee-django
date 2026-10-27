@@ -221,6 +221,8 @@ export interface AuthoredKeysetFeedOptions<
   enabled?: boolean;
   dataProviderName?: string;
   models: readonly string[];
+  /** Exact record interests use the authored-query metadata owner. */
+  records?: readonly { model: string; id: string }[];
   pageSize: number;
   /** Native request lifecycle policy; identity and retained pages stay with this owner. */
   queryOptions?: Pick<UseInfiniteQueryOptions<
@@ -288,7 +290,7 @@ export function useAuthoredKeysetFeed<
   useAuthoredErrorPolicy([queryKey]);
   const result = useInfiniteQuery({
     ...options.queryOptions, ...configured, enabled,
-    meta: sharedAuthoredMeta(client, queryKey, models, [], [], options.queryOptions),
+    meta: sharedAuthoredMeta(client, queryKey, models, options.records, [], options.queryOptions),
   });
   const { refetch } = result;
   // Track queryKey through hashKey intentionally: TanStack treats equal hashes as the same query.

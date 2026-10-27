@@ -3,7 +3,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 
-import { useComparisonAnswerWrite, useComparisonStatementWrite } from "./comparison-writes";
+import { useComparisonAnswerVisibility, useComparisonAnswerWrite, useComparisonStatementWrite } from "./comparison-writes";
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn(async () => ({ data: { id: "answer-new" } })),
@@ -20,6 +20,8 @@ vi.mock("@refinedev/core", () => ({
 }));
 vi.mock("@angee/ui", () => ({
   createNamespaceT: () => () => (key: string) => key,
+  useEnumOptions: () => ["ROUND", "RESPONDER", "SEALED"].map(value => ({ value, label: value })),
+  canonicalOptionValue: (options: { value: string }[], value: string) => options.find(option => option.value.toLowerCase() === value.toLowerCase())?.value,
   optionToken: (value: unknown) => String(value ?? "").toLowerCase(),
   useAuthoredResourceMutation: () => [mocks.visibility, { fetching: false }],
   useActionResultRun: () => (fire: () => Promise<unknown>) => fire(),
@@ -55,4 +57,11 @@ test("new answers and statements use the existing resource writes", async () => 
     id: "proposal-1", values: { statement: "Six weeks" },
     meta: expect.objectContaining({ gqlVariables: { expected_revision: 4 } }),
   }));
+});
+
+test("visibility rejects a value outside metadata before issuing the action", async () => {
+  mocks.visibility.mockClear();
+  const { result } = renderHook(() => useComparisonAnswerVisibility());
+  await expect(result.current.change("answer-1", 7, "unknown")).rejects.toThrow("Unknown proposal answer visibility");
+  expect(mocks.visibility).not.toHaveBeenCalled();
 });

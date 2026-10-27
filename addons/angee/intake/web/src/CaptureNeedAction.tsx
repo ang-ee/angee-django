@@ -33,7 +33,6 @@ export function CaptureNeedAction({
   targetId,
 }: CaptureNeedActionProps): React.ReactElement {
   const t = useIntakeT();
-  const [open, setOpen] = React.useState(false);
   const importanceOptions = useEnumOptions(NEED_MODEL, "importance", { casing: "upper" });
   const [capture] = useAuthoredResourceMutation(CaptureNeedDocument, {
     invalidateModels: [NEED_MODEL],
@@ -64,33 +63,29 @@ export function CaptureNeedAction({
   );
 
   return (
-    <>
-      <Button type="button" variant="primary" size="sm" onClick={() => setOpen(true)}>
+    <MutationDialog<CaptureNeedValues>
+      trigger={<Button type="button" variant="primary" size="sm">
         <Glyph decorative name="plus" />
         {t("capture.button")}
-      </Button>
-      <MutationDialog<CaptureNeedValues>
-        open={open}
-        onOpenChange={setOpen}
-        title={t("capture.title")}
-        description={t("capture.description")}
-        fields={fields}
-        initialValues={{ importance: "NORMAL" }}
-        submitLabel={t("capture.submit")}
-        submittingLabel={t("capture.submitting")}
-        errorFallback={t("capture.error")}
-        parseValues={(values) => parseCaptureNeedValues(values, t("capture.importanceRequired"))}
-        onSubmit={async (values) =>
-          actionFormSubmitResult(await capture({
-            target: {
-              model_label: targetModel,
-              record_id: targetId,
-            },
-            ...values,
-          }), "capture_need")
-        }
-      />
-    </>
+      </Button>}
+      title={t("capture.title")}
+      description={t("capture.description")}
+      fields={fields}
+      initialValues={{ importance: "NORMAL" }}
+      submitLabel={t("capture.submit")}
+      submittingLabel={t("capture.submitting")}
+      errorFallback={t("capture.error")}
+      parseValues={(values) => parseCaptureNeedValues(values, t("capture.importanceRequired"))}
+      onSubmit={async (values) =>
+        actionFormSubmitResult(await capture({
+          target: {
+            model_label: targetModel,
+            record_id: targetId,
+          },
+          ...values,
+        }), "capture_need")
+      }
+    />
   );
 }
 

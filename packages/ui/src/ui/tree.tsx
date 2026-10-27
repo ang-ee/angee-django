@@ -69,6 +69,8 @@ export interface TreeProps {
   nodes: readonly TreeNode[];
   "aria-label"?: string;
   selectedId?: string;
+  /** Reveal loaded paths when their nodes change; subsequent folding stays user-owned. */
+  revealIds?: readonly string[];
   onSelect?: (id: string) => void;
   /**
    * Fired when a node transitions collapsed→expanded and its children are not
@@ -161,6 +163,7 @@ export function Tree({
   nodes,
   "aria-label": ariaLabel,
   selectedId,
+  revealIds,
   onSelect,
   onExpand,
   getNodeDraggable,
@@ -178,6 +181,23 @@ export function Tree({
   const [collapsed, setCollapsed] = useState<Set<string>>(() =>
     collectInitialCollapsed(nodes),
   );
+  useEffect(() => {
+    if (!revealIds?.length) return;
+    const targets = new Set(revealIds);
+    const ancestors = new Set<string>();
+    const reveal = (items: readonly TreeNode[]): boolean => {
+      let found = false;
+      for (const node of items) {
+        const childFound = reveal(node.children ?? []);
+        if (childFound) ancestors.add(node.id);
+        found = found || childFound || targets.has(node.id);
+      }
+      return found;
+    };
+    reveal(nodes);
+    setCollapsed((current) => [...ancestors].some((id) => current.has(id))
+      ? new Set([...current].filter((id) => !ancestors.has(id))) : current);
+  }, [nodes, revealIds]);
   const mainFlat = useMemo(() => flattenTree(nodes, collapsed), [collapsed, nodes]);
   const smartFlat = useMemo<FlatRow[]>(
     () =>

@@ -50,32 +50,17 @@ def test_local_install_appends_and_preserves_comments(tmp_path: Path, settings: 
 
     installer = _local_installer(tmp_path, settings)
 
-    result = installer.install("example.demo")
+    snapshot = installer.installed_apps_snapshot()
+    assert snapshot is not None
+    installer.apply_app_names((*snapshot.names, "example.demo"), expected_text=snapshot.text)
 
-    assert result.already is False
-    assert result.summary == "Installed example.demo; the change is pending a restart."
-    assert installer.installed_app_names() == ("angee.platform", "example.notes", "example.demo")
+    assert installer.desired_app_names() == frozenset({"angee.platform", "example.notes", "example.demo"})
 
     text = (tmp_path / "settings.yaml").read_text(encoding="utf-8")
     assert "# Project composition facts" in text  # top comment survived
     assert "# the console host" in text  # inline comment survived
     assert 'ANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"' in text  # other keys untouched
     assert text.index("angee.platform") < text.index("example.notes") < text.index("example.demo")  # author order
-
-
-def test_snapshot_then_apply_preserves_comments(tmp_path: Path, settings: Any) -> None:
-    """A preview parse cannot consume comment state needed by the confirmed edit."""
-
-    installer = _local_installer(tmp_path, settings)
-    snapshot = installer.installed_apps_snapshot()
-
-    assert snapshot is not None
-    installer.apply_app_names((*snapshot.names, "example.demo"), expected_text=snapshot.text)
-
-    text = (tmp_path / "settings.yaml").read_text(encoding="utf-8")
-    assert "# Project composition facts" in text
-    assert "  - angee.platform  # the console host" in text
-    assert "  - example.demo" in text
 
 
 def test_local_install_preserves_sequence_indentation(tmp_path: Path, settings: Any) -> None:
@@ -88,7 +73,9 @@ def test_local_install_preserves_sequence_indentation(tmp_path: Path, settings: 
 
     installer = _local_installer(tmp_path, settings)
 
-    installer.install("example.demo")
+    snapshot = installer.installed_apps_snapshot()
+    assert snapshot is not None
+    installer.apply_app_names((*snapshot.names, "example.demo"), expected_text=snapshot.text)
 
     lines = (tmp_path / "settings.yaml").read_text(encoding="utf-8").splitlines()
     # Existing entries keep their exact 2-space-dash indentation (+ inline comment).
@@ -103,14 +90,14 @@ def test_local_install_preserves_sequence_indentation(tmp_path: Path, settings: 
 
 
 def test_local_install_is_idempotent(tmp_path: Path, settings: Any) -> None:
-    """Installing an already-present root is a no-op (``already`` True), file unchanged."""
+    """Applying unchanged reviewed roots leaves the file unchanged."""
 
     installer = _local_installer(tmp_path, settings)
     before = (tmp_path / "settings.yaml").read_text(encoding="utf-8")
 
-    result = installer.install("angee.platform")
-
-    assert result.already is True
+    snapshot = installer.installed_apps_snapshot()
+    assert snapshot is not None
+    installer.apply_app_names(snapshot.names, expected_text=snapshot.text)
     assert (tmp_path / "settings.yaml").read_text(encoding="utf-8") == before
 
 
@@ -160,35 +147,40 @@ def test_local_backend_refuses_a_write_without_a_read_snapshot(
         LocalInstallerBackend().write_settings_text(_SETTINGS_YAML)
 
 
-def test_local_uninstall_removes_then_absent_is_noop(tmp_path: Path, settings: Any) -> None:
-    """Uninstall removes the root; uninstalling an absent root is a no-op."""
+def test_apply_removes_roots_then_unchanged_is_noop(tmp_path: Path, settings: Any) -> None:
+    """Applying reviewed roots removes absent entries and preserves an unchanged document."""
 
     installer = _local_installer(tmp_path, settings)
 
-    removed = installer.uninstall("example.notes")
-    assert removed.already is False
-    assert installer.installed_app_names() == ("angee.platform",)
+    snapshot = installer.installed_apps_snapshot()
+    assert snapshot is not None
+    installer.apply_app_names(("angee.platform",), expected_text=snapshot.text)
+    assert installer.desired_app_names() == frozenset({"angee.platform"})
     text = (tmp_path / "settings.yaml").read_text(encoding="utf-8")
     assert "example.notes" not in text
     assert "# the console host" in text  # surviving entry keeps its comment
 
-    absent = installer.uninstall("never.installed")
-    assert absent.already is True
+    installer.apply_app_names(("angee.platform",), expected_text=text)
+    assert (tmp_path / "settings.yaml").read_text(encoding="utf-8") == text
 
 
-def test_install_then_uninstall_round_trips_comments(tmp_path: Path, settings: Any) -> None:
-    """An install followed by an uninstall leaves the comments and other keys intact."""
+def test_add_then_remove_round_trips_comments(tmp_path: Path, settings: Any) -> None:
+    """Adding then removing a reviewed root leaves comments and other keys intact."""
 
     installer = _local_installer(tmp_path, settings)
 
-    installer.install("example.demo")
-    installer.uninstall("example.demo")
+    snapshot = installer.installed_apps_snapshot()
+    assert snapshot is not None
+    installer.apply_app_names((*snapshot.names, "example.demo"), expected_text=snapshot.text)
+    updated = installer.installed_apps_snapshot()
+    assert updated is not None
+    installer.apply_app_names(snapshot.names, expected_text=updated.text)
 
     text = (tmp_path / "settings.yaml").read_text(encoding="utf-8")
     assert "example.demo" not in text
     assert "# Project composition facts" in text
     assert "# the console host" in text
-    assert installer.installed_app_names() == ("angee.platform", "example.notes")
+    assert installer.desired_app_names() == frozenset({"angee.platform", "example.notes"})
 
 
 def test_desired_app_names_is_unknown_when_unreadable(tmp_path: Path, settings: Any) -> None:
@@ -199,7 +191,7 @@ def test_desired_app_names_is_unknown_when_unreadable(tmp_path: Path, settings: 
 
     installer = AddonInstaller(LocalInstallerBackend())
     assert installer.desired_app_names() is None
-    assert installer.installed_app_names() == ()
+    assert installer.installed_apps_snapshot() is None
 
 
 def test_desired_app_names_rejects_non_string_members(tmp_path: Path, settings: Any) -> None:
@@ -221,7 +213,7 @@ def test_addon_installer_resolves_local_default(settings: Any) -> None:
     assert isinstance(addon_installer().backend, LocalInstallerBackend)
 
 
-def test_install_refuses_project_yaml_when_installed_apps_is_overridden(
+def test_snapshot_is_unknown_when_installed_apps_is_overridden(
     tmp_path: Path, settings: Any
 ) -> None:
     """Editing an eclipsed YAML value cannot claim to have queued a change."""
@@ -229,10 +221,8 @@ def test_install_refuses_project_yaml_when_installed_apps_is_overridden(
     installer = _local_installer(tmp_path, settings)
     settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset()
 
-    result = installer.install("example.demo")
-
-    assert result.ok is False
-    assert "not controlled by the project settings.yaml" in result.summary
+    assert installer.installed_apps_snapshot() is None
+    assert installer.desired_app_names() is None
 
 
 def test_addon_installer_rejects_unknown_key(settings: Any) -> None:

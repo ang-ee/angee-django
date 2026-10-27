@@ -17,6 +17,7 @@ from django.test.utils import CaptureQueriesContext
 from import_export.results import Result, RowResult
 from rebac import system_context
 from rebac.errors import MissingActorError
+from rebac.testing import install_schema
 
 from angee.addons import addon_manifest
 from angee.models import AngeeModel
@@ -37,7 +38,6 @@ from angee.resources.widgets import (
     resolve_ledger_xref,
     resolve_xref,
 )
-from angee.testing.permissions import install_permission_schema
 from angee.tiers import ResourceTier
 from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- share fake-addon lifetime
 from tests.tables import model_tables
@@ -2104,6 +2104,40 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
         assert hooks == [True, True]
 
 
+@pytest.mark.parametrize("storage", ["denormalized", "registry"])
+def test_unchanged_grant_batches_use_one_native_key_read(
+    composed_tables: None, tmp_path: Path, settings: Any, storage: str,
+) -> None:
+    """Reloading many grants skips every tuple without per-row reads or writes."""
+
+    from django.contrib.auth import get_user_model
+    from rebac import ObjectRef, RelationshipTuple, to_subject_ref, write_relationships
+    from rebac.models import PermissionAuditEvent
+
+    from angee.identity import public_subject_ref
+
+    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
+    user = get_user_model().objects.create_user(username="grant-batch-reader")
+    subject = to_subject_ref(user)
+    entry = ResourceEntry.from_declaration(addon(tmp_path), "install", {"path": "grants.yaml", "kind": "grants"})
+    rows = tuple(GrantRow(
+        entry=entry, resource=f"angee/role:batch-{index}",
+        relation="member", subject=str(public_subject_ref(subject)), index=index,
+    ) for index in range(24))
+    groups = (GrantGroup(entry=entry, rows=(*rows, rows[0])),)
+    with system_context(reason="test.resources.grant_batch"):
+        write_relationships([RelationshipTuple(
+            resource=ObjectRef("angee/role", f"batch-{index}"),
+            relation="member", subject=subject,
+        ) for index in range(8)])
+        assert materialize_grant_groups(groups, ledger_model=ResourceLedger, addon_aliases={}) == (16, 8)
+        audit_count = PermissionAuditEvent.objects.count()
+        with CaptureQueriesContext(connection) as captured:
+            assert materialize_grant_groups(groups, ledger_model=ResourceLedger, addon_aliases={}) == (0, 24)
+        assert len(captured) == 1
+        assert PermissionAuditEvent.objects.count() == audit_count
+
+
 @pytest.mark.django_db(transaction=True)
 def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
     """A grant on an MTI child row lands on every REBAC identity it IS-A.
@@ -2237,14 +2271,14 @@ def test_mti_grants_follow_ancestor_relation_contract(
     from angee.resources import grants
 
     active = LocalBackend()
-    install_permission_schema(parse_zed(f"""
+    install_schema(parse_zed(f"""
         definition auth/user {{}}
         definition auth/group {{ relation member: auth/user }}
         definition mtidemo/parent {{
             {parent_relation}
         }}
         definition mtidemo/child {{ relation reviewer: auth/user }}
-    """), active=active)
+    """), backend=active)
     child, parent = ObjectRef("mtidemo/child", "1"), ObjectRef("mtidemo/parent", "1")
     subject = SubjectRef.of("auth/user", "2")
     # Xref resolution and real MTI identity enumeration are covered by the
@@ -2275,11 +2309,11 @@ def test_invalid_explicit_mti_grant_still_fails_native_validation(
     from angee.resources import grants
 
     active = LocalBackend()
-    install_permission_schema(parse_zed("""
+    install_schema(parse_zed("""
         definition auth/user {}
         definition mtidemo/parent {}
         definition mtidemo/child {}
-    """), active=active)
+    """), backend=active)
     child, parent = ObjectRef("mtidemo/child", "1"), ObjectRef("mtidemo/parent", "1")
     monkeypatch.setattr(grants, "backend", lambda: active)
     monkeypatch.setattr(grants, "_resolve_resource_refs", lambda *args: [child, parent])

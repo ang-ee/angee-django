@@ -61,23 +61,40 @@ once. Model scope, container narrowing and each group's `when` determine which
 role claims apply. The record owner continues to own the permission arm and
 narrowing of the aside.
 
-Bind uses `PaneLabelPopover` with a page selector and Bind button. One group
+Bind uses `PaneLabelPopover` with the native searchable `RelationPicker` and Bind button.
+Candidates are paged on the server, writable, untrashed, and not already bound
+under the chosen role. Binding requires an explicit selection. One group
 component owns the picker and rows through `render(context, label)`, sharing
 busy state with Unbind. The picker closes on success and shows binding failures
 inside it. Generic Bind writes `related` and is absent if a sibling claims that
-role; a role-specific group writes its configured role. Both groups' `useVerb`
-rules include view-as restrictions. The page reader and editor use `SurfaceHeader`
-and publish Edit, Done and Delete into the shell's `ControlBand`. On a page,
+role; a role-specific group writes its configured role. Both groups include view-as restrictions.
+
+Pages compose the native `Form` with title and Markdown body fields. `FormView`
+owns the record header and toolbar, Save/Discard, validation, dirty state and
+navigation protection. Knowledge's submit adapter only translates the guarded
+body mutation into that form contract; title and body persist together through
+`MarkdownPageManager.write_body`. Folders use the generated page update.
 Backlinks and Bound to are Related groups using the shared pane rows; Bound to
-uses `RecordReferenceRow` for one bounded label read per model, registered record
-links and non-interactive references when the model has no record route.
+uses `RecordReferenceRow` for bounded labels and registered record links.
+
+The body uses the existing `markdown.editor` widget and shared Markdown renderer.
+The navigator composes `CollectionTreeView` for server-scoped roots, lazy child
+pages, search and paging. Direct record reads stay independent of that navigator;
+readable ancestors reveal the path without exposing hidden parent labels. The
+record pager replays the same branch, order and filter through native route context.
+The existing **New** menu owns Page, Folder and Subpage creation; child lists
+use native record links. `LinkManager` owns exact-title wikilink resolution,
+including target creation, rename and trash/restore; the UI renders its readable targets.
+Markdown links using a page's `wikilink_url` share that index and navigation;
+literal links inside code are excluded.
 
 For dated, role-scoped notes, use `RecordNotesStream({ target, role, vault,
 heading, composer })` in a record section or `recordNotesTab({ label, role,
 vault, heading, composer, sequence, when })` as an aside child; the tab shows
 where the Pages group does. `vault` is the public vault id. The stream reads page content through the binding query and offers its inline
 composer only when the record can be bound and that vault projects `write`.
-It creates a note page, writes its markdown body, then binds it under `role`.
+`RecordBindingManager.create_note` creates the page, body and binding in one
+transaction. Its changeset receipt makes a transport retry idempotent.
 The Pages group continues to link to each page's reader.
 
 Pages are trashable through the shared `trash_record` / `restore_record` verbs,

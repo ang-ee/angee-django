@@ -762,6 +762,7 @@ dependencies = [
     { name = "django-zed-rebac" },
     { name = "hatch-angee" },
     { name = "jsonschema", extra = ["format-nongpl"] },
+    { name = "pyclean" },
     { name = "pydantic" },
     { name = "referencing" },
     { name = "sentry-sdk" },
@@ -850,6 +851,7 @@ requires-dist = [
     { name = "hatch-angee", specifier = ">=0.2.4" },
     { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
+    { name = "pyclean", specifier = ">=3.7.0" },
     { name = "pydantic", specifier = ">=2.13" },
     { name = "referencing", specifier = ">=0.37" },
     { name = "sentry-sdk", specifier = ">=2.71.0" },
@@ -2120,6 +2122,15 @@ keyring = [
 ]
 memory = [
     { name = "cachetools" },
+]
+
+[[package]]
+name = "pyclean"
+version = "3.7.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8b/cc/1039d7423a4fe961a36c41c985cf7c1a84270de922d4cc82e16494c7a8b5/pyclean-3.7.0.tar.gz", hash = "sha256:f4605562684fe721d79cfb92842d9d993d1aa7e9a1d13f316e45b29d02d9946b", size = 27580, upload-time = "2026-05-23T01:44:06.561Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6d/5d/38264b704ed3dd35c765dda435118cf9a249048bd638fbd46d3fd51a9146/pyclean-3.7.0-py3-none-any.whl", hash = "sha256:76c1688c1a976889d526c1a2623107f4bc746ce26538f184f041422d91653858", size = 28374, upload-time = "2026-05-23T01:44:05.483Z" },
 ]
 
 [[package]]

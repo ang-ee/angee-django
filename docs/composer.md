@@ -75,6 +75,16 @@ applies the bounded django-yamlconf adapter, evaluates Angee defaults, makes
 configured addon roots importable, and calls `Composer`. The same loader serves
 the import-free dependency bootstrap without constructing Django app configs.
 
+The baked runtime image supplies its folder-addon roots through the native
+`YAMLCONF_CONFFILE` overlay, [docker/addon-settings.yaml](../docker/addon-settings.yaml).
+Its additive declaration preserves project roots. An explicit deployment override
+of `YAMLCONF_CONFFILE` replaces that image default; the replacement owns the full
+overlay, including any baked addon roots the deployment needs.
+Instance Python and web jobs use the same project mount beside the framework
+sources, so generated relative paths and native pnpm workspace membership agree;
+the [shared stack template](../templates/stacks/_shared/stack-body.yaml.jinja)
+owns that layout.
+
 Project settings may override framework defaults before composition. Settings
 that are products of composition are reserved and are assigned by `Composer`; an
 addon or project cannot redefine them with a conflicting value. The current
@@ -341,6 +351,39 @@ contains it. The timeline reads source rows directly and requires no backfill.
 An addon declaring migrations for its own app label keeps that native runtime
 app, even after its last model is retired, so Django can apply the cutover and
 retain its migration history.
+
+#### Retiring `angee.base` imports
+
+**0.3.0 is the removal cutoff for the `angee.base` compatibility package.** An
+installation that carries forward a database must first run compatible framework
+code that still contains `angee.base` and `reset_migration_history`. It cannot
+skip that step if its migration graph imports the retired package: Django imports
+applied migration modules before it can plan an upgrade or reset their history.
+
+From each affected stack's host environment, while compatible code is installed:
+
+1. Update pinned addons to their current import owners. In particular, older
+   messaging bridges imported `SourceKind` from `angee.base.mixins`; current
+   consumers import it from `angee.models`.
+2. Finish pending migrations and resolve composed model drift through the normal
+   build, `makemigrations` and `migrate` lifecycle. Then run
+   `manage.py reset_migration_history --database <alias>` for the affected database.
+   The command refuses pending composed migrations and model drift; it replaces
+   composed migration files and their applied records without recreating tables.
+3. Confirm the complete retained migration graph and installed addon code contain
+   no `angee.base` imports. The reset does not rewrite non-composed migrations;
+   retire those imports through their owning app's supported migration-history
+   transition before proceeding. A migration tree shared by several databases
+   needs a coordinated cutover of all of them before its files are replaced.
+4. Upgrade to the code without the package. Fresh installations generate migrations
+   using the current owners directly; carried-forward installations load their
+   collapsed histories. Verify both paths before deployment.
+
+Live implementations remain in `angee.fields`, `angee.impl`, `angee.identity`,
+`angee.indexes` and `angee.models`; the frozen historical REBAC helper has no live
+replacement. Django's persisted app label `base` remains owned by `BaseConfig` in
+`angee.apps`. Removing the Python directory does not rename that label, database
+tables or content types.
 
 ### Composed addon dependencies
 

@@ -158,7 +158,7 @@ product specifics down into the framework. Every fact lives at its owning level.
 
 ```text
 .                    # consolidated framework source slot
-├── angee/           # django-angee core: base/, data/, compose/, jobs/, serving seams
+├── angee/           # django-angee core: models/, data/, compose/, jobs/, serving seams
 ├── addons/          # standard angee.* folder addons with co-located web fragments
 ├── packages/        # schema-independent @angee/* packages and workshop/test tooling
 ├── examples/        # consumer addons and reference browser suite

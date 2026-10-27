@@ -108,6 +108,28 @@ def test_denied_explorer_is_null_while_computed_collections_are_empty(monkeypatc
     }
 
 
+@pytest.mark.parametrize("allowed", [False, True])
+def test_platform_owns_ledger_listing_and_its_read_gate(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, allowed: bool,
+) -> None:
+    """The console retains the ledger wire contract and uses one platform gate."""
+
+    resource = apps.get_model("resources", "Resource")
+    row = resource.objects.create(
+        source_addon="test.ledger", source_path="rows.yaml", tier="install", xref="example",
+        content_hash="hash", target_model="iam.User", target_id="user",
+    )
+    monkeypatch.setattr(platform_schema, "platform_can_read", lambda: allowed)
+    schema = _schema()
+    data = _data(execute_schema(
+        schema, '{ resources(where: {source_addon: {_eq: "test.ledger"}}) { id source_addon xref } }',
+    ))
+    assert data == {"resources": [{"id": str(row.pk), "source_addon": "test.ledger", "xref": "example"}]
+                    if allowed else []}
+    [metadata] = [item for item in schema.angee_resources if item.model_label == "resources.Resource"]
+    assert metadata.roots.list_name == "resources"
+
+
 def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_tables: None, monkeypatch: Any) -> None:
     """Addon facts come from the catalogue while model and field bindings share rows."""
 

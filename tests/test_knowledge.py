@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 
 import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import AnonymousUser
+from django.core.exceptions import ValidationError
 from rebac import (
     MissingActorError,
     PermissionDenied,
     RelationshipTuple,
     actor_context,
+    system_context,
     to_object_ref,
     to_subject_ref,
     write_relationships,
@@ -30,12 +33,13 @@ from angee.mcp.graphql import execute_under_actor
 from tests.conftest import Link, MarkdownPage, Page, SchemaAddon, Vault, create_user, vault_for
 
 
-def test_create_for_sets_owner_and_audit_stamps(composed_tables: None) -> None:
+@pytest.mark.parametrize("worker", [False, True])
+def test_create_for_sets_owner_and_audit_stamps(composed_tables: None, worker: bool) -> None:
     """The vault factory persists ownership and stamps the creating actor."""
 
     alice = create_user("alice")
 
-    with actor_context(alice):
+    with system_context(reason="test.knowledge.worker") if worker else nullcontext(), actor_context(alice):
         vault = Vault.objects.create_for(alice, name="Research")
 
     assert vault.owner == alice
@@ -116,6 +120,16 @@ def test_create_in_refuses_cross_vault_parent(composed_tables: None) -> None:
         folder = Page.objects.create_in(journal, title="Projects", kind=Page.PageKind.FOLDER)
         with pytest.raises(ValueError, match="same vault"):
             Page.objects.create_in(research, parent=folder, title="Escapee")
+
+
+@pytest.mark.parametrize("kind", ["folder", "note"])
+def test_create_in_reports_duplicate_title_as_validation(composed_tables: None, kind: str) -> None:
+    alice = create_user("duplicate-title")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        Page.objects.create_in(vault, title="Existing", kind=kind)
+        with pytest.raises(ValidationError):
+            Page.objects.create_in(vault, title="Existing", kind=kind)
 
 
 def test_page_inherits_vault_read(composed_tables: None) -> None:
@@ -224,7 +238,8 @@ def test_roles_grant_cross_vault_reach(composed_tables: None) -> None:
     assert list(Vault.objects.as_user(alice)) == []
 
 
-def test_write_body_creates_updates_and_guards(composed_tables: None) -> None:
+@pytest.mark.parametrize("worker", [False, True])
+def test_write_body_creates_updates_and_guards(composed_tables: None, worker: bool) -> None:
     """Body writes upsert the sidecar, derive hash facts, and reject stale tokens."""
 
     alice = create_user("alice")
@@ -250,8 +265,31 @@ def test_write_body_creates_updates_and_guards(composed_tables: None) -> None:
     assert updated.word_count == 1
 
     _grant(vault, "viewer", bob)
-    with actor_context(bob), pytest.raises(PermissionDenied):
+    with (
+        system_context(reason="test.knowledge.worker") if worker else nullcontext(),
+        actor_context(bob),
+        pytest.raises(PermissionDenied),
+    ):
         MarkdownPage.objects.write_body(page, "vandalised")
+
+
+def test_write_body_saves_title_atomically_and_validates_it(composed_tables: None) -> None:
+    """A form save cannot persist its title or body without the other half."""
+
+    alice = create_user("alice")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        page = Page.objects.create_in(vault, title="Draft")
+        Page.objects.create_in(vault, title="Taken")
+        saved = MarkdownPage.objects.write_body(page, "Original", title="Saved")
+        assert saved.title == "Saved"
+        for title in ("", "Taken", "x" * 513):
+            with pytest.raises(ValidationError):
+                MarkdownPage.objects.write_body(page, "Must not persist", title=title, expected_hash=saved.body_hash)
+        with pytest.raises(StaleBodyError):
+            MarkdownPage.objects.write_body(page, "Stale body", title="Stale title", expected_hash="stale")
+        stored = MarkdownPage.objects.get(pk=page.pk)
+        assert (stored.title, stored.body, stored.body_hash) == ("Saved", "Original", saved.body_hash)
 
 
 def test_write_body_rejects_bodyless_kinds(composed_tables: None) -> None:
@@ -288,6 +326,19 @@ def test_parse_wikilinks_extracts_target_and_display() -> None:
     }
 
 
+def test_native_markdown_wikilinks_index_encoded_titles_and_ignore_code(composed_tables: None) -> None:
+    alice = create_user("markdown-links")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        target = Page.objects.create_in(vault, title="Guide # [one]")
+        source = Page.objects.create_in(vault, title="Source", body=(
+            f"[A **bold** guide](<{target.wikilink_url}>)\n\n"
+            "`[[Inline code]]`\n\n```md\n[[Code block]]\n```"
+        ))
+    link = Link._base_manager.get(source_page=source)
+    assert (link.target_text, link.display_text, link.target_page_id) == (target.title, "A bold guide", target.pk)
+
+
 def test_body_save_builds_resolved_and_dangling_links(composed_tables: None) -> None:
     """Saving a body indexes its wikilinks, resolved against same-vault titles."""
 
@@ -316,6 +367,26 @@ def test_editing_body_replaces_stale_links(composed_tables: None) -> None:
         MarkdownPage.objects.write_body(page, "[[Beta]]")
 
     assert [link.target_text for link in Link._base_manager.filter(source_page=page)] == ["Beta"]
+
+
+def test_target_lifecycle_refreshes_exact_title_links_including_bulk_trash(composed_tables: None) -> None:
+    owner = create_user("link-lifecycle")
+    vault = vault_for(owner)
+    with actor_context(owner):
+        source = Page.objects.create_in(vault, title="Source", body="[[Target]] [[target]] [[Renamed]]")
+        target = Page.objects.create_in(vault, title="Target")
+
+        def resolved() -> dict[str, int | None]:
+            return dict(Link.objects.filter(source_page=source).values_list("target_text", "target_page_id"))
+
+        assert resolved() == {"Target": target.pk, "target": None, "Renamed": None}
+        target.title = "Renamed"
+        target.save(update_fields=["title"])
+        assert resolved() == {"Target": None, "target": None, "Renamed": target.pk}
+        Page.objects.filter(pk=target.pk).trash()
+        assert set(resolved().values()) == {None}
+        Page.objects.filter(pk=target.pk).restore()
+        assert resolved()["Renamed"] == target.pk
 
 
 def test_backlinks_respect_source_page_read(composed_tables: None) -> None:

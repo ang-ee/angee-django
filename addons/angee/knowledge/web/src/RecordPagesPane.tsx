@@ -1,13 +1,14 @@
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { ResourceQuery, useModelMetadata } from "@angee/metadata";
+import { useAuthoredQuery } from "@angee/refine";
 import {
-  Button, ErrorBanner, InlineEmpty, PaneLabelPopover, PaneRow, PaneRows, RecordReferenceRow, Select, Skeleton, SkeletonStatus, SkeletonText,
-  errorMessage, useRelatedGroups, useRouteHref, useRuntimeViewAs, type ChatterViewContext, type ContainerChild, type RelatedGroupContent,
+  Button, ErrorBanner, InlineEmpty, PaneLabelPopover, PaneRow, PaneRows, RecordReferenceRow, RelationPicker, Skeleton, SkeletonStatus, SkeletonText,
+  errorMessage, useAuthoredResourceMutation, useRelatedGroups, useRouteHref, useRuntimeViewAs, type ChatterViewContext, type ContainerChild, type RelatedGroupContent,
   type RelatedGroupLabel,
 } from "@angee/ui";
 import { useMemo, useState, type ReactElement } from "react";
 
 import {
-  KNOWLEDGE_LIST_LIMIT, KnowledgeBindRecord, KnowledgePage, KnowledgePageRecordBindings, KnowledgePages, KnowledgeRecordPages,
+  KnowledgeBindRecord, KnowledgePage, KnowledgePageRecordBindings, KnowledgePages, KnowledgeRecordPages,
   KnowledgeUnbindRecord, PAGE_MODEL, PAGE_READ_MODELS, RECORD_BINDING_MODEL,
 } from "./data/documents";
 import { useKnowledgeT } from "./i18n";
@@ -72,58 +73,49 @@ function RecordPagesGroup({ context, role, label }: { context: ChatterViewContex
   const t = useKnowledgeT();
   const routeHref = useRouteHref();
   const { query, bindings, canWrite, canBind } = useRecordPagesRead(context, role);
-  const pagesQuery = useAuthoredQuery(KnowledgePages, { limit: KNOWLEDGE_LIST_LIMIT, offset: 0 }, {
-    enabled: canBind, models: [PAGE_MODEL],
-  });
-  const [bind] = useAuthoredMutation(KnowledgeBindRecord, { invalidateModels: BINDING_MODELS });
-  const [unbind] = useAuthoredMutation(KnowledgeUnbindRecord, { invalidateModels: BINDING_MODELS });
   const [open, setOpen] = useState(false);
   const [pageToBind, setPageToBind] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [bindError, setBindError] = useState<string | null>(null);
-  const [unbindError, setUnbindError] = useState<string | null>(null);
-  const unboundPages = pagesQuery.data?.pages?.filter((page) => page.permissions.includes("write")
-    && !bindings?.some((binding) => binding.page === page.id && binding.role === (role ?? "related"))) ?? [];
-  const chosenPage = unboundPages.some((page) => page.id === pageToBind) ? pageToBind : unboundPages[0]?.id ?? "";
+  const [search, setSearch] = useState("");
+  const metadata = useModelMetadata(PAGE_MODEL);
+  const where = useMemo(() => metadata ? ResourceQuery.from(metadata).toWhere({
+    is_trashed: { exact: false }, writable: { exact: true }, title: { iContains: search },
+    id: { notInList: (bindings ?? []).filter((binding) => binding.role === (role ?? "related"))
+      .flatMap((binding) => binding.page ? [binding.page] : []) },
+  }) : undefined, [bindings, metadata, role, search]);
+  const pagesQuery = useAuthoredQuery(KnowledgePages, { limit: 20, offset: 0, where, order: [{ title: "asc" }] }, {
+    enabled: canBind && open && Boolean(metadata), models: [PAGE_MODEL],
+  });
+  const [bind, bindState] = useAuthoredResourceMutation(KnowledgeBindRecord, { invalidateModels: BINDING_MODELS });
+  const [unbind, unbindState] = useAuthoredResourceMutation(KnowledgeUnbindRecord, { invalidateModels: BINDING_MODELS });
+  const busy = bindState.fetching || unbindState.fetching;
 
   async function changeBinding(page: string, remove: boolean, bindingRole = role ?? "related"): Promise<void> {
     if (!(remove ? canWrite : canBind) || busy) return;
-    setBusy(true);
-    const setError = remove ? setUnbindError : setBindError;
-    setError(null);
+    const { modelLabel, recordId } = recordPagesTarget(context);
+    const input = { model_label: modelLabel, record_id: recordId, page, role: bindingRole };
     try {
-      const { modelLabel, recordId } = recordPagesTarget(context);
-      const input = { model_label: modelLabel, record_id: recordId, page, role: bindingRole };
       if (remove) await unbind({ input });
-      else {
-        await bind({ input });
-        setOpen(false);
-        setPageToBind("");
-      }
-    } catch (error) {
-      setError(errorMessage(error, t("record.writeError")));
-    } finally {
-      setBusy(false);
-    }
+      else { await bind({ input }); setOpen(false); setPageToBind(""); }
+    } catch { /* The mutation owner exposes the error below. */ }
   }
 
   return <>
     {label(<PaneLabelPopover icon="plus" label={t("record.bind")} open={open} onOpenChange={setOpen}>
-      {bindError ? <ErrorBanner description={bindError} /> : null}
-      {pagesQuery.error ? <ErrorBanner description={errorMessage(pagesQuery.error, t("record.loadError"))} /> : null}
-      {pagesQuery.isPending && !pagesQuery.data ? <SkeletonStatus label={t("record.loadingPages")}><Skeleton size="lg" /></SkeletonStatus> :
-        <Select aria-label={t("record.choosePage")} value={chosenPage}
-          options={unboundPages.map((page) => ({ value: page.id, label: page.title }))}
-          placeholder={t("record.choosePage")} onValueChange={setPageToBind} />}
-      <Button type="button" size="sm" variant="secondary" disabled={!chosenPage || busy || !canBind}
-        onClick={() => void changeBinding(chosenPage, false)}>{t("record.bind")}</Button>
+      {bindState.error ? <ErrorBanner description={errorMessage(bindState.error, t("record.writeError"))} /> : null}
+      <RelationPicker aria-label={t("record.choosePage")} value={pageToBind} onChange={setPageToBind}
+        placeholder={t("record.choosePage")} onSearchChange={setSearch}
+        options={(pagesQuery.data?.pages ?? []).map((page) => ({ value: page.id, label: page.title,
+          description: page.vault_label ?? undefined }))}
+        searchState={{ pending: pagesQuery.isFetching, error: pagesQuery.error?.message, retry: () => void pagesQuery.refetch() }} />
+      <Button type="button" size="sm" variant="secondary" disabled={!pageToBind || busy || !canBind}
+        onClick={() => void changeBinding(pageToBind, false)}>{t("record.bind")}</Button>
     </PaneLabelPopover>)}
     <li>
       {query.isPending && !query.data ? <SkeletonStatus label={t("record.loading")} className="p-2">
         <SkeletonText lines={2} size="lg" />
       </SkeletonStatus> : query.error && !query.data ? <ErrorBanner description={errorMessage(query.error, t("record.loadError"))} /> :
         <div className="flex min-h-0 flex-col">
-          {unbindError ? <ErrorBanner description={unbindError} /> : null}
+          {unbindState.error ? <ErrorBanner description={errorMessage(unbindState.error, t("record.writeError"))} /> : null}
           {bindings?.length ? <PaneRows>
             {bindings.map((binding) => <li key={binding.id}>
               {/* Unbind is the row's verb; the binding role is a declared id, never shown raw. */}

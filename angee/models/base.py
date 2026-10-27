@@ -84,9 +84,8 @@ class AngeeModel(
         merge identity but do not prevent removal of its reverted creation.
         """
 
-        # angee.refs composes this package (RecordRefMixin is a model mixin), so the
-        # reference guard is bound here, at call time, not at import time.
-        from angee.refs import reference_blocks_target_delete
+        # Record-edge policy composes MergeableMixin, which depends on this base.
+        from angee.models.refs import reference_blocks_target_delete
 
         live_references = (
             reference

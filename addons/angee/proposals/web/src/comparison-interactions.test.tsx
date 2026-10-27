@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   saveStatement: vi.fn(async () => undefined),
 }));
 vi.mock("./comparison-writes", () => ({
+  useComparisonAnswerVisibility: () => ({ pending: false, change: vi.fn() }),
   useComparisonAnswerWrite: () => ({ pending: false, save: mocks.saveAnswer }),
   useComparisonStatementWrite: () => ({ pending: false, save: mocks.saveStatement }),
 }));

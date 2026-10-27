@@ -267,23 +267,6 @@ class GroupType(AngeeNode):
             return cast(list[IAMGroupBindingType], _group_bindings_owner(self))
 
 
-def _legacy_role_id(root: Any) -> str:
-    """Return the short ID exposed by the authored legacy role binding."""
-
-    return cast(IAMRoleRow, root).role_id
-
-
-@strawberry.type
-class IAMRoleType:
-    """Legacy role binding over the canonical computed IAM role row."""
-
-    id: str = strawberry.field(resolver=_legacy_role_id)
-    namespace: str
-    label: str
-    declared: bool
-    grantable: bool
-
-
 @strawberry.type
 class IAMGrantType:
     """Direct binding over the canonical computed IAM grant row."""
@@ -562,12 +545,6 @@ class IssuedUserPassword:
     password: str
 
 
-def _permission_hub_roles() -> list[IAMRoleType]:
-    """Return roles visible from active role relationship rows."""
-
-    return cast(list[IAMRoleType], _permission_hub_roles_owner())
-
-
 def _permission_schema() -> list[IAMResourceSchemaType]:
     """Bind native installed REBAC definitions for the IAM console."""
 
@@ -723,7 +700,7 @@ def _admin_actor(info: strawberry.Info) -> bool:
 
 
 def _role_rows_for(info: strawberry.Info) -> list[IAMRoleRow]:
-    """Row provider gated on the same platform-admin reach the authored query had."""
+    """Expose the catalogue only to platform administrators."""
 
     if not _admin_actor(info):
         return []
@@ -732,7 +709,7 @@ def _role_rows_for(info: strawberry.Info) -> list[IAMRoleRow]:
 
 
 def _grant_rows_for(info: strawberry.Info) -> list[IAMGrantRow]:
-    """Row provider gated on the same platform-admin reach the authored query had."""
+    """Expose the catalogue only to platform administrators."""
 
     if not _admin_actor(info):
         return []
@@ -985,12 +962,6 @@ class IAMConsoleQuery:
         view_as = _view_as(info)
         actor = view_as.real_user if view_as is not None else session_user(info)
         return cast(list[UserType], User.objects.viewable_people(actor, search=search, limit=limit))
-
-    @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def roles(self) -> list[IAMRoleType]:
-        """Return schema-declared and retained tuple-only roles."""
-
-        return _permission_hub_roles()
 
     @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def rebac_schema(self) -> list[IAMResourceSchemaType]:
@@ -1262,7 +1233,6 @@ schemas = {
             UserType,
             CurrentUserType,
             GroupType,
-            IAMRoleType,
             IAMGrantType,
             IAMPrincipalRoleType,
             IAMPrincipalGrantType,

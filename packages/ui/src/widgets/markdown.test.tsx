@@ -5,6 +5,7 @@ import { useState } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { markdownEditorWidget, markdownPreviewWidget } from "./markdown";
+import { WikilinkProvider } from "./wikilink";
 
 describe("markdown widgets", () => {
   afterEach(() => {
@@ -51,10 +52,20 @@ describe("markdown widgets", () => {
     const preview = rendered()[0]!.closest("[tabindex]");
     expect(preview).not.toBeNull();
     fireEvent.focus(preview!);
-    expect(screen.getByRole("button", { name: "Bold" })).toBeTruthy();
+    // Preview links must not move between pointer-down focus and click.
+    expect(screen.queryByRole("button", { name: "Bold" })).toBeNull();
     fireEvent.click(sourceButton);
+    expect(screen.getByRole("button", { name: "Bold" })).toBeTruthy();
     expect(rendered()).toHaveLength(0);
     expect(screen.getByLabelText("Body").className).not.toContain("hidden");
+  });
+
+  test("renders saved prose that arrives after the field mounts", () => {
+    const Editor = markdownEditorWidget.edit;
+    const view = render(<Editor value={undefined} field={{ label: "Body" }} />);
+    view.rerender(<Editor value="**Loaded prose**" field={{ label: "Body" }} />);
+    expect(screen.getByText("Loaded prose", { selector: "strong" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Markdown source" })).toBeTruthy();
   });
 
   test("publishes toolbar edits immediately and accepts controlled value feedback", () => {
@@ -81,5 +92,28 @@ describe("markdown widgets", () => {
     expect(screen.getByRole("textbox", { name: "Body" }).textContent).toBe("Reset content");
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(errors).not.toHaveBeenCalled();
+  });
+
+  test("focusing a preview link preserves its target through the click", () => {
+    const Editor = markdownEditorWidget.edit;
+    render(<WikilinkProvider resolve={() => ({ href: "/knowledge/parent", broken: false })}>
+      <Editor value="[[Parent]]" field={{ label: "Body" }} />
+    </WikilinkProvider>);
+    const link = screen.getByRole("link", { name: "Parent" });
+    fireEvent.focus(link);
+    expect(screen.getByRole("link", { name: "Parent" })).toBe(link);
+    expect(link.getAttribute("href")).toBe("/knowledge/parent");
+    expect(screen.queryByRole("button", { name: "Bold" })).toBeNull();
+  });
+
+  test("resolves imported Markdown destinations through native wikilink navigation", () => {
+    const resolve = vi.fn(() => ({ href: "/knowledge/guide", broken: false }));
+    const Preview = markdownPreviewWidget.read;
+    render(<WikilinkProvider resolve={resolve}>
+      <Preview value="[A **bold** guide](<wikilink:Guide%20%23%20%5Bone%5D>)" />
+    </WikilinkProvider>);
+    expect(resolve).toHaveBeenCalledWith("Guide # [one]");
+    expect(screen.getByRole("link", { name: "A bold guide" }).getAttribute("href")).toBe("/knowledge/guide");
+    expect(screen.getByText("bold").tagName).toBe("STRONG");
   });
 });

@@ -7,6 +7,8 @@ import {
 
 /** How a `[[wikilink]]` resolves: a way to open it, and whether it is broken. */
 export interface WikilinkTarget {
+  /** Native record link; preserves modifier-click and opening another tab. */
+  href?: string;
   /** Open the linked page; absent when the link does not resolve. */
   onActivate?: () => void;
   /** The target does not resolve to a page (rendered as a broken link). */

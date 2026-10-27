@@ -13,7 +13,7 @@ from angee.decisions.testing.drivers import seed_decision
 from angee.decisions.testing.models import Decision, DecisionRecord
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.relations import with_record_reference_access
-from angee.refs import RecordRefMixin
+from angee.models import RecordRefMixin
 from tests.conftest import Page, addon_schema, create_user, execute_schema, result_data, vault_for
 from tests.tables import model_tables
 

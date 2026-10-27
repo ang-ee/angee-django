@@ -103,9 +103,14 @@ from angee.identity import (
     public_id_of,
 )
 from angee.impl import resolve_hooks
-from angee.models import AngeeModel, OptimisticLockMixin, RowLockMixin, row_lock_paths
+from angee.models import (
+    AngeeModel,
+    OptimisticLockMixin,
+    RecordRefMixin,
+    RowLockMixin,
+    row_lock_paths,
+)
 from angee.permissions import require_rebac_queryset
-from angee.refs import RecordRefMixin
 
 if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType

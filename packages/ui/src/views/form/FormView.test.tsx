@@ -3443,7 +3443,8 @@ describe("FormView", () => {
       const title = screen.getByRole("textbox", { name: "Title" });
       const header = title.closest("header")!;
       const strip = screen.getByRole("tablist");
-      expect(title.className).toContain("text-22");
+      expect(title.parentElement!.className).toContain("text-22");
+      expect(title.style.font).toBe("inherit");
       return { headerClasses: header.parentElement!.className, stripClasses: strip.className };
     };
     const chrome = recordChrome();

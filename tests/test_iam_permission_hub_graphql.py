@@ -55,7 +55,7 @@ def test_platform_admin_is_grantable_without_django_superuser(
                 subject = iam_schema.Group.objects.create(name=f"Administrators {storage}")
                 subject.add_member(str(to_subject_ref(recipient)))
         console = _schema("console")
-        query = "query { roles { id } }"
+        query = "query { iam_roles { id } }"
 
         def can_read_unrelated() -> bool:
             return backend().check_access(
@@ -63,7 +63,7 @@ def test_platform_admin_is_grantable_without_django_superuser(
             ).allowed
 
         assert not recipient.is_superuser
-        assert _execute(console, query, user=recipient).errors is not None
+        assert _data(_execute(console, query, user=recipient))["iam_roles"] == []
         assert not can_read_unrelated()
         for mutation, expected in (("grant_role", True), ("revoke_role", False)):
             result = _data(_execute(
@@ -73,7 +73,7 @@ def test_platform_admin_is_grantable_without_django_superuser(
                 user=admin,
             ))
             assert result[mutation] is True
-            assert (_execute(console, query, user=recipient).errors is None) is expected
+            assert bool(_data(_execute(console, query, user=recipient))["iam_roles"]) is expected
             assert can_read_unrelated() is expected
         recipient.refresh_from_db()
         assert not recipient.is_superuser
@@ -90,11 +90,6 @@ def test_permission_hub_queries_are_admin_only(
     grant(actor=target, role="angee/role:auditor")
     console_schema = _schema("console")
     queries = [
-        """
-        query {
-          roles { id namespace label }
-        }
-        """,
         """
         query {
           rebac_schema {
@@ -243,40 +238,6 @@ def test_roles_grants_resources_are_admin_scoped(
     assert _data(allowed)["iam_grants"]
 
 
-def test_legacy_and_computed_role_bindings_share_canonical_rows(
-    composed_tables: None,
-) -> None:
-    """One role computation preserves legacy short IDs and canonical resource IDs."""
-
-    admin = _platform_admin("hub-role-bindings-admin")
-    target = User.objects.create_user(username="hub-role-bindings-target")
-    grant(actor=target, role="angee/role:auditor")
-
-    data = _data(
-        _execute(
-            _schema("console"),
-            """
-            query {
-              roles { id namespace label }
-              iam_roles(limit: 50) { id role_id namespace label }
-            }
-            """,
-            user=admin,
-        )
-    )
-    computed = {row["id"]: row for row in data["iam_roles"]}
-
-    assert data["roles"]
-    for legacy in data["roles"]:
-        canonical_id = f"{legacy['namespace']}/role:{legacy['id']}"
-        assert computed[canonical_id] == {
-            "id": canonical_id,
-            "role_id": legacy["id"],
-            "namespace": legacy["namespace"],
-            "label": legacy["label"],
-        }
-
-
 def test_roles_query_excludes_role_types_missing_from_rebac_schema(
     composed_tables: None,
 ) -> None:
@@ -308,19 +269,19 @@ def test_roles_query_excludes_role_types_missing_from_rebac_schema(
             console_schema,
             """
             query {
-              roles { id namespace label }
+              iam_roles { id namespace label }
               iam_grants(limit: 10) { role }
             }
             """,
             user=admin,
         )
     )
-    roles = data["roles"]
+    roles = data["iam_roles"]
     grants = data["iam_grants"]
     schema_role_types = iam_roles.schema_role_resource_types()
 
-    assert {"id": "admin", "namespace": "angee", "label": "Admin"} in roles
-    assert {"id": "note_admin", "namespace": "notes", "label": "Note Admin"} not in roles
+    assert {"id": "angee/role:admin", "namespace": "angee", "label": "Admin"} in roles
+    assert {"id": "notes/role:note_admin", "namespace": "notes", "label": "Note Admin"} not in roles
     assert {f"{role['namespace']}/role" for role in roles} <= schema_role_types
     assert "angee/role:auditor" in {grant["role"] for grant in grants}
     assert "notes/role:note_admin" not in {grant["role"] for grant in grants}
