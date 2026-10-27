@@ -64,6 +64,9 @@ test("a new embedded trigger preserves the workflow default in its native create
   const dialog = await screen.findByRole("dialog");
   fireEvent.change(await within(dialog).findByLabelText("Subject model"), { target: { value: "notes.note" } });
   expect(await within(dialog).findByRole("combobox", { name: "Filter field" })).toBeTruthy();
+  const source = within(dialog).getByRole("combobox", { name: "Source" });
+  const condition = within(dialog).getByRole("heading", { name: "Condition" });
+  expect(source.compareDocumentPosition(condition) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(within(dialog).queryByText("Select a record model to edit its condition.")).toBeNull();
   fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
   await waitFor(() => expect(requests.some(({ query }) => query.includes("insert_trigger_one"))).toBe(true));
@@ -76,12 +79,16 @@ test("viewer facts make the existing trigger immutable and avoid implementation-
   const requests: TriggerRequest[] = [];
   render(<TriggerStory canEdit={false} onRequest={(request) => requests.push(request)} />);
   await screen.findByRole("heading", { name: "Review admission" });
-  expect(await screen.findByText(/Status.*in_review/)).toBeTruthy();
+  const value = await screen.findByRole("combobox", { name: "Filter value" });
+  expect(value.textContent).toContain("In review");
+  expect(value.getAttribute("aria-readonly")).toBe("true");
   expect(screen.queryByRole("button", { name: "Enable trigger" })).toBeNull();
   expect(requests.find(({ query }) => query.includes("trigger_by_pk"))?.query).toContain("enable_preview");
   expect(screen.queryByRole("menuitem", { name: "Disable trigger" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
-  expect(screen.queryByLabelText("Filter value")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Remove rule" })).toBeNull();
   expect(screen.queryByRole("textbox", { name: "Subject model" })).toBeNull();
   expect(screen.queryByRole("combobox", { name: "Source" })).toBeNull();
   const save = screen.queryByRole("button", { name: "Save" });
@@ -92,7 +99,7 @@ test("viewer facts make the existing trigger immutable and avoid implementation-
 test("a stored generic trigger renders its retained condition through the resolved model", async () => {
   const requests: TriggerRequest[] = [];
   render(<TriggerStory onRequest={(request) => requests.push(request)} />);
-  expect(await screen.findByText(/Status.*in_review/)).toBeTruthy();
+  expect((await screen.findAllByRole("combobox", { name: "Filter value" }))[0]!.textContent).toContain("In review");
   expect(screen.queryByText("Select a record model to edit its condition.")).toBeNull();
   const detail = requests.find(({ query }) => query.includes("trigger_by_pk"));
   expect(detail?.query).toContain("source_model");

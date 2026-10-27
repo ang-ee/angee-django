@@ -65,6 +65,15 @@ test("controlled editing retains drafts and leaves collection updates to the cal
   expect((screen.getByLabelText("Filter value") as HTMLInputElement).value).toBe("beta");
 });
 
+test("a retained comparison seeds the native draft and stays visible after an unchanged apply", () => {
+  const onSubmit = vi.fn();
+  render(<FilterClauseEditor fields={fields} defaultValue={{ fieldId: "count", operator: "gte", value: "0" }}
+    onSubmit={onSubmit} submitLabel="Apply" />, { wrapper: Provider });
+  fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+  expect(onSubmit).toHaveBeenCalledWith({ field: "item_count", operator: "gte", value: 0, type: "number" });
+  expect((screen.getByLabelText("Filter value") as HTMLInputElement).value).toBe("0");
+});
+
 test("JSON feedback is linked to the input and invalid drafts never submit", () => {
   const onSubmit = vi.fn();
   render(<FilterClauseEditor fields={[{ id: "tags", label: "Tags", operators: ["inList"] }]} onSubmit={onSubmit} />, { wrapper: Provider });

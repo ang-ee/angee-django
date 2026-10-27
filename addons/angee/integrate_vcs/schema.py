@@ -7,11 +7,12 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db import transaction
+from django.contrib.auth import get_user_model
 from django.utils import timezone
-from rebac import system_context
 from strawberry import auto
+from strawberry.permission import PermissionExtension
 from strawberry.scalars import JSON
+from strawberry.types import get_object_definition
 
 from angee.graphql.actions import ActionResult, action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
@@ -26,13 +27,14 @@ from angee.integrate.schema import (
     CredentialType,
     ExternalAccountType,
     IntegrationLabelMixin,
+    IntegrationWriteBackend,
     VendorType,
-    apply_integration_patch_fields,
-    integration_create_attrs,
-    save_provided_fields,
+    integration_input_extensions,
 )
 
 Vendor = apps.get_model("integrate", "Vendor")
+Credential = apps.get_model("integrate", "Credential")
+ExternalAccount = apps.get_model("integrate", "ExternalAccount")
 VcsBridge = apps.get_model("integrate_vcs", "VcsBridge")
 Repository = apps.get_model("integrate_vcs", "Repository")
 Source = apps.get_model("integrate_vcs", "Source")
@@ -119,40 +121,6 @@ class RepoCandidate:
     archived: bool
 
 
-@strawberry.input
-class VcsBridgeInput:
-    """Fields accepted when creating a VCS bridge child row."""
-
-    vendor: PublicID
-    owner: PublicID
-    display_name: str = ""
-    credential: PublicID | None = None
-    account: PublicID | None = strawberry.UNSET
-    backend_class: str | None = strawberry.UNSET
-    lifecycle: str | None = strawberry.UNSET
-    config: JSON | None = strawberry.UNSET
-    webhook_secret: str = ""
-
-
-@strawberry.input
-class VcsBridgePatch:
-    """Fields accepted when updating a VCS bridge child model."""
-
-    id: PublicID
-    display_name: str | None = strawberry.UNSET
-    vendor: PublicID | None = strawberry.UNSET
-    credential: PublicID | None = strawberry.UNSET
-    account: PublicID | None = strawberry.UNSET
-    owner: PublicID | None = strawberry.UNSET
-    backend_class: str | None = strawberry.UNSET
-    lifecycle: str | None = strawberry.UNSET
-    config: JSON | None = strawberry.field(
-        default=strawberry.UNSET,
-        description="Merge supplied config keys with existing config; null removes a key.",
-    )
-    webhook_secret: str | None = strawberry.UNSET
-
-
 def _repo_candidate(descriptor: Any) -> RepoCandidate:
     """Project a host ``RepoDescriptor`` into a typeahead candidate."""
 
@@ -199,11 +167,49 @@ _VCS_BRIDGE_RESOURCE = hasura_model_resource(
         "runtime_status",
         "sync_stage",
     ],
-    insert=False,
-    update=False,
     delete=True,
-    field_id_decode={"vendor": public_pk_decoder(Vendor)},
+    insertable=[
+        "vendor",
+        "credential",
+        "account",
+        "backend_class",
+        "lifecycle",
+        "config",
+        "display_name",
+        "webhook_secret",
+    ],
+    updatable=[
+        "vendor",
+        "credential",
+        "account",
+        "backend_class",
+        "lifecycle",
+        "config",
+        "display_name",
+        "webhook_secret",
+    ],
+    write_backend=IntegrationWriteBackend(
+        VcsBridge,
+        public_id_fields=("vendor", "owner", "credential", "account"),
+    ),
+    field_id_decode={
+        "vendor": public_pk_decoder(Vendor),
+        "owner": public_pk_decoder(get_user_model()),
+        "credential": public_pk_decoder(Credential),
+        "account": public_pk_decoder(ExternalAccount),
+    },
 )
+for _field in get_object_definition(_VCS_BRIDGE_RESOURCE.mutation, strict=True).fields:
+    if _field.python_name in (
+        _VCS_BRIDGE_RESOURCE.insert_one_root,
+        _VCS_BRIDGE_RESOURCE.update_by_pk_root,
+    ):
+        _field.extensions.append(
+            PermissionExtension(
+                permissions=[permission() for permission in _ADMIN_PERMISSION_CLASSES],
+            )
+        )
+
 _REPOSITORY_RESOURCE = hasura_model_resource(
     RepositoryType,
     model=Repository,
@@ -262,62 +268,6 @@ class VCSConsoleQuery:
 
 
 @strawberry.type
-class VcsBridgeCreateMutation:
-    """Admin create for a VCS bridge child, validating backend-owned fields."""
-
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def create_vcs_bridge(self, data: VcsBridgeInput) -> VcsBridgeType:
-        """Create a VCS child row directly."""
-
-        attrs = {
-            **integration_create_attrs(data, reason="integrate.graphql.vcs_bridge.create"),
-            "backend_class": VcsBridge.impl_key_for(
-                "backend_class",
-                None if data.backend_class is strawberry.UNSET else data.backend_class,
-                default="local",
-            ),
-            "webhook_secret": data.webhook_secret,
-        }
-        if data.config is not strawberry.UNSET:
-            attrs["config"] = data.config
-        with system_context(reason="integrate.graphql.vcs_bridge.create"), transaction.atomic():
-            bridge = VcsBridge.objects.create(**attrs)
-        return cast(VcsBridgeType, bridge)
-
-
-@strawberry.type
-class VcsBridgeUpdateMutation:
-    """Admin update for a VCS bridge child, validating backend-owned fields."""
-
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def update_vcs_bridge(self, data: VcsBridgePatch) -> VcsBridgeType:
-        """Update a VCS child row, merging supplied config keys."""
-
-        with (
-            action_target(
-                VcsBridge,
-                data.id,
-                reason="integrate.graphql.vcs_bridge.update",
-            ) as bridge,
-            transaction.atomic(),
-        ):
-            if data.backend_class is not strawberry.UNSET:
-                bridge.set_impl_key("backend_class", data.backend_class, default="local")
-            provided = apply_integration_patch_fields(
-                bridge,
-                data,
-                reason="integrate.graphql.vcs_bridge.update",
-            )
-            if data.config is not strawberry.UNSET:
-                provided.update(bridge.apply_config_patch(data.config))
-            if data.webhook_secret is not strawberry.UNSET:
-                bridge.webhook_secret = data.webhook_secret or ""
-                provided.add("webhook_secret")
-            save_provided_fields(bridge, provided)
-        return cast(VcsBridgeType, bridge)
-
-
-@strawberry.type
 class VCSActionMutation:
     """Operational actions on a VCS bridge and its inventory."""
 
@@ -367,6 +317,7 @@ _CONSOLE_TYPES: list[object] = [
 
 schemas = {
     "console": {
+        "input_extensions": integration_input_extensions(_VCS_BRIDGE_RESOURCE),
         "query": [
             _VCS_BRIDGE_RESOURCE.query,
             _REPOSITORY_RESOURCE.query,
@@ -379,8 +330,6 @@ schemas = {
             _REPOSITORY_RESOURCE.mutation,
             _SOURCE_RESOURCE.mutation,
             _TEMPLATE_RESOURCE.mutation,
-            VcsBridgeCreateMutation,
-            VcsBridgeUpdateMutation,
             VCSActionMutation,
         ],
         "subscription": [changes(VcsBridge, field="vcsBridgeChanged")],

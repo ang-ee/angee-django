@@ -331,7 +331,7 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
         create_only=True,
     )
     """Registry key for the inference backend this provider uses."""
-    name = models.CharField(max_length=128)
+    name = models.CharField(max_length=128, blank=True)
     base_url = models.URLField(blank=True)
     """Base endpoint for OpenAI-compatible providers; blank uses the backend default."""
     config = models.JSONField(default=dict, blank=True)
@@ -361,6 +361,11 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
 
         backend_class = cast(type[InferenceBackend], self.resolve_impl("backend_class"))
         return backend_class(self)
+
+    def test_connection(self) -> str:
+        """Exercise the selected backend's connection (the Integration test contract)."""
+
+        return self.backend.test_connection()
 
     def refresh_models(self) -> int:
         """Re-list this provider's models into :class:`InferenceModel` rows."""

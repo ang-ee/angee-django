@@ -14,12 +14,13 @@ from graphql import GraphQLInputObjectType, get_named_type
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from strawberry import auto
 from strawberry.types import get_object_definition
+from strawberry_django.optimizer import DjangoOptimizerExtension
 
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.models import AngeeDataModel
-from tests.conftest import create_user, execute_schema, make_addon, result_data
+from tests.conftest import create_platform_admin, create_user, execute_schema, make_addon, result_data
 from tests.linesdemo.models import Document, DocumentLine, Tag
 from tests.scopedemo.models import SharedDoc
 
@@ -78,14 +79,17 @@ def test_input_donors_reach_native_create_and_update_envelopes() -> None:
         "query": [resource.query], "mutation": [resource.mutation],
         "types": [WriteContractDocType, *resource.types], "input_extensions": (InsertExtras, UpdateExtras),
     }})]).build("public")
-    result_data(execute_schema(schema, """mutation {
-      insert_write_contract_docs_one(object: {
-        title: "Inserted", details: [{value: "First"}, {value: "Second", note: null}]
-      }) { title }
-      update_write_contract_docs_by_pk(pk_columns: {id: "public-key"}, _set: {
-        title: "Updated", note: null
-      }) { title }
-    }"""))
+    # This backend captures inputs without persisting a row. Native response
+    # projection is exercised by persisted-backend tests, not this envelope test.
+    with DjangoOptimizerExtension.disabled():
+        result_data(execute_schema(schema, """mutation {
+          insert_write_contract_docs_one(object: {
+            title: "Inserted", details: [{value: "First"}, {value: "Second", note: null}]
+          }) { title }
+          update_write_contract_docs_by_pk(pk_columns: {id: "public-key"}, _set: {
+            title: "Updated", note: null
+          }) { title }
+        }"""))
 
     assert backend.calls == [
         ("create", None, {"title": "Inserted", "details": [{"value": "First"}, {"value": "Second", "note": None}]}),
@@ -234,7 +238,7 @@ def test_insert_applies_input_extensions_after_the_row_write(composed_tables: No
 
     result = result_data(execute_schema(_STAMPED_SCHEMA, """mutation {
       insert_stamped_documents_one(object: {title: "Stamped", stamp: "first"}) { id title }
-    }""", user=create_user("author")))
+    }""", user=create_platform_admin("author")))
 
     with system_context(reason="test.input_extensions.read"):
         document = Document.objects.get(title="Stamped")

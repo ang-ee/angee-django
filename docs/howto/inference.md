@@ -7,6 +7,25 @@ Ollama, specialize the OpenAI binding; Anthropic retains its OAuth headers and
 required wire preamble. Vendor request/response serialization belongs to the
 native model adapters.
 
+Use the OpenAI backend for OpenAI-compatible servers such as llama.cpp, with
+their API base URL on the provider. Hosted OpenAI requires an attached
+credential; a configured compatible endpoint can omit one. An attached
+credential still wins, and an absent credential never falls back to an
+environment API key. Compatible catalogues admit non-OpenAI model names while
+preserving configured model filters. Use the Ollama backend for Ollama's native
+discovery and request settings; its default is localhost, but its provider URL
+can point to a remote server.
+
+Ollama refresh updates model use from native `/api/show` capabilities for both
+catalogue handles: embedding models become Embedding, completion with vision
+becomes Multimodal, and text completion becomes Chat. When capabilities are
+unavailable or unrecognized, refresh preserves curated model uses.
+
+The integration's **Test connection** action reads the selected backend's live
+model catalogue without updating catalogue rows or generating inference. An
+empty catalogue still proves connectivity. The manual backend reports that it
+has no connection to test.
+
 For one request from synchronous Django code:
 
 ```python

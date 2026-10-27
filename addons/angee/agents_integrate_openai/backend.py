@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, ClassVar
+from urllib.parse import urlsplit
 
 from angee.agents.backends import InferenceModelSpec
 from angee.agents.sdk_backends import SDKInferenceBackend
@@ -16,7 +17,7 @@ _MAX_TOKEN_FIELDS = frozenset({"max_tokens", "max_completion_tokens"})
 
 
 class OpenAIInferenceBackend(SDKInferenceBackend):
-    """Inference backend backed by OpenAI's official Python SDK."""
+    """Hosted OpenAI and explicit compatible deployments through the official SDK."""
 
     key = "openai"
     label = "OpenAI"
@@ -48,6 +49,28 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     oauth_auth_kwarg = ""
     sdk_package_name = "openai"
 
+    @property
+    def _is_compatible_endpoint(self) -> bool:
+        """Whether the configured deployment is a non-hosted OpenAI-compatible server."""
+
+        try:
+            parsed = urlsplit(self.endpoint)
+        except ValueError:
+            return False
+        host = (parsed.hostname or "").rstrip(".").casefold()
+        return (
+            parsed.scheme in {"http", "https"}
+            and bool(host)
+            and host != "openai.com"
+            and not host.endswith(".openai.com")
+        )
+
+    @property
+    def requires_credential(self) -> bool:
+        """Hosted OpenAI needs a key; compatible deployments may be unauthenticated."""
+
+        return not self._is_compatible_endpoint
+
     def list_models(self) -> Sequence[InferenceModelSpec]:
         """List OpenAI models and their broker-prefixed aliases."""
 
@@ -69,7 +92,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
                 self._model_specs(
                     handle=model_id,
                     display_name=model_id,
-                    model_use=self._discovered_model_use(),
+                    model_use=str(discovery.get("model_use", "")),
                     context_window=int(discovery.get("context_window", 0) or 0),
                     config=config,
                 )
@@ -80,12 +103,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
         """Return optional native discovery facts for one listed physical model."""
 
         del client, model_id
-        return {}
-
-    def _discovered_model_use(self) -> str:
-        """Return the modality asserted by this provider's model listing."""
-
-        return "chat"
+        return {"model_use": "chat"}
 
     def _build_model(self, handle: str, client: Any) -> OpenAIChatModel:
         """Use native protocol conversion, including the configured token-limit field."""
@@ -106,14 +124,16 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     def _is_chat_model(self, model_id: str) -> bool:
         """Return whether a compatible model id should enter the chat catalogue.
 
-        Deny prefixes win; an empty allow-prefix tuple is the explicit allow-all
-        sentinel for every remaining id.
+        Deny prefixes win. Compatible endpoints default to all remaining ids;
+        hosted OpenAI keeps its chat prefixes. Explicit config overrides either.
         """
 
         denied = self._config_string_list("model_deny_prefixes", default=self.model_deny_prefixes)
         if any(model_id.startswith(prefix) for prefix in denied):
             return False
-        allowed = self._config_string_list("model_allow_prefixes", default=self.model_allow_prefixes)
+        allowed = self._config_string_list(
+            "model_allow_prefixes", default=() if self._is_compatible_endpoint else self.model_allow_prefixes,
+        )
         return not allowed or any(model_id.startswith(prefix) for prefix in allowed)
 
     def _max_tokens_param(self) -> str:

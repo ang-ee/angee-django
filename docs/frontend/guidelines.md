@@ -1097,6 +1097,9 @@ The name after `#` types the entry. Each owner adds its name and content type to
 the `ContainerKinds` interface, so a `#aside` child carries
 `ChatterTabContent`, a `#views` child `ResourceViewKindContent`, and a
 `#sections` child the `Group`, `Action` and `Tab` declarations a form parses.
+Contribute those markers directly: the form parser does not render a component
+to discover declarations inside it. Use `LabelKey` for translated marker labels
+and put components in their rendered content slots.
 There are no per-kind constructor functions; an addon helper returns a plain
 child (`recordPagesTab()`, `decisionRecordTab()`). A new
 container name is added by declaration merging, as
@@ -1521,6 +1524,13 @@ root and the caller supplies no custom submit handler. A create-only resource ca
 still open a creation form. Fixtures must declare the write operations they intend
 to exercise. Record locking (`readOnlyWhen`) uses the server record, not unsaved
 form values.
+
+Native form saves refresh their resource queries and authored reads of that
+model; custom commands retain their mutation owner's invalidation. Declare
+other affected models through `invalidateModels`; the
+[shared save owner](../../packages/ui/src/views/form/use-form-view-save.ts)
+resolves their resource and authored-query invalidation. A dependency between
+read models is not a reason to replace generated CRUD with a custom mutation.
 
 A save whose normalized header and line values equal the server record sends no
 mutation. It resets the dirty-but-equivalent draft to those server values and

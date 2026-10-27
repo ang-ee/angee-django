@@ -23,6 +23,7 @@ from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
 
 from angee.impl import ImplBase
+from angee.integrate.errors import IntegrationError
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,9 +84,6 @@ class InferenceBackend(ImplBase):
     # runtime composes into the container env (see ``angee.agents.runtimes``). An
     # empty tuple means the backend declares no static-key runtime env.
     api_key_env: ClassVar[tuple[str, ...]] = ()
-    # Whether callers must attach an inference credential. This belongs to the
-    # contract because every backend consumer must make the same typed decision.
-    requires_credential: ClassVar[bool] = True
     default_base_url: ClassVar[str] = ""
     transient_error_paths: ClassVar[tuple[str, ...]] = ()
     """Dotted vendor SDK transport failures in addition to the shared network types.
@@ -102,6 +100,12 @@ class InferenceBackend(ImplBase):
         """Bind this backend to its provider row."""
 
         self.provider = provider
+
+    @property
+    def requires_credential(self) -> bool:
+        """Whether this deployment requires auth, shared by SDK and runtime admission."""
+
+        return True
 
     @property
     def endpoint(self) -> str:
@@ -135,6 +139,17 @@ class InferenceBackend(ImplBase):
         """Return the provider's advertised models for catalogue upsert."""
 
         raise NotImplementedError("InferenceBackend subclasses must implement list_models().")
+
+    def test_connection(self) -> str:
+        """Read the live catalogue without persisting models or requesting inference.
+
+        Listing owns the backend's transport and credential policy. An empty
+        catalogue still proves connectivity; failures retain the integration
+        action's operator-safe diagnostic projection.
+        """
+
+        self.list_models()
+        return "Inference provider is reachable."
 
     def model(self, handle: str, *, credential: Any | None = None) -> AbstractAsyncContextManager[Model]:
         """Bind a native model for one invocation, closing owned clients on exit.
@@ -210,6 +225,11 @@ class ManualInferenceBackend(InferenceBackend):
 
     key = "manual"
     label = "Manual inference"
+
+    def test_connection(self) -> str:
+        """Refuse a connectivity claim because this backend has no transport."""
+
+        raise IntegrationError("Manual inference has no connection to test.")
 
     def list_models(self) -> Sequence[InferenceModelSpec]:
         """Return no models; the catalogue is maintained by hand on this backend."""

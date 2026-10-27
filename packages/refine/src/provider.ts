@@ -145,8 +145,12 @@ function mutationSelection(
 
 /** Native inventory and picker reads need a valid identity selection when none is declared. */
 function readSelection(meta: MetaQuery | undefined): MetaQuery {
-  if (meta?.gqlQuery || meta?.gqlMutation) return meta;
-  return { ...meta, fields: hasFieldSelection(meta?.fields) ? meta?.fields : ["id"] };
+  if (meta && (meta.gqlQuery || meta.gqlMutation || hasFieldSelection(meta.fields))) return meta;
+  // Refine's lazy signal must stay unread until a transport supports cancellation.
+  return Object.defineProperties({}, {
+    ...Object.getOwnPropertyDescriptors(meta ?? {}),
+    fields: { value: ["id"], enumerable: true, configurable: true, writable: true },
+  });
 }
 
 function hasFieldSelection(fields: unknown): boolean {

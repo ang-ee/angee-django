@@ -194,7 +194,7 @@ def test_update_imap_channel_credential_replaces_the_login_in_place(
 
 
 def test_update_imap_channel_credential_refuses_blank_material(composed_tables: None) -> None:
-    """The kind handler's validation follows the IMAP BAD_USER_INPUT contract."""
+    """The shared credential handler identifies the missing field without rotating the secret."""
 
     admin = _platform_admin("msg-imap-rotate-blank-admin")
     _seed_imap_vendor()
@@ -208,8 +208,11 @@ def test_update_imap_channel_credential_refuses_blank_material(composed_tables: 
     )
 
     assert result.errors
-    assert "username and password" in result.errors[0].message
-    assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+    assert result.errors[0].extensions == {
+        "code": "VALIDATION",
+        "validationErrors": {"password": ["This field is required."]},
+        "formErrors": [],
+    }
     with system_context(reason="test.messaging.imap.rotate.blank.verify"):
         saved = Channel.objects.get(sqid=channel["id"])
         assert saved.credential.reveal()["password"] == "mail-password"

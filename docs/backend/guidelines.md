@@ -199,6 +199,9 @@ Use these owners instead of maintaining another contract in an addon:
   `only`, `select_related`, `prefetch_related`, and `annotate` hints. Computed
   fields promote their model-owned aliases through native `annotate` hints only
   when selected; filter/order aliases stay unselected until the SQL uses them.
+  Build computed filter expressions only for aliases referenced by the resolved
+  native predicate, shared by requests and stored conditions. Preparing an unused
+  expression still costs Python work even when Django omits it from SQL.
   See [the Hasura adapter](../../addons/angee/graphql/data/hasura.py) and
   [workflow decision fields](../../addons/angee/workflows/schema.py).
   Dependencies include inherited `AngeeNode.display_name`: bind its existing
@@ -796,13 +799,12 @@ data through REBAC, never a queryset bypass.
   denied: scoped lists omit those rows; point checks raise `PermissionDepthExceeded`.
   Deeper hierarchies need PostgreSQL (default 16). [Base autoconfig](../../angee/autoconfig.py)
   owns the defaults; explicit environment values take precedence over project settings.
-- If a removed or renamed definition in an otherwise composed package fails
-  `rebac.E009`, run the check-free `reconcile_permissions` first; it prunes stale
-  package-managed schema rows before `makemigrations` / `rebac sync` can run.
-- When an addon removes its last REBAC resource, keep an empty package-owned
-  `permissions.zed` with a bumped schema revision until old package-managed rows
-  have been pruned; deleting the file makes `rebac sync` skip the package and
-  strand stale definitions in existing databases.
+- Core [`reconcile_permissions`](../../angee/management/commands/reconcile_permissions.py)
+  prunes stale package-managed schema through [`angee.permissions`](../../angee/permissions.py),
+  independently of optional addons. Provision runs it check-free after migrations
+  preserve identity changes and before `rebac sync` and system checks. Use that
+  sequence when removing or renaming definitions, removing an addon, or deleting
+  its last `permissions.zed` file; `rebac sync` alone skips absent declarations.
 
 ## Pitfalls
 
@@ -1312,10 +1314,17 @@ and current contracts before applying a historical example to a new deployment.
 - **GraphQL authorization tests include a non-admin reader.** Admin-only tests
   neither pin deny-hard-fail behavior nor expose a leaked `sudo()` scope.
 - **`hasura_model_resource` create `full_clean`s the input, so model + input defaults must agree.**
-  Strawberry prepares one instance, calls `full_clean()`, and passes that same
-  instance to the manager's `insert()` (or native insert-only save when absent).
+  Strawberry prepares one instance and calls `full_clean()` before persistence;
+  the locked version then calls `manager.create(**kwargs)`, so that prepared
+  instance is not the saved instance. Do not depend on its identity surviving.
   Factory invariants needed by both ORM and GraphQL creation belong on the
   queryset's cooperative `insert()`, which ordinary `create()` also composes.
+  When creation needs preparation before validation, the existing
+  [`AngeeHasuraWriteBackend`](../../addons/angee/graphql/data/hasura.py) dispatches
+  to a model manager factory; keep native mutation envelopes, metadata and form
+  submission. [`IntegrationWriteBackend`](../../addons/angee/integrate/schema.py)
+  composes that seam for integration capabilities. Required fields and defaults
+  must come from the final input contract, never another list in a consumer form.
   Model-owned defaults belong in `clean()` and `save()`; see
   [`Cadence`](../../addons/angee/nexus/models.py). A required field defaulted by
   `clean()` uses `blank=True` so Django's preceding field validation can defer

@@ -11,13 +11,14 @@ from unittest.mock import patch
 
 import pytest
 import strawberry_django
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models
 from django.db.models.functions import Coalesce, NullIf
 from django.test.utils import CaptureQueriesContext
 from rebac import (
     RelationshipTuple,
     SubjectRef,
+    actor_context,
     system_context,
     to_object_ref,
     write_relationships,
@@ -235,7 +236,7 @@ def relation_grouping_case(transactional_db: None):
                 update=False,
                 delete=False,
             )
-            schema = GraphQLSchemas(
+            owner = GraphQLSchemas(
                 [
                     SchemaAddon(
                         {
@@ -246,7 +247,8 @@ def relation_grouping_case(transactional_db: None):
                         }
                     )
                 ]
-            ).build("public")
+            )
+            schema = owner.build("public")
             pinned_resource = hasura_model_resource(
                 GroupParentType,
                 model=GroupParent,
@@ -358,6 +360,7 @@ def relation_grouping_case(transactional_db: None):
                 ]
             )
             yield SimpleNamespace(
+                owner=owner,
                 schema=schema,
                 pinned_schema=pinned_schema,
                 alice=alice,
@@ -843,6 +846,9 @@ def test_relation_id_predicates_use_redacted_values(relation_grouping_case: Any,
             expected = readable - matches if operator in {"_neq", "_nin"} else matches
         assert {row["id"] for row in result["group_parents"]} == expected, (operator, value)
         assert result["group_parents_aggregate"]["aggregate"]["count"] == len(expected)
+        condition = case.owner.resource_filter(GroupParent, variables["where"])
+        stored = condition(GroupParent.objects.with_actor(case.alice))
+        assert set(stored.values_list("sqid", flat=True)) == expected, (operator, value)
         pinned = result_data(execute_schema(
             case.pinned_schema, document.replace("group_parents", "pinned_group_parents"), variables, user=case.bob,
         ))
@@ -850,15 +856,62 @@ def test_relation_id_predicates_use_redacted_values(relation_grouping_case: Any,
         assert pinned["pinned_group_parents_aggregate"]["aggregate"]["count"] == len(expected)
 
 
-def test_relation_in_resolves_all_operands_with_one_read(relation_grouping_case: Any) -> None:
+def test_stored_relation_filters_recheck_the_executing_actor_without_mutating_operands(
+    relation_grouping_case: Any,
+) -> None:
+    """One saved rule retains native boolean/redaction semantics across principals."""
+    case = relation_grouping_case
+    alpha, beta = str(case.alpha.sqid), str(case.beta.sqid)
+    conditions = [
+        ({"_and": [{"kind": {"_eq": "target"}}, {"_or": [
+            {"target": {"_in": [alpha, beta, "malformed"]}},
+            {"target": {"_eq": str(case.parents[0].sqid)}},
+        ]}]}, (0, 1), (2,)),
+        ({"_not": {"target": {"_eq": alpha}}}, (3, 4), (2, 3, 4)),
+        ({"middle__target__display_name": {"_eq": "Alpha"}}, (6,), ()),
+        ({"_and": [{"kind": {"_eq": "nested"}}, {
+            "_not": {"middle__target__display_name": {"_eq": "Alpha"}},
+        }]}, (), (7, 8)),
+    ]
+    document = "query($where: group_parents_bool_exp!) { group_parents(where: $where) { id } }"
+    for where, alice_rows, bob_rows in conditions:
+        condition = case.owner.resource_filter(GroupParent, where)
+        for actor, indices in ((case.alice, alice_rows), (case.bob, bob_rows), (case.alice, alice_rows)):
+            expected = {str(case.parents[index].sqid) for index in indices}
+            native = result_data(execute_schema(case.schema, document, {"where": where}, user=actor))
+            assert {row["id"] for row in native["group_parents"]} == expected
+            # The explicit queryset actor takes precedence over an ambient actor.
+            with actor_context(case.bob):
+                stored = condition(GroupParent.objects.with_actor(actor))
+                assert set(stored.values_list("sqid", flat=True)) == expected
+                narrowed = condition(GroupParent.objects.with_actor(actor).exclude(pk=case.parents[0].pk))
+                assert set(narrowed.values_list("sqid", flat=True)) == expected - {str(case.parents[0].sqid)}
+
+
+@pytest.mark.parametrize("operator", ["_eq", "_in", "_is_null"])
+def test_stored_relation_filters_reject_null_operands_before_execution(
+    relation_grouping_case: Any, operator: str,
+) -> None:
+    """Deferring permission-aware ID resolution must retain authoring validation."""
+    with pytest.raises(ValidationError, match="does not accept null"):
+        relation_grouping_case.owner.resource_filter(GroupParent, {"target": {operator: None}})
+
+
+@pytest.mark.parametrize("consumer", ["request", "stored"])
+def test_relation_in_resolves_all_operands_with_one_read(relation_grouping_case: Any, consumer: str) -> None:
     case = relation_grouping_case
     ids = [str(row.sqid) for row in (case.alpha, case.beta, case.duplicate_one, case.duplicate_two)]
     document = "query($ids: [String!]!) { group_parents(where: {target: {_in: $ids}}) { id } }"
     # Warm schema/permission caches before measuring database reads.
     result_data(execute_schema(case.schema, document, {"ids": ids[:1]}, user=case.alice))
+    condition = case.owner.resource_filter(GroupParent, {"target": {"_in": ids + ["malformed"]}})
     with CaptureQueriesContext(connection) as queries:
-        data = result_data(execute_schema(case.schema, document, {"ids": ids + ["malformed"]}, user=case.alice))
-    assert len(data["group_parents"]) == 4
+        if consumer == "request":
+            data = result_data(execute_schema(case.schema, document, {"ids": ids + ["malformed"]}, user=case.alice))
+            count = len(data["group_parents"])
+        else:
+            count = len(condition(GroupParent.objects.with_actor(case.alice)))
+    assert count == 4
     reads = [query["sql"] for query in queries if query["sql"].startswith("SELECT")
              and f'FROM "{GroupLabel._meta.db_table}"' in query["sql"]
              and f'FROM "{GroupParent._meta.db_table}"' not in query["sql"]]

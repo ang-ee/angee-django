@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.db import connection, models
 from django.test.utils import isolate_apps
 
@@ -40,6 +41,25 @@ def test_credential_kind_owns_material_validation_and_authentication(kind, mater
 def test_unknown_credential_kind_is_rejected() -> None:
     with pytest.raises(ValueError):
         CredentialKind("unsupported")
+
+
+@pytest.mark.parametrize(
+    ("kind", "material", "missing"),
+    [
+        (CredentialKind.SSH_KEY, {}, {"private_key"}),
+        (CredentialKind.OAUTH, {}, {"access_token"}),
+        (CredentialKind.BASIC_AUTH, {}, {"username", "password"}),
+        (CredentialKind.BASIC_AUTH, {"username": "test-user"}, {"password"}),
+        (CredentialKind.APP_KEYS, {}, {"app_id", "app_secret"}),
+        (CredentialKind.APP_KEYS, {"app_secret": "synthetic-secret"}, {"app_id"}),
+    ],
+)
+def test_credential_material_errors_identify_only_missing_fields(kind, material, missing) -> None:
+    handler = kind.handler
+    with pytest.raises(ValidationError) as failure:
+        handler.validate(material)
+    assert failure.value.message_dict == {field: ["This field is required."] for field in missing}
+    handler.validate({**material, **dict.fromkeys(missing, "synthetic-value")})
 
 
 @pytest.fixture

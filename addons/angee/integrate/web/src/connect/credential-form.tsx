@@ -43,6 +43,7 @@ export function CredentialForm({
   });
   const [createCredential] = useAuthoredResourceMutation(IntegrateCreateCredential, {
     invalidateModels: INTEGRATE_CREATE_CREDENTIAL_INVALIDATES,
+    errorNotification: false,
   });
   const revealSecret = useSecretReveal();
 
@@ -67,8 +68,8 @@ export function CredentialForm({
         data: {
           name: String(data.name ?? ""),
           kind: String(data.kind ?? ""),
-          api_key: String(data.apiKey ?? ""),
-          private_key: String(data.privateKey ?? ""),
+          api_key: String(data.api_key ?? ""),
+          private_key: String(data.private_key ?? ""),
         },
       } as DocumentVariables<typeof IntegrateCreateCredential>;
       const result = await createCredential(variables);
@@ -92,7 +93,7 @@ export function CredentialForm({
             ]}
           />
           <Field
-            name="apiKey"
+            name="api_key"
             label={t("credentials.create.apiToken")}
             widget="text"
             kind="string"
@@ -100,7 +101,7 @@ export function CredentialForm({
             showWhen={(values) => values.kind === "static_token"}
           />
           <Field
-            name="privateKey"
+            name="private_key"
             label={t("credentials.create.privateKey")}
             widget="textarea"
             kind="string"

@@ -288,9 +288,14 @@ pushes to `main`. The current tiers are:
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents
-  and addon fragments, and run the bridges repository's pytest suite. Framework
-  composed-host tests create their own temporary hosts in the SQLite suite; the
-  stack job does not repeat that framework suite.
+  and addon fragments, and run the bridges repository's pytest suite with its
+  native source-test settings and collection policy. Bridge tests use the
+  composed stack's runtime dependencies plus the framework's locked check tools,
+  as the consumer lane does; they do not resolve a second environment from the
+  bridges' standalone generated addon dependency group. Its checked-in group
+  remains subject to the suite's manifest-drift guard.
+  Framework composed-host tests create their own temporary hosts in the SQLite
+  suite; the stack job does not repeat that framework suite.
 
 A test missing from the durations still runs: pytest-split gives it the average
 duration and places it in exactly one shard. Refresh the file when a shard nears

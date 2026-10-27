@@ -3,7 +3,7 @@
 When an addon leaves ``INSTALLED_APPS``, ``rebac sync`` never revisits it, so its
 ``Schema*`` rows orphan and the library's ``rebac.E009`` check then blocks every
 checked command (``makemigrations``, ``migrate``, ``rebac sync``) — breaking the
-rebuild the uninstall triggers. ``platform``'s ``reconcile_permission_schema`` (run
+rebuild the uninstall triggers. The core ``reconcile_permission_schema`` (run
 check-free by the ``reconcile_permissions`` command) is the global prune that removes
 those orphans and stale rows inside still-composed packages.
 
@@ -14,10 +14,15 @@ model and field references have been pruned.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
-from django.core.management import call_command
+from django.apps import apps
+from django.conf import settings
+from django.core.management import call_command, get_commands
+from django.test import override_settings
 from rebac import schema_changes
 from rebac.schema.ast import FieldBinding, backing_to_dict
 
@@ -241,7 +246,7 @@ def test_reconcile_prunes_orphaned_package_and_keeps_composed(db) -> None:
     from django.apps import apps
     from rebac.models import PackageManagedRecord, SchemaDefinition
 
-    from angee.platform.permissions import reconcile_permission_schema
+    from angee.permissions import reconcile_permission_schema
 
     orphan = _managed("ghost.addon", "ghost/thing")  # no such app in the composed set
     kept_package = apps.get_app_config("messaging").name
@@ -260,7 +265,7 @@ def test_reconcile_prunes_schema_when_installed_package_has_no_permissions_file(
     from django.apps import apps
     from rebac.models import PackageManagedRecord, SchemaDefinition
 
-    from angee.platform.permissions import reconcile_permission_schema
+    from angee.permissions import reconcile_permission_schema
 
     package = apps.get_app_config("contenttypes").name
     stale = _managed(package, "retired/review")
@@ -279,7 +284,7 @@ def test_reconcile_prunes_stale_rows_inside_composed_package(db) -> None:
     from django.apps import apps
     from rebac.models import PackageManagedRecord, SchemaDefinition, SchemaRelation
 
-    from angee.platform.permissions import reconcile_permission_schema
+    from angee.permissions import reconcile_permission_schema
 
     package = apps.get_app_config("messaging").name
     stale_definition, stale_relation = _managed_relation(
@@ -324,7 +329,7 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
         active_relationship_model,
     )
 
-    from angee.platform.permissions import reconcile_permission_schema
+    from angee.permissions import reconcile_permission_schema
 
     settings.REBAC_LOCAL_BACKEND_STORAGE = storage_mode
     package = apps.get_app_config("nexus").name
@@ -385,6 +390,40 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
 def test_reconcile_is_a_noop_when_nothing_stale(db) -> None:
     """Every managed package composed (here: none managed at all) prunes nothing."""
 
-    from angee.platform.permissions import reconcile_permission_schema
+    from angee.permissions import reconcile_permission_schema
 
     assert reconcile_permission_schema() == 0
+
+
+def test_reconcile_command_is_available_without_platform() -> None:
+    """Every composed host can reconcile policy independently of the admin console."""
+
+    installed = [name for name in settings.INSTALLED_APPS if name != "angee.platform"]
+    with override_settings(INSTALLED_APPS=installed):
+        assert not apps.is_installed("angee.platform")
+        assert get_commands()["reconcile_permissions"] == "angee"
+
+
+def test_permissions_import_before_app_population() -> None:
+    """Model declarations can import permission helpers before the registry is populated."""
+
+    result = subprocess.run(
+        [sys.executable, "-c", """
+from django.apps import apps
+from django.conf import settings
+settings.configure(
+    SECRET_KEY="permission-import-probe",
+    INSTALLED_APPS=["django.contrib.contenttypes", "rebac", "angee"],
+)
+assert not apps.apps_ready
+import angee.permissions
+assert not apps.apps_ready
+assert not apps.models_ready
+"""],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

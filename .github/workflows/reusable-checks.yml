@@ -250,8 +250,8 @@ jobs:
   stack:
     if: ${{ inputs.stack-enabled }}
     runs-on: ubuntu-latest
-    # Composition, fragment checks and the serial bridges suite (439 tests since
-    # the feed and comment bridges) no longer fit 30 minutes.
+    # Composition, fragment checks and the serial bridges suite no longer fit
+    # 30 minutes.
     timeout-minutes: 60
     services:
       postgres:
@@ -380,7 +380,7 @@ jobs:
         run: |
           uv run manage.py angee provision
       - name: Export the framework's locked check tools
-        if: ${{ inputs.consumer-path != '' }}
+        if: ${{ inputs.consumer-path != '' || inputs.addons-profile == 'full' }}
         working-directory: stack/workspaces/src/angee
         run: uv export --locked --only-group dev --no-hashes --no-emit-project --output-file "$GITHUB_WORKSPACE/check-tools.txt"
       - name: Lint the consumer with the framework policy
@@ -482,5 +482,9 @@ jobs:
           fi
       - name: Pytest the bridge source contracts
         if: ${{ inputs.addons-profile == 'full' }}
-        working-directory: stack/workspaces/src/angee-messaging-bridges
-        run: uv run pytest -q ${{ inputs.pytest-extra-args }}
+        working-directory: stack
+        run: >-
+          uv run --project "$GITHUB_WORKSPACE/stack"
+          --directory "$GITHUB_WORKSPACE/stack/workspaces/src/angee-messaging-bridges"
+          --with-requirements "$GITHUB_WORKSPACE/check-tools.txt"
+          pytest -q ${{ inputs.pytest-extra-args }}

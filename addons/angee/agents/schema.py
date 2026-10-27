@@ -17,11 +17,11 @@ import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
-from django.db import transaction
 from rebac import current_actor, system_context
 from strawberry import auto
-from strawberry.permission import BasePermission
+from strawberry.permission import BasePermission, PermissionExtension
 from strawberry.scalars import JSON
+from strawberry.types import get_object_definition
 
 from angee.actors import actor_user_id
 from angee.agents import provisioning
@@ -45,11 +45,10 @@ from angee.integrate.schema import (
     ExternalAccountType,
     IntegrationLabelMixin,
     IntegrationOAuthMixin,
+    IntegrationWriteBackend,
     VendorType,
-    apply_integration_patch_fields,
     connect_integration_target,
-    integration_create_attrs,
-    save_provided_fields,
+    integration_input_extensions,
 )
 from angee.integrate_vcs.schema import SourceType, TemplateType
 
@@ -286,42 +285,6 @@ class AgentChatTarget:
     session_id: PublicID | None = None
 
 
-@strawberry.input
-class InferenceProviderInput:
-    """Fields accepted when creating an inference provider."""
-
-    vendor: PublicID
-    owner: PublicID
-    credential: PublicID | None = None
-    account: PublicID | None = strawberry.UNSET
-    backend_class: str | None = strawberry.UNSET
-    lifecycle: str | None = strawberry.UNSET
-    name: str = ""
-    base_url: str = ""
-    # UNSET (not None): an omitted field must fall back to the model default, not
-    # overwrite a non-null column with null (see docs/backend/guidelines.md Pitfalls).
-    config: JSON | None = strawberry.UNSET
-
-
-@strawberry.input
-class InferenceProviderPatch:
-    """Fields accepted when updating an inference provider."""
-
-    id: PublicID
-    vendor: PublicID | None = strawberry.UNSET
-    owner: PublicID | None = strawberry.UNSET
-    credential: PublicID | None = strawberry.UNSET
-    account: PublicID | None = strawberry.UNSET
-    backend_class: str | None = strawberry.UNSET
-    lifecycle: str | None = strawberry.UNSET
-    name: str | None = strawberry.UNSET
-    base_url: str | None = strawberry.UNSET
-    config: JSON | None = strawberry.field(
-        default=strawberry.UNSET,
-        description="Merge supplied config keys with existing config; null removes a key.",
-    )
-
-
 _AGENT_RESOURCE = hasura_model_resource(
     AgentType,
     model=Agent,
@@ -459,9 +422,13 @@ _INFERENCE_PROVIDER_RESOURCE = hasura_model_resource(
     sortable=["vendor", "backend_class", "lifecycle", "runtime_status", "name", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["backend_class", "lifecycle", "runtime_status", "vendor", "vendor__display_name"],
-    insert=False,
-    update=False,
     delete=True,
+    insertable=["vendor", "credential", "account", "backend_class", "lifecycle", "config", "name", "base_url"],
+    updatable=["vendor", "credential", "account", "backend_class", "lifecycle", "config", "name", "base_url"],
+    write_backend=IntegrationWriteBackend(
+        InferenceProvider,
+        public_id_fields=("vendor", "owner", "credential", "account"),
+    ),
     field_id_decode={
         "vendor": public_pk_decoder(Vendor),
         "owner": public_pk_decoder(User),
@@ -469,6 +436,17 @@ _INFERENCE_PROVIDER_RESOURCE = hasura_model_resource(
         "account": public_pk_decoder(ExternalAccount),
     },
 )
+for _field in get_object_definition(_INFERENCE_PROVIDER_RESOURCE.mutation, strict=True).fields:
+    if _field.python_name in (
+        _INFERENCE_PROVIDER_RESOURCE.insert_one_root,
+        _INFERENCE_PROVIDER_RESOURCE.update_by_pk_root,
+    ):
+        _field.extensions.append(
+            PermissionExtension(
+                permissions=[permission() for permission in _ADMIN_PERMISSION_CLASSES],
+            )
+        )
+
 _INFERENCE_MODEL_RESOURCE = hasura_model_resource(
     InferenceModelType,
     model=InferenceModel,
@@ -516,35 +494,6 @@ _INFERENCE_MODEL_RESOURCE = hasura_model_resource(
 
 
 @strawberry.type
-class InferenceProviderCreateMutation:
-    """Admin create for an inference provider child row."""
-
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def create_inference_provider(self, data: InferenceProviderInput) -> InferenceProviderType:
-        """Create an inference provider directly."""
-
-        attrs = {
-            **integration_create_attrs(data, reason="agents.graphql.inference_provider.create"),
-            "backend_class": InferenceProvider.impl_key_for(
-                "backend_class",
-                None if data.backend_class is strawberry.UNSET else data.backend_class,
-                default="manual",
-            ),
-        }
-        if data.account is strawberry.UNSET and (credential := attrs.get("credential")) is not None:
-            attrs["account"] = credential.external_account
-        if data.name:
-            attrs["name"] = data.name
-        if data.base_url:
-            attrs["base_url"] = data.base_url
-        if data.config is not strawberry.UNSET:
-            attrs["config"] = data.config
-        with system_context(reason="agents.graphql.inference_provider.create"), transaction.atomic():
-            provider = InferenceProvider.objects.create(**attrs)
-        return cast(InferenceProviderType, provider)
-
-
-@strawberry.type
 class InferenceProviderConnectMutation:
     """Authenticated OAuth connect for an inference provider child row."""
 
@@ -574,42 +523,6 @@ class InferenceProviderConnectMutation:
             )
         except OAuthFlowError as error:
             return ConnectIntegrationResult(error=error.public_message, error_code=error.code)
-
-
-@strawberry.type
-class InferenceProviderUpdateMutation:
-    """Admin update for an inference provider child row."""
-
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def update_inference_provider(self, data: InferenceProviderPatch) -> InferenceProviderType:
-        """Update a provider, merging supplied config keys."""
-
-        with (
-            action_target(
-                InferenceProvider,
-                data.id,
-                reason="agents.graphql.inference_provider.update",
-            ) as provider,
-            transaction.atomic(),
-        ):
-            if data.backend_class is not strawberry.UNSET:
-                provider.set_impl_key("backend_class", data.backend_class, default="manual")
-            provided = apply_integration_patch_fields(
-                provider,
-                data,
-                reason="agents.graphql.inference_provider.update",
-                ignore_null_lifecycle=True,
-            )
-            if data.name is not strawberry.UNSET:
-                provider.name = data.name or ""
-                provided.add("name")
-            if data.base_url is not strawberry.UNSET:
-                provider.base_url = data.base_url or ""
-                provided.add("base_url")
-            if data.config is not strawberry.UNSET:
-                provided.update(provider.apply_config_patch(data.config))
-            save_provided_fields(provider, provided)
-        return cast(InferenceProviderType, provider)
 
 
 def _agent_for_view(view: dict[str, Any]) -> Any:
@@ -807,6 +720,7 @@ _CONSOLE_TYPES: list[object] = [
 
 schemas = {
     "console": {
+        "input_extensions": integration_input_extensions(_INFERENCE_PROVIDER_RESOURCE),
         "query": [
             AgentSessionQuery,
             _AGENT_RESOURCE.query,
@@ -823,9 +737,7 @@ schemas = {
             AgentDeletePreviewMutation,
             _AGENT_SESSION_RESOURCE.mutation,
             _AGENT_TURN_RESOURCE.mutation,
-            InferenceProviderCreateMutation,
             InferenceProviderConnectMutation,
-            InferenceProviderUpdateMutation,
             _SKILL_RESOURCE.mutation,
             _MCP_SERVER_RESOURCE.mutation,
             _MCP_TOOL_RESOURCE.mutation,

@@ -169,6 +169,7 @@ export {
 } from "./router";
 export {
   authoredQueryReadsAnyModel,
+  invalidateAuthoredQueries,
 } from "./query-invalidation";
 export {
   stableKey,

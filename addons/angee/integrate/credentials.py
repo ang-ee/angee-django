@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -51,10 +52,13 @@ class CredentialKindHandler:
     def validate(self, material: dict[str, Any]) -> None:
         """Require the kind's secret material before it is stored."""
 
-        if not material.get(self.material_field):
-            raise ValueError(
-                f"{self.kind} credential material requires {self.material_field}.",
-            )
+        missing = {
+            field: "This field is required."
+            for field in self.input_material_fields()
+            if not material.get(field)
+        }
+        if missing:
+            raise ValidationError(missing)
 
     def upsert_fields(self, material: dict[str, Any]) -> dict[str, Any]:
         """Return common credential fields derived from ``material``."""
@@ -233,12 +237,6 @@ class BasicAuthCredentialHandler(CredentialKindHandler):
     material_field = "password"
     material_fields = ("username", "password")
 
-    def validate(self, material: dict[str, Any]) -> None:
-        """Require both a username and a password before storing the credential."""
-
-        if not material.get("username") or not material.get("password"):
-            raise ValueError("basic_auth credential material requires a username and password.")
-
     def auth_headers(self, credential: Any) -> dict[str, str]:
         """Return an HTTP Basic ``Authorization`` header from the username and password."""
 
@@ -256,12 +254,6 @@ class AppKeysCredentialHandler(CredentialKindHandler):
     kind = "app_keys"
     material_field = "app_secret"
     material_fields = ("app_id", "app_secret")
-
-    def validate(self, material: dict[str, Any]) -> None:
-        """Require both halves of an external application registration."""
-
-        if not material.get("app_id") or not material.get("app_secret"):
-            raise ValueError("app_keys credential material requires app_id and app_secret.")
 
     def auth_headers(self, credential: Any) -> dict[str, str]:
         """Return no HTTP headers because application keys parameterize a client library."""

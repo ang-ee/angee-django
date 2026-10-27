@@ -1357,7 +1357,7 @@ describe("FormView", () => {
             roots: {
               list: "inference_providers",
               detail: "inference_provider",
-              update: "update_inference_provider",
+              update: "update_inference_providers_by_pk",
             },
           },
         },

@@ -29,6 +29,7 @@ from rebac import PermissionDenied, check_new, system_context, to_subject_ref
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
+from strawberry.types import get_object_definition
 from strawberry_django.pagination import OffsetPaginated
 
 from angee.errors import exception_text
@@ -65,7 +66,7 @@ from angee.integrate import connect as _connect
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.mixins import SyncStateMixin
-from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle
+from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle, IntegrationManager
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, PROVIDER_UNAVAILABLE, OAuthFlowError
 from angee.integrate.oauth.registrations import OAuthRegistrationExtension
@@ -684,100 +685,16 @@ def _enabled_oauth_client_from_id(oauth_client_id: PublicID) -> Any:
 def _credential_material(data: CredentialInput) -> dict[str, str]:
     """Read the secret(s) the kind's handler names out of the discriminated input."""
 
+    try:
+        handler = CredentialKind(data.kind).handler
+    except ValueError as error:
+        raise ValidationError({"kind": "Select a supported credential kind."}) from error
     material: dict[str, str] = {}
-    for field in CredentialKind(data.kind).handler.input_material_fields():
+    for field in handler.input_material_fields():
         if not hasattr(data, field):
-            raise ValueError(f"Cannot create a credential of kind {data.kind!r}.")
+            raise ValidationError({"kind": "This credential kind requires its connection flow."})
         material[field] = getattr(data, field)
     return material
-
-
-def integration_create_attrs(
-    data: Any,
-    *,
-    reason: str,
-) -> dict[str, Any]:
-    """Resolve inherited ``Integration`` create fields from GraphQL public ids."""
-
-    credential = (
-        None
-        if data.credential is None
-        else resolve_action_target(Credential, data.credential, reason=f"{reason}.credential")
-    )
-    account = (
-        strawberry.UNSET
-        if data.account is strawberry.UNSET
-        else (
-            None
-            if data.account is None
-            else resolve_action_target(ExternalAccount, data.account, reason=f"{reason}.account")
-        )
-    )
-    attrs: dict[str, Any] = {
-        "vendor": resolve_action_target(Vendor, data.vendor, reason=f"{reason}.vendor"),
-        "owner": _user_from_public_id(data.owner),
-    }
-    if hasattr(data, "display_name"):
-        attrs["display_name"] = data.display_name
-    if credential is not None:
-        attrs["credential"] = credential
-    if account is not strawberry.UNSET:
-        attrs["account"] = account
-    if data.lifecycle not in (strawberry.UNSET, None):
-        attrs["lifecycle"] = IntegrationLifecycle.from_value(data.lifecycle)
-    return attrs
-
-
-def apply_integration_patch_fields(
-    target: Any,
-    data: Any,
-    *,
-    reason: str,
-    ignore_null_lifecycle: bool = False,
-) -> set[str]:
-    """Apply inherited ``Integration`` patch fields and return caller-save names.
-
-    Lifecycle is guarded by ``Integration.set_lifecycle()``, which eagerly saves
-    through the transition hook. It is therefore deliberately omitted from the
-    returned set so child update callers do not re-emit the state write.
-    Credential attachment, lifecycle transitions and ``transfer_ownership`` save
-    eagerly, before unsaved patch values are set; a null owner clears it.
-    """
-
-    provided: set[str] = set()
-    if data.credential is not strawberry.UNSET:
-        credential = (
-            None
-            if data.credential is None
-            else resolve_action_target(Credential, data.credential, reason=f"{reason}.credential")
-        )
-        target.attach_credential(credential)
-    if data.lifecycle is not strawberry.UNSET and (data.lifecycle is not None or not ignore_null_lifecycle):
-        lifecycle = IntegrationLifecycle.from_value(data.lifecycle)
-        target.set_lifecycle(lifecycle)
-    if data.owner is not strawberry.UNSET:
-        target.transfer_ownership(None if data.owner is None else _user_from_public_id(data.owner))
-    if hasattr(data, "display_name") and data.display_name is not strawberry.UNSET:
-        target.display_name = data.display_name or ""
-        provided.add("display_name")
-    if data.vendor is not strawberry.UNSET:
-        target.vendor = resolve_action_target(Vendor, data.vendor, reason=f"{reason}.vendor")
-        provided.add("vendor")
-    if data.account is not strawberry.UNSET:
-        target.account = (
-            None
-            if data.account is None
-            else resolve_action_target(ExternalAccount, data.account, reason=f"{reason}.account")
-        )
-        provided.add("account")
-    return provided
-
-
-def save_provided_fields(target: Any, provided: set[str]) -> None:
-    """Persist provided fields once, skipping the save when a transition already did all work."""
-
-    if provided:
-        target.save(update_fields={*provided, "updated_at"})
 
 
 def _concrete_integration_target(info: strawberry.Info, user: Any, resource: str, id: PublicID) -> Any:
@@ -1748,6 +1665,28 @@ class SyncRecordActionMutation:
         return ActionResult(ok=True, message=_("Stream resync requested."))
 
 
+@strawberry.input
+class IntegrationOwnerInput:
+    """Explicit ownership is a model-authorized verb, not an editable column."""
+
+    owner: PublicID | None = strawberry.UNSET
+
+
+def integration_input_extensions(resource: Any) -> list[type]:
+    """Contribute the native ownership input to integration capability writes."""
+
+    donors = []
+    for surface in (resource.insert_input_type, resource.set_input_type):
+        if surface is not None:
+            name = get_object_definition(surface, strict=True).name
+            donors.append(
+                strawberry.input(name=name, extend=True)(
+                    type(f"{name}_owner", (IntegrationOwnerInput,), {}),
+                )
+            )
+    return donors
+
+
 class IntegrationWriteBackend(AngeeHasuraWriteBackend):
     """Compose native patch authorization with model-owned credential attachment."""
 
@@ -1759,28 +1698,26 @@ class IntegrationWriteBackend(AngeeHasuraWriteBackend):
         *,
         expected_revision: int | None = None,
     ) -> Any:
-        fields = dict(data)
-        credential_id = fields.pop("credential", strawberry.UNSET)
         with transaction.atomic():
             target = require_instance_for_id(self.model, pk, queryset=self.write_target_queryset())
             target.require_access("write", _session_user(info))
-            # Native patching locks the addressed model. Acquire the final child
-            # first so parent-addressed patches share the bridge worker order.
+            # The final child is locked first, matching workers and parent-addressed writes.
             with system_context(reason="integrate.graphql.patch.lock"):
                 target.lock_capability()
-            instance = super().update(info, pk, fields, expected_revision=expected_revision)
-            if credential_id is not strawberry.UNSET:
-                credential = (
-                    None
-                    if credential_id is None
-                    else require_instance_for_id(
-                        Credential,
-                        credential_id,
-                        queryset=Credential.objects.for_write(),
-                    )
-                )
-                instance.attach_credential(credential)
-            return instance
+            return super().update(info, pk, data, expected_revision=expected_revision)
+
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        """The integration factory owns defaults and candidate validation."""
+
+        del info
+        manager = cast(IntegrationManager, self.model._default_manager)
+        return manager.create_capability(**self._decode_public_id_fields(data))
+
+    def _update_row(self, info: strawberry.Info, instance: Any, data: dict[str, Any]) -> Any:
+        """Dispatch native values through the integration's transition and config owners."""
+
+        fields = instance.prepare_patch(data)
+        return super()._update_row(info, instance, fields) if fields else instance
 
 
 _INTEGRATION_RESOURCE = hasura_model_resource(

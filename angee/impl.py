@@ -229,21 +229,34 @@ class ImplBase:
         """Resolve a string FK default against the related model's ``slug`` and assign it."""
 
         related = field.related_model
-        try:
-            related._meta.get_field("slug")
-        except FieldDoesNotExist as error:
-            raise FieldDoesNotExist(
-                f"{type(instance).__name__}.{field.name} impl default targets {related._meta.label}, "
-                "which must declare a slug field."
-            ) from error
+        targets = ImplBase.relation_default_queryset(field, natural_key, queryset=related._base_manager.all())
         with system_context(reason="angee.impl.materialize_fk"):
-            target = related._base_manager.filter(slug=natural_key).first()
+            target = targets.first()
         if target is None:
             raise ValueError(
                 f"{type(instance).__name__}.{field.name} impl default references "
                 f"{related._meta.label} slug {natural_key!r}, but no row exists."
             )
         setattr(instance, field.name, target)
+
+    @staticmethod
+    def relation_default_queryset(
+        field: Any, natural_key: str, *, queryset: models.QuerySet[Any],
+    ) -> models.QuerySet[Any]:
+        """Select an implementation's declared slug within the caller's row scope.
+
+        Materialization evaluates under system authority; public metadata uses
+        an actor-scoped queryset and omits unavailable suggestions.
+        """
+        related = field.related_model
+        try:
+            related._meta.get_field("slug")
+        except FieldDoesNotExist as error:
+            raise FieldDoesNotExist(
+                f"{field.model.__name__}.{field.name} impl default targets {related._meta.label}, "
+                "which must declare a slug field."
+            ) from error
+        return queryset.filter(slug=natural_key)
 
 
 def impl_registry(registry_setting: str) -> dict[str, str]:
@@ -586,7 +599,9 @@ class ImplDefaultsMixin(models.Model):
         return instance
 
     def refresh_from_db(
-        self, using: str | None = None, fields: Iterable[str] | None = None,
+        self,
+        using: str | None = None,
+        fields: Iterable[str] | None = None,
         from_queryset: models.QuerySet[Any] | None = None,
     ) -> None:
         """Keep the immutable-key snapshot coherent when Django reloads those fields."""
@@ -620,17 +635,7 @@ class ImplDefaultsMixin(models.Model):
 
         adding = self._state.adding
         if adding:
-            provided: frozenset[str] = getattr(self, "_impl_provided_fields", frozenset())
-
-            for field in self._meta.get_fields():
-                if not isinstance(field, ImplClassField):
-                    continue
-                key = getattr(self, field.attname, None)
-                if not key:
-                    continue
-                impl = field.resolve_class(key)
-                if isinstance(impl, type) and issubclass(impl, ImplBase):
-                    impl.materialize(self, provided=provided)
+            self.prepare_impl_defaults()
         update_fields = kwargs.get("update_fields")
         self.validate_impl_keys(update_fields=update_fields)
         self.validate_impl_configs(update_fields=update_fields)
@@ -643,6 +648,27 @@ class ImplDefaultsMixin(models.Model):
             if adding or updated is None or field.name in updated or field.attname in updated:
                 loaded[field.attname] = self.__dict__[field.attname]
         self._loaded_impl_keys = loaded
+
+    def prepare_impl_defaults(self) -> None:
+        """Prepare unsupplied implementation defaults before validation or insertion."""
+
+        if not self._state.adding:
+            return
+        provided: frozenset[str] = getattr(self, "_impl_provided_fields", frozenset())
+        for field in self._meta.get_fields():
+            if not isinstance(field, ImplClassField):
+                continue
+            key = getattr(self, field.attname, None)
+            if not key:
+                continue
+            key = field.key_for(key)
+            setattr(self, field.attname, key)
+            try:
+                impl = field.resolve_class(key)
+            except ValueError as error:
+                raise ValidationError({field.name: str(error)}) from error
+            if isinstance(impl, type) and issubclass(impl, ImplBase):
+                impl.materialize(self, provided=provided)
 
     def validate_impl_keys(self, *, update_fields: Any = None) -> None:
         """Reject persisted implementation switches at the shared model boundary."""

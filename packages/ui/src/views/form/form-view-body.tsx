@@ -8,6 +8,7 @@ import { Textarea } from "../../ui/textarea";
 import { Chip } from "../../ui/chip";
 import {
   FieldDescription,
+  FieldError,
   FieldLabel,
   FieldRoot,
 } from "../../ui/field";
@@ -735,6 +736,7 @@ function BoundFieldRow({
   onCommit?: () => void;
   controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
 }): React.ReactElement {
+  const controlId = React.useId();
   const effectiveReadOnly = Boolean(readOnly);
   const developerTitle = useDeveloperFieldTitle();
   const composite = isCompositeFieldDescriptor(field);
@@ -742,12 +744,22 @@ function BoundFieldRow({
   const displayedMessages = composite
     ? directDottedPathMessages(messages, field.name)
     : messages;
+  const descriptionId = field.description ? `${controlId}-description` : undefined;
+  const errorId = displayedMessages.length ? `${controlId}-error` : undefined;
+  const controlProps = {
+    id: controlId,
+    "aria-describedby": [descriptionId, errorId].filter(Boolean).join(" ") || undefined,
+    "aria-invalid": displayedMessages.length > 0 || undefined,
+    "aria-required": field.required && !effectiveReadOnly || undefined,
+    ...(composite ? { "aria-labelledby": `${controlId}-label` } : {}),
+  };
   return (
     <FieldRoot
       invalid={displayedMessages.length > 0}
       className={cn(FIELD_ROOT_CLASS, gridFieldClass(field), rail && "grid grid-cols-[minmax(0,5.5rem)_minmax(0,1fr)] items-start gap-x-2")}
     >
       <div className="flex items-center gap-1"><FieldLabel variant="eyebrow" className={cn(rail && "mb-0 min-h-8 normal-case tracking-normal")}
+        id={composite ? `${controlId}-label` : undefined} htmlFor={composite || effectiveReadOnly || restricted ? undefined : controlId}
         title={developerTitle(field.name, field.widget)}>
         {field.label ?? field.name}
       </FieldLabel>
@@ -764,6 +776,7 @@ function BoundFieldRow({
         {relation && (!field.widget || field.widget === "many2one") ? (
           <RelationFieldWidget
             controlRef={controlRef}
+            controlProps={controlProps}
             value={relationValueId(value) || null}
             onChange={onChange}
             onCommit={onCommit}
@@ -776,6 +789,7 @@ function BoundFieldRow({
         ) : relationList ? (
           <RelationMultiFieldWidget
             controlRef={controlRef}
+            controlProps={controlProps}
             value={Array.isArray(value) ? value : []}
             onChange={onChange}
             onCommit={onCommit}
@@ -794,12 +808,12 @@ function BoundFieldRow({
             readOnly={effectiveReadOnly}
             onChange={onChange}
             onCommit={onCommit}
-            controlProps={field.required ? { id: field.name, "aria-required": true } : undefined}
+            controlProps={controlProps}
           />
         )}
         </DescriptorPresenceControl>
       </div> : null}
-      <FieldFooter description={field.description} errors={displayedMessages} />
+      <FieldFooter description={field.description} errors={displayedMessages} descriptionId={descriptionId} errorId={errorId} />
     </FieldRoot>
   );
 }
@@ -830,8 +844,11 @@ function BodyFieldControl({
   onCommit?: () => void;
   controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
 }): React.ReactElement {
+  const controlId = React.useId();
   const composite = isCompositeFieldDescriptor(field);
   const messages = [...fieldErrorMessages(errors, composite ? field.name : undefined), ...(serverMessages ?? [])];
+  const descriptionId = field.description ? `${controlId}-description` : undefined;
+  const errorId = messages.length ? `${controlId}-error` : undefined;
   return (
     <FieldRoot invalid={messages.length > 0} className="grid gap-2">
       <DescriptorPresenceControl field={field} value={value} readOnly={readOnly} onChange={onChange} onCommit={onCommit} controlRef={controlRef}>
@@ -844,9 +861,15 @@ function BodyFieldControl({
         readOnly={readOnly}
         onChange={onChange}
         onCommit={onCommit}
+        controlProps={{
+          id: controlId,
+          "aria-describedby": [descriptionId, errorId].filter(Boolean).join(" ") || undefined,
+          "aria-invalid": messages.length > 0 || undefined,
+          "aria-required": field.required && !readOnly || undefined,
+        }}
       />
       </DescriptorPresenceControl>
-      <FieldFooter description={field.description} errors={messages} />
+      <FieldFooter description={field.description} errors={messages} descriptionId={descriptionId} errorId={errorId} />
     </FieldRoot>
   );
 }
@@ -854,16 +877,20 @@ function BodyFieldControl({
 function FieldFooter({
   description,
   errors,
+  descriptionId,
+  errorId,
 }: {
   description?: React.ReactNode;
   errors: readonly string[];
+  descriptionId?: string;
+  errorId?: string;
 }): React.ReactElement | null {
   if (!description && errors.length === 0) return null;
   return (
     <>
-      {description ? <FieldDescription>{description}</FieldDescription> : null}
+      {description ? <FieldDescription id={descriptionId}>{description}</FieldDescription> : null}
       {errors.length > 0 ? (
-        <p className="text-12 leading-5 text-danger-text">{errors.join(", ")}</p>
+        <FieldError id={errorId} match>{errors.join(", ")}</FieldError>
       ) : null}
     </>
   );
