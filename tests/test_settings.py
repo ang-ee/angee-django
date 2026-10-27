@@ -15,7 +15,7 @@ from django.core.exceptions import ImproperlyConfigured
 
 from angee.compose.autoconfig import AutoConfig
 from angee.compose.composer import Composer
-from angee.compose.project import prepend_import_paths
+from angee.conf import prepend_import_paths
 from angee.project import PROJECT_DIR_ENV, find_project_dir, project_dir
 
 BASE_APP = "angee.apps.BaseConfig"
@@ -52,7 +52,7 @@ def _default_installed_apps(tmp_path: Path, roots: tuple[str, ...]) -> tuple[str
     """Return framework defaults followed by the project-declared roots."""
 
     defaults = runpy.run_module(
-        "angee.compose.defaults",
+        "angee.defaults",
         init_globals={"BASE_DIR": tmp_path, "INSTALLED_APPS": roots},
         run_name="__test_effective_defaults__",
     )
@@ -64,7 +64,7 @@ def test_public_origin_joins_csrf_trusted_origins(tmp_path: Path, monkeypatch: p
 
     monkeypatch.setenv("ANGEE_PUBLIC_ORIGIN", "https://demo.example.com")
     defaults = runpy.run_module(
-        "angee.compose.defaults",
+        "angee.defaults",
         init_globals={"BASE_DIR": tmp_path},
         run_name="__test_effective_defaults__",
     )
@@ -1084,7 +1084,7 @@ def test_defaults_module_requires_compose_seed(
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(ImproperlyConfigured, match="angee.compose.settings"):
-        runpy.run_module("angee.compose.defaults", run_name="__test_defaults__")
+        runpy.run_module("angee.defaults", run_name="__test_defaults__")
 
     assert not (tmp_path / "db.sqlite3").exists()
     assert not (tmp_path / ".angee").exists()
@@ -1094,7 +1094,7 @@ def test_defaults_module_seeds_compose_installed_app(tmp_path: Path) -> None:
     """Defaults seed the composer app before project app roots."""
 
     defaults = runpy.run_module(
-        "angee.compose.defaults",
+        "angee.defaults",
         init_globals={"BASE_DIR": tmp_path, "INSTALLED_APPS": ("angee.resources",)},
         run_name="__test_defaults__",
     )
@@ -1772,7 +1772,7 @@ def test_autoconfig_applies_installed_entries_without_populating_apps(tmp_path, 
     assert "ANGEE_RUNTIME_DIR" not in namespace
 
 
-@pytest.mark.parametrize("name", ["INSTALLED_APPS", "ROOT_URLCONF", "ASGI_APPLICATION", "ANGEE_RUNTIME_DIR"])
+@pytest.mark.parametrize("name", ["INSTALLED_APPS", "ANGEE_RUNTIME_DIR"])
 def test_autoconfig_installed_apps_cannot_change_composer_settings(tmp_path, monkeypatch, name):
     """Bare and composed settings share the same reserved declaration policy."""
 
@@ -1864,3 +1864,20 @@ def test_mail_provider_environment_belongs_to_messaging(tmp_path, monkeypatch, i
         assert namespace["ANGEE_EMAIL_DELIVERY_CONFIGURED"] is True
     else:
         assert "ANYMAIL_MAILGUN_SENDER_DOMAIN" not in namespace
+
+
+def test_plain_composer_preserves_host_choices_and_adds_no_capability_defaults(tmp_path):
+    namespace = {
+        "INSTALLED_APPS": ("tests.settings.BareComposeConfig",),
+        "ANGEE_RUNTIME_DIR": tmp_path / "runtime",
+        "ROOT_URLCONF": "project.urls",
+        "ASGI_APPLICATION": "project.asgi.application",
+    }
+    Composer(namespace).compose_settings()
+    assert [config.name for config in namespace["INSTALLED_APPS"]] == ["angee.compose"]
+    assert namespace["ROOT_URLCONF"] == "project.urls"
+    assert namespace["ASGI_APPLICATION"] == "project.asgi.application"
+    assert "MIDDLEWARE" not in namespace
+    assert "COMPOSE_INTEGRATIONS" not in namespace
+    assert "REBAC_BACKEND" not in namespace
+    assert "ANGEE_CHANGESET_MODEL" not in namespace

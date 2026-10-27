@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import lru_cache
 from typing import Any
 
@@ -14,6 +15,24 @@ from rebac.managers import RebacQuerySet
 from rebac.resources import model_for_resource_type, model_resource_type
 from rebac.schema import Definition, FieldBinding, Schema, resolve_schema_path, validate_schema
 from rebac.schema.parser import parse_zed
+
+
+def declared_grants(model: type[models.Model]) -> dict[str, str]:
+    """Validate the record-share relations declared on this model itself."""
+
+    raw = model.__dict__.get("rebac_grantable", {})
+    if not isinstance(raw, Mapping):
+        raise ImproperlyConfigured(f"{model._meta.label}.rebac_grantable must be a mapping.")
+    declaration: dict[str, str] = {}
+    for relation, permission in raw.items():
+        if not isinstance(relation, str) or not relation:
+            raise ImproperlyConfigured(
+                f"{model._meta.label}.rebac_grantable relation names must be non-empty strings."
+            )
+        if not isinstance(permission, str) or not permission:
+            raise ImproperlyConfigured(f"{model._meta.label}.rebac_grantable[{relation!r}] must name a permission.")
+        declaration[relation] = permission
+    return declaration
 
 
 def require_rebac_queryset[M: models.Model](model: type[M]) -> RebacQuerySet[M]:

@@ -38,7 +38,7 @@ from angee.models.manager import AngeeManager, AngeeUnscopedManager
 from angee.models.merge_references import MergeContractMixin, named_in_relationships, references
 from angee.models.query import AngeeQuerySet, SystemQuerysetMixin, row_lock_paths
 from angee.models.transitions import StateTransitions
-from angee.permissions import effective_rebac_definition
+from angee.permissions import declared_grants, effective_rebac_definition
 from angee.signals import record_access_revoked
 from angee.tiers import ResourceTier
 
@@ -324,19 +324,7 @@ class AngeeModel(
     def get_rebac_grantable(cls) -> dict[str, str]:
         """Return and validate this model's declared record-share relations."""
 
-        raw = cls.__dict__.get("rebac_grantable", {})
-        if not isinstance(raw, Mapping):
-            raise ImproperlyConfigured(f"{cls._meta.label}.rebac_grantable must be a mapping.")
-        declaration: dict[str, str] = {}
-        for relation, permission in raw.items():
-            if not isinstance(relation, str) or not relation:
-                raise ImproperlyConfigured(
-                    f"{cls._meta.label}.rebac_grantable relation names must be non-empty strings."
-                )
-            if not isinstance(permission, str) or not permission:
-                raise ImproperlyConfigured(f"{cls._meta.label}.rebac_grantable[{relation!r}] must name a permission.")
-            declaration[relation] = permission
-        return declaration
+        return declared_grants(cls)
 
     @classmethod
     def record_access_permission(cls, relation: str) -> str:

@@ -269,9 +269,9 @@ class StateTransitions:
         """Re-run this declaration's class-build validation against ``cls``'s MRO.
 
         ``contribute_to_class`` validates only the *declaring* class's own methods.
-        Django's ``class_prepared`` hook installs the guard on each final concrete
-        class, using its own field. The composer calls this after
-        final concrete composition, so its MRO must satisfy the same class-build checks —
+        Django's ``class_prepared`` hook runs this validation before installing
+        the guard on each final concrete class, using its own field. The complete
+        MRO must satisfy the same class-build checks —
         every reachable ``@transition`` method still guards a declared or policy
         edge. It validates without mutating ``cls`` (no descriptor install).
 
@@ -652,21 +652,8 @@ def _verify_uncontended_source(
         raise TransitionNotAllowed(_message(field, source, target, "state changed under a concurrent transition"))
 
 
-def revalidate_transition_metadata(cls: type[models.Model]) -> None:
-    """Re-validate every ``StateTransitions`` declaration reachable on ``cls``.
-
-    The composer calls this for each final concrete model: each declaration was
-    validated when its declaring abstract class was built, but the composed MRO
-    must satisfy the same class-build checks. Raises ``ImproperlyConfigured`` (via the declaration)
-    when the reorder leaves a transition method guarding an undeclared edge.
-    """
-
-    for declaration in StateTransitions._iter_declarations(cls):
-        declaration.revalidate_for(cls)
-
-
 def _guard_transition_fields(sender: type[models.Model], **kwargs: Any) -> None:
-    """Restore inherited guards after Django installs concrete field descriptors."""
+    """Validate the final MRO and guard Django's concrete field descriptors."""
 
     declarations = tuple(StateTransitions._iter_declarations(sender))
     if not declarations:
@@ -677,6 +664,7 @@ def _guard_transition_fields(sender: type[models.Model], **kwargs: Any) -> None:
     if not issubclass(sender, AngeeModel):
         raise ImproperlyConfigured(f"{sender._meta.label} must inherit AngeeModel to host StateTransitions.")
     for declaration in declarations:
+        declaration.revalidate_for(sender)
         declaration._guard_for(sender)
 
 

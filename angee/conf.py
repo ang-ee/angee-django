@@ -26,7 +26,7 @@ from angee.project import (
     project_dir,
 )
 
-DEFAULTS_SETTINGS_MODULE = "angee.compose.defaults"
+DEFAULTS_SETTINGS_MODULE = "angee.defaults"
 
 
 def prepend_import_paths(paths: Iterable[Path]) -> None:

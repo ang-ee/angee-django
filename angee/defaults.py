@@ -22,7 +22,7 @@ def _sequence(value: Any) -> tuple[Any, ...]:
 
 _BASE_DIR = globals().get("BASE_DIR")
 if _BASE_DIR is None:
-    raise ImproperlyConfigured("angee.compose.defaults must be evaluated by angee.compose.settings")
+    raise ImproperlyConfigured("angee.defaults must be evaluated by angee.compose.settings")
 
 BASE_DIR = resolve_path(_BASE_DIR)
 DEBUG = bool(globals().get("DEBUG", False))

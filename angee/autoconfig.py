@@ -1,4 +1,4 @@
-"""Settings fragments required by Angee's model foundation."""
+"""Settings contributed by the current Angee host and model foundation app."""
 
 from __future__ import annotations
 
@@ -8,6 +8,14 @@ from typing import Any, TypedDict
 _Settings = TypedDict(
     "_Settings",
     {
+        "COMPOSE_INTEGRATIONS:append": list[str],
+        "COMPOSE_EXTERNAL_ARTIFACT_ROOTS": tuple[str, ...],
+        "COMPOSE_OWNED_ARTIFACT_PATHS": tuple[str, ...],
+        "ROOT_URLCONF": str,
+        "ASGI_APPLICATION": str,
+        "MIDDLEWARE:prepend": list[str],
+        "MIDDLEWARE:append": list[str],
+        "ANGEE_WEB_STATEMENT_TIMEOUT": int,
         "ANGEE_CHANGESET_MODEL": str,
         "ANGEE_IMPL_REGISTRIES": list[str],
         "ANGEE_HOOKS": list[str],
@@ -24,6 +32,17 @@ _Settings = TypedDict(
 )
 
 SETTINGS: _Settings = {
+    "COMPOSE_INTEGRATIONS:append": ["angee.build.PermissionIntegration", "angee.web.WebIntegration"],
+    "COMPOSE_EXTERNAL_ARTIFACT_ROOTS": ("gql", "schemas", "web"),
+    "COMPOSE_OWNED_ARTIFACT_PATHS": ("web/manifest.json", "web/tailwind.sources.css"),
+    "ROOT_URLCONF": "angee.urls",
+    "ASGI_APPLICATION": "angee.asgi.application",
+    "MIDDLEWARE:prepend": ["django.middleware.security.SecurityMiddleware"],
+    "MIDDLEWARE:append": [
+        "django.middleware.common.CommonMiddleware",
+        "django.middleware.csp.ContentSecurityPolicyMiddleware",
+    ],
+    "ANGEE_WEB_STATEMENT_TIMEOUT": 60,
     "ANGEE_CHANGESET_MODEL": "provenance.Changeset",
     "ANGEE_IMPL_REGISTRIES": [],
     "ANGEE_HOOKS": ["ANGEE_MERGE_GUARDS"],

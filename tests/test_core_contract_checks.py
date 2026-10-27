@@ -9,7 +9,7 @@ from angee.checks import (
     check_ownership,
     check_rebac_caveats,
 )
-from angee.compose.permissions import apply_schema_paths, extension_source_map
+from angee.build import apply_schema_paths, extension_source_map
 from tests.core_persistence import OWNERSHIP_SCHEMA, OwnedRow
 from tests.test_zed_extensions import _base_addon, _contrib_addon
 

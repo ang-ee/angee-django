@@ -24,12 +24,9 @@ class ComposeConfig(AppConfig):
         """
 
         super().import_models()
-        # Deferred (phase-1 AppConfig rule): importing Runtime at module top
-        # would transitively import model classes (angee.resources.models.Resource,
-        # AngeeModel) during phase-1 AppConfig load, before the registry is ready.
-        # By phase 2 the registry is populated, so this import — and the abstract
-        # source models it introspects — is safe. ``from_django`` owns the
-        # ANGEE_RUNTIME_DIR contract and raises if it is missing.
+        # Source discovery and installed build integrations run in phase 2,
+        # after AppConfig discovery and before ready(). No source model or
+        # feature integration is imported during phase-1 config loading.
         from angee.compose.runtime import Runtime
 
         runtime = Runtime.from_django()

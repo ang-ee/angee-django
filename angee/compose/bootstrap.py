@@ -9,7 +9,7 @@ from typing import Any
 from hatch_angee import discover
 
 from angee.compose.dependencies import AddonDependencyGroup, AddonDependencyGroupResult
-from angee.compose.project import ProjectContract
+from angee.conf import ProjectContract
 
 
 def _strings(value: Any, *, setting: str) -> tuple[str, ...]:

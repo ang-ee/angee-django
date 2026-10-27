@@ -44,7 +44,7 @@ def test_baked_image_addon_root_uses_native_yamlconf_append(tmp_path: Path, cust
         expected_root = str(tmp_path / "deployment-addons")
     result = subprocess.run(
         ["sh", "-c", 'exec "$@"', "image-environment", sys.executable, "-c", (
-            "import json; from angee.compose.project import ProjectContract; "
+            "import json; from angee.conf import ProjectContract; "
             "namespace={}; ProjectContract(namespace).load(); "
             "print(json.dumps([str(path) for path in namespace['ANGEE_ADDON_DIRS']]))"
         )],

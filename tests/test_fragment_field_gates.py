@@ -13,7 +13,8 @@ from rebac.schema import parse_zed
 from rebac.schema.parser import validate_schema
 
 from angee.compose.model_composition import ModelComposition
-from angee.compose.permissions import (
+from angee.build import (
+    field_gate_owners,
     SchemaExtensionError,
     apply_schema_paths,
     extension_source_map,
@@ -141,7 +142,7 @@ def test_composer_maps_only_canonical_donor_columns_and_runtime_emits_the_gate(m
         f"definition {target} {{ permission read__receipt = read }}",
     )
     composition = ModelComposition.discover((donor, base))
-    assert composition.field_gate_owners() == {target: {"receipt": donor.name, "recipient": donor.name}}
+    assert field_gate_owners(composition) == {target: {"receipt": donor.name, "recipient": donor.name}}
     runtime = Runtime((base, donor), composition, runtime_dir=tmp_path / "runtime")
     sources = runtime.render_sources()
     assert "permission read__receipt = read" in sources[merged_schema_relpath(base.name)]

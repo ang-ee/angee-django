@@ -9,7 +9,7 @@ import pytest
 from django.apps import AppConfig, apps
 from django.core.management import call_command
 
-from angee.compose.permissions import apply_schema_paths, extension_source_map
+from angee.build import apply_schema_paths, extension_source_map, field_gate_owners
 from angee.fs import write_atomic
 
 
@@ -19,7 +19,7 @@ def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[s
     # Pytest imports plugins before Django populates each worker's app registry.
     from angee.compose.model_composition import ModelComposition
 
-    return ModelComposition.discover(app_configs).field_gate_owners()
+    return field_gate_owners(ModelComposition.discover(app_configs))
 
 
 @pytest.fixture

@@ -26,7 +26,7 @@ def test_defaults_prefixes_the_ordered_core_app_set(tmp_path: Path) -> None:
     """Core and its Django app dependencies are always on before project roots."""
 
     defaults = runpy.run_module(
-        "angee.compose.defaults",
+        "angee.defaults",
         init_globals={"BASE_DIR": tmp_path, "INSTALLED_APPS": ("example.product",)},
         run_name="__test_core_defaults__",
     )
@@ -81,7 +81,7 @@ def test_rebac_depth_uses_explicit_settings_before_backend_defaults(
         namespace["DATABASES"] = {"default": {"ENGINE": f"django.db.backends.{engine}", "NAME": "test"}}
     if depth is not None:
         namespace["REBAC_DEPTH_LIMIT"] = depth
-    defaults = runpy.run_module("angee.compose.defaults", init_globals=namespace, run_name="__test_rebac_defaults__")
+    defaults = runpy.run_module("angee.defaults", init_globals=namespace, run_name="__test_rebac_defaults__")
     namespace = {name: value for name, value in defaults.items() if name.isupper() and not name.startswith("_")}
     if composed:
         Composer(namespace).compose_settings()

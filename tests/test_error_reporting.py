@@ -19,7 +19,7 @@ from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import Transport
 from strawberry.django.views import GraphQLView
 
-from angee.compose.project import ProjectContract
+from angee.conf import ProjectContract
 from angee.graphql.schema import GraphQLSchemas
 from tests.test_graphql import addon
 from tests.test_settings_composition_errors import _environment, _project
@@ -47,7 +47,7 @@ class _Query:
 _PROBE = """
 import json
 import sentry_sdk
-from angee.compose.project import ProjectContract
+from angee.conf import ProjectContract
 
 try:
     ProjectContract({"__name__": "probe_settings"}).compose()

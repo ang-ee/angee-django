@@ -3,8 +3,8 @@
 The composer is Angee's Django composition layer. It turns a project's normal
 Django settings contract and installed addon apps into one runnable Django
 project: final settings, a single ordered app registry, generated concrete ORM
-models, stable URL/ASGI entrypoints, and lifecycle inputs for GraphQL,
-resources, permissions, MCP, and other addons.
+models and a shared generated-file lifecycle. Angee's host and installed
+capabilities supply URL/ASGI defaults and their build integrations.
 
 A project declares root apps with `INSTALLED_APPS`. An addon is a plain Django
 app whose `addon.toml` owns its identity, metadata, dependencies, Python
@@ -44,9 +44,9 @@ below.
 
 | Concern | Owner |
 |---|---|
-| Project-root discovery and project settings/bootstrap environment | [`ProjectContract`](../angee/compose/project.py), called by [`angee.compose.settings`](../angee/compose/settings.py) |
+| Project-root discovery and project settings/bootstrap environment | [`ProjectContract`](../angee/conf.py), called by [`angee.compose.settings`](../angee/compose/settings.py) |
 | Bounded django-yamlconf loading and provenance | [`angee.compose.yamlconf`](../angee/compose/yamlconf.py) |
-| Overridable framework defaults and ordered always-on core apps | [`angee.compose.defaults`](../angee/compose/defaults.py) |
+| Overridable framework defaults and ordered always-on core apps | [`angee.defaults`](../angee/defaults.py) |
 | Reserved composed settings and final settings mutation | [`AutoConfig`](../angee/compose/autoconfig.py) owns reserved names; [`Composer`](../angee/compose/composer.py) assigns their values |
 | Django app discovery, identity aliases and root annotations | [`AppGraph`](../angee/compose/appgraph.py) |
 | Dependency ordering and cycle rejection for both discovery paths | [`order_app_dependencies`](../angee/addons.py) |
@@ -54,6 +54,11 @@ below.
 | Addon declarations and parsing | `addon.toml` and hatch-angee's native `AddonManifest`; [`angee.addons`](../angee/addons.py) binds the result to a native config |
 | Abstract-source discovery, donor order, parent relationships and collisions | [`ModelComposition`](../angee/compose/model_composition.py) |
 | Concrete class source text | [`angee.compose.rendering`](../angee/compose/rendering.py) |
+| Literal feature declarations and generated-file contributions | [`BuildIntegration`](../angee/compose/declarations.py), selected by installed autoconfig |
+| REBAC Meta, additive grants and permission-schema projection | [`PermissionIntegration`](../angee/build.py) |
+| Source-local catalogue/tier projection | [`CatalogueIntegration`](../addons/angee/resources/build.py) |
+| Web manifest and Tailwind source projection | [`WebIntegration`](../angee/web.py) |
+| Host URL/ASGI, middleware and external artifact ownership defaults | [`angee.autoconfig`](../angee/autoconfig.py) |
 | Artifact assembly and explicit build/check/cleanup orchestration | [`Runtime`](../angee/compose/runtime.py) |
 | Atomic writes, drift and guarded filesystem cleanup | [`GeneratedTree`](../angee/fs.py) |
 | Addon migration materialization and dependency projection | [`RuntimeMigrations`](../angee/compose/migrations.py), [`AddonDependencyGroup`](../angee/compose/dependencies.py) |
@@ -96,9 +101,13 @@ roots importable. It is not a second addon list: project roots are the configure
 
 ## App Graph And Settings
 
-`Composer` reads the core-prefixed `INSTALLED_APPS`, resolves the full ordered app
-set through `AppGraph`, writes the resolved `AppConfig` objects back to
-`INSTALLED_APPS`, and sets the stable framework entrypoints.
+`Composer` reads the supplied `INSTALLED_APPS`, resolves the full ordered app
+set through `AppGraph`, and writes the same `AppConfig` objects back to
+`INSTALLED_APPS`. Angee's host loader supplies its default app profile; installing
+the composer alone adds no model toolkit, history, permissions, jobs or routes.
+URL/ASGI and middleware defaults belong to the installed Angee host and can be
+overridden by project settings. Direct Composer users make their import roots
+available before resolving apps; Angee's host loader owns namespace-path refresh.
 
 `AppGraph` delegates app creation to Django's `AppConfig.create()` and expands
 addon dependencies from the native manifest. `addon_manifest()` validates that
@@ -213,12 +222,20 @@ validated contract. See [Bridge](../addons/angee/integrate/models.py) and
 Tracking and batch behavior stay with their owners. `HistoryMixin` uses a native
 simple-history descriptor adapted for generated module labels and virtual fields;
 every concrete descendant of a tracked source has its own history table,
-including MTI children. Each emitted concrete Meta names the tracked
-`_angee_base` manager; retained models supply its guarded queryset. Resource
+including MTI children. Models declare their own managers and Meta;
+the renderer never injects an Angee manager into a plain Django class.
+`ModelHistory` refuses a base manager without its queryset capture capability.
+Angee's model bases already declare the guarded managers; a plain tracked model
+must declare an unfiltered history-capable manager explicitly. Resource
 participants inherit the resources-owned
 [`ResourceLoadMixin`](../addons/angee/resources/mixins.py) and delegate through
-`super()`. The renderer has no generic decorator/attribute language or resource
-hook aggregator.
+`super()`. Installed build integrations contribute literal feature attributes,
+custom Meta options, generated text and post-emission path binding through
+[`declarations.py`](../angee/compose/declarations.py). They cannot replace native
+fields, managers, methods or the compiler's structural declarations. Source/donor
+ordering and collisions remain compiler-owned; REBAC and catalogue semantics
+remain with their respective integrations. There is no executable-code callback
+or resource lifecycle aggregator in the renderer.
 
 Adding native history to an existing model emits only Django's schema changes:
 the first tracked write after the upgrade is the row's first version. An addon
@@ -416,8 +433,9 @@ installed before normal Django composition.
 
 `ComposeConfig.import_models()` is the Django app-loading hook. In population
 phase 2 it discovers sources, calls `configure_migration_modules()`, repairs output
-with `emit_if_stale()`, and imports generated models. Final transition metadata is
-validated against those concrete classes.
+with `emit_if_stale()`, and imports generated models. The transition owner's
+native `class_prepared` receiver validates the final MRO before installing guards,
+including for models constructed outside the composer.
 
 - `emit_if_stale()` is write-only and idempotent. It repairs missing or stale
   generated sources file by file before import, and it never resets, cleans, or

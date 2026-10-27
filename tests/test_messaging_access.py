@@ -15,7 +15,7 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 
-from angee.compose.permissions import apply_schema_paths, extension_source_map
+from angee.build import apply_schema_paths, extension_source_map
 from angee.fs import write_atomic
 from angee.messaging.testing.models import Channel, Message, Part, Thread, ThreadAttachment
 from angee.testing.permissions import installed_field_owners

@@ -21,17 +21,19 @@ from rebac import schema_changes
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
 from angee.addons import addon_manifest
+from angee.build import PermissionIntegration, composed_grants
 from angee.compose.appgraph import AppGraph
 from angee.compose.apps import ComposeConfig
+from angee.compose.declarations import model_declaration
 from angee.compose.dependencies import AddonDependencyGroupResult
 from angee.compose.management.commands.angee import Command
 from angee.compose.model_composition import ModelComposition
-from angee.compose.project import ProjectContract
 from angee.compose.rendering import render_models
 from angee.compose.runtime import Runtime
-from angee.compose.web import WebRuntime
+from angee.conf import ProjectContract
 from angee.fs import GENERATED_SENTINEL
 from angee.models import AngeeModel, HistoryMixin, role_anchor
+from angee.web import WebRuntime
 from tests.conftest import make_addon
 
 
@@ -151,9 +153,11 @@ def test_runtime_renders_resource_sources(tmp_path: Path) -> None:
 def test_runtime_model_render_plan_keeps_model_owned_meta(tmp_path: Path) -> None:
     """Each named render plan carries the Meta facts for its own model."""
 
-    source = render_models(
-        ModelComposition({"tests": (FirstRenderPlanMetaThing, SecondRenderPlanMetaThing)}, {}), "tests"
-    )
+    composition = ModelComposition({"tests": (FirstRenderPlanMetaThing, SecondRenderPlanMetaThing)}, {})
+    source = render_models(composition, "tests", declarations={
+        model: model_declaration(composition, model, (PermissionIntegration(),))
+        for model in composition.ordered_models
+    })
 
     first_source = source[
         source.index("class FirstRenderPlanMetaThing") : source.index("class SecondRenderPlanMetaThing")
@@ -184,10 +188,13 @@ def test_runtime_composes_additive_grants_without_parent_authority() -> None:
         {"tests": (parent, child)}, {"tests.grantparent": (donor,)}, model_owners={donor: module.__name__},
     )
 
-    assert composition.grantable(parent) == {"viewer": "share", "reviewer": "write"}
-    assert composition.grantable(child) == {}
-    rendered = render_models(composition, "tests")
-    assert "rebac_grantable = {'viewer': 'share', 'reviewer': 'write'}" in rendered
+    assert composed_grants(composition, parent) == {"viewer": "share", "reviewer": "write"}
+    assert composed_grants(composition, child) == {}
+    rendered = render_models(composition, "tests", declarations={
+        model: model_declaration(composition, model, (PermissionIntegration(),))
+        for model in composition.ordered_models
+    })
+    assert "rebac_grantable = {'reviewer': 'write', 'viewer': 'share'}" in rendered
     assert "rebac_grantable = {}" in rendered[rendered.index("class GrantChild("):]
 
 
@@ -203,8 +210,11 @@ def test_runtime_rejects_conflicting_donor_grant_authority() -> None:
         extends="tests.GrantSource",
         rebac_grantable={"reviewer": "write"},
     )
+    composition = ModelComposition(
+        {"tests": (source,)}, {"tests.grantsource": (donor,)}, model_owners={donor: module.__name__},
+    )
     with pytest.raises(ImproperlyConfigured, match="conflicting rebac_grantable"):
-        ModelComposition({"tests": (source,)}, {"tests.grantsource": (donor,)}, model_owners={donor: module.__name__})
+        model_declaration(composition, source, (PermissionIntegration(),))
 
 
 def test_runtime_rejects_conflicting_donor_managers() -> None:
@@ -234,8 +244,11 @@ def test_runtime_validates_donor_grants_with_model_owner(invalid: Any) -> None:
     module = ModuleType("tests.grant_invalid")
     source = _source_model(module, "GrantValid", "tests", runtime=True)
     donor = _source_model(module, "GrantInvalid", "tests", extends="tests.GrantValid", rebac_grantable=invalid)
+    composition = ModelComposition(
+        {"tests": (source,)}, {"tests.grantvalid": (donor,)}, model_owners={donor: module.__name__},
+    )
     with pytest.raises(ImproperlyConfigured, match="rebac_grantable"):
-        ModelComposition({"tests": (source,)}, {"tests.grantvalid": (donor,)}, model_owners={donor: module.__name__})
+        model_declaration(composition, source, (PermissionIntegration(),))
 
 
 def test_runtime_honors_explicit_label_when_module_terminal_differs(
@@ -533,7 +546,10 @@ def test_role_anchor_emits_the_hand_rolled_runtime_source(tmp_path: Path) -> Non
     probe = role_anchor("tests/role", name="ProbeRole", module=module.__name__)
     setattr(module, "ProbeRole", probe)
 
-    source = render_models(ModelComposition({"tests": (probe,)}, {}), "tests")
+    composition = ModelComposition({"tests": (probe,)}, {})
+    source = render_models(composition, "tests", declarations={
+        probe: model_declaration(composition, probe, (PermissionIntegration(),)),
+    })
 
     assert "from tests.role_anchor_probe import ProbeRole as AbstractProbeRole" in source
     assert "class ProbeRole(AbstractProbeRole):" in source
@@ -2048,7 +2064,7 @@ def test_settings_and_bootstrap_import_without_loading_model_runtime() -> None:
             """
 import sys
 from django.conf import settings
-import angee.compose.project
+import angee.conf
 import angee.compose.bootstrap
 import angee.compose.composer
 assert not settings.configured

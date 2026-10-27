@@ -71,7 +71,7 @@ def test_failed_composition_preserves_published_settings(tmp_path: Path) -> None
             sys.executable, "-c",
             """
 from django.core.exceptions import ImproperlyConfigured
-from angee.compose.project import ProjectContract
+from angee.conf import ProjectContract
 
 published = {"__name__": "published_settings", "INSTALLED_APPS": ["retained"], "RETAINED": True}
 previous = dict(published)
