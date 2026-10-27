@@ -17,16 +17,13 @@ import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
-from rebac import current_actor, system_context
 from strawberry import auto
 from strawberry.permission import BasePermission, PermissionExtension
 from strawberry.scalars import JSON
 from strawberry.types import get_object_definition
 
-from angee.actors import actor_user_id
 from angee.agents import provisioning
 from angee.agents.context import render_view_context
-from angee.agents.models import RuntimeStatus, SessionStatus
 from angee.graphql.actions import ActionResult, action_target, authorized_permission_target, resolve_action_target
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
@@ -525,59 +522,23 @@ class InferenceProviderConnectMutation:
             return ConnectIntegrationResult(error=error.public_message, error_code=error.code)
 
 
-def _agent_for_view(view: dict[str, Any]) -> Any:
-    """Return the running agent that serves ``view`` for the current actor, or ``None``.
-
-    v1 routes every view to the **actor's own** running agent with an available chat
-    transport (the most recently updated). ``view["type"]`` is the routing seam — a
-    later slice dispatches on it to pick a view-specialised agent — so it is read
-    here even though v1 ignores it.
-    """
-
-    del view  # routing seam: a later slice dispatches on ``view["type"]``; v1 ignores it
-    actor = current_actor()
-    user_id = actor_user_id(actor) if actor is not None else None
-    if user_id is None:
-        return None
-    with system_context(reason="agents.graphql.agent_for_view"):
-        candidates = (
-            Agent.objects.filter(owner_id=user_id, is_template=False, runtime_status=RuntimeStatus.RUNNING)
-            .select_related("model")
-            .order_by("-updated_at")
-        )
-        return next((agent for agent in candidates if agent.can_chat), None)
-
-
 @strawberry.type
 class AgentSessionQuery:
     """Authenticated agent session queries for chat surfaces."""
 
     @strawberry.field
     def resolve_session_for_view(self, view: JSON) -> AgentChatTarget | None:
-        """Resolve the agent that serves the user's current view, for the side chatter.
+        """Return the actor's current chat agent and open in-process session.
 
-        The chatter knows the *view*, not the agent: this picks the actor's running agent
-        (``view["type"]`` is the routing seam for a later view-specialised agent) so the
-        client can select its chat surface. Returns ``None`` when the
-        user has no running agent, so the chatter shows a call-to-action instead of erroring.
+        ``view`` remains accepted by the public query; selection is actor-wide.
         """
 
-        agent = _agent_for_view(dict(view) if isinstance(view, dict) else {})
+        del view
+        agent = Agent.objects.chat_for_actor()
         if agent is None:
             return None
-        model = getattr(agent, "model", None)
-        user_id = actor_user_id(current_actor())
-        if user_id is None:
-            return None
-        with system_context(reason="agents.graphql.session_for_view"):
-            session = (
-                AgentSessionModel.objects.filter(agent=agent, user_id=user_id)
-                .exclude(status=SessionStatus.CLOSED)
-                .order_by("-updated_at")
-                .first()
-                if agent.runs_in_process
-                else None
-            )
+        model = agent.model
+        session = AgentSessionModel.objects.current_for_agent(agent)
         return AgentChatTarget(
             agent_id=PublicID(str(agent.sqid)),
             agent_name=str(agent.name),

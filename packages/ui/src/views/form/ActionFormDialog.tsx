@@ -134,7 +134,7 @@ function ActionArgsDialog({
   const body = (
     <>
       {definition ? <ActionDescriptorFields definition={definition} control={form.control} readOnly={saveConflict} disabled={submitting} /> : null}
-      {!definition ? <DescriptorFieldList fields={args.map(actionArgField)} readOnly={submitting || saveConflict} /> : null}
+      {!definition ? <DescriptorFieldList fields={args.map(actionArgField)} readOnly={saveConflict} /> : null}
       <ErrorBanner description={formError} />
     </>
   );

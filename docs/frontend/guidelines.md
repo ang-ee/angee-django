@@ -130,8 +130,8 @@ shared UI copy through an addon bundle.
 The [public catalog](../../packages/ui/src/catalog.ts) assigns one UX kind to
 each shipped component and its owner-specific hooks. The
 [Library overview](../../packages/storybook/src/stories/Library.stories.tsx) (story id `library-overview--default`)
-renders the owners. [`createApp().explain()`](../../packages/app/src/explain.ts)
-exposes menu and container provenance from the composed runtime.
+renders the owners. The running application's `createApp(...).explain` exposes
+menu and container provenance through the [runtime explanation owner](../../packages/app/src/explain.ts).
 
 | Kind | Meaning |
 |---|---|
@@ -2005,7 +2005,9 @@ Hard-won traps — the wise learn from others' mistakes
   children render straight into the panel, which owns scroll and padding while the
   pane owns width, border and background; `RailPanel` owns the inspector card. Lay
   out a bounded graph — the selection or a capped neighbourhood — never a whole
-  schema: Dagre holds the main thread for minutes at around two thousand nodes.
+  schema. Bound relationships as well as nodes: layout and canvas initialization
+  both occupy the main thread. The [platform graph](../../addons/angee/platform/web/src/lib/explorer.ts)
+  pages incident relationships while keeping every model and relationship reachable.
 - **A connect action is one ceremony.** Pass the button as `MutationDialog.trigger`
   so the dialog owns open state, reset and native focus pairing. Addons retain
   vendor pairing and source selection.

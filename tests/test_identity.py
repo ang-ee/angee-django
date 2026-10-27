@@ -158,6 +158,23 @@ def test_batch_identity_preserves_field_codec_input_keys_and_queryset_scope(
             assert instance_from_public_id(
                 model, value, queryset=scoped, public_identity=adapter,
             ) == resolved.get(value)
+            if issubclass(model, AngeeModel):
+                assert scoped.from_public_id(value) == resolved.get(value)
+
+
+def test_queryset_identity_treats_invalid_uuid_as_a_lookup_miss() -> None:
+    """Queryset lookups share the identity owner's field-validation boundary."""
+
+    model = type(
+        f"IdentityUUIDThing{next(_model_counter)}",
+        (AngeeModel,),
+        {
+            "__module__": __name__,
+            "id": models.UUIDField(primary_key=True),
+            "Meta": type("Meta", (), {"app_label": "tests", "managed": False}),
+        },
+    )
+    assert model.objects.all().from_public_id("malformed") is None
 
 
 @pytest.mark.parametrize("lookup_kind", ["compound", "transform", "nonunique"])
@@ -189,6 +206,7 @@ def test_batch_identity_preserves_native_custom_lookup_contract(
         model.objects.create(code="alpha")
         assert instances_from_public_ids(model, ["alpha", "missing"]) == {"alpha": first}
         assert instance_from_public_id(model, "alpha") == first
+        assert model.objects.all().from_public_id("alpha") == first
 
 
 def _bound_sqid_model(*, prefix: str) -> type[models.Model]:

@@ -1,4 +1,4 @@
-const callbacks = new Map<Element, () => void>();
+const callbacks = new Map<Element, (visible: boolean) => void>();
 let observer: IntersectionObserver | undefined;
 
 function disconnectWhenIdle() {
@@ -7,17 +7,12 @@ function disconnectWhenIdle() {
   observer = undefined;
 }
 
-/** One observer; a mounted specimen stays mounted after its first intersection. */
-export function observeSpecimen(element: Element, onVisible: () => void): () => void {
+/** One observer bounds live specimens to the viewport and its preload margin. */
+export function observeSpecimen(element: Element, onVisible: (visible: boolean) => void): () => void {
   observer ??= new IntersectionObserver(entries => {
     for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      const callback = callbacks.get(entry.target);
-      callbacks.delete(entry.target);
-      observer?.unobserve(entry.target);
-      callback?.();
+      callbacks.get(entry.target)?.(entry.isIntersecting);
     }
-    disconnectWhenIdle();
   }, { rootMargin: "200px" });
   callbacks.set(element, onVisible);
   observer.observe(element);

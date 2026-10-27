@@ -4,7 +4,7 @@
 #
 # Lean and direct on python-slim + uv (no intermediate "docker-django" base): the
 # framework's dependency closure is baked into a venv OUTSIDE the app root
-# (`/opt/.venv`), so a project's source can bind-mount over `/app` in dev while the
+# (`/opt/.venv`), so a project's source can bind-mount at its configured root while the
 # baked deps survive — change code, it's live; change a lockfile, `up --build`
 # rebuilds the deps layer. The framework CODE is NOT baked here: it is mounted
 # (framework dev) or added by a derived image / installed as the wheel (downstream
@@ -78,73 +78,30 @@ ENTRYPOINT ["tini", "--", "/usr/local/bin/angee-django-entrypoint"]
 #   uv sync --frozen && exec uv run python manage.py runserver 0.0.0.0:8000
 CMD ["python", "-c", "import django, sys; print('django-angee-base ready — python', sys.version.split()[0], '· django', django.get_version())"]
 
-# --- runtime: base + baked deps + framework code + [postgres] -------------------
-# ghcr.io/ang-ee/django-angee — the FULL framework runtime image (framework CODE +
-# deps + psycopg baked), distinct from the deps-only `final`/django-angee-base
-# above. The self-contained `local` stack runs its `django` service on this image:
-# the project bind-mounts over /app while `import angee.*` resolves from the baked
-# wheel in /opt/.venv, independent of the mount. Build it explicitly:
-#   docker build --target runtime -t ghcr.io/ang-ee/django-angee:latest .
+# --- runtime: core wheel + native folder-addon sources --------------------------
 FROM deps AS runtime
-# Off /app on purpose: the local stack bind-mounts the project at /app, so the
-# framework source lands at /opt/angee-src — a mount over /app can never hide it.
 WORKDIR /opt/angee-src
-# The addon-owned Strawberry fork is public (git inherited from base clones it
-# over anonymous HTTPS → credential-free). README.md + both license files satisfy
-# the wheel build's metadata (`license-files`: LGPLv3 additional permissions plus
-# the GPLv3 they extend); angee + addons are the two source roots the hatch-angee
-# backend merges onto the one `angee.*` PEP 420 namespace.
 COPY --chown=angee:angee pyproject.toml uv.lock README.md LICENSE LICENSE.GPL ./
 COPY --chown=angee:angee angee ./angee
 COPY --chown=angee:angee addons ./addons
-# --no-editable installs the framework as a BUILT wheel into /opt/.venv (via the
-# hatch-angee backend) so `import angee.*` resolves from site-packages regardless
-# of the /app project mount; --extra postgres pulls psycopg (the driver Django 6's
-# django.db.backends.postgresql uses); --no-dev drops daphne/pytest/etc. for a lean
-# runtime; --frozen honours the committed lock (relocked to carry the extra).
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --extra postgres \
     && chown -R angee:angee /opt/.venv
+# The wheel owns only core. Native yamlconf adds the baked addon root alongside
+# project-owned roots before manifest bootstrap and Django app discovery.
+COPY docker/addon-settings.yaml ./addon-settings.yaml
+ENV YAMLCONF_CONFFILE=/opt/angee-src/addon-settings.yaml
 USER root
 WORKDIR /app
-# tini reaps PID 1 for a clean `docker stop`. The stack's django service supplies
-# the concrete command (wait-for-postgres · migrate · rebac sync · runserver); the
-# venv is on PATH and runtime/ is committed, so there is no uv/angee build at start.
 ENTRYPOINT ["tini", "--", "/usr/local/bin/angee-django-entrypoint"]
 
-# --- web-src: collect every @angee/* JS package the wheel ships into one tree -----
-# The framework JS is scattered in the venv — the core libs at angee/web/*, each
-# addon's frontend at angee/<addon>/web (e.g. @angee/operator, @angee/iam). Flatten
-# them into /opt/angee-js/<name> so the web image COPIES one dir as a flat workspace.
-FROM runtime AS web-src
-USER root
-WORKDIR /opt/.venv/lib/python3.14/site-packages
-RUN mkdir -p /opt/angee-js && \
-    find angee -name package.json -not -path '*/node_modules/*' | while read -r f; do \
-      name=$(sed -n 's/.*"name": *"@angee\/\([^"]*\)".*/\1/p' "$f" | head -1); \
-      [ -n "$name" ] && cp -R "$(dirname "$f")" "/opt/angee-js/$name"; \
-    done
-
-# --- angee-web: node + ALL the framework @angee/* packages as a pnpm workspace ----
-# ghcr.io/ang-ee/angee-web — the framework's JS runtime. The @angee/* packages are
-# private and ship inside the django-angee wheel (one distribution channel), so this
-# image COPIES them (via web-src) straight from the runtime venv — they can never
-# drift from the Python side — and installs their deps once into a pnpm workspace. The
-# self-contained `local` stack runs its `vite` service here: the project's web/
-# bind-mounts in and joins the workspace, resolving @angee/* (whose inter-deps use
-# `workspace:*`) from the baked packages. Build it explicitly:
-#   docker build --target angee-web -t ghcr.io/ang-ee/angee-web:latest .
+# --- angee-web: native framework package and addon-web workspace ----------------
+# Keep the same source/project paths as the Python image: composer-emitted
+# relative addon roots then resolve identically during codegen in either image.
 FROM node:22-slim AS angee-web
 RUN corepack enable
-WORKDIR /opt/angee-web
-# Every @angee/* package (core + addon frontends), byte-identical to the wheel's JS.
-COPY --from=web-src /opt/angee-js ./packages
-COPY packages/scripts/pnpm-policy.cjs ./framework-install/pnpm-policy.cjs
-COPY packages/scripts/patches ./framework-install/patches
-# A workspace over the copied packages so `workspace:*` inter-deps resolve;
-# link-workspace-packages so a downstream project's `@angee/*: ^x` range still links
-# the baked package by name; auto-install-peers keeps a single React instance.
-RUN printf 'packages:\n  - "packages/*"\nglobalPnpmfile: framework-install/pnpm-policy.cjs\n' > pnpm-workspace.yaml \
- && printf '{"name":"@angee/web-runtime","private":true,"packageManager":"pnpm@11.1.3"}\n' > package.json \
- && printf 'link-workspace-packages=true\nprefer-workspace-packages=true\nauto-install-peers=true\n' > .npmrc \
- && pnpm install
+WORKDIR /opt/angee-src
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY packages ./packages
+COPY addons ./addons
+RUN pnpm install --frozen-lockfile

@@ -795,6 +795,10 @@ def test_validation_errors_surface_per_field_extensions(composed: bool) -> None:
         names[2]: ["A client ID is required."],
     }
     assert extensions["formErrors"] == ["Provider is misconfigured."]
+    assert field_result.errors[0].message == (
+        "This field cannot be blank. This field cannot be blank. "
+        "A client ID is required. Provider is misconfigured."
+    )
 
     # A non-dict ValidationError carries only a form-level message.
     assert plain_result.errors is not None
@@ -802,6 +806,7 @@ def test_validation_errors_surface_per_field_extensions(composed: bool) -> None:
     assert plain_extensions is not None
     assert plain_extensions["validationErrors"] == {}
     assert plain_extensions["formErrors"] == ["Something went wrong."]
+    assert plain_result.errors[0].message == "Something went wrong."
 
 
 def test_unexpected_graphql_errors_hide_exception_details(caplog: pytest.LogCaptureFixture) -> None:

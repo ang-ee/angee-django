@@ -31,10 +31,11 @@ from angee.models import (
     AppendOnlyModel,
     AppendOnlyQuerySet,
     HistoryMixin,
+    MergePolicy,
     OwnerMixin,
+    RecordRefMixin,
     update_fields_with_auto_now,
 )
-from angee.refs import MergePolicy, RecordRefMixin
 from angee.resources.mixins import ResourceLoadMixin
 from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, GraphEdge, GraphNode
 from angee.workflows.managers import (

@@ -22,8 +22,34 @@ from tests.conftest import (
     result_data,
     vault_for,
 )
+from tests.test_knowledge import _grant
 
 knowledge_schema = importlib.import_module("angee.knowledge.schema")
+
+
+def test_navigation_roots_ancestors_and_wikilinks_follow_page_access(composed_tables: None) -> None:
+    owner, reader = create_user("navigation-owner"), create_user("navigation-reader")
+    vault = vault_for(owner)
+    with actor_context(owner):
+        parent = Page.objects.create_in(vault, title="Private parent", kind="folder")
+        child = Page.objects.create_in(vault, title="Shared child", parent=parent, body="[[Private target]]")
+        Page.objects.create_in(vault, title="Private target")
+    _grant(child, "viewer", reader)
+    query = """query {
+      pages(where: {navigation_root: {_eq: true}, is_trashed: {_eq: false}}, order_by: [{title: asc}]) {
+        id title vault_label has_children ancestors { id title has_children }
+        wikilinks { title page }
+      }
+    }"""
+    data = result_data(execute_schema(_schema("public"), query, user=reader))["pages"]
+    assert data == [{
+        "id": str(child.sqid), "title": "Shared child", "vault_label": vault.name,
+        "has_children": False, "ancestors": [], "wikilinks": [{"title": "Private target", "page": None}],
+    }]
+    detail = result_data(execute_schema(_schema("public"), """query ($id: String!) {
+      pages_by_pk(id: $id) { ancestors { id title has_children } }
+    }""", {"id": str(child.sqid)}, user=owner))["pages_by_pk"]
+    assert detail["ancestors"] == [{"id": str(parent.sqid), "title": "Private parent", "has_children": True}]
 
 
 @pytest.mark.django_db
@@ -208,7 +234,7 @@ def test_update_page_body_round_trip_and_stale_guard(composed_tables: None) -> N
             schema,
             """
             mutation Write($page: ID!) {
-              update_page_body(page: $page, body: "one two three") {
+              update_page_body(page: $page, body: "one two three", title: "Saved together") {
                 ok error_code
                 markdown { body_hash word_count excerpt page }
               }
@@ -227,7 +253,7 @@ def test_update_page_body_round_trip_and_stale_guard(composed_tables: None) -> N
             schema,
             """
             mutation Stale($page: ID!) {
-              update_page_body(page: $page, body: "other", expected_hash: "stale") {
+              update_page_body(page: $page, body: "other", title: "Must not save", expected_hash: "stale") {
                 ok error_code markdown { id }
               }
             }
@@ -252,6 +278,7 @@ def test_update_page_body_round_trip_and_stale_guard(composed_tables: None) -> N
         )
     )["pages_by_pk"]
     assert detail["markdown"]["word_count"] == 3
+    assert detail["title"] == "Saved together"
 
 
 def test_update_page_body_reports_unsupported_kind(composed_tables: None) -> None:

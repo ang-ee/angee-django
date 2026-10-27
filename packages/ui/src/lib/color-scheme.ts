@@ -59,7 +59,6 @@ export function applyColorSchemePreference(value: ColorSchemePreference, target?
   if (typeof document !== "undefined") {
     const root = (target ?? document).documentElement;
     root.dataset.colorScheme = resolved;
-    root.dataset.theme = resolved;
     root.style.colorScheme = resolved;
   }
   return resolved;

@@ -9,7 +9,7 @@ import { InboxPage } from "./InboxPage";
 import { DECISION_MODEL } from "./documents.console";
 import { decisionFixture, decisionLinkFixture, decisionResourceFixture, decisionRecordFixture, decisionUserFixture } from "./testing";
 
-export default { title: "Decisions/Inbox", parameters: { angeeOwnRuntime: true, layout: "fullscreen" } };
+export default { title: "Decisions/Inbox", parameters: { angeeOwnRuntime: true, layout: "fullscreen" }, excludeStories: ["DecisionStory"] };
 export const Open = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <DecisionStory appearance={storyAppearance(globals)} /> };
 export const Closed = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <DecisionStory appearance={storyAppearance(globals)} closed /> };
 export const ClosedWithoutAttribution = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <DecisionStory appearance={storyAppearance(globals)} closed emptyFacts /> };
@@ -32,7 +32,7 @@ const runtime = {
   auth: { user: { id: "usr_reviewer", name: "Reviewer" }, status: "authenticated" as const, hasRole: () => false },
 };
 
-function DecisionStory({ appearance, multiple = false, closed = false, inbox = false, conflict = false, invalidAttempt = false, readOnly = false, emptyFacts = false, pendingEmpty = false }: {
+export function DecisionStory({ appearance, multiple = false, closed = false, inbox = false, conflict = false, invalidAttempt = false, readOnly = false, emptyFacts = false, pendingEmpty = false }: {
   appearance?: RuntimeFixtureProps["appearance"];
   multiple?: boolean; closed?: boolean; inbox?: boolean; conflict?: boolean; invalidAttempt?: boolean; readOnly?: boolean; emptyFacts?: boolean;
   pendingEmpty?: boolean;

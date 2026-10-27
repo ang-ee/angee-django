@@ -27,8 +27,9 @@ from angee.data.field_classification import is_to_one_relation
 from angee.graphql.ids import PublicID, optional_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path
 from angee.graphql.node import AngeeNode
+from angee.models import RecordRefMixin
 from angee.permissions import require_rebac_queryset
-from angee.refs import RecordRef, RecordRefMixin
+from angee.refs import RecordRef
 
 
 @strawberry.type

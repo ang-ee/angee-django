@@ -36,7 +36,6 @@ from angee.platform import composed
 from angee.platform.installer import (
     AddonInstaller,
     InstallResult,
-    LocalInstallerBackend,
     StaleAddonPreviewError,
     addon_installer,
 )
@@ -135,11 +134,6 @@ class AddonManager[T: Addon](AngeeManager[T]):
             return InstallResult(
                 name=name, action=action, already=preview.roots_before == preview.roots_after
             )
-
-    def uninstall(self, name: str, revision: str | None = None) -> InstallResult:
-        """Compatibility alias for the canonical disable action."""
-
-        return self.disable(name, revision)
 
     def change_preview(
         self,
@@ -418,7 +412,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         if "INSTALLED_APPS" not in getattr(settings, "ANGEE_PROJECT_YAML_SETTINGS", ()):
             return None
         loaded = composed.root_app_names()
-        desired = AddonInstaller(LocalInstallerBackend()).desired_app_names()
+        desired = addon_installer().desired_app_names()
         return None if desired is None else desired != loaded
 
 

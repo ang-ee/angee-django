@@ -1,0 +1,14 @@
+// @rebac_package: knowledge_integrate_notion
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+definition knowledge_integrate_notion/notion_connection {
+    relation integration: integrate/integration // rebac:field=integration_ptr
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = integration->read
+    permission write = integration->write
+    permission delete = integration->write
+    permission write__owner = integration->transfer
+}

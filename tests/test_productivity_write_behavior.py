@@ -16,6 +16,7 @@ from django.utils import timezone
 from rebac import system_context
 from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 from strawberry import auto
 
 import tests.test_messaging  # noqa: F401 -- register related models before native database setup
@@ -38,7 +39,6 @@ from angee.models import (
 from angee.models import Stage as OrderedStage
 from angee.projects.models import Task as AbstractTask
 from angee.projects.testing.models import Queue, Stage, Task
-from angee.testing.permissions import install_permission_schema
 from angee.work.models import TaskWork
 from tests import test_sequence  # noqa: F401 -- register Queue's sequence target before database setup
 from tests.composed_host import run_composed_tests
@@ -207,9 +207,9 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
             permission write = authenticated
         }
         """)
-    install_permission_schema(
+    install_schema(
         replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]),
-        active=active,
+        backend=active,
     )
     try:
         admin = create_platform_admin("productivity-create-admin")

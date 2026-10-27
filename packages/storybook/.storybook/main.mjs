@@ -37,7 +37,18 @@ const config = {
   typescript: { reactDocgen: false },
   viteFinal: async (vite) => {
     const tailwind = (await import("@tailwindcss/vite")).default;
+    const { searchForWorkspaceRoot } = await import("vite");
     vite.plugins = [...(vite.plugins ?? []), tailwind()];
+    vite.server = {
+      ...vite.server,
+      fs: {
+        ...vite.server?.fs,
+        allow: [
+          ...(vite.server?.fs?.allow ?? [searchForWorkspaceRoot(ROOT)]),
+          searchForWorkspaceRoot(STACK_ROOT),
+        ],
+      },
+    };
     vite.resolve = {
       ...(vite.resolve ?? {}),
       preserveSymlinks: true,

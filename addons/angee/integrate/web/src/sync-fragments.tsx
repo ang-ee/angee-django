@@ -1,3 +1,4 @@
+import { useIntegrateT } from "./i18n";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import {
   Action,
@@ -9,6 +10,7 @@ import {
 import type { ReactElement, ReactNode } from "react";
 
 export type IntegrationSyncFieldName =
+  | "open_failure_count"
   | "is_syncing"
   | "sync_stage"
   | "sync_error"
@@ -28,6 +30,7 @@ export interface IntegrationSyncFieldsOptions extends IntegrationSyncFragmentOpt
 
 const DEFAULT_SYNC_FIELDS: readonly IntegrationSyncFieldName[] = [
   "is_syncing",
+  "open_failure_count",
   "sync_stage",
   "sync_error",
   "sync_progress",
@@ -42,19 +45,18 @@ export function IntegrationSyncFields({
   fields = DEFAULT_SYNC_FIELDS,
   labels,
 }: IntegrationSyncFieldsOptions): ReactElement {
-  return (
-    <Group label={label} columns={2}>
-      {fields.map((name) => (
-        <Field
-          key={name}
-          name={name}
-          label={labels?.[name]}
-          widget={syncWidget(name)}
-          readOnly
-        />
-      ))}
-    </Group>
-  );
+  const t = useIntegrateT();
+  const diagnostics: readonly IntegrationSyncFieldName[] = fields.filter((name) => name === "sync_progress" || name === "last_sync_summary");
+  const primary = fields.filter((name) => !diagnostics.includes(name));
+  const field = (name: IntegrationSyncFieldName) => <Field key={name} name={name}
+    label={labels?.[name] ?? (name === "sync_stage" ? t("sync.runStage")
+      : name === "open_failure_count" ? t("streams.openFailures") : undefined)} widget={syncWidget(name)} readOnly />;
+  return <>
+    <Group label={label} columns={2}>{primary.map(field)}</Group>
+    {diagnostics.length ? <Group label={t("sync.diagnostics")} columns={1} collapsible defaultOpen={false}>
+      {diagnostics.map(field)}
+    </Group> : null}
+  </>;
 }
 
 /** Declarative integration runtime columns with the same status presentation. */

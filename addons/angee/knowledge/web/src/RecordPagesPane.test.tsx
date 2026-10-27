@@ -9,21 +9,12 @@ const sdk = vi.hoisted(() => ({ query: vi.fn(), bind: vi.fn(), unbind: vi.fn(), 
 vi.mock("@angee/refine", async (original) => ({
   ...(await original<typeof import("@angee/refine")>()),
   useAuthoredQuery: sdk.query,
-  useAuthoredMutation: (document: unknown) => [document === KnowledgeBindRecord ? sdk.bind : sdk.unbind],
 }));
 vi.mock("@angee/ui", async (original) => ({
   ...(await original<typeof import("@angee/ui")>()),
   useRuntimeViewAs: () => sdk.preview,
   useRouteHref: () => (name: string, params?: { id?: string }) => `/${name.replace(".", "/")}/${params?.id ?? ""}`,
-  Select: ({ options, value, onValueChange, ...props }: {
-    options: readonly { value: string; label: string }[];
-    value: string;
-    onValueChange: (value: string) => void;
-    "aria-label": string;
-  }) => <select aria-label={props["aria-label"]} value={value}
-    onChange={(event) => onValueChange(event.currentTarget.value)}>
-    {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-  </select>,
+
 }));
 
 import { pageBacklinksGroup, pageBoundToGroup, recordPagesGroup } from "./RecordPagesPane";
@@ -31,12 +22,15 @@ import { KnowledgeBindRecord, KnowledgePage, KnowledgePageRecordBindings, Knowle
 import { AppRuntimeProvider, CHATTER_CONTAINERS, InAppLinkProvider, RelatedPane, RelatedCountProbe, containersFromChildren, createRouteHref, type ChatterViewContext, type ContainerChild, type RelatedGroupContent } from "@angee/ui";
 
 import { createUiTestProviders } from "@angee/ui/testing";
+import { ResourceQuery } from "@angee/metadata";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 
 const { Provider, clearClients } = createUiTestProviders({
   resources: [testDataResource("example.Record", {
     recordRepresentation: "title", query: testResourceQuery({ fields: { id: testQueryField("id"), title: testQueryField("title") } }),
-  })],
+  }), testDataResource("knowledge.Page", { query: ResourceQuery.forRows({ fields: {
+    id: { scalar: "ID" }, title: { scalar: "String" }, is_trashed: { scalar: "Boolean" }, writable: { scalar: "Boolean" },
+  } }).contract })],
 });
 const context: ChatterViewContext = {
   pathname: "/records/rec_1", params: { id: "rec_1" },
@@ -55,7 +49,10 @@ function Count({ current }: { current: ChatterViewContext }) {
 function Groups({ groups, current = context }: {
   groups: Record<string, ContainerChild<RelatedGroupContent>>; current?: ChatterViewContext;
 }) {
-  return <Provider dataProvider={{ getList: async () => ({ data: [{ id: "rec_1", title: "Record rec_1" }], total: 1 }) }}>
+  return <Provider dataProvider={{ custom: async ({ meta }) => {
+    const data = await (meta?.gqlMutation === KnowledgeBindRecord ? sdk.bind : sdk.unbind)(meta?.gqlVariables);
+    return { data: data ?? {} };
+  }, getList: async () => ({ data: [{ id: "rec_1", title: "Record rec_1" }], total: 1 }) }}>
     <InAppLinkProvider navigate={sdk.navigate}><AppRuntimeProvider runtime={{
       routeHref: createRouteHref([{ name: "records", path: "/records" }, { name: "record", path: "/records/$id" }]),
       routesByResource: { "example.Record": { collection: "records", record: { name: "record", param: "id" } } },
@@ -68,7 +65,7 @@ beforeEach(() => {
   sdk.query.mockReset().mockImplementation((document) => document === KnowledgePageRecordBindings
     ? { data: { page_record_bindings: [{ id: "krb_1", model_label: "example.Record", record_id: "rec_1", role: "contract" }] }, isPending: false }
     : document === KnowledgePages
-    ? { data: { pages: [{ id: "pg_2", title: "Another", permissions: ["write"] }] }, isPending: false }
+    ? { data: { pages: [{ id: "pg_2", title: "Another", vault_label: "Reference", permissions: ["write"] }] }, isPending: false }
     : document === KnowledgePage
       ? { data: { pages_by_pk: { backlinks: [{ page: "pg_9", title: "Linking page", display_text: "see also" }] } }, isPending: false }
       : { data: { record_knowledge_can_bind: true, record_knowledge_bindings: [
@@ -105,6 +102,7 @@ test("writer controls use the role-keyed bind and unbind mutations", async () =>
   render(<Groups groups={{ pages: recordPagesGroup({ role: "reference" }) }} />);
   fireEvent.click(screen.getByRole("button", { name: "Bind" }));
   const dialog = await screen.findByRole("dialog");
+  await choosePage(dialog);
   fireEvent.click(within(dialog).getByRole("button", { name: "Bind" }));
   await waitFor(() => expect(sdk.bind).toHaveBeenCalledWith({ input: {
     model_label: "example.Record", record_id: "rec_1", page: "pg_2", role: "reference",
@@ -191,6 +189,7 @@ test("Bind keeps mutation errors inside the open picker", async () => {
   render(<Groups groups={{ pages: recordPagesGroup() }} />);
   fireEvent.click(screen.getByRole("button", { name: "Bind" }));
   const dialog = await screen.findByRole("dialog");
+  await choosePage(dialog);
   fireEvent.click(within(dialog).getByRole("button", { name: "Bind" }));
   expect((await within(dialog).findByRole("alert")).textContent).toContain("Binding refused");
   expect(screen.getByRole("dialog")).toBe(dialog);
@@ -207,7 +206,9 @@ test.each([{ viewAs: "actor", pending: false }, { viewAs: null, pending: true }]
 test("the generic group's Bind writes related, unless an eligible sibling owns it", async () => {
   render(<Groups groups={{ pages: recordPagesGroup() }} />);
   fireEvent.click(screen.getByRole("button", { name: "Bind" }));
-  fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Bind" }));
+  const dialog = await screen.findByRole("dialog");
+  await choosePage(dialog);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Bind" }));
   await waitFor(() => expect(sdk.bind).toHaveBeenCalledWith({ input: {
     model_label: "example.Record", record_id: "rec_1", page: "pg_2", role: "related",
   } }));
@@ -217,3 +218,9 @@ test("the generic group's Bind writes related, unless an eligible sibling owns i
   expect(screen.getAllByRole("button", { name: "Bind" })).toHaveLength(1);
   expect(screen.getByRole("button", { name: "Bind" }).closest("li")?.textContent).toContain("Owned");
 });
+
+async function choosePage(dialog: HTMLElement) {
+  expect(within(dialog).getByRole("button", { name: "Bind" }).hasAttribute("disabled")).toBe(true);
+  fireEvent.click(within(dialog).getByRole("combobox", { name: "Choose a page" }));
+  fireEvent.click(await screen.findByRole("option", { name: /Another/ }));
+}

@@ -5,8 +5,8 @@ from django.db import transaction
 from rebac import actor_context
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 
-from angee.testing.permissions import install_permission_schema
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow
 
@@ -24,7 +24,7 @@ def history_permissions(db, settings, request):
     """Use the existing persistence probe with a deliberately unreadable title."""
 
     settings.REBAC_LOCAL_BACKEND_STORAGE = request.param
-    install_permission_schema(parse_zed("""
+    install_schema(parse_zed("""
         definition auth/user {}
         definition scopedemo/owned_row {
             relation owner: auth/user // rebac:field=owner

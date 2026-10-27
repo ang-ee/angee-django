@@ -107,3 +107,17 @@ describe("TreeView", () => {
     ).toBe(false);
   });
 });
+
+test("insertion reveals a collapsed ancestor and leaves subsequent folding with the user", () => {
+  const tree = (inserting: boolean) => withIcons(<TreeView<Row> rows={ROWS}
+    insertion={inserting ? { parentId: "systems", node: <input aria-label="Child title" /> } : null} />);
+  const view = render(tree(false));
+  fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
+  expect(screen.queryByText("Graph-RAG retrieval")).toBeNull();
+  view.rerender(tree(true));
+  expect(screen.getByRole("textbox", { name: "Child title" })).toBeTruthy();
+  expect(screen.getByText("Graph-RAG retrieval")).toBeTruthy();
+  view.rerender(tree(false));
+  fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
+  expect(screen.queryByText("Graph-RAG retrieval")).toBeNull();
+});

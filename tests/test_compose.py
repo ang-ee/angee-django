@@ -143,10 +143,9 @@ def test_runtime_renders_resource_sources(tmp_path: Path) -> None:
     # Tailwind sources, never schema-shaped TypeScript. `runtime/web/app.ts` and
     # `runtime/gql/<schema>/*` are owned by the `angee-web-codegen` CLI.
     assert Path("web/app.ts") not in sources
-    assert '"package": "@angee/resources"' in sources[Path("web/manifest.json")]
-    resources_web = Path(apps.get_app_config("resources").path).resolve() / "web"
-    addon_source = Path(os.path.relpath(resources_web, tmp_path / "runtime" / "web")).as_posix()
-    assert f'@source "{addon_source}/src";' in sources[Path("web/tailwind.sources.css")]
+    # The import ledger has no console capability of its own. Platform contributes
+    # its UI only when that higher-level addon is composed.
+    assert json.loads(sources[Path("web/manifest.json")])["addonPackages"] == []
 
 
 def test_runtime_model_render_plan_keeps_model_owned_meta(tmp_path: Path) -> None:
@@ -1818,8 +1817,6 @@ def test_project_env_file_loads_without_overriding_process_env(tmp_path: Path, m
     )
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("YAMLCONF_SECRET_KEY", "from-process-env")
-
-    import os
 
     # read_env writes straight into os.environ (not via monkeypatch), so clean up
     # directly — a trailing monkeypatch.delenv would record the leaked value as

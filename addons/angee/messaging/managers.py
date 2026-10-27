@@ -1041,6 +1041,11 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeManager[
     materialize under system context.
     """
 
+    def _label(self, value: str) -> str:
+        """Bound the edge's display label; the record and title fragment retain full text."""
+
+        return strip_null_bytes(value)[: self.model._meta.get_field("label").max_length]
+
     def for_record(self, record: Any, *, role: str = "chatter") -> ThreadAttachmentT | None:
         """Return the existing thread attachment for ``record`` and ``role``."""
 
@@ -1103,7 +1108,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeManager[
             raise ValueError("Source thread attachment requires a saved thread.")
         key = generic_target(record).lookups(self.model, "target")
         values = {
-            "label": strip_null_bytes(label or str(record)),
+            "label": self._label(label or str(record)),
             "metadata": strip_null_bytes(metadata or {}),
         }
         with transaction.atomic():
@@ -1193,7 +1198,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeManager[
                 role=role,
                 defaults={
                     "thread_id": thread.pk,
-                    "label": strip_null_bytes(str(record)),
+                    "label": self._label(str(record)),
                 },
             )
             # The thread is deterministic from (content_type, object_id, role), so an

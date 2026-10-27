@@ -9,7 +9,7 @@ much as Django's ``on_delete`` decides what a delete does to such rows:
   append-only model, which can neither move nor outlive the record and so
   blocks, and a ``DO_NOTHING`` key (history), which keeps pointing at the record;
   the pointing model's ``merge_policies`` names a key whose policy differs;
-- a polymorphic edge (:class:`~angee.refs.RecordRefMixin`) follows its
+- a polymorphic edge (:class:`~angee.models.refs.RecordRefMixin`) follows its
   model's ``merge_policy``, which blocks unless the edge declares another;
 - any other generic foreign key has no declared policy and blocks.
 
@@ -68,9 +68,6 @@ from angee.models.merge_references import (
 )
 from angee.models.merge_references import (
     Reference as Reference,
-)
-from angee.models.merge_references import (
-    _RecordRefMergeContract as _RecordRefMergeContract,
 )
 from angee.models.merge_references import (
     unique_field_sets as unique_field_sets,

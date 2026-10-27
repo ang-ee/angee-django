@@ -163,13 +163,16 @@ export function IntegrationStreamsPane(): ReactElement {
     }),
   ], [resync, show, t]);
   const failureColumns = useMemo<readonly ListColumn<FailureRow>[]>(() => [
-    { field: "kind" },
-    { field: "code" },
+    { field: "source_label", header: t("streams.source"), interactive: true, minWidth: 180,
+      render: (row) => row.source_url ? <NavLink href={row.source_url} target="_blank" rel="noopener">{row.source_label}</NavLink> : row.source_label },
+    { field: "message", header: t("streams.problem"), minWidth: 320 },
+    { field: "kind", hiddenByDefault: true },
+    { field: "code", hiddenByDefault: true },
     { field: "status", widget: "statusBadge" },
-    { field: "attempts" },
-    { field: "retry_at" },
-    { field: "created_at" },
-  ], []);
+    { field: "attempts", hiddenByDefault: true },
+    { field: "retry_at", hiddenByDefault: true },
+    { field: "created_at", hiddenByDefault: true },
+  ], [t]);
   const failureActions = useMemo<readonly RowActionDeclaration<FailureRow>[]>(() => [
     defineRowAction<FailureRow>({
       kind: "page",

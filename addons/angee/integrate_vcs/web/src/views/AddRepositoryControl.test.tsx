@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor, } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, baseIcons } from "@angee/ui";
 
@@ -143,6 +143,40 @@ describe("AddRepositoryControl typeahead", () => {
     expect(await screen.findByText("Added")).toBeTruthy();
   });
 
+  test("ignores an add completed after the selected bridge changes", async () => {
+    baseMocks.bridgeOptions = bridgeOptions();
+    sdkMocks.search.data = searchData();
+    let finish!: () => void;
+    sdkMocks.addRepository.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const view = renderControl();
+    fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "widget" } });
+    fireEvent.click(await screen.findByRole("button", { name: /acme\/widgets/ }));
+    await waitFor(() => expect(sdkMocks.addRepository).toHaveBeenCalledOnce());
+    baseMocks.bridgeOptions = [{ value: "another-bridge", label: "another host" }];
+    view.rerender(<AppRuntimeProvider runtime={{ icons: baseIcons }}><AddRepositoryControl /></AppRuntimeProvider>);
+    await act(async () => finish());
+    expect(screen.queryByText("Added")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "widget" } });
+    expect(await screen.findByRole("button", { name: /acme\/widgets/ })).toBeTruthy();
+  });
+
+  test("serializes repository additions while a write is pending", async () => {
+    baseMocks.bridgeOptions = bridgeOptions();
+    const first = searchData().search_repositories[0]!;
+    sdkMocks.search.data = { search_repositories: [first, { ...first, name: "acme/another" }] };
+    let finish!: () => void;
+    sdkMocks.addRepository.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    renderControl();
+    fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "widget" } });
+    fireEvent.click(await screen.findByRole("button", { name: /acme\/widgets/ }));
+    expect(screen.queryByRole("button", { name: /acme\/another/ })).toBeNull();
+    expect(sdkMocks.addRepository).toHaveBeenCalledOnce();
+    await act(async () => finish());
+    expect(await screen.findByRole("button", { name: /acme\/another/ })).toBeTruthy();
+  });
+
   test("shows a bounded search failure with retry instead of no matches", async () => {
     baseMocks.bridgeOptions = bridgeOptions();
     sdkMocks.search.error = new Error("Request failed.");
@@ -191,7 +225,7 @@ function bridgeOptions(): Array<{ value: string; label: string }> {
   return [{ value: VCS_ID, label: "github (active)" }];
 }
 
-function searchData(): unknown {
+function searchData() {
   return {
     search_repositories: [
       {

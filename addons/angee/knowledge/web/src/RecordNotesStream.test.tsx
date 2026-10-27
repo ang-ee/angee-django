@@ -6,7 +6,7 @@ import type { RecordThreadStreamSource } from "@angee/messaging";
 import type { ChatterViewContext } from "@angee/ui";
 
 const sdk = vi.hoisted(() => ({
-  query: vi.fn(), refetch: vi.fn(), createPage: vi.fn(), updateBody: vi.fn(), bind: vi.fn(),
+  query: vi.fn(), refetch: vi.fn(), createNote: vi.fn(),
   stream: vi.fn(),
   calls: [] as string[],
 }));
@@ -14,9 +14,11 @@ const sdk = vi.hoisted(() => ({
 vi.mock("@angee/refine", async (original) => ({
   ...(await original<typeof import("@angee/refine")>()),
   useAuthoredQuery: sdk.query,
-  useAuthoredMutation: (document: unknown) => [document === KnowledgeUpdatePageBody ? sdk.updateBody : sdk.bind],
 }));
-vi.mock("./data/use-page-actions", () => ({ usePageActions: () => ({ createPage: sdk.createPage }) }));
+vi.mock("@angee/ui", async (original) => ({
+  ...(await original<typeof import("@angee/ui")>()),
+  useAuthoredResourceMutation: () => [sdk.createNote, { fetching: false, error: null }],
+}));
 vi.mock("@angee/messaging", () => ({
   RecordThreadStream: ({ heading, source }: {
     heading: { label: string };
@@ -35,7 +37,7 @@ vi.mock("@angee/messaging", () => ({
 }));
 
 import { RecordNotesStream, recordNotesTab } from "./RecordNotesStream";
-import { KnowledgeRecordNotes, KnowledgeUpdatePageBody, KnowledgeVault, RECORD_BINDING_MODEL } from "./data/documents";
+import { KnowledgeRecordNotes, KnowledgeVault, RECORD_BINDING_MODEL } from "./data/documents";
 
 const target = { modelLabel: "example.Record", recordId: "rec_1" };
 const context: ChatterViewContext = {
@@ -69,11 +71,7 @@ beforeEach(() => {
   sdk.refetch.mockReset().mockResolvedValue({});
   sdk.stream.mockReset();
   sdk.calls.length = 0;
-  sdk.createPage.mockReset().mockImplementation(async () => { sdk.calls.push("create"); return "pg_new"; });
-  sdk.updateBody.mockReset().mockImplementation(async () => {
-    sdk.calls.push("body"); return { update_page_body: { ok: true } };
-  });
-  sdk.bind.mockReset().mockImplementation(async () => { sdk.calls.push("bind"); return {}; });
+  sdk.createNote.mockReset().mockResolvedValue({ create_record_note: { id: "binding_new", page: "pg_new" } });
 });
 afterEach(cleanup);
 
@@ -88,7 +86,7 @@ test("lists bound pages in the shared child stream without a page conversation",
     expect.objectContaining({ enabled: true }));
 });
 
-test("composer creates, writes, binds, then refetches", async () => {
+test("composer posts one atomic note command, then refetches", async () => {
   render(<RecordNotesStream target={target} role="notes" vault="vlt_1" />);
   const source = lastChildSource();
   expect(source.items[0]).toMatchObject({
@@ -99,13 +97,10 @@ test("composer creates, writes, binds, then refetches", async () => {
   expect(source.createAction).toBeDefined();
   await source.createAction?.submit({ body: "New first line\nMore detail" }, { record: null, selectedIds: [] });
   source.onCreated?.();
-  expect(sdk.calls).toEqual(["create", "body", "bind"]);
-  expect(sdk.createPage).toHaveBeenCalledWith(expect.objectContaining({ vault: "vlt_1", kind: "note", parent: null,
-    title: expect.stringMatching(/^New first line · \d{4}-/) }));
-  expect(sdk.updateBody).toHaveBeenCalledWith({ page: "pg_new", body: "New first line\nMore detail" });
-  expect(sdk.bind).toHaveBeenCalledWith({ input: {
-    model_label: target.modelLabel, record_id: target.recordId, page: "pg_new", role: "notes",
-  } });
+  expect(sdk.createNote).toHaveBeenCalledExactlyOnceWith({
+    model_label: target.modelLabel, record_id: target.recordId, vault: "vlt_1", role: "notes",
+    body: "New first line\nMore detail", idempotency_key: expect.any(String),
+  });
   expect(sdk.refetch).toHaveBeenCalledOnce();
 });
 
@@ -150,3 +145,16 @@ function lastChildSource(): Extract<RecordThreadStreamSource, { kind: "children"
   if (source.kind !== "children") throw new Error("Expected a child stream");
   return source;
 }
+
+test("a transport retry reuses its receipt key; changing the draft starts a new request", async () => {
+  sdk.createNote.mockRejectedValue(new Error("Offline"));
+  render(<RecordNotesStream target={target} role="notes" vault="vlt_1" />);
+  const submit = lastChildSource().createAction!.submit;
+  const context = { record: null, selectedIds: [] };
+  await expect(submit({ body: "Draft" }, context)).rejects.toThrow("Offline");
+  await expect(submit({ body: "Draft" }, context)).rejects.toThrow("Offline");
+  const first = sdk.createNote.mock.calls[0]![0].idempotency_key;
+  expect(sdk.createNote.mock.calls[1]![0].idempotency_key).toBe(first);
+  await expect(submit({ body: "Changed" }, context)).rejects.toThrow("Offline");
+  expect(sdk.createNote.mock.calls[2]![0].idempotency_key).not.toBe(first);
+});

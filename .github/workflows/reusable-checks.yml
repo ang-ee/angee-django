@@ -250,9 +250,8 @@ jobs:
   stack:
     if: ${{ inputs.stack-enabled }}
     runs-on: ubuntu-latest
-    # Composition, fragment checks and the serial bridges suite no longer fit
-    # 30 minutes.
-    timeout-minutes: 60
+    # Consumers also run their full PostgreSQL suite before fragment checks.
+    timeout-minutes: ${{ inputs.consumer-path != '' && 90 || 60 }}
     services:
       postgres:
         image: postgres:17

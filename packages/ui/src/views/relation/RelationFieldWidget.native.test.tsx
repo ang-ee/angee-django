@@ -132,3 +132,18 @@ test("single relation combobox retains missing values and offers retry before cr
   expect(changed).not.toHaveBeenCalled();
   await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
 });
+
+
+test("a missing relation honors its authored placeholder while retaining its stored id", () => {
+  const change = vi.fn();
+  const { rerender } = render(<Provider><RelationField value="unloaded-id" options={[]}
+    placeholder="Unavailable account" aria-label="Account" onChange={change} /></Provider>);
+  const trigger = screen.getByRole("combobox", { name: "Account" });
+  expect(trigger.textContent).toContain("Unavailable account");
+  expect(trigger.textContent).not.toContain("unloaded-id");
+  expect(change).not.toHaveBeenCalled();
+  rerender(<Provider><RelationField value="unloaded-id" options={[]}
+    aria-label="Account" onChange={change} /></Provider>);
+  expect(trigger.textContent).toContain("unloaded-id");
+  expect(change).not.toHaveBeenCalled();
+});

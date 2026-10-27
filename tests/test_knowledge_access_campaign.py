@@ -35,6 +35,42 @@ mutation Clone($template: ID!, $name: String!, $owned: Boolean!, $key: String) {
 """
 
 
+def test_record_note_is_atomic_and_replays_the_original_binding(composed_permissions, monkeypatch):
+    owner = create_user("record-note-owner")
+    vault = vault_for(owner, name="Notes")
+    target = vault_for(owner, name="Target")
+    manager = RecordBinding.objects
+    upsert = type(manager).upsert
+    with actor_context(owner):
+        def fail_binding(*args, **kwargs):
+            raise RuntimeError("Binding unavailable")
+
+        monkeypatch.setattr(type(manager), "upsert", fail_binding)
+        with pytest.raises(RuntimeError, match="Binding unavailable"):
+            manager.create_note(target=target, vault=vault, body="A note\nDetails", idempotency_key="post-note")
+        assert not Page.objects.filter(vault=vault).exists()
+        assert not changeset_model().objects.filter(key="post-note").exists()
+        monkeypatch.setattr(type(manager), "upsert", upsert)
+        binding = manager.create_note(target=target, vault=vault, body="A note\nDetails", idempotency_key="post-note")
+        replay = manager.create_note(target=target, vault=vault, body="A note\nDetails", idempotency_key="post-note")
+        assert replay.pk == binding.pk
+        assert Page.objects.filter(vault=vault).count() == 1
+        assert MarkdownPage.objects.get(pk=binding.page_id).body == "A note\nDetails"
+
+
+@pytest.mark.parametrize("missing_end", ["vault", "target"])
+def test_record_note_denial_leaves_no_page_or_receipt(composed_permissions, missing_end):
+    owner, writer = create_user("note-owner"), create_user("note-writer")
+    vault = vault_for(owner, name="Notes")
+    target = vault_for(owner, name="Target")
+    _grant(target if missing_end == "vault" else vault, "editor", writer)
+    with actor_context(writer), pytest.raises(PermissionDenied):
+        RecordBinding.objects.create_note(target=target, vault=vault, body="Denied", idempotency_key="denied-note")
+    with system_context(reason="test.note.rollback"):
+        assert not Page.objects.filter(vault=vault).exists()
+        assert not changeset_model().objects.filter(key="denied-note").exists()
+
+
 def test_record_pages_projection_respects_role_and_both_write_ends(composed_permissions):
     owner, reader = create_user("page-owner"), create_user("page-reader")
     vault = vault_for(owner, name="Pages")

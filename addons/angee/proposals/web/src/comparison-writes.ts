@@ -1,6 +1,6 @@
 import { refineResourceName, useModelMetadata, type Row } from "@angee/metadata";
 import { extractActionOutcome, refineFieldsFromPaths } from "@angee/refine";
-import { useActionResultRun, useAuthoredResourceMutation, optionToken } from "@angee/ui";
+import { canonicalOptionValue, useActionResultRun, useAuthoredResourceMutation, useEnumOptions, optionToken } from "@angee/ui";
 import { useCreate, useUpdate, type BaseRecord, type HttpError } from "@refinedev/core";
 
 import type { ComparisonAnswer, ComparisonProposal } from "./comparison-data";
@@ -9,6 +9,23 @@ import { useProposalsT } from "./i18n";
 import { ANSWER_MODEL, PROPOSAL_MODEL } from "./resources";
 
 type RowRecord = BaseRecord & Row;
+
+/** One audience action contract for direct changes and answer edits. */
+export function useComparisonAnswerVisibility() {
+  const options = useEnumOptions(ANSWER_MODEL, "visibility", { casing: "upper" });
+  const [change, state] = useAuthoredResourceMutation(ANSWER_VISIBILITY, { invalidateModels: [ANSWER_MODEL] });
+  return {
+    pending: state.fetching,
+    change: async (answer: string, revision: number | null | undefined, value: string) => {
+      const visibility = canonicalOptionValue(options, value);
+      // Generated enum types are erased; narrow the metadata option at the wire boundary.
+      if (visibility !== "ROUND" && visibility !== "RESPONDER" && visibility !== "SEALED") {
+        throw new TypeError(`Unknown proposal answer visibility: ${value}`);
+      }
+      return extractActionOutcome(await change({ answer, revision, visibility }), "set_proposal_answer_visibility");
+    },
+  };
+}
 
 /** Write topic answers through the declared resource and its revision precondition. */
 export function useComparisonAnswerWrite() {
@@ -25,11 +42,11 @@ export function useComparisonAnswerWrite() {
   };
   const create = useCreate<RowRecord, HttpError, Record<string, unknown>>(options);
   const update = useUpdate<RowRecord, HttpError, Record<string, unknown>>(options);
-  const [setVisibility, visibilityState] = useAuthoredResourceMutation(ANSWER_VISIBILITY, { invalidateModels: [ANSWER_MODEL] });
+  const visibilityAction = useComparisonAnswerVisibility();
   const settle = useActionResultRun();
 
   return {
-    pending: create.mutation.isPending || update.mutation.isPending || visibilityState.fetching,
+    pending: create.mutation.isPending || update.mutation.isPending || visibilityAction.pending,
     save: async (proposalId: string, topicId: string, body: string, visibility: string, answer?: ComparisonAnswer) => {
       if (!resource) throw new Error(t("comparison.saveError"));
       if (answer) {
@@ -44,9 +61,7 @@ export function useComparisonAnswerWrite() {
           revision = typeof result.data.revision === "number" ? result.data.revision : revision;
         }
         if (optionToken(visibility) !== optionToken(answer.visibility)) {
-          const outcome = await settle(async () => extractActionOutcome(await setVisibility({
-            answer: answer.id, revision, visibility: visibility.toUpperCase() as "ROUND" | "RESPONDER" | "SEALED",
-          }), "set_proposal_answer_visibility"));
+          const outcome = await settle(() => visibilityAction.change(answer.id, revision, visibility));
           return outcome?.ok === true;
         }
       } else {

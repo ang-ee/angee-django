@@ -16,19 +16,18 @@ from django.utils.module_loading import import_string
 from rebac import ObjectRef, generic_target, system_context
 from rebac.resources import model_resource_type
 
-from angee import refs as record_refs
 from angee.knowledge import schema as knowledge_schema
 from angee.lineage import concrete_child, concrete_child_accessor, concrete_child_models
+from angee.models import RecordRefMixin
+from angee.models import refs as record_refs
+from angee.models.refs import delete_record_refs, record_edges_by_target
 from angee.projects.testing.models import Link, Task
 from angee.refs import (
     RecordRef,
-    RecordRefMixin,
     RetainedGenericRelation,
     ancestor_object_refs,
-    delete_record_refs,
     generic_pointer_model,
     generic_pointer_target,
-    record_edges_by_target,
     record_ref_for,
 )
 from angee.storage import schema as storage_schema

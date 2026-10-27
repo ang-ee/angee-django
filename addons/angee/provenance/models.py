@@ -43,13 +43,14 @@ from angee.models import (
     AngeeUnscopedManager,
     ChangesetQuerySet,
     HistoryMixin,
+    MergePolicy,
+    RecordRefMixin,
     SourceKind,
     SqidMixin,
     StatementSourceMixin,
     model_history,
     role_anchor,
 )
-from angee.refs import MergePolicy, RecordRefMixin
 from angee.serialization import canonical_json, canonical_json_sha256, json_safe
 
 ProvenanceRole = role_anchor("provenance/role")

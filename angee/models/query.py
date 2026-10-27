@@ -22,6 +22,7 @@ from rebac.watch import KEY_CHUNK, statement_keys
 from rebac.watch import by_key as native_by_key
 
 from angee.changesets import changeset_model_label, current_changeset, write_group
+from angee.identity import instance_from_public_id
 from angee.pagination import KeysetOrder, KeysetPage
 
 if TYPE_CHECKING:
@@ -386,13 +387,7 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
     def from_public_id(self, value: str) -> _ModelT | None:
         """Return the row addressed by ``value`` within this queryset policy."""
 
-        if value == "":
-            return None
-        try:
-            lookup = cast(Any, self.model).public_id_lookup(value)
-            return cast(_ModelT | None, cast(Any, self).filter(**lookup).first())
-        except TypeError, ValueError:
-            return None
+        return instance_from_public_id(self.model, value, queryset=self)
 
     def lock_if_supported(
         self, *, of: tuple[str, ...] = ("self",), skip_locked: bool = False, no_key: bool = False

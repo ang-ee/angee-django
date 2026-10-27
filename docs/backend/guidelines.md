@@ -959,11 +959,12 @@ and current contracts before applying a historical example to a new deployment.
   them without touching non-composed apps. A data transition that `makemigrations`
   cannot express uses an addon `[[migrations]]` declaration as a write → apply on
   every stack → delete in the next change vehicle; no declaration is released
-  history. A stack collapses its history **before** taking a release that moves a
-  module its generated migrations import; where a release renames such a module
-  anyway (`angee.base` → `angee`), the old paths stay as thin re-export aliases
-  (`angee/base/`) until every stack has collapsed, because the applied graph must
-  load for `makemigrations`, `migrate` and `reset_migration_history` alike.
+  history. A stack collapses its history **before** taking a release that removes
+  a module its generated migrations import: the applied graph must load for
+  `makemigrations`, `migrate` and `reset_migration_history` alike. Retire any
+  non-composed migration imports separately and check pinned addons before crossing
+  that release's upgrade cutoff. The [0.3.0 `angee.base` retirement](../composer.md#retiring-angeebase-imports)
+  follows this sequence; its compatibility package is removed.
 - **Removing a field, model or donor addon whose storage holds data needs a
   declared cutover.** `makemigrations` refuses the autodetected drop through the
   [composer's drop guard](../composer.md#addon-owned-runtime-migrations). An
@@ -1088,7 +1089,7 @@ and current contracts before applying a historical example to a new deployment.
   Compose a custom final save through `persist(instance, *, update_fields)`;
   the success hook must explicitly forward it to `save_state`, which retains the
   concurrency guard and transaction.
-- **MTI down-casts use `angee.refs.concrete_child`.** The parent-link
+- **MTI down-casts use `angee.lineage.concrete_child`.** The parent-link
   accessor and any query prefetch identify the child; callers supply their
   actor-scoped queryset when that lookup is permission-sensitive. A parent
   row never grows a human-label kind column to mirror its child model.
@@ -2044,8 +2045,10 @@ open fresh evaluator scopes for authorization and change-feed reads.
 
 ### Direct record access
 
-[`RecordRefMixin`](../../angee/refs.py) owns the canonical content-type
-and public-ID projection for a generic record pointer.
+[`RecordRefMixin`](../../angee/models/refs.py), exported by `angee.models`,
+owns the generic pointer's model contract, accepted targets, merge policy and
+deletion policy. [`angee.refs`](../../angee/refs.py) owns the underlying pointer
+identities and retained relation field; it does not import the model toolkit.
 Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`; a
 model needing row-aware cleanup implements `teardown_for_target(target)`. The
 core target-delete receiver invokes that one declaration for instance and

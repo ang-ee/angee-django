@@ -29,10 +29,12 @@ Reference resolution composes the two owners, never re-deriving either:
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable, Mapping
+from itertools import batched
 from typing import TYPE_CHECKING
 
-from django.db import models
+from django.db import connections, models
 from rebac import (
     ObjectRef,
     RelationshipTuple,
@@ -43,6 +45,7 @@ from rebac import (
     write_relationships,
 )
 from rebac.models import active_relationship_model
+from rebac.models.relationship import WIRE_VALUE_FIELDS
 from rebac.schema.walker import find_relation, subject_allowed_by_relation
 
 from angee.identity import canonical_subject_ref
@@ -75,14 +78,9 @@ def materialize_grant_groups(
     if not resolved:
         return 0, 0
 
-    relationship_model = active_relationship_model()
-    new_grants: list[RelationshipTuple] = []
-    skipped = 0
-    for grant in resolved.values():
-        if _grant_exists(relationship_model, grant):
-            skipped += 1
-        else:
-            new_grants.append(grant)
+    existing = _existing_grant_keys(resolved.values())
+    new_grants = [grant for key, grant in resolved.items() if key not in existing]
+    skipped = len(resolved) - len(new_grants)
     # Drive the write off the existence check so an unchanged re-load is a true
     # no-op: only tuples that are actually missing are written, so a repeat load
     # touches no rows (no audit entry, no zookie bump) instead of re-upserting
@@ -171,18 +169,21 @@ def _resolve_row(
         raise ResourceLoadError(f"{row.entry.display} grant {row.index}: {error}") from error
 
 
-def _grant_exists(relationship_model: type[models.Model], grant: RelationshipTuple) -> bool:
-    """Return whether a tuple with ``grant``'s natural key already exists."""
+def _existing_grant_keys(grants: Iterable[RelationshipTuple]) -> set[tuple[str, ...]]:
+    """Read native wire identities once per resource-type batch, in either store."""
 
-    return relationship_model._default_manager.filter(
-        resource_type=grant.resource.resource_type,
-        resource_id=grant.resource.resource_id,
-        relation=grant.relation,
-        subject_type=grant.subject.subject_type,
-        subject_id=grant.subject.subject_id,
-        optional_subject_relation=grant.subject.optional_relation,
-        caveat_name=grant.caveat_name,
-    ).exists()
+    resources: dict[str, set[str]] = defaultdict(set)
+    for grant in grants:
+        resources[grant.resource.resource_type].add(grant.resource.resource_id)
+    rows = active_relationship_model().objects.all()
+    max_params = connections[rows.db].features.max_query_params
+    existing: set[tuple[str, ...]] = set()
+    for resource_type, ids in sorted(resources.items()):
+        batch_size = max_params - 1 if max_params is not None else len(ids)
+        for resource_ids in batched(sorted(ids), batch_size):
+            matches = rows.filter(resource_type=resource_type, resource_id__in=resource_ids).wire_values()
+            existing.update(tuple(row[field] for field in WIRE_VALUE_FIELDS) for row in matches)
+    return existing
 
 
 def _is_literal_ref(value: str) -> bool:

@@ -21,8 +21,12 @@ from import_export.utils import get_related_model
 
 from angee.identity import instances_from_public_ids, public_id_of
 from angee.impl import ImplDefaultsMixin
-from angee.models import AngeeModel, StateTransitions, update_fields_with_auto_now
-from angee.refs import RecordRefMixin
+from angee.models import (
+    AngeeModel,
+    RecordRefMixin,
+    StateTransitions,
+    update_fields_with_auto_now,
+)
 from angee.resources.entries import ResourceEntry, resolve_model
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.kinds import ResourceKindDeclarations

@@ -22,9 +22,9 @@ class OperatorInstallerBackend(AddonInstallerBackend):
 
     ``read_settings_text`` seeds :attr:`_etag` from the operator read; the matching
     ``write_settings_text`` echoes it for the daemon's optimistic-concurrency check
-    (the two run within one ``AddonInstaller.install``/``disable`` call on this one
+    (the two run within one ``AddonInstaller.apply_app_names`` call on this one
     instance). An unconfigured or unreachable daemon surfaces as ``FileNotFoundError``
-    on the read, which the installer turns into a clean refusal rather than a crash.
+    on the read; the addon manager reports unreadable settings through its preview.
     """
 
     key = "operator"

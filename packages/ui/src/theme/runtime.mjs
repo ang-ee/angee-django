@@ -33,7 +33,7 @@ export const THEME_TOKEN_NAMES = Object.freeze([
 
 /** Disposable first-paint cache protocol, shared by bootstrap and React. */
 export const APPEARANCE_CACHE_KEY = "angee:appearance";
-export const APPEARANCE_CACHE_SCHEMA = 1;
+export const APPEARANCE_CACHE_SCHEMA = 2;
 export const APPEARANCE_CACHE_LIMIT = 128 * 1024;
 
 /** Apply only the public token contract, before or after React mounts. */
@@ -43,7 +43,6 @@ export function applyAppearanceRoot({ themeId, colorScheme, tokens = {}, target 
   const root = (target ?? document).documentElement;
   if (themeId) root.dataset.themeId = themeId; else delete root.dataset.themeId;
   root.dataset.colorScheme = colorScheme;
-  root.dataset.theme = colorScheme;
   root.style.colorScheme = colorScheme;
   for (const name of THEME_TOKEN_NAMES) root.style.removeProperty(name);
   for (const [name, value] of Object.entries(tokens)) root.style.setProperty(name, value);
@@ -56,7 +55,7 @@ export function bootstrapAppearance(payload, target = globalThis) {
   ]));
   let themeId = payload.host.themeId;
   let preference = payload.host.colorScheme;
-  let tokens = null;
+  let tokenLayers = null;
   try {
     const encoded = target.localStorage.getItem(APPEARANCE_CACHE_KEY);
     if (encoded && encoded.length <= APPEARANCE_CACHE_LIMIT) {
@@ -68,22 +67,24 @@ export function bootstrapAppearance(payload, target = globalThis) {
         && (cached.themeId === null || themes.has(cached.themeId))
         && ["light", "dark", "system"].includes(cached.colorSchemePreference)
       ) {
-        if (cached.tokens != null) assertTokenLayer(cached.tokens, "appearance cache");
+        for (const layer of ["shared", "light", "dark"]) {
+          assertTokenLayer(cached.tokenLayers?.[layer], `appearance cache.${layer}`);
+        }
         themeId = themes.get(cached.themeId)?.id ?? cached.themeId;
         preference = cached.colorSchemePreference;
-        tokens = cached.tokens ?? null;
+        tokenLayers = cached.tokenLayers;
       }
     }
   } catch { /* Invalid or unavailable disposable storage falls back to the host. */ }
   const colorScheme = preference === "system"
     ? target.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
     : preference;
-  const layers = themeId === payload.host.themeId
+  const layers = tokenLayers ?? (themeId === payload.host.themeId
     ? payload.host.tokenLayers
-    : themes.get(themeId)?.defaultTokens;
+    : themes.get(themeId)?.defaultTokens);
   applyAppearanceRoot({
     themeId, colorScheme,
-    tokens: tokens ?? { ...layers?.shared, ...layers?.[colorScheme] },
+    tokens: { ...layers?.shared, ...layers?.[colorScheme] },
     target: target.document,
   });
 }
