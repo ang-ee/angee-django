@@ -6,25 +6,30 @@ import importlib
 import os
 import runpy
 import sys
-from collections.abc import Iterable, MutableMapping
+from collections.abc import Iterable, Mapping, MutableMapping
+from copy import deepcopy
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import environ
 import sentry_sdk
+from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from sentry_sdk.integrations.celery import CeleryIntegration
 from sentry_sdk.integrations.django import DjangoIntegration
 from sentry_sdk.integrations.logging import ignore_logger
 
+from angee.addons import addon_manifest
 from angee.compose import yamlconf
+from angee.compose.declarations import AppDeclarationSource
 from angee.project import (
     PROJECT_SETTINGS_ENV,
     PROJECT_YAML_NAME,
     PROJECT_YAML_SETTINGS,
     project_dir,
 )
+from angee.utils.paths import resolve_path
 
 DEFAULTS_SETTINGS_MODULE = "angee.defaults"
 
@@ -32,7 +37,7 @@ DEFAULTS_SETTINGS_MODULE = "angee.defaults"
 def prepend_import_paths(paths: Iterable[Path]) -> None:
     """Put import paths first and refresh the already-loaded framework package.
 
-    ``angee.compose.settings`` necessarily imports the foundation package before
+    ``angee.settings`` necessarily imports the foundation package before
     project addon roots are known.  Since the foundation now lives directly in
     that regular package, its pkgutil path must gain the configured ``angee``
     portions after those roots enter ``sys.path``.
@@ -126,7 +131,14 @@ class ProjectContract:
         settings_module = self.env.str(PROJECT_SETTINGS_ENV, default=PROJECT_YAML_NAME)
 
         prepend_import_paths((root,))
-        project_settings = self._load_project_settings(root, settings_module)
+        declarations = self._load_project_settings(root, settings_module)
+        project_settings = ModuleType(declarations.__name__)
+        # Native yamlconf overlays traverse dictionaries in place. Keep the
+        # cached Python declarations intact for subsequent configuration loads.
+        project_settings.__dict__.update({
+            name: deepcopy(value) if yamlconf.is_setting_name(name) and isinstance(value, dict) else value
+            for name, value in vars(declarations).items()
+        })
         yamlconf.load_project(project_settings, root)
         yamlconf.reject_unexpected_sources(project_settings, root, settings_module)
         project_yaml_settings = yamlconf.project_yaml_settings(project_settings, root)
@@ -188,7 +200,7 @@ class ProjectContract:
             sys.modules[settings_module] = project_settings
 
         if project_settings is None:
-            raise ImproperlyConfigured("angee.compose.settings needs settings.py or settings.yaml beside manage.py")
+            raise ImproperlyConfigured("angee.settings needs settings.py or settings.yaml beside manage.py")
 
         settings_file = getattr(project_settings, "__file__", None)
         if not settings_file:
@@ -213,6 +225,23 @@ class ProjectContract:
             if yamlconf.is_setting_name(name) and name not in yamlconf.YAMLCONF_PREDEFINED_SETTINGS
         }
         seed.setdefault("BASE_DIR", root)
+        # The host accepts earlier project declarations; the compiler sees only
+        # its canonical names. Keep yamlconf's raw input provenance intact so
+        # existing references to those declarations still expand natively.
+        for suffix in ("DIR", "MODULE"):
+            previous = f"ANGEE_RUNTIME_{suffix}"
+            canonical = f"COMPOSE_RUNTIME_{suffix}"
+            if previous not in seed:
+                continue
+            value = seed.pop(previous)
+            if canonical in seed:
+                same = (
+                    resolve_path(value) == resolve_path(seed[canonical])
+                    if suffix == "DIR" else value == seed[canonical]
+                )
+                if not same:
+                    raise ImproperlyConfigured(f"{previous} and {canonical} must agree when both are declared.")
+            seed.setdefault(canonical, value)
 
         if "DATABASE_URL" in os.environ:
             database = self.env.db()
@@ -268,3 +297,15 @@ class ProjectContract:
                 project_settings,
                 yamlconf.YAMLCONF_ATTRIBUTES,
             )
+
+
+class ManifestDeclarations(AppDeclarationSource):
+    """Project the host's canonical addon manifests into the compiler contract."""
+
+    def dependencies(self, app: AppConfig, *, refresh: bool = False) -> tuple[str, ...]:
+        manifest = addon_manifest(app, refresh=refresh)
+        return manifest.depends_on if manifest is not None else ()
+
+    def migrations(self, app: AppConfig) -> tuple[Mapping[str, Any], ...]:
+        manifest = addon_manifest(app)
+        return manifest.migrations if manifest is not None else ()

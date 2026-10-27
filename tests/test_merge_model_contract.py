@@ -4,8 +4,13 @@ from django.db import models
 from django.db.migrations.state import ModelState
 from django.test.utils import isolate_apps
 
-from angee.models import AngeeDataModel, ArchiveMixin, HistoryMixin, MergeableMixin
+from angee.models import (
+    AngeeDataModel,
+    ArchiveMixin,
+    MergeableMixin,
+)
 from angee.models.merge_references import ForeignKeyReference, MergeContractMixin, MergePolicy
+from angee.provenance.contrib.angee.history import HistoryMixin
 
 
 def test_merge_base_preserves_existing_composed_field_state_and_mro() -> None:

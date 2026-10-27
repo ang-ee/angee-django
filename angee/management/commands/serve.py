@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 import uvicorn
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 
@@ -26,8 +27,9 @@ class Command(BaseCommand):
         if workers < 0 or (options["production"] and workers != 0 and workers < 2):
             raise CommandError("Production serving requires at least two workers, or 0 for CPU count.")
         workers = workers or max(2, os.cpu_count() or 2)
+        module, _, attribute = settings.ASGI_APPLICATION.rpartition(".")
         uvicorn.run(
-            "angee.asgi:application",
+            f"{module}:{attribute}",
             host=options["host"],
             port=options["port"],
             workers=workers,

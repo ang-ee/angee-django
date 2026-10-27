@@ -8,8 +8,8 @@ from typing import Any
 
 from hatch_angee import discover
 
-from angee.compose.dependencies import AddonDependencyGroup, AddonDependencyGroupResult
 from angee.conf import ProjectContract
+from angee.management.dependencies import AddonDependencyGroup, AddonDependencyGroupResult
 
 
 def _strings(value: Any, *, setting: str) -> tuple[str, ...]:

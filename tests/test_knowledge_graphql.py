@@ -8,10 +8,11 @@ from typing import Any
 import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context, system_context
+from rebac import actor_context, system_context, to_subject_ref
 from rebac.roles import grant
 
-from angee.changesets import changeset_model
+from angee.knowledge.retrieval import LexicalRetrievalBackend
+from angee.provenance.context import changeset_model
 from tests.conftest import (
     MarkdownPage,
     Page,
@@ -22,6 +23,7 @@ from tests.conftest import (
     result_data,
     vault_for,
 )
+from tests.knowledge_retrieval import ReverseRetrieval
 from tests.test_knowledge import _grant
 
 knowledge_schema = importlib.import_module("angee.knowledge.schema")
@@ -50,6 +52,117 @@ def test_navigation_roots_ancestors_and_wikilinks_follow_page_access(composed_ta
       pages_by_pk(id: $id) { ancestors { id title has_children } }
     }""", {"id": str(child.sqid)}, user=owner))["pages_by_pk"]
     assert detail["ancestors"] == [{"id": str(parent.sqid), "title": "Private parent", "has_children": True}]
+
+
+def test_navigation_relations_batch_narrow_lists_without_disclosing_hidden_pages(composed_tables: None) -> None:
+    """Ancestor selections and link targets stay scoped at constant query count."""
+
+    owner, reader = create_user("batch-navigation-owner"), create_user("batch-navigation-reader")
+    vault = vault_for(owner)
+    with actor_context(owner):
+        hidden_root = Page.objects.create_in(vault, title="Hidden root", kind="folder")
+        visible_target = Page.objects.create_in(vault, title="Visible target")
+        Page.objects.create_in(vault, title="Hidden target")
+        sources = []
+        parents = []
+        for index in range(4):
+            parent = Page.objects.create_in(vault, title=f"Parent {index}", kind="folder", parent=hidden_root)
+            parents.append(parent)
+            sources.append(Page.objects.create_in(
+                vault, title=f"Source {index}", parent=parent,
+                body="[[Visible target]] [[Hidden target]] [[Missing target]]",
+            ))
+    _grant(visible_target, "viewer", reader)
+    for index, (parent, source) in enumerate(zip(parents, sources, strict=True)):
+        _grant(parent if index % 2 == 0 else source, "viewer", reader)
+    schema = _schema("public")
+    query = """query ($ids: [String!]!) {
+      pages(where: {id: {_in: $ids}}, order_by: [{title: asc}]) {
+        id ancestors { id title has_children ancestors { id title } }
+        wikilinks { title page }
+      }
+    }"""
+    variables = {"ids": [str(source.sqid) for source in sources]}
+    result_data(execute_schema(schema, query, variables, user=reader))
+    counts = []
+    for size in (1, len(sources)):
+        with CaptureQueriesContext(connection) as captured:
+            data = result_data(execute_schema(schema, query, {"ids": variables["ids"][:size]}, user=reader))["pages"]
+        counts.append(len(captured))
+        assert len(data) == size
+        for index, row in enumerate(data):
+            assert row["ancestors"] == ([{
+                "id": str(parents[index].sqid), "title": f"Parent {index}", "has_children": True, "ancestors": [],
+            }] if index % 2 == 0 else [])
+            assert row["wikilinks"] == [
+                {"title": "Hidden target", "page": None},
+                {"title": "Missing target", "page": None},
+                {"title": "Visible target", "page": str(visible_target.sqid)},
+            ]
+    assert counts[1] == counts[0], counts
+
+
+def test_ancestor_prefetch_preserves_the_supplied_actor_and_deferred_model_fields(composed_tables: None) -> None:
+    """Sharing one ancestor must retain its queryset authority on each result."""
+
+    owner, reader = create_user("ancestor-owner"), create_user("ancestor-reader")
+    vault = vault_for(owner)
+    with actor_context(owner):
+        parent = Page.objects.create_in(vault, title="Shared folder", kind="folder")
+        children = [Page.objects.create_in(vault, title=f"Child {index}", parent=parent) for index in range(2)]
+    _grant(parent, "viewer", reader)
+    with actor_context(owner):
+        rows = list(Page.objects.with_actor(reader).filter(pk__in=[child.pk for child in children])
+            .only("id", "path").prefetch_related(Page.ancestors_prefetch(
+                Page.objects.with_actor(reader).untrashed().only("title"), to_attr="prefetched_ancestors",
+            )))
+        assert len(rows) == len(children)
+        assert rows[0].prefetched_ancestors[0] is not rows[1].prefetched_ancestors[0]
+        for row in rows:
+            assert len(row.prefetched_ancestors) == 1
+            ancestor = row.prefetched_ancestors[0]
+            assert type(ancestor) is Page
+            assert ancestor.title == "Shared folder"
+            assert "vault_id" in ancestor.get_deferred_fields()
+            assert ancestor.actor() == to_subject_ref(reader)
+
+
+def test_nested_ancestor_selections_batch_shared_paths_and_aliases(composed_tables: None) -> None:
+    """Every selected ancestor depth retains its optimizer hints across aliases."""
+
+    owner, reader = create_user("nested-ancestor-owner"), create_user("nested-ancestor-reader")
+    vault = vault_for(owner)
+    with actor_context(owner):
+        root = Page.objects.create_in(vault, title="Root", kind="folder")
+        parent = Page.objects.create_in(vault, title="Parent", kind="folder", parent=root)
+        children = [Page.objects.create_in(vault, title=f"Child {index}", parent=parent) for index in range(4)]
+    _grant(root, "viewer", reader)
+    schema = _schema("public")
+    query = """query ($ids: [String!]!) {
+      pages(where: {id: {_in: $ids}}) {
+        labels: ancestors { title }
+        ancestors { id has_children ancestors { id title has_children } }
+      }
+    }"""
+    ids = [str(child.sqid) for child in children]
+    result_data(execute_schema(schema, query, {"ids": ids}, user=reader))
+    counts = []
+    for size in (1, len(children)):
+        with CaptureQueriesContext(connection) as captured:
+            rows = result_data(execute_schema(schema, query, {"ids": ids[:size]}, user=reader))["pages"]
+        counts.append(len(captured))
+        assert len(rows) == size
+        for row in rows:
+            assert row == {
+                "labels": [{"title": "Root"}, {"title": "Parent"}],
+                "ancestors": [
+                    {"id": str(root.sqid), "has_children": True, "ancestors": []},
+                    {"id": str(parent.sqid), "has_children": True, "ancestors": [
+                        {"id": str(root.sqid), "title": "Root", "has_children": True},
+                    ]},
+                ],
+            }
+    assert counts[1] == counts[0], counts
 
 
 @pytest.mark.django_db
@@ -441,6 +554,43 @@ def test_search_pages_matches_title_and_body_actor_scoped(composed_tables: None)
         user=bob,
     )
     assert denied.errors is not None
+
+
+def test_search_projection_batches_relations_and_preserves_backend_rank_and_access(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ranked materialized search results receive every selected Page hint in bulk."""
+
+    monkeypatch.setattr(LexicalRetrievalBackend, "search_many", classmethod(ReverseRetrieval.search_many.__func__))
+    owner, reader = create_user("projection-owner"), create_user("projection-reader")
+    vault = vault_for(owner, name="Searchable")
+    hidden_vault = vault_for(owner, name="Private")
+    with actor_context(owner):
+        root = Page.objects.create_in(vault, title="Folder", kind="folder")
+        target = Page.objects.create_in(vault, title="Target")
+        pages = [Page.objects.create_in(vault, title=f"Needle {index}", parent=root, body="[[Target]]")
+                 for index in range(4)]
+        Page.objects.create_in(hidden_vault, title="Needle private")
+    _grant(vault, "viewer", reader)
+    schema = _schema("public")
+    query = """query ($first: Int!) {
+      search_pages(query: "Needle", first: $first) {
+        id title has_children ancestors { title has_children } wikilinks { title page }
+      }
+    }"""
+    result_data(execute_schema(schema, query, {"first": len(pages)}, user=reader))
+    counts = []
+    for size in (1, len(pages)):
+        with CaptureQueriesContext(connection) as captured:
+            rows = result_data(execute_schema(schema, query, {"first": size}, user=reader))["search_pages"]
+        counts.append(len(captured))
+        expected = list(reversed(pages))[:size]
+        assert rows == [{
+            "id": str(page.sqid), "title": page.title, "has_children": False,
+            "ancestors": [{"title": "Folder", "has_children": True}],
+            "wikilinks": [{"title": "Target", "page": str(target.sqid)}],
+        } for page in expected]
+    assert counts[1] == counts[0], counts
 
 
 def test_page_backlinks_list_resolved_sources(composed_tables: None) -> None:

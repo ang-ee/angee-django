@@ -1,4 +1,8 @@
-"""Reusable abstract model mixins for Angee source models."""
+"""Angee retained statements, source trust, permission admission, and replay.
+
+These addon models compose native capture with Angee identity, document, merge,
+and evidence contracts. The native capture modules have no dependency on them.
+"""
 
 from __future__ import annotations
 
@@ -32,25 +36,28 @@ from rebac.resources import model_for_subject_type, model_resource_type
 from simple_history.manager import HistoryDescriptor
 from simple_history.models import HistoricalRecords
 
-from angee.actors import instance_actor, source_kind_for
-from angee.changesets import current_changeset
-from angee.evidence import (
+from angee.actors import instance_actor
+from angee.fields import StateField
+from angee.lineage import most_derived_concrete
+from angee.models.identity import SqidMixin, TimestampMixin, update_fields_with_auto_now
+from angee.models.locks import OptimisticLockMixin
+from angee.models.manager import AngeeManager
+from angee.models.merge_references import MergeContractMixin
+from angee.models.query import AngeeUnscopedQuerySet, SystemQuerysetMixin, by_key, query_batch_size
+from angee.models.trash import TrashMixin, TrashQuerySet
+from angee.permissions import require_rebac_queryset
+from angee.provenance.context import current_changeset
+from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet, AngeeHistoryUnscopedQuerySet
+from angee.provenance.evidence import (
     EvidenceReference,
     FactAuthority,
     readable_evidence,
     readable_evidence_records,
     readable_records,
 )
-from angee.fields import StateField
-from angee.lineage import most_derived_concrete
-from angee.models.history import HistoryMixin, ModelHistory, _ChangesetHistory
-from angee.models.identity import SqidMixin, TimestampMixin, update_fields_with_auto_now
-from angee.models.locks import OptimisticLockMixin
-from angee.models.manager import AngeeManager
-from angee.models.merge_references import MergeContractMixin
-from angee.models.query import AngeeQuerySet, AngeeUnscopedQuerySet, SystemQuerysetMixin, by_key, query_batch_size
-from angee.models.trash import TrashMixin, TrashQuerySet
-from angee.permissions import require_rebac_queryset
+from angee.provenance.history import _ChangesetHistory
+from angee.provenance.sources import source_kind_for
 from angee.validation import validate_value
 
 
@@ -70,7 +77,7 @@ def _statement_foreign_key(model: type[models.Model], name: str) -> models.Forei
     return field
 
 
-class StatementQuerySet[T: Statement](AngeeUnscopedQuerySet[T]):
+class StatementQuerySet[T: Statement](AngeeHistoryUnscopedQuerySet[T]):
     """Chainable assertion scopes; the manager owns subject admission."""
 
     _statement_reader: object | None = None
@@ -615,7 +622,7 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
             pair.trash(reason="Merged pair endpoints")
 
 
-class StatementSubjectQuerySet[T: models.Model](TrashQuerySet[T], AngeeQuerySet[T]):
+class StatementSubjectQuerySet[T: models.Model](TrashQuerySet[T], AngeeHistoryQuerySet[T]):
     """Canonical asserted rows, retaining withdrawn subjects and their identities."""
 
     def canonical(self) -> Self:
@@ -1307,7 +1314,7 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
         cls.objects.db_manager(rows.db).merge(reference, rows, survivor=survivor)
 
 
-class StatementPairQuerySet(TrashQuerySet, AngeeUnscopedQuerySet):
+class StatementPairQuerySet(TrashQuerySet, AngeeHistoryUnscopedQuerySet):
     """Retained pair carriers use the same removal scopes as canonical subjects."""
 
 

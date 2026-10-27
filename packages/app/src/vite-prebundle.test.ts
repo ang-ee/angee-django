@@ -74,12 +74,10 @@ test("bundles and applies appearance synchronously before the app module loads",
     });
     try {
       const html = await server.transformIndexHtml("/", '<html><head></head><body><script type="module" src="/main.ts"></script></body></html>');
-      const template = window.document.createElement("template");
-      template.innerHTML = html;
-      const bootstrap = template.content.querySelector("script[data-angee-appearance-bootstrap]");
+      const bootstrap = html.match(/<script data-angee-appearance-bootstrap="">([\s\S]*?)<\/script>/);
       expect(bootstrap).not.toBeNull();
       expect(html.indexOf("data-angee-appearance-bootstrap")).toBeLessThan(html.indexOf('src="/main.ts"'));
-      runInNewContext(bootstrap!.textContent!, { document: window.document, localStorage: window.localStorage });
+      runInNewContext(bootstrap![1]!, { document: window.document, localStorage: window.localStorage });
       expect(window.document.documentElement.dataset.colorScheme).toBe("light");
       expect(window.document.documentElement.style.colorScheme).toBe("light");
       expect(window.document.documentElement.hasAttribute("data-theme")).toBe(false);

@@ -39,7 +39,9 @@ from angee.integrate.streams import (
 )
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Party
-from angee.models import SourceKind
+from angee.provenance.statements import (
+    SourceKind,
+)
 from angee.workflows.runner import runner
 from angee.workflows.steps import Retryable, Wait
 from angee.workflows.testing.drivers import decide, load_workflow, run_until

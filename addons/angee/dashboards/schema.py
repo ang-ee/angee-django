@@ -29,7 +29,8 @@ from angee.iam.audit import TrashedRefMixin
 from angee.iam.identity import user_display_label, user_public_id
 from angee.iam.permissions import request_from_info, session_user
 from angee.identity import instance_from_public_id
-from angee.models import CreationKeyConflict, StaleRevisionError
+from angee.models import StaleRevisionError
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 
 Dashboard = apps.get_model("dashboards", "Dashboard")
 DashboardWidget = apps.get_model("dashboards", "DashboardWidget")

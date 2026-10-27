@@ -118,6 +118,9 @@ Composed hosts also install their schema during native database setup. Register
 `angee.testing.fixtures` through the root conftest's `pytest_plugins`; a runner
 that loads it explicitly must pass `-p django -p angee.testing.fixtures` in that
 order so pytest-django cannot shadow the shared `django_db_setup` override.
+Hosts installing provenance also register
+[`angee.provenance.testing.fixtures`](../addons/angee/provenance/testing/fixtures.py)
+for test attribution; the generic framework plugin does not install that boundary.
 A test that reaches a statement source needs the install-tier `provenance.Rule`
 principals parties declares: list
 [`angee.parties.testing.fixtures`](../addons/angee/parties/testing/fixtures.py) in
@@ -162,7 +165,7 @@ They are distinct lifecycle operations, not a mandatory sequence for every task:
 
 | Purpose | Command | Prerequisite / effect |
 |---|---|---|
-| Prepare the complete runtime | `uv run manage.py angee provision` | Builds, then runs the remaining preparation in one fresh process; the [command owner](../angee/compose/management/commands/angee.py) defines ordering and options |
+| Prepare the complete runtime | `uv run manage.py angee provision` | Builds, then runs the remaining preparation in one fresh process; the [command owner](../angee/management/commands/angee.py) defines ordering and options |
 | Build composed runtime | `uv run manage.py angee build` | Updates generated runtime, prunes obsolete generated sources, updates host dependency declarations and materializes pending addon migrations |
 | Clean generated runtime | `uv run manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves current migration directories |
 | Check composition drift | `uv run --locked manage.py angee build --check` | Checks composer-owned artifacts, dependency projection, and addon declarations; Django bootstrap can repair runtime sources before dispatch |
@@ -318,7 +321,7 @@ with the consumer's inherited framework policy, and collects its full declared
 Python paths with `python_files=test*.py` on PostgreSQL, using four native
 pytest-xdist workers with `--dist worksteal`. Scheduling individual tests lets
 long consumer intake modules use every worker. Each worker loads the configured
-host through `angee.compose.settings`; pytest-django owns its separate test
+host through `angee.settings`; pytest-django owns its separate test
 database. Shared test plugins must defer
 model imports until Django's app registry is populated. Check tools come from
 the framework lockfile. Host SDL/codegen precede typecheck/test of that consumer's

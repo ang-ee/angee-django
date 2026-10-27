@@ -1,0 +1,159 @@
+"""Generic provenance runs as a native Django app without Angee or REBAC models."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+
+@pytest.mark.parametrize("operation", ["explicit-source", "separate-history", "bound-history", "retained-reference"])
+def test_native_capture_preserves_database_owners_without_host_imports(tmp_path: Path, operation: str) -> None:
+    package = tmp_path / "native_capture"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "models.py").write_text("""
+from django.db import models
+from angee.provenance.context import ChangesetRequired
+from angee.provenance.history import HistoryMixin, ModelHistory
+
+class Changeset(models.Model):
+    actor_ref = models.TextField(blank=True)
+    change_reason = models.TextField(blank=True)
+    touched = models.JSONField(default=list)
+    counts = models.JSONField(default=dict)
+    occurred_at = models.DateTimeField()
+    required_context_error = ChangesetRequired
+
+    @classmethod
+    def ambient_attribution(cls):
+        return "", ""
+
+    @classmethod
+    def context_required(cls):
+        return True
+
+    def history_user(self):
+        return None
+
+    def close(self, outcome):
+        pass
+
+class Container(models.Model):
+    pass
+
+class Row(HistoryMixin):
+    value = models.CharField(max_length=40)
+    container = models.ForeignKey(Container, null=True, on_delete=models.CASCADE)
+    history = ModelHistory(inherit=True, use_base_model_db=False)
+""")
+    script = """
+import os
+import sys
+os.environ.pop("DJANGO_SETTINGS_MODULE", None)
+from django.conf import settings
+
+class StorageRouter:
+    history_alias = "secondary"
+
+    def db_for_read(self, model, **hints):
+        if model._meta.app_label == "native_capture":
+            if model._meta.model_name == "changeset":
+                return "secondary"
+            if sys.argv[1] == "retained-reference" and model._meta.model_name == "historicalrow":
+                return "secondary"
+            return "default"
+        return None
+
+    def db_for_write(self, model, **hints):
+        if model._meta.app_label == "native_capture":
+            if model._meta.model_name in {"row", "container"}:
+                return "default"
+            if model._meta.model_name == "changeset":
+                return "secondary"
+            return self.history_alias
+        return None
+
+    def allow_relation(self, first, second, **hints):
+        if first._meta.app_label == second._meta.app_label == "native_capture":
+            return True
+        return None
+
+settings.configure(
+    INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth", "simple_history", "native_capture"],
+    DATABASES={name: {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
+               for name in ("default", "secondary")},
+    DATABASE_ROUTERS=[StorageRouter()],
+    ANGEE_CHANGESET_MODEL="native_capture.Changeset",
+    SECRET_KEY="native-capture-test",
+    USE_TZ=True,
+)
+import django
+django.setup()
+from django.contrib.auth.models import Group, Permission, User
+from django.contrib.contenttypes.models import ContentType
+from django.db import connections
+from angee.provenance.context import changeset
+from native_capture.models import Changeset, Container, Row
+
+assert "angee.models" not in sys.modules
+assert "angee.autoconfig" not in sys.modules
+assert "angee.provenance.models" not in sys.modules
+assert not any(name == "rebac" or name.startswith("rebac.") for name in sys.modules)
+for alias in ("default", "secondary"):
+    with connections[alias].schema_editor() as editor:
+        for model in (ContentType, Permission, Group, User, Changeset, Container, Row, Row.history.model):
+            editor.create_model(model)
+
+with changeset(fresh=True):
+    if sys.argv[1] == "explicit-source":
+        row = Row(value="explicit secondary")
+        row.save(using="secondary")
+        assert row._state.db == "secondary"
+        assert not Row.objects.using("default").exists()
+        snapshot = Row.history.using("secondary").get(id=row.pk)
+        assert snapshot.value == "explicit secondary"
+    elif sys.argv[1] == "retained-reference":
+        from angee.models.merge_references import ForeignKeyReference, MergePolicy
+
+        container = Container.objects.create()
+        row = Row.objects.create(container=container, value="retained pointer")
+        row.delete()
+        reference = ForeignKeyReference(Row, MergePolicy.MOVE, Row._meta.get_field("container"))
+        assert not Row.objects.using("default").exists()
+        assert Row.history.using("secondary").filter(container_id=container.pk).exists()
+        assert reference.retains(container)
+        settings.SIMPLE_HISTORY_ENABLED = False
+        assert reference.retains(container)
+    else:
+        row = Row(value="independent source")
+        row.save(using="default")
+        before = Row.history.using("secondary").count()
+        if sys.argv[1] == "bound-history":
+            # An explicit historical manager binding wins over its write router;
+            # the stored source still belongs to the row's default database.
+            settings.DATABASE_ROUTERS[0].history_alias = "default"
+            snapshots = Row.history.db_manager("secondary").bulk_history_create([row], update=True)
+        else:
+            snapshots = Row.history.bulk_history_create([row], update=True)
+        assert len(snapshots) == 1
+        assert snapshots[0]._state.db == "secondary"
+        assert snapshots[0].value == "independent source"
+        assert snapshots[0].history_type == "~"
+        assert Row.history.using("secondary").count() == before + 1
+"""
+    root = Path(__file__).resolve().parents[1]
+    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "addons"), str(tmp_path)))}
+    result = subprocess.run(
+        [sys.executable, "-c", script, operation],
+        cwd=root,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

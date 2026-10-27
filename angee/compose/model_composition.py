@@ -21,7 +21,7 @@ from django.db import models
 from django.db.models.utils import make_model_tuple
 from django.utils.module_loading import module_has_submodule
 
-from angee.addons import addon_manifest
+from angee.compose.declarations import AppDeclarationSource
 
 
 def _model_reference(model: type[models.Model], attribute: str) -> str | None:
@@ -140,7 +140,9 @@ class ModelComposition:
         self._validate_donor_managers()
 
     @classmethod
-    def discover(cls, app_configs: Iterable[AppConfig]) -> ModelComposition:
+    def discover(
+        cls, app_configs: Iterable[AppConfig], *, declarations: AppDeclarationSource | None = None,
+    ) -> ModelComposition:
         """Import source modules during Django phase 2 and collect own declarations.
 
         App order supplies donor precedence; module namespace order supplies the
@@ -151,9 +153,9 @@ class ModelComposition:
         sources_by_label: dict[str, list[type[models.Model]]] = {}
         extensions: dict[str, list[type[models.Model]]] = {}
         model_owners: dict[type[models.Model], str] = {}
+        declarations = declarations if declarations is not None else AppDeclarationSource.configured()
         for config in app_configs:
-            manifest = addon_manifest(config)
-            if manifest is not None and any(item.get("app_label") == config.label for item in manifest.migrations):
+            if any(item.get("app_label") == config.label for item in declarations.migrations(config)):
                 # An addon still owns its migration graph after retiring its last
                 # model. Keep an empty native app so Django can apply that cutover.
                 sources_by_label.setdefault(config.label, [])

@@ -20,9 +20,10 @@ from rebac.checks import check_universal_admin_in_roles
 from rebac.errors import SchemaError
 from rebac.models import SchemaRelation
 
-from angee.compose.management.commands.angee import Command
 from angee.graphql.checks import check_graphql_schemas
 from angee.graphql.schema import GraphQLSchemas, SchemaParts
+from angee.management.commands.angee import Command
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 
 def _environment(tmp_path: Path) -> dict[str, str]:
@@ -51,17 +52,13 @@ execute_from_command_line(sys.argv)
         encoding="utf-8",
     )
     (package / "settings.py").write_text(
-        f"""from django.apps import AppConfig
-class BareComposeConfig(AppConfig):
-    name = "angee.compose"
-    label = "compose"
-SECRET_KEY = "provision-process-probe"
+        f"""SECRET_KEY = "provision-process-probe"
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.auth",
     "rebac",
     "probe.apps.ProbeConfig",
-    "probe.settings.BareComposeConfig",
+    "angee",
 ]
 DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(root / "probe.sqlite3")!r}}}}}
 """,
@@ -75,7 +72,7 @@ class ProbeConfig(AppConfig):
         import json
         import os
         from pathlib import Path
-        import angee.compose.management.commands.angee as provision
+        import angee.management.commands.angee as provision
         events = Path(__file__).resolve().parent.parent / "events.jsonl"
         def record_step(command, step):
             del command
@@ -115,6 +112,33 @@ def test_provision_builds_then_runs_one_fresh_post_build_process(tmp_path: Path)
     ]
     assert events[0]["pid"] not in {event["pid"] for event in events[1:]}
     assert len({event["pid"] for event in events[1:]}) == 1
+
+
+def test_native_composed_test_runner_does_not_require_provenance(tmp_path: Path) -> None:
+    """The source test host can run a core-only Django test without addon boundaries."""
+
+    root = Path(__file__).resolve().parents[1]
+    addon = tmp_path / "addons" / "native_probe"
+    addon.mkdir(parents=True)
+    (addon / "__init__.py").write_text("")
+    (addon / "tests.py").write_text(
+        'from django.apps import apps\nfrom django.test import SimpleTestCase\n'
+        'class CoreTests(SimpleTestCase):\n'
+        '    def test_native_host(self):\n'
+        '        self.assertTrue(apps.is_installed("angee"))\n'
+        '        self.assertFalse(apps.is_installed("angee.provenance"))\n'
+    )
+    report = tmp_path / "report.json"
+    result = subprocess.run(
+        [sys.executable, str(root / "tests/composed_host.py"), "--runtime-dir", str(tmp_path / "runtime"),
+         "--addon-dir", str(addon.parent), "--app", "django.contrib.auth", "--app", "native_probe",
+         "--no-examples", "--action", "tests",
+         "--test-label", "native_probe.tests", "--output", str(report)],
+        cwd=root, env=_environment(tmp_path), capture_output=True, text=True,
+        timeout=COMPOSED_TEST_TIMEOUT, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}
 
 
 def test_native_makemigrations_then_migrate_sees_new_file_in_same_process(tmp_path: Path) -> None:
@@ -279,7 +303,7 @@ def test_graphql_check_then_schema_command_reuses_the_built_schema(
     monkeypatch.setattr(schemas, "_build", counted_build)
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     with override_system_checks([check_graphql_schemas]):
-        with override_settings(ANGEE_RUNTIME_DIR=tmp_path / "runtime"):
+        with override_settings(COMPOSE_RUNTIME_DIR=tmp_path / "runtime"):
             call_command("check", verbosity=0)
             call_command("schema", verbosity=0)
 

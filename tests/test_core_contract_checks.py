@@ -5,11 +5,11 @@ import pytest
 from django.apps import apps
 from django.core.checks.registry import registry
 
+from angee.build import apply_schema_paths, extension_source_map
 from angee.checks import (
     check_ownership,
     check_rebac_caveats,
 )
-from angee.build import apply_schema_paths, extension_source_map
 from tests.core_persistence import OWNERSHIP_SCHEMA, OwnedRow
 from tests.test_zed_extensions import _base_addon, _contrib_addon
 

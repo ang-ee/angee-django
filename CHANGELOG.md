@@ -11,18 +11,30 @@ live in code docstrings.
 
 ## Unreleased — AP consolidation 2026-10-18 (breaking; ships in 0.3.0)
 
-- `angee.base` is `angee`: `angee.models` (base model, ownership, statements,
-  merge, locks), `angee.fields`, `angee.impl`, `angee.identity`, `angee.indexes`,
+- `angee.base` is `angee`: `angee.models` (base model, ownership, merge, locks),
+  `angee.fields`, `angee.impl`, `angee.identity`, `angee.indexes`,
   `angee.lineage`, `angee.refs`. **0.3.0 removes the `angee.base` compatibility
   package**, including its frozen historical REBAC helper. Existing databases
   must first pass through compatible code that still supplies these imports and
   `reset_migration_history`; finish migrations and collapse their composed history
   before taking the removal. Update pinned addons too: older messaging bridges
   imported `SourceKind` through `angee.base.mixins`; its public owner is now
-  `angee.models`. Follow the [upgrade cutoff](docs/composer.md#retiring-angeebase-imports).
+  `angee.provenance.statements`. Follow the [upgrade cutoff](docs/composer.md#retiring-angeebase-imports).
   The persisted Django app label `base`, tables and content types keep their names.
   Other surviving migration contracts, including `angee.parties.runtime_migrations`,
   retain their own retirement requirements.
+- Composer stays in `angee.compose` and consumes declared app and build contracts.
+  Angee's host owns project defaults, addon manifests, dependency projection and
+  feature adapters. Rendered hosts now call `angee.management.main`, use
+  `angee.settings`, and provision through `angee.management.bootstrap`; refresh
+  hosts from the project and stack templates before restarting on this version.
+- Provenance lives entirely in the `angee.provenance` addon. Context, evidence,
+  history and statements leave the model foundation; callers import their addon
+  owners and explicitly opt into captured managers. The native Django capture
+  engine is separate from the `provenance.contrib.angee` permission and replay
+  adapters. HTTP, task, command and test boundaries are installed by the addon.
+  GraphQL hosts without provenance retain native CRUD and expose no creation
+  idempotency argument. See the [addon contract](addons/angee/provenance/README.md).
 - Model references follow Django's explicit model-package exports:
   `RecordRefMixin` and `DerivedFrom` are imported from `angee.models`;
   reference discovery and deletion hooks live in `angee.models.refs`.
@@ -63,7 +75,7 @@ stack that keeps its database is the incremental one in "Unreleased — AP
 consolidation" (a stack with re-importable data starts a fresh database).
 
 - A record's facts are statements: who asserted a value, from what evidence,
-  through which link. `StatementsMixin` and `Aspect` (`angee.models.statements`)
+  through which link. `StatementsMixin` and `Aspect` (`angee.provenance.statements`)
   declare them, `StatementManager` resolves the winner, and every write runs
   under a provenance changeset. Parties, circles and spaces memberships,
   addresses and relationships carry statements instead of `source` columns.

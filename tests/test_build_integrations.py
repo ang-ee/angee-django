@@ -91,10 +91,30 @@ def test_artifact_collisions_and_escaping_paths_fail_before_writing(tmp_path, na
 def test_binding_receives_the_emitted_map_even_when_sources_are_unchanged(tmp_path, settings):
     contribution = Contribution(sources={Path("feature.txt"): "value"})
     directory = tmp_path / "runtime"
-    settings.ANGEE_RUNTIME_DIR = directory
+    settings.COMPOSE_RUNTIME_DIR = directory
     runtime = Runtime((), ModelComposition({}, {}), runtime_dir=directory, integrations=(contribution,))
     assert runtime.emit_if_stale() is True
     assert runtime.emit_if_stale() is False
     assert len(contribution.bound) == 2
     for sources in contribution.bound:
         assert sources[Path("feature.txt")] == (directory / "feature.txt").read_text()
+
+
+@pytest.mark.parametrize("operation", ["render_sources", "emit_if_stale", "build"])
+def test_native_model_artifacts_cannot_escape_through_directory_symlinks(
+    tmp_path, native_source, operation,
+):
+    """Native model outputs obey the same containment contract as contributions."""
+
+    runtime = runtime_for(tmp_path, native_source)
+    runtime.runtime_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    foreign = outside / "models.py"
+    foreign.write_text("foreign", encoding="utf-8")
+    (runtime.runtime_dir / "build_contract").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ImproperlyConfigured, match="escapes the root through a symlink"):
+        getattr(runtime, operation)()
+    assert foreign.read_text(encoding="utf-8") == "foreign"
+    assert not (runtime.runtime_dir / "__init__.py").exists()

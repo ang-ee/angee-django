@@ -24,7 +24,7 @@ from angee.project import PROJECT_DIR_ENV
 # remain owned by Composer and the installed addons' autoconfig modules.
 ASGI_APPLICATION: str
 ANGEE_WEB_STATEMENT_TIMEOUT: int
-ANGEE_RUNTIME_DIR: Path
+COMPOSE_RUNTIME_DIR: Path
 CELERY_TASK_SOFT_TIME_LIMIT: int
 CELERY_TASK_TIME_LIMIT: int
 
@@ -44,8 +44,8 @@ _NAMESPACE = runpy.run_module(
     init_globals={
         "BASE_DIR": _CACHE_ROOT,
         "SECRET_KEY": "framework-type-checking",
-        "ANGEE_RUNTIME_DIR": _CACHE_ROOT / "typing_runtime",
-        "ANGEE_RUNTIME_MODULE": "typing_runtime",
+        "COMPOSE_RUNTIME_DIR": _CACHE_ROOT / "typing_runtime",
+        "COMPOSE_RUNTIME_MODULE": "typing_runtime",
         "ANGEE_ADDON_DIRS": _ADDON_DIRS,
         "INSTALLED_APPS": _ROOT_APPS,
         "DATABASES": {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},

@@ -221,6 +221,6 @@ test("the generic group's Bind writes related, unless an eligible sibling owns i
 
 async function choosePage(dialog: HTMLElement) {
   expect(within(dialog).getByRole("button", { name: "Bind" }).hasAttribute("disabled")).toBe(true);
-  fireEvent.click(within(dialog).getByRole("button", { name: "Choose a page" }));
+  fireEvent.click(within(dialog).getByRole("combobox", { name: "Choose a page" }));
   fireEvent.click(await screen.findByRole("option", { name: /Another/ }));
 }

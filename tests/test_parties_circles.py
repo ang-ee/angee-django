@@ -18,7 +18,6 @@ from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import to_subject_ref
 
-from angee.actors import source_kind_for
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.backends import ManualChannelBackend
@@ -40,9 +39,12 @@ from angee.messaging.testing.models import (
     RelationshipKind,
     Thread,
 )
-from angee.models import SourceKind
 from angee.parties.backends import ParsedAddress, ParsedContact
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
+from angee.provenance.sources import source_kind_for
+from angee.provenance.statements import (
+    SourceKind,
+)
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import current_stream, make_integration
 from tests.test_messaging import _grant

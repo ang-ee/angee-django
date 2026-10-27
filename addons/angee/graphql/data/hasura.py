@@ -12,16 +12,17 @@ from typing import TYPE_CHECKING, Any, cast
 import strawberry
 import strawberry_django
 from asgiref.sync import sync_to_async
+from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.db.models.expressions import BaseExpression, Combinable, CombinedExpression
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast, Concat
 from django.db.models.lookups import Exact, In
-from rebac import PermissionDenied, current_actor, system_context
+from django.utils.module_loading import import_string
+from rebac import PermissionDenied, system_context
 from rebac.managers import RebacQuerySet
 from rebac.relation_loading import relation_actor
-from rebac.resources import model_resource_type
 from strawberry.extensions import FieldExtension
 from strawberry.types import get_object_definition
 from strawberry_django.fields.types import field_type_map
@@ -47,12 +48,6 @@ from strawberry_django_hasura import (
 from strawberry_django_hasura.filtering import filter_queryset, where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
-from angee.changesets import (
-    changeset,
-    changeset_model,
-    creation_fingerprint,
-    require_changeset,
-)
 from angee.data.field_classification import (
     is_to_one_relation,
 )
@@ -170,70 +165,6 @@ class HasuraLines:
     defaults: Mapping[str, str | int | float | bool | None] = dataclasses.field(default_factory=dict)
 
 
-def _claimed_create(
-    model: type[models.Model],
-    idempotency_key: str | None,
-    *,
-    fingerprint: str,
-    insert: Callable[[], Any],
-) -> Any:
-    """Insert once for one actor-scoped resource and replay its claimed row.
-
-    Without a key the insert runs as the backend wrote it: a custom backend owns
-    its own transaction, as upstream calls it.
-    """
-
-    if idempotency_key is None:
-        return insert()
-    with changeset(fresh=True), transaction.atomic():
-        actor = current_actor()
-        if not model_resource_type(model) or actor is None:
-            raise ImproperlyConfigured("Idempotent resources require an actor-scoped queryset.")
-        replay = changeset_model().objects.claim(
-            f"graphql.create:{model._meta.label_lower}:{actor}",
-            idempotency_key,
-            fingerprint=fingerprint,
-        )
-        if replay is not None:
-            created = replay.created_row
-            if not isinstance(created, model):
-                raise ValidationError({"idempotency_key": "The claimed creation result is unavailable."})
-            instance = require_rebac_queryset(model).with_actor(actor).filter(pk=created.pk).first()
-            if instance is None:
-                raise PermissionDenied("The claimed creation result is not readable.")
-            return instance
-        instance = insert()
-        require_changeset().record_created(instance)
-        return instance
-
-
-class _ClaimingWriteBackend:
-    """Add the framework claim contract to an upstream-compatible custom backend."""
-
-    def __init__(self, model: type[models.Model], backend: WriteBackend) -> None:
-        self.model = model
-        self.backend = backend
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.backend, name)
-
-    def create(
-        self,
-        info: strawberry.Info,
-        data: dict[str, Any],
-        *,
-        idempotency_key: str | None = None,
-    ) -> Any:
-        """Create through the custom backend under the shared claim owner."""
-
-        return _claimed_create(
-            self.model,
-            idempotency_key,
-            fingerprint=creation_fingerprint(data),
-            insert=lambda: self.backend.create(info, data),
-        )
-
-
 def _child_back_fk(parent_model: type[models.Model], relation: str) -> str:
     """Return the child FK field name behind a parent's to-many ``relation``."""
 
@@ -320,20 +251,10 @@ class AngeeHasuraWriteBackend:
 
         return write_queryset(self.model)
 
-    def create(self, info: strawberry.Info, data: dict[str, Any], *, idempotency_key: str | None = None) -> Any:
-        """Create one row under the changeset claim; :meth:`insert` owns the row itself.
+    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        """Create one row through this backend's native insertion contract."""
 
-        A subclass that routes creation through its own factory overrides
-        :meth:`insert`, never this method: the replay token and its fingerprint
-        belong to every insertable resource.
-        """
-
-        return _claimed_create(
-            self.model,
-            idempotency_key,
-            fingerprint=self._creation_fingerprint(data),
-            insert=lambda: self.insert(info, data),
-        )
+        return self.insert(info, data)
 
     def insert(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
         """Insert one row, its declared nested child lines and input extensions atomically."""
@@ -349,8 +270,8 @@ class AngeeHasuraWriteBackend:
                 instance.apply_input_extensions(**extensions)
         return instance
 
-    def _creation_fingerprint(self, data: dict[str, Any]) -> str:
-        """Fingerprint the decoded write inputs, their extensions and the declared line envelope."""
+    def creation_values(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Return decoded creation values, including input extensions and child lines."""
 
         data = dict(data)
         line_rows = self._pop_line_rows(data) if self.lines is not None else None
@@ -359,7 +280,7 @@ class AngeeHasuraWriteBackend:
             "object": {**self._decode_public_id_fields(data), **extensions},
             "lines": self._prepare_line_rows(line_rows) if line_rows is not None else None,
         }
-        return creation_fingerprint(content)
+        return content
 
     def save(
         self,
@@ -1493,6 +1414,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     lines-aware :class:`AngeeHasuraWriteBackend`; a caller supplying its own
     ``write_backend`` must make it lines-aware.
 
+    ``ANGEE_GRAPHQL_WRITE_BACKEND_ADAPTER`` may name a factory receiving the
+    model and selected native backend, returning a backend plus its native
+    ``insert_arguments`` declaration. Addons own those optional write capabilities.
+
     ``subtitle=DataResourceSubtitleMetadata(...)`` declares the renderer's
     closed created/updated/word-count vocabulary as dotted GraphQL selection
     paths. Every path resolves against ``node`` during metadata emission; adding
@@ -1660,11 +1585,11 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             **{name: public_pk_decoder(related) for name, related in active_write_backend.public_id_fields.items()},
             **(field_id_decode or {}),
         }
-    resource_write_backend = (
-        active_write_backend
-        if isinstance(active_write_backend, AngeeHasuraWriteBackend)
-        else _ClaimingWriteBackend(model, active_write_backend)
-    )
+    resource_write_backend = active_write_backend
+    insert_arguments = None
+    adapter_path = getattr(settings, "ANGEE_GRAPHQL_WRITE_BACKEND_ADAPTER", "")
+    if insert and adapter_path:
+        resource_write_backend, insert_arguments = import_string(adapter_path)(model, active_write_backend)
     declared_writable = [seq for seq in (writable, insertable, updatable) if seq is not None]
     _check_writable_relations_decoded(
         model,
@@ -1720,7 +1645,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         insert=insert,
         update=update,
         delete=delete,
-        insert_arguments={"idempotency_key": str | None} if insert else None,
+        insert_arguments=insert_arguments,
         update_arguments={"expected_revision": int | None}
         if update and issubclass(model, OptimisticLockMixin)
         else None,

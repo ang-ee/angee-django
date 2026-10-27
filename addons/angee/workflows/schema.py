@@ -17,7 +17,6 @@ from strawberry.scalars import JSON
 from strawberry_django.queryset import run_type_get_queryset
 
 from angee.decisions.schema import DecisionType
-from angee.evidence import readable_evidence
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
@@ -41,6 +40,7 @@ from angee.iam.schema import UserType
 from angee.identity import public_id_for
 from angee.impl import resolve_all_impl_classes
 from angee.models import record_display_label
+from angee.provenance.evidence import readable_evidence
 from angee.workflows.definition import Body, Definition, Issue
 from angee.workflows.models import RunGraphNode
 from angee.workflows.states import RunOrigin, StepRunStatus, WaitingKind

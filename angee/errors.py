@@ -93,15 +93,6 @@ class DomainError(Exception):
         super().__init__(self.code)
 
 
-class CreationKeyConflict(DomainError):
-    """An idempotency key was already claimed for different content."""
-
-    code = "CREATION_KEY_CONFLICT"
-
-    def __init__(self, *args: object) -> None:
-        Exception.__init__(self, *args or (self.code,))
-
-
 class RecordAccessSubjectRefused(DomainError, ValidationError):
     """The record's invariant refuses a holder, without exposing subject details."""
 

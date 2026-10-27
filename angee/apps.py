@@ -65,7 +65,6 @@ class BaseConfig(AppConfig):
         )
         # The check imports REBAC models, which require completed app population.
         from angee.checks import (
-            check_changeset_middleware,
             check_hierarchy_queryset_order,
             check_hooks,
             check_impl_registries,
@@ -74,7 +73,6 @@ class BaseConfig(AppConfig):
             check_rebac_database,
         )
 
-        checks.register(check_changeset_middleware, checks.Tags.security)
         checks.register(check_rebac_database, checks.Tags.models)
         checks.register(check_hierarchy_queryset_order, checks.Tags.models)
         checks.register(check_impl_registries, checks.Tags.models)

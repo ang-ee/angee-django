@@ -200,10 +200,10 @@ export function TreeView<TRow extends Record<string, unknown>>({
 
 /** Place the insertion row first under its parent (or first at the root), expanding the parent. */
 function withInsertion(nodes: TreeNode[], parentId: string | null, node: ReactNode): TreeNode[] {
-  // The row is a form, not a node: its keys and clicks stay with the field, so Enter
-  // submits the title instead of selecting the row and arrows edit instead of moving.
+  // The row is a form, not a node: clicks stay with its field. Tree owns the
+  // keyboard boundary for every embedded control, including this one.
   const label = (
-    <div className="contents" onKeyDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+    <div className="contents" onClick={(event) => event.stopPropagation()}>
       {node}
     </div>
   );

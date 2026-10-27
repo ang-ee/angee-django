@@ -10,7 +10,6 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.evidence import FactAuthority
 from angee.extraction.contracts import (
     CorrectionRef,
     DocumentPart,
@@ -39,6 +38,7 @@ from angee.extraction.profiles import ExtractionProfile
 from angee.fields import StateField
 from angee.impl import ImplClassField
 from angee.models import AngeeDataModel, AngeeModel, AppendOnlyModel, AuditMixin, DerivedFrom
+from angee.provenance.evidence import FactAuthority
 from angee.refs import record_ref_for
 from angee.serialization import canonical_json
 

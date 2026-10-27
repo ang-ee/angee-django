@@ -134,7 +134,9 @@ export function ScopedExplorerPane<
     ],
   );
   const loadingLabel = t("loading.default");
-  const primaryPane = hasRoots
+  // Search results are a transient option catalogue, so an empty or pending
+  // search must leave its control mounted for clearing and retrying.
+  const primaryPane = hasRoots || rootPicker.onSearchChange
     ? navigator
     : loading
       ? <ExplorerNavigatorSkeleton label={loadingLabel} />

@@ -10,7 +10,7 @@ from django.apps import AppConfig, apps
 from django.core.management import call_command
 
 from angee.build import apply_schema_paths, extension_source_map, field_gate_owners
-from angee.fs import write_atomic
+from angee.utils.files import write_atomic
 
 
 def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[str, str]]:

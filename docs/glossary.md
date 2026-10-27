@@ -131,7 +131,7 @@ also accepts non-user REBAC subjects.
 converts it to the FK's Python type and returns no user for other subject types.
 
 **Changeset** — attribution for one logical write, owned by
-[`changeset()`](../angee/changesets.py) and stored by the
+[`changeset()`](../addons/angee/provenance/context.py) and stored by the
 [provenance addon](../addons/angee/provenance/models.py).
 
 **Action / activity** — action uses FHIR AuditEvent's C/U/D verbs; activity
@@ -148,7 +148,7 @@ distinct history events.
 `statements = StatementRecords(aspects=…)` gets a typed `<Model>Statement` table
 beside its history table, read through the subject like history rows and
 written only by `statements.set()` and the status verbs
-([owner](../angee/models/statements.py)).
+([owner](../addons/angee/provenance/statements.py)).
 
 **Aspect** — a declared field group of a canonical model, optionally with a
 typed member (a Handle, a counterparty), carrying its survivorship strategy and
@@ -359,7 +359,7 @@ read, created, changed, deleted or called. Admission inputs use the same relatio
 with no step. Readers see record identities through their current read scope.
 
 **Derived-from evidence** — a frozen fact or source link admitted through
-`angee.evidence`'s standing-read check. Decisions, run inputs and
+`angee.provenance.evidence`'s standing-read check. Decisions, run inputs and
 extraction retain their own edges to this shared source identity.
 
 ## Decisions

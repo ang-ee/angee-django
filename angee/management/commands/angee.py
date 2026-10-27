@@ -1,4 +1,4 @@
-"""Angee build-time management commands."""
+"""Native host commands for build, provisioning, and cleanup."""
 
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ from django.db import OperationalError, connections
 from django.db.models.signals import post_migrate
 
 from angee.compose.runtime import Runtime
+from angee.management.dependencies import AddonDependencyGroup
+from angee.project import find_project_dir
 
 _ANALYZE_RECEIVER = "angee.provision.analyze_migrated"
 
@@ -88,11 +90,14 @@ class Command(BaseCommand):
 
         runtime = Runtime.from_django()
         try:
+            dependencies = AddonDependencyGroup.from_app_configs(runtime.addons, project_dir=find_project_dir())
             if options["check"]:
                 runtime.check()
+                dependencies.check()
                 message = "angee build --check: ok"
             else:
-                dependency_result = runtime.build()
+                runtime.build()
+                dependency_result = dependencies.write()
                 style = self.style.WARNING if dependency_result.skipped else self.style.SUCCESS
                 self.stdout.write(style(f"angee build: addon dependencies {dependency_result.value}"))
                 message = "angee build: ok"

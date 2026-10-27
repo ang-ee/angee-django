@@ -126,7 +126,7 @@ def boot(
         init_globals={
             "BASE_DIR": runtime_dir.parent,
             "SECRET_KEY": "isolated-composition-check",
-            "ANGEE_RUNTIME_DIR": runtime_dir,
+            "COMPOSE_RUNTIME_DIR": runtime_dir,
             "ANGEE_ADDON_DIRS": tuple(addon_dirs),
             "INSTALLED_APPS": installed_apps,
             "DATABASES": {"default": database},
@@ -429,20 +429,6 @@ def main() -> None:
     args = parser.parse_args()
     if args.test_postgresql and args.action != "tests":
         parser.error("--test-postgresql is available only for native test runs")
-    from angee.changesets import changeset
-
-    boundary = (
-        nullcontext()
-        if args.action in {"tests", "reset-migrations"}
-        else changeset(fresh=True, activity="system", change_reason=f"manage.{args.action}")
-    )
-    with boundary:
-        run(args)
-
-
-def run(args: argparse.Namespace) -> None:
-    """Dispatch one composed-host action without a process-wide test boundary."""
-
     boot(
         args.source_root.resolve(),
         args.runtime_dir.resolve(),
@@ -451,6 +437,22 @@ def run(args: argparse.Namespace) -> None:
         root_apps=args.app,
         test_postgresql=args.test_postgresql,
     )
+    from django.conf import settings
+    from django.utils.module_loading import import_string
+
+    context_path = getattr(settings, "ANGEE_MANAGEMENT_CONTEXT", "")
+    boundary = (
+        import_string(context_path)(args.action)
+        if context_path and args.action not in {"tests", "reset-migrations"}
+        else nullcontext()
+    )
+    with boundary:
+        run(args)
+
+
+def run(args: argparse.Namespace) -> None:
+    """Dispatch one bootstrapped host action without a process-wide test boundary."""
+
     if args.action == "tests":
         from django.apps import apps
         from django.conf import settings
@@ -458,9 +460,6 @@ def run(args: argparse.Namespace) -> None:
         from django.db import connection
         from django.test import TransactionTestCase
         from django.test.runner import DiscoverRunner
-
-        from angee.changesets import changeset
-        from angee.provenance.testing import load_statement_sources
 
         class ComposedTestRunner(DiscoverRunner):
             """Prepare the generated host's schema before Django checks its models."""
@@ -473,6 +472,11 @@ def run(args: argparse.Namespace) -> None:
 
             def build_suite(self, *test_labels: Any, **kwargs: Any) -> TestSuite:
                 suite = super().build_suite(*test_labels, **kwargs)
+                if not apps.is_installed("angee.provenance"):
+                    return suite
+
+                from angee.provenance.context import changeset
+                from angee.provenance.testing import load_statement_sources
 
                 def fixture_boundaries(tests: TestSuite) -> None:
                     for test in tests:

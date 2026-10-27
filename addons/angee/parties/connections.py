@@ -24,9 +24,11 @@ from django.db import transaction
 from rebac import system_context
 from rebac.actors import to_subject_ref
 
-from angee.actors import source_kind_for
-from angee.evidence import EvidenceReference
-from angee.models import SourceKind
+from angee.provenance.evidence import EvidenceReference
+from angee.provenance.sources import source_kind_for
+from angee.provenance.statements import (
+    SourceKind,
+)
 
 
 class ConnectionHandle(Protocol):

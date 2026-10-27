@@ -26,7 +26,6 @@ from rebac import (
 from rebac.models import active_relationship_model
 
 from angee.build import apply_schema_paths, extension_source_map
-from angee.fs import write_atomic
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
@@ -35,6 +34,7 @@ from angee.messaging.testing.models import Channel, Message, Person, Thread, Thr
 from angee.projects.testing.models import Project, ProjectBinding, Task
 from angee.spaces.testing.models import Group, Membership
 from angee.testing.permissions import installed_field_owners
+from angee.utils.files import write_atomic
 from tests.conftest import (
     Backend,
     Drive,

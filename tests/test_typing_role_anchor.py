@@ -25,12 +25,12 @@ def test_generated_role_anchor_alias_survives_cold_and_warm_analysis(tmp_path: P
         "'angee', 'role_probe', 'angee.compose']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
-        f"ANGEE_RUNTIME_DIR = Path({str(tmp_path / 'role_runtime')!r})\n"
-        "ANGEE_RUNTIME_MODULE = 'role_runtime'\n"
+        f"COMPOSE_RUNTIME_DIR = Path({str(tmp_path / 'role_runtime')!r})\n"
+        "COMPOSE_RUNTIME_MODULE = 'role_runtime'\n"
     )
     config = tmp_path / "mypy.ini"
     config.write_text(
-        "[mypy]\nplugins = angee.compose.typing\n"
+        "[mypy]\nplugins = angee.typing\n"
         f"mypy_path = {tmp_path},{root},{root / 'addons'}\ncache_dir = {tmp_path / 'cache'}\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = role_settings\n"
     )

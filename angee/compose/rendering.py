@@ -68,7 +68,7 @@ def render_models(
         ]
         body_lines.extend(
             [
-                "    angee_contributed_field_origins: ClassVar[tuple[tuple[str, str], ...]] = "
+                "    compose_contributed_field_origins: ClassVar[tuple[tuple[str, str], ...]] = "
                 f"{composition.contributed_field_origins(source)!r}",
                 "",
             ]

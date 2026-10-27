@@ -6,12 +6,14 @@ from django.db import models
 
 from angee.models import (
     AngeeDataModel,
+    role_anchor,
+)
+from angee.provenance.statements import (
     Aspect,
     SourceKind,
     StatementQuerySet,
     StatementRecords,
     StatementsMixin,
-    role_anchor,
 )
 from angee.refs import RetainedGenericRelation
 

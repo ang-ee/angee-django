@@ -15,7 +15,7 @@ from django.http import HttpRequest, HttpResponse
 from django.utils.decorators import sync_and_async_middleware
 
 from angee.asgi import ASGIApp, Receive, Scope, Send
-from angee.changesets import changeset, changeset_model_label
+from angee.provenance.context import changeset, changeset_model_label
 
 FAILED_STATUS = 400
 """The first response status that closes a request's changeset as failed."""

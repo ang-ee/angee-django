@@ -113,7 +113,7 @@ def _typing_host_probe(root: Path, project: Path | None) -> subprocess.Completed
             "print(json.dumps({",
             "'apps': [getattr(app, 'name', app) for app in host.INSTALLED_APPS],",
             "'addon_dirs': [str(path) for path in host.ANGEE_ADDON_DIRS],",
-            "'runtime': str(host.ANGEE_RUNTIME_DIR),",
+            "'runtime': str(host.COMPOSE_RUNTIME_DIR),",
             "'database': host.DATABASES['default'], 'secret': host.SECRET_KEY,",
             "}))",
         ]),
@@ -154,7 +154,7 @@ def test_typing_host_uses_declared_project_paths_without_live_database_or_runtim
         "INSTALLED_APPS = ['typing_consumer']\n"
         f"ANGEE_ADDON_DIRS = [Path({str(addon_dir)!r}), Path({str(root / 'addons')!r})]\n"
         "SECRET_KEY = 'project-secret-must-not-survive'\n"
-        "ANGEE_RUNTIME_DIR = BASE_DIR / 'live_runtime'\n"
+        "COMPOSE_RUNTIME_DIR = BASE_DIR / 'live_runtime'\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.postgresql', 'NAME': 'do-not-connect'}}\n"
     )
     result = _typing_host_probe(root, project)

@@ -7,16 +7,28 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from django.core.management import get_commands
 from django.core.management.commands.runserver import Command as DjangoRunserver
 
-from angee.compose.management.commands import runserver as runserver_module
-from angee.compose.management.commands.runserver import Command
+from angee.management.commands import runserver as runserver_module
+from angee.management.commands.runserver import Command
 
 
 def test_runserver_is_a_django_runserver_subclass() -> None:
     """The override subclasses Django's runserver so it inherits the reloader."""
 
     assert issubclass(Command, DjangoRunserver)
+
+
+def test_native_command_precedes_staticfiles_when_foundation_is_first(settings: Any) -> None:
+    """Django discovers the host override even with the competing contrib command."""
+
+    settings.INSTALLED_APPS = [
+        "angee", "django.contrib.staticfiles", *(entry for entry in settings.INSTALLED_APPS if entry != "angee"),
+    ]
+    assert get_commands()["runserver"] == "angee"
+    assert get_commands()["serve"] == "angee"
+    assert get_commands()["angee"] == "angee"
 
 
 def test_inner_run_sets_sdl_gate_and_serves_resolved_app(monkeypatch: pytest.MonkeyPatch, settings: Any) -> None:
@@ -34,7 +46,7 @@ def test_inner_run_sets_sdl_gate_and_serves_resolved_app(monkeypatch: pytest.Mon
         def run(self) -> None:
             captured["ran"] = True
 
-    module = "angee.compose.management.commands.runserver"
+    module = "angee.management.commands.runserver"
     monkeypatch.setattr(f"{module}.autoreload.trigger_reload", lambda filename: None)
     monkeypatch.setattr(f"{module}.import_string", lambda path: app)
     monkeypatch.setattr(f"{module}.uvicorn.Server", _FakeServer)

@@ -44,7 +44,6 @@ from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter, SubjectRef
 
 from angee.actors import actor_user_id, instance_actor, subject_reaches_user
-from angee.changesets import changeset, changeset_model, creation_fingerprint, require_changeset
 from angee.errors import DomainError, RecordAccessSubjectRefused
 from angee.fields import FractionalRankField, StateField
 from angee.iam.identity import user_label_expression, user_label_queryset
@@ -66,6 +65,8 @@ from angee.models import (
 from angee.models.expressions import JSONArraySubquery
 from angee.money.fields import MoneyField
 from angee.proposals.inputs import RoundTemplate
+from angee.provenance.context import changeset, changeset_model, require_changeset
+from angee.provenance.contrib.angee.serialization import creation_fingerprint
 from angee.validation import validate_value
 
 if TYPE_CHECKING:

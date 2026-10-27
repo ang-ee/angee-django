@@ -3,7 +3,7 @@ requires = [
   # hatch-angee supports older hatchling releases, but PEP 639 license-files
   # metadata requires hatchling 1.27 or newer.
   "hatchling>=1.27",
-  "hatch-angee>=0.2.4",
+  "hatch-angee @ git+https://github.com/ang-ee/hatch-angee.git@10c5257e21bc19fb1fcdd9ca77f4e3c01ebfebd5",
 ]
 build-backend = "hatch_angee.build"
 
@@ -43,11 +43,11 @@ dependencies = [
   "cryptography>=44",
   "django-simple-history>=3.13",
   "django-sqids>=0.1",
-  "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@bf5989e6247fdf9c2c240b961a71cddc174c4216",
+  "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@31d1c5ca9cee7c117e73edbd0154ba02ce7d0790",
   # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
   # override does not accept it yet; lift the cap when rebac supports 6.1.
   "django>=6.0,<6.1",
-  "hatch-angee>=0.2.4",
+  "hatch-angee @ git+https://github.com/ang-ee/hatch-angee.git@10c5257e21bc19fb1fcdd9ca77f4e3c01ebfebd5",
   "django-choices-field @ git+https://github.com/ang-ee/django-choices-field.git@b02c1488660d0bf1f4483d2e73bc842b41b70632",
   "django-yamlconf>=1.5.0",
   "django-environ>=0.12",
@@ -60,7 +60,6 @@ dependencies = [
   "uvicorn[standard]>=0.30",
   # Error reporting; ProjectContract starts it only when the deployment sets SENTRY_DSN.
   "sentry-sdk>=2.71.0",
-  "pyclean>=3.7.0",
 ]
 
 [project.urls]
@@ -77,7 +76,7 @@ Issues = "https://github.com/ang-ee/angee-django/issues"
 # Postgres driver only — installed by the runtime image's `--extra postgres` and by
 # the self-contained local stack. psycopg 3 is the driver Django 6's
 # django.db.backends.postgresql uses when DATABASE_URL points at Postgres (the
-# stack env supplies the URL; angee/compose/settings.py maps it, SQLite floor
+# stack env supplies the URL; angee/settings.py maps it, SQLite floor
 # otherwise).
 postgres = ["psycopg[binary,pool]>=3.2"]
 
@@ -237,7 +236,7 @@ exclude = [
 select = ["E", "F", "I"]
 
 [tool.mypy]
-plugins = ["angee.compose.typing"]
+plugins = ["angee.typing", "angee.provenance.typing"]
 python_version = "3.14"
 cache_dir = ".mypy_cache"
 explicit_package_bases = true

@@ -54,10 +54,14 @@ export function KnowledgePage() {
       ...(Filter.from(scope).facetValues("vault").length ? { id: { inList: Filter.from(scope).facetValues("vault") } } : {}),
     }) : undefined,
   }, { enabled: Boolean(vaultMetadata), models: ["knowledge.Vault"] });
+  // The first readable vault seeds the selection once; later picker searches
+  // only change its options, never the selected vault.
+  const initialVaultId = !openId && selectedVault === undefined ? vaults.data?.vaults[0]?.id : undefined;
+  if (initialVaultId) setSelectedVault(initialVaultId);
   const roots = useMemo(() => [...new Map([
     ...(vaults.data?.vaults ?? []), ...(vault.data?.vaults_by_pk ? [vault.data.vaults_by_pk] : []),
   ].map((row) => [row.id, row])).values()], [vaults.data, vault.data]);
-  const activeVaultId = vaultId ?? (openId ? "" : roots[0]?.id ?? "");
+  const activeVaultId = vaultId ?? initialVaultId ?? "";
   useBreadcrumbLeafLabel(detail?.title ?? null);
   useBreadcrumbCollectionLink(home, openId ? home : null);
   const openPage = useCallback((id: string, context?: ListViewNavigationScope) => {
@@ -81,12 +85,12 @@ export function KnowledgePage() {
     ? detail.kind === "folder" ? detail.id : detail.parent : null;
   const renderTree = useCallback((controller: Controller, selector: ReactNode) => <KnowledgeTree
     pane={{ selector, overflowItems: [{ icon: "vault", label: t("vault.settings"), onClick: () => void navigate({ to: href("knowledge.settings") }) }] }}
-    toolbarActions={<PaneToolbarMenu icon="plus" label={t("newPage.menu")} text disabled={!writable || actions.busy} items={[
+    toolbarActions={controller.root ? <PaneToolbarMenu icon="plus" label={t("newPage.menu")} text disabled={!writable || actions.busy} items={[
         { icon: "note", label: t("newPage.page"), onClick: () => setCreating({ kind: "note", parent, vault: controller.rootId }) },
         { icon: "folder", label: t("newPage.folder"), onClick: () => setCreating({ kind: "folder", parent, vault: controller.rootId }) },
         ...(detail && detail.vault === controller.rootId && !detail.is_trashed ? [{ icon: "note", label: t("newPage.subpage"),
           onClick: () => setCreating({ kind: "note" as const, parent: detail.id, vault: controller.rootId }) }] : []),
-]} />}
+]} /> : null}
     vault={controller.rootId} detail={detail ?? null} scope={scope} writable={writable}
     creating={creating?.vault === controller.rootId ? creating : null}
     onCancel={() => setCreating((current) => current === creating ? null : current)}

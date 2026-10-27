@@ -4,29 +4,29 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import nullcontext
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import batched
-from typing import TYPE_CHECKING, Any, Self, TypeVar, cast
+from typing import Any, Self, TypeVar, cast
 
-from django.conf import settings
 from django.core import signing
 from django.core.exceptions import EmptyResultSet
-from django.db import NotSupportedError, connections, models, transaction
+from django.db import connections, models
 from django.db.models.functions import Coalesce
-from rebac import current_actor, system_context
+from rebac import check_new, current_actor, system_context, to_subject_ref
+from rebac.backends import backend
+from rebac.field_backing import _proposed_forward_relationships
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 from rebac.resources import model_resource_type
-from rebac.watch import KEY_CHUNK, statement_keys
+from rebac.schema.introspection import relation_dependencies
+from rebac.watch import KEY_CHUNK
 from rebac.watch import by_key as native_by_key
+from simple_history.exceptions import NotHistoricalModelError
+from simple_history.manager import HistoryManager
+from simple_history.utils import get_history_manager_for_model
 
-from angee.changesets import changeset_model_label, current_changeset, write_group
 from angee.identity import instance_from_public_id
 from angee.pagination import KeysetOrder, KeysetPage
-
-if TYPE_CHECKING:
-    from angee.models.history import ModelHistory
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _QuerySetT = TypeVar("_QuerySetT", bound=models.QuerySet[Any])
@@ -83,8 +83,6 @@ class CandidateRelationships:
     def allows(self, subject: Any, action: str) -> bool:
         """Whether ``subject`` may perform ``action`` on the candidate these relations describe."""
 
-        from rebac import check_new, to_subject_ref
-
         return check_new(
             subject=to_subject_ref(subject), action=action, resource_type=self.resource_type,
             relationships=self.relationships,
@@ -93,12 +91,6 @@ class CandidateRelationships:
 
 def candidate_relationships(instance: models.Model, action: str) -> CandidateRelationships | None:
     """Read the relations ``instance`` would carry for ``action``; ``None`` when its type has no definition."""
-
-    # The composer imports this module at settings time, before the app registry
-    # is ready; rebac's backend and field backing load auth models on import.
-    from rebac.backends import backend
-    from rebac.field_backing import _proposed_forward_relationships
-    from rebac.schema.introspection import relation_dependencies
 
     resource_type = model_resource_type(type(instance))
     if resource_type is None:
@@ -165,33 +157,17 @@ def _parent_link_paths(model: type[models.Model], prefix: str = "") -> tuple[str
     return tuple(paths)
 
 
-def model_history(model: type[models.Model]) -> ModelHistory | None:
-    """Resolve the history registration owned by ``model``'s concrete table.
+def model_history(model: type[models.Model]) -> HistoryManager | None:
+    """Return native history for this concrete table, including retained snapshots."""
 
-    A proxy write mutates that same table.  Returning the concrete registration
-    lets queryset history capture read and snapshot the stored concrete row while
-    the proxy queryset retains its own guards and delete receivers.
-    """
-
-    if not getattr(settings, "SIMPLE_HISTORY_ENABLED", True):
-        return None
-    if model._meta.label_lower == changeset_model_label().lower():
-        return None
     concrete = model._meta.concrete_model or model
-    history = getattr(concrete._meta, "angee_model_history", None)
-    if history is None:
-        history = next(
-            (
-                getattr(parent._meta, "angee_model_history", None)
-                for parent in concrete._meta.all_parents
-                if getattr(parent._meta, "angee_model_history", None) is not None
-            ),
-            None,
-        )
-    return cast("ModelHistory | None", history)
+    try:
+        return get_history_manager_for_model(concrete)
+    except NotHistoricalModelError:
+        return None
 
 
-def record_history(model: type[models.Model]) -> ModelHistory | None:
+def record_history(model: type[models.Model]) -> HistoryManager | None:
     """Return the history owner of a permission-governed record model.
 
     History is read through the record's own REBAC gate, so a tracked table
@@ -270,119 +246,6 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
     """
 
     model: type[_ModelT]
-
-    def update(self, **kwargs: Any) -> int:
-        """Capture stored state after an authorized write of frozen, locked keys.
-
-        A write to columns the history excludes (a counter), with at most its
-        timestamp stamps, changes no tracked state and records no version.
-        """
-
-        history_model = self.model._meta.concrete_model or self.model
-        history = model_history(history_model)
-        if history is None or self.query.is_sliced or not self._changes_tracked_state(
-            history, history_model, kwargs
-        ):
-            return super().update(**kwargs)
-        self._for_write = True
-        selection = self._system_capture(reason="angee.history.rows") if isinstance(self, RebacQuerySet) else self
-        with transaction.atomic(using=self.db):
-            keys = list(dict.fromkeys(statement_keys(cast(Any, selection).lock_if_supported())))
-            if not keys:
-                return 0
-            current_changeset(required=True, record=True)
-            with transaction.atomic(using=self.db, savepoint=False), write_group():
-                count = sum(super(_AngeeQuerySetMixin, rows).update(**kwargs) for rows in by_key(self, keys))
-                history.bulk_history_create(history_model, keys, "~", using=self.db)
-                self._result_cache = None
-                return count
-
-    def _changes_tracked_state(
-        self,
-        history: ModelHistory,
-        model: type[models.Model],
-        values: Mapping[str, Any],
-    ) -> bool:
-        """Whether an update writes a column the history tracks, beyond auto-now stamps."""
-
-        tracked = {field.attname for field in history.fields_included(model)} | {
-            field.name for field in history.fields_included(model)
-        }
-        stamps = {
-            name for field in model._meta.concrete_fields if getattr(field, "auto_now", False)
-            for name in (field.name, field.attname)
-        }
-        return any(name in tracked for name in values if name not in stamps)
-
-    def bulk_create(
-        self,
-        objs: Iterable[_ModelT],
-        batch_size: int | None = None,
-        ignore_conflicts: bool = False,
-        update_conflicts: bool = False,
-        update_fields: Iterable[str] | None = None,
-        unique_fields: Iterable[str] | None = None,
-    ) -> list[_ModelT]:
-        """Capture inserted/upserted stored rows, refusing unknowable identities."""
-
-        history_model = self.model._meta.concrete_model or self.model
-        history = model_history(history_model)
-        candidates = list(objs)
-        if history is not None and candidates:
-            if ignore_conflicts:
-                raise NotSupportedError("History capture cannot identify bulk_create(ignore_conflicts=True) rows.")
-            if not connections[self.db].features.can_return_rows_from_bulk_insert and any(
-                obj.pk is None for obj in candidates
-            ):
-                raise NotSupportedError("History capture requires bulk-insert primary keys on this database.")
-            current_changeset(required=True, record=True)
-        self._for_write = True
-        with transaction.atomic(using=self.db) if history is not None else nullcontext(), write_group():
-            rows = super().bulk_create(
-                candidates,
-                batch_size=batch_size,
-                ignore_conflicts=ignore_conflicts,
-                update_conflicts=update_conflicts,
-                update_fields=tuple(update_fields) if update_fields is not None else None,
-                unique_fields=tuple(unique_fields) if unique_fields is not None else None,
-            )
-            if history is not None and rows:
-                if any(row.pk is None for row in rows):
-                    raise NotSupportedError("History capture requires a primary key for every bulk-inserted row.")
-                history.bulk_history_create(
-                    history_model,
-                    [row.pk for row in rows],
-                    "~" if update_conflicts else "+",
-                    using=self.db,
-                    batch_size=batch_size,
-                )
-            return rows
-
-    def delete(self) -> tuple[int, dict[str, int]]:
-        """Batch root snapshots; native receivers retain collector cascade capture."""
-
-        history_model = self.model._meta.concrete_model or self.model
-        history = model_history(history_model)
-        if history is not None and history.cascade_delete_history:
-            history = None
-        if history is None or self.query.is_sliced:
-            return super().delete()
-        self._for_write = True
-        selection = self._system_capture(reason="angee.history.rows") if isinstance(self, RebacQuerySet) else self
-        with transaction.atomic(using=self.db):
-            keys = list(dict.fromkeys(statement_keys(cast(Any, selection).lock_if_supported())))
-            if not keys:
-                return 0, {}
-            current_changeset(required=True, record=True)
-            with transaction.atomic(using=self.db, savepoint=False), write_group():
-                history.bulk_history_create(history_model, keys, "-", using=self.db)
-                counts: dict[str, int] = {}
-                for rows in by_key(self, keys):
-                    _, deleted = super(_AngeeQuerySetMixin, rows).delete()
-                    for label, count in deleted.items():
-                        counts[label] = counts.get(label, 0) + count
-                self._result_cache = None
-                return sum(counts.values()), counts
 
     def from_public_id(self, value: str) -> _ModelT | None:
         """Return the row addressed by ``value`` within this queryset policy."""

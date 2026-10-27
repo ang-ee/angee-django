@@ -26,18 +26,14 @@ from rebac.backends import backend
 from rebac.field_backing import canonical_model
 
 from angee.actors import actor_user_id
-from angee.changesets import changeset, changeset_model, creation_fingerprint, require_changeset
 from angee.errors import RecordAccessSubjectRefused
 from angee.fields import FractionalRankField, StateField
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.models import (
     AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
     AuditMixin,
     HierarchyMixin,
     HierarchyQuerySet,
-    HistoryMixin,
     ImmutableFieldsMixin,
     ItemOwnershipMixin,
     MergeableMixin,
@@ -59,6 +55,11 @@ from angee.projects.events import (
     task_promoted,
 )
 from angee.projects.inputs import MilestoneTemplate
+from angee.provenance.context import changeset, changeset_model, require_changeset
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.provenance.contrib.angee.serialization import creation_fingerprint
 from angee.scheduling.fields import RecurrenceField
 from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
@@ -72,7 +73,7 @@ class ProjectSetupState(StrEnum):
     COMPLETE = "complete"
 
 
-class ProjectQuerySet[ProjectT: Project](OwnerQuerySet[ProjectT], AngeeQuerySet[ProjectT]):
+class ProjectQuerySet[ProjectT: Project](OwnerQuerySet[ProjectT], AngeeHistoryQuerySet[ProjectT]):
     """Project rows with the shared ownership release contract."""
 
     def update(self, **kwargs: Any) -> int:
@@ -98,7 +99,7 @@ class ProjectQuerySet[ProjectT: Project](OwnerQuerySet[ProjectT], AngeeQuerySet[
         return super().bulk_create(objs, *args, **kwargs)
 
 
-_ProjectManagerBase = AngeeManager.from_queryset(ProjectQuerySet)
+_ProjectManagerBase = AngeeHistoryManager.from_queryset(ProjectQuerySet)
 
 
 class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
@@ -235,7 +236,7 @@ class TaskQuerySet[TaskT: Task](
     MergeableQuerySet[TaskT],
     TrashQuerySet[TaskT],
     OwnerQuerySet[TaskT],
-    AngeeQuerySet[TaskT],
+    AngeeHistoryQuerySet[TaskT],
 ):
     """Task rows with hierarchy, merge, trash, and ownership contracts."""
 
@@ -282,7 +283,7 @@ class TaskQuerySet[TaskT: Task](
         )
 
 
-_TaskManagerBase = AngeeManager.from_queryset(TaskQuerySet)
+_TaskManagerBase = AngeeHistoryManager.from_queryset(TaskQuerySet)
 
 
 class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
@@ -359,7 +360,7 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
         return task
 
 
-class LinkManager[LinkT: Link](AngeeManager[LinkT]):
+class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
     """Own URL-keyed upserts on live project and task targets.
 
     permissions.zed backs the link's project and task relations with
@@ -408,7 +409,7 @@ class LinkManager[LinkT: Link](AngeeManager[LinkT]):
         return link
 
 
-class ProjectBindingManager[BindingT: ProjectBinding](AngeeManager[BindingT]):
+class ProjectBindingManager[BindingT: ProjectBinding](AngeeHistoryManager[BindingT]):
     """Own project-container bindings; ``permissions.zed`` authorizes both ends."""
 
     def validate_target(self, target: models.Model) -> None:
@@ -774,7 +775,7 @@ class Project(
         return self
 
 
-class MilestoneQuerySet[MilestoneT: Milestone](AngeeQuerySet[MilestoneT]):
+class MilestoneQuerySet[MilestoneT: Milestone](AngeeHistoryQuerySet[MilestoneT]):
     """Milestone rows with project scheduling helpers."""
 
     def overdue(self) -> Self:
@@ -783,7 +784,7 @@ class MilestoneQuerySet[MilestoneT: Milestone](AngeeQuerySet[MilestoneT]):
         return self.filter(target_date__lt=timezone.localdate(), reached_at__isnull=True, project__status="open")
 
 
-_MilestoneManagerBase = AngeeManager.from_queryset(MilestoneQuerySet)
+_MilestoneManagerBase = AngeeHistoryManager.from_queryset(MilestoneQuerySet)
 
 
 class _MilestoneManager[MilestoneT: Milestone](_MilestoneManagerBase[MilestoneT]):

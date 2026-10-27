@@ -5,19 +5,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from django.apps import AppConfig, apps
-from django.conf import settings
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import DEFAULT_DB_ALIAS, router
 from django.db import models as django_models
 from django.utils.module_loading import import_string
-from rebac import app_settings
 from rebac.models import RebacResource, Relationship, RelationshipRegistry
 from rebac.resources import model_resource_type
 from rebac.schema import AllowedSubject, FieldBinding, PermArrow, PermRef
-from simple_history.models import registered_models
 
-from angee.changesets import changeset_model_label
 from angee.impl import (
     _hook_paths,
     _resolve_hook_path,
@@ -27,31 +23,6 @@ from angee.impl import (
 )
 from angee.models import HierarchyQuerySet, ItemOwnershipMixin, OwnerMixin
 from angee.permissions import effective_rebac_definition, effective_rebac_schema
-
-
-def check_changeset_middleware(
-    app_configs: Sequence[AppConfig] | None = None,
-    **kwargs: object,
-) -> list[checks.CheckMessage]:
-    """Require strict HTTP attribution to follow REBAC's actor resolution."""
-
-    del app_configs, kwargs
-    if not app_settings.REBAC_STRICT_MODE or not changeset_model_label():
-        return []
-    if not registered_models:
-        return []
-    middleware = settings.MIDDLEWARE
-    actor = "rebac.middleware.ActorMiddleware"
-    boundary = "angee.middleware.ChangesetMiddleware"
-    if middleware.count(boundary) == 1 and actor in middleware and middleware.index(actor) < middleware.index(boundary):
-        return []
-    return [
-        checks.Error(
-            "Strict changeset attribution requires one ChangesetMiddleware after REBAC's ActorMiddleware.",
-            hint=f"Add '{boundary}' after '{actor}' in MIDDLEWARE.",
-            id="angee.E038",
-        )
-    ]
 
 
 def check_rebac_caveats(

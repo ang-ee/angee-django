@@ -53,8 +53,6 @@ from angee.models import (
     AngeeManager,
     AngeeQuerySet,
     OptimisticLockMixin,
-    SourceKind,
-    StatementSourceMixin,
     role_anchor,
 )
 
@@ -626,7 +624,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             return None
 
 
-class User(StatementSourceMixin, AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDataModel):
+class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDataModel):
     """Abstract swappable user model composed into Angee runtimes.
 
     ``kind=service`` rows are non-login principals for agents and automation:
@@ -671,14 +669,6 @@ class User(StatementSourceMixin, AbstractBaseUser, RebacPermissionsMixin, Optimi
         """Whether this principal represents a human, independently of activity."""
 
         return self.kind == UserKind.PERSON
-
-    @property
-    def source_kind(self) -> SourceKind | None:
-        """Classify active person accounts; other users are not statement sources."""
-
-        if not self.is_active or not self.is_person:
-            return None
-        return cast(SourceKind, SourceKind.PERSON)
 
     class Meta:
         """Django model options for the IAM user source."""

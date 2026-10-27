@@ -20,16 +20,18 @@ from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.changesets import changeset
-from angee.evidence import EvidenceReference
 from angee.identity import public_id_of, public_subject_ref
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.knowledge import schema as knowledge_schema
 from angee.messaging.testing.models import Channel
-from angee.models import SourceKind
 from angee.parties import schema as parties_schema
 from angee.provenance import schema as provenance_schema
+from angee.provenance.context import changeset
+from angee.provenance.evidence import EvidenceReference
+from angee.provenance.statements import (
+    SourceKind,
+)
 from tests.conftest import (
     Page,
     addon_schema,

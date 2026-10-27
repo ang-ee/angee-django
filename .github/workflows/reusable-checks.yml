@@ -250,9 +250,8 @@ jobs:
   stack:
     if: ${{ inputs.stack-enabled }}
     runs-on: ubuntu-latest
-    # Composition, fragment checks and the serial bridges suite no longer fit
-    # 30 minutes.
-    timeout-minutes: 60
+    # Consumers also run their full PostgreSQL suite before fragment checks.
+    timeout-minutes: ${{ inputs.consumer-path != '' && 90 || 60 }}
     services:
       postgres:
         image: postgres:17
@@ -371,7 +370,7 @@ jobs:
         working-directory: stack
         run: |
           uv sync
-          uv run python -m angee.compose.bootstrap
+          uv run python -m angee.management.bootstrap
           uv sync
           uv run manage.py angee build
           uv run manage.py schema
@@ -410,7 +409,7 @@ jobs:
 
           os.environ["MYPYPATH"] = os.pathsep.join(filter(None, (
               *(str(path) for path in typing_settings.ANGEE_ADDON_DIRS),
-              str(typing_settings.ANGEE_RUNTIME_DIR.parent),
+              str(typing_settings.COMPOSE_RUNTIME_DIR.parent),
               os.environ.get("MYPYPATH"),
           )))
           subprocess.run([
@@ -430,7 +429,7 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
           ANGEE_PROJECT_DIR: ${{ github.workspace }}/stack
-          DJANGO_SETTINGS_MODULE: angee.compose.settings
+          DJANGO_SETTINGS_MODULE: angee.settings
           CONSUMER_PATH: ${{ inputs.consumer-path }}
           CONSUMER_TESTS: ${{ inputs.consumer-tests }}
           CONSUMER_PYTEST_PLUGINS: ${{ inputs.consumer-pytest-plugins }}
@@ -457,7 +456,8 @@ jobs:
               "-c", "/dev/null", "--rootdir", str(slot), "--confcutdir", str(slot),
               "--import-mode=importlib", "--nomigrations", "-o", "python_files=test*.py",
               # Register pytest-django before the shared django_db_setup override.
-              "-p", "django", "-p", "angee.testing.fixtures", "-p", "angee.parties.testing.fixtures",
+              "-p", "django", "-p", "angee.testing.fixtures", "-p", "angee.provenance.testing.fixtures",
+              "-p", "angee.parties.testing.fixtures",
               *(arg for plugin in plugins for arg in ("-p", plugin)),
               "-p", "no:randomly", "-n", "4", "--dist", "worksteal", "-q",
               *(str(slot / path) for path in paths),

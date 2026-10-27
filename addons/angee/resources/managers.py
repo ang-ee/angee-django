@@ -14,12 +14,12 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
-from angee.changesets import changeset, current_changeset
 from angee.fields import ModelLabelField
 from angee.identity import SqidPublicIdentity, public_id_of
 from angee.impl import resolve_impl_class
 from angee.jsonschema import relation_positions
 from angee.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet, SqidMixin
+from angee.provenance.context import changeset, current_changeset
 from angee.resources.entries import (
     GRANT_KIND,
     ROW_KIND,

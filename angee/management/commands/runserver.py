@@ -7,9 +7,8 @@ autoreloader). Serving with uvicorn keeps the ASGI lifespan the MCP mount needs
 (see :mod:`angee.asgi`); uvicorn no-ops its own signal handlers off the main
 thread, so it composes with the reloader's worker thread exactly as Daphne's
 server does. It wins over ``django.core``'s base ``runserver`` because the
-composer pins ``angee.compose`` first in ``INSTALLED_APPS`` (Django's
-``get_commands`` lets the earliest app win) and the composed runtime ships no
-competing ``staticfiles``/Daphne ``runserver``.
+host settings place ``angee`` before competing commands in ``INSTALLED_APPS`` (Django's
+``get_commands`` lets the earliest app win) including ``staticfiles``/Daphne ``runserver``.
 """
 
 from __future__ import annotations

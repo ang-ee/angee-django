@@ -118,7 +118,7 @@
     "@sentry/react": "^11.4.0",
     "graphql": "^16.14.0",
     "i18next": "^26.3.2",
-    "nuqs": "^2.5.0"
+    "nuqs": "^2.10.1"
   },
   "peerDependencies": {
     "@tailwindcss/vite": "^4.0.0",

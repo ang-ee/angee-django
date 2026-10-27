@@ -9,6 +9,8 @@ _Settings = TypedDict(
     "_Settings",
     {
         "COMPOSE_INTEGRATIONS:append": list[str],
+        "COMPOSE_APP_DECLARATIONS": str,
+        "COMPOSE_ENV_PREFIXES": tuple[str, ...],
         "COMPOSE_EXTERNAL_ARTIFACT_ROOTS": tuple[str, ...],
         "COMPOSE_OWNED_ARTIFACT_PATHS": tuple[str, ...],
         "ROOT_URLCONF": str,
@@ -16,11 +18,9 @@ _Settings = TypedDict(
         "MIDDLEWARE:prepend": list[str],
         "MIDDLEWARE:append": list[str],
         "ANGEE_WEB_STATEMENT_TIMEOUT": int,
-        "ANGEE_CHANGESET_MODEL": str,
         "ANGEE_IMPL_REGISTRIES": list[str],
         "ANGEE_HOOKS": list[str],
         "ANGEE_MERGE_GUARDS": list[str],
-        "SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD": bool,
         "REBAC_BACKEND": str,
         "REBAC_LOCAL_BACKEND_STORAGE": str,
         "REBAC_STRICT_MODE": bool,
@@ -32,6 +32,8 @@ _Settings = TypedDict(
 )
 
 SETTINGS: _Settings = {
+    "COMPOSE_ENV_PREFIXES": ("ANGEE_",),
+    "COMPOSE_APP_DECLARATIONS": "angee.conf.ManifestDeclarations",
     "COMPOSE_INTEGRATIONS:append": ["angee.build.PermissionIntegration", "angee.web.WebIntegration"],
     "COMPOSE_EXTERNAL_ARTIFACT_ROOTS": ("gql", "schemas", "web"),
     "COMPOSE_OWNED_ARTIFACT_PATHS": ("web/manifest.json", "web/tailwind.sources.css"),
@@ -43,12 +45,10 @@ SETTINGS: _Settings = {
         "django.middleware.csp.ContentSecurityPolicyMiddleware",
     ],
     "ANGEE_WEB_STATEMENT_TIMEOUT": 60,
-    "ANGEE_CHANGESET_MODEL": "provenance.Changeset",
     "ANGEE_IMPL_REGISTRIES": [],
     "ANGEE_HOOKS": ["ANGEE_MERGE_GUARDS"],
     # Dotted callables that refuse merging away one record (angee.models.fold_records).
     "ANGEE_MERGE_GUARDS": [],
-    "SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD": True,
     "REBAC_BACKEND": "local",
     "REBAC_LOCAL_BACKEND_STORAGE": "registry",
     "REBAC_STRICT_MODE": True,

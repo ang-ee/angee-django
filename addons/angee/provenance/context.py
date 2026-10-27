@@ -1,20 +1,17 @@
-"""Write attribution without coupling the model foundation to its storage addon."""
+"""Logical write attribution for native Django capture entrypoints."""
 
 from __future__ import annotations
 
 import logging
-import sys
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
-from pathlib import Path
 from threading import RLock
 from types import TracebackType
-from typing import Any, Protocol, cast
+from typing import ClassVar, Protocol, cast
 
 from asgiref.sync import sync_to_async
 from django.apps import apps
@@ -22,27 +19,20 @@ from django.conf import settings
 from django.db import connections, models, router, transaction
 from django.db.models.base import ModelState
 from django.utils import timezone
-from rebac import app_settings, current_actor
-from rebac.actors import current_sudo_reason
-from rebac.errors import MissingActorError
-
-from angee.autoconfig import SETTINGS
-from angee.serialization import canonical_json_sha256, json_safe
 
 logger = logging.getLogger(__name__)
 
-MANAGEMENT_ENTRYPOINT = "angee.compose.manage.main"
-"""The framework-owned ``manage.py`` entrypoint that opens a command's boundary."""
+REQUIRED_MESSAGE = "A captured write requires an open changeset."
 
 
-class ChangesetRequired(MissingActorError):
+class ChangesetRequired(Exception):
     """A captured write has no logical attribution boundary."""
 
 
 def changeset_model_label() -> str:
     """Return the swappable storage label; empty when attribution storage is disabled."""
 
-    return cast(str, getattr(settings, "ANGEE_CHANGESET_MODEL", SETTINGS["ANGEE_CHANGESET_MODEL"]) or "")
+    return cast(str, getattr(settings, "ANGEE_CHANGESET_MODEL", "") or "")
 
 
 def changeset_model() -> type[models.Model]:
@@ -54,10 +44,19 @@ def changeset_model() -> type[models.Model]:
 class ChangesetLike(Protocol):
     """Storage contract supplied by ANGEE_CHANGESET_MODEL."""
 
+    required_context_error: ClassVar[type[Exception]]
+
+    @classmethod
+    def context_required(cls) -> bool: ...
+
+    @classmethod
+    def ambient_attribution(cls) -> tuple[str, str]: ...
+
     @property
     def pk(self) -> object: ...
 
     def _set_pk_val(self, value: None) -> None: ...
+
     actor_ref: str
     change_reason: str
     touched: list[str]
@@ -70,6 +69,8 @@ class ChangesetLike(Protocol):
     def close(self, outcome: str) -> None: ...
 
     def record_created(self, row: models.Model) -> None: ...
+
+    def history_user(self) -> models.Model | None: ...
 
 
 @dataclass
@@ -125,12 +126,12 @@ class _ChangesetBoundary:
         connections to the thread object as well.
         """
 
-        actor = current_actor()
-        key = (threading.current_thread(), str(actor) if actor is not None else "")
+        model = changeset_model()
+        actor_ref, _ = cast(type[ChangesetLike], model).ambient_attribution()
+        key = (threading.current_thread(), actor_ref)
         with self.lock:
             row = self.rows.get(key)
             if row is None:
-                model = changeset_model()
                 facts = dict(self.facts)
                 origin = facts.pop("origin", None)
                 facts.setdefault("occurred_at", timezone.now())
@@ -144,7 +145,7 @@ class _ChangesetBoundary:
         row = self.row()
         instance = row.instance
         if not row.attributed:
-            instance.change_reason = cast(str, self.facts.get("change_reason", current_sudo_reason() or ""))
+            instance.change_reason = cast(str, self.facts.get("change_reason", instance.ambient_attribution()[1]))
             row.attributed = True
         if record and not row.persisted:
             using = router.db_for_write(changeset_model(), instance=instance)
@@ -203,21 +204,11 @@ class _ChangesetBoundary:
 _current_changeset: ContextVar[_ChangesetBoundary | None] = ContextVar("angee_current_changeset", default=None)
 
 
-def _required_message() -> str:
-    message = "A captured write requires an open changeset."
-    if sys.argv and Path(sys.argv[0]).name == "manage.py":
-        message += (
-            f" This management command runs without a boundary: manage.py must call {MANAGEMENT_ENTRYPOINT}();"
-            " re-render it from the project template."
-        )
-    return message
-
-
 _process_boundary: _ChangesetBoundary | None = None
 """The boundary a whole-process entrypoint publishes to every thread it starts.
 
-A management command (``angee.compose.manage.main``) and a test (the ``angee.testing``
-fixture) own the process while they run, so a thread or pool they start without
+A process entrypoint or test fixture owns the process while it runs, so a thread
+or pool it starts without
 copying the context (``threading.Thread``, ``ThreadPoolExecutor``) writes under their
 boundary, in its own row. Concurrent entrypoints (requests, connections, tasks) never
 publish one: their threads carry the context explicitly (``copy_context().run``).
@@ -234,17 +225,22 @@ def current_changeset(*, required: bool = False, record: bool = False) -> Change
     """Return the concrete open changeset, recording it before a captured write.
 
     Empty boundaries create no database rows, allowing checks and schema commands
-    to run before migrations. Strictness follows REBAC's existing posture. The
-    row belongs to the current thread and ambient actor; its sudo reason resolves
+    to run before migrations. Configured storage owns strictness and attribution.
+    Explicit required writes fail closed when storage is disabled. The row belongs
+    to the current thread and actor; its ambient reason resolves
     on the first captured write (``required`` or ``record``).
     """
 
+    if not changeset_model_label():
+        if required:
+            raise ChangesetRequired(REQUIRED_MESSAGE)
+        return None
     boundary = _open_boundary()
     if boundary is None:
-        if required and app_settings.REBAC_STRICT_MODE:
-            raise ChangesetRequired(_required_message())
-        return None
-    if not changeset_model_label():
+        if required:
+            model = cast(type[ChangesetLike], changeset_model())
+            if model.context_required():
+                raise model.required_context_error(REQUIRED_MESSAGE)
         return None
     return boundary.capture(record=record) if required or record else boundary.row().instance
 
@@ -254,7 +250,7 @@ def require_changeset(*, record: bool = False) -> ChangesetLike:
 
     context = current_changeset(required=True, record=record)
     if context is None:
-        raise ChangesetRequired(_required_message())
+        raise ChangesetRequired(REQUIRED_MESSAGE)
     return context
 
 
@@ -272,23 +268,6 @@ def discard_changeset_claim(instance: ChangesetLike) -> None:
     boundary = _open_boundary()
     if boundary is not None:
         boundary.discard(instance)
-
-
-def creation_fingerprint(values: Any) -> str:
-    """Return the canonical fingerprint shared by every idempotent create."""
-
-    def content(value: Any) -> Any:
-        if isinstance(value, Enum):
-            return content(value.value)
-        if isinstance(value, models.Model):
-            return {"model": value._meta.label_lower, "pk": json_safe(value.pk)}
-        if isinstance(value, Mapping):
-            return {key: content(item) for key, item in value.items()}
-        if isinstance(value, (tuple, list)):
-            return [content(item) for item in value]
-        return json_safe(value)
-
-    return canonical_json_sha256(content(values))
 
 
 class _ChangesetScope:
@@ -367,8 +346,8 @@ def changeset(
 
     Entrypoints use ``fresh=True`` to own a boundary; their facts are defaults.
     Ad-hoc nested boundaries join and refine defaults before recording, while
-    conflicting explicit facts fail fast. No boundary changes REBAC's actor or
-    grants a bypass. A changeset row is constructed when a caller needs the
+    conflicting explicit facts fail fast. No boundary changes the ambient actor or
+    grants authority. A changeset row is constructed when a caller needs the
     concrete instance and persisted in the first captured write's transaction;
     each writing thread and actor records its own row under the shared facts.
     Asynchronous entrypoints use ``async with``. ``process=True`` is for an

@@ -345,7 +345,7 @@ To run one-shot management commands against the stack host (build the runtime,
 migrate, sync permissions, load data, check GraphQL SDL), drive its `manage.py`
 through `uv` from the controlling stack root. [Checks](../checks.md#composition-and-schema)
 owns the prerequisites and ordering. A rendered `manage.py` only calls
-`angee.compose.manage.main()`, which attributes a one-shot command's writes to one
+`angee.management.main()`, which attributes a one-shot command's writes to one
 changeset; a `manage.py` from before that entrypoint fails its first captured write
 with the remedy — re-render it from the project template. To work on a change in
 isolation, add a Jujutsu (jj) workspace of the framework's source store under

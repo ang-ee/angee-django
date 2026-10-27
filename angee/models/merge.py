@@ -38,6 +38,7 @@ system verb that folds a duplicate has no actor to authorize and calls it direct
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, ClassVar, Self, cast
 
@@ -48,7 +49,6 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import is_sudo
 
 from angee.actors import instance_actor
-from angee.changesets import changeset, current_changeset
 from angee.identity import instances_from_public_ids
 from angee.impl import resolve_hooks
 from angee.models.base import AngeeModel
@@ -73,6 +73,7 @@ from angee.models.merge_references import (
     unique_field_sets as unique_field_sets,
 )
 from angee.models.trash import TrashMixin
+from angee.signals import pre_merge
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,14 +384,8 @@ def fold_records(
 
     model = type(survivor)
     using = survivor._state.db
-    context = current_changeset() if join else None
-    if context is not None and context._state.db != using:
-        raise ValidationError("A fold must share the database of its changeset.")
-    with changeset(
-        fresh=context is None,
-        activity="merge" if context is None else None,
-        origin=survivor if context is None else None,
-    ):
+    with ExitStack() as contexts:
+        pre_merge.send(sender=model, survivor=survivor, join=join, contexts=contexts)
         with system_context(reason=MERGE_REASON):
             rows = model._base_manager.db_manager(hints={"instance": survivor}).filter(
                 pk__in=[record.pk for record in merged]
@@ -428,5 +423,3 @@ def fold_records(
                         reference.move(pointing, survivor=survivor)
         for record in merged:
             retire(record)
-        if (context := current_changeset(required=True, record=True)) is not None:
-            context.touched.append(model._meta.label_lower)

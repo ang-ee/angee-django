@@ -9,10 +9,12 @@ from typing import Any
 
 import pytest
 from django.apps import AppConfig
+from django.core.management.base import CommandError
 
-from angee.compose import dependencies as dependencies_module
-from angee.compose.dependencies import AddonDependencyGroup, AddonDependencyGroupResult
 from angee.compose.runtime import Runtime
+from angee.management import dependencies as dependencies_module
+from angee.management.commands.angee import Command
+from angee.management.dependencies import AddonDependencyGroup, AddonDependencyGroupResult
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -100,35 +102,47 @@ def test_composed_addon_dependencies_skip_a_bare_host(tmp_path: Path) -> None:
     assert not (host / "pyproject.toml").exists()
 
 
-def test_runtime_dependency_check_accepts_fresh_rejects_stale_and_skips_bare_host(tmp_path: Path) -> None:
-    """Runtime check includes the compiled host dependency group when one exists."""
+def test_host_build_projects_and_checks_dependencies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The native host command couples compiler output to its packaging contract."""
 
     host = tmp_path / "host"
     host.mkdir()
     pyproject = host / "pyproject.toml"
     pyproject.write_text('[project]\nname = "host"\nversion = "0.0.0"\n', encoding="utf-8")
     addon = _app_config(tmp_path / "fake-addon", "example.fake_check", ("alpha>=1",))
-    runtime = Runtime.discover((addon,), runtime_dir=tmp_path / "runtime", project_dir=host)
+    runtime = Runtime.discover((addon,), runtime_dir=tmp_path / "runtime")
+    monkeypatch.setattr(Runtime, "from_django", classmethod(lambda cls: runtime))
+    monkeypatch.setattr("angee.management.commands.angee.find_project_dir", lambda: host)
+    command = Command()
 
-    assert runtime.build() is AddonDependencyGroupResult.WRITTEN
-    assert runtime.build() is AddonDependencyGroupResult.UNCHANGED
-    runtime.check()
+    command._handle_build({"check": False})
+    assert _read_toml(pyproject)["dependency-groups"]["addons"] == ["alpha>=1"]
+    first_stat = pyproject.stat()
+    command._handle_build({"check": False})
+    assert pyproject.stat().st_mtime_ns == first_stat.st_mtime_ns
+    command._handle_build({"check": True})
 
     pyproject.write_text(pyproject.read_text(encoding="utf-8").replace("alpha>=1", "stale>=1"), encoding="utf-8")
-    with pytest.raises(RuntimeError, match="host addon dependency group is stale"):
-        runtime.check()
+    with pytest.raises(CommandError, match="host addon dependency group is stale"):
+        command._handle_build({"check": True})
 
     pyproject.unlink()
-    runtime.check()
+    command._handle_build({"check": True})
 
 
-def test_runtime_build_reports_a_missing_project_directory(tmp_path: Path) -> None:
-    """Runtime delegates the no-project result instead of making the command infer it."""
+def test_host_build_reports_a_missing_project_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The command reports a bare host without asking the compiler about packaging."""
 
     addon = _app_config(tmp_path / "fake-addon", "example.fake_no_project", ("alpha>=1",))
-    runtime = Runtime.discover((addon,), runtime_dir=tmp_path / "runtime", project_dir=None)
+    runtime = Runtime.discover((addon,), runtime_dir=tmp_path / "runtime")
+    monkeypatch.setattr(Runtime, "from_django", classmethod(lambda cls: runtime))
+    monkeypatch.setattr("angee.management.commands.angee.find_project_dir", lambda: None)
 
-    assert runtime.build() is AddonDependencyGroupResult.SKIPPED_NO_PROJECT_DIR
+    Command()._handle_build({"check": False})
+
+    assert "addon dependencies skipped-no-project-dir" in capsys.readouterr().out
 
 
 def test_composed_addon_dependency_write_wraps_os_errors(

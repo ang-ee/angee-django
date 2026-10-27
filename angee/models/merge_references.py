@@ -24,7 +24,6 @@ from rebac.errors import NoActorResolvedError
 from rebac.field_backing import canonical_model
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
-from simple_history.utils import get_history_manager_for_model
 
 from angee.lineage import concrete_lineage
 from angee.models.append_only import AppendOnlyModel
@@ -186,9 +185,10 @@ class Reference:
 
         if self.rows(record).exists():
             return True
+        history = model_history(self.model)
         return (
-            model_history(self.model) is not None
-            and get_history_manager_for_model(self.model).using(record._state.db).filter(**self.lookup(record)).exists()
+            history is not None
+            and history.db_manager(hints={"instance": record}).filter(**self.lookup(record)).exists()
         )
 
     def move(self, rows: models.QuerySet[Any], *, survivor: models.Model) -> None:

@@ -6,8 +6,9 @@ from collections.abc import Iterable
 
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
+from hatch_angee import order_app_dependencies
 
-from angee.addons import addon_manifest, order_app_dependencies
+from angee.compose.declarations import AppDeclarationSource
 
 
 class AppGraph:
@@ -18,19 +19,21 @@ class AppGraph:
     correctly from outside, so the graph's owner records them here and consumers
     only read:
 
-    - ``angee_addon_root``: whether the project declared this app as a root
+    - ``compose_root``: whether the project declared this app as a root
       (``True``) versus pulling it in only through another app's ``depends_on``
       closure (``False``). If a declared root is also another root's dependency,
       the root declaration wins. The root/dependency split is the source of an
       addon's "consumer" vs "required" classification.
-    - ``angee_root_declaration``: the exact string authored in ``INSTALLED_APPS``
+    - ``compose_root_declaration``: the exact string authored in ``INSTALLED_APPS``
       for a root, or ``None`` for a dependency. Runtime drift checks compare this
       with the same editable setting without losing AppConfig-path spelling.
-    - ``angee_forced``: whether any other resolved app depends on this one — the
-      composer's reading of "cannot be uninstalled" for addons another installed
-      addon needs. Transitive: ``A→B→C`` forces both ``B`` and ``C``. A leaf
-      consumer/host root nothing depends on is not forced.
+    - ``compose_required``: whether any other resolved app depends on this one.
+      Transitive: ``A→B→C`` requires both ``B`` and ``C``. Root and required status
+      are independent; a declared root may also be required by another app.
     """
+
+    def __init__(self, declarations: AppDeclarationSource | None = None) -> None:
+        self.declarations = declarations if declarations is not None else AppDeclarationSource.configured()
 
     def resolve(
         self,
@@ -59,8 +62,7 @@ class AppGraph:
         def register(config: AppConfig) -> AppConfig:
             if config.name in app_configs_by_name:
                 raise ImproperlyConfigured(f"Duplicate Django app {config.name!r}")
-            manifest = addon_manifest(config, refresh=True)
-            dependencies_by_name[config.name] = manifest.depends_on if manifest is not None else ()
+            dependencies_by_name[config.name] = self.declarations.dependencies(config, refresh=True)
             app_configs_by_name[config.name] = config
             for alias in (config.name, config.label):
                 existing = aliases.setdefault(alias, config.name)
@@ -112,7 +114,7 @@ class AppGraph:
             for dependency in dependencies_by_name[config.name]:
                 depended_upon.add(aliases.get(dependency, dependency))
         for config in ordered:
-            setattr(config, "angee_addon_root", config.name in root_name_set)
-            setattr(config, "angee_root_declaration", root_declarations.get(config.name))
-            setattr(config, "angee_forced", config.name in depended_upon)
+            setattr(config, "compose_root", config.name in root_name_set)
+            setattr(config, "compose_root_declaration", root_declarations.get(config.name))
+            setattr(config, "compose_required", config.name in depended_upon)
         return ordered

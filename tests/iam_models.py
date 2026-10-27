@@ -6,6 +6,7 @@ from angee.iam.models import Group as AbstractGroup
 from angee.iam.models import IAMKind as AbstractIAMKind
 from angee.iam.models import IAMProtected as AbstractIAMProtected
 from angee.iam.models import User as AbstractUser
+from angee.provenance.contrib.iam.models import UserSource
 
 
 class IAMKind(AbstractIAMKind):
@@ -42,7 +43,7 @@ class Group(AbstractGroup):
         rebac_subject_relation = "member"
 
 
-class User(AbstractUser):
+class User(UserSource, AbstractUser):
     """Concrete IAM user used by tests without running the composer."""
 
     class Meta(AbstractUser.Meta):

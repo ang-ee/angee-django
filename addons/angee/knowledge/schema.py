@@ -4,15 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
-from typing import Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db.models import F
+from django.db.models import F, Prefetch, prefetch_related_objects
 from rebac import system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
+from strawberry_django.optimizer import optimize
 
 from angee.data.metadata import DataResourceSubtitleMetadata
 from angee.fields import SqidField
@@ -50,6 +51,9 @@ from angee.knowledge.models import (
     UnsupportedPageKindError,
 )
 from angee.tags.schema import TaggedNode, tags_input_extensions
+
+if TYPE_CHECKING:
+    from angee.knowledge.models import Page as PageModel
 
 Vault = apps.get_model("knowledge", "Vault")
 Page = apps.get_model("knowledge", "Page")
@@ -156,6 +160,27 @@ class WikilinkType:
     page: strawberry.ID | None
 
 
+def _ancestors_prefetch(info: strawberry.Info) -> Prefetch:
+    """Optimize readable ancestors using the nested Page selection's native hints."""
+
+    # The native optimizer clones the supplied queryset but declares its return
+    # as QuerySet; retain Page's hierarchy API at that upstream type boundary.
+    rows = cast("PageQuerySet[PageModel]", optimize(PageType.get_queryset(Page.objects.untrashed(), info), info))
+    return rows.model.ancestors_prefetch(rows, to_attr="_knowledge_ancestors")
+
+
+def _wikilinks_prefetch(_info: strawberry.Info) -> Prefetch:
+    """Batch the source index and its independently readable live target pages."""
+
+    return Prefetch(
+        "outgoing_links",
+        queryset=Link.objects.only("source_page_id", "target_text", "target_page_id").prefetch_related(Prefetch(
+            "target_page", queryset=Page.objects.untrashed().only("id"),
+        )),
+        to_attr="_knowledge_wikilinks",
+    )
+
+
 @strawberry_django.type(Page)
 class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     """GraphQL projection of a page."""
@@ -176,27 +201,26 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
 
         return bool(cast(Any, self)._has_children)
 
-    @strawberry_django.field(only=["path"])
-    def ancestors(self) -> list[PageType]:
+    @strawberry_django.field(only=["path"], prefetch_related=[_ancestors_prefetch])
+    def ancestors(self, info: strawberry.Info) -> list[PageType]:
         """Readable ancestors in path order; hidden containers contribute no label."""
 
-        return cast("list[PageType]", Page.objects.ancestors_of(cast(Any, self)).untrashed().order_by("path"))
+        if not hasattr(self, "_knowledge_ancestors"):
+            prefetch_related_objects([cast("PageModel", self)], _ancestors_prefetch(info))
+        return cast("list[PageType]", cast(Any, self)._knowledge_ancestors)
 
-    @strawberry_django.field(only=["id"])
-    def wikilinks(self) -> list[WikilinkType]:
+    @strawberry_django.field(only=["id"], prefetch_related=[_wikilinks_prefetch])
+    def wikilinks(self, info: strawberry.Info) -> list[WikilinkType]:
         """Project the index owner's resolution under the current target read scope."""
 
-        links = list(Link.objects.filter(source_page_id=cast(Any, self).pk))
-        targets = {
-            row.pk: require_public_id(Page, row.pk)
-            for row in Page.objects.untrashed().filter(pk__in=[link.target_page_id for link in links])
-        }
+        if not hasattr(self, "_knowledge_wikilinks"):
+            prefetch_related_objects([cast("PageModel", self)], _wikilinks_prefetch(info))
         return [
             WikilinkType(
                 title=link.target_text,
-                page=targets.get(link.target_page_id) if link.target_page_id is not None else None,
+                page=require_public_id(Page, link.target_page.pk) if link.target_page is not None else None,
             )
-            for link in links
+            for link in cast(Any, self)._knowledge_wikilinks
         ]
 
     @strawberry_django.field(only=["id", "markdown__kind"])
@@ -497,13 +521,19 @@ class KnowledgeQuery:
     """Knowledge content queries that span the page/body join."""
 
     @strawberry.field
-    def search_pages(self, query: str, vault: PublicID | None = None, first: int = 20) -> list[PageType]:
+    def search_pages(
+        self, info: strawberry.Info, query: str, vault: PublicID | None = None, first: int = 20,
+    ) -> list[PageType]:
         """Search a selected readable vault, or bounded readable backend groups."""
         rows = Vault.objects.all()
         if vault is not None:
             target = require_instance_for_id(Vault, vault)
             rows = rows.filter(pk=target.pk)
-        return cast("list[PageType]", rows.search_pages(query, first=first))
+        ranked = rows.search_pages(query, first=first)
+        # Backends own ranking; the selected Page projection owns native hints.
+        selected = optimize(PageType.get_queryset(Page.objects.filter(pk__in=[page.pk for page in ranked]), info), info)
+        pages = {page.pk: page for page in selected}
+        return cast("list[PageType]", [pages[page.pk] for page in ranked if page.pk in pages])
 
     @strawberry.field(name="record_knowledge_bindings")
     def record_knowledge_bindings(

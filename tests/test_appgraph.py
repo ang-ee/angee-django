@@ -11,6 +11,7 @@ from hatch_angee import AddonManifest
 
 from angee.addons import addon_manifest, resolve_manifest_roots
 from angee.compose.appgraph import AppGraph
+from angee.compose.declarations import AppDeclarationSource
 from tests.conftest import make_addon
 
 
@@ -25,7 +26,7 @@ def test_folder_addon_dependency_resolves_manifest_free_core_app() -> None:
     assert base.name == "angee"
     assert addon_manifest(base) is None
     assert not hasattr(base, "angee_depends_on")
-    assert base.angee_forced is True
+    assert base.compose_required is True
     assert resolved_consumer is consumer
 
 
@@ -156,7 +157,7 @@ def test_appgraph_retains_discovered_app_config_dependency_alias(tmp_path: Path,
 
     assert AppGraph().resolve((consumer,)) == (dependency, consumer)
     assert created == [declaration]
-    assert dependency.angee_forced is True
+    assert dependency.compose_required is True
 
 
 def test_appgraph_unknown_dependency_still_fails_during_discovery(tmp_path: Path) -> None:
@@ -168,3 +169,11 @@ def test_appgraph_unknown_dependency_still_fails_during_discovery(tmp_path: Path
 
     with pytest.raises(ImproperlyConfigured, match="depends on unknown app 'missing_app_for_graph_test'"):
         AppGraph().resolve((consumer,))
+
+
+def test_plain_composer_has_no_implicit_manifest_policy(tmp_path: Path) -> None:
+    """A host must supply manifest semantics through the explicit adapter."""
+
+    consumer = make_addon(name="example.consumer", path=tmp_path, depends_on=("missing.app",))
+    (tmp_path / "addon.toml").write_text("not valid toml = [")
+    assert AppGraph(AppDeclarationSource()).resolve((consumer,)) == (consumer,)

@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 
-import { Recovery, Waiting, RunStory, type RunRequest } from "./RunsPage.stories";
+import { RunStory, type RunRequest } from "./RunsPage.stories";
 import { runFixture, stepRunFixture } from "./testing";
 import { StepRuns } from "./StepRuns";
 
@@ -74,7 +74,7 @@ async function openStep() {
 }
 
 test("routed record uses the framework action menu, facts and retained JSON", async () => {
-  render(Recovery.render());
+  render(<RunStory />);
   expect(await screen.findByText("Operator")).toBeTruthy();
   expect(await screen.findByText("Review notes")).toBeTruthy();
   expect(screen.getByRole("tab", { name: "Step runs" })).toBeTruthy();
@@ -239,7 +239,7 @@ test("map facts distinguish ordinary steps, item zero, and empty map parents", a
 });
 
 test("selected step opens in the shared drawer with attempts and records", async () => {
-  render(Recovery.render());
+  render(<RunStory />);
   const step = await openStep();
   expect(await within(step).findByRole("heading", { name: "Inspect source" })).toBeTruthy();
   expect(within(step).queryByText("Wait reason")).toBeNull();
@@ -303,7 +303,7 @@ test("run list groups and filters status, workflow and origin through shared met
 });
 
 test("waiting reason appears only on a waiting step and retry uses backend capability", async () => {
-  render(Waiting.render());
+  render(<RunStory waiting />);
   const step = await openStep();
   expect(await within(step).findByText("Dispatch attempts exhausted.")).toBeTruthy();
   const dialog = await action("Retry step", step);

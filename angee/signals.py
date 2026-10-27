@@ -11,6 +11,13 @@ from django.db.models import Model
 from django.db.models.signals import class_prepared
 from django.dispatch import Signal
 
+pre_merge = Signal()
+"""Enter addon-owned contexts around one record fold (survivor, join, contexts).
+
+``contexts`` is the fold's ExitStack. Receivers may enter a context there;
+its cleanup runs after the fold, including when validation or a write fails.
+"""
+
 bulk_updated = Signal()
 """An owning bulk verb changed a batch of rows (instances, update_fields, using).
 

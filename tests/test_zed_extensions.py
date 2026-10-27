@@ -31,8 +31,8 @@ from angee.build import (
     merged_schemas,
     render_zed,
 )
-from angee.fs import write_atomic
 from angee.testing.permissions import installed_field_owners
+from angee.utils.files import write_atomic
 
 User = get_user_model()
 

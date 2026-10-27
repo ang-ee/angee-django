@@ -41,8 +41,8 @@ from django.core.files import locks
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from angee.fs import write_atomic
 from angee.impl import ImplBase, impl_registry, resolve_impl_class
+from angee.utils.files import write_atomic
 
 _INSTALLED_APPS_KEY = "INSTALLED_APPS"
 _SETTINGS_FILENAME = "settings.yaml"

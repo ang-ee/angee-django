@@ -1,66 +1,18 @@
-"""Filesystem primitives shared by Angee's runtime and SDL emitters.
-
-A namespace-root utility (peer to :mod:`angee.paths`): both the build-time
-composer (:mod:`angee.compose.runtime`) and the GraphQL SDL owner
-(:mod:`angee.graphql.sdl`) write generated files through one primitive, so the
-atomic-write behaviour lives once.
-"""
+"""Guarded reconciliation of generated composition artifacts."""
 
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+
+from angee.utils.files import write_atomic
 
 logger = logging.getLogger(__name__)
 
 GENERATED_SENTINEL = "# ANGEE GENERATED RUNTIME - DO NOT EDIT"
-"""Marker every Angee-generated file carries; the gate before destructive cleanup.
-
-Lives here, beside :func:`write_atomic`, because it is the sentinel for *all*
-generated files — Python runtime modules, the GraphQL SDL, and the composed
-``runtime/web`` artifacts — so both the composer and the web projector import it
-from one namespace-root owner rather than from each other.
-"""
-
-
-def write_atomic(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` atomically, skipping an unchanged file.
-
-    A concurrent reader (another Django boot importing a generated module, the
-    Vite dev server reading the SDL) sees either the old file or the new one,
-    never a half-written one: the bytes go to a temp file in the *same*
-    directory and are then ``os.replace``-d into place, an atomic rename on the
-    one filesystem. The unchanged-file short-circuit preserves the emitters'
-    behaviour of not touching a file whose contents already match, so neither
-    the autoreloader nor Vite sees a spurious modification. A failed write removes
-    its own temp file so a leftover ``.tmp`` never lingers in ``runtime/`` to trip
-    drift checks.
-    """
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and path.read_text(encoding="utf-8") == text:
-        return
-    tmp: Path | None = None
-    try:
-        with NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            handle.write(text)
-            tmp = Path(handle.name)
-        os.replace(tmp, path)
-        tmp = None
-    finally:
-        if tmp is not None:
-            tmp.unlink(missing_ok=True)
+"""Stable marker checked before generated runtime cleanup."""
 
 
 @dataclass(slots=True)
@@ -149,7 +101,21 @@ class GeneratedTree:
                 ", ".join(str(self.root / path) for path in retired),
             )
 
+    @staticmethod
+    def validate_artifacts(root: Path, artifacts: Mapping[Path, str]) -> None:
+        """Reject invalid paths and links escaping the effective generated root."""
+
+        resolved_root = root.resolve()
+        for path, text in artifacts.items():
+            if not isinstance(path, Path) or path.is_absolute() or ".." in path.parts or not path.parts:
+                raise ValueError(f"Generated artifact must have a root-relative file path: {path!r}")
+            if not isinstance(text, str):
+                raise ValueError(f"Generated artifact must contain text: {path}")
+            if not (root / path).resolve().is_relative_to(resolved_root):
+                raise ValueError(f"Generated artifact escapes the root through a symlink: {path}")
+
     def _changes(self) -> tuple[set[Path], set[Path]]:
+        self.validate_artifacts(self.root, self.artifacts)
         expected = set(self.artifacts)
         expected.update(parent for path in self.artifacts for parent in path.parents)
         changed = {

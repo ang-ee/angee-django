@@ -7,7 +7,7 @@ from typing import Any
 
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.paths import resolve_path
+from angee.utils.paths import resolve_path
 
 
 def _sequence(value: Any) -> tuple[Any, ...]:
@@ -22,7 +22,7 @@ def _sequence(value: Any) -> tuple[Any, ...]:
 
 _BASE_DIR = globals().get("BASE_DIR")
 if _BASE_DIR is None:
-    raise ImproperlyConfigured("angee.defaults must be evaluated by angee.compose.settings")
+    raise ImproperlyConfigured("angee.defaults must be evaluated by angee.settings")
 
 BASE_DIR = resolve_path(_BASE_DIR)
 DEBUG = bool(globals().get("DEBUG", False))
@@ -46,10 +46,10 @@ if isinstance(_configured_installed_apps, str):
 _CORE_INSTALLED_APPS_PREFIX = (
     "django_yamlconf",
     "angee.compose",
+    "angee",
     "django.contrib.contenttypes",
     "rebac",
     "simple_history",
-    "angee",
     "django_celery_beat",
     "angee.jobs",
 )
@@ -58,7 +58,10 @@ INSTALLED_APPS = [
     *(entry for entry in _configured_installed_apps if entry not in _CORE_INSTALLED_APPS_PREFIX),
 ]
 
-ANGEE_RUNTIME_MODULE = globals().get("ANGEE_RUNTIME_MODULE", "runtime")
+COMPOSE_ENV_PREFIXES = globals().get("COMPOSE_ENV_PREFIXES", ("ANGEE_",))
+COMPOSE_APP_DECLARATIONS = globals().get("COMPOSE_APP_DECLARATIONS", "angee.conf.ManifestDeclarations")
+
+COMPOSE_RUNTIME_MODULE = globals().get("COMPOSE_RUNTIME_MODULE", "runtime")
 ANGEE_DATA_DIR = resolve_path(globals().get("ANGEE_DATA_DIR", BASE_DIR / ".angee" / "data"))
 ANGEE_ADDON_DIRS = tuple(
     resolve_path(path) for path in _sequence(globals().get("ANGEE_ADDON_DIRS", (BASE_DIR / "addons",)))

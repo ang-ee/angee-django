@@ -12,12 +12,12 @@ from pydantic.experimental.missing_sentinel import MISSING
 from rebac import RebacMixin, current_actor
 from rebac.schema.walker import field_gated_actions
 
-from angee.evidence import EvidenceFact, EvidenceReference
 from angee.fields import StateField
 from angee.graphql.data.metadata import data_resource_contributions
 from angee.graphql.schema import schema_parts_for
 from angee.identity import instance_from_public_id, public_id_for
 from angee.permissions import effective_rebac_definition, require_rebac_queryset
+from angee.provenance.evidence import EvidenceFact, EvidenceReference
 from angee.refs import generic_pointer_model
 
 

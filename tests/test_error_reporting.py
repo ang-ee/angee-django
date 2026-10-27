@@ -84,7 +84,8 @@ def _compose(tmp_path: Path, **environment: str) -> dict[str, Any]:
 
     if not (tmp_path / "settings.yaml").exists():
         (tmp_path / "settings.yaml").write_text(
-            'SECRET_KEY: isolated-error-reporting-test\nINSTALLED_APPS: []\nANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"\n',
+            'SECRET_KEY: isolated-error-reporting-test\nINSTALLED_APPS: []\n'
+            'COMPOSE_RUNTIME_DIR: "{BASE_DIR}/runtime"\n',
             encoding="utf-8",
         )
     env = _environment(tmp_path)
