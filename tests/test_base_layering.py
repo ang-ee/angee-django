@@ -178,11 +178,13 @@ def test_addons_do_not_use_a_shared_app_config_subclass() -> None:
     assert not violations
 
 
-def test_resources_does_not_import_compose() -> None:
-    """The resource subsystem does not import build-time compose code."""
+def test_resources_serving_does_not_import_compose() -> None:
+    """Resources contributes through build.py; serving never imports that adapter."""
 
-    imports = _tree_imports(RESOURCES)
-    assert not any(name.startswith("angee.compose") for name in imports)
+    imports = set().union(*(
+        _module_imports(path) for path in RESOURCES.rglob("*.py") if path.name != "build.py"
+    ))
+    assert not any(name.startswith(("angee.compose", "angee.resources.build")) for name in imports)
 
 
 def test_graphql_does_not_import_compose() -> None:

@@ -208,16 +208,22 @@ def test_framework_does_not_import_retired_ownership_owner() -> None:
     assert not {path: names for path, names in violations.items() if names}
 
 
-def test_addons_never_import_the_build_time_composer() -> None:
-    """Serving code never loads ``angee.compose``; addons share its facts through ``angee``."""
+def test_addon_serving_modules_never_import_build_owners() -> None:
+    """Only an explicit build.py may load composition contracts or another build owner."""
     root = PROJECT_ROOT / "addons/angee"
+    build_paths = set(root.glob("*/build.py"))
+    build_modules = {"angee.build", "angee.web"} | {
+        "angee." + ".".join(path.relative_to(root).with_suffix("").parts)
+        for path in build_paths
+    }
     violations = {
         path.relative_to(PROJECT_ROOT).as_posix(): sorted(
             name for name in _module_imports(path)
             if name == "angee.compose" or name.startswith("angee.compose.")
+            or any(name == module or name.startswith(module + ".") for module in build_modules)
         )
         for path in root.rglob("*.py")
-        if "tests" not in path.relative_to(root).parts
+        if "tests" not in path.relative_to(root).parts and path not in build_paths
     }
     assert not {path: names for path, names in violations.items() if names}
 

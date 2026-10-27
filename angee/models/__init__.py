@@ -108,7 +108,6 @@ from angee.models.transitions import (
     TransitionMethod,
     TransitionNotAllowed,
     get_transition_save_field,
-    revalidate_transition_metadata,
     save_state,
     transition,
 )

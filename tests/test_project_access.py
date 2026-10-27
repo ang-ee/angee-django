@@ -25,7 +25,7 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
-from angee.compose.permissions import apply_schema_paths, extension_source_map
+from angee.build import apply_schema_paths, extension_source_map
 from angee.fs import write_atomic
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import hasura_model_resource

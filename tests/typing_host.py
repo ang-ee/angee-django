@@ -87,7 +87,9 @@ def project_history_models() -> bool:
             *("\n".join(f"    {line}" for line in body.splitlines()) + "\n" for body in bodies),
         ])
         sources[Path(label) / "models.py"] = (
-            render_models(runtime.composition, label, runtime_module=runtime.runtime_module) + "\n" + projection
+            render_models(
+                runtime.composition, label, runtime_module=runtime.runtime_module, declarations=runtime.model_declarations,
+            ) + "\n" + projection
         )
     return GeneratedTree(
         runtime.runtime_dir,

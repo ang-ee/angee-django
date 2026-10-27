@@ -100,7 +100,10 @@ that layering tests enforce:
 The same one-way rule extends downward to the base addons under `addons/angee/`
 (`angee.resources`, `angee.iam`, `angee.integrate`, `angee.operator`,
 `angee.storage`): an addon
-may import `angee` and `angee.graphql`, but never `angee.compose`. The
+may import `angee` and `angee.graphql`. A capability's explicit `build.py`
+may import the compiler's declaration contract; serving modules never import
+that adapter or `angee.compose`. Autoconfig selects it by dotted path, so
+settings/app discovery does not import feature build code. The
 resource subsystem (`angee.resources`) is itself a base addon, not part of the
 core — it owns the resource ledger described below.
 
@@ -743,7 +746,7 @@ data through REBAC, never a queryset bypass.
   `permissions.zed` declares the *seam* (for example, the in-repo spaces addon
   extends `messaging/thread`); a consumer addon that needs its own role adds it
   from its own **`permissions.extends.zed`** (sibling to `permissions.zed`),
-  owned by `angee.compose.permissions`. The `tests/extcontrib` fixture keeps the
+  owned by `angee.build`. The `tests/extcontrib` fixture keeps the
   mechanical merge covered. Each
   `definition <target> { … }` block in the fragment names an existing definition
   and lists the relations it contributes and the permission arms it unions in
@@ -758,8 +761,8 @@ data through REBAC, never a queryset bypass.
   The only new permission a fragment may declare is a field gate,
   `read__<field>` or `write__<field>`, on a concrete column that the same
   package's donor contributes to the target model; no other package may extend
-  that gate. `ModelComposition.field_gate_owners` supplies the ownership map to
-  [`angee.compose.permissions`](../../angee/compose/permissions.py).
+  that gate. [`angee.build.field_gate_owners`](../../angee/build.py)
+  interprets the compiler's neutral donor-field provenance for REBAC.
   Functional drift is caught by `rebac sync` (content hash) and `angee build
   --check` (the emitted file); the contribution is revisioned by the contributing
   addon (`@rebac_schema_revision` in its fragment, echoed into the merged file's

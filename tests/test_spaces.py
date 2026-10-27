@@ -19,7 +19,7 @@ from rebac import PermissionDenied, actor_context, system_context, to_object_ref
 from rebac.backends import backend
 from rebac.models import SchemaRelation, active_relationship_model
 
-from angee.compose.permissions import (
+from angee.build import (
     apply_schema_paths,
     extension_source_map,
     merged_schema_relpath,

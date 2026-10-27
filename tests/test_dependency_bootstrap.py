@@ -141,7 +141,7 @@ class ImportBoundary(MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         forbidden = (
             "example", "rebac", "angee.compose.composer", "angee.compose.runtime",
-            "angee.compose.permissions", "angee.compose.model_composition", "angee.compose.rendering",
+            "angee.build", "angee.compose.model_composition", "angee.compose.rendering",
         )
         assert not any(fullname == name or fullname.startswith(name + ".") for name in forbidden), fullname
 sys.meta_path.insert(0, ImportBoundary())

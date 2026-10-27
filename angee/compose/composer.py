@@ -28,12 +28,6 @@ class Composer:
         installed_apps = self.namespace.get("INSTALLED_APPS")
         if installed_apps is None:
             raise ImproperlyConfigured("settings must define INSTALLED_APPS")
-        # Direct Composer consumers (notably disposable composed hosts) add
-        # addon roots after the foundation package has already been imported.
-        # Refresh the shared ``angee`` package portions before resolving apps.
-        from angee.compose.project import prepend_import_paths
-
-        prepend_import_paths(self.namespace.get("ANGEE_ADDON_DIRS", ()))
         root_apps = self._app_entries(installed_apps)
         declared_apps = None if project_apps is None else self._app_entries(project_apps)
 
@@ -44,8 +38,6 @@ class Composer:
 
         app_configs = AppGraph().resolve(root_apps, declared_roots=declared_apps)
         self.namespace["INSTALLED_APPS"] = list(app_configs)
-        self._set_composer_setting("ROOT_URLCONF", "angee.urls")
-        self._set_composer_setting("ASGI_APPLICATION", "angee.asgi.application")
         self._set_composer_setting("ANGEE_RUNTIME_DIR", runtime_dir)
         runtime_parent = str(runtime_dir.parent.resolve())
         if runtime_parent in sys.path:

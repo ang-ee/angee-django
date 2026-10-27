@@ -1,6 +1,6 @@
 """Web runtime manifest projected from the composed addon graph.
 
-The composer's *web* projector. It is deliberately offline and pure: it reads
+Angee's host web projector. It is deliberately offline and pure: it reads
 native addon manifests bound to ``AppConfig`` and renders two files under ``runtime/web/`` —
 ``manifest.json`` (the package graph, each package's addon ancestry, codegen
 contributions and the deployment's ``ANGEE_UI`` layer) and
@@ -19,13 +19,18 @@ import os
 import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import AppConfig
+from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
 from angee.addons import addon_ancestors, addon_manifest
+from angee.compose.declarations import BuildIntegration
 from angee.fs import GENERATED_SENTINEL
+
+if TYPE_CHECKING:
+    from angee.compose.runtime import Runtime
 
 CORE_WEB_PACKAGES: tuple[str, ...] = ("@angee/app", "@angee/ui")
 """Framework packages whose rendered sources and documents every host consumes."""
@@ -250,3 +255,14 @@ class WebRuntime:
             "app": addon.name,
             "types": types,
         }
+
+
+class WebIntegration(BuildIntegration):
+    """Contribute Angee's web projections to the shared generated-file lifecycle."""
+
+    def render_sources(self, runtime: Runtime) -> Mapping[Path, str]:
+        """Render the existing web owner with the host's declared UI settings."""
+
+        return WebRuntime(
+            runtime.addons, runtime_dir=runtime.runtime_dir, ui=getattr(settings, "ANGEE_UI", None),
+        ).render_sources()

@@ -172,7 +172,7 @@ class CompositionPlugin(NewSemanalDjangoPlugin):
                 if f"{app.name}.autoconfig" in sys.modules
             )
             if self.django_context.composed:
-                dependencies.append(self._new_dependency("angee.compose.defaults"))
+                dependencies.append(self._new_dependency("angee.defaults"))
         return dependencies
 
     def get_attribute_hook(self, fullname: str) -> Callable[[AttributeContext], MypyType] | None:
@@ -193,7 +193,7 @@ class CompositionPlugin(NewSemanalDjangoPlugin):
             return native(ctx)
         sources = setting_sources(self.django_context.settings, name)
         if not sources:
-            defaults = modules.get("angee.compose.defaults") if self.django_context.composed else None
+            defaults = modules.get("angee.defaults") if self.django_context.composed else None
             symbol = defaults.names.get(name) if defaults is not None else None
             if symbol is not None and symbol.type is not None and not isinstance(
                 get_proper_type(symbol.type), AnyType,

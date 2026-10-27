@@ -37,7 +37,7 @@ from simple_history.utils import get_history_manager_for_model
 from angee.actors import actor_user_id
 from angee.changesets import changeset_model_label, current_changeset, write_group
 from angee.lineage import concrete_child_models, concrete_lineage
-from angee.models.query import AngeeQuerySet, by_key, candidate_relationships, model_history
+from angee.models.query import AngeeQuerySet, _AngeeQuerySetMixin, by_key, candidate_relationships, model_history
 from angee.models.trash import TrashMixin
 
 _UNLOADED = object()
@@ -213,6 +213,12 @@ class ModelHistory(HistoricalRecords):
         )
         if declaration is not self:
             return
+        if not issubclass(sender._base_manager._queryset_class, _AngeeQuerySetMixin):
+            raise ImproperlyConfigured(
+                f"{sender._meta.label}: ModelHistory requires a history-capable base manager. "
+                "Declare an unfiltered manager composing AngeeUnscopedQuerySet (or the existing "
+                "capture mixin for a guarded manager) and name it in Meta.base_manager_name."
+            )
         super().finalize(sender, **kwargs)
         setattr(sender._meta, "angee_model_history", self)
         pre_create_historical_record.connect(

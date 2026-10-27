@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from angee.compose.project import ProjectContract
+from angee.conf import ProjectContract
 
 ProjectContract(globals()).compose()

@@ -116,12 +116,13 @@ def boot(
     from hatch_angee import discover
 
     from angee.compose.composer import Composer
+    from angee.conf import prepend_import_paths
 
     installed_apps = (
         list(root_apps) if root_apps is not None else [manifest.name for _, manifest in discover(addon_dirs)]
     )
     namespace = runpy.run_module(
-        "angee.compose.defaults",
+        "angee.defaults",
         init_globals={
             "BASE_DIR": runtime_dir.parent,
             "SECRET_KEY": "isolated-composition-check",
@@ -134,6 +135,7 @@ def boot(
     )
     namespace = {name: value for name, value in namespace.items() if name.isupper() and not name.startswith("_")}
     settings.configure(**namespace)
+    prepend_import_paths(addon_dirs)
     Composer(namespace).compose_settings()
     for name, value in namespace.items():
         setattr(settings, name, value)

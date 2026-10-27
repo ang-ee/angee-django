@@ -55,17 +55,30 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
+from django.db import models
+from rebac.mixins import REBAC_META_OPTIONS
+from rebac.resources import model_resource_type
 from rebac.schema import Definition, Permission, Schema, parse_zed, resolve_schema_path, validate_schema
 from rebac.schema import render_zed as render_schema
 
 from angee.addons import addon_manifest
+from angee.compose.declarations import BuildIntegration, DeclarationValue, ModelDeclaration
 from angee.fs import GENERATED_SENTINEL
+from angee.permissions import declared_grants
+
+if TYPE_CHECKING:
+    from angee.compose.model_composition import ModelComposition
+    from angee.compose.runtime import Runtime
 
 __all__ = [
     "EXTENSION_FILENAME",
+    "PermissionIntegration",
+    "composed_grants",
+    "field_gate_owners",
     "SchemaExtensionError",
     "extension_source_map",
     "apply_schema_paths",
@@ -401,3 +414,62 @@ def apply_schema_paths(
             continue
         setattr(app_config, "rebac_schema", effective)
         setattr(app_config, "_angee_rebac_schema_effective", effective)
+
+
+class PermissionIntegration(BuildIntegration):
+    """Project Angee's REBAC contracts without making the compiler own them."""
+
+    def model_declaration(self, composition: ModelComposition, source: type[models.Model]) -> ModelDeclaration:
+        """Preserve per-model Meta declarations and additive same-record grants."""
+
+        meta_options = {
+            option: value for option in REBAC_META_OPTIONS
+            if (value := getattr(source._meta, option, None)) is not None
+        }
+        grants = composed_grants(composition, source)
+        attributes: dict[str, DeclarationValue] = {}
+        if grants or "rebac_grantable" in source.__dict__ or composition.parent(source) is not None:
+            # A concrete parent must never donate authority to its MTI child.
+            attributes["rebac_grantable"] = dict(grants)
+        return ModelDeclaration(attributes=attributes, meta_options=meta_options)
+
+    def render_sources(self, runtime: Runtime) -> Mapping[Path, str]:
+        """Render effective permission files using the compiler's donor facts."""
+
+        return extension_source_map(runtime.addons, field_owners=field_gate_owners(runtime.composition))
+
+    def bind(self, runtime: Runtime, sources: Mapping[Path, str]) -> None:
+        """Point native REBAC discovery at the already-emitted effective files."""
+
+        apply_schema_paths(runtime.addons, runtime.runtime_dir, sources=sources)
+
+
+def composed_grants(composition: ModelComposition, source: type[models.Model]) -> dict[str, str]:
+    """Merge explicit same-record grants without inheriting parent authority."""
+
+    grants: dict[str, str] = {}
+    for owner in (source, *composition.donors(source)):
+        for relation, permission in declared_grants(owner).items():
+            previous = grants.setdefault(relation, permission)
+            if previous != permission:
+                raise ImproperlyConfigured(
+                    f"{source._meta.label_lower} composes conflicting rebac_grantable "
+                    f"permissions for {relation!r}: {previous!r} and {permission!r}."
+                )
+    return grants
+
+
+def field_gate_owners(composition: ModelComposition) -> dict[str, dict[str, str]]:
+    """Attribute concrete donor columns to their permission-schema owners."""
+
+    owners: dict[str, dict[str, str]] = {}
+    for source in composition.ordered_models:
+        resource_type = model_resource_type(source)
+        if not resource_type:
+            continue
+        columns = {field.name for field in composition.contributed_fields(source) if field.concrete}
+        owners[resource_type] = {
+            name: package for name, package in sorted(composition.contributed_field_origins(source))
+            if name in columns
+        }
+    return dict(sorted(owners.items()))

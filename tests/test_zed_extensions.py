@@ -1,4 +1,4 @@
-"""The additive REBAC-schema extension seam (``angee.compose.permissions``).
+"""The additive REBAC-schema extension seam (``angee.build``).
 
 A consumer addon contributes relations and permission arms to a definition owned
 by another addon through a sibling ``permissions.extends.zed`` fragment, instead
@@ -23,7 +23,7 @@ from rebac.backends import backend
 from rebac.schema.parser import parse_zed, validate_schema
 from rebac.types import ObjectRef
 
-from angee.compose.permissions import (
+from angee.build import (
     SchemaExtensionError,
     apply_schema_paths,
     extension_source_map,
@@ -392,7 +392,7 @@ def test_manifest_permission_file_is_checked_before_any_fragment(tmp_path):
 def test_permission_binding_does_not_repeat_merge(tmp_path, monkeypatch):
     """Binding uses the exact rendered map, without parsing source files again."""
 
-    import angee.compose.permissions as permissions
+    import angee.build as permissions
 
     base = _base_addon(tmp_path)
     contrib = _contrib_addon(tmp_path, "definition demo/thing { permission read = anonymous }")

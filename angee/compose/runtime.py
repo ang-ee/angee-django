@@ -17,19 +17,13 @@ from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.recorder import MigrationRecorder
 from django.db.migrations.state import ProjectState
 
+from angee.compose.declarations import BuildIntegration, model_declaration
 from angee.compose.dependencies import AddonDependencyGroup, AddonDependencyGroupResult
 from angee.compose.migrations import RuntimeMigrations
 from angee.compose.model_composition import ModelComposition
-from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.compose.rendering import render_models
-from angee.compose.web import WebRuntime
 from angee.fs import GENERATED_SENTINEL, GeneratedTree, write_atomic
 from angee.project import find_project_dir
-
-_COMPOSER_WEB_SOURCES = {
-    Path("web/manifest.json"),
-    Path("web/tailwind.sources.css"),
-}
 
 
 def _runtime_directory() -> Path:
@@ -48,12 +42,13 @@ def _generated_tree(runtime_dir: Path, sources: Mapping[Path, str]) -> Generated
     """Guard the whole runtime tree; sources never limit explicit cleanup."""
 
     source_roots = {path.parts[0] for path in sources}
+    external_roots = frozenset(getattr(settings, "COMPOSE_EXTERNAL_ARTIFACT_ROOTS", ()))
+    owned_paths = frozenset(Path(path) for path in getattr(settings, "COMPOSE_OWNED_ARTIFACT_PATHS", ()))
 
     def owns(path: Path) -> bool:
         root = path.parts[0]
         return (
-            root not in {"gql", "schemas"}
-            and (root != "web" or path in _COMPOSER_WEB_SOURCES)
+            (root not in external_roots or path in sources or path in owned_paths)
             # Current packages accumulate bytecode on import; retired ones must
             # still be pruned when only their bytecode remains.
             and ("__pycache__" not in path.parts or root not in source_roots | {"__pycache__"})
@@ -70,7 +65,7 @@ def _generated_tree(runtime_dir: Path, sources: Mapping[Path, str]) -> Generated
 
 
 class Runtime:
-    """Coordinate model, web, permission, dependency and migration owners.
+    """Coordinate native composition and installed build integrations.
 
     ``discover`` imports and validates source declarations explicitly. Each write
     or drift operation renders one source map. Boot repairs sources without
@@ -86,12 +81,18 @@ class Runtime:
         runtime_dir: Path,
         runtime_module: str = "runtime",
         project_dir: Path | None = None,
+        integrations: tuple[BuildIntegration, ...] | None = None,
     ) -> None:
         self.addons = addons
         self.composition = composition
         self.runtime_dir = runtime_dir
         self.runtime_module = runtime_module
         self.project_dir = project_dir
+        self.integrations = BuildIntegration.configured() if integrations is None else integrations
+        self.model_declarations = {
+            source: model_declaration(composition, source, self.integrations)
+            for source in composition.ordered_models
+        }
 
     @classmethod
     def discover(
@@ -101,6 +102,7 @@ class Runtime:
         runtime_dir: Path,
         runtime_module: str = "runtime",
         project_dir: Path | None = None,
+        integrations: tuple[BuildIntegration, ...] | None = None,
     ) -> Runtime:
         """Discover source models after Django has populated AppConfig instances."""
 
@@ -111,6 +113,7 @@ class Runtime:
             runtime_dir=runtime_dir,
             runtime_module=runtime_module,
             project_dir=project_dir,
+            integrations=integrations,
         )
 
     @classmethod
@@ -153,17 +156,35 @@ class Runtime:
             sources[root / "__init__.py"] = ""
             sources[root / "migrations" / "__init__.py"] = ""
             sources[root / "models.py"] = render_models(
-                self.composition, label, runtime_module=self.runtime_module,
+                self.composition, label, runtime_module=self.runtime_module, declarations=self.model_declarations,
             )
-        web = WebRuntime(self.addons, runtime_dir=self.runtime_dir, ui=getattr(settings, "ANGEE_UI", None))
-        sources.update(web.render_sources())
-        sources.update(extension_source_map(self.addons, field_owners=self.composition.field_gate_owners()))
+        for integration in self.integrations:
+            contributed = integration.render_sources(self)
+            for path, source in contributed.items():
+                if not isinstance(path, Path) or path.is_absolute() or ".." in path.parts or not path.parts:
+                    raise ImproperlyConfigured(f"Build artifact must have a runtime-relative file path: {path!r}")
+                if not isinstance(source, str):
+                    raise ImproperlyConfigured(f"Build artifact must contain text: {path}")
+                if not (self.runtime_dir / path).resolve().is_relative_to(self.runtime_dir.resolve()):
+                    raise ImproperlyConfigured(f"Build artifact escapes the runtime through a symlink: {path}")
+            for path, source in sorted(contributed.items()):
+                if path in sources or any(parent in sources for parent in path.parents) or any(
+                    path in existing.parents for existing in sources
+                ):
+                    raise ImproperlyConfigured(f"Competing build artifacts at {path}")
+                sources[path] = source
         return sources
 
     def _emit(self, tree: GeneratedTree) -> None:
         tree.reset()
         tree.reconcile(prune=False)
-        apply_schema_paths(self.addons, self.runtime_dir, sources=tree.artifacts)
+        self._bind(tree.artifacts)
+
+    def _bind(self, sources: Mapping[Path, str]) -> None:
+        """Bind feature-owned paths only after the shared source map was emitted."""
+
+        for integration in self.integrations:
+            integration.bind(self, sources)
 
     def runtime_migrations(self) -> RuntimeMigrations:
         """Return the native addon migration materializer."""
@@ -290,12 +311,14 @@ class Runtime:
         tree = _generated_tree(self.runtime_dir, self.render_sources())
         if tree.drift():
             self._emit(tree)
+        else:
+            self._bind(tree.artifacts)
         dependency_result = self.addon_dependency_group.write()
         self.runtime_migrations().materialize(apps=apps)
         return dependency_result
 
     def import_generated_models(self) -> None:
-        """Import concrete modules in model-parent order and validate final metadata."""
+        """Import concrete modules in parent order; Django runs native class validation."""
 
         importlib.invalidate_caches()
         imported: set[str] = set()
@@ -304,17 +327,13 @@ class Runtime:
             if label not in imported:
                 importlib.import_module(f"{self.runtime_module}.{label}.models")
                 imported.add(label)
-        self.composition.validate_concrete(
-            apps.get_model(source._meta.label_lower, require_ready=False)
-            for source in self.composition.ordered_models
-        )
 
     def emit_if_stale(self) -> bool:
-        """Repair boot sources without pruning, then bind effective permission paths."""
+        """Repair boot sources without pruning, then bind integration-owned paths."""
 
         sources = self.render_sources()
         changed = _generated_tree(self.runtime_dir, sources).reconcile(prune=False)
-        apply_schema_paths(self.addons, self.runtime_dir, sources=sources)
+        self._bind(sources)
         return changed
 
     def configure_migration_modules(self) -> None:

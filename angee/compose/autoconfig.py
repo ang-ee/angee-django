@@ -1,4 +1,4 @@
-"""Autoconfig loading plus settings fragments required by the composer app."""
+"""Apply installed apps' autoconfig through django-yamlconf's settings merge."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import os
 from collections import ChainMap
 from collections.abc import Mapping, MutableMapping
 from types import ModuleType
-from typing import Any, TypedDict
+from typing import Any
 
 import django_yamlconf
 from django.apps import AppConfig
@@ -23,7 +23,7 @@ from angee.compose.yamlconf import (
     setting_name,
 )
 
-COMPOSER_OWNED_SETTINGS = frozenset({"ANGEE_RUNTIME_DIR", "ASGI_APPLICATION", "INSTALLED_APPS", "ROOT_URLCONF"})
+COMPOSER_OWNED_SETTINGS = frozenset({"ANGEE_RUNTIME_DIR", "INSTALLED_APPS"})
 
 
 class AutoConfig:
@@ -136,27 +136,3 @@ class AutoConfig:
         if not isinstance(derived, Mapping):
             raise ImproperlyConfigured(f"{app_config.name}.autoconfig.settings() must return a mapping")
         return contributed, derived
-
-
-_Settings = TypedDict(
-    "_Settings",
-    {
-        "MIDDLEWARE:prepend": list[str],
-        "MIDDLEWARE:append": list[str],
-        "ANGEE_WEB_STATEMENT_TIMEOUT": int,
-    },
-)
-
-SETTINGS: _Settings = {
-    # Django's response security headers (SECURE_* settings, nosniff among them) lead
-    # the stack; its CSP middleware applies SECURE_CSP and each view's csp_override.
-    "MIDDLEWARE:prepend": ["django.middleware.security.SecurityMiddleware"],
-    "MIDDLEWARE:append": [
-        "django.middleware.common.CommonMiddleware",
-        "django.middleware.csp.ContentSecurityPolicyMiddleware",
-    ],
-    # Seconds one PostgreSQL statement may run in a web process; 0 disables the
-    # bound. ``angee.asgi`` applies it; workers and commands keep the server's.
-    "ANGEE_WEB_STATEMENT_TIMEOUT": 60,
-}
-"""Django settings contributed when the composer is installed."""
