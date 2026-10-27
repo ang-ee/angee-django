@@ -58,8 +58,10 @@ function MarkdownEditable({
   controlRef,
 }: WidgetRenderProps<string>): ReactElement {
   const t = useUiT();
+  const documentBody = field?.controlProps?.presentation === "document";
   // Saved prose opens rendered; an empty field opens ready for writing.
-  const [mode, setMode] = useState<MarkdownMode>(value ? "preview" : "source");
+  const [selectedMode, setMode] = useState<MarkdownMode | null>(null);
+  const mode = selectedMode ?? (value ? "preview" : "source");
   const [focused, setFocused] = useState(false);
   const [linkDraft, setLinkDraft] = useState("");
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -91,7 +93,10 @@ function MarkdownEditable({
 
   return (
     <div
-      onFocusCapture={() => setFocused(true)}
+      onFocusCapture={() => {
+        setFocused(true);
+        if (mode === "source") setMode("source");
+      }}
       onBlurCapture={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false);
       }}
@@ -104,7 +109,7 @@ function MarkdownEditable({
         className: "w-full overflow-hidden",
       })}
     >
-      {focused ? (
+      {focused && mode === "source" ? (
         <Toolbar surface="preview" className="min-h-11 flex-wrap gap-1">
           <ToolbarButton
             label={t("markdown.bold")}
@@ -177,8 +182,8 @@ function MarkdownEditable({
         className={mode === "preview" ? "hidden" : undefined}
       />
       {mode === "preview" ? (
-        <div tabIndex={0} className="min-h-24 px-3 py-2 outline-none focus-visible:focus-ring">
-          <div className="flex justify-end">
+        <div tabIndex={0} className={`min-h-24 outline-none focus-visible:focus-ring ${documentBody ? "flow-root" : "px-3 py-2"}`}>
+          <div className={documentBody ? "float-right ml-2" : "flex justify-end"}>
             <ModeButton mode="source" current={mode} onSelect={() => {
               setMode("source");
               requestAnimationFrame(() => viewRef.current?.focus());

@@ -57,9 +57,10 @@ from angee.models import (
     InputExtensionsMixin,
     MergeableMixin,
     MergeableQuerySet,
+    MergePolicy,
+    RecordRefMixin,
     role_anchor,
 )
-from angee.refs import MergePolicy, RecordRefMixin
 
 
 class TagQuerySet[TagT: Tag](

@@ -2,6 +2,8 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
+import { Window } from "happy-dom";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { createServer, optimizeDeps, resolveConfig, type ConfigEnv, type Plugin, type UserConfig } from "vite";
 
@@ -52,6 +54,43 @@ function linkedUiWebRoot(prefix: string): string {
   writeFileSync(join(webRoot, "main.ts"), 'import "@angee/ui"; import "react-dom/client";\n');
   return webRoot;
 }
+
+test("bundles and applies appearance synchronously before the app module loads", async () => {
+  const webRoot = linkedUiWebRoot("angee-vite-appearance-");
+  const window = new Window({ url: "http://localhost" });
+  try {
+    const config = await defineAngeeWebViteConfig({
+      prebundleAngeePackages: false,
+      gqlRuntimeDir: join(webRoot, "runtime", "gql"),
+      webRoot,
+      appearance: { colorScheme: "light" },
+    });
+    const server = await createServer({
+      ...config,
+      configFile: false,
+      logLevel: "silent",
+      optimizeDeps: { noDiscovery: true, entries: [] },
+      server: { middlewareMode: true, ws: false, watch: null },
+    });
+    try {
+      const html = await server.transformIndexHtml("/", '<html><head></head><body><script type="module" src="/main.ts"></script></body></html>');
+      const template = window.document.createElement("template");
+      template.innerHTML = html;
+      const bootstrap = template.content.querySelector("script[data-angee-appearance-bootstrap]");
+      expect(bootstrap).not.toBeNull();
+      expect(html.indexOf("data-angee-appearance-bootstrap")).toBeLessThan(html.indexOf('src="/main.ts"'));
+      runInNewContext(bootstrap!.textContent!, { document: window.document, localStorage: window.localStorage });
+      expect(window.document.documentElement.dataset.colorScheme).toBe("light");
+      expect(window.document.documentElement.style.colorScheme).toBe("light");
+      expect(window.document.documentElement.hasAttribute("data-theme")).toBe(false);
+    } finally {
+      await server.close();
+    }
+  } finally {
+    await window.happyDOM.close();
+    rmSync(webRoot, { recursive: true, force: true });
+  }
+});
 
 /** Every bare CodeMirror import in the UI's shipped source, with its importing file. */
 function uiCodeMirrorImports(): Array<{ specifier: string; importer: string }> {

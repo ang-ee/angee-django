@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import math
 from importlib import import_module
+from pathlib import Path
 from typing import Any
 
 import pytest
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldError, ImproperlyConfigured, ValidationError
-from django.db import connection, models
+from django.db import connection, connections, models, router
 from django.db.models import F, Value
 from django.db.models.functions import Concat
 from django.test.utils import isolate_apps, override_settings
@@ -664,7 +665,7 @@ def test_fractional_rank_deconstruct_round_trips_constructor_defaults_and_opt_ou
 
 
 @pytest.mark.django_db(transaction=True)
-def test_fractional_rank_appends_within_its_unique_context() -> None:
+def test_fractional_rank_appends_within_its_unique_context(monkeypatch: pytest.MonkeyPatch) -> None:
     """An omitted rank appends per context; an explicit rank is honored."""
 
     class RankedItem(models.Model):
@@ -680,10 +681,14 @@ def test_fractional_rank_appends_within_its_unique_context() -> None:
             constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="ranked_item_lane_rank"),)
 
     with model_tables((RankedItem,)):
-        first = RankedItem.objects.create(lane="a")
-        second = RankedItem.objects.create(lane="a")
-        other_lane = RankedItem.objects.create(lane="b")
-        explicit = RankedItem.objects.create(lane="a", rank=512.0)
+        # Exercise Django's PostgreSQL transaction guard on the SQLite floor too.
+        assert connection.get_autocommit()
+        with monkeypatch.context() as compiler:
+            compiler.setattr(connection.features, "has_select_for_update", True)
+            first = RankedItem.objects.create(lane="a")
+            second = RankedItem.objects.create(lane="a")
+            other_lane = RankedItem.objects.create(lane="b")
+            explicit = RankedItem.objects.create(lane="a", rank=512.0)
 
         assert first.rank == FractionalRankField.STEP
         assert second.rank == FractionalRankField.STEP * 2
@@ -885,6 +890,147 @@ def test_fractional_rank_rebalance_rewrites_a_clean_spread() -> None:
         assert field.rebalance(context={"lane": "c"}) == 3
         crowded = list(RankedRebalance.objects.filter(lane="c").order_by("rank").values_list("rank", flat=True))
         assert crowded == [step, step * 2, step * 3]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fractional_rank_rebalance_rolls_back_staging_on_its_routed_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, django_db_blocker: Any,
+) -> None:
+    """Both staged rank writes share the transaction of the model's native router."""
+
+    class RoutedRank(models.Model):
+        lane = models.CharField(max_length=8)
+        rank = FractionalRankField()
+
+        class Meta:
+            app_label = "auth"
+            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="routed_rank_lane_rank"),)
+
+    alias = "rank_router_probe"
+
+    class RankRouter:
+        def db_for_read(self, model: type[models.Model], **hints: Any) -> str | None:
+            return "default" if model is RoutedRank else None
+
+        def db_for_write(self, model: type[models.Model], **hints: Any) -> str | None:
+            return alias if model is RoutedRank else None
+
+    monkeypatch.setattr(router, "routers", [RankRouter()])
+    connections.databases[alias] = {
+        **connections.databases["default"],
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": str(tmp_path / "routed-rank.sqlite3"),
+        "OPTIONS": {},
+        "CONN_MAX_AGE": 0,
+    }
+    database = connections[alias]
+    try:
+        with django_db_blocker.unblock():
+            with database.schema_editor() as editor:
+                editor.create_model(RoutedRank)
+            for rank in (0.25, 0.5):
+                RoutedRank.objects.create(lane="a", rank=rank)
+            assert RoutedRank.objects.create(lane="b").rank == FractionalRankField.STEP
+            bulk_update = models.QuerySet.bulk_update
+            passes = 0
+
+            def fail_clean_pass(queryset: models.QuerySet[Any], *args: Any, **kwargs: Any) -> int:
+                nonlocal passes
+                assert queryset.db == alias
+                assert database.in_atomic_block
+                passes += 1
+                if passes == 2:
+                    raise RuntimeError("clean pass failed")
+                return bulk_update(queryset, *args, **kwargs)
+
+            monkeypatch.setattr(models.QuerySet, "bulk_update", fail_clean_pass)
+            field = RoutedRank._meta.get_field("rank")
+            with pytest.raises(RuntimeError, match="clean pass failed"):
+                field.rebalance(context={"lane": "a"})
+            assert passes == 2
+            assert list(RoutedRank.objects.using(alias).filter(lane="a").order_by("rank").values_list(
+                "rank", flat=True,
+            )) == [0.25, 0.5]
+    finally:
+        database.close()
+        del connections[alias]
+        del connections.databases[alias]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fractional_rank_allocation_uses_explicit_write_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, django_db_blocker: Any,
+) -> None:
+    """Explicit save/create/bulk aliases own allocation despite a different router."""
+
+    class AliasRank(models.Model):
+        lane = models.CharField(max_length=20)
+        rank = FractionalRankField()
+
+        class Meta:
+            app_label = "auth"
+            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="alias_rank_lane_rank"),)
+
+    alias = "rank_explicit_probe"
+
+    class DefaultRouter:
+        def db_for_read(self, model: type[models.Model], **hints: Any) -> str:
+            return "default"
+
+        db_for_write = db_for_read
+
+    monkeypatch.setattr(router, "routers", [DefaultRouter()])
+    connections.databases[alias] = {
+        **connections.databases["default"],
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": str(tmp_path / "explicit-rank.sqlite3"),
+        "OPTIONS": {},
+        "CONN_MAX_AGE": 0,
+    }
+    database = connections[alias]
+    events: list[tuple[str, float | None, str]] = []
+
+    def before_save(sender: Any, instance: Any, using: str, **kwargs: Any) -> None:
+        events.append(("before", instance.rank, using))
+
+    def after_save(sender: Any, instance: Any, using: str, **kwargs: Any) -> None:
+        events.append(("after", instance.rank, using))
+
+    try:
+        with django_db_blocker.unblock(), model_tables((AliasRank,)):
+            with database.schema_editor() as editor:
+                editor.create_model(AliasRank)
+            for lane, tail in (("create", 100.0), ("save", 100.0), ("bulk_a", 100.0), ("bulk_b", 200.0)):
+                AliasRank.objects.create(lane=lane, rank=10.0)
+                AliasRank.objects.using(alias).create(lane=lane, rank=tail)
+            models.signals.pre_save.connect(before_save, sender=AliasRank, weak=False)
+            models.signals.post_save.connect(after_save, sender=AliasRank, weak=False)
+            created = AliasRank.objects.using(alias).create(lane="create")
+            saved = AliasRank(lane="save")
+            saved.save(using=alias)
+            expected = FractionalRankField.STEP + 100.0
+            assert created.rank == saved.rank == expected
+            assert events == [
+                ("before", None, alias), ("after", expected, alias),
+                ("before", None, alias), ("after", expected, alias),
+            ]
+            rows = [AliasRank(lane="bulk_a"), AliasRank(lane="bulk_b"), AliasRank(lane="explicit", rank=7.0)]
+            AliasRank.objects.using(alias).bulk_create(rows)
+            assert [row.rank for row in rows] == [expected, FractionalRankField.STEP + 200.0, 7.0]
+            stored = AliasRank.objects.using(alias).filter(pk__in=[row.pk for row in rows]).order_by("lane")
+            assert list(stored.values_list("rank", flat=True)) == [expected, FractionalRankField.STEP + 200.0, 7.0]
+            AliasRank.objects.using(alias).create(lane="exhausted", rank=math.nextafter(math.inf, 0.0))
+            exhausted = AliasRank(lane="exhausted")
+            with pytest.raises(FractionalRankExhausted):
+                exhausted.save(using=alias)
+            assert exhausted.rank is None
+            assert AliasRank.objects.using(alias).filter(lane="exhausted").count() == 1
+    finally:
+        models.signals.pre_save.disconnect(before_save, sender=AliasRank)
+        models.signals.post_save.disconnect(after_save, sender=AliasRank)
+        database.close()
+        del connections[alias]
+        del connections.databases[alias]
 
 
 def test_fractional_rank_rebalance_rejects_traversal_context_keys() -> None:

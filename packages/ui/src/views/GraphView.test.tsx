@@ -10,6 +10,8 @@ import { GraphView, graphNodeStyle } from "./GraphView";
 const reactFlowMock = vi.hoisted(() => ({
   lastProps: undefined as Record<string, unknown> | undefined,
   initialized: true,
+  renderNodes: false,
+  updateNodeInternals: vi.fn(),
   handlesReady: true,
   unmeasured: new Set<string>(),
   fitView: vi.fn(),
@@ -38,6 +40,8 @@ vi.mock("@xyflow/react", async () => {
   return {
     ...actual,
     Background: () => React.createElement("div", { "data-testid": "background" }),
+    Handle: () => null,
+    useUpdateNodeInternals: () => reactFlowMock.updateNodeInternals,
     Controls: () => React.createElement("div", { "data-testid": "controls" }),
     MiniMap: (props: Record<string, unknown>) => {
       reactFlowMock.miniMapProps = props;
@@ -51,6 +55,23 @@ vi.mock("@xyflow/react", async () => {
         "div",
         { "data-testid": "react-flow" },
         props.children,
+        reactFlowMock.renderNodes ? (props.nodes as Node[]).map((node) => {
+          const Component = (props.nodeTypes as NonNullable<ReactFlowProps["nodeTypes"]>)[node.type!]!;
+          return React.createElement(Component, {
+            ...node,
+            key: node.id,
+            type: node.type!,
+            dragging: node.dragging ?? false,
+            zIndex: node.zIndex ?? 0,
+            selectable: node.selectable ?? true,
+            deletable: node.deletable ?? true,
+            selected: node.selected ?? false,
+            draggable: node.draggable ?? true,
+            isConnectable: true,
+            positionAbsoluteX: node.position.x,
+            positionAbsoluteY: node.position.y,
+          });
+        }) : null,
       );
     },
     ReactFlowProvider: ({ children }: { children: ReactNode }) => children,
@@ -77,6 +98,8 @@ afterEach(() => {
   reactFlowMock.lastProps = undefined;
   dagreMock.layouts = 0;
   reactFlowMock.initialized = true;
+  reactFlowMock.renderNodes = false;
+  reactFlowMock.updateNodeInternals.mockClear();
   reactFlowMock.handlesReady = true;
   reactFlowMock.unmeasured.clear();
   reactFlowMock.fitView.mockClear();
@@ -154,6 +177,26 @@ test("MiniMap is opt-in and uses native pan and zoom navigation", () => {
   view.rerender(<GraphView nodes={nodes} edges={edges} nodeStyles={nodeStyles} miniMap status={{ draft: { label: "Ready" } }} />);
   expect(reactFlowMock.miniMapProps?.nodeColor).toBe(props.nodeColor);
   expect(reactFlowMock.miniMapProps?.nodeStrokeColor).toBe(props.nodeStrokeColor);
+});
+
+test("leaves mount and orientation measurement native while updating changed handle declarations", () => {
+  reactFlowMock.renderNodes = true;
+  const node = { ...nodes[0]!, ports: [{ id: "done", label: "Done" }] };
+  const props = { nodes: [node], edges: [], nodeStyles };
+  const view = render(<GraphView {...props} />);
+  expect(reactFlowMock.updateNodeInternals).not.toHaveBeenCalled();
+  view.rerender(<GraphView {...props} layout={{ rankdir: "LR" }} />);
+  expect(reactFlowMock.updateNodeInternals).not.toHaveBeenCalled();
+  view.rerender(<GraphView {...props} nodes={[{ ...node, ports: [{ id: "done", label: "Renamed" }] }]} />);
+  expect(reactFlowMock.updateNodeInternals).not.toHaveBeenCalled();
+  view.rerender(<GraphView {...props} nodes={[{ ...node, ports: [{ id: "retry" }] }]} />);
+  expect(reactFlowMock.updateNodeInternals).toHaveBeenCalledExactlyOnceWith(node.id);
+  view.rerender(<GraphView {...props} nodes={[{ ...node, ports: [{ id: "retry" }] }]}
+    nodeStyles={{ ...nodeStyles, handler: { ...nodeStyles.handler, type: "input" } }} />);
+  expect(reactFlowMock.updateNodeInternals).toHaveBeenCalledTimes(2);
+  view.rerender(<GraphView {...props} nodes={[{ ...node, ports: [{ id: "retry" }] }]}
+    nodeStyles={{ ...nodeStyles, handler: { ...nodeStyles.handler, type: "input" } }} />);
+  expect(reactFlowMock.updateNodeInternals).toHaveBeenCalledTimes(2);
 });
 
 test("initial fit waits for native measurement and does not depend on edges", () => {

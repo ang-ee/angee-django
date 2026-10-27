@@ -27,7 +27,7 @@ const ANGEE_WATCH_IGNORED: readonly string[] = ["**/.jj/**"];
 // `runtime/gql/` path), so the proxy map and plugin choices live once, here, and
 // never drift across the example and the downstream template. Shipping this in
 // `@angee/app` (not a repo-root file) is what lets a project reach it by package
-// name from either a source checkout or published package.
+// name from either a source checkout or a published JavaScript package.
 //
 // This module is loaded by Node as a Vite config and therefore imports ONLY the
 // Node-side build plugins and node builtins — never `react`/`react-dom` or any
@@ -540,7 +540,8 @@ function angeeAppearancePlugin(payload: AppearanceBootstrapPayload): Plugin {
 }
 
 async function appearanceBootstrapScript(payload: AppearanceBootstrapPayload): Promise<string> {
-  const entry = "\0angee:appearance-bootstrap";
+  // Library entries are normalized to absolute paths before plugin resolution.
+  const entry = fileURLToPath(new URL("./appearance-bootstrap.virtual.js", import.meta.url));
   const runtime = fileURLToPath(import.meta.resolve("@angee/ui/theme-runtime"));
   // Vite owns dependency closure and minification; no second token validator or
   // function-source serializer lives in app configuration. Write nothing to disk.

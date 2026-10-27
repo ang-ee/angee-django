@@ -43,7 +43,6 @@ export function applyAppearanceRoot({ themeId, colorScheme, tokens = {}, target 
   const root = (target ?? document).documentElement;
   if (themeId) root.dataset.themeId = themeId; else delete root.dataset.themeId;
   root.dataset.colorScheme = colorScheme;
-  root.dataset.theme = colorScheme;
   root.style.colorScheme = colorScheme;
   for (const name of THEME_TOKEN_NAMES) root.style.removeProperty(name);
   for (const [name, value] of Object.entries(tokens)) root.style.setProperty(name, value);

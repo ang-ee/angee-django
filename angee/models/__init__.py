@@ -2,8 +2,6 @@
 
 # ruff: noqa: F401 -- this module is the public re-export surface.
 
-from typing import TYPE_CHECKING
-
 from angee.errors import CreationKeyConflict
 from angee.lineage import (
     concrete_child,
@@ -26,6 +24,7 @@ from angee.models.base import (
     record_display_label,
     role_anchor,
 )
+from angee.models.derived import DerivedFrom
 from angee.models.hierarchy import HierarchyMixin, HierarchyQuerySet
 from angee.models.history import ChangesetQuerySet, HistoryMixin, ModelHistory, ModelHistoryManager
 from angee.models.identity import (
@@ -78,6 +77,7 @@ from angee.models.query import (
     record_history,
     row_lock_paths,
 )
+from angee.models.refs import RecordRefMixin
 from angee.models.stages import Stage, StagedModelMixin, StageTone
 from angee.models.statements import (
     Aspect,
@@ -122,16 +122,3 @@ from angee.models.trash import (
     TrashQuerySet,
     clean_trash_reason,
 )
-
-if TYPE_CHECKING:
-    from angee.models.derived import DerivedFrom
-
-
-def __getattr__(name: str) -> object:
-    """Resolve ``DerivedFrom`` lazily: it composes angee.refs, which composes this package."""
-
-    if name == "DerivedFrom":
-        from angee.models.derived import DerivedFrom
-
-        return DerivedFrom
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

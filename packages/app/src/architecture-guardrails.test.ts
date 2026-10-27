@@ -463,17 +463,16 @@ describe("React architecture guardrails", () => {
       ];
       expect(invalidCriticalExports(declarations)).toEqual([]);
       const contents = allPackageRoots().flatMap((pkg) =>
-        sourceFiles(pkg.root).map((file) => ({
-          file,
-          consumed: consumedIdentifiers(ts.createSourceFile(
-            file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true,
-          )),
-        })),
+        sourceFiles(pkg.root)
+          .filter((file) => !isTestFile(file) && !isStoryFile(file))
+          .map((file) => ({
+            file,
+            consumed: sourceAnalysis(file).consumed,
+          })),
       );
       const unused = declarations
         .filter((declaration) => !contents.some((candidate) => {
           if (resolve(candidate.file) === resolve(declaration.ownerFile)) return false;
-          if (isTestFile(candidate.file) || isStoryFile(candidate.file)) return false;
           return candidate.consumed.has(declaration.name);
         }))
         .map((declaration) => declaration.name);
@@ -932,23 +931,32 @@ function sourceFiles(root: string): string[] {
   return files;
 }
 
-// Source files do not change during a run, so each is parsed once across the
-// layering scan and the published-vitest graph of every guardrail.
-const importSpecifierCache = new Map<string, readonly string[]>();
+// Source files do not change during a run. Import and production-consumer scans
+// share one parse and retain only the facts their checks need.
+const sourceAnalysisCache = new Map<string, {
+  specifiers: readonly string[];
+  consumed: ReadonlySet<string>;
+}>();
 
 function importSpecifiers(file: string): readonly string[] {
-  const cached = importSpecifierCache.get(file);
+  return sourceAnalysis(file).specifiers;
+}
+
+function sourceAnalysis(file: string) {
+  const cached = sourceAnalysisCache.get(file);
   if (cached) return cached;
-  const text = readFileSync(file, "utf8");
   const source = ts.createSourceFile(
     file,
-    text,
+    readFileSync(file, "utf8"),
     ts.ScriptTarget.Latest,
     true,
   );
-  const specifiers = importSpecifiersFromSource(source);
-  importSpecifierCache.set(file, specifiers);
-  return specifiers;
+  const analysis = {
+    specifiers: importSpecifiersFromSource(source),
+    consumed: isTestFile(file) || isStoryFile(file) ? new Set<string>() : consumedIdentifiers(source),
+  };
+  sourceAnalysisCache.set(file, analysis);
+  return analysis;
 }
 
 function importSpecifiersFromSource(source: ts.SourceFile): string[] {

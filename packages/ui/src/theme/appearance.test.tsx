@@ -122,7 +122,8 @@ test("an open draft re-applies theme, scheme and options without persisting", as
   expect(result.current.preferences).toEqual(saved);
   expect(result.current.currentPreferences).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
   expect(result.current.dirty).toBe(true);
-  expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark", theme: "dark" });
+  expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
+  expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
   expect(document.documentElement.style.colorScheme).toBe("dark");
   expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#556677");
 
@@ -246,6 +247,7 @@ test("reset directly deletes saved preferences, closes the draft and applies the
   expect(result.current.currentPreferences).toEqual({ version: 1 });
   expect(result.current.dirty).toBe(false);
   expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
+  expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
   expect(document.documentElement.style.getPropertyValue("--surface-rail")).toBe("");
   await act(async () => result.current.setColorScheme("light"));
   expect(patchPreferences).toHaveBeenCalledTimes(2);
@@ -331,6 +333,7 @@ test("removing optional overrides becomes clean again and keeps following host d
   expect(result.current.dirty).toBe(false);
   expect(result.current.currentPreferences).toEqual({ version: 1 });
   expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
+  expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
   expect(patchPreferences).not.toHaveBeenCalled();
 });
 

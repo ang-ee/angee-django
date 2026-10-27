@@ -60,34 +60,34 @@ function AddRepositoryDialog({
   const [added, setAdded] = React.useState<ReadonlySet<string>>(new Set());
   const [error, setError] = React.useState<string | null>(null);
 
-  // Reset per-session state whenever the dialog closes or the bridge changes.
+  // Completion belongs to the bridge and dialog session that started the write.
+  const session = React.useRef(0);
   React.useEffect(() => {
-    if (!open) {
-      setAdded(new Set());
-      setError(null);
-      setAdding(null);
-    }
-  }, [open]);
-  React.useEffect(() => {
+    session.current += 1;
     setAdded(new Set());
     setError(null);
-  }, [vcsBridgeId]);
+    setAdding(null);
+    return () => { session.current += 1; };
+  }, [open, vcsBridgeId]);
 
   const add = React.useCallback(
     async (candidate: RepoCandidate) => {
-      if (vcsBridgeId === "") return;
+      if (!open || adding !== null || vcsBridgeId === "") return;
+      const started = session.current;
       setAdding(candidate.name);
       setError(null);
       try {
         await addRepository({ vcsBridgeId, name: candidate.name });
+        if (started !== session.current) return;
         setAdded((prev) => new Set(prev).add(candidate.name));
       } catch (cause) {
+        if (started !== session.current) return;
         setError(errorMessage(cause, t("addRepo.addFailed")));
       } finally {
-        setAdding(null);
+        if (started === session.current) setAdding(null);
       }
     },
-    [addRepository, t, vcsBridgeId],
+    [addRepository, adding, open, t, vcsBridgeId],
   );
 
   return (
@@ -116,6 +116,7 @@ function AddRepositoryDialog({
           pickedNames={added}
           pickedLabel={t("addRepo.added")}
           busyName={adding}
+          readOnly={adding !== null}
         />
       </div>
     </DialogForm>

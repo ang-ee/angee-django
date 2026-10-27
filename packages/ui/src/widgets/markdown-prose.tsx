@@ -1,4 +1,4 @@
-import { type ReactElement } from "react";
+import { useMemo, type ReactElement } from "react";
 import ReactMarkdown, {
   defaultUrlTransform,
   type Components,
@@ -6,6 +6,7 @@ import ReactMarkdown, {
 import remarkGfm from "remark-gfm";
 
 import { cn } from "../lib/cn";
+import { NavLink } from "../ui/nav-link";
 import { useWikilinkResolver, type WikilinkResolver } from "./wikilink";
 
 // Rendered markdown prose: the one prose class and heading scale for every
@@ -15,13 +16,15 @@ import { useWikilinkResolver, type WikilinkResolver } from "./wikilink";
 const PREVIEW_PLUGINS = [remarkGfm];
 
 const PROSE_CLASS = cn(
-  "max-w-none text-13 leading-6 text-fg",
+  "max-w-none text-13 leading-6 text-fg [overflow-wrap:anywhere] [&>:first-child]:mt-0",
   "[&_p]:my-2 [&_h1]:my-3 [&_h1]:text-22 [&_h1]:font-semibold [&_h1]:leading-tight",
   "[&_h2]:my-2 [&_h2]:text-15 [&_h2]:font-semibold [&_h2]:leading-snug",
   "[&_h3]:my-2 [&_h3]:text-sm [&_h3]:font-semibold",
   "[&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5",
   "[&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5",
   "[&_li]:my-1 [&_li>p]:my-0",
+  "[&_.contains-task-list]:list-none [&_.contains-task-list]:pl-0 [&_.task-list-item_input]:mr-2 [&_.task-list-item_input]:accent-brand",
+  "[&_img]:my-4 [&_img]:max-w-full [&_img]:rounded-8 [&_hr]:my-6 [&_hr]:border-border-subtle",
   "[&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-border-subtle [&_blockquote]:pl-3 [&_blockquote]:text-fg-muted",
   "[&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-6 [&_pre]:bg-inset [&_pre]:p-3",
   "[&_code]:rounded-6 [&_code]:bg-inset [&_code]:px-1 [&_code]:font-mono [&_code]:text-2xs",
@@ -97,9 +100,10 @@ function wikilinkComponents(resolve: WikilinkResolver): Components {
       if (typeof href !== "string" || !href.startsWith(WIKILINK_PREFIX)) {
         return <a href={href}>{children}</a>;
       }
-      const { onActivate, broken } = resolve(
+      const { href: targetHref, onActivate, broken } = resolve(
         decodeURIComponent(href.slice(WIKILINK_PREFIX.length)),
       );
+      if (targetHref && !broken) return <NavLink href={targetHref} variant="inline">{children}</NavLink>;
       return (
         <button
           type="button"
@@ -132,11 +136,12 @@ export function Markdown({
   className?: string;
 }): ReactElement {
   const resolve = useWikilinkResolver();
+  const components = useMemo(() => resolve ? wikilinkComponents(resolve) : undefined, [resolve]);
   return (
     <div className={cn(PROSE_CLASS, className)}>
       <ReactMarkdown
         remarkPlugins={resolve ? [...PREVIEW_PLUGINS, remarkWikilinks] : PREVIEW_PLUGINS}
-        components={resolve ? wikilinkComponents(resolve) : undefined}
+        components={components}
         urlTransform={
           resolve
             ? (url) =>

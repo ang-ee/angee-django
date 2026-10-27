@@ -370,6 +370,22 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
         subject_type="auth/user",
         subject_id="kept-reader",
     )
+    stale_userset = relationship_model.objects.create(
+        resource_type="knowledge/role",
+        resource_id="vault_viewer",
+        relation="member",
+        subject_type="nexus/tie",
+        subject_id="old-tie",
+        optional_subject_relation="legacy_reader",
+    )
+    kept_userset = relationship_model.objects.create(
+        resource_type="knowledge/role",
+        resource_id="vault_viewer",
+        relation="member",
+        subject_type="nexus/tie",
+        subject_id="old-tie",
+        optional_subject_relation="party_a",
+    )
 
     assert reconcile_permission_schema() == 2
 
@@ -384,6 +400,8 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
         ),
     ).exists()
     assert not relationship_model.objects.filter(pk=stale_tuple.pk).exists()
+    assert not relationship_model.objects.filter(pk=stale_userset.pk).exists()
+    assert relationship_model.objects.filter(pk=kept_userset.pk).exists()
     assert relationship_model.objects.filter(pk=unrelated_tuple.pk).exists()
 
 

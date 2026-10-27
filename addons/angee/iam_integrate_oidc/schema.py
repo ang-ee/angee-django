@@ -113,16 +113,6 @@ def _oidc_authorize_url(oauth_client: Any, state_token: str, record: oauth_state
     )
 
 
-def _oauth_start_payload(started: oauth_flow.OAuthStart) -> OAuthStartPayload:
-    """Project the flow-owned start facts onto the GraphQL payload."""
-
-    return OAuthStartPayload(
-        authorize_url=started.authorize_url,
-        state=started.state,
-        mode=started.mode,
-        redirect_uri=started.redirect_uri,
-    )
-
 
 @strawberry.type
 class OidcLoginQuery:
@@ -150,7 +140,7 @@ class OidcLoginMutation:
         request = _request(info)
         try:
             oauth_client = _enabled_oidc_oauth_client(oauth_client_sqid)
-            return _oauth_start_payload(
+            return OAuthStartPayload.from_start(
                 oauth_flow.start(
                     request,
                     oauth_client,
@@ -212,7 +202,7 @@ class OidcLoginMutation:
         request = _request(info)
         try:
             oauth_client = _enabled_oidc_oauth_client(oauth_client_sqid)
-            return _oauth_start_payload(
+            return OAuthStartPayload.from_start(
                 oauth_flow.start(
                     request,
                     oauth_client,

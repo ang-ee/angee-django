@@ -60,6 +60,7 @@ dependencies = [
   "uvicorn[standard]>=0.30",
   # Error reporting; ProjectContract starts it only when the deployment sets SENTRY_DSN.
   "sentry-sdk>=2.71.0",
+  "pyclean>=3.7.0",
 ]
 
 [project.urls]
@@ -168,7 +169,7 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 # The distribution contains the framework core only. Folder addons are provided
-# by sibling source repositories and discovered from explicit addon directories.
+# as source folders under addons/ and discovered from explicit addon directories.
 packages = ["angee"]
 dev-mode-dirs = ["."]
 artifacts = [
@@ -178,18 +179,15 @@ artifacts = [
   "angee/**/*.yaml",
   "angee/**/*.zed",
 ]
-# The web/ sources are added by hatch-angee's addon-sources hook (the single source
-# of truth for them), so keep hatchling's default walk out of them — otherwise a
-# package the walk *does* pick up would be added twice. node_modules is never a
-# Python package, so this also drops the dependency tree the broad artifacts above
-# would otherwise force-include from web/*/node_modules.
+# Exclude dependency trees from the core wheel. Addon web fragments and shared
+# React packages remain source content outside this distribution.
 exclude = [
   "**/node_modules",
 ]
 
 # Build machinery is hatch-angee, via its build backend (no per-repo hook code or
-# tables). The framework's shared React packages live in the angee-react repo
-# and are consumed through the stack's pnpm workspace, not this wheel.
+# tables). Shared React packages live under packages/ and are consumed through
+# the stack's pnpm workspace, not this wheel.
 
 [tool.hatch.build.targets.sdist]
 only-include = [

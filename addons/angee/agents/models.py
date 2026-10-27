@@ -39,10 +39,10 @@ from pydantic_ai.output import OutputObjectDefinition
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RequestUsage, RunUsage
-from rebac import SubjectRef, actor_context, system_context, to_subject_ref
+from rebac import SubjectRef, actor_context, current_actor, system_context, to_subject_ref
 from rebac.mixins import RebacModelBase
 
-from angee.actors import instance_actor
+from angee.actors import actor_user_id, instance_actor
 from angee.agents.backends import InferenceBackend
 from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
 from angee.agents.deployments import InferenceDeploymentIdentity
@@ -876,6 +876,24 @@ class MCPTool(AuditMixin, AngeeDataModel):
         return self.name
 
 
+class AgentManager[AgentT: Agent](AngeeManager[AgentT]):
+    """Own the current actor's chat-agent selection."""
+
+    def chat_for_actor(self) -> AgentT | None:
+        """Return the user's most recently updated callable agent, if any."""
+
+        user_id = actor_user_id(current_actor())
+        if user_id is None:
+            return None
+        with system_context(reason="agents.chat_for_actor"):
+            candidates = (
+                self.filter(owner_id=user_id, is_template=False, runtime_status=RuntimeStatus.RUNNING)
+                .select_related("model")
+                .order_by("-updated_at", "-pk")
+            )
+            return next((agent for agent in candidates if agent.can_chat), None)
+
+
 class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     """An agent definition (or, when ``is_template``, an agent template).
 
@@ -1014,7 +1032,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         },
     )
 
-    objects = AngeeManager()
+    objects = AgentManager()
 
     class Meta:
         """Django model options for agents."""
@@ -1835,6 +1853,20 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
 
 class AgentSessionManager[SessionT: AgentSession](AngeeManager[SessionT]):
     """Create conversations under the caller's native REBAC create gate."""
+
+    def current_for_agent(self, agent: Any) -> SessionT | None:
+        """Return this actor's latest open session for an in-process agent."""
+
+        user_id = actor_user_id(current_actor())
+        if user_id is None or not agent.runs_in_process:
+            return None
+        with system_context(reason="agents.session.current_for_agent"):
+            return (
+                self.filter(agent=agent, user_id=user_id)
+                .exclude(status=SessionStatus.CLOSED)
+                .order_by("-updated_at", "-pk")
+                .first()
+            )
 
     def start(self, agent: Any, *, user: Any, context: Mapping[str, Any], actor: Any = None) -> Any:
         """Start an idle conversation with a callable, running in-process agent.

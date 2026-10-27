@@ -42,6 +42,8 @@ export interface TreeViewProps<
   /** Field holding a boolean that shows a spinner while the row's children load. */
   loading?: keyof TRow & string;
   selectedId?: string;
+  /** Reveal loaded ancestors without replacing the user's expansion state. */
+  revealIds?: readonly string[];
   onSelect?: (row: TRow) => void;
   /** Fired with a node id when it expands and its children are not loaded yet. */
   onExpand?: (nodeId: string) => void;
@@ -83,6 +85,7 @@ export function TreeView<TRow extends Record<string, unknown>>({
   hasChildren,
   loading,
   selectedId,
+  revealIds,
   onSelect,
   onExpand,
   renderRow,
@@ -131,6 +134,7 @@ export function TreeView<TRow extends Record<string, unknown>>({
     <Tree
       nodes={nodesWithInsertion}
       selectedId={selectedId}
+      revealIds={insertion ? [...(revealIds ?? []), TREE_INSERTION_ID] : revealIds}
       onExpand={onExpand}
       className={className}
       dropTargetId={dropTargetId}

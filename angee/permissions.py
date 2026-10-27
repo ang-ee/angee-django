@@ -227,6 +227,10 @@ def _delete_stale_relationships(records: list[Any]) -> None:
             resource_type=resource_type,
             relation=relation,
         ).delete()
+        relationship_model.objects.filter(
+            subject_type=resource_type,
+            optional_subject_relation=relation,
+        ).delete()
 
 
 def _prune_key(record: object) -> tuple[int, str]:

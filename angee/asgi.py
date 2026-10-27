@@ -8,22 +8,17 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from functools import partial
 from io import BytesIO
-from pathlib import Path
 from typing import Any, cast
 
+from django.core.exceptions import ImproperlyConfigured
+
 from angee.project import PROJECT_DIR_ENV, find_project_dir
-
-
-def _project_dir() -> Path | None:
-    """Return the project root for direct ASGI imports, when discoverable."""
-
-    return find_project_dir()
 
 
 def _bootstrap() -> None:
     """Point Django at Angee's composed settings module."""
 
-    project_dir = _project_dir()
+    project_dir = find_project_dir()
     if project_dir is not None:
         os.environ.setdefault(PROJECT_DIR_ENV, str(project_dir))
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.compose.settings")
@@ -56,7 +51,7 @@ def _http_mounts() -> list[tuple[str, Any]]:
     mounts: list[tuple[str, Any]] = []
     for app_config in apps.get_app_configs():
         mounts.extend(
-            (str(prefix), app)
+            (prefix, app)
             for prefix, app in addon_contribution(app_config, "asgi", "http_mounts", allow_callable=True)
         )
     return mounts
@@ -72,7 +67,6 @@ def _run_boot_hooks() -> None:
     """Run ASGI boot hooks contributed by installed addons after app population."""
 
     from django.apps import apps
-    from django.core.exceptions import ImproperlyConfigured
 
     from angee.addons import addon_contribution
 
@@ -95,7 +89,6 @@ def _web_statement_timeout_ms() -> int:
     """
 
     from django.conf import settings
-    from django.core.exceptions import ImproperlyConfigured
 
     raw = settings.ANGEE_WEB_STATEMENT_TIMEOUT
     try:
@@ -243,17 +236,27 @@ def _http_app(django_app: ASGIApp, http_mounts: list[tuple[str, ASGIApp]]) -> AS
     With no mounts this is just the Django app. Otherwise mounts are matched
     longest-prefix-first (so a nested mount wins over its parent) and the matched
     app receives the unchanged scope — its own route sits at the mount prefix, so
-    no path stripping is needed. Any unmatched path falls through to Django.
+    no path stripping is needed. Prefixes are absolute paths with optional trailing
+    slashes; duplicate normalized prefixes fail at boot. A root mount matches every
+    path. Any unmatched path falls through to Django.
     """
 
     if not http_mounts:
         return django_app
-    mounts = tuple(sorted(http_mounts, key=lambda mount: len(mount[0]), reverse=True))
+    normalized: dict[str, ASGIApp] = {}
+    for prefix, app in http_mounts:
+        if not isinstance(prefix, str) or not prefix.startswith("/"):
+            raise ImproperlyConfigured(f"ASGI HTTP mount prefix must be an absolute path, got {prefix!r}.")
+        prefix = prefix.rstrip("/") or "/"
+        if prefix in normalized:
+            raise ImproperlyConfigured(f"Duplicate ASGI HTTP mount prefix {prefix!r}.")
+        normalized[prefix] = app
+    mounts = tuple(sorted(normalized.items(), key=lambda mount: len(mount[0]), reverse=True))
 
     async def http_app(scope: Scope, receive: Receive, send: Send) -> None:
         path = str(scope.get("path", ""))
         for prefix, app in mounts:
-            if path == prefix or path.startswith(f"{prefix}/"):
+            if prefix == "/" or path == prefix or path.startswith(f"{prefix}/"):
                 await app(scope, receive, send)
                 return
         await django_app(scope, receive, send)
@@ -291,26 +294,31 @@ class _Lifespan:
         self._exit_stack: AsyncExitStack | None = None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        while True:
-            message = await receive()
-            if message["type"] == "lifespan.startup":
-                try:
-                    stack = AsyncExitStack()
-                    for app in self._mounts:
-                        lifespan = _mount_lifespan(app)
-                        if lifespan is not None:
-                            await stack.enter_async_context(lifespan)
-                    self._exit_stack = stack
-                except Exception as error:  # reported to the server, not swallowed
-                    await send({"type": "lifespan.startup.failed", "message": str(error)})
+        try:
+            while True:
+                message = await receive()
+                if message["type"] == "lifespan.startup":
+                    try:
+                        async with AsyncExitStack() as stack:
+                            for app in self._mounts:
+                                lifespan = _mount_lifespan(app)
+                                if lifespan is not None:
+                                    await stack.enter_async_context(lifespan)
+                            self._exit_stack = stack.pop_all()
+                    except Exception as error:  # reported to the server, not swallowed
+                        await send({"type": "lifespan.startup.failed", "message": str(error)})
+                        return
+                    await send({"type": "lifespan.startup.complete"})
+                elif message["type"] == "lifespan.shutdown":
+                    if self._exit_stack is not None:
+                        stack, self._exit_stack = self._exit_stack, None
+                        await stack.aclose()
+                    await send({"type": "lifespan.shutdown.complete"})
                     return
-                await send({"type": "lifespan.startup.complete"})
-            elif message["type"] == "lifespan.shutdown":
-                if self._exit_stack is not None:
-                    await self._exit_stack.aclose()
-                    self._exit_stack = None
-                await send({"type": "lifespan.shutdown.complete"})
-                return
+        finally:
+            if self._exit_stack is not None:
+                stack, self._exit_stack = self._exit_stack, None
+                await stack.aclose()
 
 
 application = _LazyApplication()

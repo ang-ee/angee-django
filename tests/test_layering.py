@@ -134,6 +134,36 @@ def test_data_contract_import_closure_stays_transport_neutral() -> None:
     assert reached == set()
 
 
+def test_record_pointer_import_closure_stays_independent_of_model_mixins() -> None:
+    """Generic pointers can load before Angee's composed model package."""
+
+    script = "\n".join(
+        (
+            "import importlib, json, sys",
+            "from django.conf import settings",
+            "settings.configure(INSTALLED_APPS=['django.contrib.contenttypes'])",
+            "import django",
+            "django.setup()",
+            "importlib.import_module('angee.refs')",
+            "print(json.dumps(sorted(sys.modules)))",
+        )
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    closure = set(json.loads(result.stdout))
+
+    assert "angee.refs" in closure
+    assert not {
+        module for module in closure
+        if module == "angee.models" or module.startswith("angee.models.")
+    }
+
+
 def test_integrate_does_not_import_workflows() -> None:
     """Record truth stays independent of optional workflow execution composition."""
 

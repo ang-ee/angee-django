@@ -42,9 +42,11 @@ from angee.models import (
     ItemOwnershipMixin,
     MergeableMixin,
     MergeableQuerySet,
+    MergePolicy,
     OptimisticLockMixin,
     OwnerMixin,
     OwnerQuerySet,
+    RecordRefMixin,
     TrashMixin,
     TrashQuerySet,
     candidate_relationships,
@@ -57,7 +59,6 @@ from angee.projects.events import (
     task_promoted,
 )
 from angee.projects.inputs import MilestoneTemplate
-from angee.refs import MergePolicy, RecordRefMixin
 from angee.scheduling.fields import RecurrenceField
 from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
@@ -324,7 +325,6 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
                 **generic_target(record).lookups(self.model, "subject"),
                 activity_type_id=strip_null_bytes(activity_type or kinds.DEFAULT_KEY),
             )
-            task.allocate_ordering_ranks()
             task.full_clean(validate_unique=False, validate_constraints=False)
             task.save()
         return task
@@ -1162,13 +1162,6 @@ class Task(
             .filter(_overdue__gt=0)
         )
         return rows.readable_count_subquery(actor=actor)
-
-    def allocate_ordering_ranks(self) -> None:
-        """Fill omitted project and parent ordering ranks through their fields."""
-
-        for field_name in ("sort_order", "sub_sort_order"):
-            field = cast(FractionalRankField, self._meta.get_field(field_name))
-            field.pre_save(self, True)
 
     @classmethod
     def priority_rank_expression(cls) -> models.Case:

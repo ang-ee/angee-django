@@ -64,7 +64,10 @@ a declaration never changes an existing stream.
 A declared snapshot with no reconciliation interval closes after its baseline;
 explicit resync opens a new generation. Missing cadence alone never means read-once.
 
-Several inbound failures can coexist. Semantic failures use bounded backoff;
+Several inbound problems can coexist. For one record link, new source or mapping
+evidence closes older versions of the same non-conflict problem while retaining
+their history. Stream-level event failures remain independent.
+Semantic failures use bounded backoff;
 conflicts await an explicit remote/local choice. Due replica failures re-read
 identity through `BridgeImpl.read_keys`; unsupported identity reads fall back to
 a baseline with the reason retained in failure details. Refused writes retry

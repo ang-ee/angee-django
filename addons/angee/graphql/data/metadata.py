@@ -43,9 +43,15 @@ from angee.graphql.introspection import (
 )
 from angee.impl import ImplClassField
 from angee.lineage import concrete_child_models
-from angee.models import AngeeModel, MergeableMixin, record_history
+from angee.models import (
+    AngeeModel,
+    MergeableMixin,
+    RecordRefMixin,
+    record_history,
+)
+from angee.models.refs import record_edges_by_target
 from angee.permissions import effective_rebac_definition
-from angee.refs import RecordRefMixin, generic_pointer_model, record_edges_by_target
+from angee.refs import generic_pointer_model
 from graphql import GraphQLSchema, get_named_type
 
 __all__ = [
@@ -724,7 +730,7 @@ def _record_edges(
     A record carries only these edges, so a surface listing one (a record's files,
     pages or source conversations) applies to the record types that name it. An
     edge with roles adds ``<label>:<role>`` for each role the type carries
-    (:meth:`~angee.refs.RecordRefMixin.record_edge_roles`), so a surface
+    (:meth:`~angee.models.refs.RecordRefMixin.record_edge_roles`), so a surface
     serving one role (Comments on the chatter role) gates on that entry.
     """
 

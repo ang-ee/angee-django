@@ -3,6 +3,7 @@
 {# the template root that holds copier.yml, as Copier resolves includes). `framework` #}
 {# (source|baked) is read directly in the shared body. #}
 {% set stack_flavor = "instance" %}
+{% set container_project_dir = "/opt/angee-project" %}
 {# No public ingress yet for instance stacks; localhost keeps the shared body's #}
 {# hostname-guarded blocks (ANGEE_PUBLIC_ORIGIN, edge TLS) on their loopback path. #}
 {% set ingress_domain_value = "localhost" %}
@@ -16,8 +17,8 @@
 {% set operator_bind = "127.0.0.1" %}
 {% set pgdata_mount = "./data/pgdata" %}
 {# uv's cache: the framework pyproject pins cache-dir ".angee/caches/uv", resolved #}
-{# against the CWD — in the django container that is /app (the project mount), which #}
+{# against the CWD — in the django container that is /opt/angee-project (the project mount), which #}
 {# would mint a stray nested `.angee/` on the host. Pin the stack-owned, gitignored #}
-{# ./caches/uv instead (/app/caches/uv inside the mount). #}
-{% set uv_cache_dir = "/app/caches/uv" %}
+{# ./caches/uv instead (/opt/angee-project/caches/uv inside the mount). #}
+{% set uv_cache_dir = "/opt/angee-project/caches/uv" %}
 {% include "../_shared/stack-body.yaml.jinja" %}

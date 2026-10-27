@@ -90,8 +90,6 @@ def resource_field_kind(
         return "relation"
     if is_enum or (field is not None and getattr(field, "choices", None)):
         return "enum"
-    if field is not None and getattr(field, "many_to_many", False):
-        return "list"
     return "scalar"
 
 

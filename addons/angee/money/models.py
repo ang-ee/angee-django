@@ -41,12 +41,13 @@ from angee.models import (
     ArchiveMixin,
     ArchiveQuerySet,
     HistoryMixin,
+    MergePolicy,
+    RecordRefMixin,
     role_anchor,
 )
 from angee.models.query import SystemQuerysetMixin
 from angee.money.rounding import RoundingMode, rounding_constant
 from angee.numeric import quantize
-from angee.refs import MergePolicy, RecordRefMixin
 
 REFERENCE_CURRENCY_SETTING = "ANGEE_MONEY_REFERENCE_CURRENCY"
 """The project setting naming the ISO-4217 code every :class:`CurrencyRate` is relative to."""

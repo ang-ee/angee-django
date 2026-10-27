@@ -8,7 +8,7 @@ the knowledge addon.
 
 This is a skeleton: it **subclasses the bundled lexical backend** and inherits
 its title/body ``icontains`` search, so the seam is exercised end to end while no
-real embeddings exist yet. A production plugin overrides :meth:`search` with an
+real embeddings exist yet. A production plugin overrides :meth:`search_many` with an
 approximate-nearest-neighbour query over an embedding column it adds to
 ``knowledge.Page`` (a model ``extends`` + its own migration and pgvector index).
 """
@@ -22,7 +22,7 @@ class PgvectorRetrievalBackend(LexicalRetrievalBackend):
     """Stub semantic backend: inherits lexical search until embeddings land.
 
     Concrete registry leaf (``key="pgvector"``). A real implementation keeps the
-    registration shape and replaces :meth:`search` with a vector-similarity query;
+    registration shape and replaces :meth:`search_many` with a vector-similarity query;
     the embedding column, its backfill, and the ANN index are this plugin's
     responsibility (a migration), never the knowledge addon's.
     """

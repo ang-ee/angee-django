@@ -73,15 +73,15 @@ slice. If a saved theme is later uninstalled, the UI uses the host or intrinsic
 fallback and retains the unavailable ID so reinstalling the addon can restore
 the selection.
 
-The former `angee.brand` theme ID is a compatibility alias claimed by Default.
+Saved preferences using the former `angee.brand` theme ID migrate through Default.
 Its version 1, 2 and 3 customization envelopes resolve through Default's
 migrator and the next successful appearance save writes the canonical
-`angee.stock` ID. The deprecated `angee.theme_brand` addon contains no theme
-implementation; it only depends on `angee.theme_stock` for older stack manifests.
+`angee.stock` ID. Stack manifests select `angee.theme_stock`; the former
+`angee.theme_brand` addon has been removed.
 
 The DOM uses `data-theme-id` for implementation identity and
-`data-color-scheme="light|dark"` for the resolved scheme. `data-theme` mirrors
-the scheme for one compatibility cycle.
+`data-color-scheme="light|dark"` for the resolved scheme. Theme identity and
+color scheme have separate attributes.
 
 The editable Appearance page keeps a provider draft open for its mounted
 lifetime. Theme, color scheme, customization and contributed tools read and
@@ -275,9 +275,8 @@ each addon contribution references its canonical discovered definition.
 Projects created before this feature need a template update. Re-render the
 project template, review the explicit `/src/index.css` head link and virtual
 `virtual:angee-appearance` wiring, then run the normal Angee build and production
-web build. The deprecated color-scheme names continue to delegate during this
-cycle, but new code should import `ColorSchemePreference` and
-`useColorSchemePreference` and target `data-color-scheme`.
+web build. Import `ColorSchemePreference` and `useColorSchemePreference` and
+target `data-color-scheme`.
 
 `angee.appearance_integrate` is optional. It adds a signed-in GraphQL analysis
 operation and a tool on the Appearance page, as an `appearance.settings#tools`

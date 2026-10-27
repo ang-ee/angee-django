@@ -91,14 +91,15 @@ from angee.models import (
     HierarchyQuerySet,
     HistoryMixin,
     ItemOwnershipMixin,
+    MergePolicy,
     OwnerMixin,
     OwnerQuerySet,
+    RecordRefMixin,
     TrashMixin,
     TrashQuerySet,
     role_anchor,
     row_lock_paths,
 )
-from angee.refs import MergePolicy, RecordRefMixin
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized

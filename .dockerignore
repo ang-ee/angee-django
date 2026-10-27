@@ -1,8 +1,4 @@
-# Deny-list, not an allow-list: the `runtime` stage builds the framework wheel from
-# the `angee/` + `addons/` source roots, so they (and the manifests) must stay in the
-# build context. Drop only VCS, virtualenvs, generated/state, caches, node_modules,
-# the JS workspace, and the example project — none are copied by any stage, and
-# hatch-angee already excludes web/node_modules from the wheel itself.
+# Native Python addon and JS package source trees are image inputs.
 .git
 .venv
 .angee
@@ -13,7 +9,6 @@
 .mypy_cache
 .pytest_cache
 .ruff_cache
-packages
 examples
 .work
 docs/screenshots

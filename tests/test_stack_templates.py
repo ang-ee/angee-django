@@ -536,6 +536,8 @@ def _render_project_settings(
     addons_profile: str = "base",
     framework_workspace: bool = False,
     include_arp: bool = False,
+    framework_source_path: str = "",
+    framework: str = "source",
 ) -> dict[str, Any]:
     """Render project settings enough for stack-owned contract tests."""
 
@@ -548,9 +550,12 @@ def _render_project_settings(
             '{% if addons_profile == "full" %}': addons_profile == "full",
             "{% if framework_workspace %}": framework_workspace,
             "{% if include_arp %}": include_arp,
+            '{% if framework_source_path and not framework_workspace and framework != "baked" %}':
+                bool(framework_source_path) and not framework_workspace and framework != "baked",
         },
     )
     replacements = {
+        "framework_source_path": framework_source_path,
         "addon_installer_backend": addon_installer_backend,
         "addon_namespace": "angee_local",
         "project_name": "angee-local",
@@ -569,6 +574,7 @@ def _render_project_pyproject(
     *,
     addons_profile: str = "base",
     framework_source_path: str = "",
+    framework: str = "source",
 ) -> tuple[str, dict[str, Any]]:
     """Render the project Python manifest enough for dependency contract tests."""
 
@@ -576,7 +582,8 @@ def _render_project_pyproject(
     text = _render_project_settings_conditionals(
         text,
         conditions={
-            "{% if framework_source_path %}": bool(framework_source_path),
+            '{% if framework_source_path and framework != "baked" %}':
+                bool(framework_source_path) and framework != "baked",
         },
     )
     replacements = {
@@ -743,6 +750,25 @@ def test_local_django_baked_mode_skips_uv_sync() -> None:
     assert "framework" not in stack["sources"]
     for service_name in ("celery-worker",):
         assert "uv sync" not in stack["services"][service_name]["command"][-1]
+    command = stack["jobs"]["frontend-build"]["command"][-1]
+    assert '"packages/*","addons/angee/*/web"' in command
+    assert "sources/angee" not in command
+
+
+def test_local_project_uses_native_addon_roots_only_in_source_mode() -> None:
+    """The inherited stack mode selects editable sources without burdening baked hosts."""
+
+    for framework in ("source", "baked"):
+        command = _render_local_stack(framework=framework)["jobs"]["frontend-build"]["command"][-1]
+        subprocess.run(["sh", "-n", "-c", command], check=True, timeout=10)
+        settings = _render_project_settings(framework=framework, framework_source_path="sources/angee")
+        _text, pyproject = _render_project_pyproject(framework=framework, framework_source_path="sources/angee")
+        if framework == "source":
+            assert settings["ANGEE_ADDON_DIRS"] == ["{BASE_DIR}/addons", "{BASE_DIR}/sources/angee/addons"]
+            assert pyproject["tool"]["uv"]["sources"]["django-angee"]["path"] == "sources/angee"
+        else:
+            assert settings["ANGEE_ADDON_DIRS"] == ["{BASE_DIR}/addons"]
+            assert "sources" not in pyproject["tool"]["uv"]
 
 
 def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
@@ -781,15 +807,13 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     frontend_command = stack["jobs"]["frontend-build"]["command"][-1]
     frontend_build = stack["jobs"]["frontend-build"]
     assert frontend_build["depends_on"] == ["provision", "operator-schema"]
-    # Source-mode graft: overlay each @angee package src from the monorepo and
-    # external bridge checkout, then symlink it into the mounted project.
-    assert "project/sources/angee/packages" in frontend_command
-    assert "project/sources/angee/addons/angee" in frontend_command
-    assert "project/sources/angee-messaging-bridges/addons/angee" in frontend_command
-    assert "fs.cpSync(srcDir,dstDir" in frontend_command
-    assert 'path.join(root,"project/web/node_modules/@angee")' in frontend_command
-    assert "fs.symlinkSync" in frontend_command
-    assert "pnpm build" in frontend_command
+    assert "../angee-project/sources/angee/packages/*" in frontend_command
+    assert "../angee-project/sources/angee/addons/angee/*/web" in frontend_command
+    assert "../angee-project/addons/*/*/web" in frontend_command
+    assert frontend_build["mounts"] == ["source://app:/opt/angee-project"]
+    assert "fs.cpSync" not in frontend_command
+    assert "fs.symlinkSync" not in frontend_command
+    assert "--filter ./../angee-project/web --fail-if-no-match run build" in frontend_command
     assert "tail -f /dev/null" not in frontend_command
     assert "runtime/schemas" not in frontend_command
 
@@ -1761,9 +1785,9 @@ def test_uv_caches_are_stack_owned() -> None:
 
     dev_docker = _render_dev_docker_stack()
     local = _render_local_stack()
-    for stack in (dev_docker, local):
+    for stack, cache_path in ((dev_docker, "/app/caches/uv"), (local, "/opt/angee-project/caches/uv")):
         for name in ("django", "celery-worker"):
-            assert stack["services"][name]["env"]["UV_CACHE_DIR"] == "/app/caches/uv"
+            assert stack["services"][name]["env"]["UV_CACHE_DIR"] == cache_path
 
     for gitignore_path in (LOCAL_STACK_GITIGNORE, DEV_STACK_GITIGNORE):
         assert "/caches/" in gitignore_path.read_text(encoding="utf-8")
@@ -2248,9 +2272,8 @@ def test_stack_install_roots_compose_the_shared_pnpm_policy() -> None:
     template = DEV_PNPM_WORKSPACE.read_text()
     assert "globalPnpmfile: workspaces/src/angee/packages/scripts/pnpm-policy.cjs" in template
     dockerfile = (ROOT / "Dockerfile").read_text()
-    assert "COPY packages/scripts/pnpm-policy.cjs ./framework-install/pnpm-policy.cjs" in dockerfile
-    assert "COPY packages/scripts/patches ./framework-install/patches" in dockerfile
-    assert "globalPnpmfile: framework-install/pnpm-policy.cjs" in dockerfile
+    assert "COPY packages ./packages" in dockerfile
+    assert "COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./" in dockerfile
     for surface in [workspace, yaml.safe_load(template[template.index("allowBuilds:"):])]:
         assert "overrides" not in surface
         assert "packageExtensions" not in surface

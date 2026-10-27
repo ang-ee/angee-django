@@ -32,6 +32,7 @@ from __future__ import annotations
 import base64
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, cast, overload
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -43,6 +44,7 @@ from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, FieldError, ImproperlyConfigured, ValidationError
 from django.core.validators import RegexValidator
 from django.db import models, transaction
+from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.models.query_utils import DeferredAttribute
 from django.utils.encoding import force_bytes
 from django.utils.functional import Promise
@@ -415,8 +417,15 @@ class FractionalRankExhausted(ValueError):
     """Raised when binary64 cannot represent another safe fractional rank."""
 
 
-def _rank_system_queryset(model: type[models.Model]) -> models.QuerySet[Any]:
-    """Return a locked unscoped queryset for rank allocation and repair.
+@dataclass(frozen=True, slots=True)
+class _PendingAppendRank:
+    """Carry an omitted rank to the native connection-aware save hook."""
+
+    instance: models.Model
+
+
+def _rank_system_queryset(model: type[models.Model], *, lock: bool) -> models.QuerySet[Any]:
+    """Return unscoped rows, locking only a transactional rank repair.
 
     Angee models own this through their ``system_queryset()`` classmethod.  The
     field also supports ordinary Django models, whose base manager is already
@@ -425,8 +434,9 @@ def _rank_system_queryset(model: type[models.Model]) -> models.QuerySet[Any]:
 
     system = getattr(model, "system_queryset", None)
     if callable(system):
-        return cast(models.QuerySet[Any], system(lock=("self",)))
-    return model._base_manager.all().select_for_update(of=("self",))
+        return cast(models.QuerySet[Any], system(lock=("self",) if lock else None))
+    rows = model._base_manager.all()
+    return rows.select_for_update(of=("self",)) if lock else rows
 
 
 class FractionalRankField(models.FloatField):
@@ -466,40 +476,45 @@ class FractionalRankField(models.FloatField):
         return name, path, args, kwargs
 
     def has_default(self) -> bool:
-        """Expose model-owned append allocation as a server-side default.
+        """Expose field-owned append allocation as a server-side default.
 
         Hasura input generation uses Django's field-owned ``has_default`` fact
         to decide whether an insert column may be omitted.  A fractional rank
-        has no context-free literal default; ``pre_save`` supplies its
-        contextual append rank when omitted.
+        has no context-free literal default; native save preparation supplies
+        its contextual append rank on the actual write database.
         """
 
         return True
 
     def get_default(self) -> None:
-        """Seed an omitted model value for model-owned append allocation."""
+        """Leave omitted ranks for connection-aware allocation at save time."""
 
         return None
 
     def validate(self, value: Any, model_instance: models.Model | None) -> None:
-        """Allow the pending ``None`` that ``pre_save`` replaces with a rank."""
+        """Allow the omitted ``None`` allocated by the native save-preparation hooks."""
 
         if value is None:
             return
         super().validate(value, model_instance)
 
-    def pre_save(self, model_instance: models.Model, add: bool) -> float:
-        """Honor an explicit rank or append within the instance's context."""
+    def pre_save(self, model_instance: models.Model, add: bool) -> float | _PendingAppendRank:
+        """Honor explicit ranks; defer omitted allocation until the write DB is known."""
 
         value = super().pre_save(model_instance, add)
-        if value is not None:
-            return cast(float, value)
-        rank = self._get_append_rank_for_instance(model_instance)
-        setattr(model_instance, self.attname, rank)
-        return rank
+        return _PendingAppendRank(model_instance) if value is None else cast(float, value)
 
-    def _get_append_rank_for_instance(self, instance: models.Model) -> float:
-        """Read the next rank within the instance's unique context."""
+    def get_db_prep_save(self, value: Any, connection: BaseDatabaseWrapper) -> Any:
+        """Allocate omitted ranks on the compiler's actual database connection."""
+
+        if isinstance(value, _PendingAppendRank):
+            instance = value.instance
+            value = self._get_append_rank_for_instance(instance, using=connection.alias)
+            setattr(instance, self.attname, value)
+        return super().get_db_prep_save(value, connection)
+
+    def _get_append_rank_for_instance(self, instance: models.Model, *, using: str) -> float:
+        """Read the next rank within the instance's context on its write database."""
 
         model = type(instance)
         context_fields = self._unique_context_fields(model)
@@ -508,7 +523,8 @@ class FractionalRankField(models.FloatField):
             for context_field in context_fields
         }
         previous = (
-            _rank_system_queryset(model)
+            _rank_system_queryset(model, lock=False)
+            .using(using)
             .filter(**context)
             .order_by(f"-{self.name}")
             .values_list(self.name, flat=True)
@@ -616,8 +632,8 @@ class FractionalRankField(models.FloatField):
             raise ImproperlyConfigured("FractionalRankField must be bound to a model before rebalance().")
         context_filter = self._context_filter(context)
 
-        with transaction.atomic():
-            writer = _rank_system_queryset(model).filter(**context_filter)
+        writer = _rank_system_queryset(model, lock=True).filter(**context_filter)
+        with transaction.atomic(using=writer.db):
             rows = list(writer.only(model._meta.pk.name, self.name).order_by(self.name, model._meta.pk.name))
             current = [self._coerce_endpoint(getattr(row, self.attname), name=self.attname) for row in rows]
             clean = self._clean_ranks(len(rows))

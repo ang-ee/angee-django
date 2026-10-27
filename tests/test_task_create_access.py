@@ -24,11 +24,11 @@ from rebac import (
 from rebac.actors import is_sudo
 from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.projects.models import Task as AbstractTask
-from angee.testing.permissions import install_permission_schema
 from tests.conftest import (
     create_platform_admin,
     create_user,
@@ -123,7 +123,7 @@ def task_create_case(transactional_db: None) -> Iterator[tuple[Scope, Any, Any]]
         }
         """
     )
-    install_permission_schema(
+    install_schema(
         replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]),
     )
     try:
