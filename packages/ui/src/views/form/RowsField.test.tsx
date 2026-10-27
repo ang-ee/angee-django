@@ -149,7 +149,7 @@ describe("rows widget", () => {
       />,
     );
 
-    const trigger = await screen.findByRole("button", {
+    const trigger = await screen.findByRole("combobox", {
       name: "Target: General",
     });
     expect(screen.queryByPlaceholderText("Search…")).toBeNull();

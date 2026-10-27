@@ -32,7 +32,9 @@ Project and stack templates expose three build inputs:
 The Vite configuration validates those values against the generated catalogue.
 Changing a host default therefore requires the normal codegen and web build.
 The synchronous head bootstrap applies that default, or a validated actor cache,
-before the application entry loads.
+before the application entry loads. Vite bundles the React-free
+[`bootstrapAppearance`](../../packages/ui/src/theme/runtime.mjs) owner; bootstrap
+and React share its token validation, cache protocol and root application.
 
 A signed-in user's `iam.User.preferences.appearance` fields override the host
 independently. The stored document contains stable IDs and versioned inputs:
@@ -90,7 +92,8 @@ the saved preference. Both leave the page ready for the next edit. Leaving with
 unsaved changes uses the standard navigation guard; confirmed departure discards
 the draft, and unmounting always restores the saved appearance. Read-only
 appearance opens no draft and offers neither action. The boot cache contains
-only saved values, so reloading restores the saved appearance.
+only saved values and both resolved scheme layers, so reloading restores the
+saved appearance even when the device's color scheme changed between visits.
 
 The three recovery verbs have distinct scopes: **Discard** restores the last
 saved appearance; **Restore theme defaults** edits the draft inside the

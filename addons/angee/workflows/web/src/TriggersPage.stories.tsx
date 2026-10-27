@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { composeAddons } from "@angee/app";
-import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
+import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
 import { createRouteHref, defaultWidgets, JsonValueSchema } from "@angee/ui";
 import { TriggerCondition } from "./TriggerCondition";
 import { TriggersList } from "./TriggersPage";
@@ -11,10 +11,10 @@ import { triggerEventFixture, triggerEventResourceFixture, triggerFixture, trigg
 import { runResourceFixture, userResourceFixture, workflowResourceFixture } from "./testing";
 import addon from "./index";
 
-export default { title: "Workflows/Triggers", parameters: { layout: "fullscreen" }, excludeStories: ["TriggerStory"] };
-export const Trigger = { render: () => <TriggerStory /> };
-export const WorkflowTriggers = { render: () => <TriggerStory embedded /> };
-export const ReadOnly = { render: () => <TriggerStory canEdit={false} /> };
+export default { title: "Workflows/Triggers", parameters: { angeeOwnRuntime: true, layout: "fullscreen" }, excludeStories: ["TriggerStory"] };
+export const Trigger = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <TriggerStory appearance={storyAppearance(globals)} /> };
+export const WorkflowTriggers = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <TriggerStory appearance={storyAppearance(globals)} embedded /> };
+export const ReadOnly = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <TriggerStory appearance={storyAppearance(globals)} canEdit={false} /> };
 
 const RequestSchema = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
 export type TriggerRequest = v.InferOutput<typeof RequestSchema>;
@@ -43,7 +43,8 @@ const runtime = {
 };
 
 /** Native form and actions over retained trigger rows, with generated mutation documents. */
-export function TriggerStory({ embedded = false, canEdit = true, onRequest }: { embedded?: boolean; canEdit?: boolean; onRequest?: (request: TriggerRequest) => void }) {
+export function TriggerStory({ appearance, embedded = false, canEdit = true, onRequest }: {
+  appearance?: RuntimeFixtureProps["appearance"]; embedded?: boolean; canEdit?: boolean; onRequest?: (request: TriggerRequest) => void }) {
   const schemas = useMemo(() => {
     let current = { ...triggerFixture, can_edit: canEdit, enable_preview: canEdit ? triggerFixture.enable_preview : null };
     const fixture = storySchema(async (_input, init) => {
@@ -73,7 +74,7 @@ export function TriggerStory({ embedded = false, canEdit = true, onRequest }: { 
       triggerResourceFixture, triggerEventResourceFixture, workflowResourceFixture, runResourceFixture, userResourceFixture, triggerNoteResourceFixture, triggerMessageResourceFixture,
     ] } } } };
   }, [canEdit, onRequest]);
-  return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows/triggers"
+  return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} collectionPath="/workflows/triggers"
     initialEntry={embedded ? "/workflows/triggers" : "/workflows/triggers/wft_review"} runtime={runtime}
     resourceName={TRIGGER_MODEL} resourceLabel="Triggers" operationDocuments={documents}>
     <TriggersList workflowId={embedded ? "wfl_review" : undefined} />

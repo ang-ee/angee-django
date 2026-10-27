@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { decisionLinkFixture, decisionRecordFixture, decisionResourceFixture, decisionUserFixture } from "@angee/decisions/testing";
-import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
+import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
 import {
   Button, ChatterProvider, FormView, RecordFieldMarksProvider, ScrollArea, createRouteHref, useChatter, JsonValueSchema,
 } from "@angee/ui";
@@ -13,14 +13,14 @@ import { timelineFixture, type TimelineState } from "./timeline-testing";
 import { WORKFLOW_STATUS_TONES } from "./status-tones";
 import { attemptResourceFixture, recordResourceFixture, runResourceFixture, stepRunResourceFixture, watchResourceFixture } from "./testing";
 
-export default { title: "Workflows/Record timeline", parameters: { layout: "fullscreen" }, excludeStories: ["TimelineStory"] };
-export const WaitingOnDecision = { render: () => <TimelineStory /> };
-export const Clean = { render: () => <TimelineStory state="clean" /> };
-export const HeldByError = { render: () => <TimelineStory state="error" /> };
-export const RetryWithAcknowledgement = { render: () => <TimelineStory state="error" duplicateRisk /> };
-export const HeldByRun = { render: () => <TimelineStory state="run" /> };
-export const Stopped = { render: () => <TimelineStory state="stopped" /> };
-export const RecordSet = { render: () => <TimelineStory state="set" /> };
+export default { title: "Workflows/Record timeline", parameters: { angeeOwnRuntime: true, layout: "fullscreen" }, excludeStories: ["TimelineStory"] };
+export const WaitingOnDecision = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <TimelineStory appearance={storyAppearance(globals)} /> };
+export const Clean = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <TimelineStory appearance={storyAppearance(globals)} state="clean" /> };
+export const HeldByError = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <TimelineStory appearance={storyAppearance(globals)} state="error" /> };
+export const RetryWithAcknowledgement = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <TimelineStory appearance={storyAppearance(globals)} state="error" duplicateRisk /> };
+export const HeldByRun = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <TimelineStory appearance={storyAppearance(globals)} state="run" /> };
+export const Stopped = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <TimelineStory appearance={storyAppearance(globals)} state="stopped" /> };
+export const RecordSet = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <TimelineStory appearance={storyAppearance(globals)} state="set" /> };
 
 const Request = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
 export type TimelineRequest = v.InferOutput<typeof Request>;
@@ -36,7 +36,8 @@ const runtime = {
 };
 
 /** The real read and inline mutation owners over a neutral, disposable transport. */
-export function TimelineStory({ state = "decision", collapsed = false, duplicateRisk = false, data, onRequest }: {
+export function TimelineStory({ appearance, state = "decision", collapsed = false, duplicateRisk = false, data, onRequest }: {
+  appearance?: RuntimeFixtureProps["appearance"];
   state?: TimelineState; collapsed?: boolean; duplicateRisk?: boolean; onRequest?: (request: TimelineRequest) => void;
   data?: TimelineSelection;
 }) {
@@ -58,7 +59,7 @@ export function TimelineStory({ state = "decision", collapsed = false, duplicate
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [resource, decisionResourceFixture, decisionLinkFixture, decisionUserFixture, runResourceFixture, stepRunResourceFixture, attemptResourceFixture, recordResourceFixture, watchResourceFixture] } } } };
   }, [state, duplicateRisk, data, onRequest]);
-  return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} initialEntry="/notes/nte_7" collectionPath="/notes" resourceLabel="Notes" runtime={runtime} operationDocuments={{ console: operationDocuments }}>
+  return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} initialEntry="/notes/nte_7" collectionPath="/notes" resourceLabel="Notes" runtime={runtime} operationDocuments={{ console: operationDocuments }}>
     <RecordFieldMarksProvider><ChatterProvider defaultCollapsed={collapsed}><TimelineLayout set={state === "set"} /></ChatterProvider></RecordFieldMarksProvider>
   </RoutedRuntimeFixture>;
 }

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { ActionMenu, ActionTrigger, ModalsHost } from "@angee/ui";
+import { ActionMenu, ActionTrigger } from "@angee/ui";
 
 /**
  * The one verb menu: a trigger (icon-only `⋮`, or labelled) whose items are
@@ -31,22 +31,20 @@ function Items() {
 
 /** The command band's leading menu: icon-only, with an accessible name. */
 export const Default: Story = {
-  render: () => <ModalsHost><ActionMenu label={null} aria-label="Actions" glyph="more-vertical" size="iconSm"><Items /></ActionMenu></ModalsHost>,
+  render: () => <ActionMenu label={null} aria-label="Actions" glyph="more-vertical" size="iconSm"><Items /></ActionMenu>,
 };
 
 /** A labelled trigger ("Actions") for list toolbars. */
 export const Labelled: Story = {
-  render: () => <ModalsHost><ActionMenu label="Actions" glyph={null} size="sm" variant="secondary"><Items /></ActionMenu></ModalsHost>,
+  render: () => <ActionMenu label="Actions" glyph={null} size="sm" variant="secondary"><Items /></ActionMenu>,
 };
 
 /** A pane menu with a count on its trigger, and a blocked menu while the record is dirty. */
 export const BadgeAndBlocked: Story = {
   render: () => (
-    <ModalsHost>
-      <div className="flex items-center gap-3">
-        <ActionMenu label={null} aria-label="More" glyph="more-horizontal" size="iconSm" badge={3}><Items /></ActionMenu>
-        <ActionMenu label={null} aria-label="Actions" glyph="more-vertical" size="iconSm" blocked><Items /></ActionMenu>
-      </div>
-    </ModalsHost>
+    <div className="flex items-center gap-3">
+      <ActionMenu label={null} aria-label="More" glyph="more-horizontal" size="iconSm" badge={3}><Items /></ActionMenu>
+      <ActionMenu label={null} aria-label="Actions" glyph="more-vertical" size="iconSm" blocked><Items /></ActionMenu>
+    </div>
   ),
 };

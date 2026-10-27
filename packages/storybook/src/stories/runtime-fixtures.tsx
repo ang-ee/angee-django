@@ -1,8 +1,24 @@
-import { ModelMetadataProvider, defineAngeeSchemaMetadata, refineResourcesFromAngeeSchemaMetadata, schemaFieldMetadataFromAngeeSchemaMetadata, type AngeeSchemaMetadata, } from "@angee/metadata";
 import {
-  useMemo, type ComponentProps, type ReactNode } from "react";
+  ActiveGraphQLSchemaProvider,
+  ModelMetadataProvider,
+  defineAngeeSchemaMetadata,
+  refineResourcesFromAngeeSchemaMetadata,
+  schemaFieldMetadataFromAngeeSchemaMetadata,
+  type AngeeSchemaMetadata,
+} from "@angee/metadata";
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import {
   AppRuntimeProvider,
+  AppearanceProvider,
+  ModalsHost,
+  ToastProvider,
   InAppLinkProvider,
   routerNavigator,
   baseIcons,
@@ -10,7 +26,6 @@ import {
   defaultWidgets,
   type AppRuntime,
 } from "@angee/ui";
-import { ActiveGraphQLSchemaProvider, } from "@angee/metadata";
 import {
   createAngeeHasuraDataProviders,
   OperationDocumentsProvider,
@@ -21,8 +36,10 @@ import {
 } from "@angee/refine";
 import type { IResourceItem } from "@refinedev/core";
 import { composeAddons } from "@angee/app";
-import { ModalsHost, ToastProvider } from "@angee/ui";
-export { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
+import { parseFlatSearch, stringifyFlatSearch } from "@angee/app/create-app";
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
+import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
+import { previewThemes, previewThemeId } from "../theme-global";
 import {
   Outlet,
   RouterProvider,
@@ -32,12 +49,13 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 
+export { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
+
 /**
- * Shared story fixtures for data-bound views (`ListView`/`FormView`). A view that
- * fetches needs the same provider stack — modal host, refine data provider over a
- * story fetch responder, generated resource metadata, and the composed runtime
- * (base icons + widgets) — so it lives here once instead of being re-hand-rolled
- * per story.
+ * The one Storybook environment, shared by the global preview decorator and
+ * direct routed fixtures. Native story parameters configure schema transport,
+ * resources and runtime; direct fixture stories pass toolbar appearance from
+ * their render context. Toasts and modal portals inherit this same environment.
  */
 
 type StorySchemaConfig = AngeeHasuraSchemaConfig & {
@@ -47,20 +65,35 @@ type StorySchemaConfig = AngeeHasuraSchemaConfig & {
 /** The framework's containers as `createApp` composes them: the view switcher's kinds, the chatter aside, the shell's. */
 const FRAMEWORK_CONTAINERS = composeAddons([], { canonicalModelLabel: (model) => model }).containers;
 
-export function RuntimeRegistryFixture({
-  children,
-  runtime = {},
-}: {
-  children: ReactNode;
-  runtime?: Partial<AppRuntime>;
-}): ReactNode {
-  return (
-    <AppRuntimeProvider
-      runtime={{ icons: baseIcons, widgets: defaultWidgets, containers: FRAMEWORK_CONTAINERS, ...runtime }}
-    >
-      {children}
-    </AppRuntimeProvider>
-  );
+/** Keep route components stable while args and toolbar globals change. */
+export function useStorySnapshot<T>(snapshot: T) {
+  const latest = useRef(snapshot);
+  const store = useMemo(() => {
+    const listeners = new Set<() => void>();
+    return {
+      subscribe(listener: () => void) {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      getSnapshot: () => latest.current,
+      publish(next: T) {
+        latest.current = next;
+        listeners.forEach((listener) => listener());
+      },
+    };
+  }, []);
+  useLayoutEffect(() => {
+    if (latest.current !== snapshot) store.publish(snapshot);
+  }, [snapshot, store]);
+  return store;
+}
+
+/** Toolbar globals are translated by native Storybook decorators/renderers. */
+export function storyAppearance(globals: Record<string, unknown>): NonNullable<RuntimeFixtureProps["appearance"]> {
+  return {
+    themeId: previewThemeId(globals.themeId),
+    colorScheme: globals.colorScheme === "dark" ? "dark" : globals.colorScheme === "light" ? "light" : "system",
+  };
 }
 
 /** A JSON `Response` for a story fetch responder. */
@@ -89,6 +122,20 @@ export function storySchema(
   };
 }
 
+export interface RuntimeFixtureProps {
+  activeSchema?: string;
+  schemas: Record<string, StorySchemaConfig>;
+  appearance?: ComponentProps<typeof AppearanceProvider>["host"];
+  children: ReactNode;
+  runtime?: Partial<AppRuntime>;
+  syncWithLocation?: boolean;
+  resources?: IResourceItem[];
+  routed?: boolean;
+  operationDocuments?: ComponentProps<typeof OperationDocumentsProvider>["documents"];
+  liveProvider?: ComponentProps<typeof Refine>["liveProvider"];
+  queryClient?: ReturnType<typeof useQueryClient>;
+}
+
 /**
  * Wrap a data-bound view in the modal host, refine data providers over `schemas`,
  * active schema metadata, and the composed runtime — the stack every fetching
@@ -98,6 +145,7 @@ export function RuntimeFixture({
   activeSchema = "public",
   schemas,
   children,
+  appearance,
   runtime = {},
   syncWithLocation = false,
   resources,
@@ -105,18 +153,8 @@ export function RuntimeFixture({
   operationDocuments = {},
   liveProvider,
   queryClient,
-}: {
-  activeSchema?: string;
-  schemas: Record<string, StorySchemaConfig>;
-  children: ReactNode;
-  runtime?: Partial<AppRuntime>;
-  syncWithLocation?: boolean;
-  resources?: IResourceItem[];
-  routed?: boolean;
-  operationDocuments?: ComponentProps<typeof OperationDocumentsProvider>["documents"];
-  liveProvider?: ComponentProps<typeof Refine>["liveProvider"];
-  queryClient?: ReturnType<typeof useQueryClient>;
-}): ReactNode {
+}: RuntimeFixtureProps): ReactNode {
+  const QueryStateAdapter = routed ? NuqsAdapter : NuqsTestingAdapter;
   const normalized = useMemo(
     () =>
       Object.fromEntries(
@@ -136,8 +174,8 @@ export function RuntimeFixture({
     [schemas],
   );
   const dataProvider = useMemo(
-    () => createAngeeHasuraDataProviders(normalized, "public"),
-    [normalized],
+    () => createAngeeHasuraDataProviders(normalized, activeSchema),
+    [activeSchema, normalized],
   );
   const fieldMetadata = useMemo(
     () =>
@@ -145,23 +183,27 @@ export function RuntimeFixture({
     [activeSchema, normalized],
   );
   return (
-    <ToastProvider><ModalsHost>
-      <Refine
-        dataProvider={dataProvider}
-        liveProvider={liveProvider}
-        resources={resources ?? [...refineResourcesFromAngeeSchemaMetadata(normalized[activeSchema]?.metadata)]}
-        routerProvider={routed ? tanStackRouterProvider : undefined}
-        options={{ syncWithLocation, ...(queryClient ? { reactQuery: { clientConfig: queryClient } } : {}) }}
-      >
-        <OperationDocumentsProvider documents={operationDocuments}><ActiveGraphQLSchemaProvider schema={activeSchema}>
-          <ModelMetadataProvider metadata={fieldMetadata}>
-            <RuntimeRegistryFixture runtime={runtime}>
-              {children}
-            </RuntimeRegistryFixture>
-          </ModelMetadataProvider>
-        </ActiveGraphQLSchemaProvider></OperationDocumentsProvider>
-      </Refine>
-    </ModalsHost></ToastProvider>
+    <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, containers: FRAMEWORK_CONTAINERS, themes: previewThemes, ...runtime }}>
+      <AppearanceProvider host={appearance}>
+        <Refine
+          dataProvider={dataProvider}
+          liveProvider={liveProvider}
+          resources={resources ?? [...refineResourcesFromAngeeSchemaMetadata(normalized[activeSchema]?.metadata)]}
+          routerProvider={routed ? tanStackRouterProvider : undefined}
+          options={{ syncWithLocation, ...(queryClient ? { reactQuery: { clientConfig: queryClient } } : {}) }}
+        >
+          <OperationDocumentsProvider documents={operationDocuments}>
+            <ActiveGraphQLSchemaProvider schema={activeSchema}>
+              <ModelMetadataProvider metadata={fieldMetadata}>
+                <QueryStateAdapter>
+                  <ToastProvider><ModalsHost>{children}</ModalsHost></ToastProvider>
+                </QueryStateAdapter>
+              </ModelMetadataProvider>
+            </ActiveGraphQLSchemaProvider>
+          </OperationDocumentsProvider>
+        </Refine>
+      </AppearanceProvider>
+    </AppRuntimeProvider>
   );
 }
 
@@ -170,6 +212,7 @@ export function RoutedRuntimeFixture({
   activeSchema = "public",
   schemas,
   children,
+  appearance,
   collectionPath,
   initialEntry = collectionPath,
   recordParam = "id",
@@ -183,6 +226,7 @@ export function RoutedRuntimeFixture({
   activeSchema?: string;
   schemas: Record<string, StorySchemaConfig>;
   children: ReactNode;
+  appearance?: RuntimeFixtureProps["appearance"];
   collectionPath: string;
   initialEntry?: string;
   recordParam?: string;
@@ -193,28 +237,31 @@ export function RoutedRuntimeFixture({
   liveProvider?: ComponentProps<typeof Refine>["liveProvider"];
   queryClient?: ReturnType<typeof useQueryClient>;
 }): ReactNode {
+  const store = useStorySnapshot({ activeSchema, schemas, children, appearance, runtime, resourceLabel, resourceName, operationDocuments, liveProvider, queryClient });
   const router = useMemo(() => {
-    const resources = resourceName ? [{
-      name: resourceName,
-      list: collectionPath,
-      show: `${collectionPath}/:${recordParam}`,
-      meta: { label: resourceLabel },
-    }] : undefined;
-    const root = createRootRoute({ component: () => <InAppLinkProvider navigate={navigate}><RuntimeFixture
-      activeSchema={activeSchema}
-      schemas={schemas}
-      runtime={runtime}
-      resources={resources}
-      routed
-      syncWithLocation
-      operationDocuments={operationDocuments}
-      liveProvider={liveProvider}
-      queryClient={queryClient}
-    ><Outlet /></RuntimeFixture></InAppLinkProvider> });
+    function StoryRoot() {
+      const { resourceLabel, resourceName, ...fixture } = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+      const resources = resourceName ? [{
+        name: resourceName,
+        list: collectionPath,
+        show: `${collectionPath}/:${recordParam}`,
+        meta: { label: resourceLabel },
+      }] : undefined;
+      return <InAppLinkProvider navigate={navigate}>
+        <RuntimeFixture {...fixture} resources={resources} routed syncWithLocation>
+          <Outlet />
+        </RuntimeFixture>
+      </InAppLinkProvider>;
+    }
+    function StoryContent() {
+      const { children } = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+      return <ConsoleLayout>{children}</ConsoleLayout>;
+    }
+    const root = createRootRoute({ component: StoryRoot });
     const collection = createRoute({
       getParentRoute: () => root,
       path: collectionPath,
-      component: () => <ConsoleLayout>{children}</ConsoleLayout>,
+      component: StoryContent,
     });
     const record = createRoute({
       getParentRoute: () => collection,
@@ -223,16 +270,11 @@ export function RoutedRuntimeFixture({
     const router = createRouter({
       routeTree: root.addChildren([collection.addChildren([record])]),
       history: createMemoryHistory({ initialEntries: [initialEntry] }),
-      parseSearch: (value) => Object.fromEntries(new URLSearchParams(value)),
-      stringifySearch: (value) => {
-        const query = new URLSearchParams(Object.entries(value).flatMap(([key, item]) => (
-          item == null ? [] : [[key, String(item)]]
-        ))).toString();
-        return query ? `?${query}` : "";
-      },
+      parseSearch: parseFlatSearch,
+      stringifySearch: stringifyFlatSearch,
     });
     const navigate = routerNavigator(router);
     return router;
-  }, [activeSchema, children, collectionPath, initialEntry, liveProvider, operationDocuments, queryClient, recordParam, resourceLabel, resourceName, runtime, schemas]);
+  }, [collectionPath, initialEntry, recordParam, store]);
   return <RouterProvider router={router} />;
 }

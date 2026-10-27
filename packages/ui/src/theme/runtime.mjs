@@ -31,6 +31,65 @@ export const THEME_TOKEN_NAMES = Object.freeze([
   "--dur-fast", "--dur-base", "--dur-slow", "--ease",
 ]);
 
+/** Disposable first-paint cache protocol, shared by bootstrap and React. */
+export const APPEARANCE_CACHE_KEY = "angee:appearance";
+export const APPEARANCE_CACHE_SCHEMA = 2;
+export const APPEARANCE_CACHE_LIMIT = 128 * 1024;
+
+/** Apply only the public token contract, before or after React mounts. */
+export function applyAppearanceRoot({ themeId, colorScheme, tokens = {}, target }) {
+  if (typeof document === "undefined" && !target) return;
+  assertTokenLayer(tokens, "appearance");
+  const root = (target ?? document).documentElement;
+  if (themeId) root.dataset.themeId = themeId; else delete root.dataset.themeId;
+  root.dataset.colorScheme = colorScheme;
+  root.dataset.theme = colorScheme;
+  root.style.colorScheme = colorScheme;
+  for (const name of THEME_TOKEN_NAMES) root.style.removeProperty(name);
+  for (const [name, value] of Object.entries(tokens)) root.style.setProperty(name, value);
+}
+
+/** Synchronous first paint; the app bundles this headless owner as an inline IIFE. */
+export function bootstrapAppearance(payload, target = globalThis) {
+  const themes = new Map(payload.catalogue.themes.flatMap((theme) => [
+    [theme.id, theme], ...(theme.legacyIds ?? []).map((alias) => [alias, theme]),
+  ]));
+  let themeId = payload.host.themeId;
+  let preference = payload.host.colorScheme;
+  let tokenLayers = null;
+  try {
+    const encoded = target.localStorage.getItem(APPEARANCE_CACHE_KEY);
+    if (encoded && encoded.length <= APPEARANCE_CACHE_LIMIT) {
+      const cached = JSON.parse(encoded);
+      if (
+        cached && typeof cached === "object" && !Array.isArray(cached)
+        && cached.schema === APPEARANCE_CACHE_SCHEMA
+        && cached.fingerprint === payload.fingerprint
+        && (cached.themeId === null || themes.has(cached.themeId))
+        && ["light", "dark", "system"].includes(cached.colorSchemePreference)
+      ) {
+        for (const layer of ["shared", "light", "dark"]) {
+          assertTokenLayer(cached.tokenLayers?.[layer], `appearance cache.${layer}`);
+        }
+        themeId = themes.get(cached.themeId)?.id ?? cached.themeId;
+        preference = cached.colorSchemePreference;
+        tokenLayers = cached.tokenLayers;
+      }
+    }
+  } catch { /* Invalid or unavailable disposable storage falls back to the host. */ }
+  const colorScheme = preference === "system"
+    ? target.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+    : preference;
+  const layers = tokenLayers ?? (themeId === payload.host.themeId
+    ? payload.host.tokenLayers
+    : themes.get(themeId)?.defaultTokens);
+  applyAppearanceRoot({
+    themeId, colorScheme,
+    tokens: { ...layers?.shared, ...layers?.[colorScheme] },
+    target: target.document,
+  });
+}
+
 const TOKEN_SET = new Set(THEME_TOKEN_NAMES);
 const FORBIDDEN_VALUE = /[;{}@]|url\s*\(|expression\s*\(|!important/i;
 const INTEGER_VALUE = /^(?:0|[1-9]\d*)$/;

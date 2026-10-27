@@ -27,6 +27,7 @@ test("native install policy preserves consumer settings while enforcing framewor
   expect(configured(config)).toEqual({
     registry: config.registry,
     overrides: {
+      "nuqs": "2.10.1",
       "consumer-package": "1.0.0", "@assistant-ui/react": "0.14.26",
       "@assistant-ui/core": "0.2.20", "@assistant-ui/store": "0.2.19", "@assistant-ui/tap": "0.9.3",
     },
@@ -38,6 +39,7 @@ test("native install policy preserves consumer settings while enforcing framewor
       },
     },
     patchedDependencies: {
+      "nuqs@2.10.1": fileURLToPath(new URL("../../scripts/patches/nuqs-2.10.1.patch", import.meta.url)),
       "consumer-package": "consumer.patch",
       "@refinedev/core@5.0.12": fileURLToPath(new URL("../../scripts/patches/refinedev-core-5.0.12.patch", import.meta.url)),
     },
@@ -48,6 +50,9 @@ test("native install policy accepts roots with no existing dependency policy", (
   expect(configured({})).toMatchObject({
     overrides: { "@assistant-ui/react": "0.14.26" },
     packageExtensions: { "@refinedev/core@5.0.12": { dependencies: { graphql: "^16.14.0" } } },
-    patchedDependencies: { "@refinedev/core@5.0.12": expect.stringContaining("refinedev-core-5.0.12.patch") },
+    patchedDependencies: {
+      "@refinedev/core@5.0.12": expect.stringContaining("refinedev-core-5.0.12.patch"),
+      "nuqs@2.10.1": expect.stringContaining("nuqs-2.10.1.patch"),
+    },
   });
 });

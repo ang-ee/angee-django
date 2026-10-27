@@ -26,24 +26,4 @@ v.check(entry => entry.kind !== null || Boolean(entry.reason), "Infrastructure r
 export type CatalogEntry = v.InferOutput<typeof CatalogEntrySchema>;
 export const CatalogSchema = v.array(CatalogEntrySchema);
 
-/** The composition graph uses the same ontology as the export catalog. */
-export const CompositionReportSchema = v.object({
-  version: v.literal(0),
-  source: v.string(),
-  nodes: v.array(v.looseObject({
-    id: v.string(), name: v.string(), prefix: v.string(),
-    kind: Kind, kindBasis: v.string(), reason: v.optional(v.string()),
-    shipped: v.boolean(), ownershipViolation: v.boolean(),
-    routeInstance: v.optional(v.boolean(), false),
-  })),
-  edges: v.array(v.object({
-    from: v.string(), to: v.string(), file: v.nullable(v.string()), source: v.string(),
-  })),
-  fan_in: v.record(v.string(), v.pipe(v.number(), v.integer(), v.minValue(0))),
-  hand_rolled: v.array(v.string()),
-  duplicates: v.record(v.string(), v.array(v.string())),
-  pages: v.array(v.string()),
-});
-export type CompositionReport = v.InferOutput<typeof CompositionReportSchema>;
-export const parseCompositionReport = (input: unknown): CompositionReport => v.parse(CompositionReportSchema, input);
 export const parseCatalog = (input: unknown): CatalogEntry[] => v.parse(CatalogSchema, input);

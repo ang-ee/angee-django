@@ -87,11 +87,11 @@ test("a relation choose uses server search and filters, gates Confirm, sends pub
   const getList = vi.fn(async (_params: unknown) => ({ data: [selected], total: 1 }));
   const getOne = vi.fn(async () => ({ data: selected }));
   render(<ChooseHarness dataProvider={{ getList, getOne }} />);
-  expect(screen.queryByRole("button", { name: "Contact" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Contact" })).toBeNull();
   expect(confirmDisabled()).toBe(true);
   fireEvent.click(screen.getByRole("radio", { name: /^Another contact/ }));
   expect(confirmDisabled()).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "Contact" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Contact" }));
   fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: "Visible" } });
   await waitFor(() => expect(getList.mock.calls.at(-1)?.[0]).toMatchObject({
     filters: [{ operator: "or", value: [{ field: "name", operator: "contains", value: "Visible" }] }],
@@ -102,7 +102,7 @@ test("a relation choose uses server search and filters, gates Confirm, sends pub
   fireEvent.click(screen.getByRole("button", { name: "Revise" }));
   fireEvent.click(screen.getByRole("radio", { name: /^Another contact/ }));
   expect(confirmDisabled()).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "Contact" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Contact" }));
   fireEvent.click(await screen.findByRole("option", { name: selected.name }));
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   await waitFor(() => expect(decide).toHaveBeenCalledExactlyOnceWith({ id: "dcn_review",
@@ -142,7 +142,7 @@ test("inline create saves immediately and selects the returned record for the an
   const create = vi.fn(async (_params: unknown) => ({ data: created }));
   render(<ChooseHarness dataProvider={{ getList, create, getOne: async () => ({ data: created }) }} />);
   fireEvent.click(screen.getByRole("radio", { name: /^Another contact/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Contact" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Contact" }));
   fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: created.name } });
   fireEvent.click(await screen.findByText(`Create “${created.name}”`));
   const dialog = await screen.findByRole("dialog");
@@ -150,7 +150,7 @@ test("inline create saves immediately and selects the returned record for the an
   fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
   await waitFor(() => expect(create).toHaveBeenCalledOnce());
   expect(create.mock.calls[0]?.[0]).toMatchObject({ variables: { name: created.name } });
-  await screen.findByRole("button", { name: `Contact: ${created.name}` });
+  await screen.findByRole("combobox", { name: `Contact: ${created.name}` });
   expect(confirmDisabled()).toBe(false);
   expect(decide).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
@@ -172,7 +172,7 @@ test("every chosen field gates Confirm and unchosen values are omitted", async (
   expect(confirmDisabled()).toBe(false);
   fireEvent.click(screen.getByRole("checkbox", { name: "Another contact" }));
   expect(confirmDisabled()).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "Contact" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Contact" }));
   fireEvent.click(await screen.findByRole("option", { name: selected.name }));
   expect(confirmDisabled()).toBe(false);
   fireEvent.click(screen.getByRole("checkbox", { name: "Another contact" }));

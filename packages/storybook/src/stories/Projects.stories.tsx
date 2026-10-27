@@ -12,9 +12,9 @@ import {
   type GroupDescriptor,
   type ListColumn,
 } from "@angee/ui";
-import { useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { useState, type ReactElement } from "react";
 
-import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
+import { jsonResponse, storySchema } from "./runtime-fixtures";
 
 interface TaskRow extends Row {
   id: string;
@@ -154,10 +154,11 @@ const metadata = {
 
         roots: {
           list: "projects",
+          aggregate: "projects_aggregate",
           detail: "projects_by_pk",
           update: "update_projects_by_pk",
         },
-        typeNames: { node: "ProjectType" },
+        typeNames: { node: "ProjectType", filter: "ProjectFilter", order: "ProjectOrder" },
         recordRepresentation: "title",
         capabilities: ["list", "detail", "update"],
         fields: [
@@ -165,7 +166,7 @@ const metadata = {
           scalarField("title", "String", true),
           scalarField("body", "String", true),
           enumField("status", ["PLANNED", "ACTIVE", "ON_HOLD", "DONE", "CANCELED"]),
-          scalarIdRelationField("lead", "iam.User"),
+          relationField("lead", "iam.User", false),
           scalarField("start_date", "Date", true),
           scalarField("target_date", "Date", true),
           scalarField("updated_at", "DateTime"),
@@ -196,11 +197,12 @@ const metadata = {
 
         roots: {
           list: "project_tasks",
+          aggregate: "project_tasks_aggregate",
           detail: "project_tasks_by_pk",
           create: "insert_project_tasks_one",
           update: "update_project_tasks_by_pk",
         },
-        typeNames: { node: "TaskType" },
+        typeNames: { node: "TaskType", filter: "TaskFilter", order: "TaskOrder" },
         recordRepresentation: "title",
         capabilities: ["list", "detail", "create", "update"],
         fields: [
@@ -208,7 +210,7 @@ const metadata = {
           scalarField("title", "String", true),
           relationField("project", "projects.Project"),
           enumField("status", ["OPEN", "DONE", "DROPPED"]),
-          scalarIdRelationField("assignee", "iam.User"),
+          relationField("assignee", "iam.User", false),
           enumField("priority", ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"], true),
           scalarField("due_date", "Date", true),
           scalarField("sort_order", "Float", true),
@@ -247,8 +249,8 @@ const metadata = {
         appLabel: "iam",
         modelName: "User",
 
-        roots: { list: "users" },
-        typeNames: { node: "UserType" },
+        roots: { list: "users", aggregate: "users_aggregate" },
+        typeNames: { node: "UserType", filter: "UserFilter", order: "UserOrder" },
         recordRepresentation: "username",
         capabilities: ["list"],
         fields: [scalarField("id", "ID"), scalarField("username", "String")],
@@ -262,7 +264,7 @@ const metadata = {
 
 const meta = {
   title: "Addons/Projects",
-  parameters: { layout: "padded" },
+  parameters: { angeeFixture: () => ({ schemas: createProjectSchemas() }), layout: "padded" },
 } satisfies Meta;
 
 export default meta;
@@ -271,17 +273,15 @@ type Story = StoryObj<typeof meta>;
 
 export const ProjectRecord: Story = {
   render: () => (
-    <ProjectRuntimeFixture>
-      <div className="mx-auto max-w-5xl">
-        <FormView
-          resource="projects.Project"
-          id={project.id}
-          fields={projectFields}
-          groups={projectGroups}
-          returning={["body", "status", "lead", "start_date", "target_date", "updated_at"]}
-        />
-      </div>
-    </ProjectRuntimeFixture>
+    <div className="mx-auto max-w-5xl">
+      <FormView
+        resource="projects.Project"
+        id={project.id}
+        fields={projectFields}
+        groups={projectGroups}
+        returning={["body", "status", "lead", "start_date", "target_date", "updated_at"]}
+      />
+    </div>
   ),
 };
 
@@ -293,42 +293,35 @@ function TaskBoardFixture(): ReactElement {
   const [recordId, setRecordId] = useState<string | undefined>();
   const [creating, setCreating] = useState(false);
   return (
-    <ProjectRuntimeFixture>
-      <div className="min-h-[540px] min-w-[1000px]">
-        <ResourceList<TaskRow>
-          resource="projects.Task"
-          columns={taskColumns}
-          formFields={[
-            { name: "title", label: "Task", title: true },
-            { name: "project", label: "Project" },
-            { name: "assignee", label: "Assignee" },
-            { name: "priority", label: "Priority" },
-            { name: "due_date", label: "Due date" },
-          ]}
-          recordId={recordId}
-          creating={creating}
-          onSelect={(id) => {
-            setCreating(id === null);
-            setRecordId(id ?? undefined);
-          }}
-          onClose={() => {
-            setCreating(false);
-            setRecordId(undefined);
-          }}
-          placement="drawer"
-          defaultView="board"
-          baseFilter={{ status: { exact: "OPEN" } }}
-          order={{ sort_order: "ASC" }}
-          laneSource={{ field: "assignee", rankField: "sort_order" }}
-        />
-      </div>
-    </ProjectRuntimeFixture>
+    <div className="min-h-[540px] min-w-[1000px]">
+      <ResourceList<TaskRow>
+        resource="projects.Task"
+        columns={taskColumns}
+        formFields={[
+          { name: "title", label: "Task", title: true },
+          { name: "project", label: "Project" },
+          { name: "assignee", label: "Assignee" },
+          { name: "priority", label: "Priority" },
+          { name: "due_date", label: "Due date" },
+        ]}
+        recordId={recordId}
+        creating={creating}
+        onSelect={(id) => {
+          setCreating(id === null);
+          setRecordId(id ?? undefined);
+        }}
+        onClose={() => {
+          setCreating(false);
+          setRecordId(undefined);
+        }}
+        placement="drawer"
+        defaultView="board"
+        baseFilter={{ status: { exact: "OPEN" } }}
+        order={{ sort_order: "ASC" }}
+        laneSource={{ field: "assignee", rankField: "sort_order" }}
+      />
+    </div>
   );
-}
-
-function ProjectRuntimeFixture({ children }: { children: ReactNode }): ReactElement {
-  const schemas = useMemo(createProjectSchemas, []);
-  return <RuntimeFixture schemas={schemas}>{children}</RuntimeFixture>;
 }
 
 function createProjectSchemas() {
@@ -348,14 +341,17 @@ function createProjectSchemas() {
     const detailTask = tasks.find((task) => task.id === detailId) ?? tasks[0];
     return jsonResponse({
       data: {
-        projects: collection([project]),
+        projects: [project],
+        projects_aggregate: { aggregate: { count: 1 } },
         projects_by_pk: project,
         update_projects_by_pk: project,
-        project_tasks: collection(tasks),
+        project_tasks: tasks,
+        project_tasks_aggregate: { aggregate: { count: tasks.length } },
         project_tasks_by_pk: detailTask,
         insert_project_tasks_one: detailTask,
         update_project_tasks_by_pk: detailTask,
-        users: collection(users),
+        users,
+        users_aggregate: { aggregate: { count: users.length } },
       },
     });
   });
@@ -379,14 +375,6 @@ function taskWithValues(task: TaskRow, values: Record<string, unknown>): TaskRow
     ...(typeof values.sub_sort_order === "number"
       ? { sub_sort_order: values.sub_sort_order }
       : {}),
-  };
-}
-
-function collection<T>(results: readonly T[]) {
-  return {
-    totalCount: results.length,
-    results,
-    pageInfo: { offset: 0, limit: 200 },
   };
 }
 
@@ -458,34 +446,13 @@ function enumField(
 function relationField(
   name: string,
   relationModelLabel: string,
+  relationObject = true,
 ): DataResourceFieldMetadata {
   return {
     name,
     kind: "relation",
     relationModelLabel,
-    relationObject: true,
-    readable: true,
-
-    aggregatable: false,
-
-    creatable: true,
-    updatable: true,
-    requiredOnCreate: false,
-    nullable: true,
-  };
-}
-
-function scalarIdRelationField(
-  name: string,
-  relationModelLabel: string,
-): DataResourceFieldMetadata {
-  return {
-    name,
-    kind: "scalar",
-    scalar: "ID",
-    widget: "select",
-    relationModelLabel,
-    relationObject: false,
+    relationObject,
     readable: true,
 
     aggregatable: false,

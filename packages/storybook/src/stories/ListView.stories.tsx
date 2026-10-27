@@ -9,7 +9,7 @@ import {
 } from "@angee/ui";
 
 import { ResourceQuery } from "@angee/metadata";
-import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
+import { jsonResponse, storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
 
 const rows = [
   {
@@ -82,18 +82,25 @@ const rowActions: readonly RowActionDeclaration<StoryRow>[] = [
 const storySchemas = storySchema(async () =>
   jsonResponse({
     data: {
-      notes: {
-        totalCount: rows.length,
-        results: rows,
-        pageInfo: { offset: 0, limit: 50 },
-      },
+      notes: rows,
+      notes_aggregate: { aggregate: { count: rows.length } },
     },
   }),
 );
 
+storySchemas.public!.metadata = { angee: { resources: [testDataResource("notes.Note", {
+  schemaName: "public",
+  roots: { list: "notes", aggregate: "notes_aggregate" },
+  typeNames: { filter: "NoteFilter", order: "NoteOrder" },
+  query: testResourceQuery({ fields: Object.fromEntries(([
+    ["id", "ID"], ["title", "String"], ["tags", "String"], ["status", "String"],
+    ["owner", "String"], ["words", "Int"], ["updatedAt", "DateTime"],
+  ] as const).map(([name, scalar]) => [name, testQueryField(name, { scalar, sort: { field: name } })])) }),
+})] } };
+
 const meta = {
   title: "Views/ListView",
-  parameters: { layout: "padded" },
+  parameters: { angeeFixture: { schemas: storySchemas }, layout: "padded" },
 } satisfies Meta;
 
 export default meta;
@@ -110,28 +117,25 @@ export const SearchShortcuts: Story = {
 
 function ListFixture({ withShortcuts = false }: { withShortcuts?: boolean }) {
   return (
-    <RuntimeFixture schemas={storySchemas}>
-      <div className="max-w-5xl">
-        <ListView
-          resource="notes.Note"
-          columns={columns}
-          rowActions={rowActions}
-          chrome={{ heading: { label: "Notes", hint: "Shared team records", audience: "Editors" } }}
-          search={withShortcuts ? { shortcuts: [{ kind: "toggle", id: "status:ACTIVE" }, { kind: "facet", field: "status" }] } : undefined}
-          filterOptions={withShortcuts ? [
-            { id: "status:ACTIVE", label: "Active", filter: { status: { exact: "ACTIVE" } } },
-          ] : undefined}
-          customFilterFields={withShortcuts ? [{ id: "status", label: "Status", type: "selection", options: [
-            { value: "ACTIVE", label: "Active" }, { value: "DRAFT", label: "Draft" }, { value: "ARCHIVED", label: "Archived" },
-          ] }] : undefined}
-          createLabel="New note"
-          onCreate={() => undefined}
-        />
-      </div>
-    </RuntimeFixture>
+    <div className="max-w-5xl">
+      <ListView
+        resource="notes.Note"
+        columns={columns}
+        rowActions={rowActions}
+        chrome={{ heading: { label: "Notes", hint: "Shared team records", audience: "Editors" } }}
+        search={withShortcuts ? { shortcuts: [{ kind: "toggle", id: "status:ACTIVE" }, { kind: "facet", field: "status" }] } : undefined}
+        filterOptions={withShortcuts ? [
+          { id: "status:ACTIVE", label: "Active", filter: { status: { exact: "ACTIVE" } } },
+        ] : undefined}
+        customFilterFields={withShortcuts ? [{ id: "status", label: "Status", type: "selection", options: [
+          { value: "ACTIVE", label: "Active" }, { value: "DRAFT", label: "Draft" }, { value: "ARCHIVED", label: "Archived" },
+        ] }] : undefined}
+        createLabel="New note"
+        onCreate={() => undefined}
+      />
+    </div>
   );
 }
-
 
 const referenceQuery = ResourceQuery.forRows({ fields: {
   title: { scalar: "String" }, "requester.display_name": { scalar: "String" },

@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useMemo, useState } from "react";
 import {
-  ActionTrigger, AppRuntimeProvider, Button, Chip, CommandBand, FORM_CONTAINERS, Glyph, ModalsHost,
+  ActionTrigger, AppRuntimeProvider, Button, Chip, CommandBand, FORM_CONTAINERS, Glyph,
   SaveDiscardActions, containersFromChildren, useAppRuntime, type RecordChromeContext, type RecordNavigation,
 } from "@angee/ui";
 
@@ -43,31 +43,29 @@ function Band({ dirty = false, trashed = false }: { dirty?: boolean; trashed?: b
     onNext: () => setPosition((value) => Math.min(6, value + 1)),
   };
   return (
-    <ModalsHost>
-      <AppRuntimeProvider runtime={fixtureRuntime}>
-        <CommandBand
-          blocked={dirty}
-          menu={<>
-            <ActionTrigger glyph="copy" onClick={noop}>Copy link</ActionTrigger>
-            <ActionTrigger glyph="file" onClick={noop}>Duplicate</ActionTrigger>
-            <ActionTrigger glyph="trash" variant="danger" onClick={noop}>Move to trash</ActionTrigger>
-          </>}
-          verbs={dirty ? (
-            <SaveDiscardActions isDirty onDiscard={noop} onSave={noop} />
-          ) : trashed ? (
-            <Button size="sm" variant="secondary"><Glyph name="restore" />Restore</Button>
-          ) : (
-            <>
-              <Button size="sm" variant="primary"><Glyph name="check" />Post</Button>
-              <Button size="sm" variant="danger"><Glyph name="x" />Cancel bill</Button>
-            </>
-          )}
-          chrome={chrome}
-          end={dirty ? <Chip tone="warning">Unsaved changes</Chip> : undefined}
-          navigation={navigation}
-        />
-      </AppRuntimeProvider>
-    </ModalsHost>
+    <AppRuntimeProvider runtime={fixtureRuntime}>
+      <CommandBand
+        blocked={dirty}
+        menu={<>
+          <ActionTrigger glyph="copy" onClick={noop}>Copy link</ActionTrigger>
+          <ActionTrigger glyph="file" onClick={noop}>Duplicate</ActionTrigger>
+          <ActionTrigger glyph="trash" variant="danger" onClick={noop}>Move to trash</ActionTrigger>
+        </>}
+        verbs={dirty ? (
+          <SaveDiscardActions isDirty onDiscard={noop} onSave={noop} />
+        ) : trashed ? (
+          <Button size="sm" variant="secondary"><Glyph name="restore" />Restore</Button>
+        ) : (
+          <>
+            <Button size="sm" variant="primary"><Glyph name="check" />Post</Button>
+            <Button size="sm" variant="danger"><Glyph name="x" />Cancel bill</Button>
+          </>
+        )}
+        chrome={chrome}
+        end={dirty ? <Chip tone="warning">Unsaved changes</Chip> : undefined}
+        navigation={navigation}
+      />
+    </AppRuntimeProvider>
   );
 }
 

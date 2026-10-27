@@ -110,13 +110,13 @@ test("Enter in the real relation picker selects an option without submitting a c
     return <FilterClauseEditor fields={fields} value={value} onChange={onChange} onSubmit={onSubmit} />;
   }
   render(<Example />, { wrapper: Provider });
-  fireEvent.click(screen.getByRole("button", { name: "Filter value: Alpha" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Filter value: Alpha" }));
   const input = await screen.findByPlaceholderText("Search…");
   fireEvent.change(input, { target: { value: "Beta" } });
   await screen.findByRole("option", { name: "Beta" });
   fireEvent.keyDown(input, { key: "ArrowDown" });
   fireEvent.keyDown(input, { key: "Enter" });
-  await waitFor(() => expect(screen.getByRole("button", { name: "Filter value: Beta" })).toBeTruthy());
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Filter value: Beta" })).toBeTruthy());
   expect(onSubmit).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
   expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ field: "target", operator: "exact", value: "beta" });

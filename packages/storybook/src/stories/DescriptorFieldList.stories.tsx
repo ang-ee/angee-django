@@ -3,8 +3,6 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { FormProvider, useForm } from "react-hook-form";
 import { Button, DescriptorFieldList, type DescriptorField } from "@angee/ui";
 
-import { RuntimeRegistryFixture } from "./runtime-fixtures";
-
 const fields: readonly DescriptorField[] = [
   { name: "title", label: "Title", description: "This value belongs to the surrounding form." },
   { name: "details", label: "Show details", widget: "switch" },
@@ -21,7 +19,7 @@ export default meta;
 function DescriptorFieldListDemo(): React.ReactElement {
   const form = useForm<Record<string, unknown>>({ defaultValues: { title: "Example", details: true, note: "" } });
   const [submitted, setSubmitted] = React.useState<Record<string, unknown>>();
-  return <RuntimeRegistryFixture><FormProvider {...form}>
+  return <FormProvider {...form}>
     <form className="grid w-96 gap-4" onSubmit={form.handleSubmit(setSubmitted)}>
       <DescriptorFieldList fields={fields} />
       <div className="flex gap-2">
@@ -30,7 +28,7 @@ function DescriptorFieldListDemo(): React.ReactElement {
       </div>
       {submitted ? <pre className="rounded-6 bg-inset p-3 text-12">{JSON.stringify(submitted, null, 2)}</pre> : null}
     </form>
-  </FormProvider></RuntimeRegistryFixture>;
+  </FormProvider>;
 }
 
 export const Fields: StoryObj = { render: () => <DescriptorFieldListDemo /> };

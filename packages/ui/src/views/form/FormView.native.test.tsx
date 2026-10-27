@@ -336,16 +336,16 @@ test("an editable metadata relation drops a stale expanded option when its id ch
       <button type="button" onClick={() => context.form.form.setValue("parent", undefined)}>Clear parent</button>
     </>,
   });
-  const relation = await screen.findByRole("button", { name: /Parent/ });
+  const relation = await screen.findByRole("combobox", { name: /Parent/ });
   expect(relation.textContent).toContain("note-a");
   fireEvent.click(screen.getByRole("button", { name: "Choose B" }));
   await waitFor(() => {
-    const current = screen.getByRole("button", { name: /Parent/ });
+    const current = screen.getByRole("combobox", { name: /Parent/ });
     expect(current.textContent).toContain("note-b");
     expect(current.textContent).not.toContain("note-a");
   });
   fireEvent.click(screen.getByRole("button", { name: "Clear parent" }));
-  await waitFor(() => expect(screen.queryByRole("button", { name: /Parent/ })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("combobox", { name: /Parent/ })).toBeNull());
 });
 
 test("a focused field opens its collapsed group and a live title uses form context", async () => {
@@ -853,7 +853,7 @@ test.each([
       <NoteForm />
     </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
   </Provider>);
-  const control = screen.getByRole(field.name === "parent" ? "button" : "textbox", { name: field.label });
+  const control = screen.getByRole(field.name === "parent" ? "combobox" : "textbox", { name: field.label });
   if (field.name !== "parent") fireEvent.change(control, { target: { value: "Rejected" } });
   fireEvent.click(screen.getByRole("button", { name: "Create" }));
   const message = await screen.findByText("Choose a different value.");

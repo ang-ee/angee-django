@@ -12,11 +12,14 @@ import {
 import { stableKey } from "@angee/refine";
 import {
   resolveThemeOptions,
+  applyAppearanceRoot,
+  APPEARANCE_CACHE_KEY,
+  APPEARANCE_CACHE_SCHEMA,
+  APPEARANCE_CACHE_LIMIT,
   type ColorScheme,
   type ColorSchemePreference,
   type ThemeOptionsEnvelope,
-  type ThemeTokenName,
-  THEME_TOKEN_NAMES,
+  type ThemeTokenLayers,
 } from "./runtime.mjs";
 import type { ThemeContribution } from "./index";
 import {
@@ -36,21 +39,13 @@ import {
  * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export const APPEARANCE_PREFERENCE_KEY = "appearance";
-/**
- * @kind null
- * @reason Codec and transport infrastructure: translates runtime data and addresses.
- */
-export const APPEARANCE_CACHE_KEY = "angee:appearance";
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
-export const APPEARANCE_CACHE_SCHEMA = 1;
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
-export const APPEARANCE_CACHE_LIMIT = 128 * 1024;
+// Preserve the existing provider import surface through the headless owner.
+export {
+  applyAppearanceRoot,
+  APPEARANCE_CACHE_KEY,
+  APPEARANCE_CACHE_SCHEMA,
+  APPEARANCE_CACHE_LIMIT,
+} from "./runtime.mjs";
 
 export interface AppearancePreferences {
   version: 1;
@@ -176,9 +171,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
       actorId: auth.user?.id ?? "anonymous",
       themeId: savedAppearance.effectiveThemeId,
       colorSchemePreference: savedAppearance.colorSchemePreference,
-      colorScheme: savedAppearance.colorScheme,
-      options: savedAppearance.effectiveOptions,
-      tokens: savedAppearance.effectiveTokens,
+      tokenLayers: savedAppearance.tokenLayers,
       ...(pendingLegacy ? { pendingLegacy } : {}),
     });
   }, [auth.user?.id, savedAppearance, host.fingerprint, pendingLegacy, resolvingIdentity]);
@@ -348,7 +341,7 @@ function resolveAppearance(preferences: AppearancePreferences, notice: Appearanc
   const colorSchemePreference = preferences.colorScheme ?? host.colorScheme ?? "system";
   const colorScheme = colorSchemePreference === "system" ? system : colorSchemePreference;
   const requestedOptions = preferences.themeId === undefined ? host.options : preferences.options;
-  let effectiveTokens: Partial<Record<ThemeTokenName, string>> = {};
+  let tokenLayers: ThemeTokenLayers = { shared: {}, light: {}, dark: {} };
   let effectiveOptions: ThemeOptionsEnvelope | undefined;
   if (effectiveTheme) {
     let resolved;
@@ -358,10 +351,11 @@ function resolveAppearance(preferences: AppearancePreferences, notice: Appearanc
       notice ??= "options-invalid";
       resolved = resolveThemeOptions(effectiveTheme.definition);
     }
-    effectiveTokens = { ...resolved.tokens.shared, ...resolved.tokens[colorScheme] };
+    tokenLayers = resolved.tokens;
     if (effectiveTheme.definition.options) effectiveOptions = { version: resolved.version, value: resolved.value };
   }
-  return { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, effectiveTokens, effectiveOptions, notice };
+  const effectiveTokens = { ...tokenLayers.shared, ...tokenLayers[colorScheme] };
+  return { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, tokenLayers, effectiveTokens, effectiveOptions, notice };
 }
 
 /**
@@ -412,21 +406,6 @@ export function writeAppearancePreferences(preferences: RuntimeUserPreferences, 
     return rest;
   }
   return { ...preferences, [APPEARANCE_PREFERENCE_KEY]: appearance };
-}
-
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
-export function applyAppearanceRoot({ themeId, colorScheme, tokens, target }: { themeId: string | null; colorScheme: ColorScheme; tokens?: Partial<Record<ThemeTokenName, string>>; target?: Document }): void {
-  if (typeof document === "undefined" && !target) return;
-  const root = (target ?? document).documentElement;
-  if (themeId) root.dataset.themeId = themeId; else delete root.dataset.themeId;
-  root.dataset.colorScheme = colorScheme;
-  root.dataset.theme = colorScheme;
-  root.style.colorScheme = colorScheme;
-  for (const name of THEME_TOKEN_NAMES) root.style.removeProperty(name);
-  for (const [name, value] of Object.entries(tokens ?? {})) if (value !== undefined) root.style.setProperty(name, value);
 }
 
 /**

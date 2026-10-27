@@ -1,7 +1,7 @@
 import { useMemo, type ComponentProps, type ReactNode } from "react";
 import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
-import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
+import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
 import { ChatterTabsTestHost, ShellPageTestProviders } from "@angee/app/testing";
 import { createRouteHref, defaultWidgets, JsonValueSchema } from "@angee/ui";
 
@@ -14,21 +14,21 @@ import { workflowVersionFixture } from "./catalogue/testing";
 import { triggerEventResourceFixture } from "./trigger-testing";
 import { WORKFLOW_STATUS_TONES } from "./status-tones";
 
-export default { title: "Workflows/Run page", parameters: { layout: "fullscreen" }, excludeStories: ["RunStory"] };
-export const Recovery = { render: () => <RunStory /> };
-export const Runs = { render: () => <RunStory list /> };
-export const Waiting = { render: () => <RunStory waiting /> };
-export const Watching = { render: () => <RunStory
+export default { title: "Workflows/Run page", parameters: { angeeOwnRuntime: true, layout: "fullscreen" }, excludeStories: ["RunStory"] };
+export const Recovery = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <RunStory appearance={storyAppearance(globals)} /> };
+export const Runs = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <RunStory appearance={storyAppearance(globals)} list /> };
+export const Waiting = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <RunStory appearance={storyAppearance(globals)} waiting /> };
+export const Watching = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <RunStory appearance={storyAppearance(globals)}
   run={runFixture({ status: "WAITING", can_cancel: true, can_reprocess: false, finished_at: null })}
   steps={[stepRunFixture({ status: "WAITING", outcome: "", waiting_kind: "RECORD", can_retry: false,
     watches: [{ id: "wsw_note", record_model: "notes.Note", record_id: "nte_7" }] })]} /> };
-export const DuplicateRisk = { render: () => <RunStory steps={[stepRunFixture({ requires_duplicate_acknowledgement: true })]} /> };
-export const ReadOnly = { render: () => <RunStory run={runFixture({ can_reprocess: false })} steps={[stepRunFixture({ can_retry: false })]} /> };
-export const Mapped = { render: () => <RunStory steps={mappedSteps} /> };
-export const Redacted = { render: () => <RunStory redacted /> };
-export const Unavailable = { render: () => <RunStory unavailable /> };
-export const QueryError = { render: () => <RunStory queryError /> };
-export const ActionRejected = { render: () => <RunStory rejectAction /> };
+export const DuplicateRisk = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <RunStory appearance={storyAppearance(globals)} steps={[stepRunFixture({ requires_duplicate_acknowledgement: true })]} /> };
+export const ReadOnly = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <RunStory appearance={storyAppearance(globals)} run={runFixture({ can_reprocess: false })} steps={[stepRunFixture({ can_retry: false })]} /> };
+export const Mapped = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <RunStory appearance={storyAppearance(globals)} steps={mappedSteps} /> };
+export const Redacted = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <RunStory appearance={storyAppearance(globals)} redacted /> };
+export const Unavailable = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <RunStory appearance={storyAppearance(globals)} unavailable /> };
+export const QueryError = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <RunStory appearance={storyAppearance(globals)} queryError /> };
+export const ActionRejected = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <RunStory appearance={storyAppearance(globals)} rejectAction /> };
 
 const RequestSchema = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
 export type RunRequest = v.InferOutput<typeof RequestSchema>;
@@ -58,8 +58,9 @@ const runtime = {
 };
 
 /** Real router, query transport and generated mutation documents over retained fixture rows. */
-export function RunStory({ list = false, waiting = false, redacted = false, unavailable = false, queryError = false, rejectAction = false,
+export function RunStory({ appearance, list = false, waiting = false, redacted = false, unavailable = false, queryError = false, rejectAction = false,
   run, steps, children, evidence = [], onRequest, content, graph, initialEntry, liveProvider, queryClient }: {
+  appearance?: RuntimeFixtureProps["appearance"];
   list?: boolean; waiting?: boolean; redacted?: boolean; unavailable?: boolean; queryError?: boolean; rejectAction?: boolean;
   run?: Run; steps?: readonly StepRun[]; children?: readonly Run[];
   evidence?: readonly { id: string; record_model: string | null; record_id: string | null }[];
@@ -150,7 +151,7 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
       triggerEventResourceFixture, watchResourceFixture, decisionResourceFixture,
     ] } } } };
   }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, evidence, onRequest, graph]);
-  return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows/runs"
+  return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} collectionPath="/workflows/runs"
     initialEntry={initialEntry ?? (list ? "/workflows/runs" : "/workflows/runs/wfr_review")} runtime={runtime}
     liveProvider={liveProvider} queryClient={queryClient}
     resourceName="workflows.WorkflowRun" resourceLabel="Runs" operationDocuments={documents}>

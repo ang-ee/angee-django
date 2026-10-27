@@ -11,7 +11,6 @@ import {
 } from "@angee/ui";
 
 import {
-  RuntimeFixture,
   jsonResponse,
   storySchema,
   testDataResource,
@@ -43,7 +42,7 @@ const runtime = {
 
 const meta = {
   title: "Views/FieldProvenance",
-  parameters: { layout: "centered" },
+  parameters: { angeeFixture: { schemas, runtime }, layout: "centered" },
 } satisfies Meta;
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -80,7 +79,7 @@ function PartyFieldProvenance() {
 }
 
 export const PartyStatement: Story = {
-  render: () => <RuntimeFixture schemas={schemas} runtime={runtime}>
+  render: () => (
     <RecordFieldMarksProvider><PartyFieldProvenance /></RecordFieldMarksProvider>
-  </RuntimeFixture>,
+  ),
 };
