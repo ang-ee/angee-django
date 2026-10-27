@@ -86,16 +86,21 @@ that layering tests enforce:
 
 - Core modules under `angee/` never import folder addons, including test support.
   Reusable addon test compositions live in the owning addon.
-- `angee` is the model foundation (models, fields, mixins, managers,
-  querysets, and native tracking mixins). It must not import `angee.compose`,
-  `angee.graphql`, or addon packages.
+- Angee's model foundation (models, fields, mixins, managers, querysets, and
+  native tracking mixins) must not import `angee.compose`, `angee.graphql`, or
+  addon packages. Native host orchestration in `angee.management` sits above
+  those owners: its `angee` command dispatches compilation and owns dependency
+  projection; serving commands consume the finished registry.
 - `angee.graphql` is the `addons/angee/graphql` folder addon's GraphQL runtime (schema
   assembly, Strawberry helpers, serving, subscriptions, and SDL commands). It
   may import `angee`, never `angee.compose`.
-- `angee.compose` is the build-time composer. It may import `angee` and
-  discover plain Django addon configs, but no serving module (`asgi`, `urls`,
-  `views`, `consumers`, `signals`, `models`, `graphql`) may import
-  `angee.compose`.
+- `angee.compose` owns generic Django composition mechanics and neutral shared
+  file/path utilities. Host declarations, environment conventions, and feature
+  policy enter through its explicit adapter contracts; it never imports Angee's
+  host loader, model toolkit, or addons. No serving module (`asgi`, `urls`,
+  `views`, `consumers`, `signals`, `models`, `graphql`) may import the compiler.
+  Host serving commands share that restriction; host build/provision commands
+  dispatch compilation explicitly.
 
 The same one-way rule extends downward to the base addons under `addons/angee/`
 (`angee.resources`, `angee.iam`, `angee.integrate`, `angee.operator`,
@@ -864,7 +869,7 @@ and current contracts before applying a historical example to a new deployment.
   other worker services), or run the whole-application restart; see
   [Restart the running stack](../howto/getstarted.md#restart-the-running-stack).
 - **`angee dev` serves via Angee's `runserver` override, not `uvicorn --reload`.**
-  `angee.compose` ships a `runserver` that runs `ASGI_APPLICATION` under uvicorn
+  `angee` ships a `runserver` that runs `ASGI_APPLICATION` under uvicorn
   supervised by Django's follow-imports autoreloader (mirrors Daphne's override).
   It needs no `--reload-dir`: Django watches imported source — consumer/base addons,
   framework core, *and* editable deps — and never the generated `runtime/` (each
@@ -874,7 +879,7 @@ and current contracts before applying a historical example to a new deployment.
   live edit refreshes `runtime/schemas/*.graphql` and Vite HMRs; `schema --check`
   stays a real drift gate because management commands never import `angee.asgi`.
   Generated files (runtime models + SDL) are written atomically via
-  `angee.fs.write_atomic`. The override also hard-exits the autoreloader child on
+  `angee.utils.files.write_atomic`. The override also hard-exits the autoreloader child on
   reload: open uvicorn/channels WebSocket work can leave non-daemon runtime threads
   alive, so Django's default `sys.exit(3)` can wedge the child on a dead listener.
   Install `pywatchman` for event-based (vs 1s-poll) reload.
@@ -900,21 +905,21 @@ and current contracts before applying a historical example to a new deployment.
 ### Migrations and runtime
 
 - History snapshots retain stored values even when the actor's view is redacted.
-  [`ModelHistory`](../../angee/models/history.py) gives native history construction a
+  [`ModelHistory`](../../addons/angee/provenance/contrib/angee/history.py) gives native history construction a
   detached snapshot and records deletion inside the delete transaction before
   the source row disappears; it never unredacts the caller's instance.
 - **Review enrolled local rows before enabling two-way record sync.** The
   [record-sync driver](../../addons/angee/integrate/README.md) may publish targeted
   links after the first baseline. Directory membership belongs to RecordLink;
   creating a Party never enrolls it in a remote address book.
-- [`HistoryMixin`](../../angee/models/history.py) excludes `GeneratedField` and its
+- [`HistoryMixin`](../../addons/angee/provenance/contrib/angee/history.py) excludes `GeneratedField` and its
   subclasses from historical models because their expressions belong to the live
   row. A queryset update that writes only columns the history excludes (a
   counter), with at most auto-now stamps, records no version. A multi-table
   child's save records the child's history only; its version carries the inherited
   columns, and its revert restores them. A record's chatter thread and edge are its
   bookkeeping: they revert under the record's `write`, and undoing the record's
-  creation tears them down with it. Base autoconfig enables the native
+  creation tears them down with it. Provenance autoconfig enables the native
   `SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD` setting, so simple-history
   allocates a separate nullable text change-reason field for each historical
   model; inherited tracking must never share mutable field instances across models.
@@ -1851,8 +1856,8 @@ bridge advisory lock as polling and delivery settlement.
 system checks; compose them instead of a local column, comparison, or guard.
 Their docstrings own the exact behavior.
 
-[`StatementRecords`](../../angee/models/statements.py) composes simple-history's field
-copying into typed statement models. Their [manager](../../angee/models/manager.py)
+[`StatementRecords`](../../addons/angee/provenance/statements.py) composes simple-history's field
+copying into typed statement models. Their [manager](../../addons/angee/provenance/statements.py)
 owns locked assertion writes and survivorship; the canonical subject owns source
 eligibility and application. Like history tables, statements have no independent
 REBAC resource or ORM read policy. Read them through their subject: the
@@ -1909,7 +1914,7 @@ operational identities; statement querysets use `applied()` for winning value
 assertions. Source-copy identity remains reversible pair evidence and never
 chooses a transport or moves channel occurrences.
 
-[`HistoryMixin.history_relations`](../../angee/models/history.py) declares owned
+[`HistoryMixin.history_relations`](../../addons/angee/provenance/contrib/angee/history.py) declares owned
 reverse-FK collections, such as dashboard widgets or project milestones. These
 rows keep their own history and read gates; document history groups their deltas
 with record identity. `history_tables()` is the one concrete-table inventory.
@@ -1940,14 +1945,14 @@ corrected local projection under its existing write-back policy. Archive callers
 use an explicit system boundary; serving exports retain subject authorization and
 gated-field redaction. No archive sink or history-pruning policy is introduced.
 
-Every captured write runs inside a [changeset boundary](../../angee/changesets.py);
+Every captured write runs inside a [changeset boundary](../../addons/angee/provenance/context.py);
 strict mode refuses one without it. Entrypoints own boundaries, one per unit of
 work, and nothing else opens a `fresh` one except a deliberately separate logical
 write (merge, revert, seed): HTTP requests through `ChangesetMiddleware` on the
 stack's own sync or async path; WebSocket connections through
 `ChangesetScopeMiddleware`, composed in [`angee.asgi`](../../angee/asgi.py); Celery
-tasks through [`angee.jobs.celery.Task`](../../angee/jobs/celery.py); management
-commands through [`angee.compose.manage.main()`](../../angee/compose/manage.py),
+tasks through [`angee.provenance.tasks.Task`](../../addons/angee/provenance/tasks.py); management
+commands through [`angee.management.main()`](../../angee/management/__init__.py),
 which every rendered `manage.py` calls (`serve`, `runserver` and `test` are
 excluded because their requests, connections, tasks and tests own boundaries;
 interactive shells keep the command boundary); a bridge live-session run through
@@ -1955,7 +1960,7 @@ interactive shells keep the command boundary); a bridge live-session run through
 boundary stores one changeset row per writing thread and actor under its shared
 facts, so `copy_context().run` in a worker pool and a per-event actor loop
 attribute exactly. A response status of 400 or more, a GraphQL result with
-`errors` (marked by [`AngeeGraphQLView`](../../addons/angee/graphql/views.py)) or an
+`errors` (marked by the [provenance result receiver](../../addons/angee/provenance/graphql.py)) or an
 exception closes the rows as failed. Tests inherit a boundary from the root
 `conftest.py`; modules marked `entrypoint_boundaries` exercise the production ones.
 
@@ -2032,12 +2037,15 @@ open fresh evaluator scopes for authorization and change-feed reads.
 - **Concurrency and replay tokens are GraphQL root arguments.** On models
   composing `OptimisticLockMixin`, `update_<resource>_by_pk` accepts
   `expected_revision: Int`; a stale value fails with `STALE_REVISION`.
-  `insert_<resource>_one` accepts `idempotency_key: String`; replaying the same
+  With the [provenance write adapter](../../addons/angee/provenance/graphql.py) installed,
+  `insert_<resource>_one` also accepts `idempotency_key: String`; replaying the same
   actor/resource-scoped key and content returns the readable original, and
   changed content fails with
   `CREATION_KEY_CONFLICT`. Neither token belongs in `_set` or `object`.
-  The [Hasura adapter](../../addons/angee/graphql/data/hasura.py) declares and
-  consumes them through the changeset claim and optimistic-lock owners.
+  The [Hasura adapter](../../addons/angee/graphql/data/hasura.py) composes native
+  write backends and their declared arguments; provenance owns creation claims,
+  and the model owns optimistic locking. A host without provenance exposes no
+  idempotency argument.
 - **Permission answers reuse the authorization owner.** Declare a type's
   `permissions` through [`permissions_field(names)`](../../addons/angee/graphql/capabilities.py);
   it reports only the declared Zed permissions held by the current actor,

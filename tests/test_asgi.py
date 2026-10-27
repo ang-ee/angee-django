@@ -346,3 +346,49 @@ def test_shared_router_validates_graphql_websocket_origins(
         await socket.disconnect()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("wrapper_names", [(), ("first", "second")])
+def test_websocket_addon_wrappers_are_optional_and_run_after_authentication(
+    monkeypatch: pytest.MonkeyPatch, settings: Any, wrapper_names: tuple[str, ...],
+) -> None:
+    """An installed capability wraps an authenticated scope in declared order."""
+
+    settings.DEBUG = True
+    settings.ALLOWED_HOSTS = ["localhost"]
+    seen: list[str] = []
+    addons = [SimpleNamespace(name=name) for name in wrapper_names]
+    monkeypatch.setattr("django.apps.apps.get_app_configs", lambda: addons)
+
+    def contribution(config: Any, module: str, attr: str) -> list[Any]:
+        assert (module, attr) == ("asgi", "websocket_middleware")
+
+        def wrap(inner: Any) -> Any:
+            async def middleware(scope: Any, receive: Any, send: Any) -> None:
+                assert scope["user"].is_anonymous
+                seen.append(config.name)
+                await inner(scope, receive, send)
+            return middleware
+        return [wrap]
+
+    monkeypatch.setattr("angee.addons.addon_contribution", contribution)
+
+    async def endpoint(scope: Any, receive: Any, send: Any) -> None:
+        assert scope["user"].is_anonymous
+        seen.append("endpoint")
+        assert (await receive())["type"] == "websocket.connect"
+        await send({"type": "websocket.accept"})
+        await receive()
+
+    application = asgi.websocket_application([path("ws", endpoint)])
+
+    async def exercise() -> None:
+        client = WebsocketCommunicator(
+            application, "/ws", headers=[(b"host", b"localhost"), (b"origin", b"http://localhost")],
+        )
+        connected, _ = await client.connect()
+        assert connected
+        await client.disconnect()
+
+    asyncio.run(exercise())
+    assert seen == [*wrapper_names, "endpoint"]

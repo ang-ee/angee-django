@@ -12,7 +12,6 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 from rebac import system_context
 
-from angee.changesets import changeset
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.live import PairingState, SessionLoggedOut
 from angee.integrate.locks import bridge_advisory_lock
@@ -20,6 +19,7 @@ from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.session_process import BridgeSessionProcess, SessionProcessError
 from angee.integrate.sync import bridge_progress_context
 from angee.jobs.locks import task_lock, task_locks_are_cross_process
+from angee.provenance.context import changeset
 
 logger = logging.getLogger(__name__)
 

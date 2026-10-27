@@ -153,7 +153,7 @@ export const APPEARANCE_CACHE_KEY: "angee:appearance";
  * @kind null
  * @reason Shared disposable appearance cache protocol.
  */
-export const APPEARANCE_CACHE_SCHEMA: 1;
+export const APPEARANCE_CACHE_SCHEMA: 2;
 /**
  * @kind null
  * @reason Shared disposable appearance cache protocol.

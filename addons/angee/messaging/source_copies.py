@@ -22,10 +22,16 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import system_context, to_subject_ref
 
-from angee.changesets import changeset
-from angee.evidence import EvidenceReference
-from angee.models import MergeableMixin, PairAspect, StatementsMixin
+from angee.models import (
+    MergeableMixin,
+)
 from angee.parties.models import Handle
+from angee.provenance.context import changeset
+from angee.provenance.evidence import EvidenceReference
+from angee.provenance.statements import (
+    PairAspect,
+    StatementsMixin,
+)
 
 SOURCE_IDENTITY_RULE = "messaging.source_identity"
 """The provenance rule that asserts email copies, and the reason its folds record."""

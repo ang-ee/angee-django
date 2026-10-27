@@ -9,7 +9,7 @@ from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.paths import resolve_path
+from angee.utils.paths import resolve_path
 
 PROJECT_DIR_ENV = "ANGEE_PROJECT_DIR"
 PROJECT_SETTINGS_ENV = "ANGEE_PROJECT_SETTINGS"

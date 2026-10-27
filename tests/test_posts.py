@@ -30,15 +30,17 @@ from rebac import (
     write_relationships,
 )
 
-from angee.actors import source_kind_for
 from angee.integrate import scheduler
 from angee.integrate.testing.integration import Integration
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.messaging.testing.models import Channel, Handle, Message, MessageEdge, Reaction, Thread
-from angee.models import SourceKind
 from angee.posts.backends import ParsedMetrics, ParsedPost, ParsedReaction
 from angee.posts.ingest import land_posts
 from angee.posts.models import ThreadPublic
+from angee.provenance.sources import source_kind_for
+from angee.provenance.statements import (
+    SourceKind,
+)
 from tests.conftest import (
     Feed,
     FeedFollow,

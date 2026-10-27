@@ -21,7 +21,7 @@ def _bootstrap() -> None:
     project_dir = find_project_dir()
     if project_dir is not None:
         os.environ.setdefault(PROJECT_DIR_ENV, str(project_dir))
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.compose.settings")
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.settings")
 
 
 def _websocket_urlpatterns() -> list[object]:
@@ -170,16 +170,27 @@ def _application() -> Any:
 def websocket_application(patterns: list[object]) -> ASGIApp:
     """Compose the shared cookie/Origin and attribution boundaries for addon WebSocket routes.
 
-    Each connection scope owns one changeset (:class:`~angee.middleware.ChangesetScopeMiddleware`),
-    the counterpart of the HTTP request middleware for consumer writes.
+    Installed addons contribute wrappers through ``asgi.websocket_middleware``.
+    Authentication and origin validation remain the host boundary.
     """
 
     from channels.auth import AuthMiddlewareStack
     from channels.routing import URLRouter
+    from django.apps import apps
 
-    from angee.middleware import ChangesetScopeMiddleware
+    from angee.addons import addon_contribution
 
-    return _WebsocketOriginValidator(AuthMiddlewareStack(ChangesetScopeMiddleware(URLRouter(patterns))))
+    application = URLRouter(patterns)
+    wrappers = [
+        wrapper
+        for app_config in apps.get_app_configs()
+        for wrapper in addon_contribution(app_config, "asgi", "websocket_middleware")
+    ]
+    for wrapper in reversed(wrappers):
+        if not callable(wrapper):
+            raise ImproperlyConfigured("asgi.websocket_middleware must contain callables")
+        application = wrapper(application)
+    return _WebsocketOriginValidator(AuthMiddlewareStack(application))
 
 
 class _WebsocketOriginValidator:

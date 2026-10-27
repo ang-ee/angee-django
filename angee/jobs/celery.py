@@ -1,31 +1,19 @@
-"""Celery application and execution boundary for Angee jobs."""
+"""Native Celery application for Angee jobs.
+
+``ANGEE_CELERY_TASK_CLASS`` optionally selects Celery's app-wide task base by
+class path. Without that contribution Celery retains its native Task.
+"""
 
 from __future__ import annotations
 
 import os
-from typing import Any
 
 from celery import Celery
-from celery import Task as CeleryTask
+from django.conf import settings
 
-from angee.changesets import changeset
-
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.compose.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.settings")
 
 
-class Task(CeleryTask):
-    """Own task attribution; the task binds its principal before captured writes."""
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        with changeset(
-            fresh=True,
-            activity="system",
-            change_reason=f"task.{self.name}",
-            correlation_id=self.request.id or "",
-        ):
-            return super().__call__(*args, **kwargs)
-
-
-app = Celery("angee", task_cls=Task)
+app = Celery("angee", task_cls=getattr(settings, "ANGEE_CELERY_TASK_CLASS", "celery.app.task:Task"))
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()

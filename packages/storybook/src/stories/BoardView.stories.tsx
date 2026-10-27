@@ -84,11 +84,12 @@ const metadata = {
 
         roots: {
           list: "tasks",
+          aggregate: "tasks_aggregate",
           detail: "tasks_by_pk",
           create: "insert_tasks_one",
           update: "update_tasks_by_pk",
         },
-        typeNames: { node: "TaskType" },
+        typeNames: { node: "TaskType", filter: "TaskFilter", order: "TaskOrder" },
         recordRepresentation: "title",
         capabilities: ["list", "detail", "create", "update"],
         fields: [
@@ -117,8 +118,8 @@ const metadata = {
         appLabel: "pm",
         modelName: "Stage",
 
-        roots: { list: "stages" },
-        typeNames: { node: "StageType" },
+        roots: { list: "stages", aggregate: "stages_aggregate" },
+        typeNames: { node: "StageType", filter: "StageFilter", order: "StageOrder" },
         recordRepresentation: "name",
         capabilities: ["list"],
         fields: [
@@ -238,16 +239,10 @@ function createBoardStorySchemas() {
       ?? mutationTask;
     return jsonResponse({
       data: {
-        tasks: {
-          totalCount: storedTasks.length,
-          results: storedTasks,
-          pageInfo: { offset: 0, limit: 50 },
-        },
-        stages: {
-          totalCount: stages.length,
-          results: stages,
-          pageInfo: { offset: 0, limit: 200 },
-        },
+        tasks: storedTasks,
+        tasks_aggregate: { aggregate: { count: storedTasks.length } },
+        stages,
+        stages_aggregate: { aggregate: { count: stages.length } },
         tasks_by_pk: detailTask,
         insert_tasks_one: mutationTask,
         update_tasks_by_pk: mutationTask,

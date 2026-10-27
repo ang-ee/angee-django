@@ -43,13 +43,6 @@ from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.actors import actor_user_id
-from angee.changesets import (
-    changeset,
-    changeset_model,
-    creation_fingerprint,
-    require_changeset,
-    write_group,
-)
 from angee.fields import StateField
 from angee.impl import ImplClassField
 from angee.knowledge.retrieval import RetrievalBackend
@@ -57,12 +50,9 @@ from angee.lineage import concrete_child, concrete_child_accessor, concrete_chil
 from angee.messaging.models import ThreadedModelMixin
 from angee.models import (
     AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
     AuditMixin,
     HierarchyMixin,
     HierarchyQuerySet,
-    HistoryMixin,
     MergePolicy,
     OwnerMixin,
     RecordRefMixin,
@@ -70,6 +60,11 @@ from angee.models import (
     TrashQuerySet,
     row_lock_paths,
 )
+from angee.provenance.context import changeset, changeset_model, require_changeset, write_group
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.provenance.contrib.angee.serialization import creation_fingerprint
 from angee.refs import RecordRef
 from angee.tags.models import TaggedModel
 
@@ -134,7 +129,7 @@ def parse_wikilinks(body: str) -> dict[str, str]:
     return found
 
 
-class VaultQuerySet[VaultT: Vault](TrashQuerySet[VaultT], AngeeQuerySet[VaultT]):
+class VaultQuerySet[VaultT: Vault](TrashQuerySet[VaultT], AngeeHistoryQuerySet[VaultT]):
     """Actor-scoped vault reads and search helpers."""
 
     def search_pages(self, query: str, *, first: int = 20) -> list[Any]:
@@ -160,7 +155,7 @@ class VaultQuerySet[VaultT: Vault](TrashQuerySet[VaultT], AngeeQuerySet[VaultT])
         return pages
 
 
-_VaultManagerBase = AngeeManager.from_queryset(VaultQuerySet)
+_VaultManagerBase = AngeeHistoryManager.from_queryset(VaultQuerySet)
 
 
 class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
@@ -306,7 +301,7 @@ class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
         return vault.with_actor(actor)
 
 
-class Vault(OwnerMixin, TrashMixin, AngeeDataModel, HistoryMixin):
+class Vault(OwnerMixin, TrashMixin, HistoryMixin, AngeeDataModel):
     """Top-level page container; the permission and namespace boundary.
 
     Trashing a vault withholds its pages while retaining their independent trash
@@ -371,7 +366,7 @@ class Vault(OwnerMixin, TrashMixin, AngeeDataModel, HistoryMixin):
         return backend_class(self)
 
 
-class PageQuerySet[PageT: Page](HierarchyQuerySet[PageT], TrashQuerySet[PageT], AngeeQuerySet[PageT]):
+class PageQuerySet[PageT: Page](HierarchyQuerySet[PageT], TrashQuerySet[PageT], AngeeHistoryQuerySet[PageT]):
     """Actor-scoped page reads; ``untrashed()`` is every page's default surface."""
 
     def navigation_root_expression(self, *, removed: bool = False) -> models.Expression:
@@ -389,7 +384,7 @@ class PageQuerySet[PageT: Page](HierarchyQuerySet[PageT], TrashQuerySet[PageT], 
         return models.Exists(children.filter(parent_id=models.OuterRef("pk")))
 
 
-_PageManagerBase = AngeeManager.from_queryset(PageQuerySet)
+_PageManagerBase = AngeeHistoryManager.from_queryset(PageQuerySet)
 
 
 class PageManager[PageT: Page](_PageManagerBase[PageT]):
@@ -484,7 +479,7 @@ class PageManager[PageT: Page](_PageManagerBase[PageT]):
         return copies
 
 
-class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMixin, AngeeDataModel, HistoryMixin):
+class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMixin, HistoryMixin, AngeeDataModel):
     """Universal addressable content node inside a vault.
 
     A page owns title and hierarchy. A concrete child owns each content shape;
@@ -603,7 +598,7 @@ class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMix
 
 
 
-class RecordBindingManager[BindingT: RecordBinding](AngeeManager[BindingT]):
+class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT]):
     """Own polymorphic knowledge-to-record binding writes and reverse reads.
 
     Bindings are stored at :func:`rebac.generic_target` and written under the
@@ -1310,7 +1305,7 @@ class MarkdownPage(HistoryMixin, models.Model, metaclass=RebacModelBase):
 # ---------------------------------------------------------------------------
 
 
-class LinkManager[LinkT: Link](AngeeManager[LinkT]):
+class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
     """Owns the wikilink edge set derived from page bodies."""
 
     def rebuild_for(self, markdown: Any) -> None:

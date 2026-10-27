@@ -60,15 +60,14 @@ from typing import TYPE_CHECKING
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
-from rebac.mixins import REBAC_META_OPTIONS
 from rebac.resources import model_resource_type
 from rebac.schema import Definition, Permission, Schema, parse_zed, resolve_schema_path, validate_schema
 from rebac.schema import render_zed as render_schema
 
 from angee.addons import addon_manifest
 from angee.compose.declarations import BuildIntegration, DeclarationValue, ModelDeclaration
-from angee.fs import GENERATED_SENTINEL
 from angee.permissions import declared_grants
+from angee.utils.artifacts import GENERATED_SENTINEL
 
 if TYPE_CHECKING:
     from angee.compose.model_composition import ModelComposition
@@ -421,6 +420,10 @@ class PermissionIntegration(BuildIntegration):
 
     def model_declaration(self, composition: ModelComposition, source: type[models.Model]) -> ModelDeclaration:
         """Preserve per-model Meta declarations and additive same-record grants."""
+
+        # The native owner also defines Django model mixins. Model projection
+        # runs in phase 2; schema-source/test-fixture imports may run before setup.
+        from rebac.mixins import REBAC_META_OPTIONS
 
         meta_options = {
             option: value for option in REBAC_META_OPTIONS

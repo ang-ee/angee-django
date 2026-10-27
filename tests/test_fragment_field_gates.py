@@ -12,16 +12,16 @@ from rebac.models import SchemaDefinition
 from rebac.schema import parse_zed
 from rebac.schema.parser import validate_schema
 
-from angee.compose.model_composition import ModelComposition
 from angee.build import (
-    field_gate_owners,
     SchemaExtensionError,
     apply_schema_paths,
     extension_source_map,
+    field_gate_owners,
     merged_schema_relpath,
     merged_schemas,
     render_zed,
 )
+from angee.compose.model_composition import ModelComposition
 from angee.compose.runtime import Runtime
 from angee.testing.permissions import installed_field_owners
 from tests.conftest import make_addon

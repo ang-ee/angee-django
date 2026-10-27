@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import keyword
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
@@ -17,6 +18,42 @@ from django.utils.module_loading import import_string
 if TYPE_CHECKING:
     from angee.compose.model_composition import ModelComposition
     from angee.compose.runtime import Runtime
+
+
+class AppDeclarationSource:
+    """Host adapter for app dependencies and native migration declarations.
+
+    Plain Django apps need no adapter. Hosts select one dotted class path through
+    COMPOSE_APP_DECLARATIONS before settings composition; manifest parsing and
+    caching remain with that host's authoritative declaration owner.
+    """
+
+    def dependencies(self, app: AppConfig, *, refresh: bool = False) -> tuple[str, ...]:
+        """Return app paths required by this native config."""
+
+        return ()
+
+    def migrations(self, app: AppConfig) -> tuple[Mapping[str, Any], ...]:
+        """Return native migration declarations owned by this app."""
+
+        return ()
+
+    @staticmethod
+    def configured(namespace: Mapping[str, Any] | None = None) -> AppDeclarationSource:
+        """Resolve the optional adapter without importing any feature models."""
+
+        path = (
+            namespace.get("COMPOSE_APP_DECLARATIONS") if namespace is not None
+            else getattr(settings, "COMPOSE_APP_DECLARATIONS", None)
+        )
+        if path is None:
+            return AppDeclarationSource()
+        if not isinstance(path, str):
+            raise ImproperlyConfigured("COMPOSE_APP_DECLARATIONS must be a dotted class path.")
+        adapter = import_string(path)
+        if not isinstance(adapter, type) or not issubclass(adapter, AppDeclarationSource):
+            raise ImproperlyConfigured(f"{path} must subclass AppDeclarationSource.")
+        return adapter()
 
 
 type DeclarationValue = (
@@ -59,6 +96,15 @@ class BuildIntegration:
     def bind(self, runtime: Runtime, sources: Mapping[Path, str]) -> None:
         """Bind generated paths after successful emission, without rerendering."""
 
+    def retired_primary_keys(self, model: type[models.Model], alias: str) -> Iterable[Any]:
+        """Return rows the capability explicitly permits to retire with a model.
+
+        The drop guard still proves every other row absent on every routed
+        database. The native field owns conversion of the supplied keys.
+        """
+
+        return ()
+
     @staticmethod
     def configured() -> tuple[BuildIntegration, ...]:
         """Resolve the installed settings contract once for a runtime."""
@@ -90,11 +136,13 @@ def model_declaration(
 
     attributes: dict[str, DeclarationValue] = {}
     meta_options: dict[str, DeclarationValue] = {}
-    reserved_attributes = {"Meta", "runtime", "extends", "requires_parent", "angee_contributed_field_origins"}
+    reserved_attributes = {"Meta", "runtime", "extends", "requires_parent", "compose_contributed_field_origins"}
     participant: type[models.Model] | None = source
     while participant is not None:
         for owner in (participant, *composition.donors(participant)):
-            for native_field in (*owner._meta.local_fields, *owner._meta.local_many_to_many, *owner._meta.private_fields):
+            for native_field in (
+                *owner._meta.local_fields, *owner._meta.local_many_to_many, *owner._meta.private_fields,
+            ):
                 reserved_attributes.update((native_field.name, native_field.attname))
             reserved_attributes.update(manager.name for manager in owner._meta.managers)
             reserved_attributes.update(

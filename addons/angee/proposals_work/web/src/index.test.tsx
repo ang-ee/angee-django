@@ -89,7 +89,7 @@ test("contributes one queue section to the round form", () => {
 
 test("renders the standard relation picker and saves through the round form", async () => {
   const { update } = renderRound(["manage", "write"]);
-  const picker = await screen.findByRole("button", { name: /Questions queue/ });
+  const picker = await screen.findByRole("combobox", { name: /Questions queue/ });
   expect(picker.hasAttribute("disabled")).toBe(false);
   fireEvent.click(picker);
   fireEvent.click(await screen.findByRole("option", { name: "Delivery queue" }));
@@ -103,7 +103,7 @@ test("renders the standard relation picker and saves through the round form", as
 test("keeps the queue visible and read-only without round write", async () => {
   const { update, provider } = renderRound(["respond", "ask"]);
   await screen.findByText("Review queue");
-  const picker = screen.queryByRole("button", { name: /Questions queue/ });
+  const picker = screen.queryByRole("combobox", { name: /Questions queue/ });
   expect(picker === null || picker.hasAttribute("disabled")).toBe(true);
   expect(provider.getList).not.toHaveBeenCalled();
   expect(update).not.toHaveBeenCalled();

@@ -11,9 +11,9 @@ function LiveSpecimen({ entry, globals }: { entry: CatalogEntry; globals: string
   const host = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
   useEffect(() => {
-    if (!visible && host.current) return observeSpecimen(host.current, () => setVisible(true));
-  }, [visible]);
-  return <div ref={host} className="min-h-80">
+    if (host.current) return observeSpecimen(host.current, setVisible);
+  }, []);
+  return <div ref={host} className="h-80">
     {!visible ? <Skeleton className="h-80 w-full" /> : entry.storyId ? <iframe title={`${entry.name} shipped specimen`}
       src={`/iframe.html?id=${entry.storyId}&viewMode=story&globals=${encodeURIComponent(globals)}`}
       className="h-80 w-full rounded-6 border border-border-subtle" />

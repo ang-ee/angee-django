@@ -42,7 +42,7 @@ from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.messaging.schema import MessageType
-from angee.models import CreationKeyConflict, StaleRevisionError
+from angee.models import StaleRevisionError
 from angee.money.schema import CurrencyType
 from angee.parties.schema import PartyType
 from angee.projects.models import Project as ProjectModel
@@ -50,6 +50,7 @@ from angee.projects.schema import MilestoneType, ProjectType, TaskType
 from angee.proposals.inputs import RoundTemplate, TopicTemplate
 from angee.proposals.models import AnswerVisibility, PassAudience, QuestionAudience, RoundOpeningPolicy
 from angee.proposals.models import Round as RoundModel
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from angee.spaces.schema import SpaceGroupType
 
 Round = apps.get_model("proposals", "Round")

@@ -16,15 +16,18 @@ from django.test.utils import isolate_apps
 
 from angee.compose.model_composition import ModelComposition
 from angee.compose.rendering import render_models
-from angee.models import AngeeUnscopedManager, HistoryMixin, SqidMixin
+from angee.models import (
+    SqidMixin,
+)
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
 from tests.tables import model_tables
-
 
 
 class HistorySource(HistoryMixin, models.Model):
     """Plain Django tracking declares its capture manager at the model owner."""
 
-    objects = AngeeUnscopedManager()
+    objects = AngeeHistoryUnscopedManager()
 
     class Meta:
         abstract = True
@@ -174,7 +177,7 @@ def test_rendered_model_exports_donor_field_provenance(modules):
     assert composition.contributed_field_origins(Root) == (("external_id", donor_config.name),)
     (field,) = composition.contributed_fields(Root)
     assert field is donor_module.RootExtension._meta.get_field("external_id")
-    assert concrete.angee_contributed_field_origins == (("external_id", donor_config.name),)
+    assert concrete.compose_contributed_field_origins == (("external_id", donor_config.name),)
 
 
 @isolate_apps()
@@ -425,6 +428,7 @@ def test_native_history_excludes_generated_fields_from_final_model(modules):
         "Tracked",
         config.label,
         bases=(HistorySource,),
+        meta={"base_manager_name": "objects"},
         runtime=True,
         value=models.IntegerField(),
         doubled=models.GeneratedField(
@@ -471,6 +475,7 @@ def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modul
         "Tracked",
         config.label,
         bases=(SqidMixin, HistorySource),
+        meta={"base_manager_name": "objects"},
         runtime=True,
         title=models.CharField(max_length=32),
     )
@@ -480,6 +485,8 @@ def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modul
         config.label,
         runtime=True,
         extends=f"{config.label}.Tracked",
+        objects=AngeeHistoryUnscopedManager(),
+        meta={"base_manager_name": "objects"},
         extra=models.IntegerField(default=0),
     )
     composition = ModelComposition.discover((config,))
@@ -698,9 +705,25 @@ def test_required_parent_applies_to_donors_and_leaves_undeclared_mixins_unchange
 
 
 @isolate_apps()
-def test_native_history_refuses_an_implicit_uncaptured_base_manager(modules):
+def test_native_history_refuses_an_explicit_uncaptured_base_manager(modules):
     create, emit = modules
     config, module = create("native_uncaptured_history")
-    source(module, "Uncaptured", config.label, bases=(HistoryMixin, models.Model), runtime=True)
+    source(
+        module, "Uncaptured", config.label, bases=(HistoryMixin, models.Model), runtime=True,
+        objects=models.Manager(), meta={"base_manager_name": "objects"},
+    )
     with pytest.raises(ImproperlyConfigured, match="history-capable base manager"):
+        emit(ModelComposition.discover((config,)))
+
+
+@isolate_apps()
+def test_native_history_refuses_an_uncaptured_default_manager_with_a_captured_base(modules):
+    create, emit = modules
+    config, module = create("native_uncaptured_default_history")
+    source(
+        module, "UncapturedDefault", config.label, bases=(HistoryMixin, models.Model), runtime=True,
+        objects=models.Manager(), _angee_base=AngeeHistoryUnscopedManager(),
+        meta={"base_manager_name": "_angee_base", "default_manager_name": "objects"},
+    )
+    with pytest.raises(ImproperlyConfigured, match="history-capable default manager"):
         emit(ModelComposition.discover((config,)))

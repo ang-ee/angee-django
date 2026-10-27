@@ -30,7 +30,6 @@ from pydantic import ConfigDict, JsonValue, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
-from angee.changesets import changeset, current_changeset
 from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.states import (
@@ -45,6 +44,7 @@ from angee.integrate.states import (
     SyncFailureKind,
 )
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
+from angee.provenance.context import changeset, current_changeset
 from angee.serialization import canonical_json, canonical_json_sha256
 
 logger = logging.getLogger(__name__)
@@ -1275,7 +1275,7 @@ def sync_bridge(bridge: Any) -> int:
                     max_workers=min(parallelism, len(definitions)), thread_name_prefix="bridge-sync"
                 ) as pool:
                     # Each worker records its own changeset row under the cycle's boundary
-                    # and actor (angee.changesets), so the copied context is safe to share.
+                    # and actor (angee.provenance.context), so the copied context is safe to share.
                     futures = {
                         pool.submit(copy_context().run, _drain_partition, bridge, definition, deadline): definition
                         for definition in definitions

@@ -23,7 +23,7 @@ from angee.compose.yamlconf import (
     setting_name,
 )
 
-COMPOSER_OWNED_SETTINGS = frozenset({"ANGEE_RUNTIME_DIR", "INSTALLED_APPS"})
+COMPOSER_OWNED_SETTINGS = frozenset({"COMPOSE_RUNTIME_DIR", "COMPOSE_RUNTIME_MODULE", "INSTALLED_APPS"})
 
 
 class AutoConfig:
@@ -89,10 +89,13 @@ class AutoConfig:
             ):
                 continue
             attributes[key] = copy.deepcopy(value)
+        prefixes = self.namespace.get("COMPOSE_ENV_PREFIXES", contributed.get("COMPOSE_ENV_PREFIXES", ()))
+        if not isinstance(prefixes, (tuple, list)) or not all(isinstance(prefix, str) for prefix in prefixes):
+            raise ImproperlyConfigured("COMPOSE_ENV_PREFIXES must be a list or tuple of setting-name prefixes.")
         env_attributes = {
             name: self.environment[name]
             for name in sorted(declared_names)
-            if name.startswith("ANGEE_") and name not in self.reserved_settings and name in self.environment
+            if name.startswith(tuple(prefixes)) and name not in self.reserved_settings and name in self.environment
         }
         if not attributes and not env_attributes:
             return

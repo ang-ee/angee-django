@@ -36,11 +36,8 @@ from rebac import GenericTarget, generic_target
 
 from angee.models import (
     AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
     ArchiveMixin,
     ArchiveQuerySet,
-    HistoryMixin,
     MergePolicy,
     RecordRefMixin,
     role_anchor,
@@ -48,6 +45,9 @@ from angee.models import (
 from angee.models.query import SystemQuerysetMixin
 from angee.money.rounding import RoundingMode, rounding_constant
 from angee.numeric import quantize
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 
 REFERENCE_CURRENCY_SETTING = "ANGEE_MONEY_REFERENCE_CURRENCY"
 """The project setting naming the ISO-4217 code every :class:`CurrencyRate` is relative to."""
@@ -73,11 +73,11 @@ def reference_currency_code() -> str:
     return str(code)
 
 
-class CurrencyQuerySet[CurrencyT: Currency](ArchiveQuerySet[CurrencyT], AngeeQuerySet[CurrencyT]):
+class CurrencyQuerySet[CurrencyT: Currency](ArchiveQuerySet[CurrencyT], AngeeHistoryQuerySet[CurrencyT]):
     """Archive read scopes layered over the REBAC-scoped currency queryset."""
 
 
-CurrencyManager = AngeeManager.from_queryset(CurrencyQuerySet)
+CurrencyManager = AngeeHistoryManager.from_queryset(CurrencyQuerySet)
 
 
 class Currency(ArchiveMixin, AngeeDataModel):
@@ -174,7 +174,7 @@ class Currency(ArchiveMixin, AngeeDataModel):
         )
 
 
-class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeQuerySet[RateT]):
+class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeHistoryQuerySet[RateT]):
     """Protect contextual identity fields that also govern rate visibility."""
 
     _identity_fields = {
@@ -198,7 +198,7 @@ class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeQue
         return super().update(**kwargs)
 
 
-_CurrencyRateManagerBase = AngeeManager.from_queryset(CurrencyRateQuerySet)
+_CurrencyRateManagerBase = AngeeHistoryManager.from_queryset(CurrencyRateQuerySet)
 
 
 class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):

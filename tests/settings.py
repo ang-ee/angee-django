@@ -132,7 +132,7 @@ else:
     }
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
-ANGEE_RUNTIME_MODULE = "tests.runtime"
+COMPOSE_RUNTIME_MODULE = "tests.runtime"
 ANGEE_ADDON_DIRS = (Path(__file__).resolve().parent.parent / "addons",)
 # Bare tests run Django's per-process LocMem cache. Production OAuth redirects
 # must use a shared cache; tests opt in explicitly so the state guard remains loud.

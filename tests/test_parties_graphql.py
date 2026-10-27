@@ -518,7 +518,9 @@ def test_a_confirmed_handle_reads_as_the_persons_statement_beside_its_producer(c
 def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables: None) -> None:
     """``asserted_by`` names a principal only when the reader may read it; evidence keeps its own gates."""
 
-    from angee.models import SourceKind
+    from angee.provenance.statements import (
+        SourceKind,
+    )
     from tests.conftest import make_integration
 
     admin = _platform_admin("statement-visibility-admin")

@@ -48,12 +48,9 @@ from angee.fields import ColorField
 from angee.identity import instance_from_public_id
 from angee.models import (
     AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
     ArchiveMixin,
     ArchiveQuerySet,
     AuditMixin,
-    HistoryMixin,
     InputExtensionsMixin,
     MergeableMixin,
     MergeableQuerySet,
@@ -61,17 +58,20 @@ from angee.models import (
     RecordRefMixin,
     role_anchor,
 )
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 
 
 class TagQuerySet[TagT: Tag](
     MergeableQuerySet[TagT],
     ArchiveQuerySet[TagT],
-    AngeeQuerySet[TagT],
+    AngeeHistoryQuerySet[TagT],
 ):
     """Archive read scopes layered over the REBAC-scoped tag queryset."""
 
 
-TagManager = AngeeManager.from_queryset(TagQuerySet)
+TagManager = AngeeHistoryManager.from_queryset(TagQuerySet)
 
 
 class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel):
@@ -100,7 +100,7 @@ class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel):
         return self.name
 
 
-class TagAssignmentQuerySet[AssignmentT: TagAssignment](AngeeQuerySet[AssignmentT]):
+class TagAssignmentQuerySet[AssignmentT: TagAssignment](AngeeHistoryQuerySet[AssignmentT]):
     """Chainable read scopes for the polymorphic tag edge."""
 
     def for_record(self, record: models.Model) -> Self:
@@ -115,7 +115,7 @@ class TagAssignmentQuerySet[AssignmentT: TagAssignment](AngeeQuerySet[Assignment
         return self.order_by(*(f"tag__{name}" for name in (tag_model._meta.ordering or ())))
 
 
-_TagAssignmentManagerBase = AngeeManager.from_queryset(TagAssignmentQuerySet)
+_TagAssignmentManagerBase = AngeeHistoryManager.from_queryset(TagAssignmentQuerySet)
 
 
 class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase[AssignmentT]):

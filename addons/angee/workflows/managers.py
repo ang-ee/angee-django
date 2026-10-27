@@ -25,7 +25,6 @@ from rebac import actor_context, generic_target, system_context, to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError
 
 from angee.actors import actor_user_id
-from angee.evidence import EvidenceReference, readable_records
 from angee.fields import ModelLabelField
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.publishing import changes_muted, mute_changes, publish_change
@@ -41,6 +40,8 @@ from angee.models import (
     row_lock_paths,
 )
 from angee.models.query import by_key
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.evidence import EvidenceReference, readable_records
 from angee.serialization import canonical_json_sha256, strip_null_bytes
 from angee.signals import bulk_updated
 from angee.workflows.definition import (
@@ -145,7 +146,7 @@ _CONFIGURATIONS: TypeAdapter[list[StepConfiguration]] = TypeAdapter(
 )
 
 
-class WorkflowManager[T: Workflow](AngeeManager[T]):
+class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
     """Own the editable document and the immutable publication sequence."""
 
     def _resolved_document(self, draft: Any, actor: Any) -> tuple[Any, list[Issue]]:
@@ -896,7 +897,7 @@ def unfinished_run_merge_guard(record: Any) -> str | None:
     return f"Workflow runs still working on {record} must finish or be canceled first."
 
 
-class StepWatchManager[T: StepWatch](AngeeManager[T]):
+class StepWatchManager[T: StepWatch](AngeeHistoryManager[T]):
     """Own transactional observation, durable change capture and wait admission."""
 
     def register(self, step_run: Any, records: tuple[Any, ...], *, actor: Any) -> None:

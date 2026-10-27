@@ -100,11 +100,11 @@ from typing import ClassVar
 from django.db import models
 from rebac.mixins import RebacModelBase
 from angee.models import AngeeModel
-from angee.models.manager import AngeeManager
-class ParentManager[T: models.Model](AngeeManager[T]):
+from angee.models.manager import AngeeUnscopedManager
+class ParentManager[T: models.Model](AngeeUnscopedManager[T]):
     def parent_method(self) -> str:
         return 'parent'
-class OtherManager[T: models.Model](AngeeManager[T]):
+class OtherManager[T: models.Model](AngeeUnscopedManager[T]):
     def other_method(self) -> int:
         return 1
 class Parent(AngeeModel):
@@ -138,12 +138,12 @@ class Explicit(Capability):
         "'angee', 'manager_contract', 'angee.compose']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
-        f"ANGEE_RUNTIME_DIR = Path({str(tmp_path / 'manager_runtime')!r})\n"
-        "ANGEE_RUNTIME_MODULE = 'manager_runtime'\n"
+        f"COMPOSE_RUNTIME_DIR = Path({str(tmp_path / 'manager_runtime')!r})\n"
+        "COMPOSE_RUNTIME_MODULE = 'manager_runtime'\n"
     )
     config = tmp_path / "mypy.ini"
     config.write_text(
-        "[mypy]\nplugins = angee.compose.typing\n"
+        "[mypy]\nplugins = angee.typing\n"
         f"mypy_path = {tmp_path},{root},{root / 'addons'}\n"
         f"cache_dir = {tmp_path / 'cache'}\n"
         "ignore_missing_imports = True\n"

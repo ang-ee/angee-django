@@ -38,6 +38,7 @@ import type { IResourceItem } from "@refinedev/core";
 import { composeAddons } from "@angee/app";
 import { parseFlatSearch, stringifyFlatSearch } from "@angee/app/create-app";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
+import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import { previewThemes, previewThemeId } from "../theme-global";
 import {
   Outlet,
@@ -153,6 +154,7 @@ export function RuntimeFixture({
   liveProvider,
   queryClient,
 }: RuntimeFixtureProps): ReactNode {
+  const QueryStateAdapter = routed ? NuqsAdapter : NuqsTestingAdapter;
   const normalized = useMemo(
     () =>
       Object.fromEntries(
@@ -193,9 +195,9 @@ export function RuntimeFixture({
           <OperationDocumentsProvider documents={operationDocuments}>
             <ActiveGraphQLSchemaProvider schema={activeSchema}>
               <ModelMetadataProvider metadata={fieldMetadata}>
-                <NuqsTestingAdapter>
+                <QueryStateAdapter>
                   <ToastProvider><ModalsHost>{children}</ModalsHost></ToastProvider>
-                </NuqsTestingAdapter>
+                </QueryStateAdapter>
               </ModelMetadataProvider>
             </ActiveGraphQLSchemaProvider>
           </OperationDocumentsProvider>

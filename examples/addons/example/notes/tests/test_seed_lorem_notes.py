@@ -11,7 +11,7 @@ from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TransactionTestCase
 from rebac import system_context
 
-from angee.compose.dependencies import AddonDependencyGroup
+from angee.management.dependencies import AddonDependencyGroup
 
 Note = apps.get_model("notes", "Note")
 User = get_user_model()

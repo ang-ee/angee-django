@@ -14,7 +14,6 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 from pydantic import ValidationError as PydanticValidationError
 
-from angee.evidence import EvidenceReference
 from angee.fields import ModelLabelField
 from angee.jsonschema import (
     compose_schema,
@@ -27,6 +26,7 @@ from angee.jsonschema import (
     validate,
     validator,
 )
+from angee.provenance.evidence import EvidenceReference
 from angee.refs import generic_pointer_model
 from angee.serialization import canonical_json, canonical_json_sha256
 from angee.workflows.bindings import (

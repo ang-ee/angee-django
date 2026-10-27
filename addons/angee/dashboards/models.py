@@ -12,7 +12,6 @@ from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import PermissionDenied, current_actor, system_context, to_subject_ref
 
-from angee.changesets import changeset, changeset_model, creation_fingerprint, require_changeset
 from angee.dashboards.resources import DashboardResource
 from angee.fields import StateField
 from angee.graphql.access import is_gated_read_axis
@@ -20,12 +19,9 @@ from angee.graphql.data.hasura import declared_hasura_resource_fields
 from angee.graphql.introspection import FieldPathError, require_field_for_path
 from angee.models import (
     AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
     ArchiveMixin,
     ArchiveQuerySet,
     AuditMixin,
-    HistoryMixin,
     ImmutableFieldsMixin,
     OptimisticLockMixin,
     OwnerMixin,
@@ -33,6 +29,11 @@ from angee.models import (
     TrashQuerySet,
 )
 from angee.permissions import effective_rebac_definition, require_rebac_queryset
+from angee.provenance.context import changeset, changeset_model, require_changeset
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.provenance.contrib.angee.serialization import creation_fingerprint
 from angee.resources.mixins import ResourceLoadMixin
 
 DASHBOARD_SCHEMA_VERSION = 1
@@ -455,7 +456,7 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
 
 class DashboardQuerySet[DashboardT: Dashboard](
     TrashQuerySet[DashboardT],
-    AngeeQuerySet[DashboardT],
+    AngeeHistoryQuerySet[DashboardT],
 ):
     """Actor-scoped dashboards with removal reserved for personal snapshots."""
 
@@ -465,7 +466,7 @@ class DashboardQuerySet[DashboardT: Dashboard](
         return self.filter(scope="personal")
 
 
-_DashboardManagerBase = AngeeManager.from_queryset(DashboardQuerySet)
+_DashboardManagerBase = AngeeHistoryManager.from_queryset(DashboardQuerySet)
 
 
 class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT]):
@@ -809,11 +810,11 @@ class Dashboard(
         super().after_resource_load(loaded, tier=tier, source=source)
 
 
-class DashboardWidgetQuerySet[WidgetT: DashboardWidget](ArchiveQuerySet[WidgetT], AngeeQuerySet[WidgetT]):
+class DashboardWidgetQuerySet[WidgetT: DashboardWidget](ArchiveQuerySet[WidgetT], AngeeHistoryQuerySet[WidgetT]):
     """Archive scopes layered over dashboard widget reads."""
 
 
-DashboardWidgetManager = AngeeManager.from_queryset(DashboardWidgetQuerySet)
+DashboardWidgetManager = AngeeHistoryManager.from_queryset(DashboardWidgetQuerySet)
 
 
 class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, HistoryMixin, AngeeDataModel):

@@ -13,9 +13,10 @@ from rebac.models import PermissionAuditEvent, active_relationship_model
 from strawberry import Schema
 
 from angee.graphql.deletion import DeletePreview
-from angee.models import CreationKeyConflict, StaleRevisionError
+from angee.models import StaleRevisionError
 from angee.projects.testing.models import Milestone, Project, ProjectBinding, Task
 from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import Drive
 from tests.proposals_campaign import ProposalCampaign, as_actor, grant
 from tests.proposals_models import Proposal, Round, Topic

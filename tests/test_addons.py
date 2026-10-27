@@ -25,7 +25,7 @@ import angee.addons as addon_module
 import tests.test_platform_install  # noqa: F401 -- register the fixture model graph before database setup
 from angee.addons import addon_manifest, available_addons, resolve_app_config, resolve_manifest_roots
 from angee.compose.appgraph import AppGraph
-from angee.compose.dependencies import AddonDependencyGroup
+from angee.management.dependencies import AddonDependencyGroup
 from angee.platform import models as platform_models
 from angee.resources.models import Resource as AbstractResource
 from tests.conftest import make_addon
@@ -332,8 +332,8 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
         loaded = make_addon(name="fakeaddon.loaded", path=tmp_path / "loaded", depends_on=("django.contrib.auth",))
         loaded.apps = apps
         loaded.models = {"documentline": line}
-        loaded.angee_addon_root = True
-        loaded.angee_forced = False
+        loaded.compose_root = True
+        loaded.compose_required = False
         installed_manifest = addon_module.parse_manifest(disabled_app / "addon.toml")
         local_manifest = AddonManifest(name="example.unavailable", depends_on=("fakeaddon.base",))
         available = {

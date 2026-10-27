@@ -65,7 +65,6 @@ from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.actors import actor_user_id
-from angee.changesets import changeset, changeset_model, creation_fingerprint, require_changeset
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.graphql.publishing import mute_changes
 from angee.identity import instances_from_public_ids
@@ -97,6 +96,10 @@ from angee.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.parties.managers import Signing
 from angee.parties.models import Handle
 from angee.permissions import require_rebac_queryset
+from angee.provenance.context import changeset, changeset_model, require_changeset
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.provenance.contrib.angee.serialization import creation_fingerprint
 from angee.refs import generic_pointer_model, generic_pointer_target
 from angee.serialization import strip_null_bytes
 from angee.storage.uploads import attachment_extension, fallback_attachment_name, truncate_filename
@@ -663,7 +666,9 @@ def _channel_cascade_children(channel: Any) -> tuple[tuple[Any, models.Q], ...]:
     )
 
 
-class ThreadQuerySet[ThreadT: Thread](MergeableQuerySet[ThreadT], OwnerQuerySet[ThreadT], AngeeQuerySet[ThreadT]):
+class ThreadQuerySet[ThreadT: Thread](
+    MergeableQuerySet[ThreadT], OwnerQuerySet[ThreadT], AngeeHistoryQuerySet[ThreadT],
+):
     """Chainable read scopes for message threads."""
 
     def inbox(self) -> Self:
@@ -748,7 +753,7 @@ class ThreadQuerySet[ThreadT: Thread](MergeableQuerySet[ThreadT], OwnerQuerySet[
         return labels
 
 
-_ThreadManagerBase = AngeeManager.from_queryset(ThreadQuerySet)
+_ThreadManagerBase = AngeeHistoryManager.from_queryset(ThreadQuerySet)
 
 
 class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
@@ -1029,7 +1034,7 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
             self.for_channel(channel).delete()
 
 
-class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeManager[ThreadAttachmentT]):
+class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryManager[ThreadAttachmentT]):
     """Owns the polymorphic edge from a model row to its chatter thread.
 
     The edge names its record by :func:`angee.refs.generic_pointer_target`: a gated

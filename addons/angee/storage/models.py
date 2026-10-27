@@ -80,16 +80,12 @@ from angee.identity import canonical_subject_ref, public_subject_ref
 from angee.impl import ImplClassField
 from angee.models import (
     AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
-    AngeeUnscopedManager,
     ArchiveMixin,
     ArchiveQuerySet,
     AuditMixin,
     DirectRecordAccess,
     HierarchyMixin,
     HierarchyQuerySet,
-    HistoryMixin,
     ItemOwnershipMixin,
     MergePolicy,
     OwnerMixin,
@@ -100,6 +96,9 @@ from angee.models import (
     role_anchor,
     row_lock_paths,
 )
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized
@@ -154,15 +153,15 @@ class UploadState(models.TextChoices):
     FAILED = "failed", "Failed"
 
 
-class StorageMasterQuerySet[StorageT: models.Model](ArchiveQuerySet[StorageT], AngeeQuerySet[StorageT]):
-    """AngeeQuerySet plus the archive read vocabulary for storage master rows.
+class StorageMasterQuerySet[StorageT: models.Model](ArchiveQuerySet[StorageT], AngeeHistoryQuerySet[StorageT]):
+    """AngeeHistoryQuerySet plus the archive read vocabulary for storage master rows.
 
     Shared by the archivable admin/infra rows (:class:`Backend`, :class:`Drive`)
     so ``.archived()`` / ``.unarchived()`` compose over the REBAC row scope.
     """
 
 
-StorageMasterManager = AngeeManager.from_queryset(StorageMasterQuerySet)
+StorageMasterManager = AngeeHistoryManager.from_queryset(StorageMasterQuerySet)
 """Default manager for the archivable storage master rows (Backend, Drive)."""
 
 
@@ -244,7 +243,7 @@ class DriveQuerySet[DriveT: Drive](OwnerQuerySet[DriveT], StorageMasterQuerySet[
     """Archive reads and protected ownership writes for storage volumes."""
 
 
-_DriveManagerBase = AngeeManager.from_queryset(DriveQuerySet)
+_DriveManagerBase = AngeeHistoryManager.from_queryset(DriveQuerySet)
 
 
 class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
@@ -341,7 +340,7 @@ class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel):
     prefix = models.CharField(max_length=512, blank=True)
 
     objects = DriveManager()
-    unscoped_objects = AngeeUnscopedManager()
+    unscoped_objects = AngeeHistoryUnscopedManager()
 
     class Meta:
         """Django model options for drives."""
@@ -394,11 +393,11 @@ class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel):
         return posixpath.join(*parts)
 
 
-class FolderQuerySet[FolderT: Folder](HierarchyQuerySet[FolderT], AngeeQuerySet[FolderT]):
+class FolderQuerySet[FolderT: Folder](HierarchyQuerySet[FolderT], AngeeHistoryQuerySet[FolderT]):
     """Actor-scoped folder trees with paths maintained by HierarchyMixin."""
 
 
-_FolderManagerBase = AngeeManager.from_queryset(FolderQuerySet)
+_FolderManagerBase = AngeeHistoryManager.from_queryset(FolderQuerySet)
 
 
 class FolderManager[FolderT: Folder](_FolderManagerBase[FolderT]):
@@ -675,7 +674,7 @@ class MimeType(AngeeDataModel):
         return self.mime_type
 
 
-class FileQuerySet[FileT: File](TrashQuerySet[FileT], OwnerQuerySet[FileT], AngeeQuerySet[FileT]):
+class FileQuerySet[FileT: File](TrashQuerySet[FileT], OwnerQuerySet[FileT], AngeeHistoryQuerySet[FileT]):
     """REBAC-scoped reads for file rows; ``trashed()`` backs the Trash smart folder."""
 
     def stale_drafts(self, cutoff: datetime) -> Self:
@@ -714,7 +713,7 @@ class FileQuerySet[FileT: File](TrashQuerySet[FileT], OwnerQuerySet[FileT], Ange
         )
 
 
-_FileManagerBase = AngeeManager.from_queryset(FileQuerySet)
+_FileManagerBase = AngeeHistoryManager.from_queryset(FileQuerySet)
 
 
 class FileManager[FileT: File](_FileManagerBase[FileT]):
@@ -1334,7 +1333,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     )
 
     objects = FileManager()
-    unscoped_objects = AngeeUnscopedManager()
+    unscoped_objects = AngeeHistoryUnscopedManager()
 
     class Meta:
         """Django model options for files."""
@@ -1768,7 +1767,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         )
 
 
-class FileAttachmentManager[AttachmentT: FileAttachment](AngeeManager[AttachmentT]):
+class FileAttachmentManager[AttachmentT: FileAttachment](AngeeHistoryManager[AttachmentT]):
     """Owns the polymorphic file edge, stored at :func:`rebac.generic_target`.
 
     A record and each of its REBAC-typed MTI ancestors share one attachment set.
@@ -1794,7 +1793,7 @@ class FileAttachmentManager[AttachmentT: FileAttachment](AngeeManager[Attachment
             file = type(file).system_queryset(lock=("self",)).get(pk=file.pk)
             return self._attach(file, target, label=label)
 
-    def for_record(self, record: models.Model) -> AngeeQuerySet[AttachmentT]:
+    def for_record(self, record: models.Model) -> AngeeHistoryQuerySet[AttachmentT]:
         """Return actor-readable file edges for a canonical record."""
 
         return (
@@ -1806,7 +1805,7 @@ class FileAttachmentManager[AttachmentT: FileAttachment](AngeeManager[Attachment
             .select_related("file")
         )
 
-    def with_same_content(self, file: Any, record: models.Model) -> AngeeQuerySet[AttachmentT]:
+    def with_same_content(self, file: Any, record: models.Model) -> AngeeHistoryQuerySet[AttachmentT]:
         """Readable edges of this record type carrying the same verified bytes."""
         return (
             self.get_queryset().filter(

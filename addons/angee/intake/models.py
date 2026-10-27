@@ -21,13 +21,21 @@ from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.actors import actor_user_id, instance_actor
-from angee.changesets import changeset, changeset_model, creation_fingerprint, require_changeset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.errors import DomainError, RecordAccessSubjectRefused
 from angee.fields import StateField
 from angee.intake.choices import NeedAccessAction
 from angee.intake.resources import NeedResource
-from angee.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AuditMixin, HistoryMixin, OptimisticLockMixin
+from angee.models import (
+    AngeeDataModel,
+    AuditMixin,
+    OptimisticLockMixin,
+)
+from angee.provenance.context import changeset, changeset_model, require_changeset
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.provenance.contrib.angee.serialization import creation_fingerprint
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
@@ -63,7 +71,7 @@ class NeedImportance(models.TextChoices):
     IMPORTANT = "important", "Important"
 
 
-class NeedQuerySet[NeedT: Need](AngeeQuerySet[NeedT]):
+class NeedQuerySet[NeedT: Need](AngeeHistoryQuerySet[NeedT]):
     """Request collections follow their stored target, including project tasks."""
 
     def for_project(self, project: models.Model) -> Self:
@@ -72,7 +80,7 @@ class NeedQuerySet[NeedT: Need](AngeeQuerySet[NeedT]):
         return self.filter(models.Q(project=project) | models.Q(task__project=project))
 
 
-_NeedManagerBase = AngeeManager.from_queryset(NeedQuerySet)
+_NeedManagerBase = AngeeHistoryManager.from_queryset(NeedQuerySet)
 
 
 class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):

@@ -9,7 +9,7 @@ import {
 } from "@angee/ui";
 
 import { ResourceQuery } from "@angee/metadata";
-import { jsonResponse, storySchema } from "./runtime-fixtures";
+import { jsonResponse, storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
 
 const rows = [
   {
@@ -82,14 +82,21 @@ const rowActions: readonly RowActionDeclaration<StoryRow>[] = [
 const storySchemas = storySchema(async () =>
   jsonResponse({
     data: {
-      notes: {
-        totalCount: rows.length,
-        results: rows,
-        pageInfo: { offset: 0, limit: 50 },
-      },
+      notes: rows,
+      notes_aggregate: { aggregate: { count: rows.length } },
     },
   }),
 );
+
+storySchemas.public!.metadata = { angee: { resources: [testDataResource("notes.Note", {
+  schemaName: "public",
+  roots: { list: "notes", aggregate: "notes_aggregate" },
+  typeNames: { filter: "NoteFilter", order: "NoteOrder" },
+  query: testResourceQuery({ fields: Object.fromEntries(([
+    ["id", "ID"], ["title", "String"], ["tags", "String"], ["status", "String"],
+    ["owner", "String"], ["words", "Int"], ["updatedAt", "DateTime"],
+  ] as const).map(([name, scalar]) => [name, testQueryField(name, { scalar, sort: { field: name } })])) }),
+})] } };
 
 const meta = {
   title: "Views/ListView",

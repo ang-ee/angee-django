@@ -42,7 +42,6 @@ from rebac.actors import current_sudo_reason, is_sudo
 
 import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
-from angee.actors import source_kind_for
 from angee.agents.testing.models import Agent
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
@@ -78,8 +77,17 @@ from angee.messaging.testing.models import (
     ThreadFollower,
     ThreadNotification,
 )
-from angee.models import AngeeModel, AuditMixin, HistoryMixin, SourceKind, SqidMixin
+from angee.models import (
+    AngeeModel,
+    AuditMixin,
+    SqidMixin,
+)
 from angee.projects.testing.models import Task as ProjectTask
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.sources import source_kind_for
+from angee.provenance.statements import (
+    SourceKind,
+)
 from angee.serialization import strip_null_bytes
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
 from tests.conftest import Backend, Drive, MimeType, make_integration

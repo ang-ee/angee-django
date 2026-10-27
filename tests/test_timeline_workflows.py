@@ -10,12 +10,12 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
-from angee.changesets import changeset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql.publishing import change_published
 from angee.graphql.schema import GraphQLSchemas
 from angee.identity import public_id_of
+from angee.provenance.context import changeset
 from angee.signals import bulk_updated
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.states import RunStatus, WaitingKind

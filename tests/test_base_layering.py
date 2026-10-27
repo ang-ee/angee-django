@@ -12,15 +12,28 @@ ROOT = Path(__file__).resolve().parents[1]
 BASE_SPEC = importlib.util.find_spec("angee")
 assert BASE_SPEC is not None and BASE_SPEC.origin is not None
 ANGEE = Path(BASE_SPEC.origin).resolve().parent
+HOST_MANAGEMENT = frozenset(
+    ANGEE / "management" / name for name in (
+        "__init__.py", "bootstrap.py", "dependencies.py", "commands/angee.py",
+        "commands/runserver.py", "commands/serve.py",
+    )
+)
+SERVING_MANAGEMENT = (
+    ANGEE / "management" / "commands" / "runserver.py",
+    ANGEE / "management" / "commands" / "serve.py",
+)
 MODEL_TOOLKIT = (
     *(ANGEE / name for name in (
-        "actors.py", "apps.py", "autoconfig.py", "changesets.py", "checks.py",
-        "errors.py", "evidence.py", "fields.py", "identity.py", "impl.py",
-        "indexes.py", "jsonschema.py", "lineage.py", "middleware.py", "numeric.py",
+        "actors.py", "apps.py", "autoconfig.py", "checks.py",
+        "errors.py", "fields.py", "identity.py", "impl.py",
+        "indexes.py", "jsonschema.py", "lineage.py", "numeric.py",
         "pagination.py", "permissions.py", "refs.py", "serialization.py", "signals.py",
         "tiers.py", "validation.py",
     )),
-    ANGEE / "management",
+    # Host settings/dependency/lifecycle orchestration sits above compilation.
+    # Remaining native commands are model-toolkit consumers; host serving
+    # commands retain the separate serving-to-compiler restriction below.
+    *(path for path in sorted((ANGEE / "management").rglob("*.py")) if path not in HOST_MANAGEMENT),
     ANGEE / "models",
 )
 GRAPHQL = ROOT / "addons" / "angee" / "graphql"
@@ -197,7 +210,9 @@ def test_graphql_does_not_import_compose() -> None:
 def test_stable_serving_entrypoints_do_not_import_compose() -> None:
     """Serving entrypoints use Django's populated registry, not compose."""
 
-    imports = _module_imports(ANGEE / "urls.py") | _module_imports(ANGEE / "asgi.py")
+    imports = set().union(*(
+        _module_imports(path) for path in (ANGEE / "urls.py", ANGEE / "asgi.py", *SERVING_MANAGEMENT)
+    ))
     forbidden = ("angee.compose",)
     assert not any(name.startswith(prefix) for name in imports for prefix in forbidden)
 

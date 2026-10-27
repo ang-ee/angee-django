@@ -26,16 +26,16 @@ from angee.iam.service_users import sync_service_user
 from angee.identity import public_id_for
 from angee.models import (
     AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
     AppendOnlyModel,
     AppendOnlyQuerySet,
-    HistoryMixin,
     MergePolicy,
     OwnerMixin,
     RecordRefMixin,
     update_fields_with_auto_now,
 )
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, GraphEdge, GraphNode
 from angee.workflows.managers import (
@@ -211,11 +211,11 @@ class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         return self.name
 
 
-class WorkflowVersionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
+class WorkflowVersionQuerySet(AppendOnlyQuerySet[Any], AngeeHistoryQuerySet[Any]):
     """Prevent collection mutation of published graph documents."""
 
 
-WorkflowVersionManager = AngeeManager.from_queryset(WorkflowVersionQuerySet)
+WorkflowVersionManager = AngeeHistoryManager.from_queryset(WorkflowVersionQuerySet)
 
 
 class WorkflowVersion(AppendOnlyModel, AngeeDataModel):
@@ -759,7 +759,7 @@ class StepRun(AngeeDataModel):
         ]
 
 
-_StepAttemptManager = AngeeManager.from_queryset(StepAttemptQuerySet)
+_StepAttemptManager = AngeeHistoryManager.from_queryset(StepAttemptQuerySet)
 
 
 class StepAttempt(AngeeDataModel):

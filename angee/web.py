@@ -27,7 +27,7 @@ from django.core.exceptions import ImproperlyConfigured
 
 from angee.addons import addon_ancestors, addon_manifest
 from angee.compose.declarations import BuildIntegration
-from angee.fs import GENERATED_SENTINEL
+from angee.utils.artifacts import GENERATED_SENTINEL
 
 if TYPE_CHECKING:
     from angee.compose.runtime import Runtime

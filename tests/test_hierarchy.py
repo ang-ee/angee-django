@@ -526,3 +526,88 @@ def test_scope_edit_of_a_detached_leaf_preserves_its_path() -> None:
         leaf.refresh_from_db()
         assert leaf.scope_id == second.pk
         assert leaf.path == path
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("explicit", [False, True])
+def test_saved_hierarchy_uses_one_write_database_for_scope_parent_and_descendants(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, django_db_blocker: Any, explicit: bool,
+) -> None:
+    """A cached parent and loaded baseline from another database cannot govern a save."""
+
+    from django.db import connections, router
+
+    alias = "hierarchy_write_probe"
+    write_hints: list[models.Model] = []
+
+    class HierarchyRouter:
+        def db_for_read(self, model: type[models.Model], **hints: Any) -> str | None:
+            return "default" if model in (Scope, ScopedHierNode) else None
+
+        def db_for_write(self, model: type[models.Model], **hints: Any) -> str | None:
+            if model is ScopedHierNode:
+                if instance := hints.get("instance"):
+                    write_hints.append(instance)
+                return "default" if explicit else alias
+            return None
+
+    connections.databases[alias] = {
+        **connections.databases["default"],
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": str(tmp_path / "hierarchy-write.sqlite3"),
+        "OPTIONS": {},
+        "CONN_MAX_AGE": 0,
+    }
+    database = connections[alias]
+    try:
+        with django_db_blocker.unblock(), system_context(reason="test hierarchy write routing"):
+            with database.schema_editor() as editor:
+                editor.create_model(Scope)
+                editor.create_model(ScopedHierNode)
+            default_scope = Scope.objects.using("default").create(name="Original scope")
+            default_parent = ScopedHierNode.objects.using("default").create(
+                id=10, scope=default_scope, name="Original parent",
+            )
+            original = ScopedHierNode.objects.using("default").create(
+                id=30, scope=default_scope, name="Original row", parent=default_parent,
+            )
+            ScopedHierNode.objects.using("default").create(
+                id=40, scope=default_scope, name="Original child", parent=original,
+            )
+            routed_scope = Scope.objects.using(alias).create(id=default_scope.pk + 1, name="Write scope")
+            routed_root = ScopedHierNode.objects.using(alias).create(id=20, scope=routed_scope, name="Write root")
+            routed_parent = ScopedHierNode.objects.using(alias).create(
+                id=10, scope=routed_scope, name="Write parent", parent=routed_root,
+            )
+            routed = ScopedHierNode.objects.using(alias).create(id=30, scope=routed_scope, name="Write row")
+            routed_child = ScopedHierNode.objects.using(alias).create(
+                id=40, scope=routed_scope, name="Write child", parent=routed,
+            )
+            original_paths = dict(ScopedHierNode.objects.using("default").values_list("pk", "path"))
+            loaded = ScopedHierNode.objects.using("default").select_related("parent").get(pk=original.pk)
+            assert loaded.parent.path != routed_parent.path
+            loaded.scope_id = routed_scope.pk
+            monkeypatch.setattr(router, "routers", [HierarchyRouter()])
+
+            with CaptureQueriesContext(connection) as original_queries:
+                loaded.save(using=alias if explicit else None, update_fields=["parent", "scope"])
+            assert not any(
+                model._meta.db_table in query["sql"]
+                for query in original_queries for model in (Scope, ScopedHierNode)
+            ), original_queries.captured_queries
+            assert loaded._state.db == alias
+            assert loaded.parent._state.db == alias
+            assert loaded.parent.path == routed_parent.path
+            routed.refresh_from_db(using=alias)
+            routed_child.refresh_from_db(using=alias)
+            assert routed.parent_id == routed_parent.pk
+            assert routed.path == routed_parent.path + f"{routed.pk:012d}/"
+            assert routed_child.path.startswith(routed.path)
+            assert routed.name == "Write row"
+            assert dict(ScopedHierNode.objects.using("default").values_list("pk", "path")) == original_paths
+            if not explicit:
+                assert any(instance is loaded for instance in write_hints)
+    finally:
+        database.close()
+        del connections[alias]
+        del connections.databases[alias]

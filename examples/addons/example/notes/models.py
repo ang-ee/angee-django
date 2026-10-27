@@ -15,13 +15,13 @@ from angee.messaging.models import ThreadedModelMixin
 from angee.models import (
     AngeeDataModel,
     AuditMixin,
-    HistoryMixin,
     OwnerMixin,
 )
+from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 
 
-class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel, HistoryMixin):
+class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
     """A short note used to exercise backend composition.
 
     Metadata and body changes are recorded through native ``history``.

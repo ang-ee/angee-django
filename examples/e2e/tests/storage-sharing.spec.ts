@@ -293,7 +293,7 @@ test("Drive and File grants share storage between users", async ({ browser }) =>
     const openPrimaryPanel = bobPage.getByRole("button", {
       name: "Open primary panel",
     });
-    const drivePicker = bobPage.getByRole("button", { name: /^Drive:/ });
+    const drivePicker = bobPage.getByRole("combobox", { name: /^Drive:/ });
     await expect(openPrimaryPanel.or(drivePicker)).toBeVisible({ timeout: 20_000 });
     if (await openPrimaryPanel.count()) await openPrimaryPanel.click();
     await expect(drivePicker).toBeVisible({ timeout: 20_000 });

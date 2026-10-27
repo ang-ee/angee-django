@@ -61,10 +61,7 @@ from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey, record_lock_key
 from angee.models import (
     AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
     AuditMixin,
-    HistoryMixin,
     OwnerMixin,
     StateTransitions,
     role_anchor,
@@ -72,6 +69,9 @@ from angee.models import (
     transition,
 )
 from angee.operator.daemon import OperatorInstanceKind, WorkspaceStatus
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
@@ -394,7 +394,7 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
         )
 
 
-class InferenceModelManager[ModelT: InferenceModel](AngeeManager[ModelT]):
+class InferenceModelManager[ModelT: InferenceModel](AngeeHistoryManager[ModelT]):
     """Manager owning catalogue sync and selection of authorized deployments."""
 
     def usable(self, actor: Any, role: str, *, uses: Collection[InferenceModelUse]) -> tuple[ModelT, ...]:
@@ -620,7 +620,7 @@ class InferenceModel(AuditMixin, AngeeDataModel):
         return InferenceResult(response=response, usage=usage, output=output)
 
 
-class SkillManager(VcsOutputManager, AngeeManager):
+class SkillManager(VcsOutputManager, AngeeHistoryManager):
     """Manager owning the reconcile of skill rows from a skill source."""
 
     def sync_from_source(self, source: Any) -> int:
@@ -714,7 +714,7 @@ class MCPServer(AuditMixin, AngeeDataModel):
     )
     config = models.JSONField(default=dict, blank=True)
 
-    objects = AngeeManager()
+    objects = AngeeHistoryManager()
 
     class Meta:
         """Django model options for MCP servers."""
@@ -876,7 +876,7 @@ class MCPTool(AuditMixin, AngeeDataModel):
         return self.name
 
 
-class AgentManager[AgentT: Agent](AngeeManager[AgentT]):
+class AgentManager[AgentT: Agent](AngeeHistoryManager[AgentT]):
     """Own the current actor's chat-agent selection."""
 
     def chat_for_actor(self) -> AgentT | None:
@@ -1851,7 +1851,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         return model.credential
 
 
-class AgentSessionManager[SessionT: AgentSession](AngeeManager[SessionT]):
+class AgentSessionManager[SessionT: AgentSession](AngeeHistoryManager[SessionT]):
     """Create conversations under the caller's native REBAC create gate."""
 
     def current_for_agent(self, agent: Any) -> SessionT | None:
@@ -2202,7 +2202,7 @@ class AgentSession(AuditMixin, AngeeDataModel):
         self._transition_fields = {"last_error"}
 
 
-class AgentTurnQuerySet[TurnT: AgentTurn](AngeeQuerySet[TurnT]):
+class AgentTurnQuerySet[TurnT: AgentTurn](AngeeHistoryQuerySet[TurnT]):
     """Turn scopes shared by session execution and transport callers."""
 
     def open(self) -> Self:
@@ -2216,7 +2216,7 @@ class AgentTurnQuerySet[TurnT: AgentTurn](AngeeQuerySet[TurnT]):
         return self.filter(status__in=ACTIVE_TURN_STATUSES)
 
 
-_AgentTurnManager = AngeeManager.from_queryset(AgentTurnQuerySet)
+_AgentTurnManager = AngeeHistoryManager.from_queryset(AgentTurnQuerySet)
 
 
 class AgentTurn(AuditMixin, AngeeDataModel):

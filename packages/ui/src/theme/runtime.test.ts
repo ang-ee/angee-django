@@ -95,7 +95,7 @@ function cacheAppearance(overrides: Record<string, unknown>) {
     actorId: "actor-one",
     themeId: "example.token-bounds",
     colorSchemePreference: "dark",
-    tokens: { "--brand": "#abcdef" },
+    tokenLayers: { shared: { "--brand": "#abcdef" }, light: {}, dark: {} },
     ...overrides,
   }));
 }
@@ -111,14 +111,14 @@ describe("first-paint appearance", () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
   test.each(accepted)("uses the theme contract for cached %s", (_kind, name, value) => {
-    cacheAppearance({ tokens: { [name]: value } });
+    cacheAppearance({ tokenLayers: themeWithToken(name, value).tokens });
     bootstrapAppearance(bootstrapPayload, window);
     expect(document.documentElement.style.getPropertyValue(name)).toBe(value);
     expect(document.documentElement.dataset.colorScheme).toBe("dark");
   });
 
   test.each(rejected)("falls back to host defaults for cached %s", (_kind, name, value) => {
-    cacheAppearance({ tokens: { [name]: value } });
+    cacheAppearance({ tokenLayers: themeWithToken(name, value).tokens });
     bootstrapAppearance(bootstrapPayload, window);
     expect(document.documentElement.style.getPropertyValue(name)).toBe("");
     expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#112233");
@@ -127,10 +127,12 @@ describe("first-paint appearance", () => {
 
   test.each<readonly [string, Record<string, unknown>]>([
     ["schema", { schema: APPEARANCE_CACHE_SCHEMA + 1 }],
+    ["old single-scheme cache", { schema: 1, tokens: { "--brand": "#abcdef" } }],
     ["fingerprint", { fingerprint: "other-host" }],
     ["uninstalled theme", { themeId: "example.missing" }],
-    ["unknown token", { tokens: { "--private-token": "15px" } }],
-    ["unsafe CSS", { tokens: { "--brand": "url(https://example.test/image)" } }],
+    ["unknown token", { tokenLayers: { shared: { "--private-token": "15px" }, light: {}, dark: {} } }],
+    ["unsafe inactive scheme", { tokenLayers: { shared: {}, light: { "--brand": "url(https://example.test/image)" }, dark: {} } }],
+    ["missing scheme", { tokenLayers: { shared: {}, dark: {} } }],
     ["oversized cache", { padding: "x".repeat(APPEARANCE_CACHE_LIMIT) }],
   ])("rejects an invalid cache %s", (_name, overrides) => {
     cacheAppearance(overrides);

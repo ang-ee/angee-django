@@ -12,10 +12,10 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context
 
-from angee.changesets import changeset as open_changeset
 from angee.graphql.publishing import mute_changes
 from angee.identity import public_id_of
 from angee.messaging.timeline import CommentKind
+from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
 from angee.timeline.kinds import Cursor, timeline_kinds
 from angee.timeline.reading import Timeline

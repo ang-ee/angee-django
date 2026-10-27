@@ -16,8 +16,7 @@ from types import ModuleType
 import django_yamlconf
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.paths import resolve_path
-from angee.project import PROJECT_YAML_NAME
+from angee.utils.paths import resolve_path
 
 YAMLCONF_PREDEFINED_SETTINGS = frozenset(
     {
@@ -113,7 +112,7 @@ def load_project(
         if loader is None:
             return
         attributes = django_yamlconf.bootstrap_attributes(str(root))
-        project_yaml = root / f"{PROJECT_YAML_NAME}.yaml"
+        project_yaml = root / "settings.yaml"
         if os.access(project_yaml, os.R_OK):
             django_yamlconf.load_conffile(attributes, project_settings, loader, loader_kwargs, str(project_yaml))
         if final_conf := os.environ.get("YAMLCONF_CONFFILE"):
@@ -131,7 +130,7 @@ def project_yaml_settings(project_settings: ModuleType, root: Path) -> frozenset
     yamlconf's cached attribute representation itself.
     """
 
-    project_yaml = (root / f"{PROJECT_YAML_NAME}.yaml").resolve()
+    project_yaml = (root / "settings.yaml").resolve()
     names: set[str] = set()
     for name in django_yamlconf.defined_attributes(project_settings):
         info = django_yamlconf.get_attr_info(name, project_settings)

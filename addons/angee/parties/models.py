@@ -49,19 +49,10 @@ from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.lineage import concrete_child, concrete_child_models
 from angee.models import (
     AngeeDataModel,
-    AngeeManager,
-    Aspect,
     AuditMixin,
     HierarchyMixin,
-    HistoryMixin,
     MergeableMixin,
-    ModelHistory,
     OwnerMixin,
-    PairAspect,
-    SourceKind,
-    StatementRecords,
-    StatementsMixin,
-    StatementSubjectManager,
     TrashMixin,
 )
 from angee.parties.backends import DirectoryBackend
@@ -73,6 +64,16 @@ from angee.parties.managers import (
     PartyStatementQuerySet,
 )
 from angee.parties.mixins import MembershipDecisionMixin, PartyAspectMixin, PartyStatementMixin
+from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.statements import (
+    Aspect,
+    PairAspect,
+    SourceKind,
+    StatementRecords,
+    StatementsMixin,
+    StatementSubjectManager,
+)
 from angee.refs import RetainedGenericRelation
 from angee.tags.models import TaggedModel
 
@@ -997,7 +998,7 @@ class Folder(OwnerMixin, AngeeDataModel):
     )
     source_href = models.CharField(max_length=1024, blank=True, default="")
 
-    objects = AngeeManager()
+    objects = AngeeHistoryManager()
 
     class Meta:
         """Django model options for the folder source model."""

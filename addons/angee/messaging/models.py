@@ -90,16 +90,17 @@ from angee.models import (
     AngeeDataModel,
     AngeeModel,
     AuditMixin,
-    HistoryMixin,
     MergePolicy,
-    ModelHistory,
     OptimisticLockMixin,
     OwnerMixin,
     RecordRefMixin,
-    SourceKind,
     TrashMixin,
 )
 from angee.parties.models import Handle
+from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
+from angee.provenance.statements import (
+    SourceKind,
+)
 from angee.refs import RecordRef, RetainedGenericRelation, generic_pointer_model
 from angee.resources.mixins import ResourceLoadMixin
 from angee.serialization import strip_null_bytes

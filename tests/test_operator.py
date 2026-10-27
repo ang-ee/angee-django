@@ -321,7 +321,7 @@ def test_file_tools_call_the_files_api_and_carry_the_etag(monkeypatch: pytest.Mo
 # --- endpoint resolution ------------------------------------------------------
 #
 # The daemon resolves from Django settings only. Dev stack env and project YAML
-# are normalized by ``angee.compose.settings`` before apps read configuration.
+# are normalized by ``angee.settings`` before apps read configuration.
 
 
 def test_endpoint_defaults_to_same_origin_proxy() -> None:
@@ -734,7 +734,7 @@ def test_operator_admin_role_reaches_connection_read_tuple_free() -> None:
 def test_operator_schema_writes_the_live_sdl_into_the_runtime(monkeypatch, settings, tmp_path) -> None:
     """The stack job's export lands in the runtime, never in the operator package's committed snapshot."""
 
-    settings.ANGEE_RUNTIME_DIR = tmp_path
+    settings.COMPOSE_RUNTIME_DIR = tmp_path
     stub = SimpleNamespace(
         admin_bearer="token", server_base="http://operator", introspect_sdl=lambda: "type Query { ping: String }",
     )

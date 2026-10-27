@@ -11,9 +11,9 @@ from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 
 from angee.addons import addon_manifest
-from angee.web import WebRuntime
 from angee.graphql.schema import schema_parts_for
 from angee.resources.entries import ResourceEntry, resource_manifest_for
+from angee.web import WebRuntime
 from tests.conftest import make_addon
 
 
