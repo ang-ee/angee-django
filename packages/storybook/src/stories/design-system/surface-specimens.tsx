@@ -5,7 +5,7 @@ import { themes } from "@angee/theme-angee/themes";
 import { ResourceQuery } from "@angee/metadata";
 import type { TypedDocumentNode } from "@angee/refine";
 import { gql } from "@angee/ui/lib/gql";
-import { RuntimeFixture, jsonResponse, storySchema, testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "../runtime-fixtures";
+import { jsonResponse, storySchema, testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "../runtime-fixtures";
 
 const noop = () => undefined;
 const formSpec = { type: "object", properties: { title: { type: "string", label: "Title" } } };
@@ -48,10 +48,12 @@ const containers = U.containersFromChildren(U.FORM_CONTAINERS, {
     <U.RecordRailGroup id="properties" label="Properties" fields={[{ field: ownerField }]} />,
   } },
 });
-const formRuntime = { containers };
+/** Native story parameters configure the canonical preview environment. */
+export const surfaceFixture = { schemas };
+export const formSurfaceFixture = { ...surfaceFixture, runtime: { containers } };
 
 export function Forms() {
-  return <RuntimeFixture schemas={schemas} runtime={formRuntime}>
+  return (
     <U.Form resource="notes.Note" id={record.id} acknowledgedSource={source}
       formExtras={({ form }) => <U.SurfacePanel title="Bound values"><div className="grid gap-3 p-4">
         <BoundSummary form={form} />
@@ -65,7 +67,7 @@ export function Forms() {
       <U.Action id="review" label="Review" run={async () => undefined} />
       <U.Tab id="notes" label="Notes"><U.EmptyState title="Notes" description="Content supplied through the tab declaration." /></U.Tab>
     </U.Form>
-  </RuntimeFixture>;
+  );
 }
 function BoundSummary({ form }: { form: Parameters<typeof U.useFormViewValues>[0] }) {
   const title = U.useFormViewValues<string>(form, "title");
@@ -73,15 +75,15 @@ function BoundSummary({ form }: { form: Parameters<typeof U.useFormViewValues>[0
 }
 
 export function Resources() {
-  return <RuntimeFixture schemas={schemas}><div className="grid gap-6">
+  return <div className="grid gap-6">
     <U.ResourceCreate resource="notes.Note" fields={fields} defaultValues={record} title="Create a record" />
     <U.ResourceEdit resource="notes.Note" id={record.id} fields={fields} acknowledgedSource={source} />
     <U.ResourceShow resource="notes.Note" id={record.id} fields={fields} acknowledgedSource={source} />
-  </div></RuntimeFixture>;
+  </div>;
 }
 
 export function Collections() {
-  return <RuntimeFixture schemas={schemas}><div className="grid gap-6">
+  return <div className="grid gap-6">
     <U.List resource="notes.Note" presentation="embedded">
       <U.Column field="title" header="Title" /><U.Column field="owner" header="Owner" />
       <U.Facet field="owner" label="Owner" />
@@ -90,7 +92,7 @@ export function Collections() {
       columns={[{ field: "title", header: "Title" }, { field: "owner", header: "Owner" }]} fields={["title", "owner"]} />
     <U.AggregatePanel resource="notes.Note" title="Records" dimensions={[]} />
     <U.RemovedRecords resource={resource} label={row => String(row.title)} fields={["title"]} />
-  </div></RuntimeFixture>;
+  </div>;
 }
 
 type TreeRecord = typeof record & { parent: string | null; expandable: boolean };
@@ -104,10 +106,10 @@ const treeSource: U.CollectionSource<TreeRecord> = {
   rows: U.collectionQuery({ document: treeDocument, variables: () => ({}), select: data => data.libraryPage }),
 };
 export function CollectionTree() {
-  return <RuntimeFixture schemas={schemas}><U.ResourceViewProvider scope="local">
+  return <U.ResourceViewProvider scope="local">
     <U.CollectionTreeView resource="library.Tree" source={treeSource} rowKey="id" parent="parent" label="title"
       hasChildren="expandable" columns={[{ field: "title", header: "Title" }]} presentation="embedded" />
-  </U.ResourceViewProvider></RuntimeFixture>;
+  </U.ResourceViewProvider>;
 }
 
 const points = [{ key: "ready", label: "Ready", value: 12 }, { key: "review", label: "In review", value: 5 }];
@@ -128,7 +130,7 @@ export function Editors() {
   const [date, setDate] = useState<Date | null>(new Date("2026-10-19T12:00:00Z"));
   const [open, setOpen] = useState(false);
   const rowsField = { name: "items", label: "Items", rowTemplate: [{ name: "title", label: "Title", widget: "text" }] };
-  return <RuntimeFixture schemas={schemas}><div className="grid gap-4">
+  return <div className="grid gap-4">
     <U.JsonEditor value={value} onChange={setValue} /><U.JsonValueView value={value} />
     <U.RowsField value={rows} onChange={setRows} field={rowsField} />
     <U.DatePopover selected={date} label={date?.toISOString().slice(0, 10) ?? "Choose date"} ariaLabel="Review date"
@@ -139,17 +141,17 @@ export function Editors() {
       renderTrigger={({ open }) => <U.Button onClick={open}>Rename handbook</U.Button>} />
     <U.InlineTextAction multiline open value="A longer body the reader edits in place." inputLabel="Edit body"
       submitLabel="Save" submitVariant="primary" submitUnchanged onSubmit={noop} onCancel={noop} />
-  </div></RuntimeFixture>;
+  </div>;
 }
 
 export function ActionForms() {
   const [open, setOpen] = useState(false);
-  return <RuntimeFixture schemas={schemas}>
+  return <>
     <U.Button onClick={() => setOpen(true)}>Open action form</U.Button>
     <U.ActionFormDialog open={open} onOpenChange={setOpen} context={{ record, selectedIds: [record.id] }}
       action={{ id: "rename", label: "Rename", args: [{ name: "title", label: "Title", kind: "string" }],
         submit: async () => ({ ok: true, message: "Renamed" }) }} />
-  </RuntimeFixture>;
+  </>;
 }
 
 const previewImage = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120"><rect width="320" height="120" fill="#64748b"/><text x="160" y="68" text-anchor="middle" fill="white" font-size="24">Preview fixture</text></svg>')}`;
@@ -220,9 +222,9 @@ function HookValues() {
   </div>;
 }
 export function Hooks() {
-  return <RuntimeFixture schemas={schemas}>
+  return (
     <U.RecordChromeProvider value={{ resource: "notes.Note", canonicalResource: "notes.Note", dataProviderName: "public", recordId: record.id, record, formReadOnly: false }}>
       <HookValues />
     </U.RecordChromeProvider>
-  </RuntimeFixture>;
+  );
 }

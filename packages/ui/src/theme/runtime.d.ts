@@ -127,3 +127,45 @@ export function compileThemeCss(definitions: readonly ThemeDefinition<unknown>[]
  * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function serializableThemeMetadata(definition: ThemeDefinition<unknown>): SerializableThemeMetadata;
+
+/** Data projected by app composition for the headless first-paint owner. */
+export interface AppearanceBootstrapPayload {
+  fingerprint: string;
+  host: {
+    themeId: string | null;
+    colorScheme: ColorSchemePreference;
+    options?: ThemeOptionsEnvelope;
+    fingerprint: string;
+    tokenLayers: ThemeTokenLayers;
+  };
+  catalogue: {
+    schema: number;
+    fingerprint: string;
+    themes: Array<{ id: string; legacyIds?: readonly string[]; defaultTokens?: ThemeTokenLayers }>;
+  };
+}
+/**
+ * @kind null
+ * @reason Shared disposable appearance cache protocol.
+ */
+export const APPEARANCE_CACHE_KEY: "angee:appearance";
+/**
+ * @kind null
+ * @reason Shared disposable appearance cache protocol.
+ */
+export const APPEARANCE_CACHE_SCHEMA: 1;
+/**
+ * @kind null
+ * @reason Shared disposable appearance cache protocol.
+ */
+export const APPEARANCE_CACHE_LIMIT: number;
+/**
+ * @kind null
+ * @reason Headless appearance DOM lifecycle shared by bootstrap and React.
+ */
+export function applyAppearanceRoot(options: { themeId: string | null; colorScheme: ColorScheme; tokens?: TokenLayer; target?: Document }): void;
+/**
+ * @kind null
+ * @reason Headless first-paint lifecycle bundled by app composition.
+ */
+export function bootstrapAppearance(payload: AppearanceBootstrapPayload, target?: Pick<Window, "document" | "localStorage" | "matchMedia">): void;

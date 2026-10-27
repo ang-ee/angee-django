@@ -32,7 +32,9 @@ Project and stack templates expose three build inputs:
 The Vite configuration validates those values against the generated catalogue.
 Changing a host default therefore requires the normal codegen and web build.
 The synchronous head bootstrap applies that default, or a validated actor cache,
-before the application entry loads.
+before the application entry loads. Vite bundles the React-free
+[`bootstrapAppearance`](../../packages/ui/src/theme/runtime.mjs) owner; bootstrap
+and React share its token validation, cache protocol and root application.
 
 A signed-in user's `iam.User.preferences.appearance` fields override the host
 independently. The stored document contains stable IDs and versioned inputs:

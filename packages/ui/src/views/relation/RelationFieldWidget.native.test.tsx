@@ -6,6 +6,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { createUiTestProviders } from "../../testing";
 import { AppRuntimeProvider, createRouteHref } from "../../runtime";
 import { RelationFieldWidget } from "./RelationFieldWidget";
+import { RelationField } from "../../widgets/RelationField";
 import { useRelationSelectedOption } from "./relation-options";
 import { customFilterChipsFor } from "../resource/resource-view-utils";
 
@@ -92,7 +93,7 @@ test("relation search reaches records beyond the first page and resolves a selec
   await screen.findByText("Sender is Distant sender");
   expect(getOne).toHaveBeenCalledOnce();
   expect(getList).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Exact address: Distant sender" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Exact address: Distant sender" }));
   await screen.findByRole("option", { name: "Sender 199" });
   fireEvent.change(screen.getByPlaceholderText("Search…"), { target: { value: "distant@example.com" } });
   await waitFor(() => expect(getList.mock.calls.at(-1)?.[0].filters).toEqual([{
@@ -102,4 +103,32 @@ test("relation search reaches records beyond the first page and resolves a selec
   expect(screen.queryByRole("option", { name: "Sender 199" })).toBeNull();
   fireEvent.click(match);
   expect(change).toHaveBeenCalledWith(selected.id);
+});
+
+
+test("single relation combobox retains missing values and offers retry before creation", async () => {
+  const retry = vi.fn();
+  const create = vi.fn();
+  const search = vi.fn();
+  const changed = vi.fn();
+  const props = {
+    value: "unloaded-id", options: [], onCreate: create, onChange: changed,
+    onSearchChange: search, "aria-label": "Related row",
+  };
+  const { rerender } = render(<Provider><RelationField {...props}
+    searchState={{ error: "Unavailable", retry }} /></Provider>);
+  const trigger = screen.getByRole("combobox", { name: "Related row" });
+  expect(trigger.textContent).toContain("unloaded-id");
+  fireEvent.click(trigger);
+  expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("Unavailable"));
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(retry).toHaveBeenCalledOnce();
+  fireEvent.change(screen.getByPlaceholderText("Search…"), { target: { value: "  New row  " } });
+  expect(search).toHaveBeenCalledWith("  New row  ");
+  expect(screen.queryByRole("option")).toBeNull();
+  rerender(<Provider><RelationField {...props} /></Provider>);
+  fireEvent.click(await screen.findByRole("option", { name: /Create.*New row/ }));
+  expect(create).toHaveBeenCalledWith("New row");
+  expect(changed).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
 });

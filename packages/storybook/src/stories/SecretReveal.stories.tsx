@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, ModalsHost, useSecretReveal } from "@angee/ui";
+import { Button, useSecretReveal } from "@angee/ui";
 
 function RevealDemo(): React.ReactElement {
   const reveal = useSecretReveal();
@@ -22,7 +22,6 @@ const meta = {
   title: "Primitives/SecretReveal",
   component: RevealDemo,
   parameters: { layout: "centered" },
-  decorators: [(Story) => <ModalsHost><Story /></ModalsHost>],
 } satisfies Meta<typeof RevealDemo>;
 
 export default meta;

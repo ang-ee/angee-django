@@ -9,7 +9,7 @@ import {
 } from "@angee/ui";
 
 import { ResourceQuery } from "@angee/metadata";
-import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
+import { jsonResponse, storySchema } from "./runtime-fixtures";
 
 const rows = [
   {
@@ -93,7 +93,7 @@ const storySchemas = storySchema(async () =>
 
 const meta = {
   title: "Views/ListView",
-  parameters: { layout: "padded" },
+  parameters: { angeeFixture: { schemas: storySchemas }, layout: "padded" },
 } satisfies Meta;
 
 export default meta;
@@ -110,28 +110,25 @@ export const SearchShortcuts: Story = {
 
 function ListFixture({ withShortcuts = false }: { withShortcuts?: boolean }) {
   return (
-    <RuntimeFixture schemas={storySchemas}>
-      <div className="max-w-5xl">
-        <ListView
-          resource="notes.Note"
-          columns={columns}
-          rowActions={rowActions}
-          chrome={{ heading: { label: "Notes", hint: "Shared team records", audience: "Editors" } }}
-          search={withShortcuts ? { shortcuts: [{ kind: "toggle", id: "status:ACTIVE" }, { kind: "facet", field: "status" }] } : undefined}
-          filterOptions={withShortcuts ? [
-            { id: "status:ACTIVE", label: "Active", filter: { status: { exact: "ACTIVE" } } },
-          ] : undefined}
-          customFilterFields={withShortcuts ? [{ id: "status", label: "Status", type: "selection", options: [
-            { value: "ACTIVE", label: "Active" }, { value: "DRAFT", label: "Draft" }, { value: "ARCHIVED", label: "Archived" },
-          ] }] : undefined}
-          createLabel="New note"
-          onCreate={() => undefined}
-        />
-      </div>
-    </RuntimeFixture>
+    <div className="max-w-5xl">
+      <ListView
+        resource="notes.Note"
+        columns={columns}
+        rowActions={rowActions}
+        chrome={{ heading: { label: "Notes", hint: "Shared team records", audience: "Editors" } }}
+        search={withShortcuts ? { shortcuts: [{ kind: "toggle", id: "status:ACTIVE" }, { kind: "facet", field: "status" }] } : undefined}
+        filterOptions={withShortcuts ? [
+          { id: "status:ACTIVE", label: "Active", filter: { status: { exact: "ACTIVE" } } },
+        ] : undefined}
+        customFilterFields={withShortcuts ? [{ id: "status", label: "Status", type: "selection", options: [
+          { value: "ACTIVE", label: "Active" }, { value: "DRAFT", label: "Draft" }, { value: "ARCHIVED", label: "Archived" },
+        ] }] : undefined}
+        createLabel="New note"
+        onCreate={() => undefined}
+      />
+    </div>
   );
 }
-
 
 const referenceQuery = ResourceQuery.forRows({ fields: {
   title: { scalar: "String" }, "requester.display_name": { scalar: "String" },

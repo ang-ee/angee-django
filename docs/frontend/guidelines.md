@@ -130,9 +130,8 @@ shared UI copy through an addon bundle.
 The [public catalog](../../packages/ui/src/catalog.ts) assigns one UX kind to
 each shipped component and its owner-specific hooks. The
 [Library overview](../../packages/storybook/src/stories/Library.stories.tsx) (story id `library-overview--default`)
-renders the owners; the
-[composition report](../../packages/storybook/src/stories/Composition.stories.tsx) (story id `reports-composition--default`)
-shows their dependencies.
+renders the owners. [`createApp().explain()`](../../packages/app/src/explain.ts)
+exposes menu and container provenance from the composed runtime.
 
 | Kind | Meaning |
 |---|---|
@@ -151,9 +150,6 @@ catalog and container contracts, and brings the concrete gap and intended
 composition to the framework owner. Extend that owner or contribute through its
 container. A new owner belongs in `@angee/ui` (or app composition in
 `@angee/app`) with its story and catalog entry, never as an addon-local copy.
-Addon route instances awaiting the lane-2 page shapes appear in the composition
-report as “composes no page shape yet”; they are information, not ownership
-violations.
 
 **The shipped owner is the only Storybook authority.** Authoritative stories
 render real `@angee/ui`, `@angee/app` shell owners and shipped addon components,
@@ -162,7 +158,7 @@ needing its own markup belongs under `Explorations/<YYYY-MM-DD> <name>` (a
 `packages/storybook/src/explorations/` folder with its own story glob in
 `.storybook/main.mjs`; none exists today), names the ruling it fed and its
 superseding owner, and is deleted once that owner exists. Explorations sort last
-and never enter the Library or the shipped composition tree.
+and never enter the Library.
 
 The `@angee/ui/catalog` subpath audits runtime exports, including aliases; the
 root entry does not load it. Type-only exports are contracts, not rendered
@@ -176,8 +172,7 @@ stable.
 The [generator](../../packages/storybook/scripts/catalog.mjs) reads these facts
 through TypeScript, reports independent owners of the same shell place, and
 derives story links only from CSF `meta.component` or `parameters.owner`.
-Missing coverage stays `null` and is visible in the Library. This lane omits
-`composes`; the composition graph carries the inventory edges separately.
+Missing coverage stays `null` and is visible in the Library.
 `recipeAxes(recipe)` reads native tailwind-variants metadata for specimens.
 The guard regenerates and diffs the catalog, so shape-valid but stale facts fail.
 
@@ -1928,10 +1923,13 @@ Hard-won traps — the wise learn from others' mistakes
   `render: () => …` has dead meta args. Removing them when `meta.component` has a
   required prop breaks `StoryObj<typeof meta>` (it still demands the arg) — type the
   self-rendering stories as bare `StoryObj` (keep `component:` for autodocs). A
-  data-bound view story uses the shared `runtime-fixtures` owner (`RuntimeFixture` +
-  `storySchema(fetch)` + `jsonResponse`), not a hand-rolled provider stack; global
-  providers (`ToastProvider`, router, runtime, client) come from the preview
-  decorator — don't nest a second one.
+  data-bound view story declares `parameters.angeeFixture` with its schemas,
+  resources, runtime and operation documents; the preview mounts the shared
+  [`RuntimeFixture`](../../packages/storybook/src/stories/runtime-fixtures.tsx).
+  Use `storySchema(fetch)` and `jsonResponse` for transport fixtures. Routed
+  fixtures reused by tests set `angeeOwnRuntime: true` and pass
+  `appearance={storyAppearance(context.globals)}` into the same owner. Each
+  story has one provider stack, including appearance, data, toasts and modals.
 - **`Workbench` (`layouts/Workbench.tsx`) is the collapsible inner-shell owner;
   `Explorer` is removed.** Every multi-pane content region (console body, storage,
   knowledge, iam schema, agents sessions) composes `Workbench` over `page/SplitPanes`

@@ -4,7 +4,7 @@ import { testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { Button, ManageAccessDialog, type RecordAccessEntry } from "@angee/ui";
 
-import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
+import { jsonResponse, storySchema } from "./runtime-fixtures";
 
 const metadata = {
   angee: {
@@ -54,7 +54,7 @@ const entries: readonly RecordAccessEntry[] = [{
 const meta = {
   title: "Views/ManageAccessDialog",
   component: ManageAccessDialog,
-  parameters: { layout: "centered" },
+  parameters: { angeeFixture: { schemas }, layout: "centered" },
 } satisfies Meta<typeof ManageAccessDialog>;
 
 export default meta;
@@ -72,26 +72,24 @@ function DialogStory({
 }): React.ReactElement {
   const [open, setOpen] = React.useState(true);
   return (
-    <RuntimeFixture schemas={schemas}>
-      <ManageAccessDialog
-        open={open}
-        onOpenChange={setOpen}
-        trigger={<Button>Share project</Button>}
-        label="Apollo"
-        targetIds={["project-1"]}
-        grantable={[{
-          relation: "reader",
-          permission: "share",
-          subjects: [{ type: "example/subject", relation: null, resource: "example.Subject" }],
-        }]}
-        entries={rows}
-        fetching={fetching}
-        error={error}
-        onRetry={() => undefined}
-        onGrant={async () => true}
-        onRevoke={async () => undefined}
-      />
-    </RuntimeFixture>
+    <ManageAccessDialog
+      open={open}
+      onOpenChange={setOpen}
+      trigger={<Button>Share project</Button>}
+      label="Apollo"
+      targetIds={["project-1"]}
+      grantable={[{
+        relation: "reader",
+        permission: "share",
+        subjects: [{ type: "example/subject", relation: null, resource: "example.Subject" }],
+      }]}
+      entries={rows}
+      fetching={fetching}
+      error={error}
+      onRetry={() => undefined}
+      onGrant={async () => true}
+      onRevoke={async () => undefined}
+    />
   );
 }
 
@@ -106,7 +104,7 @@ export const People: Story = {
   render: () => {
     function PeopleDialog(): React.ReactElement {
       const [open, setOpen] = React.useState(true);
-      return <RuntimeFixture schemas={schemas}><ManageAccessDialog open={open} onOpenChange={setOpen}
+      return <ManageAccessDialog open={open} onOpenChange={setOpen}
         label="Apollo" targetIds={["project-1"]} grantable={[]} entries={entries}
         fetching={false} error={null} onRetry={() => undefined}
         onGrant={async () => true} onRevoke={async () => undefined}
@@ -118,7 +116,7 @@ export const People: Story = {
           options: [{ value: "team", label: "Team" }], actionLabel: "Open record",
           onAct: async () => undefined }]}
         onAddRole={async () => true} onRemovePerson={async () => undefined}
-      /></RuntimeFixture>;
+      />;
     }
     return <PeopleDialog />;
   },

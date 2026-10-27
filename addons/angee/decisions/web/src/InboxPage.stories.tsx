@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
-import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
+import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
 import { createRouteHref, JsonValueSchema } from "@angee/ui";
 
 import { ProposalSchema } from "./proposal";
@@ -9,16 +9,16 @@ import { InboxPage } from "./InboxPage";
 import { DECISION_MODEL } from "./documents.console";
 import { decisionFixture, decisionLinkFixture, decisionResourceFixture, decisionRecordFixture, decisionUserFixture } from "./testing";
 
-export default { title: "Decisions/Inbox", parameters: { layout: "fullscreen" } };
-export const Open = { render: () => <DecisionStory /> };
-export const Closed = { render: () => <DecisionStory closed /> };
-export const ClosedWithoutAttribution = { render: () => <DecisionStory closed emptyFacts /> };
-export const OpenWithoutRequester = { render: () => <DecisionStory pendingEmpty /> };
-export const Multiple = { render: () => <DecisionStory multiple /> };
-export const Inbox = { render: () => <DecisionStory inbox /> };
-export const Conflict = { render: () => <DecisionStory conflict /> };
-export const InvalidAttempt = { render: () => <DecisionStory invalidAttempt /> };
-export const ReadOnly = { render: () => <DecisionStory readOnly /> };
+export default { title: "Decisions/Inbox", parameters: { angeeOwnRuntime: true, layout: "fullscreen" } };
+export const Open = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <DecisionStory appearance={storyAppearance(globals)} /> };
+export const Closed = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <DecisionStory appearance={storyAppearance(globals)} closed /> };
+export const ClosedWithoutAttribution = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <DecisionStory appearance={storyAppearance(globals)} closed emptyFacts /> };
+export const OpenWithoutRequester = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <DecisionStory appearance={storyAppearance(globals)} pendingEmpty /> };
+export const Multiple = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <DecisionStory appearance={storyAppearance(globals)} multiple /> };
+export const Inbox = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <DecisionStory appearance={storyAppearance(globals)} inbox /> };
+export const Conflict = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <DecisionStory appearance={storyAppearance(globals)} conflict /> };
+export const InvalidAttempt = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <DecisionStory appearance={storyAppearance(globals)} invalidAttempt /> };
+export const ReadOnly = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <DecisionStory appearance={storyAppearance(globals)} readOnly /> };
 
 const RequestSchema = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
 const documents = { console: operationDocuments };
@@ -32,7 +32,8 @@ const runtime = {
   auth: { user: { id: "usr_reviewer", name: "Reviewer" }, status: "authenticated" as const, hasRole: () => false },
 };
 
-function DecisionStory({ multiple = false, closed = false, inbox = false, conflict = false, invalidAttempt = false, readOnly = false, emptyFacts = false, pendingEmpty = false }: {
+function DecisionStory({ appearance, multiple = false, closed = false, inbox = false, conflict = false, invalidAttempt = false, readOnly = false, emptyFacts = false, pendingEmpty = false }: {
+  appearance?: RuntimeFixtureProps["appearance"];
   multiple?: boolean; closed?: boolean; inbox?: boolean; conflict?: boolean; invalidAttempt?: boolean; readOnly?: boolean; emptyFacts?: boolean;
   pendingEmpty?: boolean;
 }) {
@@ -76,7 +77,7 @@ function DecisionStory({ multiple = false, closed = false, inbox = false, confli
       decisionUserFixture,
     ] } } } };
   }, [multiple, closed, conflict, invalidAttempt, readOnly, emptyFacts, pendingEmpty ]);
-  return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/decisions" initialEntry={inbox ? "/decisions" : "/decisions/dcn_review"}
+  return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} collectionPath="/decisions" initialEntry={inbox ? "/decisions" : "/decisions/dcn_review"}
     runtime={runtime} resourceName={DECISION_MODEL} resourceLabel="Decisions" operationDocuments={documents}>
     <InboxPage />
   </RoutedRuntimeFixture>;

@@ -116,25 +116,30 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
 /** Native query results addressed by a domain label; labels never key the cache. */
 export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
   scopes: readonly AuthoredQueryBatchScope<TDocument>[],
-  options: AuthoredOperationOptions & Pick<AuthoredQueryOptions, "enabled" | "errorNotification"> = {},
+  options: AuthoredOperationOptions & Pick<AuthoredQueryOptions, "enabled" | "errorNotification" | "refetchInterval"> = {},
 ): ReadonlyMap<string, UseQueryResult<DocumentData<TDocument>, Error>> {
   const activeProvider = useActiveDataProviderName();
   const provider = options.dataProviderName ?? activeProvider ?? "default";
   const dataProvider = useDataProvider();
   const client = useQueryClient();
-  const queries = scopes.map((scope) => {
-    const configured = authoredQueryOptions(
-      client, dataProvider, provider, scope.document, scope.variables, scope.models, scope.records, scope.relatedModels,
-    );
-    return {
-      ...configured, enabled: options.enabled ?? true,
-    };
-  });
+  const configured = scopes.map((scope) => authoredQueryOptions(
+    client, dataProvider, provider, scope.document, scope.variables, scope.models, scope.records, scope.relatedModels,
+  ));
+  // Labels address results; only native provider/document/variables identity owns
+  // requests. A dynamic batch may contain several labels for the same request.
+  const hashes = configured.map((query) => client.defaultQueryOptions(query).queryHash);
+  const unique = new Map(hashes.map((hash, index) => [hash, configured[index]!]));
+  const indexByHash = new Map([...unique.keys()].map((hash, index) => [hash, index]));
+  const queries = [...unique.values()].map((query) => ({
+    ...query,
+    enabled: options.enabled ?? true,
+    refetchInterval: options.refetchInterval,
+  }));
   const results = useQueries({ queries });
   const models = useStableArray([...new Set(scopes.flatMap((scope) => scope.models ?? []))].sort());
   useAuthoredLiveInterest(options.enabled ?? true, models);
   useAuthoredErrorPolicy(queries.map((query) => query.queryKey), { notify: options.errorNotification !== false });
-  return new Map(scopes.map((scope, index) => [scope.key, results[index]!]));
+  return new Map(scopes.map((scope, index) => [scope.key, results[indexByHash.get(hashes[index]!)!]!]));
 }
 
 /** Invalidate every authored read registered against any supplied model. */
@@ -174,7 +179,7 @@ export interface AuthoredMutationOptions<
   /**
    * For operations whose result is a secret shown once: observer reset on
    * settlement; the cache entry is collected on the next tick; single-flight
-   * per hook instance.
+   * per hook instance. Overlapping calls reject before executing.
    */
   transient?: boolean;
   /**
@@ -271,6 +276,7 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
     transient: options.transient,
     errorNotification: options.errorNotification,
   };
+  const inFlight = useRef({ count: 0, transient: false });
   const mutate = useCallback<AuthoredMutate<TDocument>>(async (variables) => {
     const {
       dataProviderName,
@@ -280,6 +286,13 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
       transient,
       errorNotification,
     } = mutationRef.current;
+    // Guard synchronously, before native MutationObserver creates an operation.
+    // Also protect a transient operation if the next render changes its policy.
+    if (inFlight.current.count > 0 && (transient || inFlight.current.transient)) {
+      throw new Error("Transient authored mutations cannot overlap another mutation.");
+    }
+    inFlight.current.count += 1;
+    if (transient) inFlight.current.transient = true;
     const resolvedVariables = (variables ?? {}) as Variables;
     try {
       const response = await mutateAsync({
@@ -292,7 +305,11 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
       });
       return authoredOperationData<Data>(response.data);
     } finally {
-      if (transient) reset();
+      if (transient) {
+        reset();
+        inFlight.current.transient = false;
+      }
+      inFlight.current.count -= 1;
     }
   }, []);
   return [

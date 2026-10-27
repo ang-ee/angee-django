@@ -9,7 +9,7 @@ import {
 } from "./catalog.mjs";
 import { noOwner, unresolvedClasses } from "../src/stories/design-system/token-findings.ts";
 import { storybookValueLookup } from "../src/url-values.ts";
-import { COMPONENT_KINDS, parseCatalog, parseCompositionReport } from "../../ui/src/catalog-schema.ts";
+import { COMPONENT_KINDS, parseCatalog } from "../../ui/src/catalog-schema.ts";
 
 const read = file => readFileSync(join(root, file), "utf8");
 const catalog = parseCatalog(JSON.parse(read("packages/ui/src/catalog-data.json")));
@@ -89,20 +89,7 @@ test("every specimen key is a classified export reachable by the Library resolve
   }
 });
 
-test("addon route instances are informational and graph kinds follow the catalog", () => {
-  const report = parseCompositionReport(JSON.parse(read("packages/storybook/reports/composition.json")));
-  for (const node of report.nodes) {
-    if (node.routeInstance || ["token", "lib", "route", "route-alias"].includes(node.prefix)) assert.equal(node.ownershipViolation, false, node.id);
-    if (node.prefix === "route" || node.prefix === "route-alias") assert.equal(node.kind, null, node.id);
-    const entry = catalog.find(entry => `${entry.package.slice(7)}:${entry.name}` === node.id);
-    if (entry) assert.equal(node.kind, entry.kind, node.id);
-  }
-  assert.equal(report.nodes.find(node => node.id === "agents:AgentSessionsPage")?.routeInstance, true);
-  assert.equal(report.nodes.find(node => node.id === "dashboards:DashboardPage")?.routeInstance, true);
-  assert(!report.nodes.some(node => node.ownershipViolation && node.kind === "page"));
-});
-
-test("URL values distinguish dots, underscores, hyphens and graph id punctuation", () => {
+test("URL values distinguish dots, underscores, hyphens and component id punctuation", () => {
   const ids = ["a.b", "a-b", "a_b", "ui:FormView", "a_2Eb", "a!b"];
   const lookup = storybookValueLookup(ids);
   assert.equal(lookup.size, ids.length);

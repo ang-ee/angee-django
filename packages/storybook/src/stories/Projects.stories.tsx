@@ -12,9 +12,9 @@ import {
   type GroupDescriptor,
   type ListColumn,
 } from "@angee/ui";
-import { useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { useState, type ReactElement } from "react";
 
-import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
+import { jsonResponse, storySchema } from "./runtime-fixtures";
 
 interface TaskRow extends Row {
   id: string;
@@ -262,7 +262,7 @@ const metadata = {
 
 const meta = {
   title: "Addons/Projects",
-  parameters: { layout: "padded" },
+  parameters: { angeeFixture: () => ({ schemas: createProjectSchemas() }), layout: "padded" },
 } satisfies Meta;
 
 export default meta;
@@ -271,17 +271,15 @@ type Story = StoryObj<typeof meta>;
 
 export const ProjectRecord: Story = {
   render: () => (
-    <ProjectRuntimeFixture>
-      <div className="mx-auto max-w-5xl">
-        <FormView
-          resource="projects.Project"
-          id={project.id}
-          fields={projectFields}
-          groups={projectGroups}
-          returning={["body", "status", "lead", "start_date", "target_date", "updated_at"]}
-        />
-      </div>
-    </ProjectRuntimeFixture>
+    <div className="mx-auto max-w-5xl">
+      <FormView
+        resource="projects.Project"
+        id={project.id}
+        fields={projectFields}
+        groups={projectGroups}
+        returning={["body", "status", "lead", "start_date", "target_date", "updated_at"]}
+      />
+    </div>
   ),
 };
 
@@ -293,42 +291,35 @@ function TaskBoardFixture(): ReactElement {
   const [recordId, setRecordId] = useState<string | undefined>();
   const [creating, setCreating] = useState(false);
   return (
-    <ProjectRuntimeFixture>
-      <div className="min-h-[540px] min-w-[1000px]">
-        <ResourceList<TaskRow>
-          resource="projects.Task"
-          columns={taskColumns}
-          formFields={[
-            { name: "title", label: "Task", title: true },
-            { name: "project", label: "Project" },
-            { name: "assignee", label: "Assignee" },
-            { name: "priority", label: "Priority" },
-            { name: "due_date", label: "Due date" },
-          ]}
-          recordId={recordId}
-          creating={creating}
-          onSelect={(id) => {
-            setCreating(id === null);
-            setRecordId(id ?? undefined);
-          }}
-          onClose={() => {
-            setCreating(false);
-            setRecordId(undefined);
-          }}
-          placement="drawer"
-          defaultView="board"
-          baseFilter={{ status: { exact: "OPEN" } }}
-          order={{ sort_order: "ASC" }}
-          laneSource={{ field: "assignee", rankField: "sort_order" }}
-        />
-      </div>
-    </ProjectRuntimeFixture>
+    <div className="min-h-[540px] min-w-[1000px]">
+      <ResourceList<TaskRow>
+        resource="projects.Task"
+        columns={taskColumns}
+        formFields={[
+          { name: "title", label: "Task", title: true },
+          { name: "project", label: "Project" },
+          { name: "assignee", label: "Assignee" },
+          { name: "priority", label: "Priority" },
+          { name: "due_date", label: "Due date" },
+        ]}
+        recordId={recordId}
+        creating={creating}
+        onSelect={(id) => {
+          setCreating(id === null);
+          setRecordId(id ?? undefined);
+        }}
+        onClose={() => {
+          setCreating(false);
+          setRecordId(undefined);
+        }}
+        placement="drawer"
+        defaultView="board"
+        baseFilter={{ status: { exact: "OPEN" } }}
+        order={{ sort_order: "ASC" }}
+        laneSource={{ field: "assignee", rankField: "sort_order" }}
+      />
+    </div>
   );
-}
-
-function ProjectRuntimeFixture({ children }: { children: ReactNode }): ReactElement {
-  const schemas = useMemo(createProjectSchemas, []);
-  return <RuntimeFixture schemas={schemas}>{children}</RuntimeFixture>;
 }
 
 function createProjectSchemas() {

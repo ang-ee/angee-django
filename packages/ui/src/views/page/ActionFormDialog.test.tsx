@@ -38,7 +38,7 @@ import { jsonSchemaActionArgs } from "../form/json-schema";
 import { registerForm, type RegisteredFormProps } from "../form/registered-form";
 import type { ActionArg, ActionDescriptor, ActionFormContext } from ".";
 
-// cmdk scrolls the active option into view; happy-dom has no layout engine.
+// The option list scrolls the active option into view; happy-dom has no layout engine.
 Element.prototype.scrollIntoView = vi.fn();
 
 const listRows = vi.hoisted(() => ({
@@ -194,7 +194,7 @@ function Harness({ action, onSucceeded }: {
 
 /** Open the collection relation picker and select an option by its label. */
 async function pickCollection(label: string): Promise<void> {
-  fireEvent.click(screen.getByRole("button", { name: "Collection" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Collection" }));
   fireEvent.click(await screen.findByText(label));
 }
 
@@ -535,7 +535,7 @@ describe("ActionFormDialog", () => {
     expect(screen.getByRole("button", { name: "Remove DOC-1" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Remove DOC-2" })).toBeTruthy();
     // The single relation composes the relation picker.
-    expect(screen.getByRole("button", { name: "Collection" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Collection" })).toBeTruthy();
     // The scalars render editable inputs.
     expect(screen.getByRole("textbox", { name: "Date" })).toBeTruthy();
     expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Date" }).value)
@@ -580,7 +580,7 @@ describe("ActionFormDialog", () => {
       }],
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Collection" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Collection" }));
     expect(await screen.findByText("Operating account •••• 4242")).toBeTruthy();
     expect(screen.getByText("Verified").className).toContain("text-success-text");
     expect(listOptions).toContainEqual(expect.objectContaining({
@@ -600,7 +600,7 @@ describe("ActionFormDialog", () => {
         }, resolve: (values) => ({ name: "collection", filters: [{ field: "scope", operator: "eq", value: values.scope }] }) },
       ] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Collection" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Collection" }));
     expect(await screen.findByText("Operating account •••• 4242")).toBeTruthy();
     expect(screen.getByText("Verified").className).toContain("text-success-text");
     expect(listOptions).toContainEqual(expect.objectContaining({ resource: "collections",
@@ -609,7 +609,7 @@ describe("ActionFormDialog", () => {
     }));
     fireEvent.click(screen.getByText("Primary Collection"));
     fireEvent.change(screen.getByRole("textbox", { name: "Scope" }), { target: { value: "cash" } });
-    fireEvent.click(screen.getByRole("button", { name: "Collection" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Collection" }));
     await screen.findByText("Primary Collection");
     expect(listOptions).toContainEqual(expect.objectContaining({ resource: "collections",
       filters: [{ field: "scope", operator: "eq", value: "cash" }],
@@ -650,7 +650,7 @@ describe("ActionFormDialog", () => {
     });
 
     // The single relation offers "Create …" for a query no option matches.
-    fireEvent.click(screen.getByRole("button", { name: "Collection" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Collection" }));
     fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: "Zed" } });
     expect(await screen.findByText("Create “Zed”")).toBeTruthy();
     fireEvent.keyDown(await screen.findByPlaceholderText("Search…"), { key: "Escape" });
@@ -667,7 +667,7 @@ describe("ActionFormDialog", () => {
 
     await screen.findByText("DOC-1");
     expect(screen.queryByRole("button", { name: "New document" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Collection" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Collection" }));
     const search = await screen.findByPlaceholderText<HTMLInputElement>("Search…");
     fireEvent.change(search, { target: { value: "Primary" } });
     // The typed text matches an option without naming it exactly, which is when
@@ -776,7 +776,11 @@ describe("ActionFormDialog", () => {
     });
 
     // The domain failure binds inline and the dialog stays open.
-    expect(await screen.findByText("Amount exceeds the limit.")).toBeTruthy();
+    const amountError = await screen.findByText("Amount exceeds the limit.");
+    const amountInput = screen.getByRole("textbox", { name: "Amount" });
+    expect(amountInput.getAttribute("aria-invalid")).toBe("true");
+    expect(amountError.id).not.toBe("");
+    expect(amountInput.getAttribute("aria-describedby")?.split(" ")).toContain(amountError.id);
     expect(
       screen.getByRole("button", { name: "Register review" }),
     ).toBeTruthy();

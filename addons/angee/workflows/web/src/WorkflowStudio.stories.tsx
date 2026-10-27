@@ -1,19 +1,19 @@
 import * as React from "react";
 import * as v from "valibot";
 import { Link } from "@tanstack/react-router";
-import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
+import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
 import { ChatterTabsTestHost, ShellPageTestProviders } from "@angee/app/testing";
 import { Button, JsonValueSchema, defaultWidgets, useChatter } from "@angee/ui";
 import { WorkflowStudio } from "./WorkflowStudio";
 import { runSubjectFixture, workflowResourceFixture } from "./testing";
 
-export default { title: "Workflows/Studio", parameters: { layout: "fullscreen" }, excludeStories: ["StudioStory"] };
-export const Draft = { render: () => <StudioStory /> };
-export const Conflict = { render: () => <StudioStory conflict /> };
-export const LocatedIssues = { render: () => <StudioStory invalid /> };
-export const UnrenderedIssues = { render: () => <StudioStory unrenderedIssues /> };
-export const ReadOnly = { render: () => <StudioStory readOnly /> };
-export const Retained = { render: () => <StudioStory retained /> };
+export default { title: "Workflows/Studio", parameters: { angeeOwnRuntime: true, layout: "fullscreen" }, excludeStories: ["StudioStory"] };
+export const Draft = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} /> };
+export const Conflict = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} conflict /> };
+export const LocatedIssues = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} invalid /> };
+export const UnrenderedIssues = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} unrenderedIssues /> };
+export const ReadOnly = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} readOnly /> };
+export const Retained = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} retained /> };
 const Request = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
 const configuration = { type: "object", properties: {
   target: { type: "string", label: "Target record", relation: { resource: "notes.Note" } },
@@ -24,8 +24,9 @@ const choices = [
   { key: "internal", label: "Internal", icon: "", category: "", defaults: {}, config_schema: null, internal: true, outcomes: { done: "Done", error: "Error" } },
 ];
 
-export function StudioStory({ conflict = false, invalid = false, unrenderedIssues = false, failLatest = false, readOnly = false, outcomesGate, retained = false, linked = false,
+export function StudioStory({ appearance, conflict = false, invalid = false, unrenderedIssues = false, failLatest = false, readOnly = false, outcomesGate, retained = false, linked = false,
   extended = false, saveInvalid = false, savedDiagnostics = false, outcomeIssue = false, badUnusedSchema = false, emptyLayout = false, onRequest }: {
+  appearance?: RuntimeFixtureProps["appearance"];
   conflict?: boolean; invalid?: boolean; unrenderedIssues?: boolean; failLatest?: boolean; readOnly?: boolean; retained?: boolean; linked?: boolean; outcomesGate?: () => Promise<void>; onRequest?: (request: v.InferOutput<typeof Request>) => void;
   extended?: boolean; saveInvalid?: boolean; savedDiagnostics?: boolean; outcomeIssue?: boolean; badUnusedSchema?: boolean; emptyLayout?: boolean;
 }) {
@@ -94,7 +95,7 @@ export function StudioStory({ conflict = false, invalid = false, unrenderedIssue
     }).public!;
     return { console: { ...publicSchema, metadata: { angee: { resources: [workflowResourceFixture, runSubjectFixture] } } } };
   }, [conflict, invalid, unrenderedIssues, failLatest, readOnly, outcomesGate, linked, extended, saveInvalid, savedDiagnostics, outcomeIssue, badUnusedSchema, emptyLayout, onRequest]);
-  return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/studio">
+  return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} collectionPath="/studio">
     <ShellPageTestProviders runtime={{ widgets: defaultWidgets }}>
       <StudioDemo retained={retained} />
     </ShellPageTestProviders>
