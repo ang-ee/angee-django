@@ -119,7 +119,7 @@ test.describe("shared record access", () => {
     await notes.shareButton.click();
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByRole("heading")).toContainText(/^Share /);
-    const recipient = dialog.getByRole("button", {
+    const recipient = dialog.getByRole("combobox", {
       name: "Recipient",
       exact: true,
     });
@@ -133,7 +133,7 @@ test.describe("shared record access", () => {
       page.getByRole("option", { name: "Angee Developer", exact: true }),
     ).toBeVisible();
     await demoAgent.click();
-    await expect(dialog.getByRole("button", {
+    await expect(dialog.getByRole("combobox", {
       name: "Recipient: Demo Agent",
       exact: true,
     })).toBeVisible();

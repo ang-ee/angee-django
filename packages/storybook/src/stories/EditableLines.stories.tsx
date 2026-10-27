@@ -5,13 +5,10 @@ import {
   Button,
   EditableLines,
   Input,
-  ModalsHost,
   defaultWidgets,
   type WidgetDefinition,
   type WidgetRenderProps,
 } from "@angee/ui";
-
-import { RuntimeRegistryFixture } from "./runtime-fixtures";
 
 const lines = {
   field: "lines",
@@ -103,6 +100,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const WidgetRowPatches: Story = {
+  parameters: { angeeFixture: { runtime: { widgets: { ...defaultWidgets, "story.editableLinePatch": patchWidget } } } },
   render: () => <EditableLinesDemo />,
 };
 
@@ -122,23 +120,19 @@ function LockedLinesDemo() {
     },
   });
   return (
-    <RuntimeRegistryFixture runtime={{ widgets: defaultWidgets }}>
-      <ModalsHost>
-        <div className="max-w-5xl">
-          <EditableLines
-            control={form.control}
-            setValue={form.setValue}
-            name="lines"
-            lines={{
-              ...lines,
-              lockField: "locked_fields",
-              // Plain cells: the system row's label reads, its quantity still edits.
-              fields: lines.fields.map((field) => ({ ...field, widget: null })),
-            }}
-          />
-        </div>
-      </ModalsHost>
-    </RuntimeRegistryFixture>
+    <div className="max-w-5xl">
+      <EditableLines
+        control={form.control}
+        setValue={form.setValue}
+        name="lines"
+        lines={{
+          ...lines,
+          lockField: "locked_fields",
+          // Plain cells: the system row's label reads, its quantity still edits.
+          fields: lines.fields.map((field) => ({ ...field, widget: null })),
+        }}
+      />
+    </div>
   );
 }
 
@@ -153,26 +147,20 @@ function EditableLinesDemo() {
   });
   const liveLines = useWatch({ control: form.control, name: "lines" });
   return (
-    <RuntimeRegistryFixture
-      runtime={{ widgets: { ...defaultWidgets, "story.editableLinePatch": patchWidget } }}
-    >
-      <ModalsHost>
-        <div className="grid max-w-5xl gap-4">
-          <p className="text-sm text-fg-muted">
-            Choose Quantity in the header's Visible fields menu, then schedule a delayed label patch and edit the quantity while it is pending.
-          </p>
-          <EditableLines
-            control={form.control}
-            setValue={form.setValue}
-            name="lines"
-            lines={lines}
-            primaryFields={["label"]}
-          />
-          <pre aria-label="Live line values" className="overflow-auto rounded-8 bg-inset p-3 text-12 text-fg">
-            {JSON.stringify(liveLines, null, 2)}
-          </pre>
-        </div>
-      </ModalsHost>
-    </RuntimeRegistryFixture>
+    <div className="grid max-w-5xl gap-4">
+      <p className="text-sm text-fg-muted">
+        Choose Quantity in the header's Visible fields menu, then schedule a delayed label patch and edit the quantity while it is pending.
+      </p>
+      <EditableLines
+        control={form.control}
+        setValue={form.setValue}
+        name="lines"
+        lines={lines}
+        primaryFields={["label"]}
+      />
+      <pre aria-label="Live line values" className="overflow-auto rounded-8 bg-inset p-3 text-12 text-fg">
+        {JSON.stringify(liveLines, null, 2)}
+      </pre>
+    </div>
   );
 }

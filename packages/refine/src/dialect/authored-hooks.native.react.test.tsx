@@ -433,7 +433,6 @@ test("authored reads run with no live provider", async () => {
   expect(result.current.error).toBeNull();
 });
 
-
 test("auth error policy covers data-only consumers and imperative refreshes", async () => {
   const failure = Object.assign(new Error("denied"), { statusCode: 403 });
   const f = fixture(vi.fn().mockRejectedValue(failure));
@@ -521,4 +520,58 @@ test("authored singleton reads opt into native previous-data placeholders across
   expect(read.result.current.data?.notes[0]?.id).toBe("one");
   await act(async () => { next.resolve({ data: { notes: [{ id: "two" }] } }); });
   await waitFor(() => expect(read.result.current.data?.notes[0]?.id).toBe("two"));
+});
+
+test.each(["success", "failure"] as const)("transient %s rejects overlap without detaching its pending operation", async (outcome) => {
+  let resolve!: (value: { data: Data }) => void;
+  let reject!: (reason: Error) => void;
+  const response = new Promise<{ data: Data }>((accept, decline) => { resolve = accept; reject = decline; });
+  const f = fixture(vi.fn(() => response));
+  const { result } = renderHook(() => useAuthoredMutation(MUTATION, { transient: true }), { wrapper: f.wrapper });
+  const variables = { id: "first" };
+  let pending!: ReturnType<typeof result.current[0]>;
+  act(() => { pending = result.current[0](variables); });
+  const settled = pending.then((data) => data, (error: unknown) => error);
+  await waitFor(() => expect(result.current[1].fetching).toBe(true));
+  await act(async () => {
+    await expect(result.current[0]({ id: "overlap" })).rejects.toThrow("Transient authored mutations cannot overlap another mutation.");
+  });
+  expect(f.custom).toHaveBeenCalledTimes(1);
+  expect(result.current[1].fetching).toBe(true);
+  expect(f.client.getMutationCache().findAll(mutationWithValues(variables))).toHaveLength(1);
+  await act(async () => {
+    if (outcome === "success") resolve({ data: { notes: [{ id: "secret" }] } });
+    else reject(new Error("Secret unavailable"));
+    await settled;
+  });
+  await waitFor(() => expect(result.current[1].fetching).toBe(false));
+  await waitFor(() => expect(f.client.getMutationCache().findAll(mutationWithValues(variables))).toHaveLength(0));
+  expect(result.current[1].error).toBeNull();
+  f.custom.mockResolvedValue({ data: { notes: [{ id: "next" }] } });
+  await act(async () => { await expect(result.current[0]({ id: "next" })).resolves.toEqual({ notes: [{ id: "next" }] }); });
+});
+
+test("ordinary authored mutations overlap while transient calls reject until earlier operations settle", async () => {
+  const first = deferred<{ data: Data }>();
+  const second = deferred<{ data: Data }>();
+  const f = fixture(vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise));
+  const { result, rerender } = renderHook(({ transient }) => useAuthoredMutation(MUTATION, { transient }), {
+    initialProps: { transient: false }, wrapper: f.wrapper,
+  });
+  let firstCall!: ReturnType<typeof result.current[0]>;
+  let secondCall!: ReturnType<typeof result.current[0]>;
+  act(() => {
+    firstCall = result.current[0]({ id: "first" });
+    secondCall = result.current[0]({ id: "second" });
+  });
+  await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(2));
+  await act(async () => { second.resolve({ data: { notes: [] } }); await secondCall; });
+  rerender({ transient: true });
+  await act(async () => {
+    await expect(result.current[0]({ id: "transient" })).rejects.toThrow("Transient authored mutations cannot overlap another mutation.");
+  });
+  expect(f.custom).toHaveBeenCalledTimes(2);
+  await act(async () => { first.resolve({ data: { notes: [] } }); await firstCall; });
+  f.custom.mockResolvedValue({ data: { notes: [] } });
+  await act(async () => { await expect(result.current[0]({ id: "transient" })).resolves.toEqual({ notes: [] }); });
 });

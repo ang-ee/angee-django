@@ -37,7 +37,7 @@ test("creates a party as one of its kinds through the shared kind switcher", asy
     </ToastProvider></ModalsHost></RouterContextProvider>
   </Provider>);
 
-  fireEvent.click(screen.getByRole("button", { name: "Counterparty" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Counterparty" }));
   fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: "Ada" } });
   fireEvent.click(await screen.findByText("Create “Ada”"));
 

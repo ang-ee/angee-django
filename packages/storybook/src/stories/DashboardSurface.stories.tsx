@@ -11,7 +11,6 @@ import {
   type StatusIconItem,
   type WidgetSpec,
 } from "@angee/ui";
-import { RuntimeRegistryFixture } from "./runtime-fixtures";
 
 const meta = {
   title: "Views/DashboardSurface",
@@ -110,7 +109,8 @@ const definition: DashboardDefinition = {
 
 /** The production dashboard, list, cards and charts composed together; fixtures contain no queries or policy engine. */
 export const Overview: Story = {
-  render: () => <RuntimeRegistryFixture runtime={{ dashboards: registry }}>
+  parameters: { angeeFixture: { runtime: { dashboards: registry } } },
+  render: () => (
     <DashboardSurface target={{ scope: "addon", key: KEY }} definition={definition} className="h-screen" headerDensity="comfortable" headingLevel={1}
       subtitle="Your records, their checks, and what needs a closer look."
       toolbar={<div className="px-4 pt-4">
@@ -123,5 +123,5 @@ export const Overview: Story = {
         ]} />
       </div>}
     />
-  </RuntimeRegistryFixture>,
+  ),
 };

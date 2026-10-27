@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useMemo } from "react";
 import { FORM_CONTAINERS, FormView, GraphView, containersFromChildren, graphNodeStyle, Input, PrimaryPaneProvider, PrimaryPanePublisher, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
 
-import { RuntimeFixture, jsonResponse, storySchema, testDataResource } from "./runtime-fixtures";
+import { jsonResponse, storySchema, testDataResource } from "./runtime-fixtures";
 
 const statusOptions = [
   { value: "DRAFT", label: "Draft" },
@@ -187,7 +187,7 @@ const storySchemas = storySchema(async (_input, init) => {
 
 const meta = {
   title: "Views/FormView",
-  parameters: { layout: "padded" },
+  parameters: { angeeFixture: { schemas: storySchemas }, layout: "padded" },
 } satisfies Meta;
 
 export default meta;
@@ -224,20 +224,20 @@ function PublishedActivity() {
   return <aside className="rounded-6 border p-3">{node ?? "No editor publication."}</aside>;
 }
 export const RetainedPanelActivity: Story = {
-  render: () => <PrimaryPaneProvider><RuntimeFixture schemas={storySchemas}>
+  render: () => <PrimaryPaneProvider>
     <div className="grid grid-cols-[1fr_16rem] gap-4">
       <FormView resource="notes.Note" id={storyRecord.id} fields={readOnlyFields}
         defaultRecordTab="editor" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true,
           render: ({ active }) => <RetainedEditor active={active} /> }]} />
       <PublishedActivity />
     </div>
-  </RuntimeFixture></PrimaryPaneProvider>,
+  </PrimaryPaneProvider>,
 };
 
 const graphNodes = Array.from({ length: 13 }, (_, index) => ({ id: `node-${index}`, kind: "item", title: `Item ${index + 1}` }));
 const graphEdges = graphNodes.slice(1).map((node, index) => ({ id: `edge-${index}`, source: graphNodes[index]!.id, target: node.id, kind: "next" }));
 export const FullBleedTab: Story = {
-  render: () => <RuntimeFixture schemas={storySchemas}>
+  render: () => (
     <div className="h-[600px]">
       <FormView resource="notes.Note" id={storyRecord.id} fields={readOnlyFields} defaultRecordTab="graph"
         recordTabs={[
@@ -247,7 +247,7 @@ export const FullBleedTab: Story = {
           { id: "activity", label: "Activity", render: () => <p>Document content keeps its centered column.</p> },
         ]} />
     </div>
-  </RuntimeFixture>,
+  ),
 };
 
 const railFields = ["title", "owner", "priority"].map((name) => ({
@@ -260,16 +260,17 @@ railSchemas.public!.metadata = { angee: { resources: [testDataResource("notes.No
 })] } };
 
 export const RecordRail: Story = {
-  render: () => <RuntimeFixture schemas={railSchemas} runtime={{ containers: containersFromChildren(FORM_CONTAINERS, {
+  parameters: { angeeFixture: { schemas: railSchemas, runtime: { containers: containersFromChildren(FORM_CONTAINERS, {
     "notes.Note#rail": { "notes.record-properties": {
       content: <FormView.RailGroup id="properties" label="Properties" hint="Edit values here"
         fields={[{ field: { name: "owner" } }, { field: { name: "priority", widget: "select",
           options: [{ value: "HIGH", label: "High" }, { value: "LOW", label: "Low" }] } }]} />,
     } },
-  }) }}>
+  }) } } },
+  render: () => (
     <FormView resource="notes.Note" id={storyRecord.id} fields={[titleField, bodyField]}
       acknowledgedSource={{ record: { ...storyRecord, permissions: ["read", "write"] }, values: storyRecord }} />
-  </RuntimeFixture>,
+  ),
 };
 
 export const RecordSectionHeading: Story = {
@@ -287,24 +288,22 @@ function FormViewFixture({
   groups: readonly GroupDescriptor[];
 }) {
   return (
-    <RuntimeFixture schemas={storySchemas}>
-      <FormView
-        resource="notes.Note"
-        id={storyRecord.id}
-        fields={fields}
-        groups={groups}
-        returning={[
-          "owner",
-          "priority",
-          "visibility",
-          "tags",
-          "createdAt",
-          "updatedAt",
-          "words",
-          "body",
-        ]}
-      />
-    </RuntimeFixture>
+    <FormView
+      resource="notes.Note"
+      id={storyRecord.id}
+      fields={fields}
+      groups={groups}
+      returning={[
+        "owner",
+        "priority",
+        "visibility",
+        "tags",
+        "createdAt",
+        "updatedAt",
+        "words",
+        "body",
+      ]}
+    />
   );
 }
 

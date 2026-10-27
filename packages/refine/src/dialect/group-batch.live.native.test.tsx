@@ -5,9 +5,12 @@ import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { createAngeeChangeLiveProvider } from "../provider";
+import { useAuthoredQuery } from "./authored-hooks";
+import { groupByVariables } from "../operations";
+import type { TypedDocumentNode } from "../typed-document";
 import { invalidateAuthoredQueries } from "../query-invalidation";
 import { createRefineTestProviders } from "../testing";
-import { useAngeeFacets, useAngeeGroupBy, useAngeeGroupByBatch, type GroupByBatchScope } from "./hooks";
+import { useAngeeAggregate, useAngeeFacets, useAngeeGroupBy, useAngeeGroupByBatch, type GroupByBatchScope } from "./hooks";
 
 const TARGET = { dataProviderName: "console", root: "messages_groups", modelLabel: "messaging.Message" };
 const DOCUMENT = "query Groups { messages_groups { key { channel_id } aggregate { count } } totalCount }";
@@ -61,7 +64,7 @@ test("group-only views refresh lanes and counts through native live model invali
     { initialProps: { scopes: SCOPES, enabled: true }, wrapper: f.wrapper });
   await waitFor(() => expect(result.current.get("channels")?.totalCount).toBe(1));
   await waitFor(() => expect(f.subscribe).toHaveBeenCalledTimes(1));
-  expect(f.client.getQueryCache().findAll({ queryKey: ["angee", "group-by"] })[0]?.meta)
+  expect(f.client.getQueryCache().findAll({ queryKey: ["angee", "authored", "finite"] })[0]?.meta)
     .toMatchObject({ angeeModels: ["messaging.Message"], angeeBroadModels: ["messaging.Message"] });
   f.custom.mockResolvedValue(response(2));
   await act(async () => { f.change(); });
@@ -99,7 +102,7 @@ test("two mounted group consumers with different result labels share one in-flig
     second: useAngeeGroupByBatch(TARGET, [{ ...SCOPES[0]!, key: "other-panel" }], { document: DOCUMENT }),
   }), { wrapper: f.wrapper });
   await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(1));
-  expect(f.client.getQueryCache().findAll({ queryKey: ["angee", "group-by"] })).toHaveLength(1);
+  expect(f.client.getQueryCache().findAll({ queryKey: ["angee", "authored", "finite"] })).toHaveLength(1);
   await act(async () => { complete(response(1)); });
   await waitFor(() => expect(result.current.first.get("channels")?.totalCount).toBe(1));
   expect(result.current.second.get("other-panel")?.totalCount).toBe(1);
@@ -126,7 +129,7 @@ test("equal variables with different documents remain separate requests", async 
     second: useAngeeGroupByBatch(TARGET, SCOPES, { document: OTHER_DOCUMENT }),
   }), { wrapper: f.wrapper });
   await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(2));
-  expect(f.client.getQueryCache().findAll({ queryKey: ["angee", "group-by"] })).toHaveLength(2);
+  expect(f.client.getQueryCache().findAll({ queryKey: ["angee", "authored", "finite"] })).toHaveLength(2);
 });
 
 test("equal documents and variables on different providers remain separate requests", async () => {
@@ -136,7 +139,7 @@ test("equal documents and variables on different providers remain separate reque
     second: useAngeeGroupByBatch({ ...TARGET, dataProviderName: "archive" }, SCOPES, { document: DOCUMENT }),
   }), { wrapper: f.wrapper });
   await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(2));
-  expect(f.client.getQueryCache().findAll({ queryKey: ["angee", "group-by"] })).toHaveLength(2);
+  expect(f.client.getQueryCache().findAll({ queryKey: ["angee", "authored", "finite"] })).toHaveLength(2);
 });
 
 test("group transport receives the native query cancellation signal", async () => {
@@ -148,7 +151,7 @@ test("group transport receives the native query cancellation signal", async () =
   const [request] = f.custom.mock.calls[0] as unknown as [{ meta: { signal: AbortSignal } }];
   const signal = request.meta.signal;
   expect(signal).toBeInstanceOf(AbortSignal);
-  await act(async () => { await f.client.cancelQueries({ queryKey: ["angee", "group-by"] }); });
+  await act(async () => { await f.client.cancelQueries({ queryKey: ["angee", "authored", "finite"] }); });
   expect(signal.aborted).toBe(true);
   await act(async () => { complete(response(1)); });
 });
@@ -174,7 +177,7 @@ test("different group variables remain separate requests", async () => {
     { key: "next-page", query: { ...SCOPES[0]!.query, page: 2 } },
   ], { document: DOCUMENT }), { wrapper: f.wrapper });
   await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(2));
-  expect(f.client.getQueryCache().findAll({ queryKey: ["angee", "group-by"] })).toHaveLength(2);
+  expect(f.client.getQueryCache().findAll({ queryKey: ["angee", "authored", "finite"] })).toHaveLength(2);
 });
 
 test("a single group consumer refreshes through live model invalidation", async () => {
@@ -239,4 +242,44 @@ test("a live event during initial group discovery restarts the native query and 
   await waitFor(() => expect(result.current.get("channels")?.totalCount).toBe(2));
   await act(async () => { accept(response(1)); });
   expect(result.current.get("channels")?.totalCount).toBe(2);
+});
+
+test("group and general authored reads share one request and model invalidation", async () => {
+  let complete!: (value: ReturnType<typeof response>) => void;
+  const custom = vi.fn(() => new Promise<ReturnType<typeof response>>((resolve) => { complete = resolve; }));
+  const f = fixture(custom);
+  const document = AST_DOCUMENT as TypedDocumentNode<ReturnType<typeof response>["data"], Record<string, unknown>>;
+  const { result } = renderHook(() => ({
+    grouped: useAngeeGroupByBatch(TARGET, SCOPES, { document }),
+    authored: useAuthoredQuery(document, groupByVariables(SCOPES[0]!.query), { dataProviderName: "console" }),
+  }), { wrapper: f.wrapper });
+  await waitFor(() => expect(custom).toHaveBeenCalledTimes(1));
+  expect(f.client.getQueryCache().findAll({ queryKey: ["angee", "authored", "finite"] })).toHaveLength(1);
+  await act(async () => { complete(response(2)); });
+  await waitFor(() => expect(result.current.grouped.get("channels")?.totalCount).toBe(2));
+  expect(result.current.authored.data?.totalCount).toBe(2);
+  custom.mockResolvedValue(response(3));
+  await act(async () => { await invalidateAuthoredQueries(f.client, [TARGET.modelLabel]); });
+  await waitFor(() => expect(result.current.grouped.get("channels")?.totalCount).toBe(3));
+  expect(result.current.authored.data?.totalCount).toBe(3);
+  expect(custom).toHaveBeenCalledTimes(2);
+});
+
+test("aggregate totals register shared model interests and retain success after failed refresh", async () => {
+  const custom = vi.fn(async () => ({ data: { ...response(1).data, messages_aggregate: { aggregate: { count: 4 } } } }));
+  const f = fixture(custom);
+  const { result } = renderHook(() => useAngeeAggregate({ ...TARGET, root: "messages_aggregate" }, {
+    document: "query Total { messages_aggregate { aggregate { count } } }", refetchInterval: 30_000,
+  }), { wrapper: f.wrapper });
+  await waitFor(() => expect(result.current.aggregate?.count).toBe(4));
+  const query = f.client.getQueryCache().findAll({ queryKey: ["angee", "authored", "finite"] })[0];
+  expect(query?.meta).toMatchObject({ angeeModels: [TARGET.modelLabel] });
+  expect(query?.options).toMatchObject({ refetchInterval: 30_000 });
+  custom.mockResolvedValue({ data: { ...response(1).data, messages_aggregate: { aggregate: { count: 5 } } } });
+  await act(async () => { f.change(); });
+  await waitFor(() => expect(result.current.aggregate?.count).toBe(5));
+  custom.mockRejectedValue(new Error("Refresh unavailable"));
+  await act(async () => { await invalidateAuthoredQueries(f.client, [TARGET.modelLabel]); });
+  await waitFor(() => expect(result.current.error?.message).toBe("Refresh unavailable"));
+  expect(result.current.aggregate?.count).toBe(5);
 });

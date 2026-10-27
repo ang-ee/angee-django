@@ -222,7 +222,7 @@ test("a declared config relation uses the native picker and submits its record i
   const requests = vi.fn();
   render(<StudioStory onRequest={requests} />);
   await selectEntry();
-  fireEvent.click(await screen.findByRole("button", { name: "Target record: Selected record" }));
+  fireEvent.click(await screen.findByRole("combobox", { name: "Target record: Selected record" }));
   fireEvent.click(await screen.findByRole("option", { name: "Another record" }));
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
   await waitFor(() => expect(requests.mock.calls.some(([request]) => request.query.includes("save_workflow_draft"))).toBe(true));

@@ -139,12 +139,12 @@ const recordContainers = U.containersFromChildren(U.FORM_CONTAINERS, {
 export function RecordVerbs() {
   const runtime = U.useAppRuntime();
   const fixtureRuntime = useMemo(() => ({ ...runtime, containers: recordContainers }), [runtime]);
-  return <U.ModalsHost><U.AppRuntimeProvider runtime={fixtureRuntime}><U.ControlBand>
+  return <U.AppRuntimeProvider runtime={fixtureRuntime}><U.ControlBand>
     <U.SaveDiscardActions isDirty onDiscard={noop} onSave={noop} />
     <U.RecordActionBar record={row} actions={[{ id: "publish", label: "Publish", primary: true, run: async () => undefined }]} />
     <U.RecordChrome value={{ resource: "notes.Note", canonicalResource: "notes.Note", dataProviderName: "public", recordId: row.id, record: row, formReadOnly: false }} />
     <U.ActionMenu><U.ActionTrigger onClick={noop}>Download</U.ActionTrigger></U.ActionMenu>
-  </U.ControlBand></U.AppRuntimeProvider></U.ModalsHost>;
+  </U.ControlBand></U.AppRuntimeProvider>;
 }
 const events: U.TimelineRailEntry[] = [{
   key: "created", at: "2026-10-19T12:00:00Z", actor: "Alex Morgan", kind: "change",
@@ -202,7 +202,7 @@ function DialogActions() {
   </div>;
 }
 export function Dialogs() {
-  return <U.ModalsHost><div className="grid gap-4">
+  return <div className="grid gap-4">
     <U.Dialog.Root><U.Dialog.Trigger render={<U.Button>Open dialog</U.Button>} />
       <U.Dialog.Portal><U.Dialog.Backdrop /><U.Dialog.Content>
         <U.Dialog.Header><U.Dialog.Title>Shared dialog</U.Dialog.Title><U.Dialog.Description>Real Base UI parts.</U.Dialog.Description></U.Dialog.Header>
@@ -211,7 +211,7 @@ export function Dialogs() {
       </U.Dialog.Content></U.Dialog.Portal>
     </U.Dialog.Root>
     <DialogActions />
-  </div></U.ModalsHost>;
+  </div>;
 }
 export function Controls() {
   const [value,setValue] = useState("first");

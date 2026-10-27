@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
-import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
+import { storyAppearance, type RuntimeFixtureProps, RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
 import { createRouteHref, JsonValueSchema } from "@angee/ui";
 
 import { WorkflowsPage } from "./WorkflowsPage";
@@ -9,12 +9,12 @@ import { workflowFixture, workflowVersionFixture } from "./catalogue/testing";
 import { runFixture, runResourceFixture, runSubjectFixture, workflowResourceFixture, stepRunResourceFixture, attemptResourceFixture, recordResourceFixture, userResourceFixture } from "./testing";
 import { triggerFixture, triggerResourceFixture } from "./trigger-testing";
 
-export default { title: "Workflows/Catalogue", parameters: { layout: "fullscreen" }, excludeStories: ["CatalogueStory"] };
-export const Catalogue = { render: () => <CatalogueStory list /> };
-export const Workflow = { render: () => <CatalogueStory /> };
-export const Author = { render: () => <CatalogueStory writer /> };
-export const Unavailable = { render: () => <CatalogueStory unavailable /> };
-export const QueryError = { render: () => <CatalogueStory queryError /> };
+export default { title: "Workflows/Catalogue", parameters: { angeeOwnRuntime: true, layout: "fullscreen" }, excludeStories: ["CatalogueStory"] };
+export const Catalogue = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <CatalogueStory appearance={storyAppearance(globals)} list /> };
+export const Workflow = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <CatalogueStory appearance={storyAppearance(globals)} /> };
+export const Author = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <CatalogueStory appearance={storyAppearance(globals)} writer /> };
+export const Unavailable = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <CatalogueStory appearance={storyAppearance(globals)} unavailable /> };
+export const QueryError = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <CatalogueStory appearance={storyAppearance(globals)} queryError /> };
 
 const RequestSchema = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
 const documents = { console: operationDocuments };
@@ -35,7 +35,8 @@ const runtime = {
   },
 };
 
-export function CatalogueStory({ list = false, unavailable = false, queryError = false, writer = false, onRequest }: {
+export function CatalogueStory({ appearance, list = false, unavailable = false, queryError = false, writer = false, onRequest }: {
+  appearance?: RuntimeFixtureProps["appearance"];
   list?: boolean; unavailable?: boolean; queryError?: boolean; writer?: boolean;
   onRequest?: (request: v.InferOutput<typeof RequestSchema>) => void;
 }) {
@@ -71,7 +72,7 @@ export function CatalogueStory({ list = false, unavailable = false, queryError =
       triggerResourceFixture,
     ] } } } };
   }, [unavailable, queryError, onRequest, writer]);
-  return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows"
+  return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} collectionPath="/workflows"
     initialEntry={list ? "/workflows" : "/workflows/wfl_review"} runtime={runtime} resourceName="workflows.Workflow" resourceLabel="Workflows" operationDocuments={documents}>
     <WorkflowsPage />
   </RoutedRuntimeFixture>;
