@@ -7,7 +7,6 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Protocol
 
 from django.conf import settings
@@ -41,7 +40,7 @@ class LockHandle(Protocol):
 class LockBackend(Protocol):
     """Backend capable of acquiring one advisory task lock."""
 
-    def try_acquire(self, key: LockKey, *, timeout: timedelta | None = None) -> LockHandle | None:
+    def try_acquire(self, key: LockKey) -> LockHandle | None:
         """Return a handle when ``key`` is acquired, else ``None``."""
 
     def is_held(self, key: LockKey) -> bool:
@@ -82,10 +81,9 @@ class LocalLockBackend:
         self._mutex = threading.Lock()
         self._held: set[LockKey] = set()
 
-    def try_acquire(self, key: LockKey, *, timeout: timedelta | None = None) -> LockHandle | None:
+    def try_acquire(self, key: LockKey) -> LockHandle | None:
         """Acquire ``key`` when no local caller already holds it."""
 
-        del timeout
         with self._mutex:
             if key in self._held:
                 return None
@@ -137,10 +135,9 @@ class PostgresAdvisoryLockBackend:
 
         self.alias = alias
 
-    def try_acquire(self, key: LockKey, *, timeout: timedelta | None = None) -> LockHandle | None:
+    def try_acquire(self, key: LockKey) -> LockHandle | None:
         """Acquire ``key`` through ``pg_try_advisory_lock``."""
 
-        del timeout
         connection = connections[self.alias]
         if connection.vendor != "postgresql":
             raise ImproperlyConfigured("PostgresAdvisoryLockBackend requires a PostgreSQL database connection.")
@@ -191,10 +188,10 @@ def record_lock_key(model_label: str, pk: object, purpose: str) -> LockKey:
 
 
 @contextmanager
-def task_lock(key: LockKey, *, timeout: timedelta | None = None) -> Iterator[bool]:
+def task_lock(key: LockKey) -> Iterator[bool]:
     """Yield whether the configured backend acquired ``key`` for this task."""
 
-    handle = get_lock_backend().try_acquire(key, timeout=timeout)
+    handle = get_lock_backend().try_acquire(key)
     if handle is None:
         yield False
         return

@@ -17,7 +17,7 @@ from strawberry import auto
 from angee.data.metadata import DataResourceSubtitleMetadata
 from angee.fields import SqidField
 from angee.graphql.actions import ActionResult, action_guard
-from angee.graphql.capabilities import permissions_field
+from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
@@ -41,6 +41,7 @@ from angee.iam.permissions import request_from_info, session_user
 from angee.identity import instance_from_public_id
 from angee.knowledge.models import (
     AmbiguousMatchError,
+    PageQuerySet,
     RecordBindingManager,
     SectionNotFoundError,
     SectionOp,
@@ -104,6 +105,7 @@ class OutlineEntryType:
 class MarkdownPageType(AngeeNode):
     """GraphQL projection of a concrete markdown page."""
 
+    title: auto
     body: auto
     body_hash: auto
     word_count: auto
@@ -146,6 +148,14 @@ class BacklinkType:
     display_text: str
 
 
+@strawberry.type
+class WikilinkType:
+    """An indexed title and its currently readable, live target."""
+
+    title: str
+    page: strawberry.ID | None
+
+
 @strawberry_django.type(Page)
 class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     """GraphQL projection of a page."""
@@ -159,6 +169,35 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
     permissions = permissions_field(("write", "delete"))
+
+    @strawberry_django.field(annotate={"_has_children": lambda info: Page.objects.has_children_expression()})
+    def has_children(self) -> bool:
+        """Expandability follows readable, untrashed children."""
+
+        return bool(cast(Any, self)._has_children)
+
+    @strawberry_django.field(only=["path"])
+    def ancestors(self) -> list[PageType]:
+        """Readable ancestors in path order; hidden containers contribute no label."""
+
+        return cast("list[PageType]", Page.objects.ancestors_of(cast(Any, self)).untrashed().order_by("path"))
+
+    @strawberry_django.field(only=["id"])
+    def wikilinks(self) -> list[WikilinkType]:
+        """Project the index owner's resolution under the current target read scope."""
+
+        links = list(Link.objects.filter(source_page_id=cast(Any, self).pk))
+        targets = {
+            row.pk: require_public_id(Page, row.pk)
+            for row in Page.objects.untrashed().filter(pk__in=[link.target_page_id for link in links])
+        }
+        return [
+            WikilinkType(
+                title=link.target_text,
+                page=targets.get(link.target_page_id) if link.target_page_id is not None else None,
+            )
+            for link in links
+        ]
 
     @strawberry_django.field(only=["id", "markdown__kind"])
     def kind(self) -> str:
@@ -179,18 +218,16 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
 
         return require_public_id(Vault, cast(Any, self).vault_id)
 
-    @strawberry_django.field(only=["vault_id"])
+    @strawberry_django.field(only=["vault_id"], annotate={"_vault_label": F("vault__name")})
     def vault_label(self) -> str | None:
-        """Return the owning vault's display name — no vault object exposed.
+        """Project the containing name with the page, without granting vault access."""
 
-        Resolved under ``system_context`` so a page viewer who lacks vault
-        read still sees where the page lives; only the name string leaves
-        the resolver.
-        """
-
+        page = cast(Any, self)
+        if "_vault_label" in page.__dict__:
+            return cast(str | None, page._vault_label)
+        # Mutation resolvers return an instance rather than an annotated queryset.
         with system_context(reason="knowledge.graphql.vault_label"):
-            vault = Vault._default_manager.filter(pk=cast(Any, self).vault_id).only("name").first()
-        return None if vault is None else str(vault)
+            return str(page.vault)
 
     @strawberry_django.field(only=["parent_id"])
     def parent(self) -> strawberry.ID | None:
@@ -399,7 +436,14 @@ _PAGE_RESOURCE = hasura_model_resource(
     PageType,
     model=Page,
     name="pages",
-    filterable=["id", "vault", "title", "is_trashed", "updated_at"],
+    filterable=[
+        "id", "vault", "parent", "title", "is_trashed", "updated_at", "navigation_root", "removed_root", "writable",
+    ],
+    filter_expressions={
+        "navigation_root": lambda rows: cast(PageQuerySet[Any], rows).navigation_root_expression(),
+        "removed_root": lambda rows: cast(PageQuerySet[Any], rows).navigation_root_expression(removed=True),
+        "writable": partial(permission_expression, name="write"),
+    },
     sortable=["title", "created_at", "updated_at", "trashed_at"],
     aggregatable=["id"],
     groupable=["vault", "vault__name", "updated_at"],
@@ -571,6 +615,21 @@ class KnowledgeMutation:
             ),
         )
 
+    @strawberry.mutation(name="create_record_note")
+    def create_record_note(
+        self, model_label: str, record_id: PublicID, vault: PublicID, body: str,
+        role: str = RecordBindingManager.DEFAULT_ROLE, idempotency_key: str | None = None,
+    ) -> RecordBindingType:
+        """Create the page, body and binding through one transactional owner."""
+
+        target = _record_for_binding(model_label, record_id, write=True)
+        if target is None:
+            raise ValueError("Record not found.")
+        return cast(RecordBindingType, RecordBinding.objects.create_note(
+            target=target, vault=require_instance_for_id(Vault, vault), body=body,
+            role=role, idempotency_key=idempotency_key,
+        ))
+
     @strawberry.mutation(name="unbind_knowledge_record")
     def unbind_knowledge_record(self, input: RecordBindingInput) -> bool:
         """Remove one Page/Vault-to-record role key if it exists."""
@@ -618,12 +677,13 @@ class KnowledgeMutation:
             str | None,
             strawberry.argument(name="expected_hash"),
         ] = None,
+        title: str | None = None,
     ) -> PageBodyPayload:
-        """Write a page's markdown body, last-write-wins with a stale guard."""
+        """Write a markdown body and optional title atomically with a stale guard."""
 
         target = require_instance_for_id(Page, page)
         return _markdown_write_payload(
-            lambda: MarkdownPage._default_manager.write_body(target, body, expected_hash=expected_hash)
+            lambda: MarkdownPage._default_manager.write_body(target, body, expected_hash=expected_hash, title=title)
         )
 
     @strawberry.mutation(name="patch_page_section")

@@ -576,7 +576,8 @@ describe("ConsoleLayout", () => {
       name: "Switch to dark mode",
     }));
 
-    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(document.documentElement.dataset.colorScheme).toBe("dark");
+    expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
     expect(storedColorSchemePreference()).toBe("dark");
     fireEvent.click(screen.getByRole("button", { name: "User menu" }));
     expect(await screen.findByRole("menuitem", { name: "Switch to light mode" }))

@@ -80,7 +80,8 @@ export interface FieldDescriptor extends FieldPresentation {
   fill?: boolean;
   /** Width measured by the record status row for responsive status widgets. */
   containerWidth?: number;
-  body?: boolean;
+  /** Main record body; `document` renders continuous prose without a visible field label or box. */
+  body?: boolean | "document";
   kind?: PageFieldKind;
   description?: ReactNode;
 }

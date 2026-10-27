@@ -17,7 +17,7 @@
     "@angee/app": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",
-    "nuqs": "^2.5.0"
+    "nuqs": "^2.10.1"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",

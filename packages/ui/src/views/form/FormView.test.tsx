@@ -1171,14 +1171,14 @@ describe("FormView", () => {
     // The widget resolves the nested {id} record to the flat option id, so the
     // option label renders — proof the form holds "reviewer-1", not the object.
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Reviewer/ }).textContent).toContain(
+      expect(screen.getByRole("combobox", { name: /Reviewer/ }).textContent).toContain(
         "Reviewer One",
       ),
     );
-    fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }));
+    fireEvent.click(screen.getByRole("combobox", { name: /Reviewer/ }));
     fireEvent.click(await screen.findByText("Reviewer Two"));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Reviewer/ }).textContent).toContain(
+      expect(screen.getByRole("combobox", { name: /Reviewer/ }).textContent).toContain(
         "Reviewer Two",
       ),
     );
@@ -1399,7 +1399,7 @@ describe("FormView", () => {
     // list has NOT fired on the editable-form mount (the headline guarantee).
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Reviewer: Primary Reviewer" }),
+        screen.getByRole("combobox", { name: "Reviewer: Primary Reviewer" }),
       ).toBeTruthy(),
     );
     expect(sdkMocks.getList).not.toHaveBeenCalled();
@@ -1409,7 +1409,7 @@ describe("FormView", () => {
 
     // Opening the picker fires the option list once; its fresh label then wins.
     fireEvent.click(
-      screen.getByRole("button", { name: "Reviewer: Primary Reviewer" }),
+      screen.getByRole("combobox", { name: "Reviewer: Primary Reviewer" }),
     );
     await waitFor(() => expect(sdkMocks.getList).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1419,7 +1419,7 @@ describe("FormView", () => {
     ));
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Reviewer: Reviewer From List" }),
+        screen.getByRole("combobox", { name: "Reviewer: Reviewer From List" }),
       ).toBeTruthy(),
     );
   });
@@ -1450,7 +1450,7 @@ describe("FormView", () => {
       routesByResource: { "workflows.Workflow": { collection: "workflows", record: { name: "workflow.record", param: "id" } } },
     });
     expect((await screen.findByRole("link", { name: "Daily briefing" })).getAttribute("href")).toBe("/workflows/workflow-1");
-    expect(screen.queryByRole("button", { name: /Workflow/ })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: /Workflow/ })).toBeNull();
     expect(screen.queryByRole("combobox")).toBeNull();
     expect(sdkMocks.getList).not.toHaveBeenCalled();
     expect(sdkMocks.getOne).toHaveBeenCalledOnce();
@@ -1632,7 +1632,7 @@ describe("FormView", () => {
       workflowRelationMetadata(),
     );
 
-    const picker = await screen.findByRole("button", {
+    const picker = await screen.findByRole("combobox", {
       name: "Workflow: Daily briefing",
     });
     expect(screen.queryByRole("textbox", { name: "Workflow" })).toBeNull();
@@ -1640,7 +1640,7 @@ describe("FormView", () => {
     fireEvent.click(await screen.findByText("Weekly review"));
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Workflow: Weekly review" }),
+        screen.getByRole("combobox", { name: "Workflow: Weekly review" }),
       ).toBeTruthy(),
     );
 
@@ -1654,7 +1654,7 @@ describe("FormView", () => {
       />,
       workflowRelationMetadata(),
     );
-    expect(screen.getByRole("button", { name: "Workflow" }).textContent).toContain(
+    expect(screen.getByRole("combobox", { name: "Workflow" }).textContent).toContain(
       "Untitled",
     );
     expect(screen.queryByRole("textbox", { name: "Workflow" })).toBeNull();
@@ -3073,7 +3073,7 @@ describe("FormView", () => {
       { widgets: { ...defaultWidgets, "test.reviewer": custom } },
     );
     const input = await screen.findByRole("textbox", { name: "Custom reviewer" });
-    expect(screen.queryByRole("button", { name: "Reviewer" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Reviewer" })).toBeNull();
     fireEvent.change(input, { target: { value: "reviewer-2" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { id: "client-1", reviewer: "reviewer-2" } }));
@@ -3107,7 +3107,7 @@ describe("FormView", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Reviewer/ }).textContent).toContain(
+      expect(screen.getByRole("combobox", { name: /Reviewer/ }).textContent).toContain(
         "Reviewer One",
       ),
     );
@@ -3443,7 +3443,8 @@ describe("FormView", () => {
       const title = screen.getByRole("textbox", { name: "Title" });
       const header = title.closest("header")!;
       const strip = screen.getByRole("tablist");
-      expect(title.className).toContain("text-22");
+      expect(title.parentElement!.className).toContain("text-22");
+      expect(title.style.font).toBe("inherit");
       return { headerClasses: header.parentElement!.className, stripClasses: strip.className };
     };
     const chrome = recordChrome();

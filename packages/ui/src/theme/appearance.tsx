@@ -19,7 +19,7 @@ import {
   type ColorScheme,
   type ColorSchemePreference,
   type ThemeOptionsEnvelope,
-  type ThemeTokenName,
+  type ThemeTokenLayers,
 } from "./runtime.mjs";
 import type { ThemeContribution } from "./index";
 import {
@@ -171,9 +171,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
       actorId: auth.user?.id ?? "anonymous",
       themeId: savedAppearance.effectiveThemeId,
       colorSchemePreference: savedAppearance.colorSchemePreference,
-      colorScheme: savedAppearance.colorScheme,
-      options: savedAppearance.effectiveOptions,
-      tokens: savedAppearance.effectiveTokens,
+      tokenLayers: savedAppearance.tokenLayers,
       ...(pendingLegacy ? { pendingLegacy } : {}),
     });
   }, [auth.user?.id, savedAppearance, host.fingerprint, pendingLegacy, resolvingIdentity]);
@@ -343,7 +341,7 @@ function resolveAppearance(preferences: AppearancePreferences, notice: Appearanc
   const colorSchemePreference = preferences.colorScheme ?? host.colorScheme ?? "system";
   const colorScheme = colorSchemePreference === "system" ? system : colorSchemePreference;
   const requestedOptions = preferences.themeId === undefined ? host.options : preferences.options;
-  let effectiveTokens: Partial<Record<ThemeTokenName, string>> = {};
+  let tokenLayers: ThemeTokenLayers = { shared: {}, light: {}, dark: {} };
   let effectiveOptions: ThemeOptionsEnvelope | undefined;
   if (effectiveTheme) {
     let resolved;
@@ -353,10 +351,11 @@ function resolveAppearance(preferences: AppearancePreferences, notice: Appearanc
       notice ??= "options-invalid";
       resolved = resolveThemeOptions(effectiveTheme.definition);
     }
-    effectiveTokens = { ...resolved.tokens.shared, ...resolved.tokens[colorScheme] };
+    tokenLayers = resolved.tokens;
     if (effectiveTheme.definition.options) effectiveOptions = { version: resolved.version, value: resolved.value };
   }
-  return { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, effectiveTokens, effectiveOptions, notice };
+  const effectiveTokens = { ...tokenLayers.shared, ...tokenLayers[colorScheme] };
+  return { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, tokenLayers, effectiveTokens, effectiveOptions, notice };
 }
 
 /**

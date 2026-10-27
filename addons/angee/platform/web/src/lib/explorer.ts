@@ -29,6 +29,7 @@ const EMPTY_EXPLORER: PlatformExplorerData = {
 
 export interface PlatformModelGraphScope {
   model?: string | null;
+  relationPage?: number;
 }
 
 export type PlatformExplorerQuery = UseQueryResult<PlatformExplorerResult> & {
@@ -55,10 +56,18 @@ export type PlatformModelDetailResult = PlatformExplorerQuery & PlatformModelDet
   notFound: boolean;
 }
 
-export type PlatformModelGraphResult = UseQueryResult<PlatformExplorerResult> & {
+export const PLATFORM_GRAPH_PAGE_SIZE = 50;
+
+interface PlatformModelGraphSelection {
+  models: readonly PlatformModelData[];
+  model: PlatformModelData | undefined;
+  relationPage: number;
+  relationTotal: number;
   nodes: readonly GraphViewNode<"model">[];
   edges: readonly GraphViewEdge[];
 }
+
+export type PlatformModelGraphResult = UseQueryResult<PlatformExplorerResult> & PlatformModelGraphSelection;
 
 function explorerOrEmpty(
   data: PlatformExplorerResult | undefined,
@@ -106,14 +115,29 @@ export function selectPlatformModelDetail(
   };
 }
 
+/** Page one selected model’s incident relationships without including peer-to-peer edges. */
 export function selectPlatformModelGraph(
   data: PlatformExplorerResult | undefined,
   scope: PlatformModelGraphScope = {},
-): Pick<PlatformModelGraphResult, "nodes" | "edges"> {
+): PlatformModelGraphSelection {
   const explorer = explorerOrEmpty(data);
+  const models = [...explorer.models].sort((a, b) => a.label.localeCompare(b.label));
+  const model = models.find((candidate) => candidate.label === scope.model) ?? models[0];
+  const incident = model ? explorer.edges.filter(
+    (edge) => edge.source === model.label || edge.target === model.label,
+  ).sort((a, b) => a.id.localeCompare(b.id)) : [];
+  const requestedPage = scope.relationPage ?? 1;
+  const relationPage = Math.max(1, Math.min(
+    Number.isSafeInteger(requestedPage) ? requestedPage : 1,
+    Math.max(1, Math.ceil(incident.length / PLATFORM_GRAPH_PAGE_SIZE)),
+  ));
+  const edges = incident.slice((relationPage - 1) * PLATFORM_GRAPH_PAGE_SIZE, relationPage * PLATFORM_GRAPH_PAGE_SIZE);
+  const endpoints = new Set(edges.flatMap((edge) => [edge.source, edge.target]));
+  if (model) endpoints.add(model.label);
   return {
-    nodes: modelGraphNodes(explorer.models, scope.model),
-    edges: modelGraphEdges(explorer.edges),
+    models, model, relationPage, relationTotal: incident.length,
+    nodes: modelGraphNodes(models.filter((candidate) => endpoints.has(candidate.label)), model?.label),
+    edges: modelGraphEdges(edges),
   };
 }
 
@@ -149,11 +173,12 @@ export function usePlatformModel(
 
 export function usePlatformModelGraph({
   model,
+  relationPage,
 }: PlatformModelGraphScope = {}): PlatformModelGraphResult {
   const query = useAuthoredQuery(PlatformExplorer);
   const graph = useMemo(
-    () => selectPlatformModelGraph(query.data, { model }),
-    [query.data, model],
+    () => selectPlatformModelGraph(query.data, { model, relationPage }),
+    [query.data, model, relationPage],
   );
   return { ...query, ...graph };
 }

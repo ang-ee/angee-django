@@ -575,3 +575,95 @@ test("ordinary authored mutations overlap while transient calls reject until ear
   f.custom.mockResolvedValue({ data: { notes: [] } });
   await act(async () => { await expect(result.current[0]({ id: "transient" })).resolves.toEqual({ notes: [] }); });
 });
+
+
+test.each(["success", "failure"] as const)("a transient %s keeps zero cache retention when the next render disables transient mode", async (outcome) => {
+  let resolve!: (value: { data: Data }) => void;
+  let reject!: (error: Error) => void;
+  const response = new Promise<{ data: Data }>((accept, decline) => { resolve = accept; reject = decline; });
+  const f = fixture(vi.fn(() => response));
+  f.client.setDefaultOptions({ mutations: { gcTime: Infinity } });
+  const { result, rerender } = renderHook(({ transient }) => useAuthoredMutation(MUTATION, { transient }), {
+    initialProps: { transient: true }, wrapper: f.wrapper,
+  });
+  const variables = { id: "secret" };
+  let pending!: ReturnType<typeof result.current[0]>;
+  act(() => { pending = result.current[0](variables); });
+  const settled = pending.then((data) => data, (error: unknown) => error);
+  await waitFor(() => expect(result.current[1].fetching).toBe(true));
+  rerender({ transient: false });
+  const mutation = f.client.getMutationCache().findAll(mutationWithValues(variables))[0];
+  expect(mutation?.gcTime).toBe(0);
+  expect(mutation?.options.gcTime).toBe(0);
+  const error = new Error("Secret unavailable");
+  await act(async () => {
+    if (outcome === "success") resolve({ data: { notes: [{ id: "secret" }] } });
+    else reject(error);
+    const value = await settled;
+    expect(value).toEqual(outcome === "success" ? { notes: [{ id: "secret" }] } : error);
+  });
+  await waitFor(() => expect(f.client.getMutationCache().findAll(mutationWithValues(variables))).toHaveLength(0));
+  expect(result.current[1].error).toBeNull();
+  expect(result.current[1].fetching).toBe(false);
+  // The pinned lifetime belongs only to the completed dispatch, not later calls.
+  const nextVariables = { id: "ordinary" };
+  f.custom.mockResolvedValue({ data: { notes: [{ id: "ordinary" }] } });
+  await act(async () => { await result.current[0](nextVariables); });
+  const next = f.client.getMutationCache().findAll(mutationWithValues(nextVariables));
+  expect(next).toHaveLength(1);
+  expect(next[0]?.gcTime).toBe(Infinity);
+});
+
+test("an ordinary mutation chained immediately after transient settlement keeps its native retention policy", async () => {
+  const response = deferred<{ data: Data }>();
+  const f = fixture(vi.fn().mockReturnValueOnce(response.promise)
+    .mockResolvedValue({ data: { notes: [{ id: "ordinary" }] } }));
+  f.client.setDefaultOptions({ mutations: { gcTime: Infinity } });
+  const { result, rerender } = renderHook(({ transient }) => useAuthoredMutation(MUTATION, { transient }), {
+    initialProps: { transient: true }, wrapper: f.wrapper,
+  });
+  const firstVariables = { id: "secret" };
+  const nextVariables = { id: "ordinary" };
+  let pending!: ReturnType<typeof result.current[0]>;
+  act(() => { pending = result.current[0](firstVariables); });
+  await waitFor(() => expect(result.current[1].fetching).toBe(true));
+  rerender({ transient: false });
+  // The next dispatch is a normal promise continuation, without waiting for a
+  // React render between the first dispatch's reset and the next invocation.
+  const chained = pending.then(() => result.current[0](nextVariables));
+  await act(async () => {
+    response.resolve({ data: { notes: [{ id: "secret" }] } });
+    await chained;
+  });
+  const next = f.client.getMutationCache().findAll(mutationWithValues(nextVariables));
+  expect(next).toHaveLength(1);
+  expect(next[0]?.gcTime).toBe(Infinity);
+  await waitFor(() => expect(f.client.getMutationCache().findAll(mutationWithValues(firstVariables))).toHaveLength(0));
+});
+
+
+test("a transient mutation chained immediately after an ordinary mutation uses zero retention and owns reset state", async () => {
+  const response = deferred<{ data: Data }>();
+  const error = new Error("Ordinary write declined.");
+  const f = fixture(vi.fn().mockImplementationOnce(async () => { await response.promise; throw error; })
+    .mockResolvedValue({ data: { notes: [{ id: "secret" }] } }));
+  f.client.setDefaultOptions({ mutations: { gcTime: Infinity } });
+  const { result, rerender } = renderHook(({ transient }) => useAuthoredMutation(MUTATION, { transient }), {
+    initialProps: { transient: false }, wrapper: f.wrapper,
+  });
+  const firstVariables = { id: "ordinary" };
+  const nextVariables = { id: "secret" };
+  let pending!: ReturnType<typeof result.current[0]>;
+  act(() => { pending = result.current[0](firstVariables); });
+  const chained = pending.catch(() => result.current[0](nextVariables));
+  await waitFor(() => expect(result.current[1].fetching).toBe(true));
+  rerender({ transient: true });
+  await act(async () => { response.resolve({ data: { notes: [] } }); await chained; });
+  const first = f.client.getMutationCache().findAll(mutationWithValues(firstVariables));
+  expect(first).toHaveLength(1);
+  expect(first[0]?.gcTime).toBe(Infinity);
+  expect(first[0]?.state.error).toBe(error);
+  await waitFor(() => expect(f.client.getMutationCache().findAll(mutationWithValues(nextVariables))).toHaveLength(0));
+  expect(result.current[1].fetching).toBe(false);
+  expect(result.current[1].error).toBeNull();
+});

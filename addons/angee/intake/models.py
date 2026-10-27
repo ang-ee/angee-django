@@ -309,7 +309,6 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             owner=None,
             **(values or {}),
         )
-        task.allocate_ordering_ranks()
         with task._work_verb_write():
             task.full_clean(validate_unique=False, validate_constraints=False)
             task.sudo(reason="intake.need.create_triage_task").save(ownerless=True)

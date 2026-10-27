@@ -608,6 +608,7 @@ describe("ActionFormDialog", () => {
       meta: expect.objectContaining({ gqlVariables: { selection_0_0: "company_7" } }),
     }));
     fireEvent.click(screen.getByText("Primary Collection"));
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
     fireEvent.change(screen.getByRole("textbox", { name: "Scope" }), { target: { value: "cash" } });
     fireEvent.click(screen.getByRole("combobox", { name: "Collection" }));
     await screen.findByText("Primary Collection");

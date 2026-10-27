@@ -203,3 +203,17 @@ function hasPseudoSelection(
 ): boolean {
   return selectedId === "all" || rows.some((row) => row.id === selectedId);
 }
+
+test("a controlled root survives server search results and reports new selections to its owner", () => {
+  const changed = vi.fn();
+  const { result, rerender } = renderHook(({ roots, rootId }: { roots: readonly Root[]; rootId: string }) =>
+    useScopedTreeExplorer({ roots, rootId, getRootId, getRootLabel, getTreeRows, onRootIdChange: changed }),
+    { initialProps: { roots: ROOTS, rootId: "root-b" } });
+  rerender({ roots: ROOTS.slice(0, 1), rootId: "root-b" });
+  expect(result.current.rootId).toBe("root-b");
+  act(() => result.current.setRootId("root-a"));
+  expect(changed).toHaveBeenCalledWith("root-a");
+  expect(result.current.rootId).toBe("root-b");
+  rerender({ roots: ROOTS, rootId: "root-a" });
+  expect(result.current.rootId).toBe("root-a");
+});

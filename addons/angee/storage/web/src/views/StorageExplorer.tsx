@@ -1,7 +1,7 @@
 import { useAuthoredQuery, useAuthoredQueryBatch, useInvalidateAuthoredModels } from "@angee/refine";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
-  EmptyState, InlineTextAction, LoadingPanel, PaneToolbarMenu, ScopedExplorerPane, TreeView,
+  EmptyState, InlineTextAction, LoadingPanel, PaneToolbar, PaneToolbarMenu, ScopedExplorerPane, TreeView,
   useConfirm, useFilePicker, useLatestRef, type FieldDescriptor, type ScopedExplorerController,
 } from "@angee/ui";
 
@@ -241,11 +241,11 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
       uploadTargetRef.current = controller.rootId
         ? { driveId: controller.rootId, folderId: selectedFolder ? effectiveScope : null }
         : null;
-      const submit = (name: string): void => {
+      const submit = async (name: string): Promise<void> => {
         if (folderEdit === "rename") {
-          void folderActionsRef.current.rename(effectiveScope, name);
+          await folderActionsRef.current.rename(effectiveScope, name);
         } else if (controller.rootId) {
-          void folderActionsRef.current.create({
+          await folderActionsRef.current.create({
             drive: controller.rootId,
             name,
             parent: selectedFolder ? effectiveScope : null,
@@ -347,8 +347,13 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
     },
     [canUpload, confirm, folderActions.busy, folderActionsRef, picker.open, t],
   );
+  const renderNavigator = useCallback((controller: StorageExplorerController, selector: ReactNode) => <>
+    <PaneToolbar {...explorerToolbar(controller)} selector={selector} />
+    {renderTree(controller)}
+  </>, [explorerToolbar, renderTree]);
   const handleRootChange = useCallback(
     (rootId: string) => {
+      setFolderEdit(null);
       setActiveDriveId(rootId);
       // A folder from the old drive is invalid here: reset the scope to All
       // files (dropping the `folder` param) and close any open preview.
@@ -373,8 +378,7 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
       navigatorLabel={t("nav.label")}
       rootPicker={driveRootPicker}
       onRootChange={handleRootChange}
-      renderTree={renderTree}
-      toolbar={explorerToolbar}
+      renderTree={renderNavigator}
       renderContentWithoutRoots={openFileId !== null}
       loading={drivesQuery.isFetching && drives.length === 0}
       loadingContent={<LoadingPanel message={t("loading")} />}

@@ -147,7 +147,7 @@ export function RelationField({
         aria-invalid={ariaInvalid}
       >
         <Combobox.Value placeholder={placeholder ?? t("relation.placeholder")}>
-          {() => selected?.label ?? (value || placeholder || t("relation.placeholder"))}
+          {() => selected?.label ?? placeholder ?? (value || t("relation.placeholder"))}
         </Combobox.Value>
         <Combobox.Icon />
       </Combobox.Trigger>

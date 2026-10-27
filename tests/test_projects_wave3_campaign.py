@@ -9,12 +9,12 @@ from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.backends import backend
 from rebac.schema.parser import parse_zed
+from rebac.testing import install_schema
 
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Milestone, Project, ProjectBinding, Task
 from angee.spaces.testing.models import Group, Membership
 from angee.storage.exceptions import UploadDenied
-from angee.testing.permissions import install_permission_schema
 from tests.conftest import Backend, Drive, File, FileAttachment, Page, RecordBinding, Vault
 from tests.messaging_campaign import grant
 from tests.t3_campaign import campaign_access as campaign_access
@@ -112,7 +112,7 @@ def test_phase_only_permission_discloses_name_without_project_access(project_cas
         else definition
         for definition in schema.definitions
     ]
-    install_permission_schema(schema, active=active)
+    install_schema(schema, backend=active)
     try:
         assert task.with_actor(submitter).promoted_phase() == phase.name
         assert not Project.objects.with_actor(submitter).filter(pk=promoted.pk).exists()
@@ -127,7 +127,7 @@ def test_phase_only_permission_discloses_name_without_project_access(project_cas
             # Actor-set expansion, six arrow sources, then the projected row SELECT.
             assert len(queries) == 8, queries.captured_queries
     finally:
-        install_permission_schema(original, active=active)
+        install_schema(original, backend=active)
 
 
 def test_record_file_follows_task_and_download_rechecks_after_narrowing(project_case):

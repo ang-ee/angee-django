@@ -5,7 +5,7 @@ import {
   type CrudFilter,
   type HttpError,
 } from "@refinedev/core";
-import { extractActionOutcome, refineFieldsFromPaths } from "@angee/refine";
+import { extractActionOutcome, refineFieldsFromPaths, stableSerialize } from "@angee/refine";
 import {
   holdsPermission,
   refineResourceName,
@@ -20,6 +20,7 @@ import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { useUiT } from "../../i18n";
 import { Button } from "../../ui/button";
 import { Collapsible } from "../../ui/collapsible";
+import { Pager } from "../../ui/pager";
 import type { ActionDescriptor } from "../page/Action";
 import { useActionResultRun } from "./action-result-run";
 import { useAuthoredResourceMutation } from "./authored-resource-mutation";
@@ -159,7 +160,6 @@ export function useTrashActions(
         id: "trash",
         label: t("trash.action"),
         icon: "trash",
-        danger: true,
         permission: TRASH_PERMISSION,
         visibleWhen: (record) => record[flag] !== true,
         run: async (context) => {
@@ -304,6 +304,7 @@ export function RemovedItem({
 }
 
 export interface RemovedListProps<TRow extends Row = Row> {
+  pagination?: { page: number; pageSize: number; onPageChange: (page: number) => void };
   /** The removed rows, from the shared trash read or a domain read (a queue's removed tasks). */
   rows: readonly TRow[];
   /** The removed count when the read pages; defaults to the rows given. */
@@ -331,6 +332,7 @@ export interface RemovedListProps<TRow extends Row = Row> {
  * @kind surface
  */
 export function RemovedList<TRow extends Row = Row>({
+  pagination,
   rows,
   total,
   error,
@@ -363,6 +365,8 @@ export function RemovedList<TRow extends Row = Row>({
           />
         );
       })}
+      {pagination && (total ?? rows.length) > pagination.pageSize
+        ? <li><Pager {...pagination} total={total} /></li> : null}
     </RemovedDisclosure>
   );
 }
@@ -373,8 +377,6 @@ export interface RemovedRecordsProps<TRow extends Row = Row> extends Pick<Remove
   fields?: readonly string[];
   /** Narrow removed records to the surface's scope, e.g. one container. */
   filters?: readonly CrudFilter[];
-  /** Keep only rows the surface lists as removed, e.g. the roots of a removed subtree. */
-  select?: (rows: readonly TRow[]) => readonly TRow[];
   pageSize?: number;
 }
 
@@ -391,12 +393,14 @@ export function RemovedRecords<TRow extends Row = Row>({
   label,
   fields = [],
   filters = [],
-  select,
   pageSize = 50,
   className,
 }: RemovedRecordsProps<TRow>): React.ReactElement | null {
   const flag = trashFlagField(resource);
   const { restore, busy } = useTrashRecord(resource);
+  const scope = stableSerialize([resource?.modelLabel, filters, pageSize]);
+  const [pagination, setPagination] = React.useState({ scope, page: 1 });
+  const page = pagination.scope === scope ? pagination.page : 1;
   const selection = React.useMemo(
     () => refineFieldsFromPaths(["id", "permissions", ...TRASH_STAMP_FIELDS, ...fields]),
     [fields],
@@ -405,17 +409,22 @@ export function RemovedRecords<TRow extends Row = Row>({
     resource: refineResourceName(resource ?? null),
     dataProviderName: resource?.schemaName,
     filters: flag ? [{ field: flag, operator: "eq", value: true }, ...filters] : [...filters],
-    pagination: { mode: "server", currentPage: 1, pageSize },
+    pagination: { mode: "server", currentPage: page, pageSize },
     meta: { fields: selection },
     queryOptions: { enabled: Boolean(resource && flag) },
   });
-  const loaded = (list.result.data ?? []) as unknown as readonly TRow[];
-  const rows = select ? select(loaded) : loaded;
+  React.useEffect(() => {
+    if (list.query.isFetching || list.result.total === undefined) return;
+    const last = Math.max(1, Math.ceil(list.result.total / pageSize));
+    if (page > last) setPagination({ scope, page: last });
+  }, [list.query.isFetching, list.result.total, page, pageSize, scope]);
+  const rows = (list.result.data ?? []) as unknown as readonly TRow[];
   if (!flag) return null;
   return (
     <RemovedList
+      pagination={{ page, pageSize, onPageChange: (next) => setPagination({ scope, page: next }) }}
       rows={rows}
-      total={select ? rows.length : list.result.total ?? rows.length}
+      total={list.result.total ?? rows.length}
       error={list.query.error}
       label={label}
       busy={busy}

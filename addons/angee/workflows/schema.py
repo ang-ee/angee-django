@@ -11,7 +11,6 @@ from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models import F, Prefetch
 from django.db.models.lookups import IsNull
-from rebac import generic_target, system_context
 from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -34,7 +33,6 @@ from angee.graphql.relations import (
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
-    with_record_reference_access,
 )
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_public_id
@@ -47,6 +45,7 @@ from angee.workflows.definition import Body, Definition, Issue
 from angee.workflows.models import RunGraphNode
 from angee.workflows.states import RunOrigin, StepRunStatus, WaitingKind
 from angee.workflows.steps import Step
+from angee.workflows.timeline import TimelineSelection
 from angee.workflows.triggers import TriggerGrantTarget
 
 strawberry.enum(cast(Any, RunOrigin))
@@ -62,8 +61,6 @@ StepRecord = apps.get_model("workflows", "StepRecord")
 StepWatch = apps.get_model("workflows", "StepWatch")
 Trigger = apps.get_model("workflows", "Trigger")
 TriggerEvent = apps.get_model("workflows", "TriggerEvent")
-Decision = apps.get_model("decisions", "Decision")
-DecisionRecord = apps.get_model("decisions", "DecisionRecord")
 _RUN_POLICY_VERSION = Prefetch(
     "version",
     queryset=WorkflowVersion.system_queryset().only("document"),
@@ -912,52 +909,29 @@ class RecordTimelineQuery:
         """One read for a record or selection, through the record and run owners."""
         if len(records) > 100:
             raise ValidationError("A timeline selection accepts at most 100 records.")
-        run_limit = max(1, min(run_limit, 100))
         actor = request_from_info(info).user
         concerned = []
         for reference in records:
             model = apps.get_model(reference.model)
             record = require_instance_for_id(model, str(reference.id), queryset=model.objects.with_actor(actor))
             concerned.append(record)
-        targets = {generic_target(record): record for record in concerned}
-        run_query = WorkflowRun.objects.with_actor(actor).about(concerned, limit=run_limit)
-        runs = list(run_type_get_queryset(
-            run_query.order_by("-created_at", "-pk"),
-            WorkflowRunType, info,
-        ).select_related("parent_step").prefetch_related("records", Prefetch(
-            "trigger_event", queryset=with_record_reference_access(TriggerEvent.objects.with_actor(actor)),
-        ))) if include_runs else []
-        has_runs = bool(runs) if include_runs else run_query.exists()
-        decisions = list(Decision.objects.with_actor(actor).open_for(*concerned).prefetch_related(Prefetch(
-            "records", queryset=with_record_reference_access(DecisionRecord.objects.with_actor(actor)),
-        )))
-        by_run = {run.pk: run for run in runs}
+        selection = TimelineSelection(concerned, actor, run_limit=run_limit)
+        runs = list(run_type_get_queryset(selection.runs, WorkflowRunType, info)) if include_runs else []
         result = []
-        for target, record in targets.items():
-            selected = {run.pk for run in runs if (
-                (run.subject_content_type_id, run.subject_object_id) == (target.content_type.pk, target.object_id)
-                or any((link.content_type_id, link.object_id) == (target.content_type.pk, target.object_id)
-                       for link in run.records.all()))}
-            for run_id in tuple(selected):
-                run = by_run[run_id]
-                while run.parent_step_id and run.parent_step.run_id in by_run:
-                    run = by_run[run.parent_step.run_id]
-                    if run.pk in selected:
-                        break
-                    selected.add(run.pk)
+        for target, selected_runs, decisions in selection.entries(runs):
             canonical = target.content_type.model_class()
             assert canonical is not None
             result.append(RecordTimelineType(
                 record_model=canonical._meta.label,
                 record_id=PublicID(public_id_for(canonical, target.object_id)),
-                runs=list(reversed([run for run in runs if run.pk in selected][:run_limit])),
-                decisions=[decision for decision in decisions if any(
-                    (link.content_type_id, link.object_id) == (target.content_type.pk, target.object_id)
-                    for link in decision.records.all())],
+                runs=selected_runs,
+                decisions=decisions,
             ))
-        with system_context(reason="workflows.timeline.selection_attention"):
-            count = Decision.objects.open_for(*concerned).count()
-        return RecordTimelineSelectionType(records=result, open_decision_count=count, has_runs=has_runs)
+        return RecordTimelineSelectionType(
+            records=result,
+            open_decision_count=selection.open_decision_count,
+            has_runs=bool(runs) if include_runs else selection.runs.exists(),
+        )
 
 schemas = {
     "console": {

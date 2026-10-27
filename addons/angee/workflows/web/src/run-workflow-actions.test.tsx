@@ -120,8 +120,8 @@ test("relation annotations render the standard record picker", async () => {
   mount(relation); await openWorkflows();
   fireEvent.click(await screen.findByRole("menuitem", { name: "Use source" }));
   const dialog = await screen.findByRole("dialog", { name: "Use source" });
-  // The standard record picker is a trigger that opens the picker dialog.
-  const picker = await within(dialog).findByRole("button", { name: "Source" });
+  // The standard record picker exposes its native combobox role and popup dialog.
+  const picker = await within(dialog).findByRole("combobox", { name: "Source" });
   expect(picker.getAttribute("aria-haspopup")).toBe("dialog");
   expect(mocks.start).not.toHaveBeenCalled();
 });

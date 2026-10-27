@@ -10,7 +10,7 @@ version = "0.0.0"
 requires-python = ">=3.14"
 dependencies = ["django-angee[postgres]"]
 
-{% if framework_source_path %}
+{% if framework_source_path and framework != "baked" %}
 
 [tool.uv.sources]
 # Framework editable from the consolidated source checkout

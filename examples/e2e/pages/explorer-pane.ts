@@ -9,7 +9,7 @@ export class ExplorerPane {
   }
 
   get picker(): Locator {
-    return this.root.getByRole("button", { name: this.label === "Files" ? /^Drive:/ : /^Vault:/ });
+    return this.root.getByRole("combobox", { name: this.label === "Files" ? /^Drive:/ : /^Vault:/ });
   }
 
   async reveal(): Promise<void> {

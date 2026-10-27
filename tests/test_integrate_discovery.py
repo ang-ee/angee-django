@@ -15,6 +15,7 @@ from django.test import override_settings
 from django.utils import timezone
 from rebac import actor_context, system_context
 from rebac.backends import backend
+from rebac.testing import install_schema
 
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.ids import PublicID
@@ -39,7 +40,6 @@ from angee.integrate.session_runner import run_bridge_session_job
 from angee.integrate.signals import discovery_finished
 from angee.integrate.streams import BridgeSyncError
 from angee.jobs.celery import app as celery_app
-from angee.testing.permissions import install_permission_schema
 from tests.conftest import Credential, create_platform_admin, execute_schema, make_addon, make_integration, result_data
 from tests.integrate_fixtures import CONNECTION_CLASSES, ConnectionBridge, LiveConnectionAdapter
 
@@ -559,9 +559,9 @@ def test_retry_discovery_authorizes_its_declared_permission(bridge):
         if permission.name == "write" else permission
         for permission in definition.permissions
     ))
-    install_permission_schema(replace(original, definitions=[
+    install_schema(replace(original, definitions=[
         narrowed if item.resource_type == resource_type else item for item in original.definitions
-    ]), active=active)
+    ]), backend=active)
     try:
         with actor_context(bridge.owner):
             assert not bridge.has_access("write")
@@ -573,7 +573,7 @@ def test_retry_discovery_authorizes_its_declared_permission(bridge):
         bridge.refresh_from_db()
         assert bridge.discovery_pending
     finally:
-        install_permission_schema(original, active=active)
+        install_schema(original, backend=active)
 
 
 def test_disconnect_source_grant_releases_derived_material(bridge):

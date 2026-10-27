@@ -28,13 +28,14 @@ from angee.models import (
     EdgeReference,
     ForeignKeyReference,
     MergeContractMixin,
+    MergePolicy,
+    RecordRefMixin,
     SourceKind,
     fold_records,
     references,
 )
 from angee.models import merge as merge_module
 from angee.projects.testing.models import Link, Project, Queue, Task
-from angee.refs import MergePolicy, RecordRefMixin
 from angee.resources.testing.models import Resource
 from angee.spaces.testing.models import Group
 from angee.tags import schema as tags_schema

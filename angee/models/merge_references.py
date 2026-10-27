@@ -291,7 +291,7 @@ class ForeignKeyReference(Reference):
 
 @dataclass(frozen=True, slots=True)
 class EdgeReference(Reference):
-    """Rows of a :class:`~angee.refs.RecordRefMixin` edge whose pointer names the record."""
+    """Rows of a :class:`~angee.models.refs.RecordRefMixin` edge whose pointer names the record."""
 
     pointer: GenericForeignKey
 

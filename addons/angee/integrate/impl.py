@@ -88,6 +88,11 @@ class BridgeImpl(IntegrationImpl):
         del link
         return None
 
+    def source_label(self, link: Any) -> str:
+        """Human source identity; connectors may project their typed observation's title."""
+
+        return str(link.external_key)
+
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Declare each independently ordered partition exactly once.
 

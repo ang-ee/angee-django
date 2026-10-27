@@ -13,10 +13,23 @@ live in code docstrings.
 
 - `angee.base` is `angee`: `angee.models` (base model, ownership, statements,
   merge, locks), `angee.fields`, `angee.impl`, `angee.identity`, `angee.indexes`,
-  `angee.lineage`, `angee.refs`. Generated migrations of a stack that keeps its
-  database import the old paths; `angee/base/{fields,mixins,impl,identity,indexes}`
-  and `angee.parties.runtime_migrations` stay as thin re-export aliases until every
-  stack has collapsed its history (`reset_migration_history`), then leave.
+  `angee.lineage`, `angee.refs`. **0.3.0 removes the `angee.base` compatibility
+  package**, including its frozen historical REBAC helper. Existing databases
+  must first pass through compatible code that still supplies these imports and
+  `reset_migration_history`; finish migrations and collapse their composed history
+  before taking the removal. Update pinned addons too: older messaging bridges
+  imported `SourceKind` through `angee.base.mixins`; its public owner is now
+  `angee.models`. Follow the [upgrade cutoff](docs/composer.md#retiring-angeebase-imports).
+  The persisted Django app label `base`, tables and content types keep their names.
+  Other surviving migration contracts, including `angee.parties.runtime_migrations`,
+  retain their own retirement requirements.
+- Model references follow Django's explicit model-package exports:
+  `RecordRefMixin` and `DerivedFrom` are imported from `angee.models`;
+  reference discovery and deletion hooks live in `angee.models.refs`.
+  `angee.refs` retains pointer identities and `RetainedGenericRelation`, keeping
+  serialized field paths stable while removing the model import cycle. Test
+  callers use `rebac.testing.install_schema(..., backend=...)` directly instead
+  of the removed `angee.testing.permissions.install_permission_schema` wrapper.
 - One spelling of ownership: `OwnerMixin.owner` is the column and a relation named
   `owner` is that column (`angee.E045`). `AgentSession.owner` is `user`,
   `parties.Handle.owner` is `controller` (GraphQL `AgentSessionType.user`,

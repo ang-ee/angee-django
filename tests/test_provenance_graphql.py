@@ -18,6 +18,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 
 from angee.changesets import changeset
 from angee.evidence import EvidenceReference
@@ -29,7 +30,6 @@ from angee.messaging.testing.models import Channel
 from angee.models import SourceKind
 from angee.parties import schema as parties_schema
 from angee.provenance import schema as provenance_schema
-from angee.testing.permissions import install_permission_schema
 from tests.conftest import (
     Page,
     addon_schema,
@@ -280,7 +280,7 @@ def test_revert_refuses_a_changeset_that_did_not_touch_the_record() -> None:
 def gated_title() -> Any:
     """The persistence probe with a ``title`` only a ``title_reader`` may read."""
 
-    install_permission_schema(
+    install_schema(
         parse_zed(
             """
             definition auth/user {}

@@ -1,21 +1,16 @@
-"""Install test permission schemas through REBAC's public backend API."""
+"""Compose installed permission declarations for source-model tests."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 from django.apps import AppConfig, apps
 from django.core.management import call_command
-from rebac.schema import Schema
 
 from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.fs import write_atomic
-
-if TYPE_CHECKING:
-    from rebac.backends import LocalBackend
 
 
 def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[str, str]]:
@@ -25,15 +20,6 @@ def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[s
     from angee.compose.model_composition import ModelComposition
 
     return ModelComposition.discover(app_configs).field_gate_owners()
-
-
-def install_permission_schema(schema: Schema, *, active: LocalBackend | None = None) -> LocalBackend:
-    """Install a local test schema through the library's public test hook."""
-
-    # The native backend imports auth models; schema installation runs after setup.
-    from rebac.testing import install_schema
-
-    return install_schema(schema, backend=active)
 
 
 @pytest.fixture

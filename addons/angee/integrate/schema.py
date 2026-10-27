@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from enum import StrEnum
 from functools import partial
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import strawberry
 import strawberry_django
@@ -72,7 +72,7 @@ from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, P
 from angee.integrate.oauth.registrations import OAuthRegistrationExtension
 from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.registry import models_with
-from angee.integrate.states import ConflictKeep, SyncFailure, SyncFailureKind, SyncFailureStatus
+from angee.integrate.states import ConflictKeep, StreamState, SyncFailure, SyncFailureKind, SyncFailureStatus
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ RecordLink = apps.get_model("integrate", "RecordLink")
 User = get_user_model()
 _OPEN_FAILURE_LINKS = Prefetch(
     "links",
-    queryset=RecordLink.objects.with_open_failures(),
+    queryset=RecordLink.objects.with_open_failures(include_source=True),
     to_attr="open_failure_links",
 )
 
@@ -443,16 +443,16 @@ class OAuthStartPayload:
     redirect_uri: str = ""
     """The effective redirect URI the flow used (resent verbatim at completion)."""
 
+    @classmethod
+    def from_start(cls, started: flow.OAuthStart) -> Self:
+        """Project the flow-owned redirect facts onto the shared payload."""
 
-def _oauth_start_payload(started: flow.OAuthStart) -> OAuthStartPayload:
-    """Project the flow-owned start facts onto the GraphQL payload."""
-
-    return OAuthStartPayload(
-        authorize_url=started.authorize_url,
-        state=started.state,
-        mode=started.mode,
-        redirect_uri=started.redirect_uri,
-    )
+        return cls(
+            authorize_url=started.authorize_url,
+            state=started.state,
+            mode=started.mode,
+            redirect_uri=started.redirect_uri,
+        )
 
 
 @strawberry.type
@@ -858,7 +858,7 @@ class ConnectionMutation:
             )
         except OAuthFlowError as error:
             return OAuthStartPayload(error=error.public_message, error_code=error.code)
-        return _oauth_start_payload(started)
+        return OAuthStartPayload.from_start(started)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def discover_oauth_endpoints(self, id: PublicID) -> ActionResult:
@@ -1251,6 +1251,16 @@ class IntegrationLabelMixin(IntegrationConnectionMixin):
 class BridgeSyncStatusMixin:
     """Project live sync status shared by all ``Bridge`` child resources."""
 
+    @strawberry_django.field(only=["id"], prefetch_related=[Prefetch(
+        "sync_streams",
+        queryset=SyncStream.objects.filter(state=StreamState.OPEN).prefetch_related(_OPEN_FAILURE_LINKS),
+        to_attr="open_sync_streams",
+    )])
+    def open_failure_count(self) -> int:
+        """Retained item failures remain visible after a run finishes."""
+
+        return cast(int, cast(Any, self).open_failure_count)
+
     @strawberry_django.field(name="is_syncing", only=["id"])
     def is_syncing(self) -> bool:
         """Return whether a worker currently holds this bridge's live sync lock."""
@@ -1404,6 +1414,18 @@ class SyncFailureType:
     details: JSON
 
     @strawberry.field
+    def message(self) -> str:
+        return cast(SyncFailure, cast(Any, self)._original_model).message
+
+    @strawberry.field
+    def source_label(self) -> str:
+        return cast(SyncFailure, cast(Any, self)._original_model).source_label
+
+    @strawberry.field
+    def source_url(self) -> str | None:
+        return cast(SyncFailure, cast(Any, self)._original_model).source_url
+
+    @strawberry.field
     def slot(self) -> int | None:
         return cast(SyncFailure, cast(Any, self)._original_model).slot
 
@@ -1487,8 +1509,15 @@ class RecordLinkType(AngeeNode):
     def source_url(self) -> str | None:
         """Return the selected connector's provider URL for this remote identity."""
 
-        integration = cast(Any, self).stream.integration.concrete_capability()
-        return cast(str | None, integration.source_url(self))
+        return cast(str | None, cast(Any, self).source_url)
+
+    @strawberry_django.field(
+        only=["stream_id", "external_key", "source_payload"], select_related=["stream__integration"],
+    )
+    def source_label(self) -> str:
+        """Connector-owned human label, shared by record sources and failures."""
+
+        return cast(str, cast(Any, self).source_label)
 
     @strawberry_django.field(only=["stream_id", "inbound", "outbox_last_error"], select_related=["stream"])
     def failures(self, open_only: bool = True) -> list[SyncFailureType]:

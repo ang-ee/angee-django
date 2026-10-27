@@ -30,6 +30,10 @@ Dependency changes must update this file in the same change.
   the stack root owns the install; never run `pnpm install` in a source slot.
   Standalone repository CI uses the repository workspace. Use pnpm at the owning
   root, not npm or yarn; see [Checks](checks.md) for execution contexts.
+  The shared [install policy](../packages/scripts/pnpm-policy.cjs) disables pnpm's
+  optimistic repeat-install shortcut so native package `prepare` scripts run
+  even when dependencies are unchanged. In particular, `@angee/metadata` owns
+  the compiled headless module consumed by plain Node code generation.
 - A dependency change is complete only when the concern row here and the owning
   Python/addon/package manifest plus the owning lockfile agree.
 
@@ -104,7 +108,7 @@ It has no task or scheduler dependency.
 | signal-cli >= 0.14.6 (system binary) | Signal linked-device protocol, encrypted account store, JSON-RPC receive stream, and attachment download | `messaging_integrate_signal` runs one native signal-cli child per channel on the dedicated `signal` queue and keeps its config under `ANGEE_DATA_DIR/signal/<sqid>`. Install the native Homebrew build on supported macOS hosts or the upstream `-Linux-native` release on Linux rather than adding a Python/JRE dependency. Pin the exact binary release in deployment, monitor upstream releases, and update inside Signal's roughly three-month client capability clock: an obsolete linked device can be remotely unlinked, and no version pin is durable indefinitely. `SIGNAL_CLI_BIN` may select the pinned executable path. |
 | matrix-nio[e2e] + vodozemac | Matrix client protocol and E2EE — password login, sync, lazy-member filters, authenticated media, Olm/Megolm decryption of encrypted rooms and attachments over the audited Rust vodozemac ratchets (wheels for every supported platform, no C toolchain) | `messaging_integrate_matrix` puppets one user's own Matrix account on the dedicated `matrix` queue and keeps nio's peewee crypto store under `ANGEE_DATA_DIR/matrix/<sqid>`. ISC + Apache-2.0. vodozemac owns the native cryptography; nio ships no cross-signing, so the addon's `recovery.py` ports mautrix's MPL-2.0 SSSS + self-signing round onto pycryptodome (`pycryptodome` and `unpaddedbase64` are declared directly because that module imports them). E2EE is mandatory and imports fail fast when its boundary is incomplete. |
 | cryptg | Native AES-IGE for MTProto — the encryption hot path | Declared directly rather than via Telethon's optional extra, so the maintained native implementation is locked instead of falling back to pure-Python `pyaes` on a long-lived ingester |
-| markdown-it-py | CommonMark tokenizer with source line spans (block token `.map`) | `knowledge` slices doc sections by heading without re-rendering — the `MarkdownPage` structure methods (`parse_outline`/`outline`, `section_range`, `spliced_section`, `spliced_unique`) shared by the `outline` read field and the section-anchored patch write |
+| markdown-it-py | CommonMark tokenizer with source line spans (block token `.map`) and native inline extension rules | `knowledge` slices doc sections by heading without re-rendering — the `MarkdownPage` structure methods (`parse_outline`/`outline`, `section_range`, `spliced_section`, `spliced_unique`) shared by the `outline` read field and the section-anchored patch write. `knowledge_integrate_notion` translates vendor tags through an inline rule while preserving Markdown code and escapes; Python's `HTMLParser` owns tag attributes. |
 | uv | Python dependency resolution and workspaces | Workspace layout |
 
 Money representation: money stays native — a `DecimalField` (default
@@ -226,7 +230,7 @@ settings or through the `ANGEE_WEB_STATEMENT_TIMEOUT` environment variable.
 | TanStack Table | Native pagination/sorting/selection state, row models and commands | Thin adapters to `@angee/metadata`'s ResourceQuery for predicates, row accessors and group identity; Refine transport, route/favorite state and grouped/board presentation; single-sort URLs |
 | TanStack Query | One native authored-read cache, finite/infinite options, observers, retries, cancellation and mutation state | Provider/document/variables identity, canonical model invalidation interests, deduplicated Refine auth/notification policy and operator snapshot cache writes. Messaging owns fixed-window reads and retained-ID revalidation over native InfiniteData; see [migration notes](frontend/upstream-reuse.md) |
 | TanStack Virtual | Row and column virtualization | Long-list wiring |
-| nuqs | Type-safe URL query state | Remaining chrome query state such as top-menu tabs |
+| nuqs | Type-safe URL query state | Remaining chrome query state such as top-menu tabs. Routed fixtures use its native TanStack Router adapter; the shared [install policy](../packages/scripts/pnpm-policy.cjs) pins and patches 2.10.1 to read the complete query snapshot from router history, preserving unrelated search keys in memory histories. |
 | i18next | Runtime translation, plural defaults and interpolation | `@angee/ui` owns the shared native initializer and provider-less defaults; `@angee/app` owns the composed active instance and provider; addons contribute namespace-relative bundles |
 | date-fns | Date and relative-time formatting | Date and timestamp widgets |
 | @number-flow/react | Animated numeric text, Intl formatting and reduced-motion-aware transitions | `MetricTile` provides the typed numeric path, binds shared motion tokens and keeps animation opt-in |

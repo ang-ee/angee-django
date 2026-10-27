@@ -1,15 +1,14 @@
 import { holdsPermission } from "@angee/metadata";
 import { RecordThreadStream, type StreamChildItem, type StreamCreateAction } from "@angee/messaging";
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
-import { ErrorBanner, Skeleton, SkeletonStatus, SkeletonText, errorMessage, type ChatterTabContent, type ContainerChild } from "@angee/ui";
-import { useMemo, type ReactElement } from "react";
+import { useAuthoredQuery } from "@angee/refine";
+import { createClientKey, useAuthoredResourceMutation, ErrorBanner, Skeleton, SkeletonStatus, SkeletonText, errorMessage, type ChatterTabContent, type ContainerChild } from "@angee/ui";
+import { useMemo, useRef, type ReactElement } from "react";
 
 import { recordPagesTarget, type RecordPagesTarget } from "./RecordPagesPane";
 import {
-  KnowledgeBindRecord, KnowledgeRecordNotes, KnowledgeUpdatePageBody, KnowledgeVault, KnowledgeVaultByName,
+  KnowledgeCreateRecordNote, KnowledgeRecordNotes, KnowledgeVault, KnowledgeVaultByName,
   PAGE_MODEL, PAGE_READ_MODELS, RECORD_BINDING_MODEL,
 } from "./data/documents";
-import { usePageActions } from "./data/use-page-actions";
 import { useKnowledgeT } from "./i18n";
 
 const BINDING_MODELS = [RECORD_BINDING_MODEL, ...PAGE_READ_MODELS] as const;
@@ -28,7 +27,7 @@ const TITLE_LENGTH = 100;
 /** The note's first line, at most `TITLE_LENGTH` characters; the page title's own text otherwise. */
 function noteTitle(body: string | null | undefined, fallback = ""): string {
   const first = (body ?? "").split(/\r?\n/, 1)[0]?.trim() ?? "";
-  return first ? Array.from(first).slice(0, TITLE_LENGTH).join("") : fallback.replace(/ · \d{4}-\d{2}-\d{2}T[^ ]*$/, "");
+  return first ? Array.from(first).slice(0, TITLE_LENGTH).join("") : fallback;
 }
 
 /** What the note says beyond its first line. */
@@ -54,11 +53,8 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
   });
   const vaultQuery = typeof vault === "string" ? vaultById : vaultByName;
   const writableVault = typeof vault === "string" ? vaultById.data?.vaults_by_pk : vaultByName.data?.vaults[0];
-  const { createPage } = usePageActions();
-  const [updateBody] = useAuthoredMutation(KnowledgeUpdatePageBody, {
-    invalidateModels: PAGE_READ_MODELS, errorFrom: (data) => data?.update_page_body,
-  });
-  const [bind] = useAuthoredMutation(KnowledgeBindRecord, { invalidateModels: [RECORD_BINDING_MODEL] });
+  const [createNote] = useAuthoredResourceMutation(KnowledgeCreateRecordNote, { invalidateModels: BINDING_MODELS });
+  const pendingNote = useRef<{ fingerprint: string; key: string } | null>(null);
 
   if (bindings.isPending && !bindings.data) return <SkeletonStatus label={t("notes.loading")} className="space-y-3 p-4">
     <Skeleton size="lg" /><SkeletonText lines={2} size="lg" /><SkeletonText lines={2} size="lg" />
@@ -88,15 +84,12 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
     submit: async (values) => {
       const body = String(values.body ?? "").trim();
       if (!body) throw new Error(t("notes.bodyRequired"));
-      // Page titles are unique per vault; the stored title carries the moment, the row shows the first line.
-      const title = `${noteTitle(body)} · ${new Date().toISOString()}`;
       if (!writableVault) throw new Error(t("notes.createError"));
-      const page = await createPage({ vault: writableVault.id, title, kind: "note", parent: null });
-      if (!page) throw new Error(t("notes.createError"));
-      await updateBody({ page, body });
-      await bind({ input: {
-        model_label: target.modelLabel, record_id: target.recordId, page, role,
-      } });
+      const input = { model_label: target.modelLabel, record_id: target.recordId, vault: writableVault.id, body, role };
+      const fingerprint = JSON.stringify(input);
+      if (pendingNote.current?.fingerprint !== fingerprint) pendingNote.current = { fingerprint, key: createClientKey() };
+      await createNote({ ...input, idempotency_key: pendingNote.current.key });
+      pendingNote.current = null;
       return { ok: true, message: t("notes.added") };
     },
   } : undefined;

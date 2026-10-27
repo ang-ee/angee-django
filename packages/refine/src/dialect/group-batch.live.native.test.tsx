@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { parse, type DocumentNode } from "graphql";
+import { focusManager } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -22,7 +23,7 @@ const SCOPES: readonly GroupByBatchScope[] = [{ key: "channels", query: {
 const { Provider, createClient, clearClients } = createRefineTestProviders({
   apiUrl: "test://group-live", providerNames: ["console", "archive"],
 });
-afterEach(() => { cleanup(); clearClients(); });
+afterEach(() => { cleanup(); clearClients(); vi.useRealTimers(); focusManager.setFocused(undefined); });
 
 function response(count: number) {
   return { data: { messages_groups: Array.from({ length: count }, (_, index) => ({
@@ -282,4 +283,41 @@ test("aggregate totals register shared model interests and retain success after 
   await act(async () => { await invalidateAuthoredQueries(f.client, [TARGET.modelLabel]); });
   await waitFor(() => expect(result.current.error?.message).toBe("Refresh unavailable"));
   expect(result.current.aggregate?.count).toBe(5);
+});
+
+test("native aggregate and group polling survives unrelated renders, pauses without focus, and stops on unmount", async () => {
+  vi.useFakeTimers();
+  focusManager.setFocused(true);
+  const custom = vi.fn(async () => ({ data: {
+    ...response(1).data, messages_aggregate: { aggregate: { count: 4 } },
+  } }));
+  const f = fixture(custom);
+  const { result, rerender, unmount } = renderHook(({ title }) => ({
+    title,
+    aggregate: useAngeeAggregate({ ...TARGET, root: "messages_aggregate" }, {
+      document: "query Total { messages_aggregate { aggregate { count } } }", refetchInterval: 30_000,
+    }),
+    grouped: useAngeeGroupBy(TARGET, {
+      ...SCOPES[0]!.query, document: DOCUMENT, refetchInterval: 30_000,
+    }),
+  }), { initialProps: { title: "First" }, wrapper: f.wrapper });
+  await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+  expect(result.current.aggregate.aggregate?.count).toBe(4);
+  expect(result.current.grouped.totalCount).toBe(1);
+  expect(custom).toHaveBeenCalledTimes(2);
+  await act(async () => { await vi.advanceTimersByTimeAsync(14_000); });
+  rerender({ title: "Unrelated title" });
+  await act(async () => { await vi.advanceTimersByTimeAsync(14_000); });
+  expect(custom).toHaveBeenCalledTimes(2);
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+  expect(custom).toHaveBeenCalledTimes(4);
+  act(() => { focusManager.setFocused(false); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(custom).toHaveBeenCalledTimes(4);
+  act(() => { focusManager.setFocused(true); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(custom).toHaveBeenCalledTimes(6);
+  unmount();
+  await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+  expect(custom).toHaveBeenCalledTimes(6);
 });

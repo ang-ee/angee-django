@@ -45,7 +45,10 @@ plugin (`pgvector`, `graphrag`).
 > Override vs augment: `ImplClassField` selects exactly **one** backend per
 > vault. To run lexical + semantic and fuse, ship a `RetrievalBackend` subclass
 > that resolves each arm through `Vault.retrieval_for(key)` and blends their
-> results in `search` — fan-out lives on the impl, not in a list-merge seam.
+> results in `search_many` — fan-out lives on the impl, not in a list-merge seam.
+
+Implement the grouped `RetrievalBackend.search_many` contract; bound `search`
+delegates to it, so both single-vault and cross-vault reads use the same backend.
 
 ### 2. GraphQL — projection extension + new query (`schemas`)
 

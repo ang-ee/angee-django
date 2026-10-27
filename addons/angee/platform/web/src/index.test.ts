@@ -20,6 +20,7 @@ describe("platform addon manifest", () => {
       "/platform/implementations/$id",
       "/platform/addons",
       "/platform/addons/$id",
+      "/platform/resources",
     ]);
     for (const route of routes) {
       expect(route.component ?? route.indexComponent).toBeTypeOf("function");
@@ -37,7 +38,7 @@ describe("platform addon manifest", () => {
   test("groups the explorer sections under one Platform tree branch", () => {
     const root = platform.menus?.[0] as BaseMenuItem | undefined;
     const groups = root?.children ?? [];
-    expect(groups.map((group) => group.id)).toEqual(["platform.explore"]);
+    expect(groups.map((group) => group.id)).toEqual(["platform.explore", "resources"]);
     expect(groups[0]?.children?.map((child) => child.label)).toEqual([
       "Graph",
       "Models",
@@ -52,6 +53,16 @@ describe("platform addon manifest", () => {
       "platform.implementations",
       "platform.addons",
     ]);
+  });
+
+  test("owns the ledger console while preserving its route and resource identity", () => {
+    const root = platform.menus?.[0] as BaseMenuItem;
+    expect(root.children?.find((child) => child.id === "resources")).toMatchObject({
+      label: "Resources", icon: "archive", route: "resources.ledger",
+    });
+    expect(platform.routes?.find((route) => route.name === "resources.ledger")).toMatchObject({
+      path: "/platform/resources", resource: "resources.Resource",
+    });
   });
 
 });

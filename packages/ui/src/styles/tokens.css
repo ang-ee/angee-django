@@ -5,7 +5,7 @@
         they exist so semantic tokens have a single source.
      2. Semantic — what components reference. Same names work in both themes.
      3. Color scheme — light is default; dark overrides via the canonical
-        [data-color-scheme="dark"] selector and its temporary legacy mirror.
+        [data-color-scheme="dark"] selector.
 
    Discipline: every semantic token MUST reference a primitive via
    `var(--<primitive>)`. Raw hex / rgba in the semantic / theme layers is a
@@ -308,8 +308,7 @@
    n-775, n-825, n-875, n-925, n-935, n-1000) so the primitive layer is
    still the single source of truth.
    ============================================================================ */
-[data-color-scheme="dark"],
-[data-theme="dark"] {
+[data-color-scheme="dark"] {
   --surface-canvas:    var(--n-950);
   --surface-sheet:     var(--n-850);
   --surface-sheet-2:   var(--n-875);
