@@ -421,13 +421,18 @@ def test_file_attachment_attach_converges_across_mti_levels(tmp_path: Path, driv
     connection.vendor != "postgresql",
     reason="PostgreSQL canonical attachment-target serialization contract",
 )
-def test_file_attachment_attach_serializes_on_canonical_target(tmp_path: Path, drive: Any) -> None:
+def test_file_attachment_attach_serializes_on_canonical_target(
+    tmp_path: Path, drive: Any, composed_permissions: None,
+) -> None:
     """A reviewed target lock fences concurrent changes to its complete File set."""
 
-    del tmp_path
+    del tmp_path, composed_permissions
     file = _proxy_upload(drive, PNG_BYTES)
+    reviewer = create_platform_admin("storage-attachment-reviewer")
     with system_context(reason="file attachment serialization setup"):
         child = MtiChild.objects.create(title="Acme", detail="org")
+    assert file.with_actor(reviewer).has_access("read")
+    assert child.with_actor(reviewer).has_access("write")
 
     def attach_while_locked() -> str:
         close_old_connections()
@@ -435,21 +440,22 @@ def test_file_attachment_attach_serializes_on_canonical_target(tmp_path: Path, d
             with connection.cursor() as cursor:
                 cursor.execute("SET lock_timeout TO '250ms'")
             try:
-                FileAttachment.objects.attach(file, child)
+                with actor_context(reviewer):
+                    FileAttachment.objects.attach(file, child)
             except OperationalError as error:
                 return str(error)
             raise AssertionError("The attachment write bypassed the canonical target lock.")
         finally:
             connections.close_all()
 
-    with transaction.atomic(), system_context(reason="file attachment serialization review"):
+    with transaction.atomic(), actor_context(reviewer):
         MtiParent._base_manager.select_for_update().get(pk=child.pk)
         with ThreadPoolExecutor(max_workers=1) as pool:
             blocked = pool.submit(attach_while_locked).result(timeout=5)
         assert "lock timeout" in blocked.lower()
         assert not FileAttachment._base_manager.filter(object_id=child.pk).exists()
 
-    with system_context(reason="file attachment serialization retry"):
+    with actor_context(reviewer):
         attachment = FileAttachment.objects.attach(file, child)
     assert attachment.object_id == child.pk
 
