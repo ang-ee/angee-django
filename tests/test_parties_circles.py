@@ -111,7 +111,8 @@ def test_manual_contact_reuses_a_retained_alias_survivor(composed_tables: None) 
             party, platform="email", value=alias.value, actor=owner,
         )
     assert stance.handle_id == survivor.pk
-    assert not Party.statements.filter(handle=alias).exists()
+    with system_context(reason="test manual contact redirect retained statements"):
+        assert not Party.statements.filter(handle=alias).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -667,8 +668,8 @@ def test_folding_a_handle_redirects_ingestion_to_the_survivor(composed_tables: N
         assert Handle.objects.canonical().filter(pk=alias.pk).exists() is False
 
         phone.refresh_from_db()
+        assert Party.statements.filter(handle=phone).count() == 1
     assert phone.party_id == party.pk
-    assert Party.statements.filter(handle=phone).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -929,9 +930,9 @@ def test_suggest_for_resolved_handle_returns_without_competing_links(composed_ta
 
         resolved.refresh_from_db()
         result = Party.objects.suggest_for(resolved)
+        assert list(Party.statements.filter(handle=resolved).values_list("subject_id", flat=True)) == [alice.pk]
 
     assert result is None
-    assert list(Party.statements.filter(handle=resolved).values_list("subject_id", flat=True)) == [alice.pk]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -958,6 +959,7 @@ def test_suggest_for_keeps_dismissed_link_dismissed(composed_tables: None) -> No
         dismissed = dismissed.with_actor(owner).dismiss()
 
         repeated = Party.objects.suggest_for(unknown)
+        assert Party.statements.filter(subject=alice, handle=unknown).count() == 2
 
     dismissed.refresh_from_db()
     unknown.refresh_from_db()
@@ -966,7 +968,6 @@ def test_suggest_for_keeps_dismissed_link_dismissed(composed_tables: None) -> No
     assert dismissed.is_dismissed
     assert not dismissed.is_confirmed
     assert unknown.party_id is None
-    assert Party.statements.filter(subject=alice, handle=unknown).count() == 2
 
 
 @pytest.mark.django_db(transaction=True)

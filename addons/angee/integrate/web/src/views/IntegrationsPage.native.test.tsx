@@ -23,7 +23,10 @@ vi.mock("../documents", () => ({
   IntegrationSyncStream: {},
   IntegrationRecordRedirectDocument: {},
 }));
-vi.mock("../connect/credential-form", () => ({ credentialCreateForm: undefined }));
+vi.mock("../connect/credential-form", async () => {
+  const { registerForm } = await import("@angee/ui");
+  return { credentialCreateForm: registerForm("integrate.Credential", () => null) };
+});
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: (...args: unknown[]) => {
