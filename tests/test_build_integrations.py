@@ -66,6 +66,35 @@ def test_plain_composition_adds_no_feature_models_managers_or_outputs(tmp_path, 
     assert "catalogue" not in model_source
 
 
+@pytest.mark.parametrize("module,existing", [
+    ("runtime.build_contract.migrations", False),
+    ("runtime.build_contract.migrations", True),
+    ("authored.history", False),
+    (None, False),
+])
+def test_build_initializes_only_missing_default_migration_packages(tmp_path, native_source, settings, module, existing):
+    settings.MIGRATION_MODULES = {"build_contract": module}
+    runtime = runtime_for(tmp_path, native_source)
+    settings.COMPOSE_RUNTIME_DIR = runtime.runtime_dir
+    initializer = runtime.runtime_dir / "build_contract/migrations/__init__.py"
+    authored = b"# Native package initializer.\r\nKEEP = True\r\n"
+    if existing:
+        initializer.parent.mkdir(parents=True)
+        initializer.write_bytes(authored)
+
+    sources = runtime.render_sources()
+    assert initializer.exists() is existing  # Rendering remains read-only.
+    assert (Path("build_contract/migrations/__init__.py") in sources) is (
+        module == "runtime.build_contract.migrations" and not existing
+    )
+    runtime.emit_sources()
+    assert initializer.exists() is (existing or module == "runtime.build_contract.migrations")
+    if initializer.exists():
+        assert initializer.read_bytes() == (authored if existing else b"")
+        assert list(initializer.parent.iterdir()) == [initializer]
+    assert runtime.emit_sources() is False
+
+
 @pytest.mark.parametrize("name", ["_meta", "title", "objects", "save", "Meta", "extends"])
 def test_build_declarations_cannot_replace_native_behavior(tmp_path, native_source, name):
     contribution = Contribution(declaration=ModelDeclaration(attributes={name: "replacement"}))
