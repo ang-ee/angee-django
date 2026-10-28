@@ -16,12 +16,12 @@ describe("spaces addon manifest", () => {
   });
 
   test("registers the Spaces menu at the groups route", () => {
-    expect(spaces.menus).toEqual([
-      expect.objectContaining({
-        id: "spaces",
+    expect(spaces.menus).toEqual({
+      spaces: {
         label: "Spaces",
+        icon: "spaces",
         route: "spaces.groups",
-      }),
-    ]);
+      },
+    });
   });
 });
