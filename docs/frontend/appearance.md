@@ -26,8 +26,8 @@ Project and stack templates expose three build inputs:
 
 - `appearance_theme_id`, which defaults to `angee.stock`;
 - `appearance_color_scheme`, one of `system`, `light` or `dark`;
-- `appearance_options`, an optional JSON `{ "version": 1, "value": ... }`
-  envelope for a configurable host theme.
+- `appearance_options`, an optional JSON `{ "version": ..., "value": ... }`
+  envelope matching the selected theme's current options version.
 
 The Vite configuration validates those values against the generated catalogue.
 Changing a host default therefore requires the normal codegen and web build.
@@ -73,11 +73,19 @@ slice. If a saved theme is later uninstalled, the UI uses the host or intrinsic
 fallback and retains the unavailable ID so reinstalling the addon can restore
 the selection.
 
-Saved preferences using the former `angee.brand` theme ID migrate through Default.
-Its version 1, 2 and 3 customization envelopes resolve through Default's
-migrator and the next successful appearance save writes the canonical
-`angee.stock` ID. Stack manifests select `angee.theme_stock`; the former
-`angee.theme_brand` addon has been removed.
+Theme IDs are exact canonical IDs and options envelopes must match the selected
+implementation's current version. Compatibility aliases and predecessor option
+migrators are not part of the current renderer.
+
+Before crossing this cutoff, save older selections and options through Appearance
+on the pre-refactor snapshot. Browser-only preferences are separate from
+the server database: a device may still hold `angee:theme` or a `pendingLegacy`
+entry in `angee:appearance`. While signed in on the snapshot, open Appearance and
+save the intended scheme and theme, or manually transfer that choice to the current
+Appearance page. The new code neither consumes those old keys nor deletes them; its disposable
+first-paint cache uses the separate current `angee:appearance:3` protocol.
+A database history reset does not prove every browser has completed this step;
+keep the snapshot available until each affected device's choice is preserved.
 
 The DOM uses `data-theme-id` for implementation identity and
 `data-color-scheme="light|dark"` for the resolved scheme. Theme identity and

@@ -30,7 +30,6 @@ const paper: ThemeContribution = {
   definition: defineTheme({
     contractVersion: 1,
     id: "example.paper",
-    legacyIds: ["example.old-paper"],
     labelKey: "paper.label",
     descriptionKey: "paper.description",
     revision: 1,
@@ -368,13 +367,15 @@ test("removing optional overrides becomes clean again and keeps following host d
   expect(patchPreferences).not.toHaveBeenCalled();
 });
 
-test("legacy theme aliases remain clean and save through the canonical preference path", async () => {
-  const { result, stored } = renderAppearance({ preferences: { appearance: { ...saved, themeId: "example.old-paper" } } });
-  act(() => result.current.openDraft());
-  expect(result.current.dirty).toBe(false);
-  expect(result.current.preferences.themeId).toBe(paper.definition.id);
-  await act(async () => result.current.save());
-  expect(stored().appearance).toEqual(saved);
+test("the cutoff leaves historical browser choices untouched and applies saved preferences", () => {
+  const previousCache = JSON.stringify({ pendingLegacy: { actorId: null, preference: "dark" } });
+  window.localStorage.setItem("angee:theme", "dark");
+  window.localStorage.setItem("angee:appearance", previousCache);
+  const { result, patchPreferences } = renderAppearance();
+  expect(result.current.preferences).toEqual(saved);
+  expect(window.localStorage.getItem("angee:theme")).toBe("dark");
+  expect(window.localStorage.getItem("angee:appearance")).toBe(previousCache);
+  expect(patchPreferences).not.toHaveBeenCalled();
 });
 
 test("scheme commands use the same setter and stay in an open draft", async () => {

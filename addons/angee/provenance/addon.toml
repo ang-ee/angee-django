@@ -6,13 +6,3 @@ category = "Data"
 depends_on = ["angee.base", "angee.graphql", "angee.timeline", "angee.web", "simple_history"]
 
 dependencies = ["django-simple-history>=3.13"]
-
-[[migrations]]
-name = "changeset_actor_ref"
-app_label = "provenance"
-module = "runtime_migrations.changeset_actor_ref"
-
-[[migrations]]
-name = "retire_idempotency_key"
-app_label = "provenance"
-module = "runtime_migrations.retire_idempotency_key"

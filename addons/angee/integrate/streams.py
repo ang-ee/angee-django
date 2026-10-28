@@ -1120,7 +1120,7 @@ def open_stream(
     definition: StreamDefinition | None = None,
     deadline: float | None = None,
 ) -> Any:
-    """Open a partition against its current declaration, seeding legacy progress only on its first epoch.
+    """Open a partition against its current declaration and retained stream progress.
 
     Opening reconciles: the stream takes what its declaration says now (direction,
     snapshot, authority) through ``SyncStream.objects.current``, so a changed
@@ -1143,25 +1143,7 @@ def open_stream(
         elif (definition.key, definition.partition) != (key, partition):
             raise AdapterContractError("The supplied stream declaration must match the requested partition.")
         definition = replace(definition, cursor=_validated_cursor(definition.cursor))
-        stream = manager.current(bridge, definition)
-        if stream.generation == 1 and not stream.cursor and bridge.cursor:
-            with transaction.atomic():
-                locked_bridge = bridge.lock_capability()
-                stream = manager.lock_current(stream)
-                if not stream.cursor and stream.last_advanced_at is None:
-                    seeded_config, legacy_cursor = adapter.seed_config(locked_bridge.cursor)
-                    config = {**seeded_config, **locked_bridge.config}
-                    legacy_cursor = _validated_cursor(legacy_cursor)
-                    if config != locked_bridge.config or legacy_cursor != locked_bridge.cursor:
-                        locked_bridge.config = config
-                        locked_bridge.cursor = legacy_cursor
-                        locked_bridge.save(update_fields=["config", "cursor", "updated_at"])
-                    cursor = adapter.seed_cursor(stream, locked_bridge.cursor)
-                    # A no-op seed is still a completed cutover attempt.
-                    manager.advance(stream, _validated_cursor({} if cursor is None else cursor))
-                bridge.config = adapter.bridge.config = locked_bridge.config
-                bridge.cursor = adapter.bridge.cursor = locked_bridge.cursor
-        return stream
+        return manager.current(bridge, definition)
 
 
 def _report(bridge: Any, message: str, **details: Any) -> None:

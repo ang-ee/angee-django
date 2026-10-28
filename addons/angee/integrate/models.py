@@ -2804,7 +2804,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
     config = models.JSONField(default=dict, blank=True)
     """Bridge-scoped settings interpreted by the selected backend."""
-    cursor = models.JSONField(default=dict, blank=True)
     poll_interval = models.PositiveIntegerField(default=300)
     subscription_state = models.JSONField(default=dict, blank=True)
     next_subscription_refresh_at = models.DateTimeField(null=True, blank=True)
@@ -2812,7 +2811,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     last_sync_completed_at = models.DateTimeField(null=True, blank=True)
     last_sync_items = models.PositiveIntegerField(default=0)
     sync_stage = StateField(choices_enum=SyncStage, max_length=32, default=SyncStage.IDLE, db_index=True)
-    """Messaging channels keep their existing varchar(32) column on upgrade."""
     sync_error = DiagnosticTextField(blank=True, default="")
     sync_run_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     """Opaque execution-owner run identity, retained after terminal settlement."""
@@ -3331,7 +3329,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                 self.report_status(status=IntegrationRuntimeStatus.OK)
             self.save(
                 update_fields=[
-                    "cursor",
                     "last_sync_summary",
                     "last_sync_completed_at",
                     "last_sync_items",

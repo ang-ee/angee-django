@@ -1,4 +1,4 @@
-import { createThemeCustomizationOptions, defineTheme, migrateThemeCustomizationFromV1 } from "@angee/ui/theme-runtime";
+import { createThemeCustomizationOptions, defineTheme } from "@angee/ui/theme-runtime";
 
 export const themes = [defineTheme({
   contractVersion: 1,
@@ -199,5 +199,5 @@ export const themes = [defineTheme({
     density: "theme",
     elevation: "theme",
     logo: "theme",
-  }, { version: 2, migrate: migrateThemeCustomizationFromV1 }),
+  }, { version: 2 }),
 })];

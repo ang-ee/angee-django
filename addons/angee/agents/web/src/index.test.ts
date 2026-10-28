@@ -1,8 +1,10 @@
+import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
-import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import agents from "./index";
+
+const declaredMenus = composeAddons([{ id: agents.id, menus: agents.menus, routes: agents.routes }], { canonicalModelLabel: (model) => model }).menuComposition.logical;
 
 describe("agents addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -20,7 +22,7 @@ describe("agents addon manifest", () => {
 
 
   test("owns separate Agents and AI menu roots without changing inference routes", () => {
-    const [agentsRoot, aiRoot] = (agents.menus ?? []) as readonly BaseMenuItem[];
+    const [agentsRoot, aiRoot] = (declaredMenus ?? []);
 
     expect((agentsRoot?.children ?? []).map((item) => item.id)).toEqual([
       "agents.menu.agents",

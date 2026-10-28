@@ -13,12 +13,8 @@ export default defineBaseAddon({
     lazyRouteComponent(() => import("./NotionConnectionsPage"), "NotionConnectionsPage"),
     NOTION_CONNECTION_MODEL,
   ),
-  menus: [{
-    id: "knowledge_integrate_notion.connections",
-    label: "Notion",
-    icon: "integration",
-    parentId: "integrate",
-    route: "knowledge_integrate_notion.connections",
-  }],
+  menus: {
+    "knowledge_integrate_notion.connections": { label: "Notion", icon: "integration", route: "knowledge_integrate_notion.connections", parent: "integrate" },
+  },
   forms: { [NOTION_CONNECTION_MODEL]: notionConnectionForm },
 });

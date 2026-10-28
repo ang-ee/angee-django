@@ -383,47 +383,55 @@ defaults or cutovers can be authored before retrying.
 Optional addon commands can follow provision through `--after-if-installed`;
 the composer runs an explicitly named command only when Django's registry
 contains it. The timeline reads source rows directly and requires no backfill.
-An addon declaring migrations for its own app label keeps that native runtime
-app, even after its last model is retired, so Django can apply the cutover and
-retain its migration history.
+While an addon declares a transition for its own app label, the composer keeps
+that native runtime app even after its last model retires, so Django can apply
+the cutover. After application and history consolidation, retire the declaration
+and body; do not retain an otherwise empty addon solely as permanent transition
+history.
 
 #### Foundation and provenance upgrade cutoff
 
-**0.3.0 replaces the old compatibility package with the real `angee.base`
-foundation addon.** An existing database must first pass through compatible code
-that can import its complete historical migration graph. Django imports applied
-migration modules before planning an upgrade; the new foundation addon does not
-restore retired APIs such as `angee.base.mixins.SourceKind`.
+Current source uses the real `angee.base` foundation addon and canonical
+capability owners only. It contains no historical root import shims, alias-only
+modules or completed transition declarations. The framework and companion
+repositories' `feature/pre-refactor` snapshots are the upgrade bridge; an old
+migration graph must cross the cutoff before those source snapshots are replaced.
 
-From each affected stack's host environment, while compatible code is installed:
+From the controlling stack's native host environment:
 
-1. Upgrade pinned addon callers to the current owners. Older messaging bridges
-   must import `SourceKind` from `angee.provenance.statements`.
-2. Apply pending migrations and resolve model drift through normal build,
-   `makemigrations` and `migrate`. Where histories import retired APIs, run
-   `manage.py reset_migration_history --database <alias>`. The command refuses
-   pending composed migrations or drift and replaces composed migration files
-   and applied records without recreating tables.
-3. Inventory the entire retained graph. Non-composed migration histories need
-   their owning app's supported retirement process; a graph shared by several
-   databases needs a coordinated cutover before replacing its files.
-4. Upgrade framework, addons and rendered host entrypoints together. The host
-   profile includes `angee.base`; its `BaseConfig` inherits Django's persisted
-   `base` label. Tables and content types keep their identities. Fresh generated
-   migrations serialize current field and callable owners.
+1. Preserve the complete coordinated source snapshots, settings, database and
+   generated runtime, including its migration files. Do not treat a source branch
+   as a substitute for the database/runtime backup.
+2. On the snapshots, apply pending migrations and finish representation changes
+   through their existing owners. Canonicalize stored identities, option versions
+   and other retained values before deleting the code that interprets their old
+   representation. Browser-only appearance choices have a separate
+   [device preservation step](frontend/appearance.md#host-and-user-precedence);
+   a database reset cannot perform or prove it.
+3. Run `manage.py reset_migration_history --database <alias>` only on a fully
+   applied, model-clean composed graph. The native command verifies those gates,
+   replaces composed history with fresh initials and records them without
+   recreating application tables. Inventory the entire retained graph too:
+   non-composed or inactive histories need their owning app's supported retirement
+   or native reserialization, with operation/state equivalence verified. A graph
+   shared by databases needs one coordinated cutoff before its files change.
+4. Verify no retained migration imports a retired owner, then advance framework,
+   addon pins and rendered host entrypoints together. The `angee.base` AppConfig
+   retains Django's persisted `base` label; tables and content types keep their
+   identities. New migrations serialize canonical field and callable owners.
+5. Run native build/provision, migration/permission checks and schema/frontend
+   generation against the resulting source. Verify both fresh installation and
+   the populated upgrade; preserve evidence for the actual cutoff revision.
 
-The retained top-level `angee.fields`, `angee.impl`, `angee.indexes`,
-`angee.models.audit` and `angee.models.ownership` modules contain narrow aliases
-for existing serialized or fingerprinted migration consumers. They are not live
-implementation owners. Keep authored `runtime_migrations` source bytes unchanged:
-materialized migrations record their source fingerprint. Remove an alias only
-when all retained migration consumers of that exact path have been retired.
+Completed addon `[[migrations]]` entries and their source bodies retire after
+application and history consolidation. The generic compiler, materializer, drop
+and drift guards and reset command remain for future write → apply → reset →
+delete transitions. Do not restore old API paths to keep a pre-cutoff graph alive;
+use the snapshots and complete its cutoff first.
 
-Provenance has one physical [addon owner](../addons/angee/provenance/README.md).
-Retire old `angee.changesets`, `angee.evidence`, `angee.models.history` and
-`angee.models.statements` imports while compatible code can still load them.
-Base models opt into provenance mixins explicitly. Verify both fresh installation
-and an existing-database upgrade before deployment.
+Provenance has one physical [addon owner](../addons/angee/provenance/README.md),
+and base models opt into its mixins explicitly. Current callers use those owners
+directly; no second provenance or foundation implementation remains at an old path.
 
 ### Composed addon dependencies
 

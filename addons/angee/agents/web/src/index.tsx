@@ -1,6 +1,6 @@
 import type { BaseAddonRoute } from "@angee/app";
-import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import { useActiveChatterView, type BaseMenuItem } from "@angee/ui";
+import { defineBaseAddon, resourcePageRoutes, type MenuDeclarations } from "@angee/app";
+import { useActiveChatterView } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { Box, Cpu, GitBranch, LayoutTemplate, Server, Sparkles, Wrench } from "lucide-react";
 
@@ -28,57 +28,22 @@ const agentsRoutes: readonly BaseAddonRoute[] = [
 
 // The addon owns a domain Agents root and a separate AI Settings category. Their
 // leaves retain the same routes; only their menu ownership changes.
-const agentsMenu: readonly BaseMenuItem[] = [
-  {
-    // Route-less app root: the rail icon resolves its target through the first
-    // descendant with one (here `agents.agents` → `/agents`), so the route is
-    // referenced by a single menu item and needs no chrome disambiguation.
-    id: AGENTS_ID,
-    label: "Agents",
-    icon: "agent",
-    children: [
-      {
-        id: "agents.menu.agents",
-        label: "Agents",
-        icon: "agent",
-        children: [
-          { id: "agents.agents", label: "Agents", icon: "agent", route: "agents.agents" },
-          { id: "agents.templates", label: "Templates", icon: "agent-template", route: "agents.templates" },
-          // Reuse the registered `comments` glyph — no new icon registration.
-          { id: "agents.sessions", label: "Sessions", icon: "comments", route: "agents.sessions" },
-        ],
-      },
-      {
-        id: "agents.menu.skills",
-        label: "Skills",
-        icon: "skill",
-        children: [
-          { id: "agents.skills", label: "Skills", icon: "skill", route: "agents.skills" },
-          { id: "agents.sources", label: "Sources", icon: "skill-source", route: "agents.sources" },
-        ],
-      },
-      {
-        id: "agents.menu.mcp",
-        label: "MCP",
-        icon: "mcp-server",
-        children: [
-          { id: "agents.mcp-servers", label: "Servers", icon: "mcp-server", route: "agents.mcp-servers" },
-          { id: "agents.mcp-tools", label: "Tools", icon: "mcp-tool", route: "agents.mcp-tools" },
-        ],
-      },
-    ],
-  },
-  {
-    id: "agents.ai",
-    label: "AI",
-    icon: "inference-provider",
-    group: "platform",
-    children: [
-      { id: "agents.providers", label: "Providers", icon: "inference-provider", route: "agents.providers" },
-      { id: "agents.models", label: "Models", icon: "inference-model", route: "agents.models" },
-    ],
-  },
-];
+const agentsMenu: MenuDeclarations = {
+  [AGENTS_ID]: { label: "Agents", icon: "agent" },
+  "agents.menu.agents": { label: "Agents", icon: "agent", parent: AGENTS_ID },
+  "agents.agents": { label: "Agents", icon: "agent", route: "agents.agents", parent: "agents.menu.agents" },
+  "agents.templates": { label: "Templates", icon: "agent-template", route: "agents.templates", parent: "agents.menu.agents" },
+  "agents.sessions": { label: "Sessions", icon: "comments", route: "agents.sessions", parent: "agents.menu.agents" },
+  "agents.menu.skills": { label: "Skills", icon: "skill", parent: AGENTS_ID },
+  "agents.skills": { label: "Skills", icon: "skill", route: "agents.skills", parent: "agents.menu.skills" },
+  "agents.sources": { label: "Sources", icon: "skill-source", route: "agents.sources", parent: "agents.menu.skills" },
+  "agents.menu.mcp": { label: "MCP", icon: "mcp-server", parent: AGENTS_ID },
+  "agents.mcp-servers": { label: "Servers", icon: "mcp-server", route: "agents.mcp-servers", parent: "agents.menu.mcp" },
+  "agents.mcp-tools": { label: "Tools", icon: "mcp-tool", route: "agents.mcp-tools", parent: "agents.menu.mcp" },
+  "agents.ai": { label: "AI", icon: "inference-provider", group: "platform" },
+  "agents.providers": { label: "Providers", icon: "inference-provider", route: "agents.providers", parent: "agents.ai" },
+  "agents.models": { label: "Models", icon: "inference-model", route: "agents.models", parent: "agents.ai" },
+};
 
 // The shell drawer keeps its sessions mounted while the active view changes.
 export { AgentChatterPane };

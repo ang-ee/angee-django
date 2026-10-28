@@ -132,7 +132,7 @@ function CompositionSections({ composition }: { composition: RuntimeComposition 
     [t("developer.unavailable"), Object.entries(menus.unavailable).map(([route, reason]) => t("developer.unavailableLine", { route, reason }))],
     [t("developer.absent"), [...absent(composition.requires?.menus), ...absent(composition.requires?.containers)]],
     // Composition findings are the app's own English diagnostics, shown as raised.
-    [t("developer.diagnostics"), [...selection.diagnostics, ...menus.diagnostics, ...(composition.containers?.diagnostics ?? [])]],
+    [t("developer.diagnostics"), [...selection.diagnostics, ...(composition.containers?.diagnostics ?? [])]],
     [t("developer.menus"), Object.entries(menus.provenance).map(([id, fields]) => t("developer.setBy", { subject: id, layers: layersOf(fields) }))],
     [t("developer.containerRules"), (composition.containers?.rules ?? []).map((rule) =>
       t("developer.ruleLine", { address: rule.address, layer: rule.layer, summary: rule.summary }))],

@@ -44,8 +44,8 @@ class MountMode(models.TextChoices):
 class Mount(Bridge):
     """An external storage source synchronized into a dedicated drive.
 
-    Per-file freshness lives on the synchronized File rows, so the Bridge cursor
-    never grows with source size.
+    Per-file freshness lives on the synchronized File rows, so each source run
+    reads those current facts.
     """
 
     runtime = True
@@ -100,8 +100,6 @@ class Mount(Bridge):
         backend.check_source()
         file_model = apps.get_model("storage", "File")
         folder_model = apps.get_model("storage", "Folder")
-        if isinstance(self.cursor, Mapping) and "index" in self.cursor:
-            self.cursor = {key: value for key, value in self.cursor.items() if key != "index"}
         previous = self._freshness_map(file_model)
         previous_present = {path for path, state in previous.items() if not state.is_trashed}
         seen_paths: set[str] = set()

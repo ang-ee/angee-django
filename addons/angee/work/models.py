@@ -1771,7 +1771,7 @@ class TaskWork(StagedModelMixin[Stage]):
         return self.stage_model().for_container(queue).filter(category=category, rule_owned=True).first()
 
     def _base_verb(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        """Run a projects-only lifecycle verb for a legacy queue-less task."""
+        """Delegate a task without a queue to its projects-owned lifecycle."""
 
         with self._work_verb_write():
             return getattr(super(), name)(*args, **kwargs)

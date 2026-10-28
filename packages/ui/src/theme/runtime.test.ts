@@ -84,7 +84,7 @@ const bootstrapPayload: AppearanceBootstrapPayload = {
   catalogue: {
     schema: 1,
     fingerprint: "catalogue-fingerprint",
-    themes: [{ id: "example.token-bounds", legacyIds: ["example.old-bounds"] }],
+    themes: [{ id: "example.token-bounds" }],
   },
 };
 
@@ -139,13 +139,6 @@ describe("first-paint appearance", () => {
     bootstrapAppearance(bootstrapPayload, window);
     expect(document.documentElement.dataset.colorScheme).toBe("light");
     expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#112233");
-  });
-
-  test("canonicalizes aliases while actor identity is still unresolved", () => {
-    cacheAppearance({ themeId: "example.old-bounds" });
-    bootstrapAppearance(bootstrapPayload, window);
-    expect(document.documentElement.dataset.themeId).toBe("example.token-bounds");
-    expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#abcdef");
   });
 
   test("uses the host when browser storage is unavailable", () => {
