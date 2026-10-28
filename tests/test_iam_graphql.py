@@ -189,7 +189,7 @@ def test_login_start_rejects_non_oidc_or_disabled_oauth_client(
 def test_login_start_returns_oidc_flow_error_payload(
     iam_connection_tables: None,
 ) -> None:
-    """Start-flow OIDC errors are returned as typed payloads, not GraphQL errors."""
+    """An incomplete registration fails its native readiness gate as a typed payload."""
 
     oauth_client = _oauth_client(
         "misconfigured",
@@ -223,8 +223,8 @@ def test_login_start_returns_oidc_flow_error_payload(
     assert data["login_start"] == {
         "authorize_url": "",
         "state": "",
-        "error": "The provider does not expose the required endpoint.",
-        "error_code": "missing_endpoint",
+        "error": "This connection is not configured.",
+        "error_code": "client_not_configured",
     }
 
 

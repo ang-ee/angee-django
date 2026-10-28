@@ -6,9 +6,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, router
 
-from angee.provenance.context import _ChangesetScope, changeset, current_changeset
+from angee.provenance.context import _ChangesetScope, changeset, changeset_model, current_changeset
 
 
 def management_context(command: str) -> _ChangesetScope:
@@ -22,8 +22,13 @@ def merge_context(survivor: models.Model, *, join: bool = False) -> Iterator[Non
     """Preserve a whole fold's attribution, including an unchanged survivor."""
 
     context = current_changeset() if join else None
-    if context is not None and context._state.db != survivor._state.db:
-        raise ValidationError("A fold must share the database of its changeset.")
+    if context is not None:
+        # Attribution is lazy: an uncaptured owner can fold before its ambient
+        # changeset has been inserted. The native write router owns that future
+        # destination just as it owns current_changeset(record=True).
+        context_alias = context._state.db or router.db_for_write(changeset_model(), instance=context)
+        if context_alias != survivor._state.db:
+            raise ValidationError("A fold must share the database of its changeset.")
     with changeset(
         fresh=context is None,
         activity="merge" if context is None else None,

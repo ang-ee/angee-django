@@ -115,6 +115,12 @@ class StageLinesTests(WorkCase):
         payload = [line for line in self.lines() if line["name"] != "Duplicate"]
         self.assert_refused(payload, "cannot be deleted")
 
+    def test_failed_model_validation_rolls_back_staged_reordering(self):
+        payload = list(reversed(self.lines(Triage={"name": "Inbox"})))
+        for index, line in enumerate(payload):
+            line["position"] = index
+        self.assert_refused(payload, "cannot change")
+
     def test_lines_cannot_create_or_convert_into_a_system_stage(self):
         self.assert_refused(self.lines(Ready={"category": "triage"}), "system-provisioned")
         payload = self.lines()

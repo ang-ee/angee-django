@@ -10,7 +10,7 @@ from django.conf import settings
 from django.core.management import execute_from_command_line
 from django.utils.module_loading import import_string
 
-from angee.project import bootstrap
+from angee import project
 
 SERVER_COMMANDS = frozenset({"runserver", "serve", "test"})
 """Commands whose units of work own their boundaries instead of the process.
@@ -34,7 +34,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     """
 
     arguments = list(sys.argv if argv is None else argv)
-    bootstrap(argv=arguments)
+    project.bootstrap(argv=arguments)
     command = arguments[1] if len(arguments) > 1 else "help"
     if command in SERVER_COMMANDS:
         execute_from_command_line(arguments)

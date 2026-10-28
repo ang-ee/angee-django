@@ -33,6 +33,11 @@ name = "retire_creation_keys"
 app_label = "messaging"
 module = "runtime_migrations.retire_creation_keys"
 
+[[migrations]]
+name = "adopt_field_contracts"
+app_label = "messaging"
+module = "runtime_migrations.adopt_field_contracts"
+
 [resources]
 install = [
   { path = "resources/install/030_provenance.rule.yaml", adopt = "key" },

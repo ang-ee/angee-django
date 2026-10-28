@@ -312,7 +312,7 @@ class DenormalizedProposalsWorkTests(ProposalsWorkTests):
 def test_proposals_work_manifest():
     addon = Path(__file__).resolve().parents[1] / "addons/angee/proposals_work"
     manifest = tomllib.loads((addon / "addon.toml").read_text())
-    assert manifest["addon"]["depends_on"] == ["angee.proposals", "angee.work"]
+    assert manifest["addon"]["depends_on"] == ["angee.proposals", "angee.work", "angee.web"]
     assert "resources" not in manifest
     assert not tuple(addon.glob("permissions*.zed"))
     proposals = tomllib.loads((addon.parent / "proposals/addon.toml").read_text())

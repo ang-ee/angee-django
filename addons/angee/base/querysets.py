@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from itertools import batched
 from typing import Any, Self, TypeVar, cast
 
-from django.core.exceptions import EmptyResultSet
+from django.core.exceptions import EmptyResultSet, ValidationError
 from django.db import connections, models
 from django.db.models.functions import Coalesce
 from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, to_subject_ref
@@ -25,6 +25,37 @@ from angee.base.pagination import KeysetOrder, KeysetPage, keyset_signer
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _QuerySetT = TypeVar("_QuerySetT", bound=models.QuerySet[Any])
+
+
+class ClosedUpdateQuerySet(models.QuerySet[_ModelT]):
+    """Close generic collection edits while retaining validated owner updates.
+
+    Compose this policy before other queryset capabilities. ``owner_update``
+    skips this sole closed-edit guard and preserves downstream guards, native
+    capture, database routing and tracked writes. Insertion and deletion remain
+    separate policy owners; ``immutable_error`` is their shared error hook.
+    """
+
+    def immutable_error(self, operation: str) -> ValidationError:
+        """Identify the model whose generic collection mutation is forbidden."""
+
+        action = "deleted" if operation in {"delete", "_raw_delete"} else "edited"
+        return ValidationError(f"{self.model._meta.label} rows cannot be {action}.")
+
+    def owner_update(self, **kwargs: Any) -> int:
+        """Protected API: apply an owner-validated write through downstream guards."""
+
+        return super().update(**kwargs)
+
+    def update(self, **kwargs: Any) -> int:
+        """Reject every collection edit."""
+
+        raise self.immutable_error("update")
+
+    def bulk_update(self, *args: Any, **kwargs: Any) -> int:
+        """Reject every batched edit."""
+
+        raise self.immutable_error("bulk_update")
 
 
 class SystemQuerysetMixin(models.Model):

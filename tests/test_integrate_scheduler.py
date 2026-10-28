@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 from django.db import transaction
-from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
 
@@ -438,7 +437,6 @@ def test_sync_completion_uses_finish_time_and_keeps_detached_progress(
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(ANGEE_TASK_LOCK_BACKEND="angee.jobs.locks.LocalLockBackend")
 def test_declined_sync_run_releases_its_queue_claim(transactional_db: None) -> None:
     """A run that cannot take the lock clears its own claim, so recovery stops.
 
@@ -548,7 +546,6 @@ def test_progress_report_during_queued_stage_keeps_the_queue_marker(transactiona
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(ANGEE_TASK_LOCK_BACKEND="angee.jobs.locks.LocalLockBackend")
 def test_bridge_is_syncing_uses_live_lock_state(transactional_db: None) -> None:
     """The live lock is separate from durable stage telemetry."""
 
@@ -587,7 +584,6 @@ def _cross_process_locks() -> Iterator[None]:
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(ANGEE_TASK_LOCK_BACKEND="angee.jobs.locks.LocalLockBackend")
 def test_effective_sync_stage_reconciles_stale_records_against_the_lock(transactional_db: None) -> None:
     """A live-ish persisted stage without the live lock reads as FAILED.
 

@@ -35,8 +35,9 @@ from angee.compose.runtime import Runtime
 from angee.conf import ProjectContract
 from angee.management.commands.angee import Command
 from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.resources.mixins import ResourceLoadMixin
 from angee.utils.artifacts import GENERATED_SENTINEL
-from angee.web import WebRuntime
+from angee.web.build import WebRuntime
 from tests.conftest import make_addon
 
 
@@ -625,7 +626,7 @@ def test_runtime_carries_catalogue_markers_on_emitted_concrete_model(tmp_path: P
     module = ModuleType("tests.catalogue_emission.models")
     CatalogueThing = type(
         "CatalogueThing",
-        (AngeeModel,),
+        (ResourceLoadMixin, AngeeModel),
         {
             "__module__": module.__name__,
             "runtime": True,
@@ -1557,8 +1558,6 @@ def test_provision_run_step_preserves_each_commands_cli_check_policy(
         ("migrate", True),
         ("rebac", True),
         ("check", None),
-        ("resources", None),
-        ("schema", None),
     ]
 
 
@@ -1881,7 +1880,9 @@ def test_database_pool_follows_project_settings(
     project_settings = ModuleType("test_project_settings")
     project_settings.BASE_DIR = tmp_path
     development: dict[str, Any] = {}
-    ProjectContract(development)._apply_defaults(project_settings, tmp_path)
+    ProjectContract(development)._apply_defaults(
+        project_settings, tmp_path, predefined_settings=frozenset(),
+    )
     database = development["DATABASES"]["default"]
     assert "pool" not in database["OPTIONS"]
     assert "CONN_MAX_AGE" not in database
@@ -1890,45 +1891,61 @@ def test_database_pool_follows_project_settings(
     monkeypatch.setenv("ANGEE_DB_POOL_MAX_SIZE", "3")
     monkeypatch.setenv("ANGEE_DB_POOL_TIMEOUT", "7")
     production: dict[str, Any] = {}
-    ProjectContract(production)._apply_defaults(project_settings, tmp_path)
+    ProjectContract(production)._apply_defaults(
+        project_settings, tmp_path, predefined_settings=frozenset(),
+    )
     database = production["DATABASES"]["default"]
     assert database["OPTIONS"]["pool"] == {"min_size": 0, "max_size": 3, "timeout": 7.0}
     assert "CONN_MAX_AGE" not in database
     assert "CONN_HEALTH_CHECKS" not in database
     monkeypatch.setenv("DATABASE_URL", "postgres://user:password@localhost:5432/db?conn_max_age=600")
     with pytest.raises(ImproperlyConfigured, match="ANGEE_DB_POOL.*DATABASE_URL CONN_MAX_AGE"):
-        ProjectContract({})._apply_defaults(project_settings, tmp_path)
+        ProjectContract({})._apply_defaults(
+            project_settings, tmp_path, predefined_settings=frozenset(),
+        )
 
     monkeypatch.setenv("DATABASE_URL", "postgres://user:password@localhost:5432/db?conn_max_age=0")
     zero_age: dict[str, Any] = {}
-    ProjectContract(zero_age)._apply_defaults(project_settings, tmp_path)
+    ProjectContract(zero_age)._apply_defaults(
+        project_settings, tmp_path, predefined_settings=frozenset(),
+    )
     assert zero_age["DATABASES"]["default"]["CONN_MAX_AGE"] == 0
     assert zero_age["DATABASES"]["default"]["OPTIONS"]["pool"]["max_size"] == 3
 
     monkeypatch.setenv("ANGEE_DB_POOL", "false")
     disabled: dict[str, Any] = {}
-    ProjectContract(disabled)._apply_defaults(project_settings, tmp_path)
+    ProjectContract(disabled)._apply_defaults(
+        project_settings, tmp_path, predefined_settings=frozenset(),
+    )
     assert "pool" not in disabled["DATABASES"]["default"]["OPTIONS"]
 
     monkeypatch.setenv("DATABASE_URL", "postgres://user:password@localhost:5432/db")
     monkeypatch.delenv("ANGEE_DB_POOL")
     project_settings.ANGEE_DB_POOL = "false"
     disabled_from_settings: dict[str, Any] = {}
-    ProjectContract(disabled_from_settings)._apply_defaults(project_settings, tmp_path)
+    ProjectContract(disabled_from_settings)._apply_defaults(
+        project_settings, tmp_path, predefined_settings=frozenset(),
+    )
     assert "pool" not in disabled_from_settings["DATABASES"]["default"]["OPTIONS"]
     project_settings.ANGEE_DB_POOL = True
     project_settings.ANGEE_DB_POOL_MAX_SIZE = 4
     from_settings: dict[str, Any] = {}
-    ProjectContract(from_settings)._apply_defaults(project_settings, tmp_path)
+    ProjectContract(from_settings)._apply_defaults(
+        project_settings, tmp_path, predefined_settings=frozenset(),
+    )
     assert from_settings["DATABASES"]["default"]["OPTIONS"]["pool"]["max_size"] == 3
     monkeypatch.delenv("ANGEE_DB_POOL_MAX_SIZE")
-    ProjectContract(from_settings)._apply_defaults(project_settings, tmp_path)
+    ProjectContract(from_settings)._apply_defaults(
+        project_settings, tmp_path, predefined_settings=frozenset(),
+    )
     assert from_settings["DATABASES"]["default"]["OPTIONS"]["pool"]["max_size"] == 4
 
     explicit_database = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": tmp_path / "app.sqlite3"}}
     project_settings.DATABASES = explicit_database
     namespace = {}
-    ProjectContract(namespace)._apply_defaults(project_settings, tmp_path)
+    ProjectContract(namespace)._apply_defaults(
+        project_settings, tmp_path, predefined_settings=frozenset(),
+    )
     assert namespace["DATABASES"] == explicit_database
 
 

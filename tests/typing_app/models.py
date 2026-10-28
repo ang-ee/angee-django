@@ -6,6 +6,8 @@ from typing import Self, cast
 
 from django.db import models
 
+from angee.base.fields import ImplClassField
+from angee.base.implementations import ImplBase
 from angee.base.managers import AngeeManager
 from angee.base.querysets import AngeeQuerySet, SystemQuerysetMixin
 from tests.typing_app.factory import OtherFactory
@@ -82,3 +84,16 @@ class SystemRecord(SystemQuerysetMixin):
 
 class PlainSystemRecord(SystemQuerysetMixin):
     count = models.IntegerField()
+
+
+class TypingImplementation(ImplBase):
+    """Native implementation declaration for a registered accessor fixture."""
+
+    registry_setting = "ANGEE_TYPING_IMPL_CLASSES"
+    known = True
+
+
+class ImplementationRecord(models.Model):
+    """Only an actual field declaration earns its generated typed accessor."""
+
+    backend_class = ImplClassField(TypingImplementation)

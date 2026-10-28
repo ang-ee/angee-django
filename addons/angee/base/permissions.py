@@ -12,7 +12,6 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from rebac import SubjectRef, current_actor, to_subject_ref
 from rebac import user_subject_type as _user_subject_type
-from rebac.backends import backend
 from rebac.managers import RebacQuerySet
 from rebac.resources import model_resource_type
 from rebac.schema import Definition, Schema, resolve_schema_path
@@ -150,4 +149,8 @@ def subject_reaches_user(subject: models.Model | SubjectRef, user_id: Any) -> bo
         return True
     if not reference.optional_relation:
         return False
+    # Permission declarations import before app population; the native auth
+    # backend loads Django models and belongs to this runtime decision only.
+    from rebac.backends import backend
+
     return backend().check_access(subject=user, action=reference.optional_relation, resource=reference.object).allowed

@@ -937,6 +937,26 @@ class StepWatchManager[T: StepWatch](AngeeHistoryManager[T]):
             raise ValidationError("A wait requires a deadline or a watched record.")
         return cast(WaitingKind, WaitingKind.TIME)
 
+    def record_changes(self, records: tuple[Any, ...]) -> None:
+        """Probe a completed batch once, then retain each watched target's capture."""
+        if len(records) > 1:
+            try:
+                groups: dict[int, set[Any]] = {}
+                for record in records:
+                    target = generic_target(record)
+                    groups.setdefault(target.content_type.pk, set()).add(target.object_id)
+                predicate = Q(pk__in=[])
+                for content_type_id, keys in sorted(groups.items()):
+                    predicate |= Q(content_type_id=content_type_id, object_id__in=keys)
+                with system_context(reason="workflows.watch_capture"):
+                    if not self.filter(predicate).exists():
+                        return
+            except Exception:
+                logger.exception("Workflow watch capture failed.")
+                return
+        for record in records:
+            self.record_change(record)
+
     def record_change(self, record: Any) -> None:
         """Capture under the record lock, isolating failure from the source write."""
         try:

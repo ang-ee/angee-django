@@ -14,7 +14,11 @@ from rebac import system_context
 
 from angee.base.models import AngeeQuerySet, AppendOnlyBaseQuerySet, AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
 from angee.base.models.audit import retained_set_null
+from angee.base.models.hierarchy import HierarchyQuerySet
+from angee.base.querysets import ClosedUpdateQuerySet
+from angee.provenance.contrib.angee.querysets import AngeeHistoryUnscopedQuerySet
 from tests.conftest import create_user
+from tests.hierdemo.models import HierNode
 
 
 class RetainedEvidenceQuerySet(AppendOnlyQuerySet["RetainedEvidence"], AngeeQuerySet["RetainedEvidence"]):
@@ -149,3 +153,34 @@ def test_owner_writes_preserve_downstream_queryset_guards(monkeypatch: pytest.Mo
         queryset.owner_update(name="changed")
     with pytest.raises(PermissionDenied, match="downstream write guard"):
         queryset.owner_bulk_create([RetainedEvidence(name="new")])
+
+
+def test_closed_owner_update_preserves_downstream_independent_guard() -> None:
+    """The protected verb skips its one closed-edit guard, not later policy."""
+
+    class IndependentGuard(models.QuerySet):
+        def update(self, **kwargs: Any) -> int:
+            raise PermissionDenied("downstream independent guard")
+
+    class Combined(ClosedUpdateQuerySet, IndependentGuard):
+        pass
+
+    rows = Combined(model=ContentType)
+    with pytest.raises(ValidationError, match="cannot be edited"):
+        rows.update()
+    with pytest.raises(PermissionDenied, match="downstream independent guard"):
+        rows.owner_update(name="changed")
+
+
+def test_closed_owner_update_keeps_hierarchy_and_capture_downstream() -> None:
+    """A combined native queryset retains hierarchy refusal before capture/SQL."""
+
+    class Combined(AppendOnlyBaseQuerySet, HierarchyQuerySet, AngeeHistoryUnscopedQuerySet):
+        pass
+
+    lineage = Combined.__mro__
+    assert lineage.index(ClosedUpdateQuerySet) < lineage.index(HierarchyQuerySet)
+    assert lineage.index(HierarchyQuerySet) < lineage.index(AngeeHistoryUnscopedQuerySet)
+    assert Combined.owner_update is ClosedUpdateQuerySet.owner_update
+    with pytest.raises(ValidationError, match="hierarchy parent, scope and path"):
+        Combined(model=HierNode).owner_update(parent_id=None)

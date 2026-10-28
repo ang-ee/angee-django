@@ -10,6 +10,7 @@ from sentry_sdk.integrations.strawberry import StrawberryIntegration
 from angee.graphql.constants import CHANGE_GROUP_EXPIRY_SECONDS, PUBLIC_ID_FIELD_NAME
 
 SETTINGS = {
+    "COMPOSE_EXTERNAL_ARTIFACT_ROOTS:append": ["schemas", "gql"],
     # Native HTTP error capture sees coercion values before our safe log policy.
     "SENTRY_DISABLED_INTEGRATIONS:append": [StrawberryIntegration],
     "ANGEE_HOOKS:append": ["ANGEE_GRAPHQL_RESOURCE_FILTERS"],

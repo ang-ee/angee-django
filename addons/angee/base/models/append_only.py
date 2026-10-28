@@ -10,24 +10,18 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 
-from angee.base.querysets import _AngeeQuerySetMixin
+from angee.base.querysets import ClosedUpdateQuerySet, _AngeeQuerySetMixin
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
-class _AppendOnlyWritesMixin(models.QuerySet[_ModelT]):
+class _AppendOnlyWritesMixin(ClosedUpdateQuerySet[_ModelT]):
     """The closed collection-write policy shared by the scoped and base querysets.
 
     ``owner_update`` and ``owner_bulk_create`` are public, framework-protected
     APIs for domain owners that have already validated fields and predicates.
     They skip this class's guard only, preserving every downstream guard.
     """
-
-    def immutable_error(self, operation: str) -> ValidationError:
-        """Identify the model whose generic collection mutation is forbidden."""
-
-        action = "deleted" if operation in {"delete", "_raw_delete"} else "edited"
-        return ValidationError(f"{self.model._meta.label} rows cannot be {action}.")
 
     def validate_insert(self) -> None:
         """Let the domain owner narrow insert admission."""
@@ -52,21 +46,6 @@ class _AppendOnlyWritesMixin(models.QuerySet[_ModelT]):
         """Protected API: insert an owner-validated batch through downstream guards."""
 
         return super().bulk_create(objs, batch_size=batch_size)
-
-    def owner_update(self, **kwargs: Any) -> int:
-        """Protected API: apply an owner-validated write through downstream guards."""
-
-        return super().update(**kwargs)
-
-    def update(self, **kwargs: Any) -> int:
-        """Reject every collection edit."""
-
-        raise self.immutable_error("update")
-
-    def bulk_update(self, *args: Any, **kwargs: Any) -> int:
-        """Reject every batched edit."""
-
-        raise self.immutable_error("bulk_update")
 
     def delete(self) -> tuple[int, dict[str, int]]:
         """Reject deletion through the collection."""
@@ -107,8 +86,8 @@ def _validate_model_insert(model: type[models.Model]) -> None:
 
 
 class AppendOnlyBaseQuerySet(
-    _AngeeQuerySetMixin[_ModelT],
     _AppendOnlyWritesMixin[_ModelT],
+    _AngeeQuerySetMixin[_ModelT],
     TrackedQuerySet[_ModelT],
 ):
     """Unscoped rows for Django's own relation reads, with the same writes closed."""

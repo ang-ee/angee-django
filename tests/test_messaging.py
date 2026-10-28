@@ -1472,7 +1472,8 @@ def test_threaded_model_post_can_autofollow_direct_recipient(composed_tables: No
 
 
 @pytest.mark.django_db(transaction=True)
-def test_threaded_model_delivery_error_counts_for_author(composed_tables: None) -> None:
+@pytest.mark.parametrize("failure_reason", ["SMTP server refused the message.", "SMTP\x00" + "é" * 9000])
+def test_threaded_model_delivery_error_counts_for_author(composed_tables: None, failure_reason: str) -> None:
     """Delivery failures roll up to the author-facing chatter error counter."""
 
     del composed_tables
@@ -1490,13 +1491,19 @@ def test_threaded_model_delivery_error_counts_for_author(composed_tables: None) 
         user=recipient,
         status="exception",
         failure_type="mail_smtp",
-        failure_reason="SMTP server refused the message.",
+        failure_reason=failure_reason,
     )
 
+    returned_reason = notification.failure_reason
+    assert returned_reason.startswith("SMTP")
+    assert "\x00" not in returned_reason
+    assert len(returned_reason) <= ThreadNotification._meta.get_field("failure_reason").max_length
+    if failure_reason == "SMTP server refused the message.":
+        assert returned_reason == failure_reason
     notification.refresh_from_db()
     assert notification.notification_status == "exception"
     assert notification.failure_type == "mail_smtp"
-    assert notification.failure_reason == "SMTP server refused the message."
+    assert notification.failure_reason == returned_reason
     assert ThreadNotification.objects.error_count_for_record(ticket, user=author) == 1
     assert ThreadNotification.objects.error_count_for_record(ticket, user=recipient) == 0
 

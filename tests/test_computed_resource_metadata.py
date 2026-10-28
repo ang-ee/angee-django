@@ -491,7 +491,7 @@ def test_resource_row_model_collision_names_both_contributors() -> None:
                 model=None,
                 model_label="platform.addon",
                 roots=DataResourceRoots(),
-                type_names=DataResourceTypeNames(),
+                type_names=DataResourceTypeNames(node="SubtitlePageType"),
                 capabilities=(),
                 policy=DataResourcePolicy(row_model=row_model),
             ),
@@ -512,6 +512,7 @@ def test_resource_row_model_collision_names_both_contributors() -> None:
                     {
                         "public": {
                             "query": [ServerRowsContribution, ClientRowsContribution],
+                            "types": [SubtitlePageType],
                         }
                     }
                 )

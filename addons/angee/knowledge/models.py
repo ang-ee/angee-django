@@ -59,6 +59,7 @@ from angee.base.models import (
 )
 from angee.base.permissions import actor_user_id
 from angee.base.refs import RecordRef
+from angee.base.signals import send_created_batch
 from angee.knowledge.retrieval import RetrievalBackend
 from angee.messaging.models import ThreadedModelMixin
 from angee.provenance.context import changeset, changeset_model, require_changeset, write_group
@@ -474,10 +475,9 @@ class PageManager[PageT: Page](_PageManagerBase[PageT]):
             apps.get_model("knowledge", "Link").objects.refresh_targets(copies.values())
             for page in copies.values():
                 page.with_actor(actor)
-                post_save.send(
-                    sender=self.model, instance=page, created=True, raw=False, using=self.db, update_fields=None,
-                    knowledge_backlinks_rebuilt=True,
-                )
+            send_created_batch(
+                sender=self.model, instances=copies.values(), using=self.db, knowledge_backlinks_rebuilt=True,
+            )
         return copies
 
 
@@ -931,11 +931,9 @@ class MarkdownPageManager[MarkdownT: MarkdownPage](PageManager[MarkdownT]):
                     body.save_base(raw=True, force_insert=True, using=self.db)
                     copies.append(body.with_actor(actor))
             apps.get_model("knowledge", "Link").objects.rebuild_many(copies)
-            for body in copies:
-                post_save.send(
-                    sender=self.model, instance=body, created=True,
-                    raw=False, using=self.db, update_fields=None, knowledge_backlinks_rebuilt=True,
-                )
+            send_created_batch(
+                sender=self.model, instances=copies, using=self.db, knowledge_backlinks_rebuilt=True,
+            )
 
     def write_body(
         self, page: Any, body: str, *, expected_hash: str | None = None, title: str | None = None,

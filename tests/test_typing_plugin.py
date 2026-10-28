@@ -147,10 +147,10 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "    registry_setting = 'ANGEE_TYPING_IMPL_CLASSES'\n"
         "    known = True\n"
         "ImplClassField(Implementation).resolve_class('impl').known\n"
-        "from angee.storage.models import Backend\n"
-        "from angee.storage.backends import StorageBackend\n"
-        "assert_type(Backend().get_backend_class_impl(), type[StorageBackend])\n"
-        "assert_type(Backend().get_backend_class_impl(default='local'), type[StorageBackend])\n"
+        "from tests.typing_app.models import ImplementationRecord\n"
+        "from tests.typing_app.models import TypingImplementation\n"
+        "assert_type(ImplementationRecord().get_backend_class_impl(), type[TypingImplementation])\n"
+        "assert_type(ImplementationRecord().get_backend_class_impl(default='local'), type[TypingImplementation])\n"
         "from tests.typing_app.factory import OtherFactory\n"
         "assert_type(OtherFactory.from_queryset(1), str)\n"
         "from angee.iam.models import User, UserKind, UserQuerySet\n"
@@ -225,9 +225,9 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "class Implementation(ImplBase):\n"
         "    registry_setting = 'ANGEE_TYPING_IMPL_CLASSES'\n"
         "ImplClassField(Implementation).resolve_class('impl').missing\n"
-        "from angee.storage.models import Backend\n"
-        "Backend().get_backend_class_impl().missing\n"
-        "Backend().get_backend_class_impl(default=1)\n"
+        "from tests.typing_app.models import ImplementationRecord\n"
+        "ImplementationRecord().get_backend_class_impl().missing\n"
+        "ImplementationRecord().get_backend_class_impl(default=1)\n"
         "FrameworkRecord.objects.missing_method()\n"
         "FrameworkRecord.objects.get().count = {}\n"
         "FrameworkRecord.objects.create(title='invalid', count={})\n"
@@ -256,13 +256,13 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
     )
     command = [sys.executable, "-m", "mypy", "--config-file", str(config)]
     positive = subprocess.run(
-        [*command, str(valid), str(root / "angee/models/manager.py")],
+        [*command, str(valid), str(root / "addons/angee/base/managers.py")],
         cwd=root, capture_output=True, text=True, check=False,
     )
     assert positive.returncode == 0, positive.stdout + positive.stderr
     negative = subprocess.run([*command, str(invalid)], cwd=root, capture_output=True, text=True, check=False)
     assert negative.returncode == 1, negative.stdout + negative.stderr
-    for line in (2, 3, 4, 5, 6, 10, 11, 12, 13, 15, 16, 17, 19, 20, 21, 23, 24, 25, 27, 29, 30, 31, 34, 35):
+    for line in (2, 3, 4, 5, 6, 11, 13, 14, 15, 16, 17, 19, 20, 21, 23, 24, 25, 27, 28, 29, 31, 33, 34, 35, 38, 39):
         assert f"invalid.py:{line}: error:" in negative.stdout, negative.stdout
 
     (tmp_path / "disabled_storage_settings.py").write_text(

@@ -90,6 +90,10 @@ def boot(
 ) -> None:
     """Compose selected app roots and their native dependency closure."""
 
+    # Native namespace identity follows one physical source, including symlinked slots.
+    source_root = source_root.resolve()
+    runtime_dir = runtime_dir.resolve()
+    extra_addon_dirs = [path.resolve() for path in extra_addon_dirs]
     database: dict[str, Any] = {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
     if test_postgresql:
         database_url = os.environ.get("DATABASE_URL", "")

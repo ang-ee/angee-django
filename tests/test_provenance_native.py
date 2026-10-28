@@ -11,9 +11,19 @@ import pytest
 
 
 @pytest.mark.parametrize("operation", [
-    "explicit-source", "separate-history", "bound-history", "retained-reference", "failed-bulk", "protected-delete",
+    "explicit-source", "separate-history", "bound-history", "failed-bulk", "protected-delete",
 ])
 def test_native_capture_preserves_database_owners_without_host_imports(tmp_path: Path, operation: str) -> None:
+    _capture_database_owner_contract(tmp_path, operation)
+
+
+def test_angee_retained_references_follow_history_routing_when_capture_is_disabled(tmp_path: Path) -> None:
+    """Angee's merge contract reads retained versions through the history router."""
+
+    _capture_database_owner_contract(tmp_path, "retained-reference", angee_adapter=True)
+
+
+def _capture_database_owner_contract(tmp_path: Path, operation: str, *, angee_adapter: bool = False) -> None:
     package = tmp_path / "native_capture"
     package.mkdir()
     (package / "__init__.py").write_text("")
@@ -55,9 +65,16 @@ class Row(HistoryMixin):
 class RetainedRow(models.Model):
     row = models.ForeignKey(Row, on_delete=models.PROTECT)
 """)
+    if angee_adapter:
+        models_path = package / "models.py"
+        models_path.write_text(models_path.read_text().replace(
+            "from angee.provenance.history import HistoryMixin, ModelHistory",
+            "from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory",
+        ))
     script = """
 import os
 import sys
+from contextlib import nullcontext
 os.environ.pop("DJANGO_SETTINGS_MODULE", None)
 from django.conf import settings
 
@@ -92,7 +109,8 @@ class StorageRouter:
         return None
 
 settings.configure(
-    INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth", "simple_history", "native_capture"],
+    INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth", "simple_history",
+                    *(["rebac", "angee.base"] if sys.argv[2] == "angee" else []), "native_capture"],
     DATABASES={name: {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
                for name in ("default", "secondary")},
     DATABASE_ROUTERS=[StorageRouter()],
@@ -109,16 +127,29 @@ from django.db.models.deletion import ProtectedError
 from angee.provenance.context import changeset
 from native_capture.models import Changeset, Container, RetainedRow, Row
 
-assert "angee.base.models" not in sys.modules
-assert "angee.autoconfig" not in sys.modules
-assert "angee.provenance.models" not in sys.modules
-assert not any(name == "rebac" or name.startswith("rebac.") for name in sys.modules)
+system_scope = nullcontext()
+if sys.argv[2] == "native":
+    assert "angee.base.models" not in sys.modules
+    assert "angee.autoconfig" not in sys.modules
+    assert "angee.provenance.models" not in sys.modules
+    assert not any(name == "rebac" or name.startswith("rebac.") for name in sys.modules)
+else:
+    from rebac import system_context
+    from angee.provenance.contrib.angee.history import HistoryMixin as AngeeHistoryMixin
+    assert issubclass(Row, AngeeHistoryMixin)
+    # These are explicit system-owned retention operations in the Angee host.
+    system_scope = system_context(reason="test retained-reference history routing")
+adapter_tables = ()
+if sys.argv[2] == "angee":
+    from rebac.models import PermissionAuditEvent
+    adapter_tables = (PermissionAuditEvent,)
 for alias in ("default", "secondary"):
     with connections[alias].schema_editor() as editor:
-        for model in (ContentType, Permission, Group, User, Changeset, Container, Row, RetainedRow, Row.history.model):
+        for model in (ContentType, Permission, Group, User, Changeset, Container, Row, RetainedRow,
+                      Row.history.model, *adapter_tables):
             editor.create_model(model)
 
-with changeset(fresh=True):
+with system_scope, changeset(fresh=True):
     if sys.argv[1] in {"failed-bulk", "protected-delete"}:
         row = Row.objects.create(value="retained")
         RetainedRow.objects.create(row=row)
@@ -176,7 +207,7 @@ with changeset(fresh=True):
     root = Path(__file__).resolve().parents[1]
     environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "addons"), str(tmp_path)))}
     result = subprocess.run(
-        [sys.executable, "-c", script, operation],
+        [sys.executable, "-c", script, operation, "angee" if angee_adapter else "native"],
         cwd=root,
         env=environment,
         text=True,

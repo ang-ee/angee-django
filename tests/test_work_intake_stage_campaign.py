@@ -193,10 +193,10 @@ def test_stage_position_orders_the_task_list_by_the_queue_workflow(queue_case, d
     )
     list(query.values_list("pk", flat=True))
     # The fetch-only column guard shares one schema operation. Together with
-    # scoping: two revision reads, actor sets, seventeen arrow sources (a record
+    # scoping: one shared revision read, actor sets, seventeen arrow sources (a record
     # task reaches each declared subject type's direct holders, and a trashed
     # task its trash authority), ordered SELECT. None grows with the rows.
-    with django_assert_num_queries(21) as queries:
+    with django_assert_num_queries(20) as queries:
         assert list(query.values_list("pk", flat=True)) == [first.pk, task.pk]
     # One SELECT orders by stage position; the task arrow source reads the table on its own.
     ordered = [

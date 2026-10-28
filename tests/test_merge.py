@@ -13,6 +13,7 @@ import pytest
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.db import router
 from django.db.models import DO_NOTHING
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
@@ -27,7 +28,7 @@ from angee.base.models.merge_references import EdgeReference, ForeignKeyReferenc
 from angee.graphql import records
 from angee.messaging.testing.models import Directory, Participant, Party, Reaction
 from angee.projects.testing.models import Link, Project, Queue, Task
-from angee.provenance.context import changeset
+from angee.provenance.context import changeset, changeset_model, current_changeset
 from angee.provenance.statements import (
     SourceKind,
 )
@@ -628,3 +629,23 @@ def test_metadata_marks_a_mergeable_resource() -> None:
     assert resources["tags.Tag"].mergeable
     wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
     assert wire["tags.Tag"]["mergeable"] is True
+
+
+def test_an_unsaved_fold_changeset_still_honors_its_native_write_router(monkeypatch) -> None:
+    """Lazy attribution cannot join a fold routed to another database."""
+
+    with system_context(reason="test unsaved fold routing"):
+        survivor = MergeReferenceNode.objects.create(title="kept")
+        merged = MergeReferenceNode.objects.create(title="other")
+    native_write = router.db_for_write
+    attribution_model = changeset_model()
+
+    def route(model, **hints):
+        return "secondary" if model is attribution_model else native_write(model, **hints)
+
+    monkeypatch.setattr(router, "db_for_write", route)
+    with system_context(reason="test routed fold refusal"), changeset(fresh=True):
+        assert current_changeset()._state.db is None
+        with pytest.raises(ValidationError, match="share the database"):
+            survivor.fold([merged])
+        assert set(MergeReferenceNode._base_manager.values_list("pk", flat=True)) == {survivor.pk, merged.pk}

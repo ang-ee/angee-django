@@ -124,6 +124,17 @@ class ArchiveWorkflowTests(TransactionTestCase):
             context.begin_effect.assert_not_called()
             execute.assert_not_called()
 
+            # Canonical public identity is required even for an authorized
+            # writer. The padded alternate spelling is never decoded upstream.
+            context.actor = self.actor
+            with self.assertRaises(PermissionDenied):
+                ArchiveExecute().run(context)
+            context.input = ArchiveMappingUnit(extractor="test_drive", target=canonical)
+            context.actor = reader
+            with self.assertRaises(PermissionDenied):
+                ArchiveExecute().run(context)
+            context.begin_effect.assert_not_called()
+            execute.assert_not_called()
             context.actor = self.actor
             result = ArchiveExecute().run(context)
             self.assertEqual(result.target, canonical)

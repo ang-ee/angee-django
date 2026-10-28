@@ -435,7 +435,11 @@ class ProjectBindingManager[BindingT: ProjectBinding](AngeeHistoryManager[Bindin
         return binding
 
     def unbind(self, *, project: models.Model, target: models.Model) -> int:
-        """Remove one explicit binding; its ``delete`` requires the same authority as ``bind``."""
+        """Delete an admitted binding; an absent or out-of-scope binding returns zero.
+
+        Native scoped deletion checks the same authority as ``bind`` on every
+        affected row. It never probes a hidden binding outside the actor scope.
+        """
 
         key = generic_target(target).lookups(self.model, "target")
         deleted, _by_model = self.filter(project=project, **key).delete()

@@ -17,19 +17,19 @@ from tests.queries import is_rebac_revision_read
     ("resource_type", "permission", "expected_queries"),
     (
         # Message read adds the trash manager arm's channel seed read.
-        ("messaging/message_edge", "read", 9),
+        ("messaging/message_edge", "read", 8),
         # A task's withholding exempts its removal authority, so its read adds a project write seed.
-        ("projects/task_relation", "read", 7),
+        ("projects/task_relation", "read", 6),
         # The base schema declares no target type: the knowledge end still seeds.
-        ("knowledge/record_binding", "read", 7),
-        ("projects/task", "comment", 5),
-        ("decisions/decision", "act", 5),
+        ("knowledge/record_binding", "read", 6),
+        ("projects/task", "comment", 4),
+        ("decisions/decision", "act", 4),
         # Its message arm adds the same trash manager seed read.
-        ("extraction/extraction", "read", 13),
-        ("storage/file", "read", 7),
-        ("storage/file_attachment", "read", 8),
-        ("projects/link", "read", 7),
-        ("messaging/thread", "read", 6),
+        ("extraction/extraction", "read", 12),
+        ("storage/file", "read", 6),
+        ("storage/file_attachment", "read", 7),
+        ("projects/link", "read", 6),
+        ("messaging/thread", "read", 5),
     ),
 )
 def test_large_permission_reads_keep_one_application_statement(
@@ -46,10 +46,10 @@ def test_large_permission_reads_keep_one_application_statement(
         list(queryset.values_list("pk", flat=True)[:1])
     # The projection guard runs only when fetching and shares one schema read
     # across columns; reading a filled cache does not run it again. The guard and
-    # scope read two revision witnesses around one consumer-row query, plus the
+    # scope share one revision witness around one consumer-row query, plus the
     # compiler's role/constant facts, arrow-target IDs, and recursive seed reads.
     assert len(queries) == expected_queries, (resource_type, permission, queries.captured_queries)
-    assert sum(is_rebac_revision_read(item["sql"]) for item in queries) == 2
+    assert sum(is_rebac_revision_read(item["sql"]) for item in queries) == 1
     table = connection.ops.quote_name(model._meta.db_table)
     assert sum(item["sql"].startswith(f"SELECT {table}.") for item in queries) == 1
 

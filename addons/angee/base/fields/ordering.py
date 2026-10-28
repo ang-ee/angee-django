@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -167,6 +167,44 @@ class FractionalRankField(models.FloatField):
         if not math.isfinite(candidate) or candidate <= lower:
             raise FractionalRankExhausted("No finite append rank remains in this ordering context.")
         return candidate
+
+    def get_temporary_ranks(
+        self,
+        instances: Sequence[models.Model],
+        requested: Iterable[Any],
+        *,
+        using: str,
+    ) -> tuple[float, ...]:
+        """Allocate a disjoint finite range for an atomic contextual reorder.
+
+        The caller holds the context's write lock and owns validation and both
+        write phases. Include every requested destination so staging never
+        occupies a final rank. Reading the declared unique contexts also covers
+        stored rows outside the caller's subset. Allocation is read-only and
+        returns only a complete range; exhaustion leaves the caller no partial plan.
+        """
+
+        if not instances:
+            return ()
+        context_fields = self._unique_context_fields(self.model)
+        contexts = models.Q()
+        for instance in instances:
+            contexts |= models.Q(**{
+                field.attname: getattr(instance, field.attname) for field in context_fields
+            })
+        previous = (
+            self.model._base_manager.using(using).filter(contexts)
+            .order_by(f"-{self.name}").values_list(self.name, flat=True).first()
+        )
+        for value in requested:
+            rank = self.to_python(value)
+            if rank is not None and (previous is None or rank > previous):
+                previous = rank
+        temporary = []
+        for _instance in instances:
+            previous = self.get_append_rank(previous)
+            temporary.append(previous)
+        return tuple(temporary)
 
 
     @staticmethod

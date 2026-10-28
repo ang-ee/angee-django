@@ -1,7 +1,6 @@
 """Every ownership adopter gates raw owner writes, including the queue and person parents."""
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from django.apps import apps
@@ -9,7 +8,6 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.agents.testing.models import Agent
-from angee.base.checks import check_ownership
 from angee.messaging.testing.models import Folder, Party, Person, Thread
 from angee.projects.testing.models import Project, Queue, Task
 from angee.spaces.testing.models import Group, Membership
@@ -139,7 +137,7 @@ def test_e027_names_the_real_adopter_and_expected_transfer_gate(owned_record, tm
     path = tmp_path / "invalid-owner-gate.zed"
     path.write_text(original[:start] + changed + original[end:])
     monkeypatch.setattr(config, "rebac_schema", str(path))
-    errors = check_ownership([SimpleNamespace(get_models=lambda: [model])])
+    errors = model.check()
     assert [error.id for error in errors] == ["angee.E027"]
     assert errors[0].obj is model
     assert model._meta.label in errors[0].msg and model._meta.rebac_resource_type in errors[0].msg
