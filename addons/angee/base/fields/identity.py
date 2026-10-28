@@ -52,8 +52,8 @@ class SqidField(SqidsField):
 
         Lets ``SqidMixin``'s one shared column serve every model: each model
         states only ``sqid_prefix = "nte_"`` and the inherited field picks it up
-        here. ``sqid`` is a private, non-concrete column, so this never reaches a
-        migration — it only shapes how the id encodes.
+        here. ``sqid`` is private and non-concrete, so Django does not serialize
+        it as a schema field. Authored migrations can still import its codec.
         """
 
         super().contribute_to_class(cls, name)
