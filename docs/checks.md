@@ -308,21 +308,30 @@ enforce private-path exclusion and other repository policies. Executable jobs in
 the reusable workflow own timeouts; GitHub's reusable-workflow caller syntax does
 not accept `timeout-minutes`.
 
-Consumer repositories call the same stack job with `uv-enabled: false`,
+Consumer repositories call the same reusable checks with `uv-enabled: false`,
 `pnpm-enabled: false`, and `stack-enabled: true`. Their caller owns the explicit
 `consumer-sources` (repository, sibling slot path, ref), `consumer-roots`,
-`consumer-path`, `consumer-tests`, and optional `consumer-pytest-plugins` inputs. The caller revision replaces its
-source ref; dependency revisions remain explicit. This lane renders a separate
-host, resolves native manifest dependencies, composes/provisions it, runs Ruff
-with the consumer's inherited framework policy, and collects its full declared
-Python paths with `python_files=test*.py` on PostgreSQL, using four native
-pytest-xdist workers with `--dist worksteal`. Scheduling individual tests lets
-long consumer intake modules use every worker. Each worker loads the configured
+`consumer-path`, `consumer-tests`, and optional `consumer-pytest-plugins` inputs.
+The caller revision replaces its source ref; dependency revisions remain explicit.
+The full declared Python collection runs once across six `stack-shard` jobs,
+using native pytest-split `least_duration` assignment. Without stored consumer
+timings, the plugin balances test counts with equal weights. Each shard renders
+its own host, resolves native manifest dependencies, composes/provisions it, and
+collects the declared Python paths with `python_files=test*.py` on PostgreSQL.
+Four native pytest-xdist workers use `--dist worksteal` inside each shard, so long
+consumer intake modules can use every worker. Each worker loads the configured
 host through `angee.compose.settings`; pytest-django owns its separate test
-database. Shared test plugins must defer
-model imports until Django's app registry is populated. Check tools come from
-the framework lockfile. Host SDL/codegen precede typecheck/test of that consumer's
-web fragments; the framework and other consumers have their own caller lanes.
+database. Pytest emits a thread dump after five minutes in one test protocol,
+including setup and teardown, without changing its outcome. Shared test plugins
+must defer model imports until Django's app registry is populated. Check tools
+come from the framework lockfile.
+
+Group 1 runs consumer Ruff/mypy and, after host SDL/codegen, the consumer's web
+fragment typechecks and tests. Optional full-profile bridge tests also run only
+in group 1. Calls without a consumer use one execution job. The `stack` aggregate
+passes only when every execution job succeeds, preserving one check name for
+callers. The framework and other consumers retain their own caller lanes.
+
 The optional `ADDON_SOURCES_TOKEN` secret must read every private source declared
 by a caller; the default GitHub token only reads the calling repository. Configure
 that secret in each consumer repository before expecting private cross-repository
