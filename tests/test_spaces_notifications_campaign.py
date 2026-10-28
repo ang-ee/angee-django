@@ -130,7 +130,7 @@ def test_graphql_generated_writes_do_not_accept_preference_columns(roster, space
         ):
             result = execute_schema(spaces_console, query, user=actor)
             assert result.errors
-            assert any(column in error.message and "not defined" in error.message for error in result.errors)
+            assert any(f"unknown field '{column}'" in error.message for error in result.errors)
     row.refresh_from_db()
     assert row.notification_policy == "inbox" and row.subtype_keys == []
     assert not Membership._base_manager.filter(group=roster.group, party=roster.people["outsider"]).exists()
