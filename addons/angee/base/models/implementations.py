@@ -4,14 +4,17 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable, Collection, Iterable, Mapping
 from typing import Any, Self
+
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import models
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from rebac import system_context
+
 from angee.base.fields.implementation import ImplClassField
-from angee.base.implementations import ImplBase
 from angee.base.identity import public_id_of
+from angee.base.implementations import ImplBase
 from angee.base.permissions import require_rebac_queryset
+
 
 class ImplDefaultsMixin(models.Model):
     """Materialise impl defaults on create for every ``ImplClassField`` on the model.
@@ -141,6 +144,15 @@ class ImplDefaultsMixin(models.Model):
             if getattr(self, field.attname) != loaded[field.attname]:
                 raise ValidationError({field.name: "Implementation selection is create-only."})
 
+    def _config_field(self) -> models.Field[Any, Any]:
+        """Resolve the concrete config column supplied by the composed model."""
+
+        model: type[models.Model] = type(self)
+        field = model._meta.get_field("config")
+        if not isinstance(field, models.Field):
+            raise FieldDoesNotExist(f"{model._meta.label}.config must be a concrete model field.")
+        return field
+
     def apply_config_patch(self, patch: object) -> set[str]:
         """Merge top-level config keys, removing explicit ``None`` values.
 
@@ -150,7 +162,7 @@ class ImplDefaultsMixin(models.Model):
 
         if not isinstance(patch, Mapping):
             raise ValidationError({"config": "Config patch must be an object."})
-        field = self._meta.get_field("config")
+        field = self._config_field()
         current = field.value_from_object(self) or {}
         merged = dict(current)
         for key, value in patch.items():
@@ -176,8 +188,10 @@ class ImplDefaultsMixin(models.Model):
                 continue
             impl = field.resolve_class(key)
             if isinstance(impl, type) and issubclass(impl, ImplBase) and impl.config_model is not None:
-                config_field = self._meta.get_field("config")
-                if config_field.attname in self.get_deferred_fields() and (update_fields is None or config_field.name not in update_fields):
+                config_field = self._config_field()
+                if config_field.attname in self.get_deferred_fields() and (
+                    update_fields is None or config_field.name not in update_fields
+                ):
                     continue
                 normalized = impl.normalize_config(config_field.value_from_object(self))
                 config_field.save_form_data(self, normalized)
@@ -210,7 +224,10 @@ class ImplDefaultsMixin(models.Model):
                 with system_context(reason="base.impl.materialize_fk"):
                     target = targets.first()
                 if target is None:
-                    raise ValueError(f"{type(self).__name__}.{field.name} impl default references {field.related_model._meta.label} slug {value!r}, but no row exists.")
+                    raise ValueError(
+                        f"{type(self).__name__}.{field.name} impl default references "
+                        f"{targets.model._meta.label} slug {value!r}, but no row exists."
+                    )
                 setattr(self, field.name, target)
             else:
                 setattr(self, field_name, copy.deepcopy(value))
@@ -232,7 +249,10 @@ def _relation_default_queryset(
     try:
         related._meta.get_field("slug")
     except FieldDoesNotExist as error:
-        raise FieldDoesNotExist(f"{field.model.__name__}.{field.name} impl default targets {related._meta.label}, which must declare a slug field.") from error
+        raise FieldDoesNotExist(
+            f"{field.model.__name__}.{field.name} impl default targets "
+            f"{related._meta.label}, which must declare a slug field."
+        ) from error
     return querysets(related).filter(slug=value)
 
 
@@ -244,7 +264,9 @@ def readable_impl_defaults(model: type[models.Model], defaults: Mapping[str, Any
             field = model._meta.get_field(name)
         except FieldDoesNotExist:
             continue
-        targets = _relation_default_queryset(field, value, querysets=lambda related: require_rebac_queryset(related).scoped())
+        targets = _relation_default_queryset(
+            field, value, querysets=lambda related: require_rebac_queryset(related).scoped()
+        )
         if targets is None:
             continue
         target = targets.first()

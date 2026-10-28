@@ -4,19 +4,18 @@ from __future__ import annotations
 
 import re
 import sys
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, Self, TypeVar, cast
 
 from django.core import checks
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, router, transaction
 from rebac import (
     RebacMixin,
     RelationshipTuple,
     SubjectRef,
     delete_relationship,
-    system_context,
     to_object_ref,
     write_relationships,
 )
@@ -26,15 +25,14 @@ from rebac.field_visibility import redacted_fields
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
-from angee.base.permissions import instance_actor
 from angee.base.identity import PublicIdentity
+from angee.base.managers import AngeeManager, AngeeUnscopedManager
 from angee.base.models.identity import SqidMixin, TimestampMixin
 from angee.base.models.inputs import InputExtensionsMixin
-from angee.base.managers import AngeeManager, AngeeUnscopedManager
 from angee.base.models.merge_references import MergeContractMixin, named_in_relationships, references
-from angee.base.querysets import row_lock_paths
 from angee.base.models.transitions import StateTransitionsMixin
-from angee.base.permissions import declared_grants, effective_rebac_definition
+from angee.base.permissions import declared_grants, effective_rebac_definition, instance_actor
+from angee.base.querysets import row_lock_paths
 from angee.base.signals import record_access_revoked
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -314,7 +312,7 @@ class AngeeModel(
         """Validate the record's invariant before a grant, assignment, or admission.
 
         Overrides call ``super()`` first and raise
-        :class:`angee.errors.RecordAccessSubjectRefused` to refuse a holder.
+        :class:`angee.base.permissions.RecordAccessSubjectRefused` to refuse a holder.
         The default accepts every subject. This hook decides no visibility and
         is never asked when revoking access or clearing ownership.
         """

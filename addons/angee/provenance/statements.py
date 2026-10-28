@@ -36,16 +36,16 @@ from simple_history.manager import HistoryDescriptor
 from simple_history.models import HistoricalRecords
 from simple_history.utils import get_history_manager_for_model
 
-from angee.base.permissions import instance_actor
 from angee.base.fields.state import StateField
 from angee.base.lineage import most_derived_concrete
+from angee.base.managers import AngeeManager
 from angee.base.models.identity import SqidMixin, TimestampMixin, update_fields_with_auto_now
 from angee.base.models.locks import OptimisticLockMixin
-from angee.base.managers import AngeeManager
 from angee.base.models.merge_references import MergeContractMixin
-from angee.base.querysets import AngeeUnscopedQuerySet, SystemQuerysetMixin, by_key, query_batch_size
 from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.base.permissions import require_rebac_queryset
+from angee.base.permissions import instance_actor, require_rebac_queryset
+from angee.base.querysets import AngeeUnscopedQuerySet, SystemQuerysetMixin, by_key, query_batch_size
+from angee.base.validators import validate_value
 from angee.provenance.context import current_changeset
 from angee.provenance.contrib.angee.history import HistoryDocumentMixin, HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet, AngeeHistoryUnscopedQuerySet
@@ -57,7 +57,6 @@ from angee.provenance.evidence import (
     readable_records,
 )
 from angee.provenance.history import _ChangesetHistory
-from angee.base.validators import validate_value
 
 
 def _statement_column(model: type[models.Model], name: str) -> models.Field:

@@ -30,10 +30,9 @@ from angee.integrate.oauth.errors import (
 )
 from angee.integrate.oauth.state import StateFlow, StateRecord
 
-
 if TYPE_CHECKING:
-    from angee.integrate.models import Integration, OAuthClient
     from angee.integrate.models import Credential as CredentialModel
+    from angee.integrate.models import Integration, OAuthClient
 
 
 def connect_integration_target(

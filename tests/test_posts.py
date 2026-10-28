@@ -37,9 +37,9 @@ from angee.messaging.testing.models import Channel, Handle, Message, MessageEdge
 from angee.posts.backends import ParsedMetrics, ParsedPost, ParsedReaction
 from angee.posts.ingest import land_posts
 from angee.posts.models import ThreadPublic
-from angee.provenance.statements import StatementSourceMixin
 from angee.provenance.statements import (
     SourceKind,
+    StatementSourceMixin,
 )
 from tests.conftest import (
     Feed,

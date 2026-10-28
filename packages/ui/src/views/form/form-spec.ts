@@ -384,10 +384,8 @@ function deserializeField(
 
 /** Project validated wire filters into Refine's required value slot. */
 function relationFilter(filter: FormSpecFilter): CrudFilter {
-  if (filter.operator === "and" || filter.operator === "or") {
-    return { ...filter, value: filter.value.map(relationFilter) };
-  }
-  return { ...filter, value: filter.value };
+  if ("field" in filter) return { ...filter, value: filter.value };
+  return { ...filter, value: filter.value.map(relationFilter) };
 }
 
 /** A decimal accepted as a number or a numeric string (optionally null) edits as a number. */

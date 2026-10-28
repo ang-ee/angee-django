@@ -16,8 +16,8 @@ from django.db.models import Field, Model
 from pydantic import BaseModel, PrivateAttr
 
 from angee.addons import is_angee_addon
-from angee.base.implementations import ImplChoice
 from angee.base.fields.implementation import ImplClassField
+from angee.base.implementations import ImplChoice
 
 
 class PlatformFieldRow(BaseModel):

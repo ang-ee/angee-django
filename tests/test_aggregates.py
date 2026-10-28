@@ -19,6 +19,8 @@ from strawberry import auto
 from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
 from strawberry_django_hasura import hasura_config
 
+from angee.base.models import AngeeDataModel
+from angee.graphql.data import metadata as metadata_module
 from angee.graphql.data.contracts import (
     DataAggregateMeasureMetadata,
     DataQueryDrill,
@@ -28,13 +30,13 @@ from angee.graphql.data.contracts import (
     DataResourceSubtitleMetadata,
     DataResourceTypeNames,
 )
-from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
-from angee.graphql.data import metadata as metadata_module
 from angee.graphql.data.hasura import (
     _measure_ops_for_field,
     _relation_filter_decoders,
     _relation_group_key_encoders,
+    hasura_model_resource,
     hasura_query_axes,
+    public_pk_decoder,
 )
 from angee.graphql.data.metadata import (
     _finalize_data_resource as _project_final_data_resource,
@@ -44,7 +46,6 @@ from angee.graphql.data.resource_fields import final_input_only_resource_fields,
 from angee.graphql.ids import require_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.base.models import AngeeDataModel
 from tests.conftest import (
     SchemaAddon,
     execute_schema,

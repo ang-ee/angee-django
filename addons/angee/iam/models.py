@@ -34,6 +34,7 @@ from rebac import (
     resolve_subjects,
     system_context,
     to_subject_ref,
+    user_subject_type,
 )
 from rebac.errors import MissingActorError
 from rebac.memberships import grant as grant_membership
@@ -42,12 +43,7 @@ from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.resources import model_resource_type
 from rebac.roles import ROLE_RELATION
 
-from rebac import user_subject_type
-from angee.errors import DomainError
 from angee.base.fields.state import StateField
-from angee.iam.events import person_created
-from angee.iam.identity import user_label
-from angee.iam.roles import protected_account_holders
 from angee.base.identity import canonical_subject_ref, instance_from_public_id
 from angee.base.models import (
     AngeeDataModel,
@@ -56,6 +52,10 @@ from angee.base.models import (
     OptimisticLockMixin,
     role_anchor,
 )
+from angee.errors import DomainError
+from angee.iam.events import person_created
+from angee.iam.identity import user_label
+from angee.iam.roles import protected_account_holders
 
 VISIBLE_PEOPLE_DEFAULT_LIMIT = 20
 """Default page size for member-facing people surfaces."""

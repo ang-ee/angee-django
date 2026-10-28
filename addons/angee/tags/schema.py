@@ -30,10 +30,10 @@ from strawberry.types import get_object_definition
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
+from angee.base.refs import canonical_link_path
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
-from angee.base.refs import canonical_link_path
 from angee.tags.models import Tag as TagModel
 
 Tag = apps.get_model("tags", "Tag")

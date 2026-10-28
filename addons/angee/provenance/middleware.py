@@ -10,11 +10,11 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 
 from asgiref.sync import iscoroutinefunction
+from asgiref.typing import ASGI3Application, ASGIReceiveCallable, ASGISendCallable, Scope
 from django.core.exceptions import MiddlewareNotUsed
 from django.http import HttpRequest, HttpResponse
 from django.utils.decorators import sync_and_async_middleware
 
-from angee.asgi import ASGIApp, Receive, Scope, Send
 from angee.provenance.context import changeset, changeset_model_label
 
 FAILED_STATUS = 400
@@ -65,9 +65,9 @@ class ChangesetScopeMiddleware:
     failed when the consumer raises. Composed by :func:`angee.asgi.websocket_application`.
     """
 
-    def __init__(self, inner: ASGIApp) -> None:
+    def __init__(self, inner: ASGI3Application) -> None:
         self.inner = inner
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def __call__(self, scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
         async with changeset(fresh=True):
             await self.inner(scope, receive, send)

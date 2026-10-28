@@ -9,8 +9,8 @@ from rebac.backends import backend, reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.errors import RecordAccessSubjectRefused
 from angee.base.models import Stage
+from angee.base.permissions import RecordAccessSubjectRefused
 from tests.conftest import Vault
 from tests.core_persistence import OwnedRow
 

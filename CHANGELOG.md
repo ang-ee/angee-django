@@ -1,7 +1,7 @@
 # Changelog
 
 Notable structural and behavioral changes to the Angee framework — the `angee/`
-core + composer and the base addons under `addons/angee/`. The format loosely
+core + composer and the framework addons under `addons/angee/`. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com). Now that the package
 ships to PyPI, releases get version-keyed headings; earlier pre-release
 entries remain grouped by the dated effort that landed them, newest first. Day-to-day detail lives in git history — this file
@@ -11,23 +11,35 @@ live in code docstrings.
 
 ## Unreleased — AP consolidation 2026-10-18 (breaking; ships in 0.3.0)
 
-- `angee.base` is `angee`: `angee.models` (base model, ownership, merge, locks),
-  `angee.fields`, `angee.impl`, `angee.identity`, `angee.indexes`,
-  `angee.lineage`, `angee.refs`. **0.3.0 removes the `angee.base` compatibility
-  package**, including its frozen historical REBAC helper. Existing databases
+- **0.3.0 replaces the old `angee.base` compatibility package with a real
+  foundation addon under `addons/angee/base/`.** Models, mixins, fields,
+  managers, querysets, indexes, validators, identity and permission integration
+  belong to that addon. The frozen historical REBAC helper is removed. Existing databases
   must first pass through compatible code that still supplies these imports and
   `reset_migration_history`; finish migrations and collapse their composed history
   before taking the removal. Update pinned addons too: older messaging bridges
   imported `SourceKind` through `angee.base.mixins`; its public owner is now
-  `angee.provenance.statements`. Follow the [upgrade cutoff](docs/composer.md#retiring-angeebase-imports).
+  `angee.provenance.statements`. Follow the [upgrade cutoff](docs/composer.md#foundation-and-provenance-upgrade-cutoff).
   The persisted Django app label `base`, tables and content types keep their names.
   Other surviving migration contracts, including `angee.parties.runtime_migrations`,
   retain their own retirement requirements.
+- Mixed root modules are decomposed by responsibility: `ImplClassField` lives in
+  `angee.base.fields.implementation`, implementation configuration in
+  `angee.base.implementations`, model defaults in
+  `angee.base.models.implementations`, and independent hook resolution in
+  `angee.hooks`. JSON Schema validation and shared schema contracts belong to
+  foundation; workflow schema algebra belongs to workflows. `angee.data` is
+  retired: GraphQL owns resource projections, and foundation owns the shared
+  FormSpec schema consumed by Python and generated frontend validation.
+  Top-level model/field modules retain only proven historical migration aliases.
 - Composer stays in `angee.compose` and consumes declared app and build contracts.
   Angee's host owns project defaults, addon manifests, dependency projection and
   feature adapters. Rendered hosts now call `angee.management.main`, use
   `angee.settings`, and provision through `angee.management.bootstrap`; refresh
   hosts from the project and stack templates before restarting on this version.
+- Jobs/Celery and web builds have their own optional addon owners. Host settings,
+  Django lifecycle, serving entrypoints and neutral shared primitives remain in
+  core; the compiler receives capability integrations through explicit contracts.
 - Provenance lives entirely in the `angee.provenance` addon. Context, evidence,
   history and statements leave the model foundation; callers import their addon
   owners and explicitly opt into captured managers. The native Django capture
@@ -36,10 +48,10 @@ live in code docstrings.
   GraphQL hosts without provenance retain native CRUD and expose no creation
   idempotency argument. See the [addon contract](addons/angee/provenance/README.md).
 - Model references follow Django's explicit model-package exports:
-  `RecordRefMixin` and `DerivedFrom` are imported from `angee.models`;
-  reference discovery and deletion hooks live in `angee.models.refs`.
-  `angee.refs` retains pointer identities and `RetainedGenericRelation`, keeping
-  serialized field paths stable while removing the model import cycle. Test
+  `RecordRefMixin` and `DerivedFrom` are imported from `angee.base.models`;
+  reference discovery and deletion hooks live in `angee.base.models.refs`.
+  `angee.base.refs` owns pointer identities and `RetainedGenericRelation`, with
+  historical migration imports handled by the upgrade cutoff. Test
   callers use `rebac.testing.install_schema(..., backend=...)` directly instead
   of the removed `angee.testing.permissions.install_permission_schema` wrapper.
 - One spelling of ownership: `OwnerMixin.owner` is the column and a relation named
@@ -88,14 +100,14 @@ consolidation" (a stack with re-importable data starts a fresh database).
   CardDAV columns on `Party` are folded into statements and record links, then
   retired by a declared chain that preflights every refusal before it drops.
   `Party.merge_into` and `PartyManager.merge` give way to the shared record
-  merge (`angee.models.merge`).
+  merge (`angee.base.models.merge`).
 - Integrate: `RecordRevision` and `SyncDiscrepancy` are retired. A link's
   observations are its native history and a sync failure is a state of its link
   (`SyncFailure`, `LinkStatus.FAILED`); `SyncStream.authoritative` marks a
   system of record.
-- Removed ahead of the 0.4.0 window they were promised (ruling 2026-10-18, with the
-  `angee.base` → `angee` rename): the `DerivedFromRelation` alias of
-  `angee.refs.RetainedGenericRelation` and `@angee/ui`'s `RevisionsTab`.
+- Removed ahead of the 0.4.0 window they were promised (ruling 2026-10-18):
+  the `DerivedFromRelation` alias of `angee.base.refs.RetainedGenericRelation`
+  and `@angee/ui`'s `RevisionsTab`.
 - GraphQL removals: `confirm_party_handle`, `dismiss_party_handle`, `veto_merge`,
   `duplicate_party_candidates`, `Party.party_handles`, `Person.folder`, the
   `source` field on circle members, relationships and space memberships,
@@ -222,7 +234,7 @@ Upgrade steps: see "Unreleased — AP consolidation" below.
   refuse an untyped row with `ValueError` (a currency-rate context reports it as
   a `ValidationError`). The two edges that name rows outside REBAC — a chatter
   thread on an ungated host and an import record link to a plain domain sink —
-  store `angee.refs.generic_pointer_target`, the library's identity for a
+  store `angee.base.refs.generic_pointer_target`, the library's identity for a
   gated row and Django's own for an ungated one. Consumers that imported the removed
   helpers move to `rebac.generic_target` (an instance's stored content type and
   id) or `rebac.field_backing.canonical_model` (a model's canonical class,
@@ -245,7 +257,7 @@ Upgrade steps: see "Unreleased — AP consolidation" below.
   on the row's role): the chatter edge remains the record's own thread,
   materialized by its verbs under system context, with access riding on the
   thread as before, and an ungated host keeps its own concrete content type
-  (`angee.refs.generic_pointer_target`). The edge's `create` no longer
+  (`angee.base.refs.generic_pointer_target`). The edge's `create` no longer
   admits every authenticated actor.
 - Project links, project resource bindings and portfolio health reports
   authorize their target in the REBAC schema: each edge's per-type relations are
@@ -388,7 +400,7 @@ Upgrade steps: see "Unreleased — AP consolidation" below.
   recovery and dispatch collections consistently reject generic inserts.
   Implementation-field checks share registry resolution
   and reject mismatched implementation keys.
-- Base autoconfig enables simple-history's native text change-reason setting,
+- Provenance autoconfig enables simple-history's native text change-reason setting,
   replacing the private field-factory override. This intentionally applies
   project-wide, including consumer and third-party `HistoricalRecords` using the
   default change-reason field; existing default `CharField(100)` histories need
@@ -398,19 +410,20 @@ Upgrade steps: see "Unreleased — AP consolidation" below.
 - Storage resolves missing drive/backend relations within one system context,
   reusing an active context; cached storage access performs no queries or audit
   writes.
-- Currency projection metadata is owned by `angee.data.field_classification`;
+- Currency projection metadata is owned by `angee.graphql.data.resource_fields`;
   import `MONEY_CURRENCY_FIELD_METADATA_KEY` there.
 - Add opt-in `angee.workflows.testing` and `angee.integrate.testing` apps for
-  addon source test models. Core retains only the generic
-  `angee.testing.fixtures.composed_tables` fixture, using pytest-django's native
+  addon source test models. Foundation owns the generic
+  `angee.base.testing.fixtures.composed_tables` fixture, using pytest-django's native
   table setup and cleanup with REBAC synchronization. Workflow drivers live in
   `angee.workflows.testing.drivers`; duplicated test models, table fixtures and
   suite-local driver forwarding imports are removed.
 - Workflow definition validation asserts JSON Schema formats for inputs and
   binding literals.
-- Declare core `jsonschema[format-nongpl]` and `referencing` dependencies.
-  `angee.jsonschema` owns declaration checks, local-reference proof,
-  format validation and bounded schema algebra for core and addon callers.
+- Foundation declares the `jsonschema[format-nongpl]` and `referencing`
+  dependencies. `angee.base.validators` owns declaration and format validation;
+  `angee.base.schemas` owns shared references and form contracts;
+  `angee.workflows.schemas` owns workflow schema algebra.
 - Row-lock callers consistently use `lock_if_supported`, which delegates write
   routing and backend support to Django.
 - Slack rate-limit retries use the SDK's shared attempt budget, explicit polling
@@ -420,10 +433,10 @@ Upgrade steps: see "Unreleased — AP consolidation" below.
   locale-specific zero-count selection unless the fallback declares a zero form.
   Test fixtures use the shared initializer, and runtime translation types match
   i18next's language contract without instance casts.
-- Row and batch resource target resolution share `angee.identity` and its
+- Row and batch resource target resolution share `angee.base.identity` and its
   field-owned public-ID decoding with Django's `in_bulk`; row adoption and hash-skip state
   stay on the resource and are reset before import.
-- `angee.jsonschema.LocalSchemaReferences` owns root-local JSON Schema
+- `angee.base.schemas.references.LocalSchemaReferences` owns root-local JSON Schema
   pointers and anchors through `referencing` for workflow structural proofs and
   implementation forms; remote references and nested resource scopes remain
   unsupported.
@@ -528,7 +541,9 @@ Upgrade steps: see "Unreleased — AP consolidation" below.
 - Forms and tables use native RHF and TanStack state with Refine core transport;
   the Refine table and RHF wrappers are removed. Authored reads expose native
   Query controls and share a provider/document/variables cache; operator snapshots
-  update it directly. Metadata/form parsing uses Valibot-inferred wire types.
+  update it directly. Resource metadata uses Valibot-inferred wire types;
+  FormSpec types and standalone browser validation are generated from the
+  foundation-owned JSON Schema.
   [Frontend migration notes](docs/frontend/upstream-reuse.md) record changed APIs
   and preserved URL/favorite contracts.
 - Two deliberate gates remain: the bounded import constraint evaluator cannot

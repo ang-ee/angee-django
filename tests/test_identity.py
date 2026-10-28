@@ -14,9 +14,9 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 from angee.base.fields.identity import SqidField
-from angee.graphql.node import AngeeNode
 from angee.base.identity import SqidPublicIdentity, instance_from_public_id, instances_from_public_ids
 from angee.base.models import AngeeModel
+from angee.graphql.node import AngeeNode
 from tests.tables import model_tables
 
 _model_counter = count()

@@ -7,8 +7,8 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db.models.signals import pre_delete
 
-from angee.proposals.models import Proposal, Round
 from angee.base.signals import connect_for_models
+from angee.proposals.models import Proposal, Round
 
 
 def connect() -> None:

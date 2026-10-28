@@ -35,7 +35,9 @@ def test_generated_role_anchor_alias_survives_cold_and_warm_analysis(tmp_path: P
         "[mypy.plugins.django-stubs]\ndjango_settings_module = role_settings\n"
     )
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH"))))
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH")))
+    )
     env["DJANGO_SETTINGS_MODULE"] = "role_settings"
     bootstrap = subprocess.run(
         [sys.executable, "-c", "import django; django.setup()"],

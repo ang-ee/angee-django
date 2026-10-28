@@ -9,8 +9,8 @@ from django.test import TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 
-from angee.errors import RecordAccessSubjectRefused
 from angee.base.identity import public_id_of
+from angee.base.permissions import RecordAccessSubjectRefused
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessCase, grant_rows
 

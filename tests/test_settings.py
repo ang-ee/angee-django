@@ -9,13 +9,14 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import django_yamlconf
 import pytest
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 
 from angee.compose.autoconfig import AutoConfig
 from angee.compose.composer import Composer
-from angee.conf import prepend_import_paths
+from angee.conf import ProjectContract, prepend_import_paths
 from angee.project import PROJECT_DIR_ENV, find_project_dir, project_dir
 
 BASE_APP = "angee.base.apps.BaseConfig"
@@ -964,6 +965,37 @@ def test_compose_settings_module_ignores_ancestor_settings_yaml(
     assert compose_settings.BASE_DIR == project
 
 
+
+def test_host_keeps_native_bootstrap_variables_out_of_django_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """New native bootstrap names expand without leaking into the host namespace."""
+
+    native_bootstrap = django_yamlconf.bootstrap_attributes
+
+    def bootstrap(base_dir: str) -> dict[str, Any]:
+        attributes: dict[str, Any] = native_bootstrap(base_dir)
+        django_yamlconf.add_attr_info(attributes, "LIBRARY_BOOTSTRAP_ONLY", "native-value")
+        return attributes
+
+    monkeypatch.setattr(django_yamlconf, "bootstrap_attributes", bootstrap)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setenv("ANGEE_PROJECT_DIR", str(tmp_path))
+    monkeypatch.delenv("ANGEE_PROJECT_SETTINGS", raising=False)
+    monkeypatch.delenv("YAMLCONF_CONFFILE", raising=False)
+    project_settings = ModuleType("settings")
+    project_settings.__file__ = str(tmp_path / "settings.py")
+    monkeypatch.setitem(sys.modules, "settings", project_settings)
+    (tmp_path / "settings.yaml").write_text('SECRET_KEY: "{LIBRARY_BOOTSTRAP_ONLY}"\n', encoding="utf-8")
+
+    namespace: dict[str, Any] = {}
+    ProjectContract(namespace).load()
+
+    assert namespace["SECRET_KEY"] == "native-value"
+    assert namespace["BASE_DIR"] == tmp_path
+    assert "LIBRARY_BOOTSTRAP_ONLY" not in namespace
+
+
 def test_reject_unexpected_yamlconf_source_fails_fast(tmp_path: Path) -> None:
     """The provenance guard still rejects a foreign yamlconf source.
 
@@ -972,8 +1004,6 @@ def test_reject_unexpected_yamlconf_source_fails_fast(tmp_path: Path) -> None:
     the project file, the ``YAMLCONF_CONFFILE`` overlay, or an internal/env
     sentinel is a bug the composer must refuse.
     """
-
-    from angee.compose.yamlconf import reject_unexpected_sources
 
     project_settings = ModuleType("settings")
     project_settings.__file__ = str(tmp_path / "settings.py")
@@ -984,7 +1014,7 @@ def test_reject_unexpected_yamlconf_source_fails_fast(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ImproperlyConfigured, match="Unexpected django-yamlconf source"):
-        reject_unexpected_sources(project_settings, tmp_path, "settings")
+        ProjectContract({})._reject_unexpected_sources(project_settings, tmp_path, "settings")
 
 
 def test_compose_settings_module_uses_project_dir_for_non_manage_entrypoints(

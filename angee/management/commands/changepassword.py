@@ -6,8 +6,12 @@ command precedence can select the IAM owner without the host binding.
 """
 
 from django.apps import apps
+from django.contrib.auth.management.commands.changepassword import Command as DjangoCommand
 
+Command: type[DjangoCommand]
 if apps.is_installed("angee.iam"):
-    from angee.iam.management.commands.changepassword import Command as Command
+    from angee.iam.management.commands.changepassword import Command as IAMCommand
+
+    Command = IAMCommand
 else:
-    from django.contrib.auth.management.commands.changepassword import Command as Command
+    Command = DjangoCommand

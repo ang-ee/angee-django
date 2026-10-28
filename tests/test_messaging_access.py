@@ -16,8 +16,8 @@ from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 
 from angee.base.build import apply_schema_paths, extension_source_map
-from angee.messaging.testing.models import Channel, Message, Part, Thread, ThreadAttachment
 from angee.base.testing.permissions import installed_field_owners
+from angee.messaging.testing.models import Channel, Message, Part, Thread, ThreadAttachment
 from angee.utils.files import write_atomic
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import File, Vendor

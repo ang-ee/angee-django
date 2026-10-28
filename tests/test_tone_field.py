@@ -5,12 +5,11 @@ from __future__ import annotations
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.graphql.data.resource_fields import resource_field_widget
-from angee.graphql.data.contracts import DataResourceFieldMetadata
 from angee.base.fields.state import StateField, ToneField
-from angee.graphql.data.resource_fields import _validate_resource_field
 from angee.base.models import Stage
 from angee.base.models.stages import StageTone
+from angee.graphql.data.contracts import DataResourceFieldMetadata
+from angee.graphql.data.resource_fields import _validate_resource_field, resource_field_widget
 
 
 def test_tone_field_declares_the_tone_widget() -> None:

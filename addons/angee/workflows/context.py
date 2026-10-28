@@ -11,10 +11,10 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models
 from rebac.resources import model_resource_type
 
-from angee.decisions.contracts import DecisionRequest
 from angee.base.identity import instance_from_public_id, public_id_for
 from angee.base.models import row_lock_paths
 from angee.base.permissions import require_rebac_queryset
+from angee.decisions.contracts import DecisionRequest
 from angee.workflows.runner import runner
 from angee.workflows.states import DONE_OUTCOME, NoteTone, RunRelation
 from angee.workflows.steps import Ask, Done, Fail, NextPage, Step, StepMode, Wait

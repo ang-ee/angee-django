@@ -15,23 +15,30 @@ from django.core.validators import DomainNameValidator, validate_email
 from django.db import models, transaction
 from django.db.models.expressions import BaseExpression
 from django.db.models.functions import Coalesce, NullIf
-from rebac import PermissionDenied, actor_context, check_new, current_actor, system_context, to_object_ref
+from rebac import (
+    PermissionDenied,
+    actor_context,
+    check_new,
+    current_actor,
+    system_context,
+    to_object_ref,
+    user_subject_type,
+)
 from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
-from rebac import user_subject_type
-from angee.base.permissions import actor_user_id, instance_actor
-from angee.decisions.contracts import DecisionProposal, DecisionRequest
-from angee.errors import DomainError, RecordAccessSubjectRefused
 from angee.base.fields.state import StateField
-from angee.intake.choices import NeedAccessAction
-from angee.intake.resources import NeedResource
 from angee.base.models import (
     AngeeDataModel,
     AuditMixin,
     OptimisticLockMixin,
 )
+from angee.base.permissions import RecordAccessSubjectRefused, actor_user_id, instance_actor
+from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.errors import DomainError
+from angee.intake.choices import NeedAccessAction
+from angee.intake.resources import NeedResource
 from angee.provenance.context import changeset, changeset_model, require_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -477,7 +484,9 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
     def _new_access_decision(self) -> Any:
         """Ask one question assigned to the target's current sharers."""
         with system_context(reason="intake.need.access_question"):
-            readers = backend().lookup_subjects(resource=to_object_ref(self), action="share", subject_type=user_subject_type())
+            readers = backend().lookup_subjects(
+                resource=to_object_ref(self), action="share", subject_type=user_subject_type(),
+            )
             assignees = tuple(
                 get_user_model().objects.filter(pk__in=[actor_user_id(ref) for ref in readers], is_active=True)
             )
@@ -1063,7 +1072,7 @@ class ChannelIntake(models.Model):
                     raise ValidationError({"intake_field_map": f"Unsupported target field: {target}."})
                 if field is None or field.read_only or field.email:
                     raise ValidationError({"intake_field_map": f"{target} requires a writable, non-email property."})
-                if field.kind not in kinds:
+                if field.schema["type"] not in kinds:
                     raise ValidationError({"intake_field_map": f"The form property has the wrong kind for {target}."})
                 if name in used:
                     raise ValidationError({"intake_field_map": "Map each form property only once."})

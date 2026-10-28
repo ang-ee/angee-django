@@ -21,8 +21,15 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models.signals import post_save
 from django.test import override_settings
 from rebac import (
-    RelationshipTuple, actor_context, anonymous_actor, current_actor, delete_relationship,
-    system_context, to_object_ref, to_subject_ref, write_relationships,
+    RelationshipTuple,
+    actor_context,
+    anonymous_actor,
+    current_actor,
+    delete_relationship,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
 )
 from rebac.graphql.strawberry import RebacChannelsConsumerMixin
 from rebac.roles import grant as grant_role
@@ -31,8 +38,8 @@ from strawberry_django.utils.requests import get_request
 
 from angee.graphql import access, publishing, subscriptions
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
-from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.graphql.events import ChangeEvent, ChangePayload, ChangeRelatedRecord
+from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from angee.iam import schema as iam_schema

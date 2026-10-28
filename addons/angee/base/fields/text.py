@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Any
+
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models
+
 from angee.base.validators import HEX_COLOR_VALIDATOR
 from angee.serialization import strip_null_bytes
 

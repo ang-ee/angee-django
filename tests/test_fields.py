@@ -16,12 +16,11 @@ from django.db.models import F, Value
 from django.db.models.functions import Concat
 from django.test.utils import isolate_apps, override_settings
 
-from angee.base.fields.text import DiagnosticTextField, ModelLabelField
-from angee.base.fields.encrypted import EncryptedField
-from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
+from angee.base.fields.encrypted import EncryptedField, _derive_fernet
 from angee.base.fields.identity import SqidField
+from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
 from angee.base.fields.state import StateField
-from angee.base.fields.encrypted import _derive_fernet
+from angee.base.fields.text import DiagnosticTextField, ModelLabelField
 from angee.base.models import SqidMixin
 from tests.tables import model_tables
 
@@ -903,3 +902,34 @@ def test_fractional_rank_allocation_uses_explicit_write_alias(
         del connections.databases[alias]
 
 
+
+
+@isolate_apps("django.contrib.contenttypes")
+def test_state_field_does_not_cache_unresolved_pending_foreign_key() -> None:
+    """Forward guard discovery must not resolve unrelated reverse metadata early."""
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+
+    class StateParent(models.Model):
+        state = StateField(choices_enum=Status, default=Status.OPEN)
+
+        class Meta:
+            app_label = "contenttypes"
+            abstract = True
+
+    class Waiting(models.Model):
+        target = models.ForeignKey("contenttypes.StateTarget", on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "contenttypes"
+
+    class StateTarget(StateParent):
+        extra_state = StateField(choices_enum=Status, default=Status.OPEN)
+
+        class Meta:
+            app_label = "contenttypes"
+
+    relation = Waiting._meta.get_field("target")
+    assert relation.remote_field.model is StateTarget
+    assert relation.related_model is StateTarget

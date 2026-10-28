@@ -1,6 +1,6 @@
 # angee-django
 
-**Developer framework and base addons for building Django + React applications
+**Developer framework and reusable addons for building Django + React applications
 on the [Angee platform](https://angee.ai).**
 
 [![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](https://github.com/ang-ee/angee-django/blob/main/LICENSE)
@@ -27,7 +27,7 @@ Public [feed streams and held replies](addons/angee/posts/README.md) compose
 
 ## What is this?
 
-`angee-django` is the **framework**, the **base addons** that ship with it, and
+`angee-django` is the **framework**, the **framework addons** that ship with it, and
 the first and default **Host** for Angee — a platform for building
 **agent-native applications** that humans and agents operate together.
 
@@ -105,10 +105,10 @@ hand. For the full onboarding path
 
 This repository holds the framework's source surfaces together:
 
-- **`angee/`** — the model and data contracts, ASGI and Celery seams, and the
-  `manage.py angee build` composer.
-- **`addons/`** — the standard folder addons, including the GraphQL runtime,
-  with co-located web fragments.
+- **`angee/`** — generic Django composition, host configuration and serving
+  entrypoints, and shared framework primitives.
+- **`addons/`** — the `angee.base` model foundation and capability addons,
+  including provenance, jobs, web builds and GraphQL, with co-located web fragments.
 - **`packages/`** — the published `@angee/*` React packages and workshops.
 - **`examples/`** — showcase consumer addons and the reference e2e suite.
 - **`templates/`** — Copier sources for projects, stacks, workspaces, and services.

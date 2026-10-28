@@ -17,6 +17,7 @@ from strawberry import auto
 from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 
+from angee.base.models import StaleRevisionError
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -26,7 +27,13 @@ from angee.graphql.actions import (
     many_actions,
 )
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, declared_hasura_resource_fields, declared_hasura_write_relation_fields, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import (
+    AngeeHasuraWriteBackend,
+    declared_hasura_resource_fields,
+    declared_hasura_write_relation_fields,
+    hasura_model_resource,
+    public_pk_decoder,
+)
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.inputs import InputReference
 from angee.graphql.node import AngeeNode
@@ -36,7 +43,6 @@ from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.messaging.schema import MessageType
-from angee.base.models import StaleRevisionError
 from angee.money.schema import CurrencyType
 from angee.parties.schema import PartyType
 from angee.projects.models import Project as ProjectModel

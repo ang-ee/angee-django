@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from django.db import models
 
-from angee.base.fields.text import ModelLabelField
 from angee.base.fields.state import StateField
+from angee.base.fields.text import ModelLabelField
 from angee.base.identity import instance_from_public_id
 from angee.base.models import AngeeModel
 from angee.resources.entries import resolve_model

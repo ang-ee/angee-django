@@ -8,6 +8,7 @@ from angee.base.models import (
     AngeeDataModel,
     role_anchor,
 )
+from angee.base.refs import RetainedGenericRelation
 from angee.provenance.statements import (
     Aspect,
     SourceKind,
@@ -15,7 +16,6 @@ from angee.provenance.statements import (
     StatementRecords,
     StatementsMixin,
 )
-from angee.base.refs import RetainedGenericRelation
 
 Role = role_anchor("extcontrib/role", name="Role")
 

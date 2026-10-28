@@ -17,11 +17,11 @@ from rebac import actor_context, system_context
 from rebac.backends import backend
 from rebac.testing import install_schema
 
+from angee.base.identity import public_id_of
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.base.identity import public_id_of
 from angee.integrate import scheduler, tasks
 from angee.integrate.connect import complete_account_connect, complete_external_account_link
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK

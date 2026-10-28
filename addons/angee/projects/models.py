@@ -21,16 +21,13 @@ from rebac import (
     system_context,
     to_object_ref,
     to_subject_ref,
+    user_subject_type,
 )
 from rebac.backends import backend
 from rebac.field_backing import canonical_model
 
-from rebac import user_subject_type
-from angee.base.permissions import actor_user_id
-from angee.errors import RecordAccessSubjectRefused
 from angee.base.fields.ordering import FractionalRankField
 from angee.base.fields.state import StateField
-from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.base.models import (
     AngeeDataModel,
     AuditMixin,
@@ -49,6 +46,8 @@ from angee.base.models import (
     TrashQuerySet,
     candidate_relationships,
 )
+from angee.base.permissions import RecordAccessSubjectRefused, actor_user_id
+from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
 from angee.projects.events import (
     milestone_reached,
@@ -59,12 +58,11 @@ from angee.projects.events import (
 from angee.projects.inputs import MilestoneTemplate
 from angee.provenance.context import changeset, changeset_model, require_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin
-from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.scheduling.fields import RecurrenceField
 from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
-from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 
 
 class ProjectSetupState(StrEnum):
@@ -1487,7 +1485,11 @@ class Task(
 
         super().validate_record_access_subject(relation, subject)
         reference = to_subject_ref(subject)
-        if self.subject_object_id is None or reference.optional_relation or reference.subject_type != user_subject_type():
+        if (
+            self.subject_object_id is None
+            or reference.optional_relation
+            or reference.subject_type != user_subject_type()
+        ):
             return
         if self.effective_actor()[1]:
             return

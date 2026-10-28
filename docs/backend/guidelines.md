@@ -102,14 +102,14 @@ that layering tests enforce:
   Host serving commands share that restriction; host build/provision commands
   dispatch compilation explicitly.
 
-The same one-way rule extends downward to the base addons under `addons/angee/`
+The same one-way rule extends downward to framework addons under `addons/angee/`
 (`angee.resources`, `angee.iam`, `angee.integrate`, `angee.operator`,
 `angee.storage`): an addon
 may import `angee` and `angee.graphql`. A capability's explicit `build.py`
 may import the compiler's declaration contract; serving modules never import
 that adapter or `angee.compose`. Autoconfig selects it by dotted path, so
 settings/app discovery does not import feature build code. The
-resource subsystem (`angee.resources`) is itself a base addon, not part of the
+resource subsystem (`angee.resources`) is itself a framework addon, not part of the
 core — it owns the resource ledger described below.
 
 ### Composition owners
@@ -771,8 +771,8 @@ data through REBAC, never a queryset bypass.
   Functional drift is caught by `rebac sync` (content hash) and `angee build
   --check` (the emitted file); the contribution is revisioned by the contributing
   addon (`@rebac_schema_revision` in its fragment, echoed into the merged file's
-  `@rebac_extended_by`), so the base addon does **not** bump its revision for an
-  additive extension. **Editing a framework/base-addon `permissions.zed` to name
+  `@rebac_extended_by`), so the extended addon does **not** bump its revision for an
+  additive extension. **Editing a framework addon's `permissions.zed` to name
   a domain role (for example, `<consumer>_reviewer`) is a bug** — the vocabulary
   belongs in the consumer addon that owns the concern.
 - There is no `rebac_roles` command. Grant writable role memberships through
@@ -871,7 +871,7 @@ and current contracts before applying a historical example to a new deployment.
 - **`angee dev` serves via Angee's `runserver` override, not `uvicorn --reload`.**
   `angee` ships a `runserver` that runs `ASGI_APPLICATION` under uvicorn
   supervised by Django's follow-imports autoreloader (mirrors Daphne's override).
-  It needs no `--reload-dir`: Django watches imported source — consumer/base addons,
+  It needs no `--reload-dir`: Django watches imported source — consumer/framework addons,
   framework core, *and* editable deps — and never the generated `runtime/` (each
   child re-emits before its reloader snapshots), so a model edit reloads once. Don't
   reintroduce `uvicorn --reload`/`--reload-dir` heuristics in the stack template. The
@@ -880,9 +880,10 @@ and current contracts before applying a historical example to a new deployment.
   `runtime/schemas/*.graphql` and Vite HMRs; `schema --check`
   stays a real drift gate because management commands never import `angee.asgi`.
   Generated files (runtime models + SDL) are written atomically via
-  `angee.utils.files.write_atomic`. The override also hard-exits the autoreloader child on
-  reload: open uvicorn/channels WebSocket work can leave non-daemon runtime threads
-  alive, so Django's default `sys.exit(3)` can wedge the child on a dead listener.
+  `angee.utils.files.write_atomic`. Django decides whether a file-change receiver
+  handled an edit or the child must reload. When its native run loop exits, the
+  command requests Uvicorn shutdown and waits for the server thread, allowing ASGI
+  lifespans to release their non-daemon work before Python exits.
   Install `pywatchman` for event-based (vs 1s-poll) reload.
 - **Each running stack needs a unique Compose project name and edge port.**
   Colliding names can merge containers into another stack's Compose project;
@@ -972,8 +973,9 @@ and current contracts before applying a historical example to a new deployment.
   a module its generated migrations import: the applied graph must load for
   `makemigrations`, `migrate` and `reset_migration_history` alike. Retire any
   non-composed migration imports separately and check pinned addons before crossing
-  that release's upgrade cutoff. The [0.3.0 `angee.base` retirement](../composer.md#retiring-angeebase-imports)
-  follows this sequence; its compatibility package is removed.
+  that release's upgrade cutoff. The [0.3.0 foundation and provenance cutoff](../composer.md#foundation-and-provenance-upgrade-cutoff)
+  follows this sequence; the real foundation addon does not restore retired
+  compatibility APIs.
 - **Removing a field, model or donor addon whose storage holds data needs a
   declared cutover.** `makemigrations` refuses the autodetected drop through the
   [composer's drop guard](../composer.md#addon-owned-runtime-migrations). An
@@ -2083,7 +2085,8 @@ subset, and `validate_record_access_target()` enforces model-specific target
 rules for listing, options, grants, and revocations. For example, Workflow
 accepts grants only on its lineage head; GraphQL must not infer that rule from
 Workflow fields. A `validate_record_access_subject()` override that keeps one
-user out of a record's holders raises `RecordAccessSubjectRefused` when
+user out of a record's holders raises the foundation-owned
+[`RecordAccessSubjectRefused`](../../addons/angee/base/permissions.py) when
 [`subject_reaches_user`](../../addons/angee/base/permissions.py), the one predicate for
 whether a subject reference resolves to, or contains, that user, answers true;
 it never decodes wildcards or usersets itself.

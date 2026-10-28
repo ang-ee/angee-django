@@ -13,8 +13,8 @@ from rebac import (
 )
 from rebac.actors import is_sudo
 
-from angee.errors import DomainError
 from angee.base.querysets import SystemQuerysetMixin
+from angee.errors import DomainError
 
 
 class ImmutableFieldsMixin(models.Model):

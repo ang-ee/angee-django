@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from functools import partial
 from io import BytesIO
 from typing import Any, cast
 
+from asgiref.typing import ASGI3Application, ASGIReceiveCallable, ASGISendCallable, Scope
 from django.core.exceptions import ImproperlyConfigured
 
 from angee.project import bootstrap
@@ -29,7 +30,7 @@ def _websocket_urlpatterns() -> list[object]:
     return patterns
 
 
-def _http_mounts() -> list[tuple[str, Any]]:
+def _http_mounts() -> list[tuple[str, ASGI3Application]]:
     """Return the ``(path_prefix, ASGI app)`` HTTP mounts contributed by addons."""
 
     # Deferred for the same Django app-loading reason as
@@ -38,7 +39,7 @@ def _http_mounts() -> list[tuple[str, Any]]:
 
     from angee.addons import addon_contribution
 
-    mounts: list[tuple[str, Any]] = []
+    mounts: list[tuple[str, ASGI3Application]] = []
     for app_config in apps.get_app_configs():
         mounts.extend(
             (prefix, app)
@@ -59,12 +60,6 @@ def _lifespans() -> list[Callable[[], AbstractAsyncContextManager[Any]]]:
         for app_config in apps.get_app_configs()
         for factory in addon_contribution(app_config, "asgi", "lifespans", allow_callable=True)
     ]
-
-
-Scope = dict[str, Any]
-Receive = Callable[[], Awaitable[Mapping[str, Any]]]
-Send = Callable[[Mapping[str, Any]], Awaitable[None]]
-ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
 
 def _run_boot_hooks() -> None:
@@ -147,7 +142,9 @@ def _application() -> Any:
     from django.db.backends.signals import connection_created
 
     timeout_ms = _web_statement_timeout_ms()
-    django_asgi_app = get_asgi_application()
+    # Django's stubs describe ASGI messages as Mapping rather than asgiref's
+    # protocol TypedDicts; the native handler implements the same ASGI 3 contract.
+    django_asgi_app = cast(ASGI3Application, get_asgi_application())
     if timeout_ms:
         connection_created.connect(
             partial(_bound_web_statements, timeout_ms=timeout_ms),
@@ -163,7 +160,7 @@ def _application() -> Any:
 
     from channels.routing import ProtocolTypeRouter
 
-    mapping: dict[str, ASGIApp] = {
+    mapping: dict[str, ASGI3Application] = {
         "http": _http_app(django_asgi_app, http_mounts),
         "lifespan": _Lifespan(lifespans),
     }
@@ -172,7 +169,7 @@ def _application() -> Any:
     return ProtocolTypeRouter(mapping)
 
 
-def websocket_application(patterns: list[object]) -> ASGIApp:
+def websocket_application(patterns: list[object]) -> ASGI3Application:
     """Compose the shared cookie/Origin and attribution boundaries for addon WebSocket routes.
 
     Installed addons contribute wrappers through ``asgi.websocket_middleware``.
@@ -199,10 +196,10 @@ def websocket_application(patterns: list[object]) -> ASGIApp:
 
 
 class _WebsocketOriginValidator:
-    def __init__(self, application: ASGIApp) -> None:
+    def __init__(self, application: ASGI3Application) -> None:
         self.application = application
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def __call__(self, scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
         from channels.security.websocket import OriginValidator
         from django.conf import settings
         from django.core.exceptions import DisallowedHost
@@ -234,19 +231,19 @@ class _LazyApplication:
     """
 
     def __init__(self) -> None:
-        self._wrapped: ASGIApp | None = None
+        self._wrapped: ASGI3Application | None = None
 
-    def _app(self) -> ASGIApp:
+    def _app(self) -> ASGI3Application:
         if self._wrapped is None:
             bootstrap()
-            self._wrapped = cast(ASGIApp, _application())
+            self._wrapped = cast(ASGI3Application, _application())
         return self._wrapped
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def __call__(self, scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
         await self._app()(scope, receive, send)
 
 
-def _http_app(django_app: ASGIApp, http_mounts: list[tuple[str, ASGIApp]]) -> ASGIApp:
+def _http_app(django_app: ASGI3Application, http_mounts: list[tuple[str, ASGI3Application]]) -> ASGI3Application:
     """Return the HTTP app: mounted sub-apps by path prefix, else Django.
 
     With no mounts this is just the Django app. Otherwise mounts are matched
@@ -259,7 +256,7 @@ def _http_app(django_app: ASGIApp, http_mounts: list[tuple[str, ASGIApp]]) -> AS
 
     if not http_mounts:
         return django_app
-    normalized: dict[str, ASGIApp] = {}
+    normalized: dict[str, ASGI3Application] = {}
     for prefix, app in http_mounts:
         if not isinstance(prefix, str) or not prefix.startswith("/"):
             raise ImproperlyConfigured(f"ASGI HTTP mount prefix must be an absolute path, got {prefix!r}.")
@@ -269,7 +266,7 @@ def _http_app(django_app: ASGIApp, http_mounts: list[tuple[str, ASGIApp]]) -> AS
         normalized[prefix] = app
     mounts = tuple(sorted(normalized.items(), key=lambda mount: len(mount[0]), reverse=True))
 
-    async def http_app(scope: Scope, receive: Receive, send: Send) -> None:
+    async def http_app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
         path = str(scope.get("path", ""))
         for prefix, app in mounts:
             if prefix == "/" or path == prefix or path.startswith(f"{prefix}/"):
@@ -292,7 +289,7 @@ class _Lifespan:
         self._factories = factories
         self._exit_stack: AsyncExitStack | None = None
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def __call__(self, scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
         try:
             while True:
                 message = await receive()

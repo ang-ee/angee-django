@@ -30,8 +30,8 @@ from simple_history.utils import get_history_manager_for_model
 from angee.base.lineage import concrete_child_models, concrete_lineage
 from angee.base.managers import AngeeManager, AngeeUnscopedManager
 from angee.base.models.merge_references import MergeContractMixin
-from angee.base.querysets import SystemQuerysetMixin, candidate_relationships
 from angee.base.models.trash import TrashMixin
+from angee.base.querysets import SystemQuerysetMixin, candidate_relationships
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
 from angee.provenance.history import (
     _UNLOADED,
@@ -99,6 +99,8 @@ class ModelHistory(CaptureHistory):
     MTI children. Native history construction receives a detached
     snapshot with stored gated values, never the caller's redacted projection.
     """
+
+    bases: tuple[type[models.Model], ...]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

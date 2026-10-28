@@ -13,8 +13,8 @@ from django.core.exceptions import ValidationError
 from django.db import DataError, models
 from rebac import system_context
 
-from angee.base.fields.state import StateField
 from angee.base.fields.implementation import ImplClassField
+from angee.base.fields.state import StateField
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate.sync import current_bridge_progress
 from angee.storage import exceptions

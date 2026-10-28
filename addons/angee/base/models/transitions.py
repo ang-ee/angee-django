@@ -3,7 +3,7 @@
 API contract:
 
 ``StateTransitions(field, graph, policy_setting=None)`` opts one ``StateField``
-on an ``AngeeModel`` host into guarding and binds it to the declared
+on a ``StateTransitionsMixin`` host into guarding and binds it to the declared
 source-to-target graph. Graph keys are source values or source lists; graph
 values are target values or target lists.
 Values are normalized through the field, so callers may use enum members, stored
@@ -75,8 +75,8 @@ from django.db import models, transaction
 from django.db.models.fields.mixins import FieldCacheMixin
 
 from angee.base.fields.state import StateField, enum_member_for
-from angee.errors import TransitionNotAllowed
 from angee.base.querysets import SystemQuerysetMixin
+from angee.errors import TransitionNotAllowed
 
 Condition = Callable[[models.Model], bool]
 SuccessHook = Callable[..., None]
@@ -155,6 +155,14 @@ class StateTransitionsMixin(SystemQuerysetMixin):
         super().__init_subclass__(**kwargs)
         for declaration in StateTransitions._iter_declarations(cls):
             if getattr(declaration.field, "model", None) is not None:
+                field_name = declaration.field.name
+                # Django removes inherited abstract fields with a None class declaration.
+                # Options still belongs to the parent while __init_subclass__ runs.
+                if cls.__dict__.get(field_name, declaration.field) is None:
+                    raise ImproperlyConfigured(
+                        f"{cls.__module__}.{cls.__qualname__}.{declaration.name} "
+                        f"cannot remove guarded StateField {field_name!r}."
+                    )
                 declaration.revalidate_for(cls)
 
     def refresh_from_db(
@@ -211,7 +219,9 @@ class StateTransitions:
         self._declared = self._normalize_graph()
         self.field.transition_guard = self
         if not issubclass(cls, StateTransitionsMixin):
-            raise ImproperlyConfigured(f"{cls._meta.label} must inherit StateTransitionsMixin to host StateTransitions.")
+            raise ImproperlyConfigured(
+                f"{cls._meta.label} must inherit StateTransitionsMixin to host StateTransitions."
+            )
 
         for method_name, value in cls.__dict__.items():
             spec = cast(_TransitionSpec | None, getattr(value, "_angee_transition_spec", None))
@@ -458,8 +468,12 @@ class StateTransitions:
     def assign(
         self, instance: models.Model, field: StateField, value: Any, load: Callable[[], Any],
     ) -> None:
-        """Allow initial, idempotent and explicitly transition-owned field writes."""
+        """Guard this declaration's model and its native descendants."""
 
+        if not isinstance(instance, self.field.model):
+            # A scalar field copy does not opt its new model into domain policy.
+            instance.__dict__[field.attname] = value
+            return
         target = field.to_python(value)
         active = cast(set[str] | None, getattr(instance, "_angee_transition_write_fields", None))
         authorized = active is not None and field.attname in active

@@ -14,11 +14,11 @@ from django.db.migrations.operations import CreateModel
 from django.db.migrations.state import ModelState, ProjectState
 from django.test.utils import isolate_apps
 
-from angee.compose.model_composition import ModelComposition
-from angee.compose.rendering import render_models
 from angee.base.models import (
     SqidMixin,
 )
+from angee.compose.model_composition import ModelComposition
+from angee.compose.rendering import render_models
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
 from tests.tables import model_tables

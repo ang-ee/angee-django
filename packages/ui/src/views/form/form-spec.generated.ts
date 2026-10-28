@@ -125,6 +125,7 @@ export interface FormSpecWire {
   allOf?: FormSpecWire[];
   $ref?: string;
   additionalProperties?: boolean | FormSpecWire;
+  prefixItems?: FormSpecWire[];
 }
 /**
  * This interface was referenced by `undefined`'s JSON-Schema

@@ -59,9 +59,8 @@ from angee.base.models import (
     role_anchor,
 )
 from angee.provenance.contrib.angee.history import HistoryMixin
-from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
-from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 
 
 class TagQuerySet[TagT: Tag](

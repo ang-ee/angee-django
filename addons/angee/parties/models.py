@@ -41,12 +41,10 @@ from phonenumbers import (
 from rebac import PermissionDenied, actor_context
 from rebac.mixins import RebacModelBase
 
-from angee.base.permissions import instance_actor
-from angee.base.fields.text import ColorField
-from angee.base.fields.state import StateField
-from angee.base.identity import public_id_of
 from angee.base.fields.implementation import ImplClassField
-from angee.integrate.models import Bridge, IntegrationCreateMode
+from angee.base.fields.state import StateField
+from angee.base.fields.text import ColorField
+from angee.base.identity import public_id_of
 from angee.base.lineage import concrete_child, concrete_child_models
 from angee.base.models import (
     AngeeDataModel,
@@ -56,6 +54,9 @@ from angee.base.models import (
     OwnerMixin,
     TrashMixin,
 )
+from angee.base.permissions import instance_actor
+from angee.base.refs import RetainedGenericRelation
+from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.parties.backends import DirectoryBackend
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
@@ -66,7 +67,7 @@ from angee.parties.managers import (
 )
 from angee.parties.mixins import MembershipDecisionMixin, PartyAspectMixin, PartyStatementMixin
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
-from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
 from angee.provenance.statements import (
     Aspect,
     PairAspect,
@@ -75,10 +76,8 @@ from angee.provenance.statements import (
     StatementsMixin,
     StatementSubjectManager,
 )
-from angee.base.refs import RetainedGenericRelation
-from angee.tags.models import TaggedModel
 from angee.resources.mixins import ResourceLoadMixin
-from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
+from angee.tags.models import TaggedModel
 
 
 class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel):

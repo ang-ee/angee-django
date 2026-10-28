@@ -141,6 +141,7 @@ addons = [
     "referencing>=0.37",
     "requests>=2.32",
     "ruamel.yaml>=0.18",
+    "sentry-sdk>=2.71.0",
     "slack-sdk>=3.43.0",
     "sqids>=0.4.1",
     "strawberry-django-aggregates @ git+https://github.com/ang-ee/strawberry-django-aggregates.git@0f374854d19b2709b6d77ae872090ab2a751f1dc",

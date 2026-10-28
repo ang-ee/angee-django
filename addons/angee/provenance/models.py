@@ -34,7 +34,6 @@ from rebac.errors import PermissionDenied
 from rebac.resources import model_resource_type
 from rebac.schema.walker import subject_allowed_by_relation
 
-from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.fields.state import StateField
 from angee.base.models import (
     AngeeDataModel,
@@ -44,6 +43,8 @@ from angee.base.models import (
     SqidMixin,
     role_anchor,
 )
+from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.signals import bulk_updated
 from angee.provenance.context import changeset, current_changeset
 from angee.provenance.contrib.angee.exceptions import ChangesetRequired
 from angee.provenance.contrib.angee.history import HistoryMixin
@@ -54,7 +55,6 @@ from angee.provenance.statements import (
     StatementSourceMixin,
 )
 from angee.serialization import canonical_json, canonical_json_sha256, json_safe
-from angee.base.signals import bulk_updated
 
 ProvenanceRole = role_anchor("provenance/role")
 

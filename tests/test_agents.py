@@ -40,7 +40,6 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RequestUsage, RunUsage
 from rebac import system_context
 
-from angee.base.fields import ImplClassField
 from angee.agents.backends import InferenceBackend
 from angee.agents.models import (
     IMAGE_INFERENCE_MODEL_USES,
@@ -59,6 +58,7 @@ from angee.agents.testing.models import InferenceModel, InferenceProvider, Skill
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from angee.agents_integrate_ollama.backend import OllamaInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
+from angee.base.fields import ImplClassField
 from angee.integrate.credentials import CredentialKind
 from tests.conftest import make_integration
 from tests.test_integrate_vcs import (

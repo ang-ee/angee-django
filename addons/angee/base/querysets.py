@@ -11,7 +11,7 @@ from typing import Any, Self, TypeVar, cast
 from django.core.exceptions import EmptyResultSet
 from django.db import connections, models
 from django.db.models.functions import Coalesce
-from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, system_context, to_subject_ref
+from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, to_subject_ref
 from rebac.backends import backend
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 from rebac.resources import model_resource_type

@@ -1,5 +1,6 @@
 """Canonical FormSpec validation, typed config projection and relation positions."""
 from __future__ import annotations
+
 import copy
 import json
 import math
@@ -7,11 +8,13 @@ from collections.abc import Iterator
 from functools import cache
 from importlib.resources import files
 from typing import Any, NoReturn
+
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from jsonschema import Draft202012Validator
 from referencing.jsonschema import DRAFT202012
-from angee.base.schemas.references import LocalSchemaReferences, schema_nodes, SCHEMA_ANNOTATIONS, schema_intersection
-from angee.base.validators import check_schema, validator, validation_issues, validate
+
+from angee.base.schemas.references import SCHEMA_ANNOTATIONS, LocalSchemaReferences, schema_intersection, schema_nodes
+from angee.base.validators import check_schema, validate, validation_issues, validator
 from angee.serialization import canonical_json
 
 _SCHEMA_COMMON_KEYS = frozenset({"title", "description", "default", "widget", "relation"})

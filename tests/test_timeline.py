@@ -12,12 +12,12 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context
 
-from angee.graphql.publishing import mute_changes
 from angee.base.identity import public_id_of
+from angee.base.pagination import KeysetOrder, keyset_signer
+from angee.graphql.publishing import mute_changes
 from angee.messaging.timeline import CommentKind
 from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
-from angee.base.pagination import KeysetOrder, keyset_signer
 from angee.timeline.kinds import timeline_kinds
 from angee.timeline.reading import Timeline
 from tests.conftest import addon_schema, create_platform_admin, execute_schema, result_data, vault_for
@@ -63,7 +63,9 @@ def test_cursor_round_trips_and_orders_the_page_totally() -> None:
     with pytest.raises(ValueError):
         order.unsign(token + "tampered", signer, models.BigIntegerField())
     with pytest.raises(ValueError):
-        order.unsign(token, keyset_signer(["other-record", "all-kinds"], salt="angee.timeline"), models.BigIntegerField())
+        order.unsign(
+            token, keyset_signer(["other-record", "all-kinds"], salt="angee.timeline"), models.BigIntegerField()
+        )
 
 
 @override_settings(ANGEE_TIMELINE_KINDS=KINDS)

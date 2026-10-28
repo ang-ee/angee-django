@@ -21,6 +21,8 @@ from django.db.migrations.state import ModelState, ProjectState
 from strawberry import auto
 
 from angee.base import fields as base_fields
+from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
+from angee.graphql.data.metadata import _finalize_data_resource
 from angee.graphql.data.resource_fields import (
     MONEY_CURRENCY_FIELD_METADATA_KEY,
     STATUS_DISPLAY_METADATA_KEY,
@@ -28,9 +30,6 @@ from angee.graphql.data.resource_fields import (
     resource_field_widget,
     status_display,
 )
-from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
-from angee.base.fields.identity import SqidField
-from angee.graphql.data.metadata import _finalize_data_resource
 from angee.money.fields import MoneyField
 from tests.money_models import MoneyDocument, MoneyLine, MoneyStatement
 

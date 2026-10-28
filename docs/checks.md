@@ -38,8 +38,14 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Python/addon/template handoff: full SQLite suite; required for core changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
-| Python types | `uv run --locked python -m mypy angee addons` |
+| Python types | `PYTHONPATH=.:addons uv run --locked python -m mypy angee addons` |
 | Dead-code review | `uv run --locked python -m vulture` |
+
+Mypy imports addon-owned plugins before its Django settings host runs. The
+invocation supplies the declared source roots on native `PYTHONPATH` so those
+plugin modules can load; `mypy_path` controls static resolution and does not
+change the interpreter's import paths. Consumer CI passes the framework root
+and the typing host's declared `ANGEE_ADDON_DIRS` to its mypy subprocess.
 
 The consumer CI lane uses the same framework mypy policy and
 [`tests.typing_settings`](../tests/typing_settings.py), with its existing

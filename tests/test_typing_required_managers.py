@@ -166,7 +166,9 @@ assert_type(Explicit.system_queryset().lock_if_supported().get(), Explicit)
 """
     source.write_text(valid)
     env = dict(os.environ, DJANGO_SETTINGS_MODULE="manager_settings")
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH"))))
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH")))
+    )
     command = [sys.executable, "-m", "mypy", "--config-file", str(config), str(source)]
     positive = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, check=False)
     assert positive.returncode == 0, positive.stdout + positive.stderr

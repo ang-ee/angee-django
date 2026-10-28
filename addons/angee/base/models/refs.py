@@ -29,9 +29,9 @@ from rebac.schema import FieldBinding
 
 from angee.base.identity import public_data_id_field, public_id_for
 from angee.base.models.merge import MergeableMixin
-from angee.base.models.merge_references import EdgeReference, MergePolicy, Reference, RecordRefMergeContract
-from angee.base.querysets import MergeableQuerySet
+from angee.base.models.merge_references import MergePolicy, RecordRefMergeContract
 from angee.base.permissions import effective_rebac_definition
+from angee.base.querysets import MergeableQuerySet
 from angee.base.refs import RecordRef, generic_pointer_model, generic_pointer_target
 
 

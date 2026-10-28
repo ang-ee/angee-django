@@ -38,15 +38,15 @@ from rebac import (
 )
 from rebac.actors import to_subject_ref
 
-from angee.base.permissions import actor_user_id
 from angee.base.identity import instances_from_public_ids
-from angee.hooks import resolve_hooks
 from angee.base.models import (
     ArchiveQuerySet,
     HierarchyQuerySet,
     MergeableQuerySet,
     by_key,
 )
+from angee.base.permissions import actor_user_id
+from angee.hooks import resolve_hooks
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager

@@ -5,15 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 import strawberry
-from strawberry_django.auth.utils import get_current_user
-from strawberry_django.utils.requests import get_request
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.http import HttpRequest
-
-from angee.graphql.ids import PublicID, require_instance_for_id
+from strawberry_django.auth.utils import get_current_user
+from strawberry_django.utils.requests import get_request
 
 from angee.base.pagination import InvalidKeysetCursor
+from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.timeline.reading import Entry, KindCount, KindSummary, Page, Timeline
 
 PAGE_LIMIT_DEFAULT = 25

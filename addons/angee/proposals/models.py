@@ -32,6 +32,7 @@ from rebac import (
     generic_target,
     system_context,
     to_object_ref,
+    user_subject_type,
 )
 from rebac.actors import to_subject_ref
 from rebac.backends import backend
@@ -41,15 +42,8 @@ from rebac.relationships import delete_relationships
 from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter, SubjectRef
 
-from angee.serialization import STRINGIFIED_JSON, canonical_json_sha256
-
-from rebac import user_subject_type
-from angee.base.permissions import actor_user_id, instance_actor, subject_reaches_user
-from angee.errors import DomainError, RecordAccessSubjectRefused
 from angee.base.fields.ordering import FractionalRankField
 from angee.base.fields.state import StateField
-from angee.iam.identity import user_label_expression, user_label_queryset
-from angee.messaging.models import ThreadedModelMixin
 from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
@@ -65,10 +59,15 @@ from angee.base.models import (
     transition,
 )
 from angee.base.models.expressions import JSONArraySubquery
+from angee.base.permissions import RecordAccessSubjectRefused, actor_user_id, instance_actor, subject_reaches_user
+from angee.base.validators import validate_value
+from angee.errors import DomainError
+from angee.iam.identity import user_label_expression, user_label_queryset
+from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
 from angee.proposals.inputs import RoundTemplate
 from angee.provenance.context import changeset, changeset_model, require_changeset
-from angee.base.validators import validate_value
+from angee.serialization import STRINGIFIED_JSON, canonical_json_sha256
 
 if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations

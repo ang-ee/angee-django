@@ -17,11 +17,11 @@ from strawberry.types.lazy_type import LazyType
 from strawberry_django.utils.typing import get_django_definition
 from strawberry_django_hasura import SnakeNameConverter
 
-from angee.graphql.data import contracts as data_contract
-from angee.graphql.introspection import is_to_many_relation, surface_field_names, surface_name
+from angee.base.fields import ImplClassField
 from angee.base.fields.state import StatusDisplay
 from angee.base.models.trash import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD, ArchiveMixin, TrashMixin
-from angee.base.fields import ImplClassField
+from angee.graphql.data import contracts as data_contract
+from angee.graphql.introspection import is_to_many_relation, surface_field_names, surface_name
 from graphql import (
     GraphQLEnumType,
     GraphQLList,
@@ -181,7 +181,9 @@ def _declared_projection_fact(
 
 def is_archive_field(field: models.Field[Any, Any] | ForeignObjectRel | None) -> bool:
     """Recognize the archive capability on its declared model owner."""
-    return isinstance(field, models.Field) and field.name == ARCHIVE_FLAG_FIELD and issubclass(field.model, ArchiveMixin)
+    return (
+        isinstance(field, models.Field) and field.name == ARCHIVE_FLAG_FIELD and issubclass(field.model, ArchiveMixin)
+    )
 
 
 def is_trash_field(field: models.Field[Any, Any] | ForeignObjectRel | None) -> bool:

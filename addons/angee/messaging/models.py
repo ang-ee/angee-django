@@ -60,11 +60,23 @@ from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.resources import model_resource_type
 
-from angee.base.permissions import actor_user_id
-from angee.errors import DomainError
+from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.identity import instance_from_public_id
-from angee.base.fields.implementation import ImplClassField
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeModel,
+    AuditMixin,
+    MergePolicy,
+    OptimisticLockMixin,
+    OwnerMixin,
+    RecordRefMixin,
+    TrashMixin,
+)
+from angee.base.permissions import actor_user_id
+from angee.base.refs import RecordRef, RetainedGenericRelation, generic_pointer_model
+from angee.errors import DomainError
+from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.delivery import queue_message_delivery
@@ -86,27 +98,15 @@ from angee.messaging.managers import (
 from angee.messaging.resources import MessageResource
 from angee.messaging.source_copies import SourceCopyMixin
 from angee.messaging.webforms import WebformSpec, default_webform_schema
-from angee.base.models import (
-    AngeeDataModel,
-    AngeeModel,
-    AuditMixin,
-    MergePolicy,
-    OptimisticLockMixin,
-    OwnerMixin,
-    RecordRefMixin,
-    TrashMixin,
-)
 from angee.parties.models import Handle
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
+from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 from angee.provenance.statements import (
     SourceKind,
 )
-from angee.base.refs import RecordRef, RetainedGenericRelation, generic_pointer_model
 from angee.resources.mixins import ResourceLoadMixin
-from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
-from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 
 
 def _actor_user_id(instance: models.Model) -> Any | None:

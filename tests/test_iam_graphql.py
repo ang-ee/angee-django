@@ -40,19 +40,19 @@ from rebac.roles import grant as grant_role
 from strawberry.django.views import GraphQLView
 
 from angee.agents.testing.models import Agent
-from angee.graphql.data.resource_fields import resource_field_kind, resource_field_widget
-from angee.graphql import subscriptions
-from angee.graphql.data.metadata import readable_model_field_names
-from angee.graphql.events import ChangePayload
-from angee.graphql.schema import AngeeSchema
-from angee.graphql.view_as import ViewAsReadOnlyExtension
-from angee.graphql.views import graphql_endpoint
 from angee.base.identity import (
     instance_from_public_id,
     public_data_id_field,
     public_id_for,
     public_id_of,
 )
+from angee.graphql import subscriptions
+from angee.graphql.data.metadata import readable_model_field_names
+from angee.graphql.data.resource_fields import resource_field_kind, resource_field_widget
+from angee.graphql.events import ChangePayload
+from angee.graphql.schema import AngeeSchema
+from angee.graphql.view_as import ViewAsReadOnlyExtension
+from angee.graphql.views import graphql_endpoint
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol

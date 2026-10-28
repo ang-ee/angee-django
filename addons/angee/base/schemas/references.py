@@ -1,11 +1,14 @@
 """Root-local native JSON Schema references and bounded structural equality."""
 from __future__ import annotations
+
 from collections.abc import Iterator
 from typing import Any
+
 from django.core.exceptions import ValidationError
 from referencing import Registry
 from referencing.exceptions import Unresolvable
 from referencing.jsonschema import DRAFT202012
+
 from angee.serialization import canonical_json
 
 SCHEMA_ANNOTATIONS = frozenset({"title", "description", "default", "examples"})

@@ -33,6 +33,7 @@ from strawberry.types import get_object_definition
 from strawberry_django.pagination import OffsetPaginated
 from strawberry_django.utils.requests import get_request
 
+from angee.base.identity import public_id_of
 from angee.errors import exception_text
 from angee.graphql.actions import (
     ActionResult,
@@ -42,7 +43,12 @@ from angee.graphql.actions import (
     resolve_action_target,
 )
 from angee.graphql.capabilities import PermissionsExtension, held_permissions
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import (
+    AngeeHasuraWriteBackend,
+    declared_hasura_resource_fields,
+    hasura_model_resource,
+    public_pk_decoder,
+)
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.impl import ImplChoice, can_read_impl_choices
@@ -54,15 +60,13 @@ from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import is_platform_admin
-
 from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
-from angee.base.identity import public_id_of
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.mixins import SyncStateMixin
-from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle, IntegrationManager
+from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationManager
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import PROVIDER_UNAVAILABLE, OAuthFlowError
 from angee.integrate.oauth.registrations import OAuthRegistrationExtension

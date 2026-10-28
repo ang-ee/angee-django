@@ -26,6 +26,7 @@ from rebac import (
     system_context,
     to_object_ref,
     to_subject_ref,
+    user_subject_type,
 )
 from rebac.actors import is_sudo
 from rebac.backends import backend
@@ -33,17 +34,16 @@ from rebac.relationships import delete_relationship, write_relationships
 from rebac.resources import model_for_resource_type
 from rebac.schema import FieldBinding
 
-from angee.errors import exception_text
+from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.text import ModelLabelField
-from angee.iam.identity import group_subject_type, user_label
-from angee.iam.service_users import sync_service_user
 from angee.base.identity import public_id_of
 from angee.base.implementations import ImplBase, resolve_all_impl_classes
-from angee.base.fields.implementation import ImplClassField
 from angee.base.models import AngeeManager, AngeeQuerySet, record_display_label, row_lock_paths
-from rebac import user_subject_type
 from angee.base.permissions import effective_rebac_definition
 from angee.base.signals import connect_for_models
+from angee.errors import exception_text
+from angee.iam.identity import group_subject_type, user_label
+from angee.iam.service_users import sync_service_user
 
 if TYPE_CHECKING:
     from angee.workflows.models import Trigger, TriggerEvent
@@ -91,7 +91,11 @@ class TriggerGrantTarget:
                 next((item for item in definition.relations if item.name == self.relation), None)
                 if definition else None
             )
-            if relation is not None and isinstance(relation.backing, FieldBinding) and "__" not in relation.backing.path:
+            if (
+                relation is not None
+                and isinstance(relation.backing, FieldBinding)
+                and "__" not in relation.backing.path
+            ):
                 try:
                     field = model._meta.get_field(relation.backing.path)
                 except FieldDoesNotExist:

@@ -6,7 +6,9 @@ from django.db import models
 
 from angee.base.managers import AngeeManager, AngeeUnscopedManager, MergeableUnscopedManager
 from angee.provenance.contrib.angee.querysets import (
-    AngeeHistoryMergeableUnscopedQuerySet, AngeeHistoryQuerySet, AngeeHistoryUnscopedQuerySet,
+    AngeeHistoryMergeableUnscopedQuerySet,
+    AngeeHistoryQuerySet,
+    AngeeHistoryUnscopedQuerySet,
 )
 
 _AngeeHistoryManagerBase = AngeeManager.from_queryset(AngeeHistoryQuerySet)

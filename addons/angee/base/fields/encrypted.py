@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import base64
-from typing import Any, cast
+from typing import Any
+
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF

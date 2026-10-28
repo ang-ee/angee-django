@@ -11,8 +11,8 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_snake_case
 
-from angee.base.implementations import ImplChoice as BaseImplChoice
 from angee.base.fields import ImplClassField
+from angee.base.implementations import ImplChoice as BaseImplChoice
 from angee.base.models.implementations import readable_impl_defaults
 from angee.graphql.mixins import ImplementationChoicesMixin
 
@@ -53,7 +53,7 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
         raise ImproperlyConfigured(str(error)) from error
     choices = [ImplChoice.from_choice(choice) for choice in model_field.impl_choices()]
     for choice in choices:
-        choice.defaults = readable_impl_defaults(django_model, cast(dict[str, Any], choice.defaults))
+        choice.defaults = JSON(readable_impl_defaults(django_model, cast(dict[str, Any], choice.defaults)))
     return choices
 
 

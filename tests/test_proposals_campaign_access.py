@@ -11,7 +11,7 @@ from django.core.exceptions import ValidationError
 from rebac import ObjectRef, PermissionDenied, SubjectRef, actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.errors import RecordAccessSubjectRefused
+from angee.base.permissions import RecordAccessSubjectRefused
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.messaging.testing.models import Person

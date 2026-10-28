@@ -35,8 +35,6 @@ from django.db import models
 from django.db.models.functions import Abs, Cast, Coalesce, Floor, Log, Power, Round, Sign
 from django.db.models.lookups import Exact
 
-from angee.resources.mixins import ResourceLoadMixin
-
 from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
@@ -45,6 +43,7 @@ from angee.base.models import (
     ArchiveQuerySet,
     role_anchor,
 )
+from angee.resources.mixins import ResourceLoadMixin
 
 
 @dataclass(frozen=True, slots=True)

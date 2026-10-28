@@ -28,7 +28,6 @@ from rebac import PermissionDenied, current_actor, system_context
 from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
 
-from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.fields.state import StateField
 from angee.base.models import (
     AngeeDataModel,
@@ -39,6 +38,7 @@ from angee.base.models import (
     StagedModelMixin,
 )
 from angee.base.models import Stage as StagePrimitive
+from angee.base.permissions import actor_user_id, instance_actor
 from angee.resources.mixins import ResourceLoadMixin
 from angee.sequence.models import PeriodReset
 from angee.spaces.managers import GroupManager

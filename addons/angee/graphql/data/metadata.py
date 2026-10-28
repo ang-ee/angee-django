@@ -13,10 +13,19 @@ from django.db import models
 from rebac.resources import model_for_resource_type, model_resource_type
 from strawberry_django_hasura import HasuraResource
 
-from angee.graphql.data import contracts as data_contract
-from angee.graphql.introspection import is_to_one_relation
+from angee.base.fields import ImplClassField
+from angee.base.lineage import concrete_child_models
+from angee.base.models import (
+    AngeeModel,
+    MergeableMixin,
+    RecordRefMixin,
+)
+from angee.base.models.refs import record_edges_by_target
+from angee.base.permissions import effective_rebac_definition
+from angee.base.refs import generic_pointer_model
 from angee.graphql.access import is_gated_read_axis
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
+from angee.graphql.data import contracts as data_contract
 from angee.graphql.data.final_schema import final_schema_references
 from angee.graphql.data.query import ResourceQueryProjection
 from angee.graphql.data.resource_fields import (
@@ -39,18 +48,9 @@ from angee.graphql.data.resource_fields import (
 )
 from angee.graphql.introspection import (
     FieldPathError,
+    is_to_one_relation,
     require_field_for_path,
 )
-from angee.base.fields import ImplClassField
-from angee.base.lineage import concrete_child_models
-from angee.base.models import (
-    AngeeModel,
-    MergeableMixin,
-    RecordRefMixin,
-)
-from angee.base.models.refs import record_edges_by_target
-from angee.base.permissions import effective_rebac_definition
-from angee.base.refs import generic_pointer_model
 from graphql import GraphQLSchema, get_named_type
 
 __all__ = [

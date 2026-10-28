@@ -25,9 +25,9 @@ from rebac import system_context
 from rebac.actors import to_subject_ref
 
 from angee.provenance.evidence import EvidenceReference
-from angee.provenance.statements import StatementSourceMixin
 from angee.provenance.statements import (
     SourceKind,
+    StatementSourceMixin,
 )
 
 

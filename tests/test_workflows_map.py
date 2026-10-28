@@ -10,10 +10,10 @@ from pydantic import BaseModel, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.base.identity import public_id_of
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql.events import ChangeRelatedRecord
-from angee.base.identity import public_id_of
 from angee.workflows import schema as workflow_schema
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.maps import MapItem

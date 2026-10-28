@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Any, cast
+
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django_sqids import SqidsField
@@ -112,7 +113,9 @@ class SqidField(SqidsField):
             return None
         self.sqids_instance = self._public_id_codec()
         decoded = self.get_prep_value(str(public_id))
-        return cast(int, decoded) if decoded is not None and self.public_id_from_value(decoded) == str(public_id) else None
+        return (
+            cast(int, decoded) if decoded is not None and self.public_id_from_value(decoded) == str(public_id) else None
+        )
 
     def _public_id_codec(self) -> Sqids:
         """Return the field's Sqids codec, initialising unbound adapter fields."""

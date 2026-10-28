@@ -14,6 +14,7 @@ from strawberry import auto
 from strawberry_django.auth.utils import get_current_user
 from strawberry_django.utils.requests import get_request
 
+from angee.base.identity import public_subject_ref
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -30,8 +31,6 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_labels, user_label, user_public_id
-
-from angee.base.identity import public_subject_ref
 from angee.projects.schema import DroppedReason, TaskType
 from angee.spaces.schema import SpaceGroupType
 

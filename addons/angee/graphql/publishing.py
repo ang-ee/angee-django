@@ -20,11 +20,11 @@ from django.db import models, transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import Signal
 
+from angee.base.refs import RecordRef, record_view_refs
+from angee.base.signals import bulk_updated
 from angee.graphql.events import ChangePayload, ChangeRelatedRecord, ReadableFields
 from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.graphql.schema import GraphQLSchemas
-from angee.base.refs import RecordRef, record_view_refs
-from angee.base.signals import bulk_updated
 
 _INMEMORY_CHANNEL_LAYER = "channels.layers.InMemoryChannelLayer"
 change_published = Signal()

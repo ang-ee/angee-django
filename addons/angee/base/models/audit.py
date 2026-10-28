@@ -10,17 +10,18 @@ from django.db import models
 from rebac import system_context
 from rebac.managers import TrackedQuerySet
 
-from angee.base.permissions import actor_user_id, instance_actor
-from angee.base.models.identity import update_fields_with_auto_now
 from angee.base.models.append_only import AppendOnlyBaseQuerySet
+from angee.base.models.identity import update_fields_with_auto_now
+from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.querysets import _AngeeQuerySetMixin, by_key
-
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
 class RetainedReferenceQuerySet(_AngeeQuerySetMixin[_ModelT], TrackedQuerySet[_ModelT]):
     """Django collector updates dispatched to the record's declared persistence owner."""
+
+    _hints: dict[str, models.Model]
 
     def update(self, **kwargs: Any) -> int:
         """Keep exact collector selection and alias while preserving native capture."""
