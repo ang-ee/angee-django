@@ -739,7 +739,7 @@ def _record_edges(
     A record carries only these edges, so a surface listing one (a record's files,
     pages or source conversations) applies to the record types that name it. An
     edge with roles adds ``<label>:<role>`` for each role the type carries
-    (:meth:`~angee.models.refs.RecordRefMixin.record_edge_roles`), so a surface
+    (:meth:`~angee.base.models.refs.RecordRefMixin.record_edge_roles`), so a surface
     serving one role (Comments on the chatter role) gates on that entry.
     """
 
