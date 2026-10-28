@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from enum import StrEnum
 from typing import Any, ClassVar, Self, cast
 
@@ -11,7 +12,7 @@ from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, models, transaction
+from django.db import IntegrityError, connections, models, router, transaction
 from django.db.models import F, Q
 from django.utils import timezone
 from rebac import (
@@ -21,23 +22,19 @@ from rebac import (
     system_context,
     to_object_ref,
     to_subject_ref,
+    user_subject_type,
 )
 from rebac.backends import backend
 from rebac.field_backing import canonical_model
 
-from angee.actors import actor_user_id
-from angee.changesets import changeset, changeset_model, creation_fingerprint, require_changeset
-from angee.errors import RecordAccessSubjectRefused
-from angee.fields import FractionalRankField, StateField
-from angee.messaging.models import AudienceMember, ThreadedModelMixin
-from angee.models import (
+from angee.base.fields.ordering import FractionalRankField
+from angee.base.fields.state import StateField
+from angee.base.identity import instances_from_public_ids
+from angee.base.models import (
     AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
     AuditMixin,
     HierarchyMixin,
     HierarchyQuerySet,
-    HistoryMixin,
     ImmutableFieldsMixin,
     ItemOwnershipMixin,
     MergeableMixin,
@@ -51,6 +48,9 @@ from angee.models import (
     TrashQuerySet,
     candidate_relationships,
 )
+from angee.base.permissions import RecordAccessSubjectRefused, actor_user_id
+from angee.base.validators import validate_value
+from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
 from angee.projects.events import (
     milestone_reached,
@@ -58,7 +58,11 @@ from angee.projects.events import (
     project_status_changed,
     task_promoted,
 )
-from angee.projects.inputs import MilestoneTemplate
+from angee.projects.inputs import MilestoneTemplate, TaskOrder
+from angee.provenance.context import changeset, changeset_model, require_changeset
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryMergeableUnscopedQuerySet, AngeeHistoryQuerySet
 from angee.scheduling.fields import RecurrenceField
 from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
@@ -72,7 +76,7 @@ class ProjectSetupState(StrEnum):
     COMPLETE = "complete"
 
 
-class ProjectQuerySet[ProjectT: Project](OwnerQuerySet[ProjectT], AngeeQuerySet[ProjectT]):
+class ProjectQuerySet[ProjectT: Project](OwnerQuerySet[ProjectT], AngeeHistoryQuerySet[ProjectT]):
     """Project rows with the shared ownership release contract."""
 
     def update(self, **kwargs: Any) -> int:
@@ -98,7 +102,7 @@ class ProjectQuerySet[ProjectT: Project](OwnerQuerySet[ProjectT], AngeeQuerySet[
         return super().bulk_create(objs, *args, **kwargs)
 
 
-_ProjectManagerBase = AngeeManager.from_queryset(ProjectQuerySet)
+_ProjectManagerBase = AngeeHistoryManager.from_queryset(ProjectQuerySet)
 
 
 class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
@@ -123,7 +127,6 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
         actor_id = actor_user_id(actor)
         if actor_id is None:
             raise ValidationError({"idempotency_key": "Setup requires a user actor."})
-        fingerprint = creation_fingerprint(configuration)
         with changeset(fresh=True), transaction.atomic():
             locked = type(task).system_queryset(lock=("self",)).get(pk=task.pk)
             if actor is not None:
@@ -137,15 +140,16 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
                 if not bypass and not project.has_access("write"):
                     raise PermissionDenied("Project write access is required for setup.")
 
-            replay = changeset_model().objects.claim(
+            result = changeset_model().objects.claim_created(
                 f"projects.setup:{actor_id}:{locked.pk}",
                 idempotency_key,
-                fingerprint=fingerprint,
+                values=configuration,
+                model=self.model,
+                unavailable=ValidationError(
+                    {"idempotency_key": "The claimed setup result is unavailable."},
+                ),
             )
-            if replay is not None:
-                result = replay.created_row
-                if not isinstance(result, self.model):
-                    raise ValidationError({"idempotency_key": "The claimed setup result is unavailable."})
+            if result is not None:
                 if actor is not None:
                     result.with_actor(actor)
                 if not bypass and not result.has_access("write"):
@@ -207,6 +211,56 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
             return project.with_actor(actor) if actor is not None else project
 
 
+class TaskOrderingQuerySet[TaskT: Task](models.QuerySet[TaskT]):
+    """Keep every tracked Task rank writer inside its one ordering transaction."""
+
+    def _ordering_write(self, fields: Iterable[str] | None = None) -> AbstractContextManager[None]:
+        if fields is not None and not self.model.ORDERING_FIELDS.intersection(fields):
+            return nullcontext()
+        self._for_write = True
+        return self.model.ordering_write(using=self.db)
+
+    def update(self, **kwargs: Any) -> int:
+        """Serialize explicit ranks and project moves without bypassing native guards."""
+
+        with self._ordering_write(kwargs):
+            return super().update(**kwargs)
+
+    def bulk_update(self, objs: Any, fields: Any, *args: Any, **kwargs: Any) -> int:
+        """Keep native bulk updates and their nested updates in the same transaction."""
+
+        fields = tuple(fields)
+        with self._ordering_write(fields):
+            return super().bulk_update(objs, fields, *args, **kwargs)
+
+    def _allocate_missing_ranks(self, rows: Sequence[TaskT]) -> None:
+        for name in self.model.ORDERING_RANK_FIELDS:
+            field = self.model._meta.get_field(name)
+            assert isinstance(field, FractionalRankField)
+            field.allocate_missing_ranks(rows, using=self.db)
+
+    def bulk_create(self, objs: Any, *args: Any, **kwargs: Any) -> list[TaskT]:
+        """Serialize and prepare native multirow inserts without duplicate defaults."""
+
+        rows = list(objs)
+        with self._ordering_write():
+            self._allocate_missing_ranks(rows)
+            return super().bulk_create(rows, *args, **kwargs)
+
+
+class TaskOrderingUnscopedQuerySet[TaskT: Task](
+    TaskOrderingQuerySet[TaskT], AngeeHistoryMergeableUnscopedQuerySet[TaskT],
+):
+    """Retain tracked base-manager writes under Task's ordering policy."""
+
+
+_TaskBaseManagerBase = AngeeHistoryMergeableUnscopedManager.from_queryset(TaskOrderingUnscopedQuerySet)
+
+
+class TaskBaseManager[TaskT: Task](_TaskBaseManagerBase[TaskT]):
+    """Importable captured base manager composing the Task ordering contract."""
+
+
 class TaskVisibilityQuerySet[TaskT: Task](models.QuerySet[TaskT]):
     """Keep visibility transitions on the authorized instance verb.
 
@@ -231,13 +285,20 @@ class TaskVisibilityQuerySet[TaskT: Task](models.QuerySet[TaskT]):
 
 class TaskQuerySet[TaskT: Task](
     HierarchyQuerySet[TaskT],
+    TaskOrderingQuerySet[TaskT],
     TaskVisibilityQuerySet[TaskT],
     MergeableQuerySet[TaskT],
     TrashQuerySet[TaskT],
     OwnerQuerySet[TaskT],
-    AngeeQuerySet[TaskT],
+    AngeeHistoryQuerySet[TaskT],
 ):
     """Task rows with hierarchy, merge, trash, and ownership contracts."""
+
+    def create_forest(self, rows: Sequence[TaskT]) -> list[TaskT]:
+        """Bracket the hierarchy owner's native insert/path initialization once."""
+
+        with self._ordering_write():
+            return super().create_forest(rows)
 
     def waiting_on(self, actor: Any) -> Self:
         """Open, untrashed tasks assigned to this actor, within the caller's scope."""
@@ -282,7 +343,7 @@ class TaskQuerySet[TaskT: Task](
         )
 
 
-_TaskManagerBase = AngeeManager.from_queryset(TaskQuerySet)
+_TaskManagerBase = AngeeHistoryManager.from_queryset(TaskQuerySet)
 
 
 class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
@@ -359,7 +420,7 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
         return task
 
 
-class LinkManager[LinkT: Link](AngeeManager[LinkT]):
+class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
     """Own URL-keyed upserts on live project and task targets.
 
     permissions.zed backs the link's project and task relations with
@@ -408,7 +469,7 @@ class LinkManager[LinkT: Link](AngeeManager[LinkT]):
         return link
 
 
-class ProjectBindingManager[BindingT: ProjectBinding](AngeeManager[BindingT]):
+class ProjectBindingManager[BindingT: ProjectBinding](AngeeHistoryManager[BindingT]):
     """Own project-container bindings; ``permissions.zed`` authorizes both ends."""
 
     def validate_target(self, target: models.Model) -> None:
@@ -434,7 +495,11 @@ class ProjectBindingManager[BindingT: ProjectBinding](AngeeManager[BindingT]):
         return binding
 
     def unbind(self, *, project: models.Model, target: models.Model) -> int:
-        """Remove one explicit binding; its ``delete`` requires the same authority as ``bind``."""
+        """Delete an admitted binding; an absent or out-of-scope binding returns zero.
+
+        Native scoped deletion checks the same authority as ``bind`` on every
+        affected row. It never probes a hidden binding outside the actor scope.
+        """
 
         key = generic_target(target).lookups(self.model, "target")
         deleted, _by_model = self.filter(project=project, **key).delete()
@@ -774,7 +839,7 @@ class Project(
         return self
 
 
-class MilestoneQuerySet[MilestoneT: Milestone](AngeeQuerySet[MilestoneT]):
+class MilestoneQuerySet[MilestoneT: Milestone](AngeeHistoryQuerySet[MilestoneT]):
     """Milestone rows with project scheduling helpers."""
 
     def overdue(self) -> Self:
@@ -783,7 +848,7 @@ class MilestoneQuerySet[MilestoneT: Milestone](AngeeQuerySet[MilestoneT]):
         return self.filter(target_date__lt=timezone.localdate(), reached_at__isnull=True, project__status="open")
 
 
-_MilestoneManagerBase = AngeeManager.from_queryset(MilestoneQuerySet)
+_MilestoneManagerBase = AngeeHistoryManager.from_queryset(MilestoneQuerySet)
 
 
 class _MilestoneManager[MilestoneT: Milestone](_MilestoneManagerBase[MilestoneT]):
@@ -947,6 +1012,8 @@ class Task(
 ):
     """The platform's one table for a discrete human action."""
 
+    _angee_base = TaskBaseManager()
+
     runtime = True
     sqid_prefix = "tsk_"
     MERGED_PERMISSION = "write"
@@ -957,6 +1024,89 @@ class Task(
     owner_container = "project"
     immutable_fields: ClassVar[tuple[str, ...]] = ("visibility",)
     rebac_grantable = {"reader": "share", "editor": "share"}
+
+    ORDERING_RANK_FIELDS: ClassVar[tuple[str, ...]] = ("sort_order", "sub_sort_order")
+    ORDERING_FIELDS: ClassVar[frozenset[str]] = frozenset({
+        "project", "project_id", "parent", "parent_id", *ORDERING_RANK_FIELDS,
+    })
+
+    @classmethod
+    @contextmanager
+    def ordering_write(cls, *, using: str) -> Iterator[None]:
+        """Serialize Task rank writers before they acquire target-row locks.
+
+        One short transaction lock covers nullable projects and native queryset
+        expressions spanning projects. The lock is shared by the actual rank
+        column owner, including MTI callers. Scope and uniqueness remain the
+        model's project constraint; no lane or actor defines that scope.
+        SQLite serializes writers through its native atomic transaction.
+        """
+
+        with transaction.atomic(using=using):
+            connection = connections[using]
+            if connection.vendor == "postgresql":
+                owner = cls._meta.get_field("sort_order").model
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        [f"angee.projects.task.ordering:{owner._meta.db_table}"],
+                    )
+            yield
+
+    def apply_input_extensions(self, *, task_order: Any = None, **values: Any) -> None:
+        """Place a board drop in the persisted project order under native admission."""
+
+        if task_order is not None:
+            order = validate_value(TaskOrder, task_order, field="task_order")
+            using = self._state.db or router.db_for_write(type(self), instance=self)
+            with type(self).ordering_write(using=using):
+                actor, bypass = self.effective_actor(strict=True)
+                project_id = (
+                    type(self).system_queryset().using(using).values_list("project_id", flat=True).get(pk=self.pk)
+                )
+                readable = (
+                    type(self).system_queryset() if bypass
+                    else type(self).objects.with_actor(actor).for_write()
+                )
+                requested = [*order.preceding, *order.following]
+                neighbors = instances_from_public_ids(type(self), requested, queryset=readable.using(using))
+                if len(set(requested)) != len(requested) or any(
+                    key not in neighbors or neighbors[key].pk == self.pk for key in requested
+                ):
+                    raise ValidationError({"task_order": "The visible ordering neighbors changed; refresh the board."})
+                preceding = next((
+                    neighbors[key] for key in reversed(order.preceding)
+                    if neighbors[key].project_id == project_id
+                ), None)
+                following = next((
+                    neighbors[key] for key in order.following
+                    if neighbors[key].project_id == project_id
+                ), None)
+                if preceding is not None and following is not None and preceding.sort_order >= following.sort_order:
+                    raise ValidationError({"task_order": "The project order changed; refresh the board."})
+                # Only ranks are read outside actor scope. Hidden or other-lane
+                # rows participate in uniqueness without exposing their identity.
+                ranks = type(self).system_queryset().using(using).filter(project_id=project_id).exclude(pk=self.pk)
+                lower: float | None
+                upper: float | None
+                if following is not None:
+                    upper = following.sort_order
+                    lower = ranks.filter(sort_order__lt=upper).order_by("-sort_order").values_list(
+                        "sort_order", flat=True,
+                    ).first()
+                elif preceding is not None:
+                    lower = preceding.sort_order
+                    upper = ranks.filter(sort_order__gt=lower).order_by("sort_order").values_list(
+                        "sort_order", flat=True,
+                    ).first()
+                else:
+                    lower = ranks.order_by("-sort_order").values_list("sort_order", flat=True).first()
+                    upper = None
+                self.sort_order = FractionalRankField.get_rank_between(lower, upper)
+                # Keep the original actor: native write/write__sort_order and
+                # history capture decide this save, including extension-only writes.
+                self.save(using=using, update_fields=("sort_order", "updated_at"))
+        super().apply_input_extensions(**values)
 
     class TaskVisibility(models.TextChoices):
         """Whether this task inherits its containers' access."""
@@ -1111,6 +1261,13 @@ class Task(
 
         return self.title
 
+    def lock_for_merge(self) -> None:
+        """Take ordering ownership before core merge/fold locks Task rows."""
+
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with type(self).ordering_write(using=using):
+            super().lock_for_merge()
+
     @classmethod
     def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> Any:
         """Append reparented children through the rank and hierarchy owners."""
@@ -1206,55 +1363,64 @@ class Task(
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Authorize project moves and assignment before revalidating task structure."""
 
-        update_fields = kwargs.get("update_fields")
-        deferred = self.get_deferred_fields()
-        project_is_written = (update_fields is None and "project_id" not in deferred) or (
-            update_fields is not None and bool({"project", "project_id"}.intersection(update_fields))
+        fields = kwargs.get("update_fields")
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        guard = (
+            type(self).ordering_write(using=using)
+            if self._state.adding or fields is None or self.ORDERING_FIELDS.intersection(fields)
+            else nullcontext()
         )
-        assignee_is_written = (update_fields is None and "assignee_id" not in deferred) or (
-            update_fields is not None and bool({"assignee", "assignee_id"}.intersection(update_fields))
-        )
-        previous_project_id, previous_assignee_id = None, None
-        if not self._state.adding and (project_is_written or assignee_is_written):
-            previous_project_id, previous_assignee_id = (
-                type(self).system_queryset().filter(pk=self.pk).values_list("project_id", "assignee_id").get()
+        with guard:
+            update_fields = kwargs.get("update_fields")
+            deferred = self.get_deferred_fields()
+            project_is_written = (update_fields is None and "project_id" not in deferred) or (
+                update_fields is not None and bool({"project", "project_id"}.intersection(update_fields))
             )
-        project = self.project
-        if project_is_written and project is not None:
-            if self._state.adding or self.project_id != previous_project_id:
+            assignee_is_written = (update_fields is None and "assignee_id" not in deferred) or (
+                update_fields is not None and bool({"assignee", "assignee_id"}.intersection(update_fields))
+            )
+            previous_project_id, previous_assignee_id = None, None
+            if not self._state.adding and (project_is_written or assignee_is_written):
+                previous_project_id, previous_assignee_id = (
+                    type(self).system_queryset().using(using).filter(pk=self.pk)
+                    .values_list("project_id", "assignee_id").get()
+                )
+            project = self.project
+            if project_is_written and project is not None:
+                if self._state.adding or self.project_id != previous_project_id:
+                    actor, bypass = self.effective_actor(strict=True)
+                    if not bypass and not project.with_actor(actor).has_access("write"):
+                        raise PermissionDenied("Write access to the project is required to add a task.")
+            if assignee_is_written and self.assignee_id is not None:
+                if self._state.adding or self.assignee_id != previous_assignee_id:
+                    self.validate_record_access_subject("assignee", self.assignee)
+            assignment_actor = None
+            if self._state.adding and self.assignee_id is not None:
                 actor, bypass = self.effective_actor(strict=True)
-                if not bypass and not project.with_actor(actor).has_access("write"):
-                    raise PermissionDenied("Write access to the project is required to add a task.")
-        if assignee_is_written and self.assignee_id is not None:
-            if self._state.adding or self.assignee_id != previous_assignee_id:
-                self.validate_record_access_subject("assignee", self.assignee)
-        assignment_actor = None
-        if self._state.adding and self.assignee_id is not None:
-            actor, bypass = self.effective_actor(strict=True)
-            if not bypass:
-                assignment_actor = actor
+                if not bypass:
+                    assignment_actor = actor
 
-        self._normalize_insert_lifecycle()
-        update_fields = kwargs.get("update_fields")
-        structure_fields = {"project", "project_id", "milestone", "milestone_id", "parent", "parent_id"}
-        if self._state.adding or update_fields is None or structure_fields.intersection(update_fields):
-            with transaction.atomic():
-                self._validate_structure()
-                super().save(*args, **kwargs)
-                # The persisted candidate lets REBAC evaluate every composed share arm.
-                # A refusal rolls the insert and its transactional side effects back.
-                if (
-                    assignment_actor is not None
-                    and (
-                        self.container_owns_items()
-                        or self.owner_id is None
-                        or self.assignee_id != actor_user_id(assignment_actor)
-                    )
-                    and not self.has_access("share")
-                ):
-                    raise PermissionDenied("Share access to the task is required to assign it.")
-            return
-        super().save(*args, **kwargs)
+            self._normalize_insert_lifecycle()
+            update_fields = kwargs.get("update_fields")
+            structure_fields = {"project", "project_id", "milestone", "milestone_id", "parent", "parent_id"}
+            if self._state.adding or update_fields is None or structure_fields.intersection(update_fields):
+                with transaction.atomic():
+                    self._validate_structure()
+                    super().save(*args, **kwargs)
+                    # The persisted candidate lets REBAC evaluate every composed share arm.
+                    # A refusal rolls the insert and its transactional side effects back.
+                    if (
+                        assignment_actor is not None
+                        and (
+                            self.container_owns_items()
+                            or self.owner_id is None
+                            or self.assignee_id != actor_user_id(assignment_actor)
+                        )
+                        and not self.has_access("share")
+                    ):
+                        raise PermissionDenied("Share access to the task is required to assign it.")
+                return
+            super().save(*args, **kwargs)
 
     @classmethod
     def hand_actions(cls) -> tuple[str, ...]:
@@ -1482,7 +1648,11 @@ class Task(
 
         super().validate_record_access_subject(relation, subject)
         reference = to_subject_ref(subject)
-        if self.subject_object_id is None or reference.optional_relation or reference.subject_type != "auth/user":
+        if (
+            self.subject_object_id is None
+            or reference.optional_relation
+            or reference.subject_type != user_subject_type()
+        ):
             return
         if self.effective_actor()[1]:
             return

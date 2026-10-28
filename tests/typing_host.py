@@ -36,9 +36,9 @@ def project_history_models() -> bool:
 
     from angee.compose.rendering import render_models
     from angee.compose.runtime import Runtime
-    from angee.fs import GENERATED_SENTINEL, GeneratedTree
-    from angee.models.history import ModelHistoryManager
-    from angee.models.statements import StatementManager, StatementPairManager
+    from angee.provenance.history import ModelHistoryManager
+    from angee.provenance.statements import StatementManager, StatementPairManager
+    from angee.utils.artifacts import GENERATED_SENTINEL, GeneratedTree
 
     runtime = Runtime.from_django()
     generated: dict[str, dict[str, type[models.Model]]] = defaultdict(dict)
@@ -87,7 +87,10 @@ def project_history_models() -> bool:
             *("\n".join(f"    {line}" for line in body.splitlines()) + "\n" for body in bodies),
         ])
         sources[Path(label) / "models.py"] = (
-            render_models(runtime.composition, label, runtime_module=runtime.runtime_module) + "\n" + projection
+            render_models(
+                runtime.composition, label, runtime_module=runtime.runtime_module,
+                declarations=runtime.model_declarations,
+            ) + "\n" + projection
         )
     return GeneratedTree(
         runtime.runtime_dir,

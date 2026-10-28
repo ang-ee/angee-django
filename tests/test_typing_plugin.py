@@ -142,11 +142,15 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "assert_type(FrameworkRecord.objects.get().title, str)\n"
         "assert_type(FrameworkRecord.objects.get_queryset().get(), FrameworkRecord)\n"
         "assert_type(FrameworkRecord.objects.get_queryset().lock_if_supported().get(), FrameworkRecord)\n"
-        "from angee.impl import ImplBase, ImplClassField\n"
+        "from angee.base.implementations import ImplBase\nfrom angee.base.fields import ImplClassField\n"
         "class Implementation(ImplBase):\n"
         "    registry_setting = 'ANGEE_TYPING_IMPL_CLASSES'\n"
         "    known = True\n"
         "ImplClassField(Implementation).resolve_class('impl').known\n"
+        "from tests.typing_app.models import ImplementationRecord\n"
+        "from tests.typing_app.models import TypingImplementation\n"
+        "assert_type(ImplementationRecord().get_backend_class_impl(), type[TypingImplementation])\n"
+        "assert_type(ImplementationRecord().get_backend_class_impl(default='local'), type[TypingImplementation])\n"
         "from tests.typing_app.factory import OtherFactory\n"
         "assert_type(OtherFactory.from_queryset(1), str)\n"
         "from angee.iam.models import User, UserKind, UserQuerySet\n"
@@ -176,7 +180,7 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "assert_type(PartyManager[ChildParty]().get_queryset().with_circle_names().get(), ChildParty)\n"
         "async def credentials() -> None:\n"
         "    assert_type(await User.objects.aget_by_natural_key('name'), User)\n"
-        "from angee.changesets import changeset_model, current_changeset, require_changeset\n"
+        "from angee.provenance.context import changeset_model, current_changeset, require_changeset\n"
         "from tests.typing_app.models import TypingChangeset\n"
         "assert_type(changeset_model(), type[TypingChangeset])\n"
         "assert_type(current_changeset(), TypingChangeset | None)\n"
@@ -202,7 +206,7 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "def system_row[RecordT: SystemRecord](model: type[RecordT]) -> RecordT:\n"
         "    assert_type(model.system_queryset(), SystemRecordQuerySet[RecordT])\n"
         "    return model.system_queryset().selected().get()\n"
-        "from angee.models.history import HistoryMixin\n"
+        "from angee.provenance.history import HistoryMixin\n"
         "def history_write(record: HistoryMixin) -> None:\n"
         "    record.save_without_historical_record(force_update=False, using='default', update_fields=['name'])\n"
         "from angee.integrate.models import Bridge\n"
@@ -217,10 +221,13 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "row.parent = Other(name='wrong relation')\n"
         "Tree.objects.missing_method()\n"
         "Tree.objects.values_list('missing_field', flat=True)\n"
-        "from angee.impl import ImplBase, ImplClassField\n"
+        "from angee.base.implementations import ImplBase\nfrom angee.base.fields import ImplClassField\n"
         "class Implementation(ImplBase):\n"
         "    registry_setting = 'ANGEE_TYPING_IMPL_CLASSES'\n"
         "ImplClassField(Implementation).resolve_class('impl').missing\n"
+        "from tests.typing_app.models import ImplementationRecord\n"
+        "ImplementationRecord().get_backend_class_impl().missing\n"
+        "ImplementationRecord().get_backend_class_impl(default=1)\n"
         "FrameworkRecord.objects.missing_method()\n"
         "FrameworkRecord.objects.get().count = {}\n"
         "FrameworkRecord.objects.create(title='invalid', count={})\n"
@@ -232,7 +239,7 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "Party.objects.get_queryset().canonical().with_circle_names().missing_method()\n"
         "Party.objects.get_queryset().with_circle_names().get().missing_field\n"
         "Party.objects.get_queryset().canonical().get().display_name = {}\n"
-        "from angee.changesets import changeset_model, current_changeset, require_changeset\n"
+        "from angee.provenance.context import changeset_model, current_changeset, require_changeset\n"
         "require_changeset().note = {}\n"
         "current_changeset(required=True).note\n"
         "changeset_model().objects.missing_method()\n"
@@ -242,20 +249,20 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "SystemRecord.system_queryset().selected().missing_method()\n"
         "SystemRecord.system_queryset().get().count = {}\n"
         "PlainSystemRecord.system_queryset().selected()\n"
-        "from angee.models.history import HistoryMixin\n"
+        "from angee.provenance.history import HistoryMixin\n"
         "def bad_history(record: HistoryMixin) -> None:\n"
         "    record.save_without_historical_record(unknown=True)\n"
         "    record.save_without_historical_record(force_update='bad')\n"
     )
     command = [sys.executable, "-m", "mypy", "--config-file", str(config)]
     positive = subprocess.run(
-        [*command, str(valid), str(root / "angee/models/manager.py")],
+        [*command, str(valid), str(root / "addons/angee/base/managers.py")],
         cwd=root, capture_output=True, text=True, check=False,
     )
     assert positive.returncode == 0, positive.stdout + positive.stderr
     negative = subprocess.run([*command, str(invalid)], cwd=root, capture_output=True, text=True, check=False)
     assert negative.returncode == 1, negative.stdout + negative.stderr
-    for line in (2, 3, 4, 5, 6, 10, 11, 12, 13, 15, 16, 17, 19, 20, 21, 23, 24, 25, 27, 29, 30, 31, 34, 35):
+    for line in (2, 3, 4, 5, 6, 11, 13, 14, 15, 16, 17, 19, 20, 21, 23, 24, 25, 27, 28, 29, 31, 33, 34, 35, 38, 39):
         assert f"invalid.py:{line}: error:" in negative.stdout, negative.stdout
 
     (tmp_path / "disabled_storage_settings.py").write_text(
@@ -267,7 +274,7 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
     disabled_source.write_text(
         "from typing import assert_type\n"
         "from django.db.models import Model\n"
-        "from angee.changesets import ChangesetLike, changeset_model, current_changeset, require_changeset\n"
+        "from angee.provenance.context import ChangesetLike, changeset_model, current_changeset, require_changeset\n"
         "assert_type(changeset_model(), type[Model])\n"
         "assert_type(current_changeset(required=True), ChangesetLike | None)\n"
         "assert_type(require_changeset(), ChangesetLike)\n"

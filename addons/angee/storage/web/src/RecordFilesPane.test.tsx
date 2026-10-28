@@ -25,8 +25,16 @@ vi.mock("./data/use-upload", async () => {
   } };
 });
 
+vi.mock("./data/use-drive-picker", () => ({
+  useDrivePicker: (_value: unknown, enabled: boolean) => ({
+    selectedId: enabled ? "drv_1" : "",
+    initial: { fetching: false },
+    picker: { options: [{ value: "drv_1", label: "Files" }], onOpenChange: vi.fn(), onSearchChange: vi.fn(), searchState: {} },
+  }),
+}));
+
 import { recordFilesGroup } from "./RecordFilesPane";
-import { StorageDrives, StorageRecordFiles } from "./data/documents";
+import { StorageRecordFiles } from "./data/documents";
 import { AppRuntimeProvider, CHATTER_CONTAINERS, InAppLinkProvider, RelatedPane, containersFromChildren, type ChatterViewContext } from "@angee/ui";
 
 const context: ChatterViewContext = {
@@ -42,11 +50,9 @@ function FilesGroup() {
 }
 
 beforeEach(() => {
-  sdk.query.mockReset().mockImplementation((document) => document === StorageDrives
-    ? { data: { drives: [{ id: "drv_1", name: "Files" }] }, isPending: false }
-    : { data: { record_files: { can_upload: true, attachments: [
+  sdk.query.mockReset().mockImplementation(() => ({ data: { record_files: { can_upload: true, attachments: [
       { id: "fat_1", label: "", file: { id: "fil_1", filename: "guide.pdf", title: "Guide", size_bytes: 2048, created_by_label: "River" } },
-    ] } }, isPending: false });
+    ] } }, isPending: false }));
   sdk.preview = { viewAs: null, pending: false };
   sdk.upload.mockReset();
   sdk.navigate.mockReset();
@@ -68,19 +74,15 @@ test("the group shares the actor-scoped attachment count and each row links to i
 });
 
 test("the label picker and row drop target share one upload owner, with progress after the popover closes", async () => {
-  sdk.query.mockImplementation((document) => document === StorageDrives
-    ? { data: { drives: [{ id: "drv_1", name: "Files" }] }, isPending: false }
-    : { data: undefined, isPending: true });
+  sdk.query.mockImplementation(() => ({ data: undefined, isPending: true }));
   const view = render(<FilesGroup />);
   expect(screen.getByRole("status").textContent).toContain("Loading attached files");
-  sdk.query.mockImplementation((document) => document === StorageDrives
-    ? { data: { drives: [{ id: "drv_1", name: "Files" }] }, isPending: false }
-    : { data: { record_files: { can_upload: true, attachments: [] } }, isPending: false });
+  sdk.query.mockImplementation(() => ({ data: { record_files: { can_upload: true, attachments: [] } }, isPending: false }));
   view.rerender(<FilesGroup />);
   const trigger = screen.getByRole("button", { name: "Upload" });
   expect(trigger.closest("li")?.textContent).toContain("Files");
   fireEvent.click(trigger);
-  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(screen.getByRole("combobox", { name: /Drive/ })).toBeTruthy();
   fireEvent.change(await screen.findByLabelText("Choose files", { selector: 'input[type="file"]' }), {
     target: { files: [new File(["content"], "note.txt", { type: "text/plain" })] },
   });

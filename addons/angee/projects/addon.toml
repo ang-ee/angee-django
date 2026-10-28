@@ -4,6 +4,7 @@ description = "Bounded projects, milestones, and the platform's one human-action
 keywords = ["projects", "milestones", "tasks", "planning"]
 category = "Productivity"
 depends_on = [
+  "angee.base",
   "django.contrib.contenttypes",
   "angee.iam",
   "angee.integrate",
@@ -15,6 +16,7 @@ depends_on = [
   "angee.storage",
   "angee.tags",
   "angee.timeline",
+  "angee.web",
 ]
 
 [[migrations]]

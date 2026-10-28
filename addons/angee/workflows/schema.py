@@ -14,10 +14,13 @@ from django.db.models.lookups import IsNull
 from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
+from strawberry_django.auth.utils import get_current_user
 from strawberry_django.queryset import run_type_get_queryset
 
+from angee.base.identity import public_id_for
+from angee.base.implementations import resolve_all_impl_classes
+from angee.base.models import record_display_label
 from angee.decisions.schema import DecisionType
-from angee.evidence import readable_evidence
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
@@ -25,7 +28,7 @@ from angee.graphql.actions import (
     authorized_permission_target,
 )
 from angee.graphql.capabilities import permission_expression, permissions_field
-from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
 from angee.graphql.impl import ImplChoice
 from angee.graphql.node import AngeeNode
@@ -36,11 +39,8 @@ from angee.graphql.relations import (
 )
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_public_id
-from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
-from angee.identity import public_id_for
-from angee.impl import resolve_all_impl_classes
-from angee.models import record_display_label
+from angee.provenance.evidence import readable_evidence
 from angee.workflows.definition import Body, Definition, Issue
 from angee.workflows.models import RunGraphNode
 from angee.workflows.states import RunOrigin, StepRunStatus, WaitingKind
@@ -137,7 +137,7 @@ class WorkflowRunType(RecordReferenceNode):
         """Keep non-reference input and check each source's declared model read policy."""
         run = cast(Any, self)
         definition = run.policy_version.definition
-        readable = readable_evidence(definition.input_evidence(run.input), request_from_info(info).user)
+        readable = readable_evidence(definition.input_evidence(run.input), get_current_user(info))
         return definition.redacted_input(run.input, {(ref.model.lower(), ref.id) for ref in readable})
     output: JSON
     outcome: auto
@@ -155,17 +155,17 @@ class WorkflowRunType(RecordReferenceNode):
     @strawberry_django.field(only=["version_id", "status", "stopped_at"], prefetch_related=[_RUN_POLICY_VERSION])
     def graph(self, info: strawberry.Info) -> WorkflowRunGraph:
         """Read one run's bounded graph; list selections cost about five queries per row."""
-        return cast(WorkflowRunGraph, cast(Any, self).graph(request_from_info(info).user))
+        return cast(WorkflowRunGraph, cast(Any, self).graph(get_current_user(info)))
 
     @strawberry_django.field(only=["status", "stopped_at"])
     def can_cancel(self, info: strawberry.Info) -> bool:
         """Project the model's viewer-specific cancellation predicate."""
-        return bool(cast(Any, self).can_cancel(request_from_info(info).user))
+        return bool(cast(Any, self).can_cancel(get_current_user(info)))
 
     @strawberry_django.field(only=["status", "version_id"])
     def can_reprocess(self, info: strawberry.Info) -> bool:
         """Project the model's viewer-specific replacement admission predicate."""
-        return bool(cast(Any, self).can_reprocess(request_from_info(info).user))
+        return bool(cast(Any, self).can_reprocess(get_current_user(info)))
 
     subject_model: str | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_model, only=["subject_content_type_id", "subject_object_id"],
@@ -241,20 +241,17 @@ class StepRunType(AngeeNode):
     @strawberry_django.field(only=["node_key", "run_id"])
     def map_steps(self, info: strawberry.Info) -> list[StepRunType]:
         """Map item execution stays beneath its authored parent in the timeline."""
-        return cast(Any, self).map_rows().with_actor(request_from_info(info).user).order_by("map_index")
+        return cast(Any, self).map_rows().with_actor(get_current_user(info)).order_by("map_index")
 
     @strawberry_django.field(only=["status", "waiting_kind", "node_key", "run_id"])
     def can_retry(self, info: strawberry.Info) -> bool:
         """Project the same model rule checked by the retry action."""
-        return bool(cast(Any, self).can_retry(request_from_info(info).user))
+        return bool(cast(Any, self).can_retry(get_current_user(info)))
 
     @strawberry_django.field(only=["node_key", "page_index", "run_id"])
     def requires_duplicate_acknowledgement(self) -> bool:
         """Read the step owner's current-page effect marker predicate."""
         return bool(cast(Any, self).requires_duplicate_acknowledgement)
-
-
-
 
 
 @strawberry_django.type(StepAttempt)
@@ -422,14 +419,14 @@ class TriggerType(AngeeNode):
     @strawberry_django.field
     def enable_preview(self, info: strawberry.Info) -> TriggerEnablePreviewType | None:
         """Show expected grants and inherited run readers only to eligible enablers."""
-        preview = Trigger.objects.enable_preview(cast(Any, self), actor=request_from_info(info).user)
+        preview = Trigger.objects.enable_preview(cast(Any, self), actor=get_current_user(info))
         return (TriggerEnablePreviewType(grants=list(preview.grants), run_readers=list(preview.run_readers))
                 if preview is not None else None)
 
     @strawberry_django.field
     def grants(self, info: strawberry.Info) -> list[TriggerGrantType]:
         """List live direct tuples; reveal a target label only through readable rows."""
-        actor = request_from_info(info).user
+        actor = get_current_user(info)
         rows = cast(Any, self).granted_relationships(actor=actor)
         targets = [TriggerGrantTarget.from_stored({
             "resource_type": str(row.resource_type), "resource_id": str(row.resource_id),
@@ -457,7 +454,7 @@ class TriggerType(AngeeNode):
     @strawberry_django.field
     def can_edit(self, info: strawberry.Info) -> bool:
         """Expose the permission owner's current write decision to authoring forms."""
-        return bool(cast(Any, self).with_actor(request_from_info(info).user).has_access("write"))
+        return bool(cast(Any, self).with_actor(get_current_user(info)).has_access("write"))
 
 
 @strawberry_django.type(TriggerEvent)
@@ -659,7 +656,7 @@ class WorkflowActionMutation:
         workflow = authorized_permission_target(info, Workflow, workflow_id, "start")
         record = authorized_permission_target(info, apps.get_model(subject.model), subject.id, "read")
         run = WorkflowRun.objects.start(
-            workflow, actor=request_from_info(info).user, subject=record, input=input, request_key=request_key,
+            workflow, actor=get_current_user(info), subject=record, input=input, request_key=request_key,
         )
         return ActionResult(ok=True, message=f"{workflow.name} started", id=run.sqid)
 
@@ -668,7 +665,7 @@ class WorkflowActionMutation:
     def enable_workflow_trigger(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Enable through its policy owner as the requesting workflow author."""
         trigger = authorized_action_target(info, Trigger, id, "write")
-        Trigger.objects.enable(trigger, actor=request_from_info(info).user)
+        Trigger.objects.enable(trigger, actor=get_current_user(info))
         return ActionResult(ok=True, message="Trigger enabled.", id=trigger.sqid)
 
     @strawberry.mutation
@@ -676,7 +673,7 @@ class WorkflowActionMutation:
     def disable_workflow_trigger(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Stop capturing future changes through the trigger lifecycle owner."""
         trigger = authorized_action_target(info, Trigger, id, "write")
-        Trigger.objects.disable(trigger, actor=request_from_info(info).user)
+        Trigger.objects.disable(trigger, actor=get_current_user(info))
         return ActionResult(ok=True, message="Trigger disabled.", id=trigger.sqid)
 
     @strawberry.mutation
@@ -687,7 +684,7 @@ class WorkflowActionMutation:
         """Revoke one source grant through the same workflow write gate as enable."""
         trigger = authorized_action_target(info, Trigger, id, "write")
         current = Trigger.objects.revoke_grant(
-            trigger, actor=request_from_info(info).user,
+            trigger, actor=get_current_user(info),
             resource_type=resource_type, resource_id=resource_id, relation=relation,
         )
         return ActionResult(
@@ -699,7 +696,7 @@ class WorkflowActionMutation:
     def cancel_workflow_run(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Cancel one writable active run through the execution owner."""
         run = authorized_action_target(info, WorkflowRun, id, "write")
-        result = WorkflowRun.objects.cancel(run, actor=request_from_info(info).user)
+        result = WorkflowRun.objects.cancel(run, actor=get_current_user(info))
         return ActionResult(ok=True, message=result.message)
 
     @strawberry.mutation
@@ -707,7 +704,7 @@ class WorkflowActionMutation:
     def reprocess_workflow_run(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Start a replacement for a terminal run as the requesting operator."""
         run = authorized_action_target(info, WorkflowRun, id, "write")
-        replacement = WorkflowRun.objects.reprocess(run, actor=request_from_info(info).user)
+        replacement = WorkflowRun.objects.reprocess(run, actor=get_current_user(info))
         return ActionResult(ok=True, message="Run reprocessed.", id=replacement.sqid)
 
     @strawberry.mutation
@@ -716,7 +713,7 @@ class WorkflowActionMutation:
         """Retry a visible step when the operator may write its owning run."""
         step_run = authorized_permission_target(info, StepRun, id, "read")
         authorized_action_target(info, WorkflowRun, step_run.run.sqid, "write")
-        StepRun.objects.retry_step(step_run, actor=request_from_info(info).user)
+        StepRun.objects.retry_step(step_run, actor=get_current_user(info))
         return ActionResult(ok=True, message="Step retried.")
 
     @strawberry.mutation
@@ -725,7 +722,7 @@ class WorkflowActionMutation:
         """Explicitly acknowledge a possible duplicate effect before retrying."""
         step_run = authorized_permission_target(info, StepRun, id, "read")
         authorized_action_target(info, WorkflowRun, step_run.run.sqid, "write")
-        StepRun.objects.retry_step(step_run, actor=request_from_info(info).user, accept_duplicate=True)
+        StepRun.objects.retry_step(step_run, actor=get_current_user(info), accept_duplicate=True)
         return ActionResult(ok=True, message="Step retried with duplicate risk acknowledged.")
 
 
@@ -799,7 +796,7 @@ class WorkflowStudioQuery:
             for node, outcomes, issues in Workflow.objects.authoring_outcomes(
                 [{"node": entry.node, "step": entry.step, "config": entry.config}
                  for entry in configurations],
-                actor=request_from_info(info).user,
+                actor=get_current_user(info),
             )
         ]
 
@@ -843,7 +840,7 @@ class WorkflowStudioMutation:
             layout=layout,
             expected_revision=expected_revision,
             node_keys=node_keys,
-            actor=request_from_info(info).user,
+            actor=get_current_user(info),
         )
         return WorkflowDraftAcknowledgement(
             revision=saved.revision,
@@ -857,7 +854,7 @@ class WorkflowStudioMutation:
         published = Workflow.objects.publish(
             workflow,
             expected_revision=expected_revision,
-            actor=request_from_info(info).user,
+            actor=get_current_user(info),
         )
         return WorkflowPublication(
             number=published.version.number,
@@ -909,7 +906,7 @@ class RecordTimelineQuery:
         """One read for a record or selection, through the record and run owners."""
         if len(records) > 100:
             raise ValidationError("A timeline selection accepts at most 100 records.")
-        actor = request_from_info(info).user
+        actor = get_current_user(info)
         concerned = []
         for reference in records:
             model = apps.get_model(reference.model)

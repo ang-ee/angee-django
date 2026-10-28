@@ -2465,9 +2465,9 @@
   {
     "package": "@angee/ui",
     "name": "FORM_SPEC_ANNOTATIONS",
-    "source": "packages/ui/src/views/form/form-spec-schema.ts",
+    "source": "packages/ui/src/views/form/form-spec.annotations.generated.ts",
     "kind": null,
-    "reason": "Schema infrastructure: validates serialized runtime contracts.",
+    "reason": "Generated codec vocabulary consumed by the optional schema validator.",
     "status": "stable",
     "storyId": null
   },
@@ -6956,7 +6956,7 @@
     "name": "parseFormSpec",
     "source": "packages/ui/src/views/form/form-spec-schema.ts",
     "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
+    "reason": "Codec infrastructure: validates the generated wire contract.",
     "status": "stable",
     "storyId": null
   },
@@ -6965,7 +6965,7 @@
     "name": "parseFormSpecPayload",
     "source": "packages/ui/src/views/form/form-spec-schema.ts",
     "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
+    "reason": "Codec infrastructure: reads a JSON object envelope.",
     "status": "stable",
     "storyId": null
   },
@@ -8570,6 +8570,15 @@
     "source": "packages/ui/src/views/relation/relation-options.ts",
     "kind": "contribution",
     "owner": "@angee/ui:RelationFieldWidget",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useRelationPickerOptions",
+    "source": "packages/ui/src/views/relation/relation-options.ts",
+    "kind": null,
+    "reason": "Shared data hook owns picker query state without rendered anatomy.",
     "status": "stable",
     "storyId": null
   },

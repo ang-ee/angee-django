@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from angee.fs import GeneratedTree, write_atomic
+from angee.utils.artifacts import GeneratedTree
+from angee.utils.files import write_atomic
 
 
 def test_write_atomic_creates_file_and_parents(tmp_path: Path) -> None:
@@ -129,3 +130,44 @@ def test_generated_tree_drift_never_reports_preserved_migration_files(tmp_path: 
     (root / "app" / "migrations" / "max_migration.txt").write_text("0002_x", encoding="utf-8")
     tree = GeneratedTree(root, {Path("app") / "models.py": "code"}, owns=lambda path: True)
     assert tree.drift() == [Path("app") / "models.py"]
+
+
+@pytest.mark.parametrize("operation", ["drift", "reconcile"])
+def test_generated_tree_rejects_artifacts_through_escaping_directory_symlinks(
+    tmp_path: Path, operation: str,
+) -> None:
+    """Every path is checked before boot repair can write through a directory link."""
+
+    root = tmp_path / "generated"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    foreign = outside / "models.py"
+    foreign.write_text("foreign", encoding="utf-8")
+    (root / "app").symlink_to(outside, target_is_directory=True)
+    tree = GeneratedTree(root, {
+        Path("first.txt"): "new",
+        Path("app/models.py"): "replacement",
+    }, owns=lambda path: True)
+
+    with pytest.raises(ValueError, match="escapes the root through a symlink"):
+        if operation == "drift":
+            tree.drift()
+        else:
+            tree.reconcile(prune=False)
+    assert foreign.read_text(encoding="utf-8") == "foreign"
+    assert not (root / "first.txt").exists()
+
+
+def test_generated_tree_accepts_a_configured_symlink_root(tmp_path: Path) -> None:
+    """Containment follows the configured root itself to its intended destination."""
+
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    root = tmp_path / "generated"
+    root.symlink_to(destination, target_is_directory=True)
+    tree = GeneratedTree(root, {Path("app/models.py"): "generated"}, owns=lambda path: True, clean_root=root)
+
+    assert tree.reconcile(prune=False) is True
+    assert (destination / "app/models.py").read_text(encoding="utf-8") == "generated"
+    assert tree.drift() == []

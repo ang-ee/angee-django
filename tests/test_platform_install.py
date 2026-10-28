@@ -50,7 +50,7 @@ SECRET_KEY: dev-key
 
 INSTALLED_APPS:
   - angee.platform  # the console host
-ANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"
+COMPOSE_RUNTIME_DIR: "{BASE_DIR}/runtime"
 """
 
 _INSTALL = "mutation($addon: String!){ install(addon: $addon){ ok message } }"
@@ -286,7 +286,7 @@ def test_disable_refuses_an_addon_required_by_the_loaded_graph(
 
     del composed_tables
     admin = _platform_admin("forced-admin")
-    monkeypatch.setattr(apps.get_app_config("iam"), "angee_forced", True, raising=False)
+    monkeypatch.setattr(apps.get_app_config("iam"), "compose_required", True, raising=False)
     if persisted_forced is not None:
         with system_context(reason="test.platform.forced.seed"):
             Addon.objects.update_or_create(
@@ -312,7 +312,7 @@ def test_disable_ignores_stale_catalogue_dependency_flags(
 
     del composed_tables
     admin = _platform_admin("stale-forced-admin")
-    monkeypatch.setattr(apps.get_app_config("platform"), "angee_forced", False, raising=False)
+    monkeypatch.setattr(apps.get_app_config("platform"), "compose_required", False, raising=False)
     with system_context(reason="test.platform.stale-forced.seed"):
         Addon.objects.update_or_create(
             name="angee.platform",

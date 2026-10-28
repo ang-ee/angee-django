@@ -2,8 +2,9 @@
 
 from django.db import models
 
-from angee.models.history import ModelHistory
-from angee.models.statements import Aspect, StatementRecords
+from angee.provenance.contrib.angee.history import ModelHistory
+from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
+from angee.provenance.statements import Aspect, StatementRecords
 
 
 class Changeset(models.Model):
@@ -15,6 +16,7 @@ class Changeset(models.Model):
 
 class Subject(models.Model):
     runtime = True
+    objects = AngeeHistoryUnscopedManager()
 
     title = models.CharField(max_length=40)
     count = models.IntegerField()
@@ -23,3 +25,4 @@ class Subject(models.Model):
 
     class Meta:
         abstract = True
+        base_manager_name = "objects"

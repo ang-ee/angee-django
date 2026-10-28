@@ -7,7 +7,7 @@ from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import pytest
-from hatch_angee import AddonManifest
+from hatch_angee import AddonManifest, ManifestError
 from rebac import system_context
 
 import tests.test_marketplace_graphql  # noqa: F401 -- register the fixture model graph before database setup
@@ -45,6 +45,7 @@ def test_parse_addon_meta_reads_the_addon_block() -> None:
 
     blob = (
         b'[addon]\nname = "angee.demo"\ndescription = "A demo addon."\n'
+        b'keywords = ["catalog", "demo"]\ncategory = "Tools"\n'
         b'depends_on = ["angee.iam", "angee.platform"]\n'
     )
 
@@ -54,6 +55,8 @@ def test_parse_addon_meta_reads_the_addon_block() -> None:
     assert "label" not in meta
     assert meta["namespace"] == "angee"
     assert meta["description"] == "A demo addon."
+    assert meta["keywords"] == ["catalog", "demo"]
+    assert meta["category"] == "Tools"
     assert meta["depends_on"] == ["angee.iam", "angee.platform"]
 
 
@@ -72,6 +75,23 @@ def test_parse_addon_meta_tolerates_a_bare_manifest() -> None:
     assert "label" not in meta
     assert meta["depends_on"] == []
     assert meta["description"] == ""
+
+
+@pytest.mark.parametrize(
+    "blob,key",
+    [
+        (b'[addon]\nname="angee.demo"\nkeywords=[1]\n', "addon.keywords[0]"),
+        (b'[addon]\nname="angee.demo"\ndescription=3\n', "addon.description"),
+        (b'[addon]\n', "addon.name"),
+    ],
+)
+def test_catalogue_uses_native_manifest_validation(blob: bytes, key: str) -> None:
+    """Malformed remote metadata has the native declaration error contract."""
+
+    with pytest.raises(ManifestError) as caught:
+        parse_addon_meta(blob)
+    assert caught.value.key == key
+    assert caught.value.path == Path("addon.toml")
 
 
 def test_remote_catalogue_reconciles_metadata_and_retains_removed_declarations(

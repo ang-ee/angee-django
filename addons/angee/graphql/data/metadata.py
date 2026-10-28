@@ -13,10 +13,19 @@ from django.db import models
 from rebac.resources import model_for_resource_type, model_resource_type
 from strawberry_django_hasura import HasuraResource
 
-from angee.data import metadata as data_contract
-from angee.data.field_classification import is_to_one_relation, model_field_scalar
+from angee.base.fields import ImplClassField
+from angee.base.lineage import concrete_child_models
+from angee.base.models import (
+    AngeeModel,
+    MergeableMixin,
+    RecordRefMixin,
+)
+from angee.base.models.refs import record_edges_by_target
+from angee.base.permissions import effective_rebac_definition
+from angee.base.refs import generic_pointer_model
 from angee.graphql.access import is_gated_read_axis
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
+from angee.graphql.data import contracts as data_contract
 from angee.graphql.data.final_schema import final_schema_references
 from angee.graphql.data.query import ResourceQueryProjection
 from angee.graphql.data.resource_fields import (
@@ -39,19 +48,9 @@ from angee.graphql.data.resource_fields import (
 )
 from angee.graphql.introspection import (
     FieldPathError,
+    is_to_one_relation,
     require_field_for_path,
 )
-from angee.impl import ImplClassField
-from angee.lineage import concrete_child_models
-from angee.models import (
-    AngeeModel,
-    MergeableMixin,
-    RecordRefMixin,
-    record_history,
-)
-from angee.models.refs import record_edges_by_target
-from angee.permissions import effective_rebac_definition
-from angee.refs import generic_pointer_model
 from graphql import GraphQLSchema, get_named_type
 
 __all__ = [
@@ -93,6 +92,8 @@ class DataResourcePolicy:
     public_id_field: str | None = None
     subject_field: str | None = None
     row_model: str | None = None
+    history: bool | None = None
+    """Whether the contributing schema exposes readable history for this model."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +157,14 @@ def finalize_data_resources(
                 identity_policies[node_name] = str(declared)
     finalized: list[data_contract.DataResourceMetadata] = []
     for model_label, contributions in by_label.items():
+        if not any(
+            item.native_resource is not None
+            or any(dataclasses.asdict(item.roots).values())
+            or any(dataclasses.asdict(item.type_names).values())
+            for item in contributions
+        ):
+            # Capability declarations augment a resource; they never expose one.
+            continue
         first = contributions[0]
         for contribution in contributions[1:]:
             if contribution.model is not first.model:
@@ -300,7 +309,7 @@ def finalize_data_resources(
             concrete_kinds=_concrete_kinds(item.model, resources_by_model),
             record_edges=_record_edges(item.model, edges_by_target),
             mergeable=item.model is not None and issubclass(item.model, MergeableMixin),
-            history=item.model is not None and record_history(item.model) is not None,
+            history=bool(_single_policy_value(item.model_label, by_label[item.model_label], "history")),
         )
         for item in finalized
     )
@@ -730,7 +739,7 @@ def _record_edges(
     A record carries only these edges, so a surface listing one (a record's files,
     pages or source conversations) applies to the record types that name it. An
     edge with roles adds ``<label>:<role>`` for each role the type carries
-    (:meth:`~angee.models.refs.RecordRefMixin.record_edge_roles`), so a surface
+    (:meth:`~angee.base.models.refs.RecordRefMixin.record_edge_roles`), so a surface
     serving one role (Comments on the chatter role) gates on that entry.
     """
 
@@ -1027,7 +1036,7 @@ def relation_group_by_fields(
                 isinstance(model_field, models.Field)
                 and model_field.concrete
                 and not model_field.is_relation
-                and model_field_scalar(model_field) == "String"
+                and isinstance(model_field, (models.CharField, models.TextField, models.UUIDField))
             ):
                 label_axis = f"{path}__{model_field.name}"
                 if is_gated_read_axis(model, label_axis):

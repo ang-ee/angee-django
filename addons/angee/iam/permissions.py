@@ -2,27 +2,22 @@
 
 iam owns "who is a platform admin", so the platform-admin GraphQL gate lives here
 — not buried in ``iam.schema`` — and downstream addons (e.g. ``integrate``) import
-it without pulling in iam's whole schema module. Also the home of the small
-request/auth context helpers shared between the permission and iam's resolvers.
+it without pulling in iam's whole schema module. Session authentication checks
+are shared by permission classes and self-service resolvers; Strawberry owns
+request context.
 """
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar
 
 import strawberry
 from django.contrib.auth.models import AnonymousUser
-from django.http import HttpRequest
 from rebac import ObjectRef, PermissionDenied, current_actor
 from strawberry.permission import BasePermission
+from strawberry_django.auth.utils import get_current_user
 
 from angee.iam.roles import platform_admin_role, subject_has_role
-
-
-def request_from_info(info: strawberry.Info) -> HttpRequest:
-    """Return the Django request from Strawberry's context."""
-
-    return cast(HttpRequest, info.context.request)
 
 
 def is_authenticated(user: Any) -> bool:
@@ -39,7 +34,7 @@ def session_user(info: strawberry.Info) -> Any:
     anonymous-deny check lives in exactly one place.
     """
 
-    user = getattr(request_from_info(info), "user", None)
+    user = get_current_user(info)
     if not is_authenticated(user):
         raise PermissionDenied("Authentication required.")
     return user
@@ -63,7 +58,7 @@ def current_actor_has_role(role: ObjectRef) -> bool:
 def require_platform_admin(info: strawberry.Info) -> Any:
     """Return the session user or raise when it lacks platform-admin reach."""
 
-    user = getattr(request_from_info(info), "user", None)
+    user = get_current_user(info)
     if not is_platform_admin(user):
         raise PermissionDenied("Platform admin permission required.")
     return user
@@ -103,7 +98,7 @@ class PlatformAdminPermission(RolePermission):
         """Return whether the request user has platform-admin reach."""
 
         del source, kwargs
-        return is_platform_admin(getattr(request_from_info(info), "user", None))
+        return is_platform_admin(get_current_user(info))
 
 
 ADMIN_PERMISSION_CLASSES: list[type[BasePermission]] = [PlatformAdminPermission]

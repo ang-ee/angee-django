@@ -21,7 +21,6 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from deepdiff import DeepDiff
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import DataError, close_old_connections, connection, connections, transaction
 from django.db.models import Q
@@ -30,7 +29,6 @@ from pydantic import ConfigDict, JsonValue, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
-from angee.changesets import changeset, current_changeset
 from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.states import (
@@ -45,6 +43,8 @@ from angee.integrate.states import (
     SyncFailureKind,
 )
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
+from angee.jobs.timeouts import task_time_budget
+from angee.provenance.context import changeset, current_changeset
 from angee.serialization import canonical_json, canonical_json_sha256
 
 logger = logging.getLogger(__name__)
@@ -1248,8 +1248,8 @@ def sync_bridge(bridge: Any) -> int:
     """Drive declared partitions within the existing bridge task's time budget."""
 
     config = bridge.config
-    soft_limit = float(settings.CELERY_TASK_SOFT_TIME_LIMIT)
-    deadline = monotonic() + max(0.0, float(config.get("sync_time_budget", max(60.0, soft_limit - 60.0))))
+    worker_budget = task_time_budget().total_seconds()
+    deadline = monotonic() + max(0.0, min(worker_budget, float(config.get("sync_time_budget", worker_budget))))
     adapter = bridge.capability_impl
     try:
         with system_context(reason="integrate.bridge.streams"):
@@ -1275,7 +1275,7 @@ def sync_bridge(bridge: Any) -> int:
                     max_workers=min(parallelism, len(definitions)), thread_name_prefix="bridge-sync"
                 ) as pool:
                     # Each worker records its own changeset row under the cycle's boundary
-                    # and actor (angee.changesets), so the copied context is safe to share.
+                    # and actor (angee.provenance.context), so the copied context is safe to share.
                     futures = {
                         pool.submit(copy_context().run, _drain_partition, bridge, definition, deadline): definition
                         for definition in definitions

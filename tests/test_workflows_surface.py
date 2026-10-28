@@ -15,9 +15,9 @@ from django.db.models.deletion import PROTECT
 from pydantic import BaseModel
 
 import angee.workflows as workflows
+from angee.base.models import DerivedFrom, RecordRefMixin
 from angee.decisions.contracts import DecisionFact, DecisionRecordReference, DecisionRequest
-from angee.evidence import EvidenceFact, EvidenceReference, FactAuthority, readable_records
-from angee.models import DerivedFrom, RecordRefMixin
+from angee.provenance.evidence import EvidenceFact, EvidenceReference, FactAuthority, readable_records
 from angee.workflows.managers import PublishResult
 from angee.workflows.states import RunOrigin
 from angee.workflows.steps import Settlement, Step
@@ -95,7 +95,7 @@ EXPECTED_SETTINGS = {
 
 EXPECTED_TEST_DRIVERS = (
     "RunFactory", "capture_tasks", "decide", "load_workflow", "observe", "publish_draft", "register_steps",
-    "run_until", "start_run", "trigger_source",
+    "run_until", "start_run",
 )
 
 
@@ -178,7 +178,8 @@ def test_workflows_public_surface() -> None:
         module_name = f"{config.name}.autoconfig"
         if importlib.util.find_spec(module_name) is None:
             continue
-        declared = importlib.import_module(module_name).SETTINGS
+        # Static defaults are optional; a module may contribute only settings(namespace).
+        declared = vars(importlib.import_module(module_name)).get("SETTINGS", {})
         names = tuple(sorted(
             key for key in declared
             if (key.startswith(("ANGEE_WORKFLOW_", "ANGEE_EXTRACTION_")) and "." not in key)

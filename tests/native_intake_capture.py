@@ -18,10 +18,10 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
-from angee.errors import RecordAccessSubjectRefused
+from angee.base.models import StaleRevisionError
+from angee.base.permissions import RecordAccessSubjectRefused
 from angee.graphql.schema import GraphQLSchemas
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
-from angee.models import StaleRevisionError
 
 
 def grant_rows(store):

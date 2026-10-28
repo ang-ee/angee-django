@@ -12,10 +12,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
 
-from django.apps import AppConfig, apps
+from django.apps import AppConfig
 from django.apps.registry import Apps
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management.base import CommandError
 from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router
 from django.db.migrations import Migration
@@ -27,8 +27,8 @@ from django.db.migrations.operations.models import DeleteModel
 from django.db.migrations.state import ProjectState
 from django.db.models.expressions import DatabaseDefault
 
-from angee.addons import addon_manifest
-from angee.fs import write_atomic
+from angee.compose.declarations import AppDeclarationSource, BuildIntegration
+from angee.utils.files import write_atomic
 
 MATERIALIZED_FOOTER = "# ANGEE MATERIALIZED MIGRATION - DO NOT EDIT"
 SOURCE_SHA256_ATTR = "angee_source_sha256"
@@ -75,10 +75,12 @@ class RuntimeMigrations:
         *,
         runtime_dir: Path,
         labels: Iterable[str],
+        declarations: AppDeclarationSource | None = None,
     ) -> None:
         self.addons = tuple(addons)
         self.runtime_dir = runtime_dir
         self.labels = frozenset(labels)
+        self.declarations = declarations if declarations is not None else AppDeclarationSource.configured()
 
     def schedule(self, state: ProjectState, *, only: Iterable[str]) -> tuple[ScheduledMigration, ...]:
         """Schedule the ``only`` origins from ``state`` as :meth:`plan` does, without a migration graph.
@@ -480,14 +482,10 @@ class RuntimeMigrations:
             raise RuntimeError(f"{origin}: invalid Django {kind} {raw!r}")
         return cast("tuple[str, str]", node)
 
-    @staticmethod
-    def _declarations(addon: AppConfig) -> Iterator[Mapping[str, Any]]:
-        """Validate capability-specific fields on the unchanged manifest entries."""
+    def _declarations(self, addon: AppConfig) -> Iterator[Mapping[str, Any]]:
+        """Validate compiler fields on the unchanged host declarations."""
 
-        manifest = addon_manifest(addon)
-        if manifest is None:
-            return
-        for index, declaration in enumerate(manifest.migrations):
+        for index, declaration in enumerate(self.declarations.migrations(addon)):
             for key in ("name", "app_label", "module"):
                 if not isinstance(declaration.get(key), str) or not declaration[key]:
                     raise RuntimeError(f"{addon.name}: migrations[{index}] requires string {key}")
@@ -587,13 +585,12 @@ class DropGuardAutodetector(MigrationAutodetector):
     database that may receive the migration, selected like Django's history
     consistency check, must prove the column empty; an unreachable or
     unconfigured database cannot, so the drop is refused. A deleted model's table
-    holds data when it has a row, under the same proof; an addon that names the model
-    under ``retired_models`` in its
-    addon.toml ``[resources]`` vouches for the rows its own resource files seeded,
-    which retire with the model.
+    holds data when it has a row, under the same proof. An installed capability
+    may explicitly identify rows that retire with a deleted model through its
+    build integration; every remaining row still blocks the drop.
 
-    A reviewed drop is an addon runtime migration: ``angee build`` materializes it
-    into the history first, so its removal is never autodetected here.
+    A reviewed drop is a declared runtime migration: build materializes it into
+    the history first, so its removal is never autodetected here.
     """
 
     def changes(
@@ -620,7 +617,7 @@ class DropGuardAutodetector(MigrationAutodetector):
                 + ". A column is dropped automatically only when every database that may receive the "
                 "migration proves it empty (NULL for a nullable field, otherwise the field's default). "
                 "Declare a cutover migration that preserves or retires this data and removes the field "
-                "in an installed addon's addon.toml [[migrations]], then run `angee build` before makemigrations."
+                "through the configured app declarations, then build before makemigrations."
             )
         refusals = [
             refusal
@@ -634,10 +631,9 @@ class DropGuardAutodetector(MigrationAutodetector):
             raise CommandError(
                 "unsafe autodetected table drop: " + "; ".join(refusals)
                 + ". A deleted model's table is dropped automatically only when every database that may "
-                "receive the migration proves it holds nothing but rows its retiring addon's resource files seeded "
-                "(addon.toml [resources] retired_models). Declare a cutover "
-                "migration that preserves or retires its rows and deletes the model in an installed addon's "
-                "addon.toml [[migrations]], then run `angee build` before makemigrations."
+                "receive the migration proves it holds no rows except those explicitly retired by an installed "
+                "build integration. Declare a cutover migration that preserves or retires its rows and deletes "
+                "the model through the configured app declarations, then build before makemigrations."
             )
         return changes
 
@@ -664,16 +660,22 @@ class DropGuardAutodetector(MigrationAutodetector):
         yield from self._holding(model, lambda alias: rows, f"{model._meta.label_lower}.{field.name}", table, column)
 
     def _populated_table(self, app_label: str, operation: DeleteModel) -> Iterator[str]:
-        """Describe each target database where the deleted model's table holds unseeded rows."""
+        """Describe each target database where the deleted model's table holds protected rows."""
 
         model = self.from_state.apps.get_model(app_label, operation.name)
         if model._meta.proxy or not model._meta.managed or model._meta.swapped:
             return
 
-        def unseeded(alias: str) -> Any:
-            return model._base_manager.exclude(pk__in=_seeded_primary_keys(model, alias))
+        integrations = BuildIntegration.configured()
 
-        yield from self._holding(model, unseeded, model._meta.label_lower, model._meta.db_table, None)
+        def remaining(alias: str) -> Any:
+            keys = {
+                key for integration in integrations
+                for key in integration.retired_primary_keys(model, alias)
+            }
+            return model._base_manager.exclude(pk__in=keys)
+
+        yield from self._holding(model, remaining, model._meta.label_lower, model._meta.db_table, None)
 
     @staticmethod
     def _holding(
@@ -704,30 +706,3 @@ class DropGuardAutodetector(MigrationAutodetector):
                 continue
             if count:
                 yield f"{name}: {storage} holds data in {count} row(s) on database {alias!r}"
-
-
-def _seeded_primary_keys(model: type[Any], alias: str) -> set[Any]:
-    """Return the keys of ``model``'s rows its retiring addon's resource files seeded on ``alias``.
-
-    The resource ledger (``angee.resources``) owns which rows those are: an addon
-    that removes a model names it under ``retired_models`` in its addon.toml
-    ``[resources]``, and only its own seeded rows retire with the model; rows other
-    addons seeded, and models no addon names, still count as data. A key the
-    model's primary key cannot hold is not a seeded row of it.
-    """
-
-    try:
-        ledger = apps.get_model("resources", "Resource")
-    except LookupError:
-        return set()
-    try:
-        candidates = ledger.objects.using(alias).retired_seed_keys(model._meta.label)
-    except DatabaseError:
-        return set()
-    keys = set()
-    for candidate in candidates:
-        try:
-            keys.add(model._meta.pk.to_python(candidate))
-        except ValidationError:
-            continue
-    return keys

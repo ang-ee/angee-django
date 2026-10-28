@@ -3,4 +3,4 @@ name = "example.theme"
 description = "A consumer-authored configurable theme example"
 keywords = ["theme", "appearance", "example"]
 category = "Example"
-depends_on = []
+depends_on = ["angee.web"]

@@ -25,6 +25,7 @@ from rebac import (
     system_context,
     to_object_ref,
     to_subject_ref,
+    user_subject_type,
 )
 from rebac import backend as rebac_backend
 from rebac.memberships import grant as grant_membership
@@ -43,8 +44,8 @@ from rebac.schema import (
     relation_is_writable,
 )
 
-from angee.iam.identity import user_label
-from angee.identity import canonical_subject_ref, public_id_for, public_subject_ref
+from angee.base.identity import canonical_subject_ref, public_id_for, public_subject_ref
+from angee.iam.identity import group_subject_type, user_label
 
 IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6
 IAM_OVERVIEW_MAX_PEEK_LIMIT = 100
@@ -74,7 +75,7 @@ def protected_account_holders() -> frozenset[str] | None:
     for subject in rebac_backend().lookup_subjects(
         resource=PROTECTED_ACCOUNTS,
         action="member",
-        subject_type=cast(str, model_resource_type(get_user_model())),
+        subject_type=user_subject_type(),
     ):
         if subject.subject_id == "*":
             return None
@@ -449,10 +450,12 @@ def validate_subject(
     """Return a concrete supported IAM subject for a new membership grant."""
 
     subject = canonical_subject_ref(value)
-    expected_relation = "" if subject.subject_type == "auth/user" else "member"
-    supported = subject.subject_type in {"auth/user", "auth/group"}
+    expected_relation = "" if subject.subject_type == user_subject_type() else "member"
+    supported = subject.subject_type in {user_subject_type(), group_subject_type()}
     if not supported or subject.optional_relation != expected_relation:
-        raise ValueError("Subject must be canonical 'auth/user:<id>' or 'auth/group:<id>#member'.")
+        raise ValueError(
+            f"Subject must be canonical '{user_subject_type()}:<id>' or '{group_subject_type()}:<id>#member'."
+        )
     if require_existing and subject not in resolve_subjects((subject,)):
         raise ValueError(f"Subject {value!r} was not found.")
     return subject
@@ -473,7 +476,7 @@ def assignment_subject_labels(subjects: Iterable[str], *, actor: Any) -> dict[st
             continue
         ids = {ref.subject_id for ref in references.values() if ref.subject_type == subject_type}
         for row in model.objects.with_actor(actor).with_action("read").filter(pk__in=ids):
-            labels[to_subject_ref(row)] = user_label(row) if subject_type == "auth/user" else str(row)
+            labels[to_subject_ref(row)] = user_label(row) if subject_type == user_subject_type() else str(row)
     return {value: labels[ref] for value, ref in references.items() if ref in labels}
 
 
@@ -567,13 +570,13 @@ def permission_hub_grant_rows(
     users = manager.filter(
         resource_type__in=schema_role_resource_types(),
         relation=ROLE_RELATION,
-        subject_type="auth/user",
+        subject_type=user_subject_type(),
         optional_subject_relation="",
     )
     groups = manager.filter(
         resource_type__in=schema_role_resource_types(),
         relation=ROLE_RELATION,
-        subject_type="auth/group",
+        subject_type=group_subject_type(),
         optional_subject_relation="member",
     )
     rows = users | groups
@@ -713,14 +716,14 @@ def _principal_binding_evidence(subject: SubjectRef) -> list[_BindingEvidence]:
         ).order_by_resource()[:PERMISSION_HUB_LIST_CAP]
     )
     evidence = [_BindingEvidence(row=row, direct=True) for row in direct_rows]
-    if subject.subject_type != "auth/user" or subject.optional_relation:
+    if subject.subject_type != user_subject_type() or subject.optional_relation:
         return evidence
 
     group_ids = sorted(
         {
             str(row.resource_id)
             for row in direct_rows
-            if str(row.resource_type) == "auth/group" and str(row.relation) == ROLE_RELATION
+            if str(row.resource_type) == group_subject_type() and str(row.relation) == ROLE_RELATION
         }
     )
     if not group_ids:
@@ -729,7 +732,7 @@ def _principal_binding_evidence(subject: SubjectRef) -> list[_BindingEvidence]:
     if remaining <= 0:
         return evidence
     inherited_rows = manager.filter(
-        subject_type="auth/group",
+        subject_type=group_subject_type(),
         subject_id__in=group_ids,
         optional_subject_relation=ROLE_RELATION,
     ).order_by_resource()[:remaining]

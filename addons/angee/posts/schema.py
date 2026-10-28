@@ -14,7 +14,7 @@ import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
-from angee.graphql.data import hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.integrate.schema import BridgeTypeMixin

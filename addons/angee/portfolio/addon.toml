@@ -4,7 +4,10 @@ description = "Phasal products, strategic initiatives, health updates, and relea
 keywords = ["portfolio", "products", "initiatives", "roadmaps", "releases"]
 category = "Productivity"
 depends_on = [
+  "angee.base",
   "angee.projects",
+  "angee.provenance",
+  "angee.web",
 ]
 
 [resources]

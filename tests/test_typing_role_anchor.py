@@ -16,26 +16,28 @@ def test_generated_role_anchor_alias_survives_cold_and_warm_analysis(tmp_path: P
     declaration = app / "models.py"
     declaration.write_text(
         "from django.conf import settings\n"
-        "from angee.models import role_anchor\n"
+        "from angee.base.models import role_anchor\n"
         "ProbeRole = role_anchor('probe/role')\n"
     )
     (tmp_path / "role_settings.py").write_text(
         "from pathlib import Path\nSECRET_KEY = 'role-types'\n"
         "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', "
-        "'angee', 'role_probe', 'angee.compose']\n"
+        "'angee', 'angee.base', 'role_probe', 'angee.compose']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
-        f"ANGEE_RUNTIME_DIR = Path({str(tmp_path / 'role_runtime')!r})\n"
-        "ANGEE_RUNTIME_MODULE = 'role_runtime'\n"
+        f"COMPOSE_RUNTIME_DIR = Path({str(tmp_path / 'role_runtime')!r})\n"
+        "COMPOSE_RUNTIME_MODULE = 'role_runtime'\n"
     )
     config = tmp_path / "mypy.ini"
     config.write_text(
-        "[mypy]\nplugins = angee.compose.typing\n"
+        "[mypy]\nplugins = angee.base.typing\n"
         f"mypy_path = {tmp_path},{root},{root / 'addons'}\ncache_dir = {tmp_path / 'cache'}\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = role_settings\n"
     )
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(tmp_path), str(root), env.get("PYTHONPATH"))))
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH")))
+    )
     env["DJANGO_SETTINGS_MODULE"] = "role_settings"
     bootstrap = subprocess.run(
         [sys.executable, "-c", "import django; django.setup()"],

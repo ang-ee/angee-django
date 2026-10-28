@@ -3,7 +3,7 @@ name = "angee.uom"
 description = "Units of measure: a category tree of convertible units with per-unit rounding."
 keywords = ["uom", "units", "measure", "conversion"]
 category = "Foundation"
-depends_on = ["angee.iam", "angee.resources", "angee.graphql"]
+depends_on = ["angee.base", "angee.iam", "angee.resources", "angee.graphql"]
 
 [resources]
 master = [

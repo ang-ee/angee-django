@@ -8,13 +8,13 @@ from django.db import DatabaseError, connection, models
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
-from angee.changesets import changeset as open_changeset
-from angee.identity import public_id_of
+from angee.base.identity import public_id_of
+from angee.base.refs import generic_pointer_target
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.messaging.testing.models import Channel
+from angee.provenance.context import changeset as open_changeset
 from angee.provenance.timeline import ChangeKind
-from angee.refs import generic_pointer_target
 from tests.conftest import create_platform_admin, current_stream, make_integration, vault_for
 from tests.test_timeline import timeline_entries
 

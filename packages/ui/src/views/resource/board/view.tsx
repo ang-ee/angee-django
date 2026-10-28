@@ -8,7 +8,7 @@ import type { ResourceViewContextValue } from "../resource-view-context";
 import type { ResourceViewGroup } from "../resource-view-model";
 import { ListEmpty, readPath, type RowGroup } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
-import type { BoardCardPlacement, CardActionContext, ListEmptyContent } from "../resource-view-types";
+import type { BoardCardPlacement, BoardOrder, CardActionContext, ListEmptyContent } from "../resource-view-types";
 import { boardMoveForDrop } from "../board-ordering";
 import { flattenLeaves } from "./cards";
 import { boardCollisionDetection, boardDragData, boardDropTarget } from "./dnd";
@@ -33,11 +33,12 @@ export interface BoardViewProps<TRow extends Row = Row> {
   cardActionContext?: CardActionContext;
   dragEnabled?: boolean;
   rankField?: string;
+  rankInputField?: string;
   optimisticPlacementByRowId?: ReadonlyMap<string, BoardCardPlacement>;
   onCardMove?: (
     row: TRow,
     laneId: string | null,
-    rank?: number,
+    order?: BoardOrder,
   ) => void | Promise<void>;
   /** Lane-footer create seam; the resource page opens its existing create form. */
   onCreateInLane?: (laneId: string | null, rank?: number) => void;
@@ -63,6 +64,7 @@ export function BoardView<TRow extends Row = Row>(
     cardActionContext,
     dragEnabled = false,
     rankField,
+    rankInputField,
     optimisticPlacementByRowId = EMPTY_BOARD_PLACEMENTS,
     onCardMove,
     onCreateInLane,
@@ -82,6 +84,7 @@ export function BoardView<TRow extends Row = Row>(
       cardActionContext={cardActionContext ?? EMPTY_CARD_ACTION_CONTEXT}
       dragEnabled={dragEnabled}
       rankField={rankField}
+      rankInputField={rankInputField}
       optimisticPlacementByRowId={optimisticPlacementByRowId}
       onCardMove={onCardMove}
       onCreateInLane={onCreateInLane}
@@ -109,6 +112,7 @@ function BoardRows<TRow extends Row>({
   cardActionContext,
   dragEnabled,
   rankField,
+  rankInputField,
   optimisticPlacementByRowId,
   onCardMove,
   onCreateInLane,
@@ -126,11 +130,12 @@ function BoardRows<TRow extends Row>({
   cardActionContext: CardActionContext;
   dragEnabled: boolean;
   rankField?: string;
+  rankInputField?: string;
   optimisticPlacementByRowId: ReadonlyMap<string, BoardCardPlacement>;
   onCardMove?: (
     row: TRow,
     laneId: string | null,
-    rank?: number,
+    order?: BoardOrder,
   ) => void | Promise<void>;
   onCreateInLane?: (laneId: string | null, rank?: number) => void;
   renderCard?: (row: TRow) => React.ReactNode;
@@ -169,14 +174,16 @@ function BoardRows<TRow extends Row>({
         target,
         groups: leaves,
         rankField,
+        rankInputField,
         rankForRow,
       });
       if (!move) return;
       const laneId = move.laneId === "" ? null : move.laneId;
-      if (move.rank === undefined) void onCardMove?.(active.row, laneId);
-      else void onCardMove?.(active.row, laneId, move.rank);
+      const order = move.order ?? move.rank;
+      if (order === undefined) void onCardMove?.(active.row, laneId);
+      else void onCardMove?.(active.row, laneId, order);
     },
-    [leaves, onCardMove, rankField, rankForRow],
+    [leaves, onCardMove, rankField, rankInputField, rankForRow],
   );
   if (!hasDeclaredLanes && leaves.every((group) => group.rows.length === 0)) {
     if (fetching) {
@@ -208,7 +215,7 @@ function BoardRows<TRow extends Row>({
           cardActionContext={cardActionContext}
           dragEnabled={moveEnabled}
           sortable={sortable}
-          rankField={rankField}
+          rankField={rankInputField ? undefined : rankField}
           rankForRow={rankForRow}
           collapsed={
             foldOverrides.get(group.key) ?? group.defaultCollapsed === true

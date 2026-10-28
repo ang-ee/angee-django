@@ -1,37 +1,25 @@
-"""Parser for a discovered addon manifest (``addon.toml``).
+"""Project native addon declarations into the marketplace catalog descriptor.
 
-Reads the manifest's ``[addon]`` block — the catalog facts a marketplace row needs
-— into the descriptor shape the sync upserts. Mirrors ``integrate.vcs.templates``
-(the ``copier.yml`` parser): ``VcsBridge.discover`` fills ``path`` from the bearing
-directory, so this owns only the manifest block.
-
-The locked hatch-angee parser accepts paths only. Replace this parser with its
-bytes/text API when that upstream release lands; do not bridge through
-temporary files.
+``VcsBridge.discover`` supplies the bearing directory as ``path``. Manifest
+validation belongs to hatch-angee; this projection owns only catalog presentation.
 """
 
 from __future__ import annotations
 
-import tomllib
 from typing import Any
+
+from hatch_angee import parse_manifest_content
 
 
 def parse_addon_meta(blob: bytes) -> dict[str, Any]:
-    """Return a catalog descriptor parsed from one ``addon.toml`` blob.
+    """Return catalog metadata from one validated ``addon.toml`` blob."""
 
-    Reads the same ``[addon]`` metadata the marketplace board groups by and renders —
-    ``description``/``keywords``/``category`` — so a discovered (``REMOTE``) row carries
-    them, not just the dependency graph.
-    """
-
-    addon = (tomllib.loads(blob.decode()) or {}).get("addon", {})
-    name = str(addon.get("name", ""))
-    raw_depends_on = addon.get("depends_on", ())
+    manifest = parse_manifest_content(blob)
     return {
-        "name": name,
-        "namespace": name.split(".", 1)[0] if name else "",
-        "description": str(addon.get("description", "")),
-        "keywords": [str(keyword) for keyword in addon.get("keywords", ())],
-        "category": str(addon.get("category", "")),
-        "depends_on": [raw_depends_on] if isinstance(raw_depends_on, str) else list(raw_depends_on),
+        "name": manifest.name,
+        "namespace": manifest.name.split(".", 1)[0],
+        "description": manifest.description,
+        "keywords": list(manifest.keywords),
+        "category": manifest.category or "",
+        "depends_on": list(manifest.depends_on),
     }

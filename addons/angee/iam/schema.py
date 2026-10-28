@@ -23,7 +23,16 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import QuerySet
-from rebac import RebacQuerySet, current_actor, resolve_subjects, system_context, to_object_ref, to_subject_ref
+from django.http import HttpRequest
+from rebac import (
+    RebacQuerySet,
+    current_actor,
+    resolve_subjects,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    user_subject_type,
+)
 from rebac import backend as rebac_backend
 from rebac.models import active_relationship_model
 from rebac.resources import model_for_resource_type
@@ -33,11 +42,16 @@ from rebac.roles import (
 from rebac.schema import Definition, Permission, Relation, Schema, render_allowed_subject
 from strawberry import auto
 from strawberry.scalars import JSON
+from strawberry_django.auth.utils import get_current_user
+from strawberry_django.utils.requests import get_request
 
+from angee.base.identity import instance_from_public_id, public_subject_ref
+from angee.base.models import AngeeModel
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permission_expression
-from angee.graphql.data import hasura_model_resource, hasura_pydantic_resource
+from angee.graphql.data.hasura import hasura_model_resource
+from angee.graphql.data.pydantic_resource import hasura_pydantic_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
@@ -48,8 +62,7 @@ from angee.iam.identity import user_display_label, user_label
 from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT, UserAccountAction
 from angee.iam.models import Group as GroupModel
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.permissions import is_platform_admin, require_platform_admin, session_user
-from angee.iam.permissions import request_from_info as _request
+from angee.iam.permissions import is_platform_admin, session_user
 from angee.iam.roles import (
     IAM_OVERVIEW_DEFAULT_PEEK_LIMIT as _IAM_OVERVIEW_DEFAULT_PEEK_LIMIT,
 )
@@ -91,8 +104,6 @@ from angee.iam.roles import (
     revoke_role as _revoke_role_owner,
 )
 from angee.iam.roles import subject_permitted as _subject_permitted_owner
-from angee.identity import instance_from_public_id, public_subject_ref
-from angee.models import AngeeModel
 
 User = cast(type[Any], get_user_model())
 Group = cast(type[Any], apps.get_model("iam", "Group"))
@@ -102,14 +113,16 @@ strawberry.enum(cast(Any, UserAccountAction))
 def _view_as(info: strawberry.Info) -> ViewAs | None:
     """Read the optional view-as carrier owned by the GraphQL transport."""
 
-    return cast(ViewAs | None, getattr(_request(info), "view_as", None))
+    return cast(ViewAs | None, getattr(get_request(info), "view_as", None))
 
 
 def _account_action_allowed(action: str, info: strawberry.Info) -> Any:
-    """Return one verb's batched eligibility, computing every verb's once per request actor."""
+    """Return one verb's eligibility, batching annotations within Django HTTP requests."""
 
     actor = current_actor()
-    request = _request(info)
+    request = get_request(info)
+    if not isinstance(request, HttpRequest):
+        return User.account_action_annotations(actor)[action]
     memo = getattr(request, "_iam_account_action_annotations", None)
     if memo is None or memo[0] != actor:
         memo = (actor, User.account_action_annotations(actor))
@@ -128,7 +141,7 @@ def _display_label(user: Any, info: strawberry.Info) -> str:
     """Return IAM's label for ``user``, the same one every record carries, whatever the viewer reads."""
 
     if "username" in user.redacted_fields():
-        return user.get_full_name() or user_display_label(user.pk, request=_request(info)) or ""
+        return user.get_full_name() or user_display_label(user.pk, request=get_request(info)) or ""
     return user_label(user)
 
 
@@ -651,52 +664,10 @@ class IAMUserWriteBackend:
         return preview.deleted_instance
 
 
-class IAMGroupWriteBackend:
-    """Admin write semantics for the Hasura ``groups`` resource."""
-
-    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Create one IAM group."""
-
-        require_platform_admin(info)
-
-        with transaction.atomic():
-            group = Group(**data)
-            group.full_clean()
-            group.save()
-            return group
-
-    def update(
-        self,
-        info: strawberry.Info,
-        pk: str,
-        data: dict[str, Any],
-    ) -> Any:
-        """Patch one IAM group."""
-
-        require_platform_admin(info)
-
-        with transaction.atomic():
-            group = _group_for_resource_id(pk, Group.objects.for_write())
-            for field, value in data.items():
-                setattr(group, field, value)
-            group.full_clean()
-            group.save()
-            return group
-
-    def delete(self, info: strawberry.Info, pk: str) -> Any | None:
-        """Delete one IAM group by public id."""
-
-        require_platform_admin(info)
-
-        preview = delete_by_public_id(Group, str(pk), confirm=True, queryset=Group.objects.for_write())
-        preview.require_no_blockers()
-        return preview.deleted_instance
-
-
 def _admin_actor(info: strawberry.Info) -> bool:
     """Return whether the request actor reaches IAM's platform-admin role."""
 
-    return is_platform_admin(getattr(_request(info), "user", None))
+    return is_platform_admin(get_current_user(info))
 
 
 def _role_rows_for(info: strawberry.Info) -> list[IAMRoleRow]:
@@ -793,7 +764,6 @@ _GROUP_RESOURCE = hasura_model_resource(
     groupable=["name"],
     writable=["name", "description"],
     get_queryset=_group_queryset,
-    write_backend=IAMGroupWriteBackend(),
     id_column="sqid",
     model_label="iam.Group",
     subject_field="assignment_subject",
@@ -838,9 +808,8 @@ class IAMQuery:
     def current_user(self, info: strawberry.Info) -> CurrentUserType | None:
         """Return the viewed identity, or the authenticated session identity."""
 
-        request = _request(info)
         view_as = _view_as(info)
-        user = view_as.target if view_as is not None else getattr(request, "user", None)
+        user = view_as.target if view_as is not None else get_current_user(info)
         if isinstance(user, AnonymousUser) or not getattr(
             user,
             "is_authenticated",
@@ -903,7 +872,7 @@ class IAMConsoleQuery:
                 rebac_backend().lookup_subjects(
                     resource=to_object_ref(target),
                     action="read",
-                    subject_type="auth/user",
+                    subject_type=user_subject_type(),
                 ),
                 100,
             )
@@ -1000,7 +969,7 @@ class IAMMutation:
     ) -> LoginPayload:
         """Authenticate credentials and bind the user to the session."""
 
-        request = _request(info)
+        request = get_request(info)
         # Elevate the whole credential-verification flow: Django upgrades a
         # stale password hash inside ``check_password`` by saving the row
         # (``must_update`` — an iteration bump, salt-entropy policy, or algorithm
@@ -1023,7 +992,7 @@ class IAMMutation:
     def logout(self, info: strawberry.Info) -> bool:
         """Clear the current session."""
 
-        auth_logout(_request(info))
+        auth_logout(get_request(info))
         return True
 
     @strawberry.mutation

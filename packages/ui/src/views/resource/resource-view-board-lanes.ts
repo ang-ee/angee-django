@@ -25,6 +25,7 @@ import { readPath, type RowGroup } from "./resource-view-list-body";
 import type {
   BoardCardPlacement,
   BoardLaneSource,
+  BoardOrder,
 } from "./resource-view-types";
 
 type RowRecord = BaseRecord & Row;
@@ -47,10 +48,11 @@ export interface BoardLaneState<TRow extends Row> {
   fetching: boolean;
   dragEnabled: boolean;
   rankField?: string;
+  rankInputField?: string;
   onCardMove?: (
     row: TRow,
     laneId: string | null,
-    rank?: number,
+    order?: BoardOrder,
   ) => Promise<void>;
 }
 
@@ -175,11 +177,14 @@ export function useBoardLaneState<TRow extends Row>({
     async (
       row: TRow,
       laneId: string | null,
-      rank?: number,
+      order?: BoardOrder,
     ): Promise<void> => {
       if (!dragEnabled || !source || !dataResource) return;
       if (laneId === null && !laneSourceNullable(source)) return;
-      if (source.rankField && rank === undefined) return;
+      const intent = typeof order === "object" ? order : undefined;
+      const rank = typeof order === "number" ? order : undefined;
+      if (source.rankInputField ? !intent : intent !== undefined) return;
+      if (source.rankField && !source.rankInputField && rank === undefined) return;
       const id = rowPublicId(row);
       if (!id) return;
       const serverLane = relationValueId(readPath(row, source.field));
@@ -191,49 +196,43 @@ export function useBoardLaneState<TRow extends Row>({
       const currentRank = currentPlacement?.rank ?? serverRank;
       const nextLane = laneId ?? "";
       if (
-        currentLane === nextLane
+        !intent
+        && currentLane === nextLane
         && (!source.rankField || ranksEqual(currentRank, rank))
       ) return;
-      setOptimisticLaneEntryByRowId((current) => {
-        const next = new Map(current);
-        next.set(id, {
-          laneId: nextLane,
-          ...(rank === undefined ? {} : { rank }),
-          serverLaneAtMove: serverLane,
-          ...(serverRank === undefined ? {} : { serverRankAtMove: serverRank }),
-          settled: false,
-        });
-        return next;
-      });
+      const request: OptimisticLaneEntry = {
+        laneId: nextLane,
+        ...(rank === undefined ? {} : { rank }),
+        serverLaneAtMove: serverLane,
+        ...(serverRank === undefined ? {} : { serverRankAtMove: serverRank }),
+        settled: false,
+      };
+      setOptimisticLaneEntryByRowId((current) => new Map(current).set(id, request));
       try {
         await updateRef.current.mutateAsync({
           id,
           values: {
             [source.field]: laneId,
-            ...(source.rankField && rank !== undefined
+            ...(source.rankInputField && intent
+              ? { [source.rankInputField]: intent }
+              : source.rankField && rank !== undefined
               ? { [source.rankField]: rank }
               : {}),
           },
         });
         setOptimisticLaneEntryByRowId((current) => {
-          const entry = current.get(id);
-          if (
-            !entry
-            || entry.laneId !== nextLane
-            || (source.rankField && !ranksEqual(entry.rank, rank))
-          ) return current;
+          if (current.get(id) !== request) return current;
           const next = new Map(current);
-          next.set(id, { ...entry, settled: true });
+          // Intent has no client rank to reconcile. Native invalidation/refetch
+          // supplies the canonical rank; only this request may clear its overlay.
+          if (intent) next.delete(id);
+          else next.set(id, { ...request, settled: true });
           return next;
         });
+        if (intent) refetchRows?.();
       } catch (error) {
         setOptimisticLaneEntryByRowId((current) => {
-          const entry = current.get(id);
-          if (
-            !entry
-            || entry.laneId !== nextLane
-            || (source.rankField && !ranksEqual(entry.rank, rank))
-          ) return current;
+          if (current.get(id) !== request) return current;
           const next = new Map(current);
           next.delete(id);
           return next;
@@ -265,6 +264,7 @@ export function useBoardLaneState<TRow extends Row>({
       fetching: laneResult.list.fetching,
       dragEnabled,
       ...(source?.rankField ? { rankField: source.rankField } : {}),
+      ...(source?.rankInputField ? { rankInputField: source.rankInputField } : {}),
       ...(dragEnabled ? { onCardMove } : {}),
     }),
     [
@@ -409,6 +409,10 @@ function boardLaneDragEnabled(
       && (
         !laneSource.rankField
         || fieldUpdatable(modelMetadata, laneSource.rankField)
+      )
+      && (
+        !laneSource.rankInputField
+        || fieldUpdatable(modelMetadata, laneSource.rankInputField)
       )
     : false;
 }

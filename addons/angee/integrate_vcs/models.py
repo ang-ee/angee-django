@@ -4,20 +4,21 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from datetime import datetime
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar
 
 from django.apps import apps
 from django.db import models, transaction
 from django.utils import timezone
 from rebac import system_context
 
-from angee.fields import EncryptedField, StateField
-from angee.impl import ImplClassField
+from angee.base.fields.encrypted import EncryptedField
+from angee.base.fields.implementation import ImplClassField
+from angee.base.fields.state import StateField
+from angee.base.models import AngeeDataModel, AngeeManager, AuditMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate_vcs import registry
 from angee.integrate_vcs.backend import VCSBackend
 from angee.integrate_vcs.templates import parse_template_meta
-from angee.models import AngeeDataModel, AngeeManager, AuditMixin
 
 
 class RepoVisibility(models.TextChoices):
@@ -66,7 +67,7 @@ class VcsBridge(Bridge):
     def backend(self) -> VCSBackend:
         """Return this bridge's selected VCS backend."""
 
-        backend_class = cast(type[VCSBackend], self.resolve_impl("backend_class"))
+        backend_class = self.get_backend_class_impl()
         return backend_class(self)
 
     def discover(self, source: Any, *, marker: str, parse: Callable[[bytes], dict[str, Any]]) -> list[dict[str, Any]]:

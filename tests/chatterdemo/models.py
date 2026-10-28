@@ -22,9 +22,17 @@ from __future__ import annotations
 
 from django.db import models
 
-from angee.fields import StateField
+from angee.base.fields.state import StateField
+from angee.base.models import (
+    AngeeModel,
+    AuditMixin,
+    SqidMixin,
+    StateTransitions,
+    save_state,
+    transition,
+)
 from angee.messaging.models import ThreadedModelMixin
-from angee.models import AngeeModel, AuditMixin, HistoryMixin, SqidMixin, StateTransitions, save_state, transition
+from angee.provenance.contrib.angee.history import HistoryMixin
 
 
 class ChatterDoc(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, AngeeModel):

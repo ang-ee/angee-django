@@ -26,7 +26,7 @@ from graphql import (
 )
 
 from angee.addons import addon_manifest
-from angee.data.metadata import (
+from angee.graphql.data.contracts import (
     DataQueryField,
     DataQueryFilter,
     DataQueryIdentity,

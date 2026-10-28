@@ -17,9 +17,9 @@ from rebac.models import RebacResource, Relationship, RelationshipRegistry
 
 from angee.agents.models import AgentSession
 from angee.agents.runtime_migrations import session_user
+from angee.base.models import OwnerMixin
 from angee.compose.migrations import RuntimeMigrations, ScheduledMigration
 from angee.integrate.runtime_migrations import external_account_owner
-from angee.models import OwnerMixin
 from angee.parties.models import Handle
 from angee.parties.runtime_migrations import handle_controller
 from angee.parties.runtime_migrations import owner_column as parties_owner_column

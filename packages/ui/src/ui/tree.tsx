@@ -16,6 +16,7 @@ import { cn } from "../lib/cn";
 import { CountBadge } from "./count-badge";
 import { toneGlyph, type Tone } from "../lib/tones";
 import { tv } from "../lib/variants";
+import { useValueStable } from "../lib/use-value-stable";
 import { SectionEyebrow } from "./section-eyebrow";
 import { Skeleton } from "./skeleton";
 
@@ -181,23 +182,31 @@ export function Tree({
   const [collapsed, setCollapsed] = useState<Set<string>>(() =>
     collectInitialCollapsed(nodes),
   );
-  useEffect(() => {
-    if (!revealIds?.length) return;
+  const reveal = useValueStable(useMemo(() => {
     const targets = new Set(revealIds);
     const ancestors = new Set<string>();
-    const reveal = (items: readonly TreeNode[]): boolean => {
+    const visit = (items: readonly TreeNode[]): boolean => {
       let found = false;
       for (const node of items) {
-        const childFound = reveal(node.children ?? []);
+        const childFound = visit(node.children ?? []);
         if (childFound) ancestors.add(node.id);
         found = found || childFound || targets.has(node.id);
       }
       return found;
     };
-    reveal(nodes);
-    setCollapsed((current) => [...ancestors].some((id) => current.has(id))
-      ? new Set([...current].filter((id) => !ancestors.has(id))) : current);
-  }, [nodes, revealIds]);
+    if (targets.size) visit(nodes);
+    return { targets: [...targets].sort(), ancestors: [...ancestors].sort() };
+  }, [nodes, revealIds]));
+  const [previousReveal, setPreviousReveal] = useState<typeof reveal | null>(null);
+  // A new selection or loaded ancestry reveals its path once. Cosmetic parent
+  // renders and rebuilt arrays leave subsequent user folding untouched.
+  if (previousReveal !== reveal) {
+    setPreviousReveal(reveal);
+    if (reveal.ancestors.some((id) => collapsed.has(id))) {
+      const ancestors = new Set(reveal.ancestors);
+      setCollapsed(new Set([...collapsed].filter((id) => !ancestors.has(id))));
+    }
+  }
   const mainFlat = useMemo(() => flattenTree(nodes, collapsed), [collapsed, nodes]);
   const smartFlat = useMemo<FlatRow[]>(
     () =>
@@ -268,6 +277,9 @@ export function Tree({
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
       if (!effectiveFocusedId) return;
+      // Embedded editors and controls own their keys; tree navigation belongs
+      // only to the focused treeitem itself.
+      if (event.defaultPrevented || event.target !== rowRefs.current.get(effectiveFocusedId)) return;
       const index = flat.findIndex((row) => row.node.id === effectiveFocusedId);
       if (index < 0) return;
       const row = flat[index];

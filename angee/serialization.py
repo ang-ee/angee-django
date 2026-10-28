@@ -11,6 +11,25 @@ from collections.abc import Iterable, Mapping
 from decimal import Decimal
 from typing import Any
 
+# These are native encoder profiles for existing persisted byte contracts.
+# They intentionally differ from strict canonical_json; changing their options
+# would rename resource hashes, import receipts and source payload identities.
+ASCII_JSON = json.JSONEncoder(
+    sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=True,
+)
+"""Compact escaped JSON used by persisted seed hashes and unordered-value ordering."""
+
+STRINGIFIED_JSON = json.JSONEncoder(
+    sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=True, default=str,
+)
+"""Compact Unicode JSON retaining native non-finite tokens and string fallbacks for import identities."""
+
+
+ASCII_STRINGIFIED_JSON = json.JSONEncoder(
+    sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=True, default=str,
+)
+"""Escaped string-fallback JSON retained by domain hashes and payload normalization."""
+
 
 def canonical_json(value: Any) -> str:
     """Serialize one JSON value with Angee's deterministic wire spelling."""
@@ -25,7 +44,7 @@ def canonical_json(value: Any) -> str:
 
 
 def canonical_json_sha256(value: Any = None, *, chunks: Iterable[str] | None = None) -> str:
-    """Hash a canonical value or a streamed canonical document with one digest."""
+    """Hash a canonical value or a caller-owned deterministic JSON stream with one digest."""
 
     digest = hashlib.sha256()
     for chunk in chunks if chunks is not None else (canonical_json(value),):
@@ -75,8 +94,4 @@ def _json_sort_key(value: Any) -> str:
     ``"z"`` instead of before it and change the resulting array order.
     """
 
-    return json.dumps(
-        json_safe(value),
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    return ASCII_JSON.encode(json_safe(value))

@@ -20,9 +20,10 @@ from rebac.checks import check_universal_admin_in_roles
 from rebac.errors import SchemaError
 from rebac.models import SchemaRelation
 
-from angee.compose.management.commands.angee import Command
 from angee.graphql.checks import check_graphql_schemas
 from angee.graphql.schema import GraphQLSchemas, SchemaParts
+from angee.management.commands.angee import Command
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 
 def _environment(tmp_path: Path) -> dict[str, str]:
@@ -51,17 +52,13 @@ execute_from_command_line(sys.argv)
         encoding="utf-8",
     )
     (package / "settings.py").write_text(
-        f"""from django.apps import AppConfig
-class BareComposeConfig(AppConfig):
-    name = "angee.compose"
-    label = "compose"
-SECRET_KEY = "provision-process-probe"
+        f"""SECRET_KEY = "provision-process-probe"
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.auth",
     "rebac",
     "probe.apps.ProbeConfig",
-    "probe.settings.BareComposeConfig",
+    "angee",
 ]
 DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(root / "probe.sqlite3")!r}}}}}
 """,
@@ -75,7 +72,7 @@ class ProbeConfig(AppConfig):
         import json
         import os
         from pathlib import Path
-        import angee.compose.management.commands.angee as provision
+        import angee.management.commands.angee as provision
         events = Path(__file__).resolve().parent.parent / "events.jsonl"
         def record_step(command, step):
             del command
@@ -85,6 +82,17 @@ class ProbeConfig(AppConfig):
 """,
         encoding="utf-8",
     )
+    commands = package / "management" / "commands"
+    commands.mkdir(parents=True)
+    (commands.parent / "__init__.py").write_text("")
+    (commands / "__init__.py").write_text("")
+    for name in ("resources", "schema", "bootstrap_admin"):
+        (commands / f"{name}.py").write_text(
+            "from django.core.management.base import BaseCommand\n"
+            "class Command(BaseCommand):\n"
+            "    def handle(self, *args, **options):\n"
+            "        pass\n"
+        )
     return root / "manage.py"
 
 
@@ -93,7 +101,9 @@ def test_provision_builds_then_runs_one_fresh_post_build_process(tmp_path: Path)
 
     manage_py = _write_topology_host(tmp_path)
     result = subprocess.run(
-        [sys.executable, str(manage_py), "angee", "provision", "--wait-db", "1", "--demo", "--force-rebac"],
+        [sys.executable, str(manage_py), "angee", "provision", "--wait-db", "1", "--force-rebac",
+         "--after-if-installed", "resources load --include-demo", "--after-if-installed", "schema",
+         "--after-if-installed", "bootstrap_admin", "--after-if-installed", "absent_addon_command"],
         cwd=tmp_path,
         env=_environment(tmp_path),
         capture_output=True,
@@ -107,14 +117,41 @@ def test_provision_builds_then_runs_one_fresh_post_build_process(tmp_path: Path)
         ["angee", "build"],
         ["makemigrations", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
-        ["reconcile_permissions"],
-        ["rebac", "--skip-checks", "sync", "--yes", "--force-overwrite"],
+        ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes", "--force-overwrite"],
         ["check", "--database", "default"],
         ["resources", "load", "--include-demo"],
         ["schema"],
+        ["bootstrap_admin"],
     ]
     assert events[0]["pid"] not in {event["pid"] for event in events[1:]}
     assert len({event["pid"] for event in events[1:]}) == 1
+
+
+def test_native_composed_test_runner_does_not_require_provenance(tmp_path: Path) -> None:
+    """The source test host can run a core-only Django test without addon boundaries."""
+
+    root = Path(__file__).resolve().parents[1]
+    addon = tmp_path / "addons" / "native_probe"
+    addon.mkdir(parents=True)
+    (addon / "__init__.py").write_text("")
+    (addon / "tests.py").write_text(
+        'from django.apps import apps\nfrom django.test import SimpleTestCase\n'
+        'class CoreTests(SimpleTestCase):\n'
+        '    def test_native_host(self):\n'
+        '        self.assertTrue(apps.is_installed("angee"))\n'
+        '        self.assertFalse(apps.is_installed("angee.provenance"))\n'
+    )
+    report = tmp_path / "report.json"
+    result = subprocess.run(
+        [sys.executable, str(root / "tests/composed_host.py"), "--runtime-dir", str(tmp_path / "runtime"),
+         "--addon-dir", str(addon.parent), "--app", "django.contrib.auth", "--app", "native_probe",
+         "--no-examples", "--action", "tests",
+         "--test-label", "native_probe.tests", "--output", str(report)],
+        cwd=root, env=_environment(tmp_path), capture_output=True, text=True,
+        timeout=COMPOSED_TEST_TIMEOUT, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}
 
 
 def test_native_makemigrations_then_migrate_sees_new_file_in_same_process(tmp_path: Path) -> None:
@@ -250,7 +287,7 @@ def test_provision_sync_replaces_invalid_historical_subject_sets_before_checks()
         with pytest.raises(SchemaError, match="names a permission"):
             call_command("check", verbosity=0)
         command = Command()
-        plan = command._provision_plan({"force_rebac": True, "demo": False, "bootstrap_admin": False})
+        plan = command._provision_plan({"force_rebac": True})
         command._run_step(next(step for step in plan if step[0] == "rebac"))
         command._run_step(["check"])
 
@@ -279,7 +316,7 @@ def test_graphql_check_then_schema_command_reuses_the_built_schema(
     monkeypatch.setattr(schemas, "_build", counted_build)
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     with override_system_checks([check_graphql_schemas]):
-        with override_settings(ANGEE_RUNTIME_DIR=tmp_path / "runtime"):
+        with override_settings(COMPOSE_RUNTIME_DIR=tmp_path / "runtime"):
             call_command("check", verbosity=0)
             call_command("schema", verbosity=0)
 

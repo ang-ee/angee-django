@@ -7,9 +7,9 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.base.identity import public_id_of
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from angee.identity import public_id_of
 from angee.projects.testing.models import Task
 from angee.tags.testing.models import Tag
 from tests.conftest import create_platform_admin, create_user, vault_for

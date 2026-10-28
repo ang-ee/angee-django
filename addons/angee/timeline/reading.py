@@ -10,11 +10,13 @@ from typing import Any
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models.functions import Cast
+from rebac import to_subject_ref
 
+from angee.base.identity import public_id_for
+from angee.base.pagination import KeysetOrder, keyset_signer
+from angee.base.refs import generic_pointer_target
 from angee.graphql.ids import PublicID
-from angee.identity import public_id_for
-from angee.refs import generic_pointer_target
-from angee.timeline.kinds import Cursor, timeline_kinds
+from angee.timeline.kinds import timeline_kinds
 
 
 @dataclass
@@ -73,6 +75,7 @@ class Timeline:
 
     def __init__(self, record: models.Model, actor: Any):
         self.record = record
+        self.actor = to_subject_ref(actor) if actor is not None else None
         self.kinds = tuple(kind for kind in timeline_kinds() if kind.eligible(type(record)))
         self.branches = {}
         self.content_types = {}
@@ -132,15 +135,24 @@ class Timeline:
         return sum(waiting for _, waiting in self.counts.values())
 
     def page(self, *, kinds: list[str] | None = None, needs_me: bool = False,
-             cursor: Cursor | None = None, limit: int = 25) -> Page:
+             before: str | None = None, limit: int = 25) -> Page:
+        order = KeysetOrder("_timeline_at", tie_breakers=("_timeline_kind",))
+        selected_kinds = sorted(set(kinds)) if kinds else sorted(kind.id for kind in self.kinds)
+        signer = keyset_signer(
+            [self.record._state.db, self.record._meta.label_lower, str(self.record.pk),
+             str(self.actor), selected_kinds, needs_me],
+            salt="angee.timeline",
+        )
+        # Every union branch explicitly projects its native key as bigint.
+        anchor = order.unsign(before, signer, models.BigIntegerField()) if before is not None else None
         branches = []
         for kind, rows in self.lines.items():
             if kinds and kind not in kinds:
                 continue
             if needs_me:
                 rows = rows.filter(_timeline_needs=True)
-            if cursor is not None:
-                rows = rows.filter(cursor.predicate())
+            if anchor is not None:
+                rows = rows.filter(order.before(anchor))
             branches.append(rows.values("_timeline_kind", "_timeline_at", "_timeline_pk", "_timeline_needs"))
         selected = list(_union(
             branches, "_timeline_kind", "_timeline_at", "_timeline_pk", "_timeline_needs",
@@ -175,9 +187,9 @@ class Timeline:
         return Page(
             entries=entries, kinds=[KindSummary(kind.id, self.counts.get(kind.id, (0, 0))[0]) for kind in self.kinds],
             needs_me=self.attention(), has_more=more,
-            next_before=Cursor(
-                last["_timeline_at"], last["_timeline_kind"], last["_timeline_pk"],
-            ).encode() if last else None,
+            next_before=order.sign_position(
+                (last["_timeline_at"], last["_timeline_kind"], last["_timeline_pk"]), signer,
+            ) if last else None,
         )
 
     def _children(self, ids: dict[str, set[int]]) -> dict[tuple[int, int], list[KindCount]]:

@@ -9,7 +9,7 @@ import httpx2
 from django.conf import settings
 from django.db import connection
 
-from angee.impl import ImplClassField
+from angee.base.fields.implementation import ImplClassField
 from angee.integrate.discovery import ConnectionDiscovery, DerivedCredential
 from angee.integrate.errors import IntegrationError
 from angee.integrate.impl import BridgeImpl, LiveBridgeImpl

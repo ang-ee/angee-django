@@ -19,7 +19,6 @@ from typing import Any, cast
 
 import strawberry
 from django.apps import apps
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import SubjectRef, current_actor
@@ -28,28 +27,32 @@ from rebac.resources import model_for_subject_type, model_resource_type
 from simple_history.utils import get_history_manager_for_model
 from strawberry.scalars import JSON
 
-from angee.actors import source_kind_for
-from angee.autoconfig import SETTINGS
-from angee.evidence import FactAuthority
+from angee.base.identity import public_id_for, public_id_of, public_subject_ref
+from angee.base.models import record_display_label
+from angee.base.permissions import require_rebac_queryset
+from angee.base.refs import generic_pointer_model
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
+from angee.graphql.data.metadata import (
+    DataResourceContribution,
+    DataResourcePolicy,
+    attach_data_resource_contribution,
+)
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
-from angee.identity import public_id_for, public_id_of, public_subject_ref
-from angee.models import (
-    HistoryMixin,
+from angee.provenance.context import changeset_model
+from angee.provenance.contrib.angee.history import HistoryMixin, record_history
+from angee.provenance.evidence import FactAuthority
+from angee.provenance.models import Changeset as ChangesetContract
+from angee.provenance.querysets import model_history
+from angee.provenance.statements import (
     SourceKind,
     Statement,
     StatementsMixin,
-    model_history,
+    StatementSourceMixin,
     prime_readable_statement_records,
-    record_display_label,
-    record_history,
 )
-from angee.permissions import require_rebac_queryset
-from angee.provenance.models import Changeset as ChangesetContract
-from angee.refs import generic_pointer_model
 from angee.serialization import json_safe
 
-Changeset = apps.get_model(getattr(settings, "ANGEE_CHANGESET_MODEL", SETTINGS["ANGEE_CHANGESET_MODEL"]))
+Changeset = changeset_model()
 
 HISTORY_LIMIT_DEFAULT = 25
 HISTORY_LIMIT_MAX = 100
@@ -286,7 +289,7 @@ def _actor_projections(changesets: Iterable[Any]) -> dict[str, tuple[SubjectRef,
     """Resolve each page actor's stored source kind once."""
 
     actors = {row.actor_ref: SubjectRef.parse(row.actor_ref) for row in changesets if row.actor_ref}
-    return {value: (actor, source_kind_for(actor)) for value, actor in actors.items()}
+    return {value: (actor, StatementSourceMixin.source_kind_for(actor)) for value, actor in actors.items()}
 
 
 def _reference_value(model_field: models.Field[Any, Any], value: Any) -> Any:
@@ -731,6 +734,18 @@ class HistoryMutation:
             raise ValidationError("This changeset must be reverted from the owner of its complete write boundary.")
         reverted = target.revert()
         return ActionResult(ok=True, message="Changeset reverted.", id=PublicID(public_id_of(reverted)))
+
+
+for _model in sorted(apps.get_models(), key=lambda model: model._meta.label_lower):
+    if issubclass(_model, HistoryMixin) and record_history(_model) is not None:
+        attach_data_resource_contribution(
+            HistoryQuery,
+            DataResourceContribution(
+                model=_model,
+                model_label=_model._meta.label,
+                policy=DataResourcePolicy(history=True),
+            ),
+        )
 
 
 schemas = {

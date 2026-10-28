@@ -17,7 +17,7 @@ import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 
 Currency = apps.get_model("money", "Currency")

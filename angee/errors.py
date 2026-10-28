@@ -35,8 +35,6 @@ def validation_error(error: BaseException | None) -> ValidationError | None:
 def classify_error(error: BaseException | None) -> ErrorClassification:
     """Share domain, authentication, permission and validation wire policy."""
 
-    from angee.models.transitions import TransitionNotAllowed
-
     if isinstance(error, DomainError):
         return ErrorClassification(error.code, error.code)
     if isinstance(error, MissingActorError):
@@ -74,6 +72,10 @@ def exception_text(error: BaseException, *, diagnostic: bool = False) -> str:
     return "; caused by ".join(details)
 
 
+class TransitionNotAllowed(Exception):
+    """A declared state transition or direct state assignment was refused."""
+
+
 class DomainError(Exception):
     """A refusal with a stable wire code.
 
@@ -91,21 +93,3 @@ class DomainError(Exception):
 
     def __init__(self) -> None:
         super().__init__(self.code)
-
-
-class CreationKeyConflict(DomainError):
-    """An idempotency key was already claimed for different content."""
-
-    code = "CREATION_KEY_CONFLICT"
-
-    def __init__(self, *args: object) -> None:
-        Exception.__init__(self, *args or (self.code,))
-
-
-class RecordAccessSubjectRefused(DomainError, ValidationError):
-    """The record's invariant refuses a holder, without exposing subject details."""
-
-    code = "RECORD_ACCESS_SUBJECT_REFUSED"
-
-    def __init__(self) -> None:
-        ValidationError.__init__(self, self.code, code=self.code)

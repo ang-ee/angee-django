@@ -41,8 +41,8 @@ from django.core.files import locks
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from angee.fs import write_atomic
-from angee.impl import ImplBase, impl_registry, resolve_impl_class
+from angee.base.implementations import ImplBase, impl_registry, resolve_impl_class
+from angee.utils.files import write_atomic
 
 _INSTALLED_APPS_KEY = "INSTALLED_APPS"
 _SETTINGS_FILENAME = "settings.yaml"
@@ -302,7 +302,7 @@ def addon_installer() -> AddonInstaller:
 
     Resolves ``settings.ANGEE_ADDON_INSTALLER_BACKEND`` against the
     ``settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES`` registry through the shared
-    :func:`~angee.impl.resolve_impl_class` owner — the row-less form of
+    :func:`~angee.base.implementations.resolve_impl_class` owner — the row-less form of
     ``ImplClassField.resolve_class`` (trusted settings path, never row text, with the
     ``AddonInstallerBackend`` subclass check).
     """

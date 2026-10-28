@@ -7,6 +7,7 @@ from typing import TypedDict
 _Settings = TypedDict(
     "_Settings",
     {
+        "COMPOSE_INTEGRATIONS:append": list[str],
         "ANGEE_IMPL_REGISTRIES:append": list[str],
         "ANGEE_MERGE_GUARDS:append": list[str],
         "ANGEE_RESOURCE_SOURCE_CLASSES": dict[str, str],
@@ -16,6 +17,7 @@ _Settings = TypedDict(
 )
 
 SETTINGS: _Settings = {
+    "COMPOSE_INTEGRATIONS:append": ["angee.resources.build.CatalogueIntegration"],
     "ANGEE_IMPL_REGISTRIES:append": [
         "angee.resources.kinds.ResourceEntryKind",
         "angee.resources.sources.ResourceSource",

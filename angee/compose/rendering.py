@@ -7,14 +7,21 @@ Django constructs fields, managers and descriptors when those classes are loaded
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from django.db import models
-from rebac.mixins import REBAC_META_OPTIONS
 
+from angee.compose.declarations import ModelDeclaration, render_literal
 from angee.compose.model_composition import ModelComposition
-from angee.tiers import ResourceTier
 
 
-def render_models(composition: ModelComposition, label: str, *, runtime_module: str = "runtime") -> str:
+def render_models(
+    composition: ModelComposition,
+    label: str,
+    *,
+    runtime_module: str = "runtime",
+    declarations: Mapping[type[models.Model], ModelDeclaration] | None = None,
+) -> str:
     """Return the concrete model module for one source app label."""
 
     imports: set[str] = {"from typing import ClassVar"}
@@ -44,7 +51,6 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
         meta_lines = [
             "        abstract = False",
             f"        app_label = {label!r}",
-            '        base_manager_name = "_angee_base"',
         ]
         constraints = [alias for donor, alias in zip(donors, donor_aliases, strict=True) if donor._meta.constraints]
         if constraints:
@@ -53,43 +59,20 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
                 + ", ".join(f"*{alias}._meta.constraints" for alias in constraints)
                 + "]"
             )
-        for option in REBAC_META_OPTIONS:
-            value = getattr(source._meta, option, None)
-            if value is not None:
-                meta_lines.append(f"        {option} = {value!r}")
-        body_lines: list[str] = []
-        if parent is None and not any(
-            manager.name == "_angee_base" for base in (*donors, source) for manager in base._meta.managers
-        ):
-            imports.add("from angee.models import AngeeUnscopedManager")
-            body_lines.extend(["    _angee_base = AngeeUnscopedManager()", ""])
-            default_manager = source._meta.default_manager
-            if default_manager is None:
-                imports.add("from django.db import models")
-                body_lines.extend(["    objects = models.Manager()", ""])
-            meta_lines.append(
-                f"        default_manager_name = {default_manager.name if default_manager is not None else 'objects'!r}"
-            )
+        declaration = (declarations or {}).get(source, ModelDeclaration())
+        meta_lines.extend(
+            f"        {option} = {render_literal(value)}" for option, value in sorted(declaration.meta_options.items())
+        )
+        body_lines = [
+            f"    {attribute} = {render_literal(value)}" for attribute, value in sorted(declaration.attributes.items())
+        ]
         body_lines.extend(
             [
-                "    angee_contributed_field_origins: ClassVar[tuple[tuple[str, str], ...]] = "
+                "    compose_contributed_field_origins: ClassVar[tuple[tuple[str, str], ...]] = "
                 f"{composition.contributed_field_origins(source)!r}",
                 "",
             ]
         )
-        if source.__dict__.get("catalogue", False):
-            catalogue_tiers = source.__dict__.get("catalogue_tiers")
-            body_lines.extend(
-                [
-                    "    catalogue = True",
-                    f"    catalogue_tier = {source.__dict__.get('catalogue_tier', ResourceTier.MASTER)!r}",
-                    *([f"    catalogue_tiers = {catalogue_tiers!r}"] if catalogue_tiers is not None else []),
-                    "",
-                ]
-            )
-        grantable = composition.grantable(source)
-        if grantable or "rebac_grantable" in source.__dict__ or parent is not None:
-            body_lines.extend([f"    rebac_grantable = {grantable!r}", ""])
         lines = [
             f"class {name}({', '.join(base_names)}):",
             f'    """Concrete {name} model."""',

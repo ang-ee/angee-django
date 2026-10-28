@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import os
+import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+from django.core.management import get_commands
 from django.core.management.commands.runserver import Command as DjangoRunserver
 
-from angee.compose.management.commands import runserver as runserver_module
-from angee.compose.management.commands.runserver import Command
+from angee.management.commands.runserver import Command
 
 
 def test_runserver_is_a_django_runserver_subclass() -> None:
@@ -19,11 +21,21 @@ def test_runserver_is_a_django_runserver_subclass() -> None:
     assert issubclass(Command, DjangoRunserver)
 
 
-def test_inner_run_sets_sdl_gate_and_serves_resolved_app(monkeypatch: pytest.MonkeyPatch, settings: Any) -> None:
-    """``inner_run`` sets the dev SDL gate, resolves the app, and runs uvicorn."""
+def test_native_command_precedes_staticfiles_when_foundation_is_first(settings: Any) -> None:
+    """Django discovers the host override even with the competing contrib command."""
+
+    settings.INSTALLED_APPS = [
+        "angee", "django.contrib.staticfiles", *(entry for entry in settings.INSTALLED_APPS if entry != "angee"),
+    ]
+    assert get_commands()["runserver"] == "angee"
+    assert get_commands()["serve"] == "angee"
+    assert get_commands()["angee"] == "angee"
+
+
+def test_inner_run_serves_resolved_app(monkeypatch: pytest.MonkeyPatch, settings: Any) -> None:
+    """``inner_run`` resolves the configured app and runs uvicorn."""
 
     settings.ASGI_APPLICATION = "angee.asgi.application"
-    monkeypatch.setenv("ANGEE_DEV_SDL", "")  # recorded as cleanup baseline
     app = object()
     captured: dict[str, Any] = {}
 
@@ -34,8 +46,7 @@ def test_inner_run_sets_sdl_gate_and_serves_resolved_app(monkeypatch: pytest.Mon
         def run(self) -> None:
             captured["ran"] = True
 
-    module = "angee.compose.management.commands.runserver"
-    monkeypatch.setattr(f"{module}.autoreload.trigger_reload", lambda filename: None)
+    module = "angee.management.commands.runserver"
     monkeypatch.setattr(f"{module}.import_string", lambda path: app)
     monkeypatch.setattr(f"{module}.uvicorn.Server", _FakeServer)
 
@@ -48,8 +59,6 @@ def test_inner_run_sets_sdl_gate_and_serves_resolved_app(monkeypatch: pytest.Mon
     monkeypatch.setattr(command, "check_migrations", lambda: None)
     command.inner_run()
 
-    assert os.environ["ANGEE_DEV_SDL"] == "1"
-    assert runserver_module.autoreload.trigger_reload is runserver_module._force_process_reload
     config = captured["config"]
     assert config.app is app
     assert config.host == "127.0.0.1"
@@ -58,23 +67,97 @@ def test_inner_run_sets_sdl_gate_and_serves_resolved_app(monkeypatch: pytest.Mon
     assert captured["ran"] is True
 
 
-def test_force_process_reload_exits_with_django_reload_code(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Reload exits the child process instead of waiting on runtime threads."""
+def test_native_reload_closes_lifespan_work_after_unhandled_change() -> None:
+    """Native handled-file semantics survive, and reload closes ASGI-owned threads."""
 
-    captured: dict[str, int] = {}
+    script = r'''
+import json
+import os
+from pathlib import Path
+from threading import Event, Thread
 
-    class _Exited(Exception):
-        pass
+import django
+import uvicorn
+from django.conf import settings
+from django.utils import autoreload
 
-    def fake_exit(code: int) -> None:
-        captured["code"] = code
-        raise _Exited
+from angee.management.commands import runserver
 
-    monkeypatch.setattr(runserver_module.os, "_exit", fake_exit)
+settings.configure(DEBUG=True, INSTALLED_APPS=[], ASGI_APPLICATION="__main__.application")
+django.setup()
+startup = Event()
+stop_work = Event()
+lifecycle = []
+workers = []
 
-    with pytest.raises(_Exited):
-        runserver_module._force_process_reload(Path("addons/angee/agents/schema.py"))
+async def application(scope, receive, send):
+    assert scope["type"] == "lifespan"
+    while True:
+        message = await receive()
+        if message["type"] == "lifespan.startup":
+            worker = Thread(target=stop_work.wait, daemon=False)
+            workers.append(worker)
+            worker.start()
+            lifecycle.append("startup")
+            startup.set()
+            await send({"type": "lifespan.startup.complete"})
+        elif message["type"] == "lifespan.shutdown":
+            stop_work.set()
+            for worker in workers:
+                worker.join()
+            lifecycle.append("shutdown")
+            await send({"type": "lifespan.shutdown.complete"})
+            return
 
-    assert captured["code"] == 3
+class SocketFreeServer(uvicorn.Server):
+    async def startup(self, sockets=None):
+        # Exercise native serve/main_loop/shutdown and lifespan without a listener.
+        await self.lifespan.startup()
+        self.servers = []
+        self.started = True
+
+class NativeChanges(autoreload.StatReloader):
+    def tick(self):
+        assert startup.wait(10), "ASGI lifespan did not start"
+        self.notify_file_changed(Path("handled.py"))
+        assert lifecycle == ["startup"]
+        assert workers[0].is_alive()
+        self.notify_file_changed(Path("reload.py"))
+        raise AssertionError("Django did not raise its reload exit")
+        yield
+
+def handle_change(sender, file_path, **kwargs):
+    return file_path.name == "handled.py"
+
+autoreload.file_changed.connect(handle_change, weak=False)
+autoreload.get_reloader = NativeChanges
+os.environ[autoreload.DJANGO_AUTORELOAD_ENV] = "true"
+original_trigger = autoreload.trigger_reload
+runserver.uvicorn.Server = SocketFreeServer
+command = runserver.Command()
+command.addr = "127.0.0.1"
+command.port = "0"
+command.check_migrations = lambda: None
+try:
+    command.run(use_reloader=True, skip_checks=True)
+except SystemExit as error:
+    assert error.code == 3
+else:
+    raise AssertionError("Missing reload exit")
+assert autoreload.trigger_reload is original_trigger
+assert lifecycle == ["startup", "shutdown"]
+assert workers and not any(worker.is_alive() for worker in workers)
+print(json.dumps({"lifecycle": lifecycle, "reload_code": 3}))
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert json.loads(result.stdout.strip().splitlines()[-1]) == {
+        "lifecycle": ["startup", "shutdown"], "reload_code": 3,
+    }

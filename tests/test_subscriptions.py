@@ -11,22 +11,45 @@ from typing import Any, cast
 
 import pytest
 import strawberry
+import strawberry_django
+from asgiref.sync import sync_to_async
 from channels.layers import InMemoryChannelLayer
 from channels.testing import WebsocketCommunicator
+from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser, Group
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models.signals import post_save
 from django.test import override_settings
-from rebac import actor_context, anonymous_actor, current_actor
+from rebac import (
+    RelationshipTuple,
+    actor_context,
+    anonymous_actor,
+    current_actor,
+    delete_relationship,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 from rebac.graphql.strawberry import RebacChannelsConsumerMixin
+from rebac.roles import grant as grant_role
+from rebac.roles import revoke as revoke_role
+from strawberry_django.utils.requests import get_request
 
 from angee.graphql import access, publishing, subscriptions
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
 from angee.graphql.events import ChangeEvent, ChangePayload, ChangeRelatedRecord
+from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.subscriptions import changes
-from tests.conftest import SchemaAddon
-from tests.scopedemo.models import ScopedDoc
+from angee.iam import schema as iam_schema
+from angee.iam.identity import user_display_label, user_label
+from angee.iam.models import UserAccountAction
+from angee.iam.permissions import session_user
+from angee.iam.schema import IAMQuery
+from angee.timeline import schema as timeline_schema
+from tests.conftest import SchemaAddon, create_platform_admin
+from tests.scopedemo.models import FactoryDoc, Scope, ScopedDoc
 
 ANON = anonymous_actor()
 SubscriptionResolver = Callable[
@@ -387,7 +410,7 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
         classmethod(lambda cls, instance, **kwargs: replace(stub_payload, broadcasts=kwargs["broadcasts"])),
     )
 
-    class Row:
+    class Row(ChangeBroadcastMixin):
         """Minimal instance carrying only the broadcast opt-out decision."""
 
         def __init__(self, broadcasts: bool) -> None:
@@ -472,4 +495,96 @@ def test_ws_query_runs_inside_actor_context() -> None:
         "type": "next",
         "payload": {"data": {"actorActive": True}},
     }
+    assert current_actor() is None
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(ANGEE_TIMELINE_KINDS=[])
+def test_ws_queries_refresh_identity_eligibility_and_timeline_admission(composed_tables: None) -> None:
+    """Separate operations on one native consumer never reuse HTTP request memos."""
+
+    users = get_user_model()
+    user = users.objects.create_user(
+        username="websocket-identity", first_name="WebSocket", last_name="Reader",
+    )
+    target = create_platform_admin("websocket-target", first_name="First", last_name="Label")
+    with system_context(reason="test.websocket.timeline_subject"):
+        scope = Scope.objects.create(name="WebSocket admission")
+        record = FactoryDoc.objects.create(scope=scope, title="Scoped timeline")
+        membership = RelationshipTuple(to_object_ref(scope), "direct_member", to_subject_ref(user))
+        write_relationships([membership])
+
+    @strawberry.type
+    class Query(IAMQuery):
+        @strawberry.field
+        def session_label(self, info: strawberry.Info) -> str:
+            return user_label(session_user(info))
+
+        @strawberry_django.field
+        def target_label(self, info: strawberry.Info) -> str | None:
+            return user_display_label(target.pk, request=get_request(info))
+
+        @strawberry_django.field
+        def target_can_rename(self, info: strawberry.Info) -> bool:
+            allowed = iam_schema._account_action_allowed(UserAccountAction.RENAME, info)
+            return bool(users._base_manager.filter(pk=target.pk).annotate(allowed=allowed).values_list(
+                "allowed", flat=True,
+            ).get())
+
+        @strawberry_django.field
+        def record_admitted(self, info: strawberry.Info) -> bool:
+            try:
+                timeline_schema._timeline(info, record._meta.label, record.public_id)
+            except ValidationError as error:
+                assert error.code == "not_found"
+                return False
+            return True
+
+    schema = GraphQLSchemas([SchemaAddon({"public": {"query": (Query,)}})]).build("public")
+
+    def change_labels_and_policy() -> None:
+        with system_context(reason="test.websocket.policy_changed"):
+            users._base_manager.filter(pk=target.pk).update(first_name="Second")
+            revoke_role(actor=target, role="angee/role:admin")
+            grant_role(actor=user, role="angee/role:admin")
+            delete_relationship(membership)
+
+    async def scenario() -> list[dict[str, object]]:
+        communicator = WebsocketCommunicator(
+            AngeeGraphQLWSConsumer.as_asgi(schema=schema),
+            "/graphql/public/",
+            subprotocols=["graphql-transport-ws"],
+        )
+        communicator.scope["user"] = user
+        connected, _subprotocol = await communicator.connect()
+        assert connected
+        try:
+            await communicator.send_json_to({"type": "connection_init"})
+            assert await communicator.receive_json_from() == {"type": "connection_ack"}
+            results = []
+            for operation in ("before", "after"):
+                if operation == "after":
+                    await sync_to_async(change_labels_and_policy)()
+                await communicator.send_json_to({
+                    "id": operation, "type": "subscribe",
+                    "payload": {"query": """{
+                        current_user { display_name } session_label
+                        target_label target_can_rename record_admitted
+                    }"""},
+                })
+                results.append(await communicator.receive_json_from())
+                assert await communicator.receive_json_from() == {"id": operation, "type": "complete"}
+            return results
+        finally:
+            await communicator.disconnect()
+
+    assert asyncio.run(scenario()) == [
+        {"id": operation, "type": "next", "payload": {"data": {
+            "current_user": {"display_name": "WebSocket Reader"}, "session_label": "WebSocket Reader",
+            "target_label": label, "target_can_rename": eligible, "record_admitted": admitted,
+        }}}
+        for operation, label, eligible, admitted in (
+            ("before", "First Label", False, True), ("after", "Second Label", True, False),
+        )
+    ]
     assert current_actor() is None

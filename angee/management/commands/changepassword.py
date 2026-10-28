@@ -1,34 +1,17 @@
-"""Rebac-aware override of Django's ``changepassword``.
+"""Native Django command-discovery bridge for the optional IAM override.
 
-The stock command loads the target user through ``User._default_manager``
-with no actor bound (``django/contrib/auth/management/commands/changepassword``).
-Under Angee's rebac-scoped User manager with ``REBAC_STRICT_MODE=True`` that
-materialisation raises :class:`rebac.errors.MissingActorError`, so the vanilla
-command cannot run.
-
-This override lives in ``angee`` — which loads before ``django.contrib.auth``
-in ``INSTALLED_APPS``, the ordering Django's command discovery requires for a
-same-named command to win — and runs the whole operation inside
-``system_context``: the same audited bypass the framework already uses for
-out-of-request maintenance jobs (see ``angee.iam.bootstrap_admin``). Behaviour
-is otherwise identical to the stock command (prompting, validation, retries).
+The host precedes auth in INSTALLED_APPS; IAM follows its auth dependency.
+Django therefore discovers this binding first. Retire the bridge when native
+command precedence can select the IAM owner without the host binding.
 """
 
-from __future__ import annotations
+from django.apps import apps
+from django.contrib.auth.management.commands.changepassword import Command as DjangoCommand
 
-from typing import Any
+Command: type[DjangoCommand]
+if apps.is_installed("angee.iam"):
+    from angee.iam.management.commands.changepassword import Command as IAMCommand
 
-from django.contrib.auth.management.commands.changepassword import (
-    Command as ChangePasswordCommand,
-)
-from rebac import system_context
-
-
-class Command(ChangePasswordCommand):
-    """``changepassword`` wrapped in an audited system context."""
-
-    def handle(self, *args: Any, **options: Any) -> str | None:
-        """Run the stock password change with rebac scoping bypassed."""
-
-        with system_context(reason="auth.changepassword"):
-            return super().handle(*args, **options)
+    Command = IAMCommand
+else:
+    Command = DjangoCommand

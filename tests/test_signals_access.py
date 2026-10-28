@@ -26,15 +26,16 @@ from rebac import actor_context, anonymous_actor
 from strawberry import auto
 from strawberry_django.fields.types import field_type_map
 
+from angee.base.models import AuditMixin, TimestampMixin
 from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.events import ChangePayload
 from angee.graphql.field_types import register_field_type
+from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.graphql.publishing import publication_ingestion_context
 from angee.graphql.schema import DEFAULT_SCHEMA_NAME, GraphQLSchemas
 from angee.graphql.subscriptions import changes
-from angee.models import AuditMixin, TimestampMixin
 from angee.serialization import json_safe
 from tests.conftest import SchemaAddon
 from tests.tables import model_tables
@@ -240,7 +241,7 @@ def test_readable_fields_provider_resolves_only_for_observable_partial_updates(
             readable_fields=readable_fields,
         )
 
-    class SilentGroup(Group):
+    class SilentGroup(ChangeBroadcastMixin, Group):
         class Meta:
             proxy = True
             app_label = "auth"
@@ -346,7 +347,7 @@ def test_publish_change_keeps_silent_rows_local(
 ) -> None:
     """Local projections see silent rows; the broadcast policy still gates transport."""
 
-    class SilentRow(models.Model):
+    class SilentRow(ChangeBroadcastMixin, models.Model):
         """Concrete row that opts out of generic change publication."""
 
         name = models.CharField(max_length=40)

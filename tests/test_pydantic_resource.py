@@ -11,7 +11,7 @@ import pytest
 import strawberry
 from pydantic import BaseModel, computed_field
 
-from angee.graphql.data import hasura_pydantic_resource, pydantic_node
+from angee.graphql.data.pydantic_resource import hasura_pydantic_resource, pydantic_node
 from angee.graphql.schema import GraphQLSchemas
 from tests.conftest import SchemaAddon
 

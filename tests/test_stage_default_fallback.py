@@ -14,19 +14,19 @@ def pipeline():
     # Conflicting name and insertion ordering catch accidental Meta ordering.
     late = FallbackStage.objects.create(container=container, name="A late", position=9)
     first = FallbackStage.objects.create(container=container, name="Z first", position=1)
-    tied = FallbackStage.objects.create(container=container, name="A tied", position=1)
+    middle = FallbackStage.objects.create(container=container, name="A middle", position=1.5)
     foreign = FallbackStage.objects.create(container=other, name="Foreign", position=0)
-    return container, (first, tied, late), foreign
+    return container, (first, middle, late), foreign
 
 
-def test_base_fallback_selects_first_by_position_then_primary_key(pipeline, django_assert_num_queries):
-    container, (first, _tied, _late), _foreign = pipeline
+def test_base_fallback_selects_first_by_fractional_position_before_name(pipeline, django_assert_num_queries):
+    container, (first, _middle, _late), _foreign = pipeline
     with django_assert_num_queries(1):
         assert FallbackStage.resolve_default(container) == first
 
 
 def test_explicit_default_wins_without_asking_the_fallback(pipeline, monkeypatch, django_assert_num_queries):
-    container, (_first, _tied, late), _foreign = pipeline
+    container, (_first, _middle, late), _foreign = pipeline
     container.default_stage = late
     container.save()
 

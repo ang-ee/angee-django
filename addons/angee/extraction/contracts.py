@@ -9,9 +9,9 @@ from typing import Annotated, Any, Literal
 from django.db.models import TextChoices
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from angee.evidence import EvidenceReference
+from angee.base.identity import public_id_of
 from angee.extraction.enums import ExtractionRole, ExtractionSourceKind
-from angee.identity import public_id_of
+from angee.provenance.evidence import EvidenceReference
 
 
 @dataclass(frozen=True, slots=True)

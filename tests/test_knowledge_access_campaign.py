@@ -7,10 +7,10 @@ from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.changesets import changeset_model
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.knowledge.schema import schemas
+from angee.provenance.context import changeset_model
 from tests.conftest import (
     MarkdownPage,
     Page,

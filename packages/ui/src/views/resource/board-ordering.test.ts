@@ -73,6 +73,47 @@ describe("board ordering requests", () => {
     })).toEqual({ laneId: "target", rank: 1536 });
   });
 
+  test("sends loaded public neighbors in visual order without evaluating a numeric rank", () => {
+    const groups = [
+      group("source", [{ id: "active", sort_order: 1024 }]),
+      group("target", [
+        { id: "before", sort_order: 1024 },
+        { id: "following", sort_order: 2048 },
+        { id: "last", sort_order: 3072 },
+      ]),
+    ];
+    expect(boardMoveForDrop({
+      activeRowId: "active",
+      activeLaneId: "source",
+      target: { laneId: "target", rowId: "following" },
+      groups,
+      rankField: "sort_order",
+      rankInputField: "task_order",
+      rankForRow: () => { throw new Error("Intent must not allocate a rank"); },
+    })).toEqual({
+      laneId: "target",
+      order: { preceding: ["before"], following: ["following", "last"] },
+    });
+  });
+
+  test("excludes the active row and expresses an empty-lane insertion explicitly", () => {
+    const request = {
+      activeRowId: "active", activeLaneId: "source",
+      groups: [group("source", [
+        { id: "active", sort_order: 1024 },
+        { id: "other", sort_order: 2048 },
+      ]), group("empty", [])],
+      rankField: "sort_order", rankInputField: "task_order",
+      rankForRow: () => { throw new Error("Intent must not allocate a rank"); },
+    };
+    expect(boardMoveForDrop({ ...request, target: { laneId: "source" } })).toEqual({
+      laneId: "source", order: { preceding: ["other"], following: [] },
+    });
+    expect(boardMoveForDrop({ ...request, target: { laneId: "empty" } })).toEqual({
+      laneId: "empty", order: { preceding: [], following: [] },
+    });
+  });
+
   test("preserves the legacy cross-lane-only contract without a rank fact", () => {
     const groups = [group("source", [{ id: "a", sort_order: 1024 }])];
     const rankForRow = (row: RowGroup<RankedRow>["rows"][number]) =>

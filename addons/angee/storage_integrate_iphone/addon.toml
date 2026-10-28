@@ -5,4 +5,4 @@ name = "angee.storage_integrate_iphone"
 description = "iPhone backups exposed as external storage Mounts"
 keywords = ["iphone", "backup", "storage", "mounts"]
 category = "Integration"
-depends_on = ["angee.storage_integrate", "angee.storage", "angee.integrate", "angee.integrate_iphone"]
+depends_on = ["angee.storage_integrate", "angee.storage", "angee.integrate", "angee.integrate_iphone", "angee.web"]

@@ -12,7 +12,7 @@ import {
   type TaskActionRow,
 } from "../task-actions";
 
-/** Personal-floor chore chart: open tasks in assignee lanes, ranked in-lane. */
+/** Personal-floor chore chart: assignee lanes project the task-owned order. */
 export function TaskBoardPage(): React.ReactElement {
   const t = useProjectsT();
   const rowActions = useTaskRowActions<TaskActionRow>();
@@ -24,7 +24,7 @@ export function TaskBoardPage(): React.ReactElement {
         defaultView="board"
         baseFilter={{ status: { exact: "OPEN" } }}
         order={{ sort_order: "ASC" }}
-        laneSource={{ field: "assignee", rankField: "sort_order" }}
+        laneSource={{ field: "assignee", rankField: "sort_order", rankInputField: "task_order" }}
         rowActions={rowActions}
         emptyContent={{
           icon: "task-board",

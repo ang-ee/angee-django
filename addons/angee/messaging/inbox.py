@@ -22,7 +22,7 @@ from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import current_actor
 
-from angee.actors import actor_user_id
+from angee.base.permissions import actor_user_id
 
 
 class InboxCoverage(BaseModel):

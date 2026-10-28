@@ -1,4 +1,4 @@
-"""Sentry starts only for a configured DSN and never receives sanitized GraphQL data."""
+"""Configured Sentry clients receive only the GraphQL owner's safe diagnostic events."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 import sentry_sdk
 import strawberry
+from django.conf import settings
 from django.test import Client, override_settings
 from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
@@ -19,7 +20,7 @@ from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import Transport
 from strawberry.django.views import GraphQLView
 
-from angee.compose.project import ProjectContract
+from angee.conf import ProjectContract
 from angee.graphql.schema import GraphQLSchemas
 from tests.test_graphql import addon
 from tests.test_settings_composition_errors import _environment, _project
@@ -47,7 +48,7 @@ class _Query:
 _PROBE = """
 import json
 import sentry_sdk
-from angee.compose.project import ProjectContract
+from angee.conf import ProjectContract
 
 try:
     ProjectContract({"__name__": "probe_settings"}).compose()
@@ -79,12 +80,14 @@ class _RecordingTransport(Transport):
         self.events.extend(event for item in envelope.items if (event := item.get_event()) is not None)
 
 
-def _compose(tmp_path: Path, **environment: str) -> dict[str, Any]:
+def _compose(tmp_path: Path, *, installed_apps: tuple[str, ...] = (), **environment: str) -> dict[str, Any]:
     """Compose the project in tmp_path in a fresh interpreter and report Sentry's client."""
 
     if not (tmp_path / "settings.yaml").exists():
         (tmp_path / "settings.yaml").write_text(
-            'SECRET_KEY: isolated-error-reporting-test\nINSTALLED_APPS: []\nANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"\n',
+            "SECRET_KEY: isolated-error-reporting-test\n"
+            f"INSTALLED_APPS: {json.dumps(installed_apps)}\n"
+            'COMPOSE_RUNTIME_DIR: "{BASE_DIR}/runtime"\n',
             encoding="utf-8",
         )
     env = _environment(tmp_path)
@@ -121,7 +124,15 @@ def test_a_dsn_starts_sentry_with_privacy_preserving_options(tmp_path: Path, env
         "max_request_body_size": "never",
     }
     assert {"django", "celery", "logging"} <= set(client["integrations"])
+
+
+def test_graphql_declares_its_native_capture_exclusion(tmp_path: Path) -> None:
+    client = _compose(tmp_path, installed_apps=("angee.graphql",), SENTRY_DSN=DSN)
+
+    assert client["failure"] is None
+    assert client["active"] is True
     assert "strawberry" not in client["integrations"]
+    assert {"django", "celery", "logging"} <= set(client["integrations"])
 
 
 def test_a_composition_failure_is_reported(tmp_path: Path) -> None:
@@ -140,7 +151,7 @@ def test_graphql_failures_reach_sentry_once_without_sanitized_values(monkeypatch
     recorded: list[dict[str, Any]] = []
     monkeypatch.setattr(sentry_sdk, "init", lambda **options: recorded.append(options))
     monkeypatch.setenv("SENTRY_DSN", DSN)
-    ProjectContract({})._start_error_reporting()
+    ProjectContract({"SENTRY_DISABLED_INTEGRATIONS": settings.SENTRY_DISABLED_INTEGRATIONS})._start_error_reporting()
     [options] = recorded
 
     schema = GraphQLSchemas([addon(public={"query": [_Query]})]).build("public")

@@ -22,8 +22,9 @@ from strawberry import auto
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
+from angee.base.identity import public_subject_ref
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
-from angee.graphql.data import (
+from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
     hasura_model_resource,
@@ -36,7 +37,6 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
-from angee.identity import public_subject_ref
 from angee.integrate.schema import BridgeTypeMixin
 from angee.parties.managers import DisplayAvatarPrefetches
 from angee.parties.models import Party as PartyModel

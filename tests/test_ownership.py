@@ -15,7 +15,7 @@ from rebac import (
 )
 from rebac.errors import PermissionDenied
 
-from angee.actors import subject_reaches_user
+from angee.base.permissions import subject_reaches_user
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow, OwnershipContainer, ownership_tables  # noqa: F401
 

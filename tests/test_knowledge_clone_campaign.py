@@ -9,8 +9,8 @@ from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.models import active_relationship_model
 
-from angee.changesets import changeset_model
-from angee.models import CreationKeyConflict
+from angee.provenance.context import changeset_model
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import Link, MarkdownPage, Page, RecordBinding, Vault, create_platform_admin, create_user
 from tests.knowledge_campaign import clone_template as clone_template
 from tests.test_knowledge import _grant

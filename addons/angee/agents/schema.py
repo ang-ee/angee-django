@@ -21,20 +21,22 @@ from strawberry import auto
 from strawberry.permission import BasePermission, PermissionExtension
 from strawberry.scalars import JSON
 from strawberry.types import get_object_definition
+from strawberry_django.utils.requests import get_request
 
 from angee.agents import provisioning
 from angee.agents.context import render_view_context
+from angee.base.identity import public_subject_ref
 from angee.graphql.actions import ActionResult, action_target, authorized_permission_target, resolve_action_target
 from angee.graphql.capabilities import permissions_field
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.permissions import PlatformAdminPermission, request_from_info
+from angee.iam.permissions import PlatformAdminPermission, session_user
 from angee.iam.schema import UserType
-from angee.identity import public_subject_ref
+from angee.integrate.connect import connect_integration_target
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.schema import (
     ConnectIntegrationResult,
@@ -44,7 +46,6 @@ from angee.integrate.schema import (
     IntegrationOAuthMixin,
     IntegrationWriteBackend,
     VendorType,
-    connect_integration_target,
     integration_input_extensions,
 )
 from angee.integrate_vcs.schema import SourceType, TemplateType
@@ -511,13 +512,12 @@ class InferenceProviderConnectMutation:
                 reason="agents.graphql.connect_inference_provider",
                 queryset=InferenceProvider._default_manager.select_related("vendor"),
             )
-            return connect_integration_target(
-                info,
-                provider,
-                provider.connect_oauth_client("Inference provider"),
-                redirect_uri=redirect_uri,
-                next_path=next,
+            started = connect_integration_target(
+                provider, provider.connect_oauth_client("Inference provider"),
+                user=session_user(info), request=get_request(info),
+                redirect_uri=redirect_uri, next_path=next,
             )
+            return ConnectIntegrationResult.from_connection(provider, started)
         except OAuthFlowError as error:
             return ConnectIntegrationResult(error=error.public_message, error_code=error.code)
 
@@ -634,7 +634,7 @@ class AgentActionMutation:
         """Format the endpoint selected by the agent's runtime."""
 
         agent = authorized_permission_target(info, Agent, id, "call")
-        return AgentChatEndpoint(**agent.runtime_backend.chat_endpoint(agent, request_from_info(info)))
+        return AgentChatEndpoint(**agent.runtime_backend.chat_endpoint(agent, get_request(info)))
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def render_agent_prompt(self, id: PublicID, view: JSON) -> str:
