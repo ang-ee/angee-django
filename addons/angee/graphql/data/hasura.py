@@ -390,8 +390,10 @@ class AngeeHasuraWriteBackend:
         prepared = self._prepare_line_rows(rows)
         # Phase 2 — child writes elevated, under a parent-row lock.
         with system_context(reason="graphql.hasura.save.lines"):
-            self.model._default_manager.select_for_update(of=row_lock_paths(self.model)).filter(pk=parent.pk).first()
-            children = child_model._base_manager.filter(**{self._line_back_fk: parent})
+            self.model._default_manager.using(parent._state.db).select_for_update(
+                of=row_lock_paths(self.model),
+            ).filter(pk=parent.pk).first()
+            children = child_model._base_manager.using(parent._state.db).filter(**{self._line_back_fk: parent})
             existing = children.in_bulk()
             by_public_id = {public_id_of(child): child for child in existing.values()}
             unknown = sorted({pid for pid, _ in prepared if pid is not None and pid not in by_public_id})
@@ -409,7 +411,7 @@ class AngeeHasuraWriteBackend:
             if removed:
                 # Removals free their unique values (a name) for the rows that follow.
                 try:
-                    child_model._base_manager.filter(pk__in=removed).delete()
+                    children.filter(pk__in=removed).delete()
                 except (models.ProtectedError, models.RestrictedError) as error:
                     raise ValidationError(_line_removal_refusal(child_model, error)) from error
             try:

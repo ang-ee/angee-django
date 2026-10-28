@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from django.core.exceptions import ValidationError
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 from rebac import actor_context, system_context
 
 from tests.composed_host import run_composed_tests
@@ -95,6 +95,35 @@ class StageLinesTests(WorkCase):
         self.assertEqual(
             [(name, position) for name, _category, position in self.stored()],
             [(line["name"], index) for index, line in enumerate(payload)],
+        )
+
+    def test_reordering_reads_the_locked_parent_database(self):
+        """A write must not inspect a replica for its current children or rank range."""
+
+        stage_model = self.Stage
+
+        class StageReadReplica:
+            def db_for_read(self, model, **hints):
+                if model is stage_model:
+                    raise AssertionError("An atomic stage write consulted the replica router.")
+                return None
+
+            def db_for_write(self, model, **hints):
+                return "default"
+
+        payload = self.lines()
+        payload[0]["position"], payload[1]["position"] = payload[1]["position"], payload[0]["position"]
+        with override_settings(DATABASE_ROUTERS=[StageReadReplica()]):
+            result = self.execute(
+                """mutation SaveQueue($pk: ID!, $lines: [work_queues_stages_insert_input!]) {
+                    work_queues_save(pk: $pk, lines: $lines) { id }
+                }""",
+                {"pk": self.queue.sqid, "lines": payload},
+            )
+        self.assertFalse(result.errors)
+        self.assertEqual(
+            [(name, position) for name, _category, position in self.stored()][:2],
+            [("Ready", 0), ("Triage", 1)],
         )
 
     def test_custom_stages_edit_and_remove_through_lines(self):

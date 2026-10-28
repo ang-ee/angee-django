@@ -87,3 +87,35 @@ class MtiParentProxy(MtiParent):
 
         proxy = True
         app_label = "mtidemo"
+
+
+class UntypedCaptureParent(AngeeDataModel):
+    """Concrete stored ancestor without its own polymorphic resource identity."""
+
+    sqid_prefix = "ucp_"
+    title = models.CharField(max_length=64)
+
+    class Meta(AngeeDataModel.Meta):
+        """Keep this parent deliberately untyped for the native lock contract."""
+
+        abstract = False
+        app_label = "mtidemo"
+        db_table = "test_mtidemo_untyped_capture_parent"
+
+
+class TypedCaptureChild(RecordChangedOptIn, UntypedCaptureParent):
+    """Canonical typed source whose concrete untyped parent also needs locking."""
+
+    detail = models.CharField(max_length=64, blank=True, default="")
+
+    @classmethod
+    def record_changed_grant_targets(cls, trigger):
+        """This lock-only source fixture grants no workflow principal access."""
+        return ()
+
+    class Meta:
+        """The child is the canonical typed edge, not its untyped parent."""
+
+        app_label = "mtidemo"
+        db_table = "test_mtidemo_typed_capture_child"
+        rebac_resource_type = "mtidemo/capture_child"

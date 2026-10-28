@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
-from django.db import IntegrityError, OperationalError, models, transaction
+from django.db import IntegrityError, OperationalError, connection, models, transaction
 from django.db.models.functions import Now, Upper
 from django.db.models.signals import post_save
 from rebac import RelationshipTuple, actor_context, current_actor, system_context, to_object_ref, to_subject_ref
@@ -34,7 +34,7 @@ from angee.workflows.testing.models import (
     WorkflowRun,
 )
 from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
-from tests.mtidemo.models import MtiParent
+from tests.mtidemo.models import MtiParent, TypedCaptureChild, UntypedCaptureParent
 from tests.test_workflows_watches import Watch, record_deliveries, start_watcher
 from tests.workflow_steps import Value, document
 
@@ -887,3 +887,31 @@ def test_trigger_hook_contributions_are_source_scoped_and_conflicts_fail():
 
     with pytest.raises(ImproperlyConfigured, match="Multiple trigger_input"):
         Trigger._trigger_hooks(Conflict(), "trigger_input")
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires native PostgreSQL table lock modes.")
+def test_source_capture_locks_untyped_concrete_ancestors(monkeypatch):
+    """Selecting only the child's PK must not silently drop its parent's OF lock."""
+    with system_context(reason="native source ancestor lock fixture"):
+        record = TypedCaptureChild.objects.create(title="Parent", detail="Observed child")
+    seen = []
+    manager = TriggerEvent.objects
+    native = manager.record_changes
+
+    def observe(model, records, *, source="record_changed"):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT relation::regclass::text FROM pg_locks "
+                "WHERE pid = pg_backend_pid() AND mode = 'RowShareLock' "
+                "AND relation IN (%s::regclass, %s::regclass)",
+                [UntypedCaptureParent._meta.db_table, TypedCaptureChild._meta.db_table],
+            )
+            seen.append({row[0] for row in cursor.fetchall()})
+        return native(model, records, source=source)
+
+    monkeypatch.setattr(manager, "record_changes", observe)
+    triggers.RecordChanged.dispatch(TypedCaptureChild, record)
+    assert seen and all(
+        tables == {UntypedCaptureParent._meta.db_table, TypedCaptureChild._meta.db_table}
+        for tables in seen
+    )

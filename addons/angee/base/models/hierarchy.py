@@ -11,10 +11,10 @@ from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import NotSupportedError, connections, models, router, transaction
 from django.db.models import F, Value
-from django.db.models.functions import Replace
+from django.db.models.functions import Cast, Replace
 
 from angee.base.indexes import PatternOpsIndex
-from angee.base.querysets import SystemQuerysetMixin, _AngeeQuerySetMixin
+from angee.base.querysets import SystemQuerysetMixin, _AngeeQuerySetMixin, query_batch_size
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _HierarchyModelT = TypeVar("_HierarchyModelT", bound="HierarchyMixin")
@@ -118,6 +118,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
         """
 
         model = self.model
+        self._for_write = True
         using = self.db
         field = model._hierarchy_parent_field()
         rows = list(rows)
@@ -158,13 +159,17 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
                 parent = parents[id(row)]
                 row.parent = parent
                 row.path = row._hierarchy_path(parent)
-            for chunk in batched(rows, 500):
+            # Each row adds a filter key and two key/value CASE pairs.
+            for chunk in batched(rows, query_batch_size(self, width=5)):
                 # The caller's queryset carries its authority (a sudo) to this write.
                 batch = cast(_AngeeQuerySetMixin, self.filter(pk__in=[row.pk for row in chunk]))
                 super(_AngeeQuerySetMixin, batch).update(
-                    parent_id=models.Case(
-                        *(models.When(pk=row.pk, then=models.Value(row.parent_id)) for row in chunk),
-                        output_field=field.target_field,
+                    parent_id=Cast(
+                        models.Case(
+                            *(models.When(pk=row.pk, then=models.Value(row.parent_id)) for row in chunk),
+                            output_field=field.target_field,
+                        ),
+                        field.target_field,
                     ),
                     path=models.Case(
                         *(models.When(pk=row.pk, then=models.Value(row.path)) for row in chunk),

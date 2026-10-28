@@ -41,6 +41,7 @@ from angee.base.identity import public_id_of
 from angee.base.implementations import ImplBase, resolve_all_impl_classes
 from angee.base.models import AngeeManager, AngeeQuerySet, record_display_label, row_lock_paths
 from angee.base.permissions import effective_rebac_definition
+from angee.base.querysets import by_key
 from angee.base.signals import connect_for_models
 from angee.errors import exception_text
 from angee.iam.identity import group_subject_type, user_label
@@ -313,9 +314,13 @@ class TriggerSource(ImplBase):
                     groups.setdefault(target_model, set()).add(target.object_id)
                 present: set[tuple[type[Model], Hashable]] = set()
                 for target_model, keys in sorted(groups.items(), key=lambda item: item[0]._meta.label_lower):
-                    rows = target_model._default_manager.filter(pk__in=keys).order_by("pk")
-                    locked = rows.select_for_update(no_key=True, of=row_lock_paths(target_model))
-                    present.update((target_model, key) for key in locked.values_list("pk", flat=True))
+                    rows = target_model._default_manager.order_by("pk").select_for_update(
+                        no_key=True, of=row_lock_paths(target_model),
+                    )
+                    for locked in by_key(rows, sorted(keys)):
+                        # Native model selection keeps a column from every MTI
+                        # ancestor, as Django requires for each requested OF lock.
+                        present.update((target_model, row.pk) for row in locked)
                 records = tuple(
                     item for item, target in targets
                     if (target.content_type.model_class(), target.object_id) in present

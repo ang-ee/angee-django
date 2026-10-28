@@ -9,6 +9,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
+from itertools import batched
 from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
@@ -35,7 +36,7 @@ from angee.base.models import (
     row_lock_paths,
 )
 from angee.base.permissions import actor_user_id
-from angee.base.querysets import by_key
+from angee.base.querysets import by_key, query_batch_size
 from angee.base.signals import bulk_updated
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.publishing import changes_muted, mute_changes, publish_change
@@ -938,18 +939,24 @@ class StepWatchManager[T: StepWatch](AngeeHistoryManager[T]):
         return cast(WaitingKind, WaitingKind.TIME)
 
     def record_changes(self, records: tuple[Any, ...]) -> None:
-        """Probe a completed batch once, then retain each watched target's capture."""
+        """Bound the existence probe, then retain each watched target's capture."""
         if len(records) > 1:
             try:
                 groups: dict[int, set[Any]] = {}
                 for record in records:
                     target = generic_target(record)
                     groups.setdefault(target.content_type.pk, set()).add(target.object_id)
-                predicate = Q(pk__in=[])
-                for content_type_id, keys in sorted(groups.items()):
-                    predicate |= Q(content_type_id=content_type_id, object_id__in=keys)
+                rows = self.get_queryset()
+                rows._for_write = True
                 with system_context(reason="workflows.watch_capture"):
-                    if not self.filter(predicate).exists():
+                    for content_type_id, keys in sorted(groups.items()):
+                        watches = rows.filter(content_type_id=content_type_id).values_list("pk", flat=True)
+                        if any(
+                            watches.filter(object_id__in=chunk).first() is not None
+                            for chunk in batched(sorted(keys), query_batch_size(watches))
+                        ):
+                            break
+                    else:
                         return
             except Exception:
                 logger.exception("Workflow watch capture failed.")
