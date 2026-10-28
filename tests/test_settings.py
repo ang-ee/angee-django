@@ -7,6 +7,8 @@ import os
 import runpy
 import sys
 from collections.abc import Iterator
+from importlib.machinery import PathFinder
+from importlib.util import module_from_spec
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -767,6 +769,44 @@ def test_prepend_import_paths_refreshes_the_loaded_foundation_package(
 
     assert angee.__path__[0] == str(addon_portion)
     assert all(path in angee.__path__ for path in foundation_paths)
+
+
+def test_prepend_import_paths_deduplicates_symlinked_namespace_locations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """One physical addon remains one native Django app location through a symlink."""
+
+    import angee
+
+    installed = tmp_path / "site-packages"
+    addon = installed / "angee" / "cold_namespace"
+    addon.mkdir(parents=True)
+    external_addon = installed / "cold_consumer" / "accounting"
+    external_addon.mkdir(parents=True)
+    linked = tmp_path / "linked-site-packages"
+    linked.symlink_to(installed, target_is_directory=True)
+    distinct = tmp_path / "other-addons" / "angee"
+    distinct.mkdir(parents=True)
+    monkeypatch.setattr(angee, "__path__", [str(linked / "angee"), str(distinct)])
+    monkeypatch.setattr(sys, "path", [str(linked), *sys.path])
+
+    prepend_import_paths((installed, linked))
+    prepend_import_paths((installed,))
+
+    assert angee.__path__ == [str((installed / "angee").resolve()), str(distinct.resolve())]
+    spec = PathFinder.find_spec("angee.cold_namespace", angee.__path__)
+    assert spec is not None
+    config = AppConfig("angee.cold_namespace", module_from_spec(spec))
+    assert Path(config.path) == addon.resolve()
+    assert sum(Path(entry).resolve() == installed.resolve() for entry in sys.path) == 1
+    consumer = PathFinder.find_spec("cold_consumer", sys.path)
+    assert consumer is not None
+    monkeypatch.setitem(sys.modules, "cold_consumer", module_from_spec(consumer))
+    accounting = PathFinder.find_spec("cold_consumer.accounting", consumer.submodule_search_locations)
+    assert accounting is not None
+    consumer_config = AppConfig("cold_consumer.accounting", module_from_spec(accounting))
+    assert Path(consumer_config.path) == external_addon.resolve()
 
 
 def test_compose_settings_module_uses_configured_addon_dirs(
