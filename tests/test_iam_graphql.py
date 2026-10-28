@@ -899,7 +899,10 @@ def test_user_crud_create_update_delete_are_admin_only(
             user=admin,
         )
         assert rejected.errors is not None
-        assert f"Field '{field}' is not defined by type 'users_insert_input'" in rejected.errors[0].message
+        assert (
+            f"Expected value of type 'users_insert_input' not to include unknown field '{field}'"
+            in rejected.errors[0].message
+        )
 
     created = _data(_execute(console_schema, create_user, user=admin))["insert_users_one"]
     assert created == {
