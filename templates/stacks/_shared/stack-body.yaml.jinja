@@ -121,8 +121,6 @@ ports:
 persist:
 {% if runtime_mode == "process" %}
   app-data: { subpath: ./data, scope: stack }
-  # Host coding agent's Playwright MCP user-data-dir (docs/stack.md).
-  chrome-profile: { subpath: ./data/chrome, scope: stack }
 {% if postgres_mode == "external" %}{% else %}  pgdata: { subpath: ./data/pgdata, scope: stack }
 {% endif %}{% if enable_ollama %}  ollama: { subpath: ./data/ollama, scope: stack }{% endif %}{% endif %}
 {% if runtime_mode == "docker" %}

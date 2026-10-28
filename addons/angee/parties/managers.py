@@ -1589,7 +1589,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         address_owner = apps.get_model("parties", "Address").objects
         link_owner = apps.get_model("parties", "Party").objects
         addresses = address_owner.system_context(reason=reason).canonical().filter(party=party)
-        links = link_owner.handle_statements().filter(subject=party)
+        links = link_owner.handle_statements().system_context(reason=reason).filter(subject=party)
         if lock:
             _handles, locked_parties = link_owner.lock_identity_rows(
                 party_ids=(party.pk,),

@@ -223,7 +223,7 @@ def overdue_milestone_count_field(model: Any) -> Any:
         "_overdue_milestone_count": lambda info: model.overdue_milestone_count_expression(
             current_actor(), **get_argument_values(
                 info._raw_info.parent_type.fields[info.field_name],
-                info._raw_info.field_nodes[0], info.variable_values,
+                info._raw_info.field_nodes[0], info._raw_info.variable_values,
             ),
         ),
     })
