@@ -309,8 +309,11 @@ historical Python bodies.
 
 Django's `MIGRATION_MODULES` owns the output package. Angee's host build defaults
 each composed label to `<runtime_module>.<app_label>.migrations`, beside its generated models;
-explicit mappings remain authoritative. Native `makemigrations` creates missing
-packages when authoring ordinary migrations. Read-only planning never creates a
+explicit mappings remain authoritative. The explicit build initializes an absent
+default migration package so unlabelled native `makemigrations` discovers fresh apps;
+existing package initializers and migration files remain untouched. Django authors
+ordinary migrations and creates missing explicitly mapped packages when requested.
+Read-only planning never creates a
 missing package, and an explicit `None` disables migrations for that app. A
 requested authored transition or history reset cannot target a disabled app.
 Keep released migration files as durable deployment inputs, including histories

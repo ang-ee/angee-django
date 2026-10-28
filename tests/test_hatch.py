@@ -290,7 +290,7 @@ editable = Path(next(WheelBuilder(str(root), plugin_manager=manager).build(
     directory=str(dist), versions=['editable'],
 )))
 assert (root / 'runtime/notes/models.py').is_file()
-assert not (root / 'runtime/notes/migrations').exists()
+assert sorted(path.name for path in (root / 'runtime/notes/migrations').iterdir()) == ['__init__.py']
 with zipfile.ZipFile(editable) as archive:
     assert not any(name.startswith(('portable/', 'angee/base/')) for name in archive.namelist())
     paths = archive.read(next(name for name in archive.namelist() if name.endswith('.pth'))).decode()
@@ -303,7 +303,7 @@ except subprocess.CalledProcessError:
     pass
 else:
     raise AssertionError('normal wheel accepted unsealed native history')
-assert not (root / 'runtime/notes/migrations').exists()
+assert not list((root / 'runtime/notes/migrations').glob('0*.py'))
 
 author = '''
 import os, sys
@@ -311,7 +311,7 @@ from django.core.management import execute_from_command_line
 os.environ['ANGEE_PROJECT_DIR'] = sys.argv[1]
 os.environ['DJANGO_SETTINGS_MODULE'] = 'runtime.settings'
 sys.path.insert(0, sys.argv[1])
-execute_from_command_line(['manage.py', 'makemigrations', 'notes', '--noinput', '--skip-checks'])
+execute_from_command_line(['manage.py', 'makemigrations', '--noinput', '--skip-checks'])
 '''
 subprocess.run([sys.executable, '-c', author, str(root)], check=True, cwd=root)
 history = root / 'runtime/notes/migrations/0001_initial.py'
