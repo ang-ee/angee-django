@@ -259,7 +259,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: ${{ fromJSON(inputs.consumer-path != '' && '[1,2,3]' || '[1]') }}
+        group: ${{ fromJSON(inputs.consumer-path != '' && '[1,2,3,4,5,6]' || '[1]') }}
     services:
       postgres:
         image: postgres:17
@@ -477,6 +477,7 @@ jobs:
               "-p", "no:randomly", "-n", "4", "--dist", "worksteal", "-q",
               "--splits", os.environ["CONSUMER_SPLITS"], "--group", os.environ["CONSUMER_GROUP"],
               "--splitting-algorithm", "least_duration", "--durations=25",
+              "-o", "faulthandler_timeout=300",
               *(str(slot / path) for path in paths),
           ]))
           PY

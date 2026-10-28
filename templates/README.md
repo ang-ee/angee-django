@@ -183,9 +183,10 @@ discovery and enabling it in `INSTALLED_APPS`.
 > `framework=baked` runs the code-baked `ghcr.io/ang-ee/django-angee` runtime image
 > instead. It runs on `pgvector/pgvector:pg17`, drives first start through a
 > provision job running
-> `manage.py angee provision --bootstrap-admin` (which bootstraps a generated `admin`
-> user), and serves the built SPA through Caddy. The operator's template-chain
-> resolver renders the project host and stack overlay in one command.
+> `manage.py angee provision --after-if-installed bootstrap_admin` (which creates
+> the generated `admin` user when IAM is installed), and serves the built SPA through
+> Caddy. The operator's template-chain resolver renders the project host and stack
+> overlay in one command.
 
 ## Run a local stack
 

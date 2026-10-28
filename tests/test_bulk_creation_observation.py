@@ -54,7 +54,7 @@ def test_clone_native_batch_delivers_all_receivers_triggers_and_new_watches(
             assert not TriggerEvent.system_queryset().filter(trigger=trigger).exists()
             StepWatch.objects.register(step, created_batch, actor=actor)
             if parameter_budget is not None:
-                monkeypatch.setattr(connection.features, "max_query_params", parameter_budget)
+                monkeypatch.setattr(type(connection.features), "max_query_params", parameter_budget)
                 monkeypatch.setattr(router, "db_for_read", observe_read)
                 budget_active = True
 
