@@ -16,6 +16,7 @@ import sys
 import tomllib
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 import yaml
@@ -91,6 +92,63 @@ def test_workspace_create_example_adds_a_jj_workspace_and_never_an_operator_work
     assert argv[argv.index("--name") + 1] == "<stack>--<name>"
     assert argv[argv.index("-r") + 1] == "<parent-ref>"
     assert argv[-1] == "$angee_root/workspaces/<name>/angee"
+
+
+SKILLS = sorted((ROOT / ".agents/skills").glob("*/SKILL.md"))
+SKILL_NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+
+def frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    """Split a skill's YAML frontmatter mapping from its body."""
+    assert text.startswith("---\n"), "missing frontmatter"
+    header, body = text[4:].split("\n---\n", 1)
+    fields = yaml.safe_load(header)
+    assert isinstance(fields, dict), "frontmatter is not a mapping"
+    return fields, body
+
+
+def links(source: Path) -> list[str]:
+    """Relative link destinations in a Markdown file, outside code blocks, URLs and absolute paths."""
+    text = re.sub(r"^[ \t]*```.*?^[ \t]*```[ \t]*$", "", source.read_text(), flags=re.MULTILINE | re.DOTALL)
+    destinations = re.findall(r"\[[^\]\n]*\]\(([^)\s#]+)", text)
+    return [d for d in destinations if not urlsplit(d).scheme and not d.startswith("/")]
+
+
+@pytest.mark.parametrize("skill", SKILLS, ids=lambda path: path.parent.name)
+def test_skill_frontmatter_names_its_directory_and_stays_loadable(skill: Path) -> None:
+    fields, body = frontmatter(skill.read_text())
+    assert fields["name"] == skill.parent.name
+    assert SKILL_NAME.fullmatch(fields["name"])
+    assert 0 < len(fields["description"]) <= 1024
+    assert len(body.splitlines()) < 500
+
+
+@pytest.mark.parametrize("skill", SKILLS, ids=lambda path: path.parent.name)
+def test_skill_links_resolve_and_bundled_files_are_one_reference_level_deep(skill: Path) -> None:
+    """A skill links into itself only as ``references/<file>``; a reference file links outward only."""
+    directory = skill.parent.resolve()
+    for source in (skill, *sorted(directory.glob("references/*.md"))):
+        for destination in links(source):
+            target = (source.parent / destination).resolve()
+            assert target.is_file(), f"{directory.name}: {source.name} -> {destination}"
+            if target.is_relative_to(directory):
+                assert source == skill, f"{directory.name}: {source.name} links back into the skill: {destination}"
+                assert target.relative_to(directory).parts[:-1] == ("references",), destination
+
+
+@pytest.mark.parametrize("skill", SKILLS, ids=lambda path: path.parent.name)
+def test_skill_declares_codex_invocation_policy(skill: Path) -> None:
+    """Only ``angee-design`` may be invoked implicitly; every other skill is explicit."""
+    policy = yaml.safe_load((skill.parent / "agents/openai.yaml").read_text())["policy"]
+    allowed = policy["allow_implicit_invocation"]
+    assert isinstance(allowed, bool), skill.parent.name
+    assert allowed is (skill.parent.name == "angee-design"), skill.parent.name
+
+
+def test_claude_code_loads_skills_through_the_shared_symlink() -> None:
+    link = ROOT / ".claude/skills"
+    assert link.is_symlink()
+    assert link.resolve() == (ROOT / ".agents/skills").resolve()
 
 
 @pytest.fixture()

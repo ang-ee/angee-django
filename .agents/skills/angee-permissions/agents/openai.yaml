@@ -1,0 +1,6 @@
+interface:
+  display_name: "Angee Permissions"
+  short_description: "Declare and wire REBAC permissions for an Angee addon."
+  default_prompt: "Use $angee-permissions to declare and wire REBAC permissions for this addon."
+policy:
+  allow_implicit_invocation: false

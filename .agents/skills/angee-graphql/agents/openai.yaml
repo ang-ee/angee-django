@@ -1,0 +1,6 @@
+interface:
+  display_name: "Angee GraphQL"
+  short_description: "Expose a model or computed source over GraphQL and the resource UI."
+  default_prompt: "Use $angee-graphql to expose this model or computed source over GraphQL and the resource UI."
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Angee Design"
+  short_description: "Run the Architecture Gate and write the owner map before adding code."
+  default_prompt: "Use $angee-design to run the Architecture Gate and write the owner map before this change."
+policy:
+  allow_implicit_invocation: true

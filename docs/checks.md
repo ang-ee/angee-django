@@ -153,12 +153,16 @@ For changes limited to instructions, tool adapters, or their tests, run from the
 
 ```sh
 uv run --locked python .agents/tools/sync-adapters.py --check
-uv run --locked python -m pytest -p no:django --noconftest -c /dev/null --rootdir=. -q tests/test_agent_stack_root_policy.py tests/test_agent_work_state_policy.py tests/test_agent_methodology.py tests/test_documentation_contracts.py
+uv run --locked python -m pytest -p no:django --noconftest -c /dev/null --rootdir=. -q tests/test_agent_stack_root_policy.py tests/test_agent_work_state_policy.py tests/test_agent_methodology.py tests/test_documentation_contracts.py tests/test_owner_index.py tests/test_agent_owner_map_guard.py
 git diff --check
 ```
 
 These tests exercise documentation links/commands, template input agreement,
 adapter parity, and mocked helper behavior without starting the application.
+`tests/test_owner_index.py` validates the owner index citations: every cited
+`path:line` in `.agents/skills/angee-design/references/owners.md` declares the
+named symbol, and every public class a foundation models or fields module
+declares, and every addon manifest, has a row.
 Disabling pytest-django, application configuration, and conftest intentionally
 isolates these tests; use normal pytest for application or template behavior.
 If template source changes too, run its contract tests and the Python suite above. A prose-only

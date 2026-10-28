@@ -1,0 +1,6 @@
+interface:
+  display_name: "Angee Resources"
+  short_description: "Declare and load an addon's master, install and demo data."
+  default_prompt: "Use $angee-resources to declare and load this addon's master, install and demo data."
+policy:
+  allow_implicit_invocation: false

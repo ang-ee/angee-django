@@ -1,0 +1,6 @@
+interface:
+  display_name: "Angee Forms"
+  short_description: "Build forms and widgets in an Angee addon."
+  default_prompt: "Use $angee-forms to build this form or widget in its Angee addon."
+policy:
+  allow_implicit_invocation: false

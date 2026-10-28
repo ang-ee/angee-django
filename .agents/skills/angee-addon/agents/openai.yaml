@@ -1,0 +1,6 @@
+interface:
+  display_name: "Angee Addon"
+  short_description: "Create and wire a new Angee addon's declarations and web fragment."
+  default_prompt: "Use $angee-addon to create and wire this addon's declarations and web fragment."
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Angee Runtime"
+  short_description: "Execute the Angee runtime lifecycle on a stack."
+  default_prompt: "Use $angee-runtime to run the required Angee runtime lifecycle steps on this stack."
+policy:
+  allow_implicit_invocation: false

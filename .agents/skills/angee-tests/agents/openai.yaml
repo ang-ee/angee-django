@@ -1,0 +1,6 @@
+interface:
+  display_name: "Angee Tests"
+  short_description: "Author an Angee addon's tests across backend, GraphQL, web and e2e."
+  default_prompt: "Use $angee-tests to author the tests this Angee addon needs."
+policy:
+  allow_implicit_invocation: false
