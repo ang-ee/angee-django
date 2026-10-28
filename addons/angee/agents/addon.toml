@@ -20,11 +20,6 @@ depends_on = [
 ]
 dependencies = ["pydantic-ai-slim>=2.13", "httpx>=0.28.1,<0.29", "agent-client-protocol==1.0.0rc2"]
 
-[[migrations]]
-name = "session_user"
-app_label = "agents"
-module = "runtime_migrations.session_user"
-
 [resources]
 demo = [
   { path = "resources/demo/010_integrate.credential.yaml", depends_on = "iam:resources/demo/010_iam.user.yaml", adopt = ["user", "name"] },

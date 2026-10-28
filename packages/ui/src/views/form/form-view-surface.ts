@@ -18,7 +18,7 @@ import { refineFieldsFromPaths } from "@angee/refine";
 import { useOne } from "@refinedev/core";
 
 import {
-  EMPTY_CONTAINERS, composedContainerChildren, modelChain, useAppRuntime, useContainer, useDeveloperMode, useFormOverride,
+  EMPTY_CONTAINERS, composedContainerChildren, modelChain, useAppRuntime, useContainer, useDeveloperMode,
 } from "../../runtime";
 import { useUiT, type UiTranslate } from "../../i18n";
 import {
@@ -297,7 +297,6 @@ export function useFormViewSurface({
   const modelLabel = dataResource?.modelLabel ?? "";
   const canonicalResource = dataResource?.canonicalLabel ?? modelLabel;
   const canonicalMetadata = useModelMetadata(canonicalResource);
-  const formOverride = useFormOverride(modelLabel);
   // Children of `form#…` show on every form; a model's own, and its MTI parent's, on its records.
   const models = React.useMemo(
     () => modelChain(canonicalResource, modelLabel),
@@ -424,27 +423,13 @@ export function useFormViewSurface({
         }),
   )], [canonicalMetadata, canonicalResource, contributionFields, modelLabel, modelMetadata]);
   const isCreate = id == null;
-  const overrideNode =
-    isCreate && React.isValidElement(formOverride) ? formOverride : null;
-  const overrideFields = React.useMemo(
-    () => (overrideNode != null ? parsePageFields(overrideNode) : null),
-    [overrideNode],
-  );
-  const overrideGroups = React.useMemo(
-    () => (overrideNode != null ? parsePageGroups(overrideNode) : null),
-    [overrideNode],
-  );
-  const overrideActions = React.useMemo(
-    () => (overrideNode != null ? parsePageActions(overrideNode) : null),
-    [overrideNode],
-  );
   const { containers = EMPTY_CONTAINERS, i18n } = useAppRuntime();
   // A declared label may be an addon message key; it reads as text from here on.
   const declaredFields = React.useMemo(
-    () => resolveFieldLabels(overrideFields ?? fields ?? childFields, i18n),
-    [childFields, fields, i18n, overrideFields],
+    () => resolveFieldLabels(fields ?? childFields, i18n),
+    [childFields, fields, i18n],
   );
-  const baseGroups = overrideGroups ?? groups ?? childGroups;
+  const baseGroups = groups ?? childGroups;
   const declaredGroups = React.useMemo(
     () => resolveGroupLabels([...baseGroups, ...contributedGroups], i18n),
     [baseGroups, contributedGroups, i18n],
@@ -464,7 +449,7 @@ export function useFormViewSurface({
     ],
     [baseGroups, contributedGroupSequences],
   );
-  const pageActions = overrideActions ?? actions ?? childActions;
+  const pageActions = actions ?? childActions;
   const resolvedFields = React.useMemo(
     () =>
       withModeLockedFields(

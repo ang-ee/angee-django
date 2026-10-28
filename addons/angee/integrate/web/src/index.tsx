@@ -1,5 +1,5 @@
-import { Tab, type BaseMenuItem } from "@angee/ui";
-import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute } from "@angee/app";
+import { Tab } from "@angee/ui";
+import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute, type MenuDeclarations } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
   Cable,
@@ -82,39 +82,17 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
   ...resourcePageRoutes("integrate.credentials", "/integrate/credentials", lazyRouteComponent(() => import("./connect/views/CredentialsPage"), "CredentialsPage"), "integrate.Credential", { detailName: "integrate.credential" }),
 ];
 
-const integrateMenu: readonly BaseMenuItem[] = [
-  {
-    // Route-less app root: the rail icon inherits its target from the first
-    // child (Integrations), avoiding a duplicate route reference.
-    id: INTEGRATE_ID,
-    label: "Integrations",
-    icon: "integration",
-    children: [
-      {
-        // Product connection records and their supporting catalogue.
-        id: "integrate.integrations.group",
-        label: "Integrations",
-        icon: "integration",
-        children: [
-          { id: "integrate.integrations", label: "Integrations", icon: "integration", route: "integrate.integrations" },
-          { id: "integrate.vendors", label: "Vendors", icon: "vendor", route: "integrate.vendors" },
-          { id: "integrate.webhooks", label: "Webhooks", icon: "webhook", route: "integrate.webhooks" },
-        ],
-      },
-      {
-        // OAuth client setup and the external identities those clients discover.
-        id: "integrate.oauth.group",
-        label: "OAuth",
-        icon: "auth",
-        children: [
-          { id: "integrate.providers", label: "OAuth providers", route: "integrate.providers", icon: "auth" },
-          { id: "integrate.accounts", label: "External accounts", route: "integrate.accounts", icon: "users" },
-        ],
-      },
-      { id: "integrate.credentials", label: "Credentials", route: "integrate.credentials", icon: "check" },
-    ],
-  },
-];
+const integrateMenu: MenuDeclarations = {
+  [INTEGRATE_ID]: { label: "Integrations", icon: "integration" },
+  "integrate.integrations.group": { label: "Integrations", icon: "integration", parent: INTEGRATE_ID },
+  "integrate.integrations": { label: "Integrations", icon: "integration", route: "integrate.integrations", parent: "integrate.integrations.group" },
+  "integrate.vendors": { label: "Vendors", icon: "vendor", route: "integrate.vendors", parent: "integrate.integrations.group" },
+  "integrate.webhooks": { label: "Webhooks", icon: "webhook", route: "integrate.webhooks", parent: "integrate.integrations.group" },
+  "integrate.oauth.group": { label: "OAuth", icon: "auth", parent: INTEGRATE_ID },
+  "integrate.providers": { label: "OAuth providers", route: "integrate.providers", icon: "auth", parent: "integrate.oauth.group" },
+  "integrate.accounts": { label: "External accounts", route: "integrate.accounts", icon: "users", parent: "integrate.oauth.group" },
+  "integrate.credentials": { label: "Credentials", route: "integrate.credentials", icon: "check", parent: INTEGRATE_ID },
+};
 
 const integrate = defineBaseAddon({
   id: INTEGRATE_ID,

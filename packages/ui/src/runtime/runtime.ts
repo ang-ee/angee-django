@@ -363,7 +363,7 @@ export function useWidget(id: string): unknown {
   return useAppRuntime().widgets[id];
 }
 
-/** Look up an addon-contributed legacy create override or complete form.
+/** Look up an addon-contributed complete form.
  * @owner FormView
  */
 export function useFormOverride(resource: string): FormOverrideMap[string] | undefined {

@@ -522,7 +522,7 @@ def relationship_rows(limit: int | None = PERMISSION_HUB_LIST_CAP) -> QuerySet[A
 
 
 def permission_hub_roles(limit: int | None = PERMISSION_HUB_LIST_CAP) -> list[IAMRoleRow]:
-    """Return declared roles plus tuple-only legacy roles."""
+    """Include retained undeclared grants so administrators can inspect and revoke them."""
 
     schema = rebac_backend().schema()
     declared = declared_role_refs(schema)

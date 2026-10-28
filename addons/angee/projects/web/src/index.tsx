@@ -1,6 +1,5 @@
 import type { BaseAddonRoute } from "@angee/app";
-import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import type { BaseMenuItem } from "@angee/ui";
+import { defineBaseAddon, resourcePageRoutes, type MenuDeclarations } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { Briefcase, ClipboardCheck, Kanban, ListChecks } from "lucide-react";
 
@@ -53,39 +52,13 @@ const projectsRoutes: readonly BaseAddonRoute[] = [
   ),
 ];
 
-const projectsMenu: readonly BaseMenuItem[] = [
-  {
-    id: "projects",
-    label: "Projects",
-    icon: "projects",
-    children: [
-      {
-        id: "projects.my-work",
-        label: "My Work",
-        icon: "my-work",
-        route: "projects.my-work",
-      },
-      {
-        id: "projects.projects",
-        label: "Projects",
-        icon: "projects",
-        route: "projects.projects",
-      },
-      {
-        id: "projects.tasks",
-        label: "Tasks",
-        icon: "project-task",
-        route: "projects.tasks",
-      },
-      {
-        id: "projects.board",
-        label: "Task board",
-        icon: "task-board",
-        route: "projects.board",
-      },
-    ],
-  },
-];
+const projectsMenu: MenuDeclarations = {
+  "projects": { label: "Projects", icon: "projects" },
+  "projects.my-work": { label: "My Work", icon: "my-work", route: "projects.my-work", parent: "projects" },
+  "projects.projects": { label: "Projects", icon: "projects", route: "projects.projects", parent: "projects" },
+  "projects.tasks": { label: "Tasks", icon: "project-task", route: "projects.tasks", parent: "projects" },
+  "projects.board": { label: "Task board", icon: "task-board", route: "projects.board", parent: "projects" },
+};
 
 const projects = defineBaseAddon({
   id: "projects",

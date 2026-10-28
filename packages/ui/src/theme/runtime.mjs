@@ -32,8 +32,8 @@ export const THEME_TOKEN_NAMES = Object.freeze([
 ]);
 
 /** Disposable first-paint cache protocol, shared by bootstrap and React. */
-export const APPEARANCE_CACHE_KEY = "angee:appearance";
-export const APPEARANCE_CACHE_SCHEMA = 2;
+export const APPEARANCE_CACHE_KEY = "angee:appearance:3";
+export const APPEARANCE_CACHE_SCHEMA = 3;
 export const APPEARANCE_CACHE_LIMIT = 128 * 1024;
 
 /** Apply only the public token contract, before or after React mounts. */
@@ -50,9 +50,7 @@ export function applyAppearanceRoot({ themeId, colorScheme, tokens = {}, target 
 
 /** Synchronous first paint; the app bundles this headless owner as an inline IIFE. */
 export function bootstrapAppearance(payload, target = globalThis) {
-  const themes = new Map(payload.catalogue.themes.flatMap((theme) => [
-    [theme.id, theme], ...(theme.legacyIds ?? []).map((alias) => [alias, theme]),
-  ]));
+  const themes = new Map(payload.catalogue.themes.map((theme) => [theme.id, theme]));
   let themeId = payload.host.themeId;
   let preference = payload.host.colorScheme;
   let tokenLayers = null;
@@ -104,16 +102,6 @@ export function assertThemeDefinition(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Theme definition must be an object.");
   if (value.contractVersion !== THEME_CONTRACT_VERSION) throw new TypeError(`Theme ${String(value.id ?? "<unknown>")} uses an unsupported contractVersion.`);
   if (typeof value.id !== "string" || !THEME_ID_PATTERN.test(value.id)) throw new TypeError(`Theme id ${JSON.stringify(value.id)} is invalid.`);
-  if (value.legacyIds !== undefined) {
-    if (!Array.isArray(value.legacyIds) || value.legacyIds.length > 16) throw new TypeError(`Theme ${value.id} legacyIds must be a bounded array.`);
-    const legacyIds = new Set();
-    for (const legacyId of value.legacyIds) {
-      if (typeof legacyId !== "string" || !THEME_ID_PATTERN.test(legacyId) || legacyId === value.id || legacyIds.has(legacyId)) {
-        throw new TypeError(`Theme ${value.id} legacy id ${JSON.stringify(legacyId)} is invalid or duplicated.`);
-      }
-      legacyIds.add(legacyId);
-    }
-  }
   for (const field of ["labelKey", "descriptionKey"]) {
     if (typeof value[field] !== "string" || value[field].length === 0 || value[field].length > 160) throw new TypeError(`Theme ${value.id} must declare a bounded ${field}.`);
   }
@@ -135,11 +123,9 @@ export function assertThemeCatalogue(definitions) {
   const seen = new Map();
   for (const definition of definitions) {
     assertThemeDefinition(definition);
-    for (const id of [definition.id, ...(definition.legacyIds ?? [])]) {
-      const previous = seen.get(id);
-      if (previous) throw new TypeError(`Theme id or legacy alias ${JSON.stringify(id)} is claimed by both ${previous} and ${definition.id}.`);
-      seen.set(id, definition.id);
-    }
+    const previous = seen.get(definition.id);
+    if (previous) throw new TypeError(`Theme id ${JSON.stringify(definition.id)} is claimed by both ${previous} and ${definition.id}.`);
+    seen.set(definition.id, definition.id);
   }
   return [...definitions].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
 }
@@ -177,7 +163,6 @@ export function serializableThemeMetadata(definition) {
   assertThemeDefinition(definition);
   return {
     contractVersion: definition.contractVersion, id: definition.id,
-    legacyIds: definition.legacyIds ?? [],
     labelKey: definition.labelKey, descriptionKey: definition.descriptionKey,
     revision: definition.revision, optionsVersion: definition.options?.version ?? null,
     optionDefaults: definition.options?.defaults ?? null,
@@ -265,21 +250,6 @@ export function createThemeCustomizationOptions(defaults, configuration = {}) {
 
 export function isThemeCustomizationOptions(options) {
   return options?.capability === "palette-customization";
-}
-
-/** Fill fields introduced by a newer shared customization schema from a base theme. */
-export function migrateThemeCustomization(value, defaults) {
-  const normalizedDefaults = parseThemeCustomization(defaults);
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Legacy theme customization must be an object.");
-  const keys = Object.keys(value);
-  if (keys.some((key) => !CUSTOMIZATION_KEY_SET.has(key))) throw new TypeError("Legacy theme customization contains unsupported fields.");
-  return parseThemeCustomization({ ...normalizedDefaults, ...value });
-}
-
-/** Standard migration for a customization contract with one version-1 predecessor. */
-export function migrateThemeCustomizationFromV1(value, fromVersion, defaults) {
-  if (fromVersion !== 1) throw new TypeError(`Theme customization options version ${fromVersion} cannot be migrated.`);
-  return migrateThemeCustomization(value, defaults);
 }
 
 export function parseThemeCustomization(value) {

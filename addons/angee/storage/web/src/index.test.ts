@@ -1,9 +1,12 @@
+import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
-import type { BaseMenuItem, ContainerChild, RelatedGroupContent } from "@angee/ui";
+import type { ContainerChild, RelatedGroupContent } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import { enStorageMessages } from "./i18n";
 import storage from "./index";
+
+const declaredMenus = composeAddons([{ id: storage.id, menus: storage.menus, routes: storage.routes }], { canonicalModelLabel: (model) => model }).menuComposition.logical;
 
 describe("storage addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -40,8 +43,8 @@ describe("storage addon manifest", () => {
   });
 
   test("exposes a Files menu with a Settings child", () => {
-    expect(storage.menus).toHaveLength(1);
-    const menu = storage.menus?.[0] as BaseMenuItem | undefined;
+    expect(declaredMenus).toHaveLength(1);
+    const menu = declaredMenus?.[0];
     expect(menu?.id).toBe("storage");
     expect(menu?.route).toBe("storage.files");
     // Storage is a domain app (top of the rail), so it carries no group.

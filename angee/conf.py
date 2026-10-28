@@ -294,25 +294,6 @@ class ProjectContract:
             if yamlconf.is_setting_name(name) and name not in predefined_settings
         }
         seed.setdefault("BASE_DIR", root)
-        # The host accepts earlier project declarations; the compiler sees only
-        # its canonical names. Keep yamlconf's raw input provenance intact so
-        # existing references to those declarations still expand natively.
-        for suffix in ("DIR", "MODULE"):
-            previous = f"ANGEE_RUNTIME_{suffix}"
-            canonical = f"COMPOSE_RUNTIME_{suffix}"
-            if previous not in seed:
-                continue
-            value = seed.pop(previous)
-            if canonical in seed:
-                same = (
-                    resolve_path(value) == resolve_path(seed[canonical])
-                    if suffix == "DIR"
-                    else value == seed[canonical]
-                )
-                if not same:
-                    raise ImproperlyConfigured(f"{previous} and {canonical} must agree when both are declared.")
-            seed.setdefault(canonical, value)
-
         if "DATABASE_URL" in os.environ:
             database = self.env.db()
             if "postgresql" in database.get("ENGINE", ""):

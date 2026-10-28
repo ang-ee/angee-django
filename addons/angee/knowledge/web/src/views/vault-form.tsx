@@ -1,18 +1,18 @@
 import type { ReactElement } from "react";
-import { Field } from "@angee/ui";
+import { Field, Form, registerForm, type RegisteredFormProps } from "@angee/ui";
 
-/**
- * The declarative create form for a knowledge vault, registered as the `Vault`
- * form override so it is used wherever a vault is created — the relation-picker
- * inline create in the wiki navigator (and any future "New vault" surface).
- *
- * `name` is the record title (prefilled with the typed query); creation is gated
- * server-side by `createVault`. Labels fall back to the SDL field metadata, so
- * neither field hard-codes its label.
- */
-export const vaultCreateForm: ReactElement = (
-  <>
-    <Field name="name" title />
-    <Field name="description" widget="textarea" />
-  </>
-);
+const VAULT_MODEL = "knowledge.Vault";
+
+/** The shared vault form keeps its title/description creation fields and ordinary saved-record fields. */
+function VaultForm({ resource: _resource, children, ...props }: RegisteredFormProps): ReactElement {
+  return (
+    <Form {...props} resource={VAULT_MODEL}>
+      {props.id == null ? <>
+        <Field name="name" title />
+        <Field name="description" widget="textarea" />
+      </> : children}
+    </Form>
+  );
+}
+
+export const vaultCreateForm = registerForm(VAULT_MODEL, VaultForm);

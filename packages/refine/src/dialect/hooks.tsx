@@ -150,7 +150,7 @@ export interface UseAngeeResourceSaveResult {
  * and resolve its in-band `ActionOutcome` (`undefined` when the transport
  * returned no payload). A domain failure resolves as
  * `ok=false` rather than throwing — project through `runActionResult` where the
- * caller wants the legacy throw-on-failure/success-message contract.
+ * caller wants the rendered action's throw-on-failure/success-message contract.
  */
 export type ActionArguments = Readonly<Record<string, unknown>>;
 

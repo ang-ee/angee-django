@@ -172,7 +172,7 @@ class PlatformExplorerData:
 
     @strawberry.field
     def models(self) -> list[PlatformModel]:
-        """Return canonical model rows through the legacy nested binding."""
+        """Return canonical model rows for the explorer graph projection."""
 
         return cast(list[PlatformModel], self.model_rows())
 

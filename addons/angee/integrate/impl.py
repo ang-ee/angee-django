@@ -102,18 +102,6 @@ class BridgeImpl(IntegrationImpl):
         """
         raise AdapterContractError("Stream adapters must declare their partitions.")
 
-    def seed_config(self, legacy_cursor: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Return config defaults and the remaining legacy cursor without mutating it.
-
-        Remove migrated policy from the returned cursor so later partitions cannot
-        restore it after an operator changes config. Retain their progress for
-        ``seed_cursor``. The driver persists both values under the bridge lock.
-        """
-        return {}, legacy_cursor
-
-    def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> dict[str, Any] | None:
-        """Translate a legacy bridge position once when opening its first empty epoch."""
-        return None
 
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Fetch at most page_bound records outside transactions within the deadline."""

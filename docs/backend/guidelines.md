@@ -983,9 +983,9 @@ and current contracts before applying a historical example to a new deployment.
   a module its generated migrations import: the applied graph must load for
   `makemigrations`, `migrate` and `reset_migration_history` alike. Retire any
   non-composed migration imports separately and check pinned addons before crossing
-  that release's upgrade cutoff. The [0.3.0 foundation and provenance cutoff](../composer.md#foundation-and-provenance-upgrade-cutoff)
-  follows this sequence; the real foundation addon does not restore retired
-  compatibility APIs.
+  that release's upgrade cutoff. The [foundation and provenance cutoff](../composer.md#foundation-and-provenance-upgrade-cutoff)
+  uses coordinated pre-refactor snapshots, representation cleanup and native
+  history consolidation; current source contains no retired compatibility APIs.
 - **Removing a field, model or donor addon whose storage holds data needs a
   declared cutover.** `makemigrations` refuses the autodetected drop through the
   [composer's drop guard](../composer.md#addon-owned-runtime-migrations). An
@@ -1207,15 +1207,13 @@ and current contracts before applying a historical example to a new deployment.
   instance saves and queryset writes share their storage rules.
   [`MessageSubtype.model_label`](../../addons/angee/messaging/models.py) and
   [`ThreadNotification.failure_reason`](../../addons/angee/messaging/models.py)
-  compose these field owners. Their declared
-  [`adopt_field_contracts`](../../addons/angee/messaging/runtime_migrations/adopt_field_contracts.py)
-  migration refuses unknown/colliding subtype labels before canonicalization,
-  retains subtype IDs/keys and global blank semantics, and refuses any existing
-  diagnostic the bounded field would change. The error identifies the affected
-  row, which needs an explicit retention decision before retrying; the migration
-  never discards retained text. The persisted subtype key `activity_done` is a
-  separate compatibility contract; renaming it requires mapping stored subtype
-  rows, follower choices and callers together.
+  compose these field owners. A deployment crossing the
+  [cutoff](../composer.md#foundation-and-provenance-upgrade-cutoff) must preflight
+  unknown/colliding subtype labels and retained diagnostics before canonicalizing
+  them on its pre-refactor snapshot, preserving IDs/keys, global blank semantics
+  and retained text. Those completed transition bodies are absent from current
+  source. The persisted subtype business key `activity_done` remains current;
+  renaming it requires mapping subtype rows, follower choices and callers together.
   Never replace these rules with a database trigger or function.
 - **Resource imports use the native import-export lifecycle.** Models composing
   [`ResourceLoadMixin`](../../addons/angee/resources/mixins.py) may declare

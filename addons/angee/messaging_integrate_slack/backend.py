@@ -205,14 +205,6 @@ class SlackChannelBackend(ChannelBackend):
         self._conversations = self._discover_conversations(deadline=deadline)
         return tuple(StreamDefinition(key="messages", partition=key) for key in sorted(self._conversations))
 
-    def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> dict[str, Any] | None:
-        """Translate one retained conversation and its thread watermarks once."""
-
-        conversation = (legacy_cursor.get("conversations") or {}).get(stream.partition)
-        threads = (legacy_cursor.get("threads") or {}).get(stream.partition)
-        if not conversation and not threads:
-            return None
-        return {"conversation": deepcopy(conversation or {}), "threads": deepcopy(threads or {})}
 
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Read one conversation page; its cursor commits with the ingested messages."""

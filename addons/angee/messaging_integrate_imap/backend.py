@@ -418,25 +418,6 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
 
         return StreamDefinition(key="messages", partition=name)
 
-    def seed_config(self, legacy_cursor: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Move legacy delivery policy while retaining per-mailbox positions."""
-
-        if legacy_cursor.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE:
-            return (
-                {
-                    "delivery_mode": NEW_MAIL_DELIVERY_MODE,
-                    "source_identity": legacy_cursor.get("source_identity", ""),
-                    "mailbox_selection": sorted(legacy_cursor.get("mailboxes") or {}),
-                },
-                {key: value for key, value in legacy_cursor.items() if key not in ("delivery_mode", "source_identity")},
-            )
-        return {}, legacy_cursor
-
-    def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> dict[str, Any] | None:
-        """Translate only the mailbox position on its first stream."""
-
-        mailbox = (legacy_cursor.get("mailboxes") or {}).get(stream.partition)
-        return deepcopy(mailbox) if mailbox else None
 
     def _report_progress(self, stage: str, message: str, **details: Any) -> None:
         """Publish IMAP-specific progress into the generic bridge reporter."""

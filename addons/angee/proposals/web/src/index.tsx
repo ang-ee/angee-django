@@ -1,9 +1,4 @@
-import {
-  defineBaseAddon,
-  resourcePageRoutes,
-  type BaseAddonRoute,
-} from "@angee/app";
-import type { BaseMenuItem } from "@angee/ui";
+import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute, type MenuDeclarations } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
   Eye,
@@ -48,27 +43,11 @@ const proposalsRoutes: readonly BaseAddonRoute[] = [
   ),
 ];
 
-const proposalsMenu: readonly BaseMenuItem[] = [
-  {
-    id: "proposals",
-    label: "Proposals",
-    icon: "proposals-round",
-    children: [
-      {
-        id: "proposals.rounds",
-        label: "Rounds",
-        icon: "proposals-round",
-        route: "proposals.rounds",
-      },
-      {
-        id: "proposals.proposals",
-        label: "Responses",
-        icon: "proposals-response",
-        route: "proposals.proposals",
-      },
-    ],
-  },
-];
+const proposalsMenu: MenuDeclarations = {
+  "proposals": { label: "Proposals", icon: "proposals-round" },
+  "proposals.rounds": { label: "Rounds", icon: "proposals-round", route: "proposals.rounds", parent: "proposals" },
+  "proposals.proposals": { label: "Responses", icon: "proposals-response", route: "proposals.proposals", parent: "proposals" },
+};
 
 const proposals = defineBaseAddon({
   id: "proposals",

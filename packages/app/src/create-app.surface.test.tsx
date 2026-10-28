@@ -41,7 +41,9 @@ test("an app condition narrows the app's routes and their record children, never
         { name: "desk.public", path: "/open", layout: "public", component: ToolsPage },
         { name: "desk.signin", path: "/signin", component: ToolsPage },
       ],
-      menus: [{ id: "desk", route: "desk.home" }],
+      menus: {
+        "desk": { route: "desk.home" },
+      },
       containers: {
         // The addon declares its own container and narrows it inside its app.
         "desk#tools": [
@@ -83,7 +85,10 @@ test("a route condition holds on the route and the routes below it", async () =>
         { name: "desk.record", path: "/desk/$id", parent: "desk.home", component: ToolsPage },
         { name: "desk.other", path: "/elsewhere", component: ToolsPage },
       ],
-      menus: [{ id: "desk", route: "desk.home" }, { id: "desk.other", route: "desk.other" }],
+      menus: {
+        "desk": { route: "desk.home" },
+        "desk.other": { route: "desk.other" },
+      },
       containers: {
         "desk#tools": [
           { "desk.share": { content: <span>Share action</span> }, "desk.workflow": { content: <span>Workflow action</span> } },
@@ -117,7 +122,9 @@ test("an app narrows the record chrome with a conditional only on its own form#c
         { name: "desk.home", path: "/desk", component: RecordPage },
         { name: "desk.record", path: "/desk/$id", component: RecordPage },
       ],
-      menus: [{ id: "desk", route: "desk.home" }],
+      menus: {
+        "desk": { route: "desk.home" },
+      },
       containers: {
         "form#chrome": [
           {
@@ -151,7 +158,9 @@ test("the app supplies in-app link navigation from the home it lands on", async 
     addons: [{ id: "desk", routes: [
       { name: "desk.home", path: "/desk", component: () => <NavLink href="/records/7?preset=open" variant="inline">Follow record</NavLink> },
       { name: "desk.record", path: "/records/$id", component: () => <div>Record page</div> },
-    ], menus: [{ id: "desk", route: "desk.home" }] }],
+    ], menus: {
+      "desk": { route: "desk.home" },
+    } }],
     layouts: { console: { requireAuth: false } }, schemas: TEST_SCHEMAS, defaultSchema: "console", location: { search: "" },
   });
   const host = document.createElement("div"); document.body.append(host);

@@ -944,25 +944,22 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   field-by-field permission query or render a misleading empty value.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
-  "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the
+  "integrate.OAuthClient" }` (declared route claims are checked during composition) — and the
   relation widget resolves its registered record route. Read-only fields render
   `RecordReference` links; editable pickers show a "follow" arrow. Refine owns the route
   trail, while the routed record surface replaces the generic action leaf with
   the model's `recordRepresentation`. A resource with no routed page simply shows
   the retained label without a link.
-- Register a resource's create form once via `defineAddon`'s
-  `forms: { "integrate.OAuthClient": <…Field/Group children…> }`; the standard renderer uses it
-  wherever that resource is created, including the relation-picker inline create. Use
-  it when the create input diverges from the read projection (write-only secrets,
-  scalar-id pickers, a kind discriminator). With a registered form,
-  `RelationPicker`'s `create` needs only `{ resource }` (the override supersedes any
-  passed `fields` on create); pass inline `fields` only for a data-dependent form
-  whose options are fetched at runtime and so cannot be a static registration.
-  `RelationPicker` also offers inline **edit** (a pencil beside the picker opens the
-  *selected* record in a form dialog) — wired by `RelationFieldWidget` from the
-  related model's fields, so a relation is created, edited, and followed without
-  leaving the parent form. The create-form override stays create-only: an edit
-  dialog renders the passed `fields` (the registered form is not reused for edit).
+- Register a resource's complete form once with
+  [`registerForm`](../../packages/ui/src/views/form/registered-form.ts), and
+  contribute that registration through `defineAddon`'s `forms` dictionary.
+  Its component composes `Form`, `Field` and `Group` and receives
+  `RegisteredFormProps`; it owns any create/edit distinction through the record
+  `id`. Collection routes and relation-picker create/edit dialogs use that same
+  form, so a caller declares the resource instead of repeating its fields.
+  Inline `fields` remain for a caller-specific form; they are not a second
+  per-model registration. Relation pickers also follow the selected record's
+  registered route, so creation, editing and navigation compose the same owners.
 - **An MTI parent's inline create chooses a kind.** A picker on a model whose
   metadata lists `concreteKinds` creates through one dialog with a kind switcher,
   and selects the new row under the parent. The switcher decides only what is
@@ -1059,9 +1056,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   the hook's `reset`; resetting a pending mutation detaches its observer without
   cancelling the write, so a dismissing dialog must preserve that pending state.
 - Client-side gates are UX only. The server is the authorization boundary.
-- **Presence reflects permissions; it never gates.** A menu entry (app roots
-  and legacy list items too; dependents and the deployment may set it like any
-  declaration field) or a container child may name `requires:
+- **Presence reflects permissions; it never gates.** A menu entry (dependents and the deployment may set it like any declaration
+  field) or a container child may name `requires:
   "<app_label.ModelName>#<permission>"`. The identity read asks
   `current_user.permitted` about every composed ref; an entry the session
   lacks leaves the rail, menus and palette with its subtree, a child leaves its

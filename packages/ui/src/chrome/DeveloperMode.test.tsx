@@ -47,7 +47,6 @@ const composition: RuntimeComposition = {
     ],
     hidden: [{ id: "desk.archive", by: "suite", reason: "hide" }],
     unavailable: { "desk.board": 'menu item "desk.board" was removed' },
-    diagnostics: [],
   },
 };
 

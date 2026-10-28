@@ -425,7 +425,6 @@ interface ThemeCatalogueFile {
   fingerprint: string;
   themes: Array<{
     id: string;
-    legacyIds?: readonly string[];
     optionsVersion?: number | null;
     headlessEntry?: string;
     defaultTokens?: Record<"shared" | "light" | "dark", Record<string, string>>;
@@ -448,7 +447,7 @@ async function appearanceBuildPayload(
   const requestedThemeId = raw?.themeId ?? null;
   const selectedTheme = requestedThemeId === null
     ? undefined
-    : sourceCatalogue.themes.find((theme) => theme.id === requestedThemeId || theme.legacyIds?.includes(requestedThemeId));
+    : sourceCatalogue.themes.find((theme) => theme.id === requestedThemeId);
   if (requestedThemeId !== null && !selectedTheme) {
     throw new Error(`Host appearance theme ${JSON.stringify(requestedThemeId)} is not installed.`);
   }
@@ -491,7 +490,7 @@ async function appearanceBuildPayload(
   const catalogue: AppearanceBootstrapPayload["catalogue"] = {
     schema: sourceCatalogue.schema,
     fingerprint: sourceCatalogue.fingerprint,
-    themes: sourceCatalogue.themes.map(({ id, legacyIds, defaultTokens }) => ({ id, legacyIds, defaultTokens })),
+    themes: sourceCatalogue.themes.map(({ id, defaultTokens }) => ({ id, defaultTokens })),
   };
   return {
     fingerprint,

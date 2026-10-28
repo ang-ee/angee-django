@@ -1,6 +1,7 @@
 """In-memory stream rows for transport-only adapter tests; DB tests use the driver."""
 
 from collections import deque
+from copy import deepcopy
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
@@ -42,8 +43,9 @@ def failure_state(failure: SyncFailure, **values: Any) -> SyncFailure:
 class AdapterPages:
     """Consume the actual extract protocol while retaining committed test cursors."""
 
-    def __init__(self, backend: Any) -> None:
+    def __init__(self, backend: Any, *, cursors: dict[str, dict[str, Any]] | None = None) -> None:
         self.backend = backend
+        self.initial_cursors = deepcopy(cursors or {})
         self.rows: dict[str, Any] = {}
         self.pending: deque[Any] | None = None
 
@@ -56,14 +58,11 @@ class AdapterPages:
                     key=spec.key,
                     partition=spec.partition,
                     generation=1,
-                    cursor=spec.cursor,
+                    cursor=self.initial_cursors.get(spec.partition, spec.cursor),
                     config=spec.config,
                 )
                 for spec in self.backend.streams(deadline=deadline)
             }
-            for stream in self.rows.values():
-                if not stream.cursor and self.backend.bridge.cursor:
-                    stream.cursor = self.backend.seed_cursor(stream, self.backend.bridge.cursor) or {}
             self.pending = deque(self.rows.values())
         while self.pending:
             stream = self.pending[0]
@@ -80,4 +79,4 @@ class AdapterPages:
     def cursors(self) -> dict[str, dict[str, Any]]:
         """Expose the independent retained cursors by partition."""
 
-        return {key: stream.cursor for key, stream in self.rows.items()}
+        return {**self.initial_cursors, **{key: stream.cursor for key, stream in self.rows.items()}}

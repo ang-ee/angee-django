@@ -1,8 +1,11 @@
+import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
 import { createRouteHref } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import proposals, { PROPOSAL_MODEL, ROUND_MODEL } from ".";
+
+const declaredMenus = composeAddons([{ id: proposals.id, menus: proposals.menus, routes: proposals.routes }], { canonicalModelLabel: (model) => model }).menuComposition.logical;
 
 describe("proposals addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -48,8 +51,8 @@ describe("proposals addon manifest", () => {
   });
 
   test("contributes one place, both item panes, and prefixed glyphs", () => {
-    expect(proposals.menus).toHaveLength(1);
-    expect(proposals.menus?.[0]?.children?.map((item) => item.route)).toEqual([
+    expect(declaredMenus).toHaveLength(1);
+    expect(declaredMenus?.[0]?.children?.map((item) => item.route)).toEqual([
       "proposals.rounds",
       "proposals.proposals",
     ]);

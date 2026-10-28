@@ -15,8 +15,3 @@ depends_on = [
   "angee.provenance",
   "angee.web",
 ]
-
-[[migrations]]
-name = "single_scope_quota"
-app_label = "posts"
-module = "runtime_migrations.single_scope_quota"

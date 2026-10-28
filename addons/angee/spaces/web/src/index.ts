@@ -12,14 +12,9 @@ const spaces = defineBaseAddon({
     lazyRouteComponent(() => import("./SpacesPage"), "SpacesPage"),
     "spaces.Group",
   ),
-  menus: [
-    {
-      id: "spaces",
-      label: "Spaces",
-      icon: "spaces",
-      route: "spaces.groups",
-    },
-  ],
+  menus: {
+    "spaces": { label: "Spaces", icon: "spaces", route: "spaces.groups" },
+  },
   icons: { spaces: UsersRound },
   i18n: { spaces: enSpacesMessages },
 });

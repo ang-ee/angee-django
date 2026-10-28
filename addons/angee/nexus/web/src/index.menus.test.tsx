@@ -12,17 +12,23 @@ import nexus from "./index";
 
 // Minimal upstream menu contracts exercise aggregation without importing peer pages.
 const upstream = [
-  defineBaseAddon({ id: "messaging", menus: [{ id: "messaging", children: [
-    { id: "messaging.messages", label: "Messages" },
-    { id: "messaging.threads", label: "Threads" },
-  ] }] }),
-  defineBaseAddon({ id: "parties", menus: [{ id: "parties", children: [
-    { id: "parties.people", label: "People" },
-    { id: "parties.organizations", label: "Organizations" },
-  ] }], containers: { "parties.overview#items": {} } }),
-  defineBaseAddon({ id: "spaces", menus: [{ id: "spaces", label: "Spaces", route: "spaces.groups" }],
+  defineBaseAddon({ id: "messaging", menus: {
+    "messaging": {},
+    "messaging.messages": { label: "Messages", parent: "messaging" },
+    "messaging.threads": { label: "Threads", parent: "messaging" },
+  } }),
+  defineBaseAddon({ id: "parties", menus: {
+    "parties": {},
+    "parties.people": { label: "People", parent: "parties" },
+    "parties.organizations": { label: "Organizations", parent: "parties" },
+  }, containers: { "parties.overview#items": {} } }),
+  defineBaseAddon({ id: "spaces", menus: {
+    "spaces": { label: "Spaces", route: "spaces.groups" },
+  },
     routes: [{ name: "spaces.groups", path: "/spaces/groups", layout: "console" }] }),
-  defineBaseAddon({ id: "posts", menus: [{ id: "posts", label: "Posts", route: "posts.feeds" }],
+  defineBaseAddon({ id: "posts", menus: {
+    "posts": { label: "Posts", route: "posts.feeds" },
+  },
     routes: [{ name: "posts.feeds", path: "/posts/feeds", layout: "console" }] }),
 ];
 const addons = [timeline, ...upstream, { ...nexus, dependsOn: ["timeline", ...upstream.map(({ id }) => id)] }];
@@ -69,7 +75,6 @@ describe("Nexus menu aggregation", () => {
       } },
       defaultSchema: "console",
     });
-    expect(explain.menus.diagnostics).toEqual([]);
     expect(explain.menus.removed).toEqual([]);
     expect(explain.menus.hidden).toEqual([{ id: "nexus.ties", by: "nexus", reason: "hide" }]);
     expect(explain.menus.unavailable).toEqual({});
@@ -95,7 +100,6 @@ describe("Nexus menu aggregation", () => {
     const { explain } = createApp({ addons: liveAddons, schemas, layouts: {
       console: { requireAuth: false }, public: { requireAuth: false, schema: "public" },
     }, defaultSchema: "console", location: { search: app ? `?app=${app}` : "" } });
-    expect(explain.menus.diagnostics).toEqual([]);
     expect(explain.menus.unavailable).toEqual({});
     expect(explain.menus.provenance["messaging.channels"]).toMatchObject({ parent: "messaging", group: "messaging" });
     expect(explain.menus.provenance["parties.directories"]).toMatchObject({ parent: "parties", group: "parties" });
