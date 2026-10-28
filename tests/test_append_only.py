@@ -11,10 +11,10 @@ from django.db import models
 from django.db.migrations.writer import MigrationWriter
 from rebac import system_context
 
-from angee.base.models import AngeeQuerySet, AppendOnlyBaseQuerySet, AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
-from angee.base.models.audit import retained_set_null
+from angee.base.models.append_only import AppendOnlyBaseQuerySet, AppendOnlyModel, AppendOnlyQuerySet
+from angee.base.models.audit import AuditMixin, retained_set_null
 from angee.base.models.hierarchy import HierarchyQuerySet
-from angee.base.querysets import ClosedUpdateQuerySet
+from angee.base.querysets import AngeeQuerySet, ClosedUpdateQuerySet
 from angee.provenance.contrib.angee.querysets import AngeeHistoryUnscopedQuerySet
 from tests.conftest import create_user
 from tests.hierdemo.models import HierNode

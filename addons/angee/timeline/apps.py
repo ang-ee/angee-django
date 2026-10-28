@@ -1,6 +1,13 @@
 """Register kind source models with the shared model-change seam."""
 
+from functools import partial
+
 from django.apps import AppConfig
+from django.core import checks
+
+from angee.hooks import check_hooks
+
+check_settings = partial(check_hooks, ("ANGEE_TIMELINE_KINDS",))
 
 
 class TimelineConfig(AppConfig):
@@ -13,6 +20,8 @@ class TimelineConfig(AppConfig):
         from angee.base.signals import bulk_updated, connect_for_models
         from angee.graphql.publishing import change_published, connect_observers
         from angee.timeline.events import before_delete, before_save, kinds_for, queue_change, queue_updates
+
+        checks.register(check_settings, checks.Tags.models)
 
         connect_for_models(
             change_published, queue_change, applies=lambda model: bool(kinds_for(model)),

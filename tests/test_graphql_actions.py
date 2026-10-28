@@ -23,8 +23,8 @@ from rebac import (
 )
 
 import angee.graphql.actions as actions_module
-from angee.base.models import StaleRevisionError, TransitionNotAllowed
-from angee.base.permissions import RecordAccessSubjectRefused
+from angee.base.exceptions import RecordAccessSubjectRefused, TransitionNotAllowed
+from angee.base.models.locks import StaleRevisionError
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,

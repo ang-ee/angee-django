@@ -28,9 +28,9 @@ from rebac import evaluator_scope
 
 from angee.agents.models import TurnStatus
 from angee.agents.protocol import ANGEE_META_KEY, TURN_FAILED_STOP_REASON, TURN_FAILURE_CODE, message_id
-from angee.base.identity import instance_from_public_id
+from angee.base.exceptions import classify_error
+from angee.base.models.identity import instance_from_public_id
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder
-from angee.errors import classify_error
 from angee.graphql.subscriptions import subscribe
 
 logger = logging.getLogger(__name__)

@@ -1,27 +1,13 @@
-"""ASGI contributions for GraphQL subscriptions and development SDL emission."""
+"""ASGI subscription routes for prebuilt GraphQL deployments."""
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
 
-from django.conf import settings
 from django.urls import re_path
 
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
 from angee.graphql.schema import GraphQLSchemas
-from angee.graphql.sdl import GraphQLSdl
-
-
-def _emit_dev_sdl() -> None:
-    """Regenerate GraphQL SDL at ASGI boot when Django DEBUG is enabled."""
-
-    if settings.DEBUG:
-        GraphQLSdl.from_discovery().emit_if_stale()
-
-
-boot_hooks: tuple[Callable[[], None], ...] = (_emit_dev_sdl,)
-"""ASGI boot hooks owned by the GraphQL addon."""
 
 
 def websocket_urlpatterns() -> list[object]:

@@ -60,23 +60,21 @@ from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.resources import model_resource_type
 
+from angee.base.exceptions import DomainError
 from angee.base.fields import DiagnosticTextField, ModelLabelField
 from angee.base.fields.implementation import ImplClassField
+from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
-from angee.base.identity import instance_from_public_id
-from angee.base.models import (
-    AngeeDataModel,
-    AngeeModel,
-    AuditMixin,
-    MergePolicy,
-    OptimisticLockMixin,
-    OwnerMixin,
-    RecordRefMixin,
-    TrashMixin,
-)
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel, AngeeModel
+from angee.base.models.identity import instance_from_public_id
+from angee.base.models.locks import OptimisticLockMixin
+from angee.base.models.merge_references import MergePolicy
+from angee.base.models.ownership import OwnerMixin
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.trash import TrashMixin
 from angee.base.permissions import actor_user_id
-from angee.base.refs import RecordRef, RetainedGenericRelation, generic_pointer_model
-from angee.errors import DomainError
+from angee.base.refs import RecordRef, generic_pointer_model
 from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.messaging.backends import ChannelBackend
@@ -1898,7 +1896,7 @@ class Message(
     text survives as immutable content-addressed fragments — no per-save history
     table doubling the hot write path.
 
-    Moderation is trash (:class:`~angee.base.models.TrashMixin`): a trashed
+    Moderation is trash (:class:`~angee.base.models.trash.TrashMixin`): a trashed
     message is withheld from every reader but channel managers and admins, and
     record chatter leaves it out of every read but its moderators' removed list.
     """

@@ -22,7 +22,7 @@ from rebac import (
     write_relationships,
 )
 
-from angee.base.models import StaleRevisionError
+from angee.base.models.locks import StaleRevisionError
 from angee.iam.signals import DJANGO_LAST_LOGIN_UID, stamp_last_login
 from angee.spaces.testing.models import Group, Membership
 from tests.conftest import create_platform_admin, execute_schema, graphql_request, result_data

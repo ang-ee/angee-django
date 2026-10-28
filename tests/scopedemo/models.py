@@ -18,7 +18,10 @@ from rebac import app_settings, current_actor, is_anonymous_actor, to_subject_re
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, OwnerMixin
+from angee.base.managers import AngeeManager
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.ownership import OwnerMixin
+from angee.base.querysets import AngeeQuerySet
 
 SCOPE_MEMBER_RELATION = "direct_member"
 """Direct membership relation on the local ``scopedemo/scope`` test resource."""

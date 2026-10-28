@@ -260,10 +260,12 @@ watchers by hand. The angee operator is the stack's monitoring and management
 service: it is not part of the frontend or backend and keeps running while it
 restarts them, so use it for every restart.
 `angee --root "$angee_root" job run deps --chained-restart` restarts the whole
-application (the restart job is `provision` on instance stacks), and
+application (current instance templates start that chain at `runtime-build`), and
 `angee --root "$angee_root" restart <service>...` restarts single services. Apply
 dependency changes with the whole-application restart; never `uv sync` the stack's
-venv while the stack runs.
+venv while the stack runs. Existing stacks retain their rendered job names until
+their templates are updated; inspect the controlling `angee.yaml` before choosing
+the dependency-chain entrypoint.
 [Restart the running stack](docs/howto/getstarted.md#restart-the-running-stack)
 has the details and the operator API. One-shot management commands use the stack
 host's `manage.py`.

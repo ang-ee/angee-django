@@ -25,9 +25,10 @@ from django.utils.text import capfirst
 from rebac import system_context
 from rebac.field_backing import canonical_model
 from rebac.resources import model_for_resource_type
-from rebac.schema import FieldBinding
+from rebac.schema import Definition, FieldBinding
 
-from angee.base.identity import public_data_id_field, public_id_for
+from angee.base.identity import public_data_id_field
+from angee.base.models.identity import public_id_for
 from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import MergePolicy, RecordRefMergeContract
 from angee.base.permissions import effective_rebac_definition
@@ -43,7 +44,7 @@ class RecordRefMixin(RecordRefMergeContract):
     """Project a row reference from the model's single declared generic foreign key.
 
     Its collision declarations (``merge_identity``, ``merge_collapse``) are the
-    pointing model's own, on :class:`~angee.base.models.MergeContractMixin`.
+    pointing model's own, on :class:`~angee.base.models.merge_references.MergeContractMixin`.
     """
 
     merge_policy: ClassVar[MergePolicy] = MergePolicy.BLOCK
@@ -167,6 +168,12 @@ class RecordRefMixin(RecordRefMergeContract):
         definition = effective_rebac_definition(cls)
         if definition is None:
             raise ImproperlyConfigured(f"{cls._meta.label} declares no REBAC definition to read target types from.")
+        return cls._declared_target_models(definition)
+
+    @classmethod
+    def _declared_target_models(cls, definition: Definition) -> dict[str, type[models.Model]]:
+        """Project one already-resolved effective definition through its pointer field."""
+
         pointer = cls.record_ref_field().name
         targets: dict[str, type[models.Model]] = {}
         for relation in definition.relations:
@@ -300,21 +307,16 @@ def record_edges_by_target() -> dict[type[models.Model], tuple[type[RecordRefMix
     for edge in sorted(apps.get_models(), key=lambda model: model._meta.label):
         if not issubclass(edge, RecordRefMixin):
             continue
-        if not edge.accepts_any_record_target and effective_rebac_definition(edge) is None:
-            continue
-        for target in edge.accepted_target_models().values():
+        if edge.accepts_any_record_target:
+            targets = edge.accepted_target_models()
+        else:
+            definition = effective_rebac_definition(edge)
+            if definition is None:
+                continue
+            targets = edge._declared_target_models(definition)
+        for target in targets.values():
             index.setdefault(target, []).append(edge)
     return {target: tuple(edges) for target, edges in index.items()}
-
-
-def record_ref_cleanup_edges() -> tuple[type[RecordRefMixin], ...]:
-    """Return installed edge models declaring target-specific teardown."""
-
-    return tuple(
-        edge
-        for edge in sorted(apps.get_models(), key=lambda model: model._meta.label)
-        if issubclass(edge, RecordRefMixin) and edge.teardown_for_target is not None
-    )
 
 
 def record_ref_cleanup_edges_for_target(
@@ -322,26 +324,19 @@ def record_ref_cleanup_edges_for_target(
 ) -> tuple[type[RecordRefMixin], ...]:
     """Return cleanup edges named by ``target``'s retained reverse relations."""
 
-    cleanup = record_ref_cleanup_edges()
-    return tuple(
-        edge for edge in cleanup if record_ref_cleanup_target(edge, target)
-    )
-
-
-def record_ref_cleanup_target(edge: type[RecordRefMixin], target: type[models.Model]) -> bool:
-    """Return whether ``target`` declares a retained reverse relation to ``edge``."""
-
+    edges: set[type[RecordRefMixin]] = set()
     for field in target._meta.private_fields:
         if not isinstance(field, GenericRelation):
             continue
         related = field.remote_field.model
-        if related is edge:
-            return True
-        if isinstance(related, str) and related.lower() == edge._meta.label_lower:
-            return True
-    return False
-
-
+        if isinstance(related, str):
+            try:
+                related = target._meta.apps.get_model(related)
+            except LookupError, ValueError:
+                continue
+        if issubclass(related, RecordRefMixin) and related.teardown_for_target is not None:
+            edges.add(related)
+    return tuple(sorted(edges, key=lambda edge: edge._meta.label))
 
 
 def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> None:

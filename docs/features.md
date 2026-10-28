@@ -18,7 +18,7 @@ actually unique to your product.
 - **Addon-based** — every capability is one addon: Django source (abstract models
   + GraphQL + REBAC + resources) plus, when it has UI, a co-located `web/`
   fragment (routes, views, widgets, menus, i18n).
-- **Composed, not patched** — `angee build` merges every addon by Python MRO into
+- **Composed, not patched** — native Hatch builds merge addons by Python MRO into
   a generated `runtime/`. Deterministic (byte-identical, CI-checked); no
   monkey-patching, no runtime registration.
 - **Headless backend, React frontend** — Python owns data, permissions, and the
@@ -36,7 +36,7 @@ actually unique to your product.
 
 ## What you get — framework primitives
 
-- **Compose** — the addon system and the `angee build` pipeline that turns
+- **Compose** — the addon system and the native Hatch build pipeline that turns
   abstract addons into one running app: concrete Django models, one GraphQL
   schema, one permission schema, typed TS.
 - **Data modeling** — abstract models with opaque `sqid` IDs and a `StateField`,
@@ -126,7 +126,7 @@ owns the composer-time declaration seam; serving code has no extension registry.
 ## How you build & ship
 
 - **Opinionated dev cycle** — build a slice frontend-first in Storybook against
-  mocked data → author the backend slice → `angee build` → e2e. GraphQL
+  mocked data → author the backend slice → rebuild with `angee dev` → e2e. GraphQL
   operation names are the throughline across every stage.
 - **Tested end to end** — pytest (including a YAML scenario runner that drives
   operations *as* a given user), Vitest, and Playwright; e2e asserts that
@@ -136,6 +136,9 @@ owns the composer-time declaration seam; serving code has no extension registry.
   agent work; agents can drive the whole lifecycle.
 - **Deterministic builds** — same inputs → byte-identical `runtime/`, gated in CI;
   generated output is never hand-edited.
+- **Native project releases** — `uv build` packages the composed runtime and
+  reviewed, version-controlled Django migration history in a project-specific
+  wheel. Provisioning applies that history without generating new migrations.
 
 ---
 

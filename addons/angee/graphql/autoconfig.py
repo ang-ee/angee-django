@@ -13,7 +13,6 @@ SETTINGS = {
     "COMPOSE_EXTERNAL_ARTIFACT_ROOTS:append": ["schemas", "gql"],
     # Native HTTP error capture sees coercion values before our safe log policy.
     "SENTRY_DISABLED_INTEGRATIONS:append": [StrawberryIntegration],
-    "ANGEE_HOOKS:append": ["ANGEE_GRAPHQL_RESOURCE_FILTERS"],
     "ANGEE_GRAPHQL_RESOURCE_FILTERS": [],
     "STRAWBERRY_DJANGO:append": {
         "DEFAULT_PK_FIELD_NAME": PUBLIC_ID_FIELD_NAME,

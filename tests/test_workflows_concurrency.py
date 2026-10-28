@@ -19,7 +19,7 @@ from django.db.models import F
 from django.db.models.functions import Now
 from rebac import actor_context, system_context
 
-from angee.base.identity import public_id_of
+from angee.base.models.identity import public_id_of
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.jobs.enqueue import celery_app

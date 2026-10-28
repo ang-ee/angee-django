@@ -13,17 +13,11 @@ from django.db import IntegrityError, models, transaction
 from rebac import PermissionDenied, current_actor, system_context, to_subject_ref
 
 from angee.base.fields.state import StateField
-from angee.base.models import (
-    AngeeDataModel,
-    ArchiveMixin,
-    ArchiveQuerySet,
-    AuditMixin,
-    ImmutableFieldsMixin,
-    OptimisticLockMixin,
-    OwnerMixin,
-    TrashMixin,
-    TrashQuerySet,
-)
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
+from angee.base.models.ownership import OwnerMixin
+from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet, TrashMixin, TrashQuerySet
 from angee.base.permissions import effective_rebac_definition, require_rebac_queryset
 from angee.dashboards.resources import DashboardResource
 from angee.graphql.access import is_gated_read_axis

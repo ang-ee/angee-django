@@ -7,8 +7,8 @@ from typing import cast
 import strawberry
 from django.db import models
 
-from angee.base.identity import public_id_of
-from angee.base.models import record_display_label
+from angee.base.models.base import record_display_label
+from angee.base.models.identity import public_id_of
 from angee.graphql.ids import PublicID
 
 NODE_DISPLAY_NAME_DESCRIPTION = "Human-readable label for this object."

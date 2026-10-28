@@ -74,9 +74,9 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from django.db.models.fields.mixins import FieldCacheMixin
 
+from angee.base.exceptions import TransitionNotAllowed
 from angee.base.fields.state import StateField, enum_member_for
-from angee.base.querysets import SystemQuerysetMixin
-from angee.errors import TransitionNotAllowed
+from angee.base.models.persistence import PersistenceMixin
 
 Condition = Callable[[models.Model], bool]
 SuccessHook = Callable[..., None]
@@ -145,7 +145,7 @@ def transition(
     return decorate
 
 
-class StateTransitionsMixin(SystemQuerysetMixin):
+class StateTransitionsMixin(PersistenceMixin):
     """Own guarded hydration and validate declarations through native class creation."""
 
     class Meta:
@@ -627,8 +627,8 @@ def _verify_uncontended_source(
 ) -> None:
     """Lock the row and reject a committed state that already left ``source``."""
 
-    if not isinstance(instance, SystemQuerysetMixin):
-        raise TypeError("Guarded state transitions require SystemQuerysetMixin.")
+    if not isinstance(instance, PersistenceMixin):
+        raise TypeError("Guarded state transitions require PersistenceMixin.")
     reader = type(instance).system_queryset(lock=("self",))
     committed = reader.filter(pk=instance.pk).values_list(field_name, flat=True).first()
     field = cast(StateField, instance._meta.get_field(field_name))

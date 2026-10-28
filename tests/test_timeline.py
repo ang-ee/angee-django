@@ -12,7 +12,7 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context
 
-from angee.base.identity import public_id_of
+from angee.base.models.identity import public_id_of
 from angee.base.pagination import KeysetOrder, keyset_signer
 from angee.graphql.publishing import mute_changes
 from angee.messaging.timeline import CommentKind

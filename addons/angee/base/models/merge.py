@@ -47,9 +47,9 @@ from django.db.models import ProtectedError, Q, RestrictedError
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import is_sudo
 
-from angee.base.identity import instances_from_public_ids
 from angee.base.managers import MergeableUnscopedManager
 from angee.base.models.base import AngeeModel
+from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.merge_references import MergePolicy, named_in_relationships, references
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import instance_actor
@@ -140,7 +140,7 @@ class MergeableMixin(AngeeModel):
 
         The model's policy (:attr:`retains_merged`), a trash owner (removal is a
         redirect it can restore) or the record's own evidence
-        (:meth:`~angee.base.models.AngeeModel.retained`) each retain it.
+        (:meth:`~angee.base.models.base.AngeeModel.retained`) each retain it.
         """
 
         return self.retains_merged or isinstance(merged, TrashMixin) or merged.retained()

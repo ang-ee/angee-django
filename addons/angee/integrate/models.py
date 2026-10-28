@@ -56,19 +56,13 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
-from angee.base.models import (
-    AngeeDataModel,
-    AuditMixin,
-    MergePolicy,
-    OwnerMixin,
-    OwnerQuerySet,
-    RecordRefMixin,
-    StateTransitions,
-    references,
-    save_state,
-    transition,
-)
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
 from angee.base.models.implementations import ImplDefaultsMixin
+from angee.base.models.merge_references import MergePolicy, references
+from angee.base.models.ownership import OwnerMixin, OwnerQuerySet
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.refs import generic_pointer_target
 from angee.graphql.capabilities import held_permissions

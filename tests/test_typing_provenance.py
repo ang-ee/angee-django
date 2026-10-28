@@ -33,7 +33,7 @@ def test_provenance_plugin_types_concrete_storage_without_angee_host(tmp_path: P
     (tmp_path / "storage_settings.py").write_text(
         "import os\nfrom pathlib import Path\n"
         "SECRET_KEY = 'optional-provenance-typing'\n"
-        "INSTALLED_APPS = ['django.contrib.contenttypes', 'storage_probe', 'angee.compose']\n"
+        "INSTALLED_APPS = ['django.contrib.contenttypes', 'storage_probe', 'angee.compose.apps.BuildComposeConfig']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
         f"COMPOSE_RUNTIME_DIR = Path({str(tmp_path / 'storage_runtime')!r})\n"

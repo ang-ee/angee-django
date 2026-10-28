@@ -15,12 +15,9 @@ from strawberry_django_hasura import HasuraResource
 
 from angee.base.fields import ImplClassField
 from angee.base.lineage import concrete_child_models
-from angee.base.models import (
-    AngeeModel,
-    MergeableMixin,
-    RecordRefMixin,
-)
-from angee.base.models.refs import record_edges_by_target
+from angee.base.models.base import AngeeModel
+from angee.base.models.merge import MergeableMixin
+from angee.base.models.refs import RecordRefMixin, record_edges_by_target
 from angee.base.permissions import effective_rebac_definition
 from angee.base.refs import generic_pointer_model
 from angee.graphql.access import is_gated_read_axis

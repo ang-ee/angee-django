@@ -5,54 +5,182 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
-import logging
+import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
 
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 from django.apps.registry import Apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router
+from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router, transaction
 from django.db.migrations import Migration
 from django.db.migrations.autodetector import MigrationAutodetector
+from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.operations.fields import RemoveField
 from django.db.migrations.operations.models import DeleteModel
+from django.db.migrations.recorder import MigrationRecorder
 from django.db.migrations.state import ProjectState
+from django.db.migrations.writer import MigrationWriter
 from django.db.models.expressions import DatabaseDefault
+from django.utils.module_loading import module_dir
 
 from angee.compose.declarations import AppDeclarationSource, BuildIntegration
 from angee.utils.files import write_atomic
 
 MATERIALIZED_FOOTER = "# ANGEE MATERIALIZED MIGRATION - DO NOT EDIT"
 SOURCE_SHA256_ATTR = "angee_source_sha256"
-logger = logging.getLogger(__name__)
+
+
+def _migration_directory(app_label: str, *, allow_missing: bool = False) -> Path:
+    """Resolve the configured native package without creating files during planning."""
+
+    module_name, _explicit = MigrationLoader.migrations_module(app_label)
+    if module_name is None:
+        raise ImproperlyConfigured(f"Migrations are disabled for app {app_label!r}")
+    try:
+        module = importlib.import_module(module_name)
+        if not hasattr(module, "__path__"):
+            raise ValueError("Migrations must be a Python package")
+        return Path(module_dir(module))
+    except (ImportError, ValueError) as error:
+        if allow_missing and isinstance(error, ModuleNotFoundError) and error.name is not None and (
+            module_name == error.name or module_name.startswith(f"{error.name}.")
+        ):
+            parent_name, _separator, basename = module_name.rpartition(".")
+            config = apps.get_app_config(app_label)
+            if parent_name == config.name:
+                return Path(config.path) / basename
+            # The native writer can initialize this immediate child later.
+            # Do not reproduce its recursive custom-package search here.
+            try:
+                parent = importlib.import_module(parent_name)
+                if not hasattr(parent, "__path__"):
+                    raise ValueError("Migration parent must be a Python package")
+                return Path(module_dir(parent)) / basename
+            except (ImportError, ValueError) as parent_error:
+                raise ImproperlyConfigured(
+                    f"Initialize the importable parent package {parent_name!r} before "
+                    f"materializing addon migrations into {module_name!r}."
+                ) from parent_error
+        raise ImproperlyConfigured(
+            f"Create the importable migration package {module_name!r} configured for {app_label!r} "
+            "before building or resetting its history."
+        ) from error
+
+
+def reset_migration_history(
+    labels: Iterable[str], *, database: str = DEFAULT_DB_ALIAS,
+) -> tuple[tuple[str, ...], int, int]:
+    """Replace fully applied, model-clean native history, restoring files on failure.
+
+    The caller explicitly selects the composed app labels. Django's configured
+    migration packages own the files, including tracked host packages outside the
+    generated runtime. This exceptional upgrade cutoff never recreates tables.
+    """
+
+    labels = tuple(sorted(set(labels)))
+    if not labels:
+        return labels, 0, 0
+    connection = connections[database]
+    executor = MigrationExecutor(connection)
+    executor.loader.check_consistent_history(connection)
+    targets = tuple(node for label in labels for node in executor.loader.graph.leaf_nodes(label))
+    if executor.migration_plan(targets):
+        raise RuntimeError(
+            "migration history reset requires a fully applied migration graph. "
+            f"Run `manage.py migrate --database {database}` first."
+        )
+    changes = MigrationAutodetector(
+        executor.loader.project_state(), ProjectState.from_apps(apps),
+    ).changes(graph=executor.loader.graph, trim_to_apps=set(labels), convert_apps=set(labels))
+    if changes:
+        raise RuntimeError(
+            "migration history reset requires the recorded graph to match the live composed models. "
+            f"Run `manage.py makemigrations {' '.join(labels)}` and "
+            f"`manage.py migrate --database {database}` first."
+        )
+
+    directories_by_label = {label: _migration_directory(label) for label in labels}
+    directories = tuple(directories_by_label.values())
+    migration_files = tuple(sorted(
+        directories_by_label[label] / f"{name}.py"
+        for label, name in executor.loader.disk_migrations
+        if label in directories_by_label
+    ))
+    original_sources = {path: path.read_bytes().decode("utf-8") for path in migration_files}
+    prefixes = tuple(MigrationLoader.migrations_module(label)[0] for label in labels)
+
+    def forget_migration_modules() -> None:
+        for name in tuple(sys.modules):
+            if any(name == prefix or name.startswith(f"{prefix}.") for prefix in prefixes):
+                sys.modules.pop(name)
+        for directory in directories:
+            for bytecode in (directory / "__pycache__").glob("*.pyc"):
+                bytecode.unlink()
+        importlib.invalidate_caches()
+
+    try:
+        for path in migration_files:
+            path.unlink()
+        forget_migration_modules()
+        call_command("makemigrations", *labels, interactive=False, include_header=False, verbosity=0)
+        forget_migration_modules()
+        fresh_executor = MigrationExecutor(connection)
+        graph = fresh_executor.loader.graph
+        fresh_nodes = dict.fromkeys(
+            node
+            for label in labels
+            for target in graph.leaf_nodes(label)
+            for node in graph.forwards_plan(target)
+            if node[0] in labels
+        )
+        recorder = MigrationRecorder(connection)
+        with transaction.atomic(using=database):
+            applied = recorder.applied_migrations()
+            # Keep shared keys valid for already-applied external dependencies.
+            for app_label, migration_name in fresh_nodes:
+                if (app_label, migration_name) not in applied:
+                    recorder.record_applied(app_label, migration_name)
+            for app_label, migration_name in sorted(applied.keys() - fresh_nodes.keys()):
+                if app_label in labels:
+                    recorder.record_unapplied(app_label, migration_name)
+            fresh_executor.loader.check_consistent_history(connection)
+            recorded = recorder.migration_qs.filter(app__in=labels).count()
+    except BaseException:
+        for directory in directories:
+            for path in directory.glob("*.py"):
+                if not path.name.startswith("_") and path not in original_sources:
+                    path.unlink()
+        for path, source in original_sources.items():
+            write_atomic(path, source)
+        forget_migration_modules()
+        raise
+    return labels, len(migration_files), recorded
 
 
 @dataclass(frozen=True, slots=True)
-class ScheduledMigration:
-    """One addon declaration the round loop found applicable, with the round it lands in."""
+class MigrationSource:
+    """A native migration and the immutable addon source that declares it."""
 
-    round: int
     origin: str
-    addon: AppConfig
-    declaration: Mapping[str, Any]
-    module: ModuleType
-    migration_class: type[Migration]
-    source_path: Path
+    migration: Migration
+    applies: Callable[[ProjectState], bool]
+    path: Path
     source: str
-    source_sha256: str
+    sha256: str
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimeMigrationPlan:
-    """One applicable addon migration attached to a concrete runtime node."""
+    """One addon source bound to its concrete native history."""
 
     origin: str
     app_label: str
@@ -62,183 +190,183 @@ class RuntimeMigrationPlan:
     output_path: Path
     source_sha256: str
     dependencies: tuple[tuple[str, str], ...]
-    latest_dependencies: tuple[tuple[tuple[str, str], tuple[str, str]], ...]
-    migration_class: type[Migration]
+    run_before: tuple[tuple[str, str], ...]
+
+
+class _PendingMigrationLoader(MigrationLoader):
+    """Let Django construct and replace the complete disk-plus-pending graph."""
+
+    def __init__(self, sources: Mapping[tuple[str, str], MigrationSource]) -> None:
+        self.sources = sources
+        super().__init__(None, ignore_no_migrations=True)
+
+    def load_disk(self) -> None:
+        super().load_disk()
+        for node, entry in self.sources.items():
+            self.disk_migrations[node] = entry.migration
+            self.migrated_apps.add(node[0])
+            self.unmigrated_apps.discard(node[0])
+        # Native graph construction sees every internal edge before resolving
+        # external symbolic references, independent of source/filesystem order.
+        self.disk_migrations = dict(sorted(self.disk_migrations.items()))
+
+    def add_internal_dependencies(self, key: tuple[str, str], migration: Migration) -> None:
+        if key in self.sources:
+            # Native self-app first/latest references are ignored; the bound
+            # host leaf already supplies the concrete prerequisite. Normalize
+            # before Django could create an internal dummy sentinel node.
+            cast(list[tuple[str, str]], migration.dependencies)[:] = [
+                dependency for dependency in migration.dependencies
+                if dependency[0] != key[0] or self.check_key(dependency, key[0]) is not None
+            ]
+        super().add_internal_dependencies(key, migration)
+
+    def add_external_dependencies(self, key: tuple[str, str], migration: Migration) -> None:
+        if key in self.sources:
+            origin = self.sources[key].origin
+            # Freeze the native resolution before Django applies replacements.
+            # Exact references to replaced originals stay exact; Django owns
+            # rewiring those edges for both fresh and partial installations.
+            cast(list[tuple[str, str]], migration.dependencies)[:] = RuntimeMigrations._resolve_nodes(
+                self, migration.dependencies, current_app=key[0], origin=origin, kind="dependency",
+            )
+            cast(list[tuple[str, str]], migration.run_before)[:] = RuntimeMigrations._resolve_nodes(
+                self, migration.run_before, current_app=key[0], origin=origin, kind="run_before",
+            )
+        super().add_external_dependencies(key, migration)
 
 
 class RuntimeMigrations:
-    """Plan and materialize addon-owned migrations into runtime app graphs."""
+    """Bind addon-owned migrations to Django's configured migration graph.
+
+    New filenames use the declared native migration name, so dependencies can
+    name pending transitions before either is materialized. Existing names and
+    copied sources remain immutable. Django owns graph order and state; guards
+    validate applicability, never infer that a data transition already ran.
+    """
 
     def __init__(
         self,
         addons: Iterable[AppConfig],
         *,
-        runtime_dir: Path,
         labels: Iterable[str],
         declarations: AppDeclarationSource | None = None,
     ) -> None:
         self.addons = tuple(addons)
-        self.runtime_dir = runtime_dir
         self.labels = frozenset(labels)
         self.declarations = declarations if declarations is not None else AppDeclarationSource.configured()
-
-    def schedule(self, state: ProjectState, *, only: Iterable[str]) -> tuple[ScheduledMigration, ...]:
-        """Schedule the ``only`` origins from ``state`` as :meth:`plan` does, without a migration graph.
-
-        Each named declaration lands in the first round whose starting state its guard
-        accepts; one that never becomes applicable is left out, and an origin no
-        addon declares fails. Callers use this to inspect one current declaration
-        batch's round ordering before materialization.
-        """
-
-        scheduled, _skipped, _state = self._schedule(state, {}, only=frozenset(only))
-        return scheduled
 
     def plan(
         self,
         *,
         apps: Apps | None = None,
         defer_drop_check: bool = False,
+        app_labels: Iterable[str] | None = None,
+        allow_missing_packages: bool = False,
     ) -> tuple[RuntimeMigrationPlan, ...]:
-        """Plan applicable writes, guarding adopted tables against the supplied apps.
+        """Bind the complete graph before validating guards and native state.
 
-        Never-applicable declarations warn after the fixed point. With a current
-        model registry, also reject autodetected drops of tables it still owns.
+        Planning is offline and read-only. A false guard is not evidence of a
+        completed backfill: the host must retain its native chain or an explicit
+        replacement baseline. Native migrate decides what has actually applied.
         """
 
-        loader = MigrationLoader(None, ignore_no_migrations=True)
-        existing = self._existing_migrations(loader)
-        scheduled, skipped, state = self._schedule(loader.project_state(), existing)
+        selected = None if app_labels is None else frozenset(app_labels)
+        existing = MigrationLoader(None, ignore_no_migrations=True)
+        sources = self._sources(existing, self._existing_migrations(existing))
+        loader = self._bind_graph(existing, sources)
+        targets = tuple(
+            leaf for leaf in loader.graph.leaf_nodes()
+            if selected is None or leaf[0] in selected
+        )
         plans: list[RuntimeMigrationPlan] = []
-        next_numbers: dict[str, int] = {}
-        leaves: dict[str, tuple[str, str] | None] = {}
-        for entry in scheduled:
-            origin, declaration, migration_class = entry.origin, entry.declaration, entry.migration_class
-            if declaration["app_label"] not in next_numbers:
-                next_numbers[declaration["app_label"]] = self._next_number(loader, declaration["app_label"])
-                leaves[declaration["app_label"]] = self._target_leaf(
-                    loader,
-                    declaration["app_label"],
-                    origin=origin,
+        ordered = dict.fromkeys(
+            node for leaf in targets for node in loader.graph.forwards_plan(leaf)
+        )
+        relevant = {node[0] for node in ordered}
+        conflicts = {
+            label: names for label, names in loader.detect_conflicts().items()
+            if selected is None or label in relevant or label in selected
+        }
+        if conflicts:
+            raise RuntimeError(f"multiple migration leaves: {conflicts}")
+        outputs: set[Path] = set()
+        for node in ordered:
+            entry = sources.get(node)
+            if entry is None:
+                continue
+            try:
+                state = loader.project_state(nodes=[node], at_end=False)
+                applicable = entry.applies(state.clone())
+            except Exception as error:
+                raise RuntimeError(f"{entry.origin}: applies(project_state) failed") from error
+            if not isinstance(applicable, bool):
+                raise RuntimeError(f"{entry.origin}: applies(project_state) must return bool")
+            if not applicable:
+                raise RuntimeError(
+                    f"{entry.origin}: migration is not applicable to its declared prerequisite state. "
+                    "A false schema guard cannot prove a data transition completed. "
+                    "Keep the complete native migration chain, or supply a reviewed native "
+                    "replacement baseline covering that chain."
                 )
-            number = next_numbers[declaration["app_label"]]
-            next_numbers[declaration["app_label"]] += 1
-            name = f"{number:04d}_{declaration['name']}"
-            node = (declaration["app_label"], name)
-            target_leaf = leaves[declaration["app_label"]]
-            dependencies, latest_dependencies = self._resolve_dependencies(
-                loader,
-                migration_class.dependencies,
-                current_app=declaration["app_label"],
-                origin=origin,
-            )
-            if entry.round:
-                deferred_dependencies = tuple(
-                    node
-                    for label, node in leaves.items()
-                    if label != declaration["app_label"] and node is not None and node not in dependencies
-                )
-                dependencies += deferred_dependencies
-            if target_leaf is not None and target_leaf not in dependencies:
-                dependencies += (target_leaf,)
-            output_path = self.runtime_dir / declaration["app_label"] / "migrations" / f"{name}.py"
-            if output_path.exists():
-                raise RuntimeError(f"{origin}: output migration already exists at {output_path}")
-            plan = RuntimeMigrationPlan(
-                origin=origin,
-                app_label=declaration["app_label"],
-                name=name,
-                source_path=entry.source_path,
+            try:
+                entry.migration.mutate_state(state)
+            except Exception as error:
+                raise RuntimeError(f"{entry.origin}: migration state transition is invalid") from error
+            output_path = _migration_directory(node[0], allow_missing=allow_missing_packages) / f"{node[1]}.py"
+            if output_path.exists() or output_path.resolve() in outputs:
+                raise RuntimeError(f"{entry.origin}: output migration already exists at {output_path}")
+            outputs.add(output_path.resolve())
+            plans.append(RuntimeMigrationPlan(
+                origin=entry.origin,
+                app_label=node[0],
+                name=node[1],
+                source_path=entry.path,
                 source=entry.source,
                 output_path=output_path,
-                source_sha256=entry.source_sha256,
-                dependencies=dependencies,
-                latest_dependencies=latest_dependencies,
-                migration_class=migration_class,
-            )
-            migration = migration_class(name, declaration["app_label"])
-            # Django's constructor owns a mutable instance copy of the class declaration.
-            cast(list[tuple[str, str]], migration.dependencies)[:] = dependencies
-            try:
-                loader.graph.add_node(node, migration)
-                for dependency in dependencies:
-                    loader.graph.add_dependency(migration, node, dependency)
-                for run_before in self._resolve_run_before(
-                    loader,
-                    migration.run_before,
-                    current_app=declaration["app_label"],
-                    origin=origin,
-                ):
-                    loader.graph.add_dependency(migration, run_before, node)
-                loader.graph.validate_consistency()
-                loader.graph.ensure_not_cyclic()
-            except Exception as error:
-                raise RuntimeError(f"{origin}: migration graph is invalid") from error
-            leaves[declaration["app_label"]] = node
-            plans.append(plan)
-
-        skipped_origins = []
-        for addon, declaration in skipped:
-            origin = f"{addon.name}:{declaration['name']}"
-            skipped_origins.append(origin)
-            if not defer_drop_check:
-                logger.warning(
-                    "%s (app label %s): runtime migration never became applicable; skipped",
-                    origin,
-                    declaration["app_label"],
-                )
+                source_sha256=entry.sha256,
+                dependencies=tuple(entry.migration.dependencies),
+                run_before=tuple(entry.migration.run_before),
+            ))
         if apps is not None and not defer_drop_check:
-            self._check_autodetected_drops(loader, state, ProjectState.from_apps(apps), skipped_origins)
-
+            trim: set[str] | None = None
+            if selected is not None:
+                pending = {node: sources[node] for node in ordered if node in sources}
+                loader = self._bind_graph(existing, pending)
+                trim = set(selected) | {node[0] for node in pending}
+            self._check_autodetected_drops(
+                loader,
+                loader.project_state(),
+                ProjectState.from_apps(apps),
+                app_labels=trim,
+            )
         return tuple(plans)
 
-    def _schedule(
+    def _sources(
         self,
-        state: ProjectState,
+        loader: MigrationLoader,
         existing: Mapping[str, tuple[tuple[str, str], Migration, Path]],
-        *,
-        only: frozenset[str] | None = None,
-    ) -> tuple[tuple[ScheduledMigration, ...], tuple[tuple[AppConfig, Mapping[str, Any]], ...], ProjectState]:
-        """Run the round loop: guards see the state their round starts from.
-
-        Returns the applicable declarations in order with their round, the ones that
-        never became applicable, and the state after the scheduled ones. A declaration
-        already materialized in ``existing`` is verified and left to that history; with
-        ``only``, every other declaration is left out. Source, digest, guard and state
-        errors raise here, before :meth:`plan` attaches the scheduled declarations to the
-        graph, so when several exist those come first.
-        """
-
-        declared_origins: set[str] = set()
-        declarations: list[tuple[AppConfig, Mapping[str, Any]]] = []
-        for addon, entries in self._migration_declarations():
-            for declaration in entries:
+    ) -> dict[tuple[str, str], MigrationSource]:
+        sources: dict[tuple[str, str], MigrationSource] = {}
+        origins: set[str] = set()
+        replaced = {node for migration in loader.replacements.values() for node in migration.replaces}
+        for addon in self.addons:
+            for declaration in self._declarations(addon):
                 origin = f"{addon.name}:{declaration['name']}"
-                if origin in declared_origins:
+                if origin in origins:
                     raise RuntimeError(f"duplicate addon runtime migration origin {origin}")
-                declared_origins.add(origin)
+                origins.add(origin)
                 self._validate_declaration(declaration, origin)
-                if only is None or origin in only:
-                    declarations.append((addon, declaration))
-        if only is not None and (undeclared := sorted(only - declared_origins)):
-            raise RuntimeError(f"no addon declares runtime migration origins {', '.join(undeclared)}")
-
-        scheduled: list[ScheduledMigration] = []
-        pending = declarations
-        round_number = 0
-        while pending:
-            remaining: list[tuple[AppConfig, Mapping[str, Any]]] = []
-            progressed = False
-            evaluation_state = state.clone()
-            for addon, declaration in pending:
-                origin = f"{addon.name}:{declaration['name']}"
                 module = self._source_module(addon, declaration, origin)
                 migration_class = self._migration_class(module, origin)
                 if migration_class.replaces:
-                    raise RuntimeError(f"{origin}: addon runtime migrations cannot replace other migrations")
-                source_path = self._source_path(module, origin)
-                source_bytes = source_path.read_bytes()
-                source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+                    raise RuntimeError(
+                        f"{origin}: declare replacements in the host's native migration package; "
+                        "addon runtime migrations cannot replace other migrations"
+                    )
+                path = self._source_path(module, origin)
+                source_bytes = path.read_bytes()
+                sha256 = hashlib.sha256(source_bytes).hexdigest()
                 materialized = existing.get(origin)
                 if materialized is not None:
                     node, migration, _ = materialized
@@ -247,96 +375,109 @@ class RuntimeMigrations:
                             f"{origin}: materialized target {node[0]!r} differs from "
                             f"declared target {declaration['app_label']!r}"
                         )
-                    if getattr(migration, SOURCE_SHA256_ATTR, None) != source_sha256:
+                    if getattr(migration, SOURCE_SHA256_ATTR, None) != sha256:
                         raise RuntimeError(f"{origin}: source digest changed after materialization")
                     continue
+                node = (declaration["app_label"], declaration["name"])
+                if node in sources or node in loader.disk_migrations:
+                    raise RuntimeError(f"{origin}: duplicate native migration node {node!r}")
+                if node in replaced:
+                    raise RuntimeError(
+                        f"{origin}: a host replacement names {node!r}, but its immutable "
+                        "original migration is missing. Materialize and retain the complete "
+                        "original chain before declaring a native squash; partial upgrades "
+                        "must still execute that chain."
+                    )
                 applies = getattr(module, "applies", None)
                 if not callable(applies):
                     raise RuntimeError(f"{origin}: source module must define applies(project_state)")
-                try:
-                    applicable = applies(evaluation_state.clone())
-                except Exception as error:
-                    raise RuntimeError(f"{origin}: applies(project_state) failed") from error
-                if not isinstance(applicable, bool):
-                    raise RuntimeError(f"{origin}: applies(project_state) must return bool")
-                if not applicable:
-                    remaining.append((addon, declaration))
-                    continue
-                try:
-                    state = migration_class(declaration["name"], declaration["app_label"]).mutate_state(state)
-                except Exception as error:
-                    raise RuntimeError(f"{origin}: migration state transition is invalid") from error
-                scheduled.append(
-                    ScheduledMigration(
-                        round=round_number,
-                        origin=origin,
-                        addon=addon,
-                        declaration=declaration,
-                        module=module,
-                        migration_class=migration_class,
-                        source_path=source_path,
-                        source=source_bytes.decode("utf-8"),
-                        source_sha256=source_sha256,
-                    )
+                sources[node] = MigrationSource(
+                    origin=origin,
+                    migration=migration_class(node[1], node[0]),
+                    applies=applies,
+                    path=path,
+                    source=source_bytes.decode("utf-8"),
+                    sha256=sha256,
                 )
-                progressed = True
+        return sources
 
-            pending = remaining
-            if not progressed:
-                break
-            round_number += 1
-        return tuple(scheduled), tuple(pending), state
+    def _bind_graph(
+        self, loader: MigrationLoader, sources: Mapping[tuple[str, str], MigrationSource],
+    ) -> MigrationLoader:
+        """Attach native host leaves, then let Django build and replace all edges."""
 
-    def check(self) -> None:
+        leaves = {label: loader.graph.leaf_nodes(label) for label, _name in sources}
+        for node, entry in sources.items():
+            migration = entry.migration
+            dependencies = tuple(
+                self._dependency_node(raw, origin=entry.origin, kind="dependency")
+                for raw in migration.dependencies
+            )
+            # Do not guess a branch for an unrelated conflicted app. Selected
+            # targets and their actual native prerequisite labels are checked
+            # together after the complete graph establishes that closure.
+            if len(host_leaves := leaves[node[0]]) == 1 and host_leaves[0] not in dependencies:
+                dependencies += (host_leaves[0],)
+            cast(list[tuple[str, str]], migration.dependencies)[:] = dependencies
+            cast(list[tuple[str, str]], migration.run_before)[:] = tuple(
+                self._dependency_node(raw, origin=entry.origin, kind="run_before")
+                for raw in migration.run_before
+            )
+        try:
+            bound = _PendingMigrationLoader(sources)
+        except Exception as error:
+            origins = ", ".join(entry.origin for entry in sources.values())
+            raise RuntimeError(f"{origins}: migration graph is invalid: {error}") from error
+        return bound
+
+    def check(self, *, app_labels: Iterable[str] | None = None) -> None:
         """Raise when an applicable addon migration has not been materialized."""
 
-        plans = self.plan()
-        if plans:
-            origins = ", ".join(plan.origin for plan in plans)
-            raise RuntimeError(f"pending addon runtime migration {origins}")
+        if plans := self.plan(app_labels=app_labels):
+            raise RuntimeError("pending addon runtime migration " + ", ".join(plan.origin for plan in plans))
 
-    def materialize(
-        self,
-        *,
-        apps: Apps,
-    ) -> tuple[Path, ...]:
-        """Stage sources, then fail closed before Django can autodetect unsafe drops.
+    def materialize(self, *, apps: Apps, app_labels: Iterable[str] | None = None) -> tuple[Path, ...]:
+        """Stage validated sources, then guard autodetected drops before migrations.
 
-        An app-label adoption may need to materialize its destination schema and
-        data migration before downstream model diffs can point at the new graph.
-        Those source files are safe to persist: no database operation has run.
-        The second plan reloads that exact staged graph and applies the physical
-        table-owner deletion guard. A blocked cleanup therefore stops the build
-        before its following ``makemigrations`` step while leaving the reviewed
-        staging nodes available for the downstream cutover migration.
+        App-label adoption may need these staging nodes before the consumer can
+        add its cutover. No database operation runs here; an unsafe table drop
+        still stops the following makemigrations command. A missing custom
+        package requires its immediate parent to be importable; deeper missing
+        parent packages must be initialized explicitly before materialization.
         """
 
+        selected = None if app_labels is None else tuple(app_labels)
         plans = self.plan(
-            apps=apps,
-            defer_drop_check=True,
+            apps=apps, defer_drop_check=True, app_labels=selected, allow_missing_packages=True,
         )
         rendered = tuple((plan, self._render(plan)) for plan in plans)
+        # All guards, destinations and source renders passed without writes.
+        # Let Django initialize custom packages only at this mutating boundary.
+        for label in dict.fromkeys(plan.app_label for plan in plans):
+            directory = Path(MigrationWriter(Migration("_package", label)).basedir)
+            directory.mkdir(parents=True, exist_ok=True)
+            initializer = directory / "__init__.py"
+            if not initializer.exists():
+                write_atomic(initializer, "")
         for plan, source in rendered:
             write_atomic(plan.output_path, source)
         importlib.invalidate_caches()
-        remaining = self.plan(apps=apps)
-        if remaining:
-            origins = ", ".join(plan.origin for plan in remaining)
+        if remaining := self.plan(apps=apps, app_labels=selected):
             raise RuntimeError(
-                "addon runtime migration staging did not reach a fixed point: " + origins
+                "pending addon runtime migrations after materialization: "
+                + ", ".join(plan.origin for plan in remaining)
             )
         return tuple(plan.output_path for plan in plans)
 
     def _check_autodetected_drops(
-        self,
-        loader: MigrationLoader,
-        from_state: ProjectState,
-        to_state: ProjectState,
-        skipped_origins: list[str],
+        self, loader: MigrationLoader, from_state: ProjectState, to_state: ProjectState,
+        *, app_labels: set[str] | None = None,
     ) -> None:
         """Refuse Django model deletions whose physical tables still have owners."""
 
-        changes = MigrationAutodetector(from_state, to_state).changes(graph=loader.graph)
+        changes = MigrationAutodetector(from_state, to_state).changes(
+            graph=loader.graph, trim_to_apps=app_labels,
+        )
         table_owners: dict[str, list[str]] = {}
         for model in to_state.apps.get_models(include_swapped=True):
             table_owners.setdefault(model._meta.db_table, []).append(model._meta.label_lower)
@@ -357,93 +498,32 @@ class RuntimeMigrations:
                             f"still owned by {', '.join(owners)}"
                         )
         if drops:
-            skipped = ", ".join(skipped_origins) or "none"
             raise RuntimeError(
                 "unsafe autodetected model deletion: " + "; ".join(drops)
-                + f". Never-applicable runtime migration declarations: {skipped}. "
-                "Declare the missing consumer cutover migration before running makemigrations."
+                + ". Declare the missing consumer cutover migration before running makemigrations."
             )
 
-    @staticmethod
-    def _next_number(loader: MigrationLoader, app_label: str) -> int:
-        numbers = [
-            MigrationAutodetector.parse_number(name) for label, name in loader.graph.nodes if label == app_label
-        ]
-        return max((number for number in numbers if number is not None), default=0) + 1
-
-    @staticmethod
-    def _target_leaf(
-        loader: MigrationLoader,
-        app_label: str,
-        *,
-        origin: str,
-        required: bool = False,
-    ) -> tuple[str, str] | None:
-        leaves = loader.graph.leaf_nodes(app_label)
-        if len(leaves) > 1:
-            rendered = ", ".join(name for _, name in leaves)
-            raise RuntimeError(f"{origin}: runtime migration target {app_label!r} has multiple leaves: {rendered}")
-        if required and not leaves:
-            raise RuntimeError(f"{origin}: __latest__ dependency app {app_label!r} has no migration leaf")
-        return leaves[0] if leaves else None
-
-    def _resolve_dependencies(
-        self,
-        loader: MigrationLoader,
-        raw_dependencies: Iterable[tuple[str, str]],
-        *,
-        current_app: str,
-        origin: str,
-    ) -> tuple[
-        tuple[tuple[str, str], ...],
-        tuple[tuple[tuple[str, str], tuple[str, str]], ...],
-    ]:
-        dependencies: list[tuple[str, str]] = []
-        latest: list[tuple[tuple[str, str], tuple[str, str]]] = []
-        for raw_dependency in raw_dependencies:
-            node = self._dependency_node(raw_dependency, origin=origin, kind="migration dependency")
-            if node[1] == "__latest__":
-                resolved = self._target_leaf(loader, node[0], origin=origin, required=True)
-                assert resolved is not None
-                dependencies.append(resolved)
-                latest.append((node, resolved))
-                continue
-            try:
-                checked = loader.check_key(node, current_app)
-            except (IndexError, ValueError) as error:
-                raise RuntimeError(f"{origin}: invalid dependency {node!r}") from error
-            if checked is not None:
-                dependencies.append(checked)
-        return tuple(dependencies), tuple(latest)
-
     @classmethod
-    def _resolve_run_before(
-        cls,
-        loader: MigrationLoader,
-        raw_nodes: Iterable[tuple[str, str]],
-        *,
-        current_app: str,
-        origin: str,
+    def _resolve_nodes(
+        cls, loader: MigrationLoader, raw_nodes: Iterable[tuple[str, str]],
+        *, current_app: str, origin: str, kind: str,
     ) -> tuple[tuple[str, str], ...]:
         nodes: list[tuple[str, str]] = []
         for raw_node in raw_nodes:
-            node = cls._dependency_node(raw_node, origin=origin, kind="run_before node")
-            if node[1] == "__latest__":
-                raise RuntimeError(f"{origin}: run_before does not support __latest__")
+            node = cls._dependency_node(raw_node, origin=origin, kind=kind)
             try:
                 checked = loader.check_key(node, current_app)
             except (IndexError, ValueError) as error:
-                raise RuntimeError(f"{origin}: invalid run_before node {node!r}") from error
-            if checked is not None:
+                raise RuntimeError(f"{origin}: invalid {kind} {node!r}") from error
+            if checked is None and node[1] == "__latest__" and node[0] != current_app:
+                raise RuntimeError(f"{origin}: __latest__ {kind} app {node[0]!r} has no migration leaf")
+            if checked is not None and checked not in nodes:
                 nodes.append(checked)
         return tuple(nodes)
 
-    def _existing_migrations(
-        self,
-        loader: MigrationLoader,
-    ) -> dict[str, tuple[tuple[str, str], Migration, Path]]:
+    def _existing_migrations(self, loader: MigrationLoader) -> dict[str, tuple[tuple[str, str], Migration, Path]]:
         existing: dict[str, tuple[tuple[str, str], Migration, Path]] = {}
-        for node, migration in loader.disk_migrations.items():
+        for node, migration in sorted(loader.disk_migrations.items()):
             origin = getattr(migration, "angee_origin", None)
             if origin is None:
                 continue
@@ -451,7 +531,7 @@ class RuntimeMigrations:
                 raise RuntimeError(f"materialized runtime migration {node!r} has an invalid origin")
             if origin in existing:
                 raise RuntimeError(f"duplicate materialized addon runtime migration origin {origin}")
-            path = self.runtime_dir / node[0] / "migrations" / f"{node[1]}.py"
+            path = _migration_directory(node[0]) / f"{node[1]}.py"
             digest = getattr(migration, SOURCE_SHA256_ATTR, None)
             if not isinstance(digest, str) or not digest:
                 raise RuntimeError(f"{origin}: materialized migration has no source digest")
@@ -470,9 +550,7 @@ class RuntimeMigrations:
     def _dependency_node(raw: object, *, origin: str, kind: str) -> tuple[str, str]:
         """Validate a native Django graph node without truncating extra items."""
 
-        if isinstance(raw, str | bytes | Mapping | set | frozenset):
-            raise RuntimeError(f"{origin}: invalid Django {kind} {raw!r}")
-        if not isinstance(raw, Iterable):
+        if isinstance(raw, str | bytes | Mapping | set | frozenset) or not isinstance(raw, Iterable):
             raise RuntimeError(f"{origin}: invalid Django {kind} {raw!r}")
         try:
             node: tuple[object, ...] = tuple(raw)
@@ -483,25 +561,23 @@ class RuntimeMigrations:
         return cast("tuple[str, str]", node)
 
     def _declarations(self, addon: AppConfig) -> Iterator[Mapping[str, Any]]:
-        """Validate compiler fields on the unchanged host declarations."""
-
         for index, declaration in enumerate(self.declarations.migrations(addon)):
             for key in ("name", "app_label", "module"):
                 if not isinstance(declaration.get(key), str) or not declaration[key]:
                     raise RuntimeError(f"{addon.name}: migrations[{index}] requires string {key}")
             yield declaration
 
-    def _migration_declarations(self) -> Iterator[tuple[AppConfig, tuple[Mapping[str, Any], ...]]]:
-        """Read installed addons' declared data transitions."""
-
-        for addon in self.addons:
-            yield addon, tuple(self._declarations(addon))
-
     def _validate_declaration(self, declaration: Mapping[str, Any], origin: str) -> None:
         if declaration["app_label"] not in self.labels:
             raise RuntimeError(f"{origin}: unknown runtime migration target {declaration['app_label']!r}")
-        if not declaration["name"].isidentifier() or not declaration["name"].islower():
-            raise RuntimeError(f"{origin}: migration name must be a lower-case Python identifier")
+        if (
+            not declaration["name"].isidentifier()
+            or not declaration["name"].islower()
+            or declaration["name"].startswith("_")
+        ):
+            raise RuntimeError(
+                f"{origin}: migration name must be a lower-case Python identifier without a leading underscore"
+            )
 
     @staticmethod
     def _source_module(addon: AppConfig, declaration: Mapping[str, Any], origin: str) -> ModuleType:
@@ -534,41 +610,16 @@ class RuntimeMigrations:
 
     @staticmethod
     def _render(plan: RuntimeMigrationPlan) -> str:
-        source = plan.source
-        if not source.endswith("\n"):
+        if not plan.source.endswith("\n"):
             raise RuntimeError(f"{plan.origin}: source migration must end with a newline")
-        # Own the list first: a source that declares no dependencies would
-        # otherwise append to Django's shared class attribute.
-        lines = [source, f"{MATERIALIZED_FOOTER}\n", "Migration.dependencies = list(Migration.dependencies)\n"]
-        for dependency, resolved in plan.latest_dependencies:
-            lines.extend(
-                (
-                    "Migration.dependencies = [\n",
-                    f"    ({json.dumps(resolved[0])}, {json.dumps(resolved[1])}) ",
-                    f"if dependency == ({json.dumps(dependency[0])}, {json.dumps(dependency[1])}) ",
-                    "else dependency\n",
-                    "    for dependency in Migration.dependencies\n",
-                    "]\n",
-                )
-            )
-        latest = dict(plan.latest_dependencies)
-        source_dependencies = tuple(
-            latest.get((dependency[0], dependency[1]), (dependency[0], dependency[1]))
-            for dependency in plan.migration_class.dependencies
-        )
-        for dependency in plan.dependencies:
-            if dependency not in source_dependencies:
-                lines.append(
-                    f"Migration.dependencies.append(({json.dumps(dependency[0])}, {json.dumps(dependency[1])}))\n"
-                )
-        lines.extend(
-            (
-                f"Migration.angee_origin = {json.dumps(plan.origin)}\n",
-                f"Migration.angee_source_sha256 = {json.dumps(plan.source_sha256)}\n",
-            )
-        )
-        return "".join(lines)
-
+        return "".join((
+            plan.source,
+            f"{MATERIALIZED_FOOTER}\n",
+            f"Migration.dependencies = {list(plan.dependencies)!r}\n",
+            f"Migration.run_before = {list(plan.run_before)!r}\n",
+            f"Migration.angee_origin = {json.dumps(plan.origin)}\n",
+            f"Migration.angee_source_sha256 = {json.dumps(plan.source_sha256)}\n",
+        ))
 
 class DropGuardAutodetector(MigrationAutodetector):
     """Django's autodetector, refusing to drop a column or table that still holds data.

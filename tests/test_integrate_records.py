@@ -12,7 +12,7 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import actor_context, system_context
 
-from angee.base.models import AngeeQuerySet, AngeeUnscopedQuerySet
+from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import (
     ConflictKeep,

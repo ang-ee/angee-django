@@ -4,11 +4,9 @@ from typing import cast
 
 from django.db import models
 
-from angee.base.models import (
-    AngeeDataModel,
-    role_anchor,
-)
-from angee.base.refs import RetainedGenericRelation
+from angee.base.fields.relations import RetainedGenericRelation
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.roles import role_anchor
 from angee.provenance.statements import (
     Aspect,
     SourceKind,

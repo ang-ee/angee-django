@@ -12,7 +12,7 @@ from django.db import models
 from django.db.models.functions import Cast
 from rebac import to_subject_ref
 
-from angee.base.identity import public_id_for
+from angee.base.models.identity import public_id_for
 from angee.base.pagination import KeysetOrder, keyset_signer
 from angee.base.refs import generic_pointer_target
 from angee.graphql.ids import PublicID

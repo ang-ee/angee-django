@@ -24,8 +24,9 @@ from django.db.backends.signals import connection_created
 from django.urls import path
 
 from angee import asgi
-from angee.asgi import _http_app, _Lifespan, _run_boot_hooks
+from angee.asgi import _http_app, _Lifespan
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
+from angee.signals import WEB_STATEMENT_TIMEOUT_UID
 
 
 def _recording_app(name: str, sink: list[tuple[str, str]]) -> Any:
@@ -115,25 +116,6 @@ def test_http_app_requires_absolute_path_prefixes(prefix: Any) -> None:
         _http_app(app, [(prefix, app)])
 
 
-def test_run_boot_hooks_dispatches_addon_asgi_contributions(monkeypatch: Any) -> None:
-    """Core ASGI boot runs callable hooks without knowing addon implementations."""
-
-    addon = SimpleNamespace(name="example.addon")
-    calls: list[str] = []
-    monkeypatch.setattr("django.apps.apps.get_app_configs", lambda: [addon])
-
-    def contribution(app_config: Any, module_name: str, attr: str) -> list[Any]:
-        assert app_config is addon
-        assert (module_name, attr) == ("asgi", "boot_hooks")
-        return [lambda: calls.append("boot")]
-
-    monkeypatch.setattr("angee.addons.addon_contribution", contribution)
-
-    _run_boot_hooks()
-
-    assert calls == ["boot"]
-
-
 def test_only_the_web_entrypoint_bounds_postgresql_statements(monkeypatch: Any, settings: Any) -> None:
     """Web-process PostgreSQL connections carry the timeout; workers and commands keep the server's."""
 
@@ -152,17 +134,17 @@ def test_only_the_web_entrypoint_bounds_postgresql_statements(monkeypatch: Any, 
     def open_connection(vendor: str = "postgresql") -> None:
         connection_created.send(sender=None, connection=SimpleNamespace(vendor=vendor, cursor=Cursor))
 
-    monkeypatch.setattr(asgi, "_run_boot_hooks", lambda: None)
     monkeypatch.setattr(asgi, "_websocket_urlpatterns", list)
     monkeypatch.setattr(asgi, "_http_mounts", list)
-    open_connection()  # a Celery worker or management command never builds the web app
+    connection_created.disconnect(dispatch_uid=WEB_STATEMENT_TIMEOUT_UID)
+    open_connection()  # a worker or command does not register the ASGI receiver
     assert statements == []
     try:
         asgi._application()
         open_connection()
         open_connection("sqlite")
     finally:
-        connection_created.disconnect(dispatch_uid=asgi.WEB_STATEMENT_TIMEOUT_UID)
+        connection_created.disconnect(dispatch_uid=WEB_STATEMENT_TIMEOUT_UID)
     assert statements == [("SELECT set_config('statement_timeout', %s, false)", ["60000"])]
 
     statements.clear()
@@ -171,7 +153,7 @@ def test_only_the_web_entrypoint_bounds_postgresql_statements(monkeypatch: Any, 
         asgi._application()
         open_connection()
     finally:
-        connection_created.disconnect(dispatch_uid=asgi.WEB_STATEMENT_TIMEOUT_UID)
+        connection_created.disconnect(dispatch_uid=WEB_STATEMENT_TIMEOUT_UID)
     assert statements == []
 
 
@@ -181,7 +163,6 @@ def test_an_invalid_web_statement_timeout_fails_at_boot(monkeypatch: Any, settin
 
     from django.core.exceptions import ImproperlyConfigured
 
-    monkeypatch.setattr(asgi, "_run_boot_hooks", lambda: None)
     settings.ANGEE_WEB_STATEMENT_TIMEOUT = value
     with pytest.raises(ImproperlyConfigured, match="ANGEE_WEB_STATEMENT_TIMEOUT"):
         asgi._application()
@@ -370,7 +351,7 @@ def test_websocket_addon_wrappers_are_optional_and_run_after_authentication(
             return middleware
         return [wrap]
 
-    monkeypatch.setattr("angee.addons.addon_contribution", contribution)
+    monkeypatch.setattr(asgi, "addon_contribution", contribution)
 
     async def endpoint(scope: Any, receive: Any, send: Any) -> None:
         assert scope["user"].is_anonymous

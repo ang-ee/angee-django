@@ -22,8 +22,8 @@ from rebac.schema import AllowedSubject, FieldBinding, PermArrow, PermRef
 
 from angee.base.models.audit import AuditMixin, retained_set_null
 from angee.base.models.base import AngeeModel
+from angee.base.models.persistence import PersistenceMixin
 from angee.base.permissions import actor_user_id, effective_rebac_definition, instance_actor
-from angee.base.querysets import SystemQuerysetMixin
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -44,7 +44,7 @@ class OwnerQuerySet(RebacQuerySet[_ModelT]):
         return self.filter(owner=user).system_context(reason="ownership.release").update(owner=None)
 
 
-class ItemOwnershipMixin(SystemQuerysetMixin, models.Model):
+class ItemOwnershipMixin(PersistenceMixin, models.Model):
     """Let a container retain ownership of newly created items through their parent access.
 
     Adopters gate updates with ``write__owns_items = share`` in their Zed schema.
@@ -57,7 +57,7 @@ class ItemOwnershipMixin(SystemQuerysetMixin, models.Model):
         abstract = True
 
 
-class OwnerMixin(AuditMixin, SystemQuerysetMixin):
+class OwnerMixin(AuditMixin, PersistenceMixin):
     """Give a grant root transferable ownership independent of its audit attribution.
 
     A non-null owner wins. Otherwise an owning container or ``save(ownerless=True)``

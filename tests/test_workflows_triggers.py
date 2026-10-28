@@ -14,8 +14,8 @@ from rebac.actors import is_sudo
 from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationship
 
-from angee.base.implementations import impl_choices_enum
-from angee.base.models import row_lock_paths
+from angee.base.fields.implementation import impl_choices_enum
+from angee.base.querysets import row_lock_paths
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.node import AngeeNode

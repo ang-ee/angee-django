@@ -14,7 +14,7 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
-from angee.base.identity import public_id_of
+from angee.base.models.identity import public_id_of
 from angee.base.refs import generic_pointer_target
 from angee.graphql.publishing import mute_changes, publish_change
 from angee.nexus.timeline import CORRESPONDENCE_KIND, CorrespondenceKind

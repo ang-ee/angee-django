@@ -7,7 +7,7 @@ import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from rebac import actor_context, system_context
 
-from angee.base.identity import public_id_of
+from angee.base.models.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.decisions.testing.models import Decision
 from tests.conftest import create_platform_admin

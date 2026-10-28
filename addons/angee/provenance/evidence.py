@@ -12,7 +12,7 @@ from django.db import models
 from pydantic import BaseModel, ConfigDict, JsonValue
 from rebac.resources import model_resource_type
 
-from angee.base.identity import instances_from_public_ids, public_id_for
+from angee.base.models.identity import instances_from_public_ids, public_id_for
 from angee.base.permissions import require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 

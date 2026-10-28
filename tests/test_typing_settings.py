@@ -127,7 +127,7 @@ def test_typing_host_keeps_default_framework_composition() -> None:
     host = json.loads(result.stdout)
     assert "angee.money" in host["apps"]
     assert "angee.workflows" in host["apps"]
-    assert "tests.typing_host.TypingHostConfig" in host["apps"]
+    assert "tests.typing_host" in host["apps"]
     assert host["addon_dirs"] == [str(root / "addons")]
     assert host["runtime"] == str(root / ".mypy_cache/typing_runtime")
     assert host["database"] == {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
@@ -163,7 +163,7 @@ def test_typing_host_uses_declared_project_paths_without_live_database_or_runtim
     assert "angee.money" in host["apps"]
     assert "typing_consumer" in host["apps"]
     assert "angee.workflows" not in host["apps"]
-    assert "tests.typing_host.TypingHostConfig" in host["apps"]
+    assert "tests.typing_host" in host["apps"]
     assert host["addon_dirs"] == [str(addon_dir), str(root / "addons")]
     assert host["runtime"] == str(project / ".mypy_cache/typing_runtime")
     assert host["database"] == {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}

@@ -13,30 +13,20 @@ Model-owned edge contracts live in :mod:`angee.base.models.refs`.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Self
 
 from django.apps import apps
-from django.contrib.contenttypes.fields import GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
-from django.db import DEFAULT_DB_ALIAS, models
+from django.db import models
 from rebac import ObjectRef, to_object_ref
 from rebac.field_backing import canonical_model
 from rebac.resources import model_resource_type
 
-from angee.base.identity import public_id_for
 from angee.base.lineage import concrete_child_models
-
-
-class RetainedGenericRelation(GenericRelation):
-    """Query retained edges without collecting them on the target's deletion."""
-
-    def bulk_related_objects(
-        self, objs: Sequence[models.Model], using: str = DEFAULT_DB_ALIAS,
-    ) -> models.QuerySet[models.Model]:
-        return models.QuerySet(model=self.related_model, using=using).none()
+from angee.base.models.identity import public_id_for
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +54,6 @@ class RecordRef:
             public_id=public_id_for(model, object_id),
             resource_type=model_resource_type(model) or "",
         )
-
 
 
 def record_view_refs(*records: RecordRef, using: str | None = None) -> tuple[RecordRef, ...]:

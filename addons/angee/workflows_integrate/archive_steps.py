@@ -4,14 +4,15 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from angee.base.identity import public_id_of
-from angee.base.implementations import ImplBase, resolve_all_impl_classes, resolve_impl_class
+from angee.base.implementations import ImplBase, check_impl_registry, resolve_all_impl_classes, resolve_impl_class
+from angee.base.models.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionFact, DecisionProposal, DecisionRequest
 from angee.provenance.evidence import FactAuthority
 from angee.workflows.context import StepContext
@@ -266,3 +267,6 @@ class ArchiveSummary(Step[list[MapItem[ArchiveExecutionOutput]], list[MapItem[Ar
     def run(self, ctx: Any) -> Settlement:
         return ctx.done(ctx.input, outcome="partial" if any(item.outcome == "error" for item in ctx.input)
                         else "complete")
+
+
+check_archive_extractor_registry = partial(check_impl_registry, ArchiveExtractor)

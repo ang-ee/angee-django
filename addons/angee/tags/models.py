@@ -45,19 +45,16 @@ from rebac.field_backing import canonical_model
 from rebac.resources import model_for_resource_type, model_resource_type
 
 from angee.base.fields.text import ColorField
-from angee.base.identity import instance_from_public_id
-from angee.base.models import (
-    AngeeDataModel,
-    ArchiveMixin,
-    ArchiveQuerySet,
-    AuditMixin,
-    InputExtensionsMixin,
-    MergeableMixin,
-    MergeableQuerySet,
-    MergePolicy,
-    RecordRefMixin,
-    role_anchor,
-)
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.identity import instance_from_public_id
+from angee.base.models.inputs import InputExtensionsMixin
+from angee.base.models.merge import MergeableMixin
+from angee.base.models.merge_references import MergePolicy
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.roles import role_anchor
+from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
+from angee.base.querysets import MergeableQuerySet
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -343,5 +340,5 @@ class TaggedModel(InputExtensionsMixin):
 
 TagRole = role_anchor("tags/role", name="TagRole")
 """The ``tags/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective tags manager. See :func:`angee.base.models.role_anchor`.
+an effective tags manager. See :func:`angee.base.models.roles.role_anchor`.
 """

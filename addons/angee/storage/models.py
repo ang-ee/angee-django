@@ -78,25 +78,16 @@ from rebac.schema.introspection import permission_sources
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.identity import canonical_subject_ref, public_subject_ref
-from angee.base.models import (
-    AngeeDataModel,
-    ArchiveMixin,
-    ArchiveQuerySet,
-    AuditMixin,
-    DirectRecordAccess,
-    HierarchyMixin,
-    HierarchyQuerySet,
-    ItemOwnershipMixin,
-    MergePolicy,
-    OwnerMixin,
-    OwnerQuerySet,
-    RecordRefMixin,
-    TrashMixin,
-    TrashQuerySet,
-    role_anchor,
-    row_lock_paths,
-)
-from angee.base.permissions import actor_user_id
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
+from angee.base.models.merge_references import MergePolicy
+from angee.base.models.ownership import ItemOwnershipMixin, OwnerMixin, OwnerQuerySet
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.roles import role_anchor
+from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet, TrashMixin, TrashQuerySet
+from angee.base.permissions import DirectRecordAccess, actor_user_id
+from angee.base.querysets import row_lock_paths
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -1931,7 +1922,7 @@ StorageRole = role_anchor("storage/role")
 
 The const-backed ``admin`` relation on ``storage/role`` (``permissions.zed``)
 registers through this anchor's ``rebac_resource_type`` (``rebac.E009``); the row
-is never created or read. See :func:`angee.base.models.role_anchor`.
+is never created or read. See :func:`angee.base.models.roles.role_anchor`.
 """
 
 

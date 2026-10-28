@@ -18,7 +18,7 @@ from django.http import HttpRequest
 from rebac import system_context
 from rebac.resources import model_resource_type
 
-from angee.base.identity import instance_from_public_id, public_id_for
+from angee.base.models.identity import instance_from_public_id, public_id_for
 
 
 def group_subject_type() -> str:

@@ -614,12 +614,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `use<Addon>T()` in an addon (created with `createNamespaceT(ns, fallback)`),
   with namespace-relative English keys in the namespace bundle. A prop whose default is a
   label defaults to `undefined` and resolves `?? t("key")` in the body — never call
-  `t()` in a default parameter. No hardcoded copy in a component. Four boundaries
+  `t()` in a default parameter. No hardcoded copy in a component. Three boundaries
   stay plain English: an addon's declarative manifest menu/route `label:` and
   chatter/drawer contribution labels (chrome data, not in-component copy — none
-  are routed), a form registered via `forms:` (a statically parsed element,
-  never rendered as a component, so a hook cannot reach its `<Field label>`),
-  and a dashboard widget row-column `label` (authored resource data).
+  are routed) and a dashboard widget row-column `label` (authored resource data).
+  A form registered via `forms:` is a component (`RegisteredFormView` renders it),
+  so `use<Addon>T()` reaches its `<Field label>`.
 - Every icon is a registered glyph rendered via `<Glyph name="…">` (or the
   `renderGlyph(icon)` slot adapter). A component never imports `lucide-react`
   directly: base glyphs live in `chrome/icon-registry.ts`; an addon contributes its

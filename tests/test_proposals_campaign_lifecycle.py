@@ -12,7 +12,7 @@ from rebac import PermissionDenied, actor_context, current_actor, sudo, system_c
 from rebac.models import PermissionAuditEvent, active_relationship_model
 from strawberry import Schema
 
-from angee.base.models import StaleRevisionError
+from angee.base.models.locks import StaleRevisionError
 from angee.graphql.deletion import DeletePreview
 from angee.projects.testing.models import Milestone, Project, ProjectBinding, Task
 from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion

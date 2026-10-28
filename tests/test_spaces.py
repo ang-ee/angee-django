@@ -20,18 +20,16 @@ from rebac.backends import backend
 from rebac.models import SchemaRelation, active_relationship_model
 
 from angee.base.build import (
-    apply_schema_paths,
     extension_source_map,
     merged_schema_relpath,
     merged_schemas,
     render_zed,
 )
-from angee.base.testing.permissions import installed_field_owners
+from angee.base.testing.permissions import emit_permissions, installed_field_owners
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.messaging.testing.models import Party, Person, Thread
 from angee.projects.testing.models import Queue
 from angee.spaces.testing.models import Group, Membership
-from angee.utils.files import write_atomic
 from tests import test_messaging_graphql
 from tests.conftest import (
     MarkdownPage,
@@ -60,11 +58,8 @@ def spaces_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
     app_configs = list(apps.get_app_configs())
     runtime_dir = tmp_path / "runtime"
     source_map = extension_source_map(app_configs, field_owners=installed_field_owners(app_configs))
-    for relpath, text in source_map.items():
-        write_atomic(runtime_dir / relpath, text)
-
     originals = {config: getattr(config, "rebac_schema", None) for config in app_configs}
-    apply_schema_paths(app_configs, runtime_dir, sources=source_map)
+    emit_permissions(app_configs, runtime_dir, sources=source_map)
 
     call_command("rebac", "sync", verbosity=0)
     try:

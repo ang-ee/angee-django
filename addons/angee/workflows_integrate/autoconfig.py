@@ -5,7 +5,6 @@ from typing import TypedDict
 _Settings = TypedDict(
     "_Settings",
     {
-        "ANGEE_IMPL_REGISTRIES:append": list[str],
         "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES": dict[str, str],
         "ANGEE_WORKFLOW_STEP_CLASSES.integrate_stream": str,
         "ANGEE_WORKFLOW_STEP_CLASSES.integrate_rescan": str,
@@ -18,7 +17,6 @@ _Settings = TypedDict(
 )
 
 SETTINGS: _Settings = {
-    "ANGEE_IMPL_REGISTRIES:append": ["angee.workflows_integrate.archive_steps.ArchiveExtractor"],
     "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES": {},
     "ANGEE_WORKFLOW_STEP_CLASSES.integrate_stream": "angee.workflows_integrate.steps.StreamStage",
     "ANGEE_WORKFLOW_STEP_CLASSES.integrate_rescan": "angee.workflows_integrate.steps.Rescan",

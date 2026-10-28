@@ -13,7 +13,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.auth.utils import get_current_user
 
-from angee.base.identity import public_id_for
+from angee.base.models.identity import public_id_for
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode

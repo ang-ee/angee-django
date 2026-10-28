@@ -45,8 +45,9 @@ from strawberry.scalars import JSON
 from strawberry_django.auth.utils import get_current_user
 from strawberry_django.utils.requests import get_request
 
-from angee.base.identity import instance_from_public_id, public_subject_ref
-from angee.base.models import AngeeModel
+from angee.base.identity import public_subject_ref
+from angee.base.models.base import AngeeModel
+from angee.base.models.identity import instance_from_public_id
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permission_expression

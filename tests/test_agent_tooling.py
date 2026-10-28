@@ -69,7 +69,7 @@ from angee.agents_runtime_pydantic.toolsets import (
     _accessible_tool_grant_ids,
     _assert_in_process_compatible,
 )
-from angee.base.models import AuditMixin
+from angee.base.models.audit import AuditMixin
 from angee.mcp.graphql import _CompiledTool
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
 

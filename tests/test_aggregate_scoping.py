@@ -13,7 +13,7 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 from strawberry import auto
 
-from angee.base.models import AngeeDataModel
+from angee.base.models.base import AngeeDataModel
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas

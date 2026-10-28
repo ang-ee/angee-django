@@ -12,9 +12,8 @@ dependencies = [
   "pydantic>=2.13",
   "channels>=4.0",
   "channels-redis>=4.2",
-  # The core wheel pins the exact django-zed-rebac release; this addon only adds
-  # the extra, so a core bump never contradicts a host's generated group.
-  "django-zed-rebac[strawberry-django]>=0.27.0",
+  # The foundation owns REBAC; this addon adds its native GraphQL integration.
+  "django-zed-rebac[strawberry-django]>=0.30.0",
   "strawberry-django-aggregates @ git+https://github.com/ang-ee/strawberry-django-aggregates.git@0f374854d19b2709b6d77ae872090ab2a751f1dc",
   "strawberry-django-hasura @ git+https://github.com/ang-ee/strawberry-django-hasura.git@4e1c2da2bcbbc90cc586fef3db8d70f5cd6ccfc0",
   # The GraphQL addon owns the fork pin as a direct reference so every composed

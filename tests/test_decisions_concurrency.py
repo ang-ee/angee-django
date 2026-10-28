@@ -9,7 +9,7 @@ import pytest
 from django.db import close_old_connections, connection, connections, transaction
 from rebac import system_context
 
-from angee.base.models import StaleRevisionError
+from angee.base.models.locks import StaleRevisionError
 from angee.decisions.testing.drivers import seed_decision
 from angee.decisions.testing.models import Decision
 from tests.conftest import create_user, vault_for
