@@ -10,7 +10,7 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
 from angee.errors import RecordAccessSubjectRefused
-from angee.models import Stage
+from angee.base.models import Stage
 from tests.conftest import Vault
 from tests.core_persistence import OwnedRow
 
@@ -70,6 +70,9 @@ class FallbackStage(Stage):
     class Meta(Stage.Meta):
         abstract = False
         app_label = "scopedemo"
+        constraints = [models.UniqueConstraint(
+            fields=("container", "position"), name="fallback_stage_container_position",
+        )]
 
 
 SUBJECT_SCHEMA = """

@@ -11,7 +11,7 @@ class TimelineConfig(AppConfig):
         from django.db.models.signals import pre_delete, pre_save
 
         from angee.graphql.publishing import change_published, connect_observers
-        from angee.signals import bulk_updated, connect_for_models
+        from angee.base.signals import bulk_updated, connect_for_models
         from angee.timeline.events import before_delete, before_save, kinds_for, queue_change, queue_updates
 
         connect_for_models(

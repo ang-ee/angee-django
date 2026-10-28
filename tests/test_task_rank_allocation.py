@@ -9,7 +9,7 @@ import pytest
 from django.db import connection
 from rebac import system_context
 
-from angee.fields import FractionalRankField
+from angee.base.fields.ordering import FractionalRankField
 from angee.projects.testing.models import Task
 
 

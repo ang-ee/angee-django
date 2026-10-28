@@ -14,7 +14,7 @@ from django.db import models, transaction
 from django.db.models.fields import NOT_PROVIDED
 from rebac.models import active_relationship_model
 
-from angee.models import AngeeModel
+from angee.base.models import AngeeModel
 from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.models import Resource

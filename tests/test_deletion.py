@@ -26,7 +26,7 @@ from angee.graphql.deletion import (
 )
 from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE
 from angee.iam import signals as iam_signals
-from angee.models import AngeeModel
+from angee.base.models import AngeeModel
 from tests.tables import model_tables
 
 

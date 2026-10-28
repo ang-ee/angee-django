@@ -74,11 +74,12 @@ from rebac.field_backing import resolve_field_backing
 from rebac.resources import model_resource_type
 from rebac.schema.introspection import permission_sources
 
-from angee.actors import actor_user_id, user_subject_type
-from angee.fields import StateField
-from angee.identity import canonical_subject_ref, public_subject_ref
-from angee.impl import ImplClassField
-from angee.models import (
+from rebac import user_subject_type
+from angee.base.permissions import actor_user_id
+from angee.base.fields.state import StateField
+from angee.base.identity import canonical_subject_ref, public_subject_ref
+from angee.base.fields.implementation import ImplClassField
+from angee.base.models import (
     AngeeDataModel,
     ArchiveMixin,
     ArchiveQuerySet,
@@ -120,6 +121,7 @@ from angee.storage.uploads import (
     truncate_filename,
 )
 from angee.tags.models import TaggedModel
+from angee.resources.mixins import ResourceLoadMixin
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +233,7 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel):
         if cached is not None:
             self._storage_cache[key] = cached
             return cached
-        backend_class = cast(type[StorageBackend], self.resolve_impl("backend_class"))
+        backend_class = self.get_backend_class_impl()
         instance = backend_class(backend_config=config)
         self._storage_cache[key] = instance
         while len(self._storage_cache) > _STORAGE_CACHE_MAX_SIZE:
@@ -643,7 +645,7 @@ class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
             raise ValidationError({"drive": "A folder requires a drive."})
 
 
-class MimeType(AngeeDataModel):
+class MimeType(ResourceLoadMixin, AngeeDataModel):
     """Reference row for one MIME type.
 
     The master-tier taxonomy seed is the source of truth; rows are read-only
@@ -1882,7 +1884,7 @@ class FileAttachment(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel):
     ergonomic reverse accessor. Declare that reverse relation on the topmost
     REBAC-typed MTI ancestor that :func:`rebac.generic_target` keys the edge on,
     so the delete collector filters at the write content type (the placement
-    invariant in :mod:`angee.refs`). Existing-edge access follows the file
+    invariant in :mod:`angee.base.refs`). Existing-edge access follows the file
     parent; creation follows the target relation the target's app declares in
     ``permissions.zed``.
     """
@@ -1929,7 +1931,7 @@ StorageRole = role_anchor("storage/role")
 
 The const-backed ``admin`` relation on ``storage/role`` (``permissions.zed``)
 registers through this anchor's ``rebac_resource_type`` (``rebac.E009``); the row
-is never created or read. See :func:`angee.models.role_anchor`.
+is never created or read. See :func:`angee.base.models.role_anchor`.
 """
 
 

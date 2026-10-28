@@ -12,7 +12,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import generic_target, system_context, to_subject_ref
 
-from angee.actors import actor_user_id
+from angee.base.permissions import actor_user_id
 from angee.extraction.acquisition import ExtractionConfig, PageCarrier, PartCarrier, PreparedDocument, prepare_pages
 from angee.extraction.contracts import (
     CorrectionBinding,
@@ -24,11 +24,11 @@ from angee.extraction.contracts import (
 )
 from angee.extraction.enums import ExtractionErrorCode, ExtractionRole, ExtractionStatus
 from angee.extraction.pointers import json_pointer_value, result_selectors
-from angee.identity import public_id_of
-from angee.jsonschema import validate
-from angee.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet
+from angee.base.identity import public_id_of
+from angee.base.validators import validate
+from angee.base.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet
 from angee.provenance.evidence import EvidenceReference, readable_records
-from angee.refs import record_ref_for
+from angee.base.refs import RecordRef
 from angee.serialization import canonical_json_sha256, strip_null_bytes
 
 if TYPE_CHECKING:
@@ -229,7 +229,7 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                     "mime_type": source.mime_type,
                 }
             )
-        reference = record_ref_for(target)
+        reference = RecordRef.from_instance(target)
         lineage_identity = canonical_json_sha256(
             {
                 "original_source": reference.public_id

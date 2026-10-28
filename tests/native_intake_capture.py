@@ -21,7 +21,7 @@ from rebac.roles import grant as grant_role
 from angee.errors import RecordAccessSubjectRefused
 from angee.graphql.schema import GraphQLSchemas
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
-from angee.models import StaleRevisionError
+from angee.base.models import StaleRevisionError
 
 
 def grant_rows(store):

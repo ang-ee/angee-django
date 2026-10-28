@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from django.db import models
 
-from angee.models.manager import AngeeManager, AngeeUnscopedManager
-from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet, AngeeHistoryUnscopedQuerySet
+from angee.base.managers import AngeeManager, AngeeUnscopedManager, MergeableUnscopedManager
+from angee.provenance.contrib.angee.querysets import (
+    AngeeHistoryMergeableUnscopedQuerySet, AngeeHistoryQuerySet, AngeeHistoryUnscopedQuerySet,
+)
 
 _AngeeHistoryManagerBase = AngeeManager.from_queryset(AngeeHistoryQuerySet)
 
@@ -19,3 +21,12 @@ class AngeeHistoryManager[T: models.Model](_AngeeHistoryManagerBase[T]):
 
 class AngeeHistoryUnscopedManager[T: models.Model](_AngeeHistoryUnscopedManagerBase[T]):
     """Explicit captured base manager for Angee record models."""
+
+
+_AngeeHistoryMergeableUnscopedManagerBase = MergeableUnscopedManager.from_queryset(
+    AngeeHistoryMergeableUnscopedQuerySet,
+)
+
+
+class AngeeHistoryMergeableUnscopedManager[T: models.Model](_AngeeHistoryMergeableUnscopedManagerBase[T]):
+    """Captured base manager explicitly selecting the merge identity contract."""

@@ -6,6 +6,11 @@ as a dependency and compose its model mixins. The model foundation has no
 provenance dependency.
 
 [`context.py`](context.py) owns logical boundaries and commit-aware persistence.
+Its native transaction adapter tracks the identity of an `on_commit` callback
+in Django's callback queue: savepoint rollback removes that callback, while
+release retains it. This lets the next captured write recreate a rolled-back
+attribution row without querying it on every write. The public `on_commit`
+notification alone cannot distinguish those states before the outer commit.
 [`history.py`](history.py) and [`querysets.py`](querysets.py) extend Django and
 simple-history's native model, manager and signal contracts. They do not import
 Angee model or permission policy. The explicit

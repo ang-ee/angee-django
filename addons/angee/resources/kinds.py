@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from angee.impl import ImplBase
+from angee.base.implementations import ImplBase
 
 if TYPE_CHECKING:
     from angee.resources.entries import ResourceEntry, ResourceGroup

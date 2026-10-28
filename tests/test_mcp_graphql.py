@@ -46,7 +46,7 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
 from angee.graphql.actions import ActionResult, action_guard
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas

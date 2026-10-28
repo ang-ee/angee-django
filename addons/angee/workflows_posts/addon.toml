@@ -3,4 +3,4 @@ name = "angee.workflows_posts"
 description = "Comment reply eligibility and scheduling through workflow steps"
 keywords = ["posts", "agents", "workflows"]
 category = "Workflows"
-depends_on = ["angee.posts", "angee.agents", "angee.workflows_agents"]
+depends_on = ["angee.base", "angee.posts", "angee.agents", "angee.workflows_agents"]

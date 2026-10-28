@@ -21,7 +21,7 @@ from rebac import schema_changes
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
 from angee.addons import addon_manifest
-from angee.build import PermissionIntegration, composed_grants
+from angee.base.build import PermissionIntegration, composed_grants
 from angee.compose.appgraph import AppGraph
 from angee.compose.apps import ComposeConfig
 from angee.compose.declarations import model_declaration
@@ -30,7 +30,7 @@ from angee.compose.rendering import render_models
 from angee.compose.runtime import Runtime
 from angee.conf import ProjectContract
 from angee.management.commands.angee import Command
-from angee.models import (
+from angee.base.models import (
     AngeeModel,
     role_anchor,
 )
@@ -1226,8 +1226,7 @@ def _provision_options(**overrides: Any) -> dict[str, Any]:
     """Build a provision options dict with every flag defaulted off."""
 
     options: dict[str, Any] = {
-        "demo": False,
-        "bootstrap_admin": False,
+        "after_if_installed": [],
         "force_rebac": False,
         "wait_db": 60,
         "post_build": False,
@@ -1237,27 +1236,27 @@ def _provision_options(**overrides: Any) -> dict[str, Any]:
 
 
 def test_provision_plan_default_flags_covers_the_no_flag_lifecycle() -> None:
-    """The bare plan runs build→migrate→sync→load→schema with no optional steps."""
+    """The native plan builds, migrates, synchronizes permissions and checks; addons are explicit."""
 
     assert Command._provision_plan(_provision_options()) == [
         ["angee", "build"],
         ["makemigrations", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
-        ["reconcile_permissions"],
-        ["rebac", "--skip-checks", "sync", "--yes"],
+        ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes"],
         ["check", "--database", "default"],
-        ["resources", "load"],
-        ["schema"],
     ]
 
 
-def test_provision_plan_demo_loads_demo_resources() -> None:
-    """``--demo`` appends ``--include-demo`` to the resources load step only."""
-
-    plan = Command._provision_plan(_provision_options(demo=True))
-
-    assert ["resources", "load", "--include-demo"] in plan
-    assert ["resources", "load"] not in plan
+def test_provision_parser_preserves_explicit_addon_command_lines() -> None:
+    """The native CLI preserves quoted addon arguments for the post-build owner."""
+    parser = Command().create_parser("manage.py", "angee")
+    options = vars(parser.parse_args([
+        "provision", "--after-if-installed", "resources load --include-demo",
+        "--after-if-installed", "addon_command --name 'quoted value'",
+    ]))
+    assert options["after_if_installed"] == [
+        "resources load --include-demo", "addon_command --name 'quoted value'",
+    ]
 
 
 def test_provision_plan_force_rebac_force_overwrites_the_sync() -> None:
@@ -1265,34 +1264,42 @@ def test_provision_plan_force_rebac_force_overwrites_the_sync() -> None:
 
     plan = Command._provision_plan(_provision_options(force_rebac=True))
 
-    assert ["rebac", "--skip-checks", "sync", "--yes", "--force-overwrite"] in plan
-    assert ["rebac", "--skip-checks", "sync", "--yes"] not in plan
+    assert ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes", "--force-overwrite"] in plan
+    assert ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes"] not in plan
 
 
-def test_provision_plan_bootstrap_admin_appends_a_final_step() -> None:
-    """``--bootstrap-admin`` appends ``bootstrap_admin`` as the last step."""
+@pytest.mark.parametrize("flag", ["--demo", "--bootstrap-admin"])
+def test_provision_parser_rejects_retired_capability_flags(flag: str) -> None:
+    """Product actions are explicit addon commands, so retired host flags fail loudly."""
+    parser = Command().create_parser("manage.py", "angee")
+    with pytest.raises(CommandError, match="unrecognized arguments"):
+        parser.parse_args(["provision", flag])
 
-    plan = Command._provision_plan(_provision_options(bootstrap_admin=True))
 
-    assert plan[-1] == ["bootstrap_admin"]
-    assert Command._provision_plan(_provision_options())[-1] != ["bootstrap_admin"]
+@pytest.mark.parametrize("command_line", ["", "'unterminated"])
+def test_provision_rejects_invalid_addon_commands_before_work(command_line, monkeypatch) -> None:
+    """A malformed explicit addon request never starts provisioning."""
+    command = Command()
+    monkeypatch.setattr(
+        command, "_wait_for_database", lambda seconds: pytest.fail("invalid command began provisioning"),
+    )
+    with pytest.raises(CommandError, match="command line"):
+        command._handle_provision(_provision_options(after_if_installed=[command_line]))
 
 
 def test_provision_plan_combines_every_flag() -> None:
-    """All flags together yield the full demo + force + bootstrap plan."""
+    """Addon requests do not change the mandatory native migration/check plan."""
 
-    plan = Command._provision_plan(_provision_options(demo=True, force_rebac=True, bootstrap_admin=True))
+    plan = Command._provision_plan(_provision_options(
+        force_rebac=True, after_if_installed=["resources load --include-demo", "schema", "bootstrap_admin"],
+    ))
 
     assert plan == [
         ["angee", "build"],
         ["makemigrations", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
-        ["reconcile_permissions"],
-        ["rebac", "--skip-checks", "sync", "--yes", "--force-overwrite"],
+        ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes", "--force-overwrite"],
         ["check", "--database", "default"],
-        ["resources", "load", "--include-demo"],
-        ["schema"],
-        ["bootstrap_admin"],
     ]
 
 
@@ -1301,7 +1308,9 @@ def test_provision_plan_builds_before_it_migrates() -> None:
 
     for options in (
         _provision_options(),
-        _provision_options(demo=True, force_rebac=True, bootstrap_admin=True),
+        _provision_options(
+            force_rebac=True, after_if_installed=["resources load --include-demo", "schema", "bootstrap_admin"],
+        ),
     ):
         plan = Command._provision_plan(options)
         makemigrations = plan.index(["makemigrations", "--noinput", "--skip-checks"])
@@ -1317,14 +1326,14 @@ def test_provision_defers_checks_only_across_the_schema_identity_transition() ->
     assert [step for step in plan if "--skip-checks" in step] == [
         ["makemigrations", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
-        ["rebac", "--skip-checks", "sync", "--yes"],
+        ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes"],
     ]
     assert (
         plan.index(["migrate", "--noinput", "--skip-checks"])
-        < plan.index(["rebac", "--skip-checks", "sync", "--yes"])
+        < plan.index(["rebac", "--skip-checks", "sync", "--prune-stale", "--yes"])
         < plan.index(["check", "--database", "default"])
     )
-    assert plan.index(["check", "--database", "default"]) < plan.index(["resources", "load"])
+    assert plan[-1] == ["check", "--database", "default"]
 
 
 def test_provision_analyzes_the_existing_tables_of_apps_migrated_forward() -> None:
@@ -1363,8 +1372,7 @@ def test_provision_plan_can_cross_an_old_persisted_rebac_identity() -> None:
     assert plan[1:6] == [
         ["makemigrations", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
-        ["reconcile_permissions"],
-        ["rebac", "--skip-checks", "sync", "--yes"],
+        ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes"],
         ["check", "--database", "default"],
     ]
 
@@ -1388,9 +1396,8 @@ def test_provision_builds_then_starts_one_post_build_child(
     monkeypatch.setattr(command, "_wait_for_database", lambda seconds: events.append(("wait", seconds)))
     monkeypatch.setattr(command, "_run_step", lambda step: events.append(("step", step)))
     options = _provision_options(
-        demo=True,
         force_rebac=True,
-        bootstrap_admin=True,
+        after_if_installed=["resources load --include-demo", "schema", "bootstrap_admin"],
         wait_db=12,
     )
 
@@ -1408,9 +1415,10 @@ def test_provision_builds_then_starts_one_post_build_child(
                 "angee",
                 "provision",
                 "--post-build",
-                "--demo",
                 "--force-rebac",
-                "--bootstrap-admin",
+                "--after-if-installed", "resources load --include-demo",
+                "--after-if-installed", "schema",
+                "--after-if-installed", "bootstrap_admin",
             ],
             False,
         ),
@@ -1461,7 +1469,9 @@ def test_provision_post_build_runs_remaining_steps_in_order_without_respawning(
     """The child reuses one populated registry and never repeats parent work."""
 
     calls: list[list[str]] = []
-    options = _provision_options(post_build=True, demo=True, bootstrap_admin=True)
+    options = _provision_options(
+        post_build=True, after_if_installed=["resources load --include-demo", "schema", "bootstrap_admin"],
+    )
     command = Command()
     messages: list[str] = []
     monkeypatch.setattr(command.stdout, "write", lambda message, *args, **kwargs: messages.append(message))
@@ -1476,9 +1486,14 @@ def test_provision_post_build_runs_remaining_steps_in_order_without_respawning(
         lambda *args, **kwargs: pytest.fail("the post-build child must not spawn another child"),
     )
 
+    monkeypatch.setattr(
+        "angee.management.commands.angee.get_commands",
+        lambda: {"resources": "resources", "schema": "graphql", "bootstrap_admin": "iam"},
+    )
     command._handle_provision(options)
 
-    assert calls == Command._provision_plan(options)[1:]
+    assert calls == [*Command._provision_plan(options)[1:],
+                     ["resources", "load", "--include-demo"], ["schema"], ["bootstrap_admin"]]
     assert "angee provision: ok" not in messages
 
 
@@ -1540,7 +1555,6 @@ def test_provision_run_step_preserves_each_commands_cli_check_policy(
         ("angee", None),
         ("makemigrations", True),
         ("migrate", True),
-        ("reconcile_permissions", None),
         ("rebac", True),
         ("check", None),
         ("resources", None),
@@ -1671,12 +1685,13 @@ def test_provision_parser_accepts_the_internal_post_build_entrypoint() -> None:
 
     parser = Command().create_parser("manage.py", "angee")
 
-    options = vars(parser.parse_args(["provision", "--post-build", "--demo", "--force-rebac", "--bootstrap-admin"]))
+    options = vars(parser.parse_args([
+        "provision", "--post-build", "--force-rebac", "--after-if-installed", "bootstrap_admin",
+    ]))
 
     assert options["post_build"] is True
-    assert options["demo"] is True
     assert options["force_rebac"] is True
-    assert options["bootstrap_admin"] is True
+    assert options["after_if_installed"] == ["bootstrap_admin"]
 
 
 def test_provision_help_hides_the_internal_post_build_entrypoint(
@@ -2075,7 +2090,7 @@ import angee.conf
 import angee.management.bootstrap
 import angee.compose.composer
 assert not settings.configured
-for module in ('angee.compose.runtime', 'angee.models', 'rebac.models'):
+for module in ('angee.compose.runtime', 'angee.base.models', 'rebac.models'):
     assert module not in sys.modules, module
 """,
         ],

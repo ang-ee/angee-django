@@ -22,7 +22,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_ai.settings import ThinkingLevel
 from rebac import to_subject_ref
 
-from angee.actors import actor_user_id
+from angee.base.validators import validate_value
+from angee.base.permissions import actor_user_id
 from angee.agents.backends import InferenceBackend
 from angee.extraction.contracts import (
     DocumentPart,
@@ -32,7 +33,7 @@ from angee.extraction.contracts import (
 )
 from angee.extraction.enums import ExtractionSourceKind
 from angee.extraction.profiles import ExtractionProfile
-from angee.impl import ImplBase
+from angee.base.implementations import ImplBase
 from angee.storage.models import UploadState
 
 
@@ -95,7 +96,7 @@ class PartCarrier(BaseModel):
     def read(self, file: Any) -> DocumentPart:
         """Read one protected part envelope from its immutable storage carrier."""
         content = file.read_verified(max_bytes=settings.ANGEE_EXTRACTION_MAX_BYTES, expected_digest=self.content_hash)
-        return ImplBase.parse_value(json.loads(content), DocumentPart, "part")
+        return validate_value(DocumentPart, json.loads(content), field="part")
 
 
 class SourceSnapshot(BaseModel):

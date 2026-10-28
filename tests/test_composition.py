@@ -9,8 +9,8 @@ from django.apps import apps
 from django.db import models
 from rebac import MissingActorError, RebacMixin, SubjectRef, system_context
 
-from angee import identity as identity_module
-from angee.identity import (
+from angee.base import identity as identity_module
+from angee.base.identity import (
     canonical_subject_ref,
     instance_from_public_id,
     public_data_id_field,
@@ -18,7 +18,7 @@ from angee.identity import (
     public_id_of,
     public_subject_ref,
 )
-from angee.models import (
+from angee.base.models import (
     AngeeDataModel,
     AngeeModel,
 )

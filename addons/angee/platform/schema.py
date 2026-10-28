@@ -21,7 +21,8 @@ from strawberry.scalars import JSON
 
 from angee.graphql.access import actor_can_read
 from angee.graphql.actions import ActionResult
-from angee.graphql.data import hasura_model_resource, hasura_pydantic_resource
+from angee.graphql.data.hasura import hasura_model_resource
+from angee.graphql.data.pydantic_resource import hasura_pydantic_resource
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.platform import composed
 from angee.platform.models import Addon as AddonModel

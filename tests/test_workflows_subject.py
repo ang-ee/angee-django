@@ -16,7 +16,7 @@ from rebac import (
     write_relationships,
 )
 
-from angee.models import row_lock_paths
+from angee.base.models import row_lock_paths
 from angee.workflows import schema as workflow_schema
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus

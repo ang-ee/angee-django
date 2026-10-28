@@ -18,7 +18,7 @@ from angee.compose.composer import Composer
 from angee.conf import prepend_import_paths
 from angee.project import PROJECT_DIR_ENV, find_project_dir, project_dir
 
-BASE_APP = "angee.apps.BaseConfig"
+BASE_APP = "angee.base.apps.BaseConfig"
 GRAPHQL_APP = "angee.graphql.apps.GraphQLConfig"
 
 
@@ -121,6 +121,11 @@ def test_resources_root_expands_framework_dependencies(tmp_path: Path) -> None:
     assert GRAPHQL_APP not in installed
     assert "angee.iam.apps.IAMConfig" not in installed
     assert "REBAC_UNIVERSAL_ADMIN_ROLE" not in settings
+    assert "angee.jobs" not in installed
+    assert "simple_history" not in installed
+    assert "angee.provenance.apps.ProvenanceConfig" not in installed
+    assert "CELERY_TASK_SOFT_TIME_LIMIT" not in settings
+    assert "ANGEE_CHANGESET_MODEL" not in settings
 
 
 def test_iam_user_is_the_default_auth_model(tmp_path: Path) -> None:
@@ -220,7 +225,7 @@ def test_iam_auth_throttling_comes_from_axes(tmp_path: Path) -> None:
 
 
 def test_addons_are_sorted_by_declared_dependencies(tmp_path: Path) -> None:
-    """The host may list addons in any order; AppConfig depends_on orders them."""
+    """The host may list addons in any order; Their native manifests order them."""
 
     settings = _compose(tmp_path)
     installed = _installed_paths(settings["INSTALLED_APPS"])
@@ -244,46 +249,43 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
     settings = _compose(tmp_path)
 
     assert _installed_paths(settings["INSTALLED_APPS"]) == [
-        "django_yamlconf",
-        "angee.compose.apps.ComposeConfig",
+        'django_yamlconf',
+        'angee.compose.apps.ComposeConfig',
+        'angee.apps.AngeeConfig',
+        'django.contrib.contenttypes.apps.ContentTypesConfig',
+        'rebac.apps.RebacConfig',
         BASE_APP,
-        "django.contrib.contenttypes.apps.ContentTypesConfig",
-        "rebac.apps.RebacConfig",
-        "simple_history",
-        # Core apps are an always-on prefix rather than addon dependencies.
-        "django_celery_beat.apps.BeatConfig",
-        "angee.jobs",
-        "channels.apps.ChannelsConfig",
+        'channels.apps.ChannelsConfig',
         GRAPHQL_APP,
-        "angee.resources",
-        "axes.apps.AppConfig",
-        "django.contrib.auth.apps.AuthConfig",
-        "django.contrib.sessions.apps.SessionsConfig",
-        "angee.iam.apps.IAMConfig",
-        "angee.timeline.apps.TimelineConfig",
-        "angee.provenance.apps.ProvenanceConfig",
-        "angee.integrate.apps.IntegrateConfig",
-        "angee.integrate_vcs.apps.IntegrateVcsConfig",
-        "angee.mcp.apps.MCPConfig",
-        "angee.operator",
-        "angee.agents.apps.AgentsConfig",
-        "angee.agents_integrate_anthropic",
-        "angee.decisions.apps.DecisionsConfig",
-        # Storage reads its files' tags, so the tags vocabulary sorts before it.
-        "angee.tags",
-        "angee.storage.apps.StorageConfig",
-        "angee.parties.apps.PartiesConfig",
-        # OIDC login now composes parties (it claims the signed-in user's own
-        # handle), so it sorts after parties and its storage dependency.
-        "angee.iam_integrate_oidc.apps.IAMIntegrateOidcConfig",
-        "django.contrib.postgres.apps.PostgresConfig",
-        "angee.messaging.apps.MessagingConfig",
-        # The notes example takes record tasks, so projects and its dependencies sort before it.
-        "angee.knowledge.apps.KnowledgeConfig",
-        "angee.scheduling.apps.SchedulingConfig",
-        "angee.projects.apps.ProjectsConfig",
-        "angee.workflows.apps.WorkflowsConfig",
-        "example.notes",
+        'angee.resources',
+        'angee.web',
+        'axes.apps.AppConfig',
+        'django.contrib.auth.apps.AuthConfig',
+        'django.contrib.sessions.apps.SessionsConfig',
+        'angee.iam.apps.IAMConfig',
+        'django_celery_beat.apps.BeatConfig',
+        'angee.jobs',
+        'angee.timeline.apps.TimelineConfig',
+        'simple_history',
+        'angee.provenance.apps.ProvenanceConfig',
+        'angee.integrate.apps.IntegrateConfig',
+        'angee.integrate_vcs.apps.IntegrateVcsConfig',
+        'angee.mcp.apps.MCPConfig',
+        'angee.operator',
+        'angee.agents.apps.AgentsConfig',
+        'angee.agents_integrate_anthropic',
+        'angee.decisions.apps.DecisionsConfig',
+        'angee.tags',
+        'angee.storage.apps.StorageConfig',
+        'angee.parties.apps.PartiesConfig',
+        'angee.iam_integrate_oidc.apps.IAMIntegrateOidcConfig',
+        'django.contrib.postgres.apps.PostgresConfig',
+        'angee.messaging.apps.MessagingConfig',
+        'angee.knowledge.apps.KnowledgeConfig',
+        'angee.scheduling.apps.SchedulingConfig',
+        'angee.projects.apps.ProjectsConfig',
+        'angee.workflows.apps.WorkflowsConfig',
+        'example.notes',
     ]
 
 
@@ -1108,15 +1110,7 @@ def test_defaults_module_seeds_compose_installed_app(tmp_path: Path) -> None:
     )
 
     assert defaults["INSTALLED_APPS"] == [
-        "django_yamlconf",
-        "angee.compose",
-        "angee",
-        "django.contrib.contenttypes",
-        "rebac",
-        "simple_history",
-        "django_celery_beat",
-        "angee.jobs",
-        "angee.resources",
+        "django_yamlconf", "angee.compose", "angee", "angee.base", "angee.resources",
     ]
     assert defaults["USE_TZ"] is True
     assert defaults["DEFAULT_AUTO_FIELD"] == "django.db.models.BigAutoField"
@@ -1715,7 +1709,7 @@ def test_autoconfig_reuses_native_module_and_preserves_incremental_values(tmp_pa
 
     monkeypatch.setattr(django_yamlconf, "add_attributes", record)
     namespace = {"ITEMS": ["project"]}
-    config = AutoConfig(namespace, reserved_settings=frozenset())
+    config = AutoConfig(namespace)
     config.update_app(AppConfig.create("pipeline_first"))
     config.update_app(AppConfig.create("pipeline_second"))
     assert namespace["ITEMS"] == ["project", "first", "second"]
@@ -1730,11 +1724,11 @@ def test_autoconfig_nested_contributions_do_not_mutate_addon_defaults(tmp_path, 
     _write_addon(tmp_path, "registry_extension", autoconfig="SETTINGS = {'REGISTRY.extension': 'extra.Impl'}\n")
     monkeypatch.syspath_prepend(str(tmp_path))
     first = {}
-    composer = AutoConfig(first, reserved_settings=frozenset())
+    composer = AutoConfig(first)
     composer.update_app(AppConfig.create("registry_owner"))
     composer.update_app(AppConfig.create("registry_extension"))
     second = {}
-    AutoConfig(second, reserved_settings=frozenset()).update_app(AppConfig.create("registry_owner"))
+    AutoConfig(second).update_app(AppConfig.create("registry_owner"))
 
     assert first["REGISTRY"] == {"core": "core.Impl", "extension": "extra.Impl"}
     assert second["REGISTRY"] == {"core": "core.Impl"}
@@ -1895,3 +1889,13 @@ def test_plain_composer_preserves_host_choices_and_adds_no_capability_defaults(t
     assert "COMPOSE_INTEGRATIONS" not in namespace
     assert "REBAC_BACKEND" not in namespace
     assert "ANGEE_CHANGESET_MODEL" not in namespace
+
+
+def test_host_only_autoconfig_does_not_install_foundation_or_job_policy() -> None:
+    """Native host hooks do not make optional model and execution settings mandatory."""
+    namespace = {"INSTALLED_APPS": ["angee"]}
+    AutoConfig.apply_installed(namespace, environment=False)
+    assert namespace["INSTALLED_APPS"] == ["angee"]
+    for name in ("ANGEE_IMPL_REGISTRIES", "ANGEE_MERGE_GUARDS", "REBAC_STRICT_MODE",
+                 "ANGEE_CHANGESET_MODEL", "CELERY_TASK_SOFT_TIME_LIMIT"):
+        assert name not in namespace

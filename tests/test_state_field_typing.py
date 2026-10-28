@@ -11,7 +11,7 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.fields import StateField
+from angee.base.fields.state import StateField
 
 
 @pytest.mark.parametrize("nullable", [False, True])
@@ -50,7 +50,7 @@ def test_state_field_constructor_and_descriptor_typing(tmp_path: Path) -> None:
 from typing import assert_type
 from django.db import models
 from django.utils.translation import gettext_lazy
-from angee.fields import StateField
+from angee.base.fields import StateField
 
 class Status(models.TextChoices):
     ENABLED = 'enabled', 'Enabled'

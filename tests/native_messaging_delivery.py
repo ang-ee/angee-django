@@ -49,7 +49,7 @@ from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, ParsedH
 from angee.messaging.email import AnymailEmailChannelBackend
 from angee.messaging.events import message_ingested
 from angee.messaging.managers import DeliveryReconciliationBusy
-from angee.models import StaleRevisionError
+from angee.base.models import StaleRevisionError
 from angee.posts import mcp_tools
 from angee.posts.backends import RECONCILIATION_SKEW_MARGIN, FeedBackend, FeedChannelBackend, ParsedPost, RecordRefusal
 from angee.posts.ingest import land_posts

@@ -5,7 +5,7 @@ name = "angee.storage_integrate"
 description = "External storage mounts synchronized through integration bridges"
 keywords = ["storage", "integrate", "mounts"]
 category = "Integration"
-depends_on = ["angee.storage", "angee.integrate"]
+depends_on = ["angee.base", "angee.storage", "angee.integrate", "angee.web"]
 
 [resources]
 master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]

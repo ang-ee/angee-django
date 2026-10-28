@@ -56,9 +56,9 @@ below.
 | Abstract-source discovery, donor order, parent relationships and collisions | [`ModelComposition`](../angee/compose/model_composition.py) |
 | Concrete class source text | [`angee.compose.rendering`](../angee/compose/rendering.py) |
 | Literal feature declarations and generated-file contributions | [`BuildIntegration`](../angee/compose/declarations.py), selected by installed autoconfig |
-| REBAC Meta, additive grants and permission-schema projection | [`PermissionIntegration`](../angee/build.py) |
+| REBAC Meta, additive grants and permission-schema projection | [`PermissionIntegration`](../addons/angee/base/build.py) |
 | Source-local catalogue/tier projection and seeded-row retirement exemption | [`CatalogueIntegration`](../addons/angee/resources/build.py) |
-| Web manifest and Tailwind source projection | [`WebIntegration`](../angee/web.py) |
+| Web manifest and Tailwind source projection | [`WebIntegration`](../addons/angee/web/build.py) |
 | Host URL/ASGI, middleware and external artifact ownership defaults | [`angee.autoconfig`](../angee/autoconfig.py) |
 | Artifact assembly and explicit build/check/cleanup orchestration | [`Runtime`](../angee/compose/runtime.py) |
 | Shared generated-artifact drift and guarded filesystem cleanup | [`GeneratedTree`](../angee/utils/artifacts.py) |
@@ -386,44 +386,43 @@ An addon declaring migrations for its own app label keeps that native runtime
 app, even after its last model is retired, so Django can apply the cutover and
 retain its migration history.
 
-#### Retiring `angee.base` imports
+#### Foundation and provenance upgrade cutoff
 
-**0.3.0 is the removal cutoff for the `angee.base` compatibility package.** An
-installation that carries forward a database must first run compatible framework
-code that still contains `angee.base` and `reset_migration_history`. It cannot
-skip that step if its migration graph imports the retired package: Django imports
-applied migration modules before it can plan an upgrade or reset their history.
+**0.3.0 replaces the old compatibility package with the real `angee.base`
+foundation addon.** An existing database must first pass through compatible code
+that can import its complete historical migration graph. Django imports applied
+migration modules before planning an upgrade; the new foundation addon does not
+restore retired APIs such as `angee.base.mixins.SourceKind`.
 
 From each affected stack's host environment, while compatible code is installed:
 
-1. Update pinned addons to their current import owners. In particular, older
-   messaging bridges imported `SourceKind` from `angee.base.mixins`; current
-   consumers import it from `angee.provenance.statements`.
-2. Finish pending migrations and resolve composed model drift through the normal
-   build, `makemigrations` and `migrate` lifecycle. Then run
-   `manage.py reset_migration_history --database <alias>` for the affected database.
-   The command refuses pending composed migrations and model drift; it replaces
-   composed migration files and their applied records without recreating tables.
-3. Confirm the complete retained migration graph and installed addon code contain
-   no `angee.base` imports. The reset does not rewrite non-composed migrations;
-   retire those imports through their owning app's supported migration-history
-   transition before proceeding. A migration tree shared by several databases
-   needs a coordinated cutover of all of them before its files are replaced.
-4. Upgrade to the code without the package. Fresh installations generate migrations
-   using the current owners directly; carried-forward installations load their
-   collapsed histories. Verify both paths before deployment.
+1. Upgrade pinned addon callers to the current owners. Older messaging bridges
+   must import `SourceKind` from `angee.provenance.statements`.
+2. Apply pending migrations and resolve model drift through normal build,
+   `makemigrations` and `migrate`. Where histories import retired APIs, run
+   `manage.py reset_migration_history --database <alias>`. The command refuses
+   pending composed migrations or drift and replaces composed migration files
+   and applied records without recreating tables.
+3. Inventory the entire retained graph. Non-composed migration histories need
+   their owning app's supported retirement process; a graph shared by several
+   databases needs a coordinated cutover before replacing its files.
+4. Upgrade framework, addons and rendered host entrypoints together. The host
+   profile includes `angee.base`; its `BaseConfig` inherits Django's persisted
+   `base` label. Tables and content types keep their identities. Fresh generated
+   migrations serialize current field and callable owners.
 
-Live implementations remain in `angee.fields`, `angee.impl`, `angee.identity`,
-`angee.indexes` and `angee.models`; the frozen historical REBAC helper has no live
-replacement. Django's persisted app label `base` remains owned by `BaseConfig` in
-`angee.apps`. Removing the Python directory does not rename that label, database
-tables or content types.
+The retained top-level `angee.fields`, `angee.impl`, `angee.indexes`,
+`angee.models.audit` and `angee.models.ownership` modules contain narrow aliases
+for existing serialized or fingerprinted migration consumers. They are not live
+implementation owners. Keep authored `runtime_migrations` source bytes unchanged:
+materialized migrations record their source fingerprint. Remove an alias only
+when all retained migration consumers of that exact path have been retired.
 
-The provenance ownership move follows the same cutoff. Retire retained imports
-of `angee.changesets`, `angee.evidence`, `angee.models.history` and
-`angee.models.statements` while compatible code still exists, then adopt the
-[addon owners](../addons/angee/provenance/README.md). Upgrade pinned consumer
-addons and refresh rendered host entrypoints together with the framework.
+Provenance has one physical [addon owner](../addons/angee/provenance/README.md).
+Retire old `angee.changesets`, `angee.evidence`, `angee.models.history` and
+`angee.models.statements` imports while compatible code can still load them.
+Base models opt into provenance mixins explicitly. Verify both fresh installation
+and an existing-database upgrade before deployment.
 
 ### Composed addon dependencies
 

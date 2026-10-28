@@ -9,7 +9,7 @@ from django.core.exceptions import PermissionDenied
 from django.db import models, transaction
 from rebac import actor_context
 
-from angee.impl import ImplClassField
+from angee.base.fields.implementation import ImplClassField
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.knowledge_integrate_notion.backend import NotionBackend
 

@@ -16,7 +16,7 @@ import {
   type UseScopedTreeExplorerOptions,
 } from "./useScopedTreeExplorer";
 
-export interface ScopedExplorerRootPicker extends Pick<RelationPickerProps, "onSearchChange" | "searchState"> {
+export interface ScopedExplorerRootPicker extends Pick<RelationPickerProps, "onSearchChange" | "searchState" | "onOpenChange"> {
   "aria-label": string;
   placeholder?: string;
   searchPlaceholder?: string;
@@ -103,6 +103,7 @@ export function ScopedExplorerPane<
                 options={rootOptions}
                 placeholder={rootPicker.placeholder}
                 searchPlaceholder={rootPicker.searchPlaceholder}
+                onOpenChange={rootPicker.onOpenChange}
                 onSearchChange={rootPicker.onSearchChange}
                 searchState={rootPicker.searchState}
                 create={rootPicker.create}

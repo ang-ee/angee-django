@@ -32,7 +32,7 @@ from strawberry.types.union import StrawberryUnion
 from strawberry_django_hasura import hasura_config
 
 from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
-from angee.data.metadata import DataResourceMetadata, serialize_data_resources
+from angee.graphql.data.contracts import DataResourceMetadata
 from angee.errors import DomainError, classify_error, validation_error
 from angee.graphql.data.metadata import (
     data_resource_contributions,
@@ -46,8 +46,8 @@ from angee.graphql.introspection import (
     surface_name,
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
-from angee.models import StaleRevisionError
-from angee.permissions import require_rebac_queryset
+from angee.base.models import StaleRevisionError
+from angee.base.permissions import require_rebac_queryset
 from graphql import GraphQLError, GraphQLObjectType, GraphQLSchema, assert_input_type, coerce_input_value
 
 DEFAULT_SCHEMA_NAME = "public"
@@ -523,7 +523,7 @@ class GraphQLSchemas:
         schema.angee_resources = resources
         extensions = dict(schema._schema.extensions or {})
         angee_extensions = dict(cast(dict[str, object], extensions.get("angee") or {}))
-        angee_extensions["resources"] = serialize_data_resources(resources, schema_name=name)
+        angee_extensions["resources"] = [item.as_wire(schema_name=name) for item in resources]
         extensions["angee"] = angee_extensions
         schema._schema.extensions = extensions
 

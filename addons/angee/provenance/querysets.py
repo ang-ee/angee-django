@@ -117,6 +117,7 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
         history_model = self.model._meta.concrete_model or self.model
         history = self.capture_history()
         candidates = list(objs)
+        self._for_write = True
         if history is not None and candidates:
             if ignore_conflicts:
                 raise NotSupportedError("History capture cannot identify bulk_create(ignore_conflicts=True) rows.")
@@ -124,9 +125,9 @@ class HistoryQuerySet(models.QuerySet[_ModelT]):
                 obj.pk is None for obj in candidates
             ):
                 raise NotSupportedError("History capture requires bulk-insert primary keys on this database.")
-            current_changeset(required=True, record=True)
-        self._for_write = True
         with transaction.atomic(using=self.db) if history is not None else nullcontext(), write_group():
+            if history is not None and candidates:
+                current_changeset(required=True, record=True)
             rows = super().bulk_create(
                 candidates,
                 batch_size=batch_size,

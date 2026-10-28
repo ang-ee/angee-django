@@ -6,7 +6,7 @@ from rebac import actor_context, system_context
 
 from angee.dashboards.models import DashboardConflictError
 from angee.graphql.schema import GraphQLSchemas
-from angee.models import StaleRevisionError
+from angee.base.models import StaleRevisionError
 from angee.provenance.context import changeset_model
 from tests.conftest import create_user
 from tests.test_dashboards import DashboardTarget, dashboard_tables  # noqa: F401

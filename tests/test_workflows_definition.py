@@ -7,8 +7,8 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from angee.impl import ImplBase
-from angee.jsonschema import validator
+from angee.base.implementations import ImplBase
+from angee.base.validators import validator
 from angee.workflows.bindings import SourceBinding
 from angee.workflows.definition import Definition
 from angee.workflows.states import ERROR_OUTCOME, WaitingKind

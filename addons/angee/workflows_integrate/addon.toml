@@ -3,7 +3,15 @@ name = "angee.workflows_integrate"
 description = "Durable bridge sync cycles and reviewed archive imports"
 keywords = ["workflows", "integrate", "sync", "archive"]
 category = "Workflows"
-depends_on = ["angee.workflows", "angee.decisions", "angee.integrate", "angee.storage"]
+depends_on = [
+  "angee.base",
+  "angee.workflows",
+  "angee.decisions",
+  "angee.integrate",
+  "angee.storage",
+  "angee.jobs",
+  "angee.provenance",
+]
 
 [resources]
 install = ["resources/install/100_workflows.workflow.yaml"]

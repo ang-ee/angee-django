@@ -10,7 +10,9 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("operation", ["explicit-source", "separate-history", "bound-history", "retained-reference"])
+@pytest.mark.parametrize("operation", [
+    "explicit-source", "separate-history", "bound-history", "retained-reference", "failed-bulk", "protected-delete",
+])
 def test_native_capture_preserves_database_owners_without_host_imports(tmp_path: Path, operation: str) -> None:
     package = tmp_path / "native_capture"
     package.mkdir()
@@ -46,9 +48,12 @@ class Container(models.Model):
     pass
 
 class Row(HistoryMixin):
-    value = models.CharField(max_length=40)
+    value = models.CharField(max_length=40, unique=True)
     container = models.ForeignKey(Container, null=True, on_delete=models.CASCADE)
     history = ModelHistory(inherit=True, use_base_model_db=False)
+
+class RetainedRow(models.Model):
+    row = models.ForeignKey(Row, on_delete=models.PROTECT)
 """)
     script = """
 import os
@@ -61,6 +66,8 @@ class StorageRouter:
 
     def db_for_read(self, model, **hints):
         if model._meta.app_label == "native_capture":
+            if sys.argv[1] in {"failed-bulk", "protected-delete"}:
+                return "default"
             if model._meta.model_name == "changeset":
                 return "secondary"
             if sys.argv[1] == "retained-reference" and model._meta.model_name == "historicalrow":
@@ -70,6 +77,8 @@ class StorageRouter:
 
     def db_for_write(self, model, **hints):
         if model._meta.app_label == "native_capture":
+            if sys.argv[1] in {"failed-bulk", "protected-delete"}:
+                return "default"
             if model._meta.model_name in {"row", "container"}:
                 return "default"
             if model._meta.model_name == "changeset":
@@ -95,21 +104,40 @@ import django
 django.setup()
 from django.contrib.auth.models import Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
-from django.db import connections
+from django.db import IntegrityError, connections
+from django.db.models.deletion import ProtectedError
 from angee.provenance.context import changeset
-from native_capture.models import Changeset, Container, Row
+from native_capture.models import Changeset, Container, RetainedRow, Row
 
-assert "angee.models" not in sys.modules
+assert "angee.base.models" not in sys.modules
 assert "angee.autoconfig" not in sys.modules
 assert "angee.provenance.models" not in sys.modules
 assert not any(name == "rebac" or name.startswith("rebac.") for name in sys.modules)
 for alias in ("default", "secondary"):
     with connections[alias].schema_editor() as editor:
-        for model in (ContentType, Permission, Group, User, Changeset, Container, Row, Row.history.model):
+        for model in (ContentType, Permission, Group, User, Changeset, Container, Row, RetainedRow, Row.history.model):
             editor.create_model(model)
 
 with changeset(fresh=True):
-    if sys.argv[1] == "explicit-source":
+    if sys.argv[1] in {"failed-bulk", "protected-delete"}:
+        row = Row.objects.create(value="retained")
+        RetainedRow.objects.create(row=row)
+        before = Changeset.objects.count()
+        assert connections["default"].get_autocommit()
+        with changeset(fresh=True):
+            try:
+                if sys.argv[1] == "failed-bulk":
+                    Row.objects.bulk_create([Row(value="retained")])
+                else:
+                    row.delete()
+            except (IntegrityError, ProtectedError):
+                pass
+            else:
+                raise AssertionError("The captured write must fail.")
+        assert Changeset.objects.count() == before
+        assert Row.objects.get(pk=row.pk).value == "retained"
+        assert Row.history.filter(id=row.pk).count() == 1
+    elif sys.argv[1] == "explicit-source":
         row = Row(value="explicit secondary")
         row.save(using="secondary")
         assert row._state.db == "secondary"
@@ -117,7 +145,7 @@ with changeset(fresh=True):
         snapshot = Row.history.using("secondary").get(id=row.pk)
         assert snapshot.value == "explicit secondary"
     elif sys.argv[1] == "retained-reference":
-        from angee.models.merge_references import ForeignKeyReference, MergePolicy
+        from angee.base.models.merge_references import ForeignKeyReference, MergePolicy
 
         container = Container.objects.create()
         row = Row.objects.create(container=container, value="retained pointer")

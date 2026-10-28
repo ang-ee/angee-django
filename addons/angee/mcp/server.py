@@ -33,7 +33,7 @@ from angee.mcp.middleware import ActorMiddleware
 from angee.mcp.verifier import RebacTokenVerifier
 
 if TYPE_CHECKING:  # pragma: no cover
-    from starlette.applications import Starlette
+    from fastmcp.server.http import StarletteWithLifespan
 
 ToolRegistrar = Callable[[FastMCP], None]
 """An addon's ``register(server)`` callable — it adds tools to the MCP server.
@@ -66,7 +66,7 @@ def mcp_server() -> FastMCP:
 
 
 @cache
-def mcp_app() -> Starlette:
+def mcp_app() -> StarletteWithLifespan:
     """Return the server's StreamableHTTP ASGI app (built once, lifespan owned by the entrypoint)."""
 
     return mcp_server().http_app(path=MOUNT_PATH, stateless_http=True, json_response=True)

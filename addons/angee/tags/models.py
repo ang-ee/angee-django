@@ -27,7 +27,7 @@ declared relations in step. The tags addon never names another addon's model.
 Compose :class:`TaggedModel` on the topmost REBAC-typed MTI ancestor the
 canonical edge keys on, never on a child, so the delete collector filters at the
 same content type the write used (the placement invariant in
-:mod:`angee.refs`).
+:mod:`angee.base.refs`).
 """
 
 from __future__ import annotations
@@ -44,9 +44,9 @@ from rebac import GenericTarget, generic_target
 from rebac.field_backing import canonical_model
 from rebac.resources import model_for_resource_type, model_resource_type
 
-from angee.fields import ColorField
-from angee.identity import instance_from_public_id
-from angee.models import (
+from angee.base.fields.text import ColorField
+from angee.base.identity import instance_from_public_id
+from angee.base.models import (
     AngeeDataModel,
     ArchiveMixin,
     ArchiveQuerySet,
@@ -61,6 +61,7 @@ from angee.models import (
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 
 
 class TagQuerySet[TagT: Tag](
@@ -76,6 +77,8 @@ TagManager = AngeeHistoryManager.from_queryset(TagQuerySet)
 
 class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel):
     """One label in a vocabulary shared by every non-anonymous actor."""
+
+    _angee_base = AngeeHistoryMergeableUnscopedManager()
 
     runtime = True
     sqid_prefix = "tag_"
@@ -341,5 +344,5 @@ class TaggedModel(InputExtensionsMixin):
 
 TagRole = role_anchor("tags/role", name="TagRole")
 """The ``tags/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective tags manager. See :func:`angee.models.role_anchor`.
+an effective tags manager. See :func:`angee.base.models.role_anchor`.
 """

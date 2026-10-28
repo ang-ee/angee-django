@@ -41,7 +41,7 @@ from angee.messaging.testing.models import (
 )
 from angee.parties.backends import ParsedAddress, ParsedContact
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
-from angee.provenance.sources import source_kind_for
+from angee.provenance.statements import StatementSourceMixin
 from angee.provenance.statements import (
     SourceKind,
 )
@@ -529,7 +529,7 @@ def test_a_moved_import_statement_stays_beside_the_directorys_and_the_directory_
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
         takeout = make_integration("move-mixed-takeout", model=Channel, backend_class="manual").integration_ptr
         directory = make_integration("move-mixed-directory", model=Directory)
-        assert source_kind_for(to_subject_ref(takeout)) == SourceKind.IMPORT
+        assert StatementSourceMixin.source_kind_for(to_subject_ref(takeout)) == SourceKind.IMPORT
         imported, carded = (
             statements._base_manager.create(
                 subject=party,

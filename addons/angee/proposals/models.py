@@ -8,8 +8,6 @@ Deliberate shares remain independent of these derived permissions.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -43,12 +41,16 @@ from rebac.relationships import delete_relationships
 from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter, SubjectRef
 
-from angee.actors import actor_user_id, instance_actor, subject_reaches_user
+from angee.serialization import STRINGIFIED_JSON, canonical_json_sha256
+
+from rebac import user_subject_type
+from angee.base.permissions import actor_user_id, instance_actor, subject_reaches_user
 from angee.errors import DomainError, RecordAccessSubjectRefused
-from angee.fields import FractionalRankField, StateField
+from angee.base.fields.ordering import FractionalRankField
+from angee.base.fields.state import StateField
 from angee.iam.identity import user_label_expression, user_label_queryset
 from angee.messaging.models import ThreadedModelMixin
-from angee.models import (
+from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeModel,
@@ -62,12 +64,11 @@ from angee.models import (
     save_state,
     transition,
 )
-from angee.models.expressions import JSONArraySubquery
+from angee.base.models.expressions import JSONArraySubquery
 from angee.money.fields import MoneyField
 from angee.proposals.inputs import RoundTemplate
 from angee.provenance.context import changeset, changeset_model, require_changeset
-from angee.provenance.contrib.angee.serialization import creation_fingerprint
-from angee.validation import validate_value
+from angee.base.validators import validate_value
 
 if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
@@ -754,7 +755,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                         and share.subject_id in groups
                         and share.optional_subject_relation == "member"
                     )
-                    wildcard = share.subject_type == "auth/user" and share.subject_id == "*"
+                    wildcard = share.subject_type == user_subject_type() and share.subject_id == "*"
                     if not (direct or group or wildcard):
                         continue
                     detail = dict(
@@ -843,28 +844,27 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             raise ValidationError({"recipient": "Only managers may choose a recipient."})
         if manager and recipient is None:
             raise ValidationError({"recipient": "Choose a user or responders."})
-        fingerprint = creation_fingerprint(
-            {
+        claim_values = {
                 "title": title,
                 "body": body,
                 "audience": audience,
                 "recipient": recipient,
             }
-        )
         claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
         with claim_boundary, transaction.atomic(), system_context(reason="proposals.round.ask"):
             locked = type(self).objects.lock_if_supported().get(pk=self.pk)
             task_model = apps.get_model("projects", "Task")
             if idempotency_key is not None:
-                replay = changeset_model().objects.claim(
+                previous = changeset_model().objects.claim_created(
                     f"proposals.clarification:{locked.pk}:{asker_id}",
                     idempotency_key,
-                    fingerprint=fingerprint,
+                    values=claim_values,
+                    model=task_model,
+                    unavailable=ValidationError(
+                        {"idempotency_key": "The claimed question is unavailable."},
+                    ),
                 )
-                if replay is not None:
-                    previous = replay.created_row
-                    if not isinstance(previous, task_model):
-                        raise ValidationError({"idempotency_key": "The claimed question is unavailable."})
+                if previous is not None:
                     return previous
             if not manager and timezone.now() > locked.last_call_at:
                 raise ValidationError("The last call for questions has passed.")
@@ -1631,18 +1631,12 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
     def _payload_hash(self, message: Message) -> str:
         """Hash the portable source payload interpreted by this parser version."""
 
-        canonical = json.dumps(
-            {
-                "parser_version": self.CAPTURE_PARSER_VERSION,
-                "preview": str(message.preview or ""),
-                "metadata": message.metadata if isinstance(message.metadata, Mapping) else {},
-            },
-            sort_keys=True,
-            ensure_ascii=False,
-            default=str,
-            separators=(",", ":"),
-        )
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        payload = {
+            "parser_version": self.CAPTURE_PARSER_VERSION,
+            "preview": str(message.preview or ""),
+            "metadata": message.metadata if isinstance(message.metadata, Mapping) else {},
+        }
+        return canonical_json_sha256(chunks=(STRINGIFIED_JSON.encode(payload),))
 
 
 class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
@@ -1857,7 +1851,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                 raise ValidationError({"round": "This round is not accepting proposal shells."})
             self.round = locked_round
             if self.responder_id is not None:
-                subject = SubjectRef.of("auth/user", str(self.responder_id))
+                subject = SubjectRef.of(user_subject_type(), str(self.responder_id))
                 if (
                     backend()
                     .check_access(subject=subject, action="manage", resource=to_object_ref(locked_round))

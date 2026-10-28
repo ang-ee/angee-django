@@ -17,7 +17,7 @@ from strawberry_django_hasura import WriteBackend
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.publishing import publish_bulk_update
 from angee.graphql.views import result_processed
-from angee.permissions import require_rebac_queryset
+from angee.base.permissions import require_rebac_queryset
 from angee.provenance.context import (
     changeset,
     changeset_model,
@@ -25,15 +25,14 @@ from angee.provenance.context import (
     mark_changeset_failed,
     require_changeset,
 )
-from angee.provenance.contrib.angee.serialization import creation_fingerprint
-from angee.signals import bulk_updated, connect_for_models
+from angee.base.signals import bulk_updated, connect_for_models
 
 
 def _claimed_create(
     model: type[models.Model],
     idempotency_key: str | None,
     *,
-    fingerprint: str,
+    values: Any,
     insert: Callable[[], Any],
 ) -> Any:
     """Insert once for one actor-scoped resource and replay its claimed row.
@@ -48,23 +47,22 @@ def _claimed_create(
         actor = current_actor()
         if not model_resource_type(model) or actor is None:
             raise ImproperlyConfigured("Idempotent resources require an actor-scoped queryset.")
-        replay = changeset_model().objects.claim(
+        replay = changeset_model().objects.claim_created(
             f"graphql.create:{model._meta.label_lower}:{actor}",
             idempotency_key,
-            fingerprint=fingerprint,
+            values=values, model=model,
+            unavailable=ValidationError(
+                {"idempotency_key": "The claimed creation result is unavailable."},
+            ),
         )
         if replay is not None:
-            created = replay.created_row
-            if not isinstance(created, model):
-                raise ValidationError({"idempotency_key": "The claimed creation result is unavailable."})
-            instance = require_rebac_queryset(model).with_actor(actor).filter(pk=created.pk).first()
+            instance = require_rebac_queryset(model).with_actor(actor).filter(pk=replay.pk).first()
             if instance is None:
                 raise PermissionDenied("The claimed creation result is not readable.")
             return instance
         instance = insert()
         require_changeset().record_created(instance)
         return instance
-
 
 
 class ClaimingWriteBackend:
@@ -82,7 +80,7 @@ class ClaimingWriteBackend:
     ) -> Any:
         values = self.backend.creation_values(data) if isinstance(self.backend, AngeeHasuraWriteBackend) else data
         return _claimed_create(
-            self.model, idempotency_key, fingerprint=creation_fingerprint(values),
+            self.model, idempotency_key, values=values,
             insert=lambda: self.backend.create(info, data),
         )
 

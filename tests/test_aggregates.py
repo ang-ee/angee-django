@@ -19,7 +19,7 @@ from strawberry import auto
 from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
 from strawberry_django_hasura import hasura_config
 
-from angee.data.metadata import (
+from angee.graphql.data.contracts import (
     DataAggregateMeasureMetadata,
     DataQueryDrill,
     DataQueryServerAxis,
@@ -28,7 +28,7 @@ from angee.data.metadata import (
     DataResourceSubtitleMetadata,
     DataResourceTypeNames,
 )
-from angee.graphql.data import hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
 from angee.graphql.data import metadata as metadata_module
 from angee.graphql.data.hasura import (
     _measure_ops_for_field,
@@ -44,7 +44,7 @@ from angee.graphql.data.resource_fields import final_input_only_resource_fields,
 from angee.graphql.ids import require_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.models import AngeeDataModel
+from angee.base.models import AngeeDataModel
 from tests.conftest import (
     SchemaAddon,
     execute_schema,
@@ -285,11 +285,11 @@ def _finalize_data_resource(
 
 
 def test_resource_field_metadata_has_a_field_owner_module() -> None:
-    """The field description is neutral while GraphQL projection stays local."""
+    """GraphQL wire declarations and projection have explicit separate owners."""
 
     from angee.graphql.data import resource_fields
 
-    assert DataResourceFieldMetadata.__module__ == "angee.data.metadata"
+    assert DataResourceFieldMetadata.__module__ == "angee.graphql.data.contracts"
     assert not hasattr(metadata_module, "DataResourceMetadata")
     assert not hasattr(resource_fields, "DataResourceFieldMetadata")
     assert metadata_module.resource_type_name is resource_fields.resource_type_name

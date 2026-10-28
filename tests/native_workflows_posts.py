@@ -46,7 +46,7 @@ from angee.agents.sessions import run_next_turn
 from angee.agents.testing.drivers import FakeRunner, update_chunk
 from angee.agents_runtime_pydantic.runtime import PydanticAIRuntime
 from angee.agents_runtime_pydantic.toolsets import AngeeToolset, ToolGrantAccess
-from angee.identity import instance_from_public_id
+from angee.base.identity import instance_from_public_id
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.posts.backends import ParsedPost
@@ -55,7 +55,7 @@ from angee.provenance.context import changeset_model
 from angee.resources.entries import ResourceEntry
 from angee.resources.loader import build_resource
 from angee.resources.widgets import resolve_ledger_xref
-from angee.tiers import ResourceTier
+from angee.resources.tiers import ResourceTier
 from angee.workflows.runner import runner
 from angee.workflows.tasks import cancel as cancel_workflow
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run

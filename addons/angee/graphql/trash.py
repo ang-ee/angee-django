@@ -10,7 +10,7 @@ from rebac.resources import model_for_resource_type
 
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.ids import PublicID
-from angee.models import TrashMixin, TrashQuerySet
+from angee.base.models import TrashMixin, TrashQuerySet
 
 TRASH_PERMISSION = "delete"
 """The record permission that moves a record to the trash and restores it."""

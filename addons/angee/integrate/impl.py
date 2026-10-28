@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
-from angee.impl import ImplBase
+from angee.base.implementations import ImplBase
 from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.live import PairingProjection, SessionLoggedOut

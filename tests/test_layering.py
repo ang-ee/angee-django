@@ -23,10 +23,9 @@ CORE_SERVING_IMPORTS = (
     "angee.compose",
     "angee.jobs",
 )
-DATA_CONTRACT_IMPORTS = (
-    "angee.data",
-    "angee.data.field_classification",
-    "angee.data.metadata",
+RESOURCE_CONTRACT_IMPORTS = (
+    "angee.graphql.data",
+    "angee.graphql.data.contracts",
 )
 REMOVED_VENDOR_MODULES = (
     "anthropic",
@@ -97,8 +96,8 @@ def test_core_serving_import_closure_stays_vendor_free() -> None:
     assert reached == set()
 
 
-def test_data_contract_import_closure_stays_transport_neutral() -> None:
-    """The data description contract reaches neither GraphQL, Strawberry, nor money."""
+def test_resource_contract_import_closure_stays_projection_free() -> None:
+    """GraphQL wire declarations load without producers, Strawberry, or money."""
 
     script = "\n".join(
         (
@@ -107,7 +106,7 @@ def test_data_contract_import_closure_stays_transport_neutral() -> None:
             "settings.configure(INSTALLED_APPS=[])",
             "import django",
             "django.setup()",
-            f"for name in {DATA_CONTRACT_IMPORTS!r}:",
+            f"for name in {RESOURCE_CONTRACT_IMPORTS!r}:",
             "    importlib.import_module(name)",
             "print(json.dumps(sorted(sys.modules)))",
         )
@@ -124,8 +123,7 @@ def test_data_contract_import_closure_stays_transport_neutral() -> None:
     reached = {
         module
         for module in closure
-        if module == "angee.graphql"
-        or module.startswith("angee.graphql.")
+        if module in {"angee.graphql.data.metadata", "angee.graphql.data.resource_fields", "angee.graphql.data.hasura"}
         or module == "angee.money"
         or module.startswith("angee.money.")
         or module == "strawberry"
@@ -144,7 +142,7 @@ def test_record_pointer_import_closure_stays_independent_of_model_mixins() -> No
             "settings.configure(INSTALLED_APPS=['django.contrib.contenttypes'])",
             "import django",
             "django.setup()",
-            "importlib.import_module('angee.refs')",
+            "importlib.import_module('angee.base.refs')",
             "print(json.dumps(sorted(sys.modules)))",
         )
     )
@@ -157,10 +155,10 @@ def test_record_pointer_import_closure_stays_independent_of_model_mixins() -> No
     )
     closure = set(json.loads(result.stdout))
 
-    assert "angee.refs" in closure
+    assert "angee.base.refs" in closure
     assert not {
         module for module in closure
-        if module == "angee.models" or module.startswith("angee.models.")
+        if module == "angee.base.models" or module.startswith("angee.base.models.")
     }
 
 
@@ -209,10 +207,11 @@ def test_framework_does_not_import_retired_ownership_owner() -> None:
 
 
 def test_addon_serving_modules_never_import_build_owners() -> None:
-    """Only an explicit build.py may load composition contracts or another build owner."""
+    """Serving modules cannot load composition; declared build and typing owners may."""
     root = PROJECT_ROOT / "addons/angee"
-    build_paths = set(root.glob("*/build.py"))
-    build_modules = {"angee.build", "angee.web"} | {
+    typing_paths = {root / "base/typing.py", root / "provenance/typing.py"}
+    build_paths = set(root.glob("*/build.py")) | typing_paths
+    build_modules = {"angee.base.build", "angee.web"} | {
         "angee." + ".".join(path.relative_to(root).with_suffix("").parts)
         for path in build_paths
     }
@@ -317,7 +316,7 @@ def test_inference_backends_catalogue_without_their_vendor_sdks() -> None:
             "import django, importlib, json, sys",
             "django.setup()",
             "from angee.agents.backends import InferenceBackend",
-            "from angee.impl import check_impl_registry, impl_choices",
+            "from angee.base.implementations import check_impl_registry, impl_choices",
             f"for name in {INFERENCE_BACKEND_MODULES!r}:",
             "    importlib.import_module(name)",
             "impl_choices(InferenceBackend)",

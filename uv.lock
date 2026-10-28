@@ -846,8 +846,8 @@ requires-dist = [
     { name = "django-simple-history", specifier = ">=3.13" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=31d1c5ca9cee7c117e73edbd0154ba02ce7d0790" },
-    { name = "hatch-angee", git = "https://github.com/ang-ee/hatch-angee.git?rev=10c5257e21bc19fb1fcdd9ca77f4e3c01ebfebd5" },
+    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=48ab2a222cac603e6b5cba4c3d8e93e5aa2ebef0" },
+    { name = "hatch-angee", specifier = ">=0.2.5" },
     { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.13" },
@@ -1085,7 +1085,7 @@ wheels = [
 [[package]]
 name = "django-zed-rebac"
 version = "0.27.3"
-source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=31d1c5ca9cee7c117e73edbd0154ba02ce7d0790#31d1c5ca9cee7c117e73edbd0154ba02ce7d0790" }
+source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=48ab2a222cac603e6b5cba4c3d8e93e5aa2ebef0#48ab2a222cac603e6b5cba4c3d8e93e5aa2ebef0" }
 dependencies = [
     { name = "django" },
 ]
@@ -1292,12 +1292,16 @@ wheels = [
 
 [[package]]
 name = "hatch-angee"
-version = "0.2.4"
-source = { git = "https://github.com/ang-ee/hatch-angee.git?rev=10c5257e21bc19fb1fcdd9ca77f4e3c01ebfebd5#10c5257e21bc19fb1fcdd9ca77f4e3c01ebfebd5" }
+version = "0.2.5"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "hatchling" },
     { name = "packaging" },
     { name = "tomlkit" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/75/46/d30e871b397c3d1d5b12d32c08ce1ca3f7d2ad79df7eda6d9684eab75f4e/hatch_angee-0.2.5.tar.gz", hash = "sha256:5f6ff9663465ed2fa465f89f874c3c2c323ca9f8959565576475014b3fad752d", size = 55765, upload-time = "2026-10-27T23:54:01.958Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4c/37/a60af13fe93402772990710ad97c493b9ac545802b3623054d0ac491cfeb/hatch_angee-0.2.5-py3-none-any.whl", hash = "sha256:3c959e2928dc4832d2fb28e06cae3bb09951c796f35057d95af79e43b99b3d14", size = 27892, upload-time = "2026-10-27T23:54:01Z" },
 ]
 
 [[package]]

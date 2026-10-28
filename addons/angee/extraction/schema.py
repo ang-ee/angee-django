@@ -11,13 +11,14 @@ from django.apps import apps
 from django.db.models import Prefetch
 from strawberry import auto
 from strawberry.scalars import JSON
+from strawberry_django.auth.utils import get_current_user
 
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_to_many, actor_scoped_to_one
-from angee.iam.permissions import request_from_info
-from angee.identity import public_id_for
+
+from angee.base.identity import public_id_for
 from angee.storage.schema import FileType
 
 Extraction = apps.get_model("extraction.Extraction")
@@ -31,7 +32,7 @@ def _readable_target(field: str) -> Callable[[strawberry.Info], Prefetch]:
 
     def prefetch(info: strawberry.Info) -> Prefetch:
         model = apps.get_model("storage.File" if field == "file" else "messaging.Message")
-        readable = model.objects.with_actor(request_from_info(info).user).with_action("read")
+        readable = model.objects.with_actor(get_current_user(info)).with_action("read")
         return Prefetch(field, queryset=readable, to_attr=f"_readable_{field}")
 
     return prefetch

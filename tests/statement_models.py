@@ -2,7 +2,7 @@
 
 from django.db import models
 
-from angee.models import (
+from angee.base.models import (
     AngeeDataModel,
 )
 from angee.money.fields import MoneyField

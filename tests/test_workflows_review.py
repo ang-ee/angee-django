@@ -8,7 +8,7 @@ from rebac.actors import is_sudo
 
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from angee.identity import public_id_of
+from angee.base.identity import public_id_of
 from angee.workflows.context import StepContext
 from angee.workflows.decision_steps import AskDecision, DecisionStep, apply_proposals
 from angee.workflows.runner import runner

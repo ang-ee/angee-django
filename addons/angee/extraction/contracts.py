@@ -10,7 +10,7 @@ from django.db.models import TextChoices
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from angee.extraction.enums import ExtractionRole, ExtractionSourceKind
-from angee.identity import public_id_of
+from angee.base.identity import public_id_of
 from angee.provenance.evidence import EvidenceReference
 
 

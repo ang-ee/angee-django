@@ -10,7 +10,7 @@ from django.db.migrations.state import ModelState, ProjectState
 from rebac import system_context
 
 from angee.compose.migrations import RuntimeMigrations
-from angee.fields import SqidField
+from angee.base.fields.identity import SqidField
 from angee.work.models import Stage
 from angee.work.runtime_migrations import stage_public_identity
 from tests.composed_host import run_composed_tests

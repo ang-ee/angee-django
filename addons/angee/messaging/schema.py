@@ -25,6 +25,7 @@ from graphql import GraphQLError
 from rebac import PermissionDenied, current_actor
 from rebac.resources import model_resource_type
 from strawberry import auto
+from strawberry_django.utils.requests import get_request
 
 from angee.graphql.actions import (
     ActionResult,
@@ -35,13 +36,7 @@ from angee.graphql.actions import (
     resolve_action_target,
 )
 from angee.graphql.capabilities import held_permissions, permissions_field
-from angee.graphql.data import (
-    AngeeHasuraWriteBackend,
-    SortAlias,
-    declared_hasura_resource_fields,
-    hasura_model_resource,
-    public_pk_decoder,
-)
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, SortAlias, declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
@@ -54,9 +49,9 @@ from angee.graphql.relations import (
 )
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import TrashedRefMixin
-from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, request_from_info
+from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import UserType
-from angee.identity import instance_from_public_id
+from angee.base.identity import instance_from_public_id
 from angee.integrate.live import PairingProjection, PairingState
 from angee.integrate.schema import BridgeTypeMixin
 from angee.messaging import connect
@@ -2127,7 +2122,7 @@ def _record_message_reaction_groups(message: Any, user: Any | None) -> list[Reco
 def _record_message_access_cache(info: strawberry.Info | None) -> dict[Any, tuple[bool, bool]]:
     """Memoize record post and moderation permissions once per thread and request."""
 
-    request = request_from_info(info) if info is not None else None
+    request = get_request(info) if info is not None else None
     if request is None:
         return {}
     cache = getattr(request, "_messaging_record_access", None)
@@ -2146,7 +2141,6 @@ def _record_message_access(record: ThreadedModelMixin, user: Any) -> tuple[bool,
         return record.can_post(user), record.can_moderate(user)
     permissions = held_permissions(record, (record.thread_post_access, "write"))
     return record.thread_post_access in permissions, "write" in permissions
-
 
 
 def _message_access(message: Any, info: strawberry.Info | None) -> dict[str, Any]:
@@ -2377,7 +2371,7 @@ def _request_user(info: strawberry.Info | None) -> Any | None:
 
     if info is None:
         return None
-    request = request_from_info(info)
+    request = get_request(info)
     user = getattr(request, "user", None)
     if user is None or getattr(user, "is_authenticated", False) is False:
         return None

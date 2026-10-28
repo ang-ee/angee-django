@@ -90,7 +90,7 @@ def test_disabling_new_capture_does_not_release_retained_reference_evidence(sett
 
     from rebac import system_context
 
-    from angee.models.merge_references import ForeignKeyReference, MergePolicy
+    from angee.base.models.merge_references import ForeignKeyReference, MergePolicy
     from tests.core_persistence import OwnershipContainer
 
     with system_context(reason="tests.history.retention"):

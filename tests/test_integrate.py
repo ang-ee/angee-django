@@ -9,7 +9,7 @@ from django.core.exceptions import ValidationError
 from django.db import connection, models
 from django.test.utils import isolate_apps
 
-from angee.fields import StateField
+from angee.base.fields.state import StateField
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.registry import models_with

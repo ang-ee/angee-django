@@ -15,7 +15,7 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
     settings.write_text(
         "from pathlib import Path\n"
         "SECRET_KEY = 'native-history-typing'\n"
-        "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', 'angee', "
+        "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', 'angee', 'angee.base', "
         "'tests.typing_history.apps.TypingHistoryConfig', 'angee.compose', 'tests.typing_host.TypingHostConfig']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"

@@ -8,7 +8,7 @@ from django.core import signing
 from django.db import models
 from rebac import SubjectRef
 
-from angee.pagination import InvalidKeysetCursor, KeysetOrder
+from angee.base.pagination import InvalidKeysetCursor, KeysetOrder
 from tests.test_system_queryset import SystemQueryThing, system_query_tables  # noqa: F401
 
 

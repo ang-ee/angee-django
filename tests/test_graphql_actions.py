@@ -34,7 +34,7 @@ from angee.graphql.actions import (
     resolve_action_target,
 )
 from angee.graphql.schema import AngeeSchema
-from angee.models import StaleRevisionError, TransitionNotAllowed
+from angee.base.models import StaleRevisionError, TransitionNotAllowed
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import create_user
 from tests.linesdemo.models import Document

@@ -82,6 +82,17 @@ class ProbeConfig(AppConfig):
 """,
         encoding="utf-8",
     )
+    commands = package / "management" / "commands"
+    commands.mkdir(parents=True)
+    (commands.parent / "__init__.py").write_text("")
+    (commands / "__init__.py").write_text("")
+    for name in ("resources", "schema", "bootstrap_admin"):
+        (commands / f"{name}.py").write_text(
+            "from django.core.management.base import BaseCommand\n"
+            "class Command(BaseCommand):\n"
+            "    def handle(self, *args, **options):\n"
+            "        pass\n"
+        )
     return root / "manage.py"
 
 
@@ -90,7 +101,9 @@ def test_provision_builds_then_runs_one_fresh_post_build_process(tmp_path: Path)
 
     manage_py = _write_topology_host(tmp_path)
     result = subprocess.run(
-        [sys.executable, str(manage_py), "angee", "provision", "--wait-db", "1", "--demo", "--force-rebac"],
+        [sys.executable, str(manage_py), "angee", "provision", "--wait-db", "1", "--force-rebac",
+         "--after-if-installed", "resources load --include-demo", "--after-if-installed", "schema",
+         "--after-if-installed", "bootstrap_admin", "--after-if-installed", "absent_addon_command"],
         cwd=tmp_path,
         env=_environment(tmp_path),
         capture_output=True,
@@ -104,11 +117,11 @@ def test_provision_builds_then_runs_one_fresh_post_build_process(tmp_path: Path)
         ["angee", "build"],
         ["makemigrations", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
-        ["reconcile_permissions"],
-        ["rebac", "--skip-checks", "sync", "--yes", "--force-overwrite"],
+        ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes", "--force-overwrite"],
         ["check", "--database", "default"],
         ["resources", "load", "--include-demo"],
         ["schema"],
+        ["bootstrap_admin"],
     ]
     assert events[0]["pid"] not in {event["pid"] for event in events[1:]}
     assert len({event["pid"] for event in events[1:]}) == 1
@@ -274,7 +287,7 @@ def test_provision_sync_replaces_invalid_historical_subject_sets_before_checks()
         with pytest.raises(SchemaError, match="names a permission"):
             call_command("check", verbosity=0)
         command = Command()
-        plan = command._provision_plan({"force_rebac": True, "demo": False, "bootstrap_admin": False})
+        plan = command._provision_plan({"force_rebac": True})
         command._run_step(next(step for step in plan if step[0] == "rebac"))
         command._run_step(["check"])
 

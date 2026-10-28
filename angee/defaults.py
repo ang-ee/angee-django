@@ -47,11 +47,7 @@ _CORE_INSTALLED_APPS_PREFIX = (
     "django_yamlconf",
     "angee.compose",
     "angee",
-    "django.contrib.contenttypes",
-    "rebac",
-    "simple_history",
-    "django_celery_beat",
-    "angee.jobs",
+    "angee.base",
 )
 INSTALLED_APPS = [
     *_CORE_INSTALLED_APPS_PREFIX,

@@ -10,7 +10,8 @@ from django.db import DatabaseError, models
 
 from angee.compose.declarations import BuildIntegration, DeclarationValue, ModelDeclaration
 from angee.compose.model_composition import ModelComposition
-from angee.tiers import ResourceTier
+from angee.resources.mixins import ResourceLoadMixin
+from angee.resources.tiers import ResourceTier
 
 
 class CatalogueIntegration(BuildIntegration):
@@ -19,7 +20,7 @@ class CatalogueIntegration(BuildIntegration):
     def model_declaration(self, composition: ModelComposition, source: type[models.Model]) -> ModelDeclaration:
         """Project only this source's declaration, never its parent's catalogue role."""
 
-        if not source.__dict__.get("catalogue", False):
+        if not issubclass(source, ResourceLoadMixin) or not source.is_catalogue_model():
             return ModelDeclaration()
         attributes: dict[str, DeclarationValue] = {
             "catalogue": True,

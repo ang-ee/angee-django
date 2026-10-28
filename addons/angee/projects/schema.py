@@ -22,15 +22,7 @@ from strawberry.scalars import JSON
 
 from angee.graphql import capabilities
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
-from angee.graphql.data import (
-    AngeeHasuraWriteBackend,
-    SortAlias,
-    declared_hasura_resource_fields,
-    declared_hasura_write_relation_fields,
-    hasura_model_resource,
-    public_pk_decoder,
-    row_annotations,
-)
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, SortAlias, declared_hasura_resource_fields, declared_hasura_write_relation_fields, hasura_model_resource, public_pk_decoder, row_annotations
 from angee.graphql.ids import PublicID, instance_for_id, optional_public_id
 from angee.graphql.inputs import InputReference, input_values
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode

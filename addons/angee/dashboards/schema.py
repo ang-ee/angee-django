@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any, cast
 
 import strawberry
@@ -17,19 +15,22 @@ from django.db.models import Q
 from rebac import PermissionDenied, current_actor
 from strawberry import auto
 from strawberry.scalars import JSON
+from strawberry_django.utils.requests import get_request
+
+from angee.serialization import ASCII_JSON, canonical_json_sha256
 
 from angee.dashboards.models import Dashboard as DashboardModel
 from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot, widget_visibility_answers
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID, require_public_id, to_public_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import TrashedRefMixin
 from angee.iam.identity import user_display_label, user_public_id
-from angee.iam.permissions import request_from_info, session_user
-from angee.identity import instance_from_public_id
-from angee.models import StaleRevisionError
+from angee.iam.permissions import session_user
+from angee.base.identity import instance_from_public_id
+from angee.base.models import StaleRevisionError
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 
 Dashboard = apps.get_model("dashboards", "Dashboard")
@@ -98,7 +99,7 @@ class DashboardType(TrashedRefMixin, AngeeNode):
 
     @strawberry_django.field(only=["owner_id"])
     def owner_label(self, info: strawberry.Info) -> str | None:
-        return user_display_label(cast(Any, self).owner_id, request=request_from_info(info))
+        return user_display_label(cast(Any, self).owner_id, request=get_request(info))
 
 
 @strawberry.type
@@ -167,7 +168,7 @@ def _summary_item(row: Any, info: strawberry.Info) -> DashboardSummaryType:
         name=row.name,
         description=row.description,
         owner=cast(strawberry.ID | None, user_public_id(row.owner_id)),
-        owner_label=user_display_label(row.owner_id, request=request_from_info(info)),
+        owner_label=user_display_label(row.owner_id, request=get_request(info)),
         revision=row.revision,
         is_trashed=row.is_trashed,
         resources=sorted(sources),
@@ -182,8 +183,8 @@ def _summary_version(user: Any, items: list[DashboardSummaryType]) -> str:
         [str(item.id), item.revision, item.can_edit, item.can_trash]
         for item in sorted(items, key=lambda value: str(value.id))
     ]
-    body = json.dumps([str(user.pk), fingerprint], separators=(",", ":"), ensure_ascii=True).encode()
-    return hashlib.sha256(body).hexdigest()
+    # The closed payload contains lists/scalars only; key sorting cannot change its bytes.
+    return canonical_json_sha256(chunks=(ASCII_JSON.encode([str(user.pk), fingerprint]),))
 
 
 _SUMMARY_CURSOR_SALT = "angee.dashboards.summary-page.v1"

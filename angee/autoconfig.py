@@ -1,42 +1,25 @@
-"""Settings contributed by the current Angee host and model foundation app."""
+"""Host bootstrap and request defaults for composed Angee applications."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, TypedDict
+from typing import TypedDict
 
 _Settings = TypedDict(
     "_Settings",
     {
-        "COMPOSE_INTEGRATIONS:append": list[str],
         "COMPOSE_APP_DECLARATIONS": str,
         "COMPOSE_ENV_PREFIXES": tuple[str, ...],
-        "COMPOSE_EXTERNAL_ARTIFACT_ROOTS": tuple[str, ...],
-        "COMPOSE_OWNED_ARTIFACT_PATHS": tuple[str, ...],
         "ROOT_URLCONF": str,
         "ASGI_APPLICATION": str,
         "MIDDLEWARE:prepend": list[str],
         "MIDDLEWARE:append": list[str],
         "ANGEE_WEB_STATEMENT_TIMEOUT": int,
-        "ANGEE_IMPL_REGISTRIES": list[str],
-        "ANGEE_HOOKS": list[str],
-        "ANGEE_MERGE_GUARDS": list[str],
-        "REBAC_BACKEND": str,
-        "REBAC_LOCAL_BACKEND_STORAGE": str,
-        "REBAC_STRICT_MODE": bool,
-        "REBAC_LINT_BARE_PREFETCH": bool,
-        "REBAC_FIELD_READ_MODE": str,
-        "REBAC_ALLOW_SUDO": bool,
-        "REBAC_SUPERUSER_BYPASS": bool,
     },
 )
 
 SETTINGS: _Settings = {
     "COMPOSE_ENV_PREFIXES": ("ANGEE_",),
     "COMPOSE_APP_DECLARATIONS": "angee.conf.ManifestDeclarations",
-    "COMPOSE_INTEGRATIONS:append": ["angee.build.PermissionIntegration", "angee.web.WebIntegration"],
-    "COMPOSE_EXTERNAL_ARTIFACT_ROOTS": ("gql", "schemas", "web"),
-    "COMPOSE_OWNED_ARTIFACT_PATHS": ("web/manifest.json", "web/tailwind.sources.css"),
     "ROOT_URLCONF": "angee.urls",
     "ASGI_APPLICATION": "angee.asgi.application",
     "MIDDLEWARE:prepend": ["django.middleware.security.SecurityMiddleware"],
@@ -45,38 +28,4 @@ SETTINGS: _Settings = {
         "django.middleware.csp.ContentSecurityPolicyMiddleware",
     ],
     "ANGEE_WEB_STATEMENT_TIMEOUT": 60,
-    "ANGEE_IMPL_REGISTRIES": [],
-    "ANGEE_HOOKS": ["ANGEE_MERGE_GUARDS"],
-    # Dotted callables that refuse merging away one record (angee.models.fold_records).
-    "ANGEE_MERGE_GUARDS": [],
-    "REBAC_BACKEND": "local",
-    "REBAC_LOCAL_BACKEND_STORAGE": "registry",
-    "REBAC_STRICT_MODE": True,
-    "REBAC_LINT_BARE_PREFETCH": False,
-    "REBAC_FIELD_READ_MODE": "redact",
-    "REBAC_ALLOW_SUDO": True,
-    # Admin reach is expressed in the schema (const-backed `admin` relations
-    # -> angee/role:admin), so all actors use grants unless a host opts into the native bypass.
-    "REBAC_SUPERUSER_BYPASS": False,
 }
-"""Django settings contributed when the model foundation is installed."""
-
-
-class _DerivedSettings(TypedDict):
-    REBAC_DEPTH_LIMIT: int
-
-
-def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
-    """Default permission depth to 8 on SQLite and 16 elsewhere.
-
-    Autoconfig supplies environment values before project settings; either
-    explicit value takes precedence over the backend default.
-    """
-
-    depth = namespace.get("REBAC_DEPTH_LIMIT")
-    if depth is not None:
-        return {"REBAC_DEPTH_LIMIT": int(depth)}
-    engine = namespace.get("DATABASES", {}).get("default", {}).get("ENGINE")
-    # Recursive permission SQL can exceed SQLite's expression-depth limit even
-    # for shallow records; this bounds compilation and inherited permission hops.
-    return {"REBAC_DEPTH_LIMIT": 8 if engine == "django.db.backends.sqlite3" else 16}

@@ -13,7 +13,7 @@ from django.core.exceptions import ImproperlyConfigured, PermissionDenied, Valid
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
-from angee.identity import public_id_of
+from angee.base.identity import public_id_of
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge

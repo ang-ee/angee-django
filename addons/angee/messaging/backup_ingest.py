@@ -26,8 +26,6 @@ pre-converts to CoreData seconds — both moves this owner leaves to the store.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections import Counter
 from collections.abc import Callable, Iterable
 from datetime import datetime
@@ -36,6 +34,8 @@ from typing import Any
 from django.apps import apps
 from django.db.models import Max
 from rebac import system_context
+
+from angee.serialization import STRINGIFIED_JSON, canonical_json_sha256
 
 from angee.messaging.backends import ParsedMessage, ParsedPart
 
@@ -71,14 +71,7 @@ class ContentKeyCounter:
     ) -> str:
         """Return the next deterministic external id for one id-less record."""
 
-        canonical = json.dumps(
-            content,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
-        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+        digest = canonical_json_sha256(chunks=(STRINGIFIED_JSON.encode(content),))[:12]
         identity = (str(thread_key), int(timestamp_ms), str(sender_key), digest)
         occurrence = self._occurrences[identity]
         self._occurrences[identity] += 1

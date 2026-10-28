@@ -20,12 +20,12 @@ from rebac.testing import install_schema
 from strawberry import auto
 
 import tests.test_messaging  # noqa: F401 -- register related models before native database setup
-from angee.fields import StateField
-from angee.graphql.data import hasura_model_resource
+from angee.base.fields.state import StateField
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.models import (
+from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -36,7 +36,7 @@ from angee.models import (
     TrashMixin,
     TrashQuerySet,
 )
-from angee.models import Stage as OrderedStage
+from angee.base.models import Stage as OrderedStage
 from angee.projects.models import Task as AbstractTask
 from angee.projects.testing.models import Queue, Stage, Task
 from angee.work.models import TaskWork
@@ -78,6 +78,9 @@ class RoutingPipelineStage(OrderedStage):
 
     class Meta:
         app_label = "tests"
+        constraints = [models.UniqueConstraint(
+            fields=("container", "position"), name="routing_stage_container_position",
+        )]
 
 
 class RoutingStageRecord(StagedModelMixin[RoutingPipelineStage], models.Model):

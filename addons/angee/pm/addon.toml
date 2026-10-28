@@ -12,6 +12,7 @@ depends_on = [
   "angee.proposals",
   "angee.proposals_work",
   "angee.work",
+  "angee.web",
 ]
 
 [resources]

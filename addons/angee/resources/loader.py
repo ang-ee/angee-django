@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import functools
-import hashlib
-import json
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -19,9 +17,9 @@ from import_export import fields, resources
 from import_export.instance_loaders import BaseInstanceLoader
 from import_export.utils import get_related_model
 
-from angee.identity import instances_from_public_ids, public_id_of
-from angee.impl import ImplDefaultsMixin
-from angee.models import (
+from angee.base.identity import instances_from_public_ids, public_id_of
+from angee.base.models.implementations import ImplDefaultsMixin
+from angee.base.models import (
     AngeeModel,
     RecordRefMixin,
     StateTransitions,
@@ -40,7 +38,7 @@ from angee.resources.widgets import (
     XrefWidgetMixin,
     _NativeJSONWidget,
 )
-from angee.serialization import json_safe
+from angee.serialization import ASCII_JSON, canonical_json_sha256, json_safe
 
 if TYPE_CHECKING:
     from angee.resources.models import Resource
@@ -405,12 +403,8 @@ class AngeeResource(resources.ModelResource):
 
         excluded = {"_xref", *(field.column_name for field in self._transition_state_fields)}
         payload = {key: value for key, value in sorted(row.items()) if key not in excluded}
-        body = json.dumps(
-            json_safe(payload),
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return f"sha256:{hashlib.sha256(body).hexdigest()}"
+        digest = canonical_json_sha256(chunks=(ASCII_JSON.encode(json_safe(payload)),))
+        return f"sha256:{digest}"
 
     def _ledger_for_xref(self, xref: str) -> Resource | None:
         """Return this entry's ledger row for ``xref`` if it exists."""
@@ -782,12 +776,11 @@ class AngeeResource(resources.ModelResource):
         """Reject resource manifests whose tier disagrees with a catalogue model."""
 
         model = self._meta.model
-        if not issubclass(model, AngeeModel):
+        if not issubclass(model, ResourceLoadMixin):
             return
-        catalogue_model = cast(type[AngeeModel], model)
-        if not catalogue_model.is_catalogue_model():
+        if not model.is_catalogue_model():
             return
-        declared_tiers = catalogue_model.get_catalogue_tiers()
+        declared_tiers = model.get_catalogue_tiers()
         if self.entry.tier in declared_tiers:
             return
         raise ResourceLoadError(

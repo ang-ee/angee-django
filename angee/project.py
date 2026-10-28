@@ -69,3 +69,16 @@ def project_dir(
             "Angee needs ANGEE_PROJECT_DIR or a project root containing settings.yaml/settings.py"
         )
     return discovered
+
+
+def bootstrap(*, argv: Sequence[str] | None = None) -> None:
+    """Point a host process at its project and canonical Django settings module.
+
+    Explicit environment values remain authoritative across child processes.
+    Management, ASGI, and Celery use this same pre-Django boundary.
+    """
+
+    discovered = find_project_dir(argv=argv)
+    if discovered is not None:
+        os.environ.setdefault(PROJECT_DIR_ENV, str(discovered))
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.settings")

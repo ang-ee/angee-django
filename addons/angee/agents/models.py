@@ -42,7 +42,7 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from rebac import SubjectRef, actor_context, current_actor, system_context, to_subject_ref
 from rebac.mixins import RebacModelBase
 
-from angee.actors import actor_user_id, instance_actor
+from angee.base.permissions import actor_user_id, instance_actor
 from angee.agents.backends import InferenceBackend
 from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
 from angee.agents.deployments import InferenceDeploymentIdentity
@@ -51,15 +51,17 @@ from angee.agents.resources import AgentResource
 from angee.agents.runners import TurnOutcome
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
-from angee.fields import DiagnosticTextField, StateField
+from angee.base.fields.text import DiagnosticTextField
+from angee.base.fields.state import StateField
 from angee.graphql.events import ChangeRelatedRecord
 from angee.iam.service_users import sync_service_user
-from angee.impl import ImplClassField, ImplDefaultsMixin
+from angee.base.fields.implementation import ImplClassField
+from angee.base.models.implementations import ImplDefaultsMixin
 from angee.integrate.models import IntegrationCreateMode
 from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey, record_lock_key
-from angee.models import (
+from angee.base.models import (
     AngeeDataModel,
     AuditMixin,
     OwnerMixin,
@@ -359,7 +361,7 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
         effect at once and the backend owns any client lifetime it needs.
         """
 
-        backend_class = cast(type[InferenceBackend], self.resolve_impl("backend_class"))
+        backend_class = self.get_backend_class_impl()
         return backend_class(self)
 
     def test_connection(self) -> str:
@@ -424,7 +426,7 @@ class InferenceModelManager[ModelT: InferenceModel](AngeeHistoryManager[ModelT])
         return len(specs)
 
 
-class InferenceModel(AuditMixin, AngeeDataModel):
+class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """One model in a provider's catalogue, agents bind to by FK.
 
     ``publisher`` is the model's maker, reusing the ``integrate.Vendor`` catalogue
@@ -682,7 +684,7 @@ class Skill(VcsOutput, AuditMixin, AngeeDataModel):
         return self.name or self.path or f"skill:{self.public_id}"
 
 
-class MCPServer(AuditMixin, AngeeDataModel):
+class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """An MCP server an agent can reach — internal to the platform or external.
 
     An external server authenticates with an ``integrate.Credential``; the operator renders
@@ -903,7 +905,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     into the workspace, and the model's API credential into the service. ``service`` and
     ``workspace`` hold the operator instance names once rendered.
 
-    Ownership is transferable (:class:`~angee.models.OwnerMixin`). An agent
+    Ownership is transferable (:class:`~angee.base.models.OwnerMixin`). An agent
     installed before any user exists loads without an owner until an
     administrator transfers it, and deleting the owner clears it, leaving the
     agent to platform administrators.
@@ -1122,7 +1124,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         owns the service template, the credential→env mapping, and the model handle.
         """
 
-        runtime_class = cast(type[AgentRuntime], self.resolve_impl("runtime_class", default="none"))
+        runtime_class = self.get_runtime_class_impl(default="none")
         return runtime_class()
 
     @property

@@ -48,10 +48,10 @@ from strawberry_django_hasura import (
 from strawberry_django_hasura.filtering import filter_queryset, where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
-from angee.data.field_classification import (
+from angee.graphql.introspection import (
     is_to_one_relation,
 )
-from angee.data.metadata import (
+from angee.graphql.data.contracts import (
     DataAggregateMeasureMetadata,
     DataLinesMetadata,
     DataQueryAxis,
@@ -90,22 +90,22 @@ from angee.graphql.introspection import (
 )
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_relation_expression, with_record_reference_access
 from angee.graphql.writes import write_queryset
-from angee.identity import (
+from angee.base.identity import (
     instance_from_public_id,
     instances_from_public_ids,
     public_data_id_field,
     public_id_for,
     public_id_of,
 )
-from angee.impl import resolve_hooks
-from angee.models import (
+from angee.hooks import resolve_hooks
+from angee.base.models import (
     AngeeModel,
     OptimisticLockMixin,
     RecordRefMixin,
     RowLockMixin,
     row_lock_paths,
 )
-from angee.permissions import require_rebac_queryset
+from angee.base.permissions import require_rebac_queryset
 
 if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType

@@ -151,14 +151,13 @@ written only by `statements.set()` and the status verbs
 ([owner](../addons/angee/provenance/statements.py)).
 
 **Aspect** — a declared field group of a canonical model, optionally with a
-typed member (a Handle, a counterparty), carrying its survivorship strategy and
-source precedence. The aspect is the unit of resolution; a value field belongs
+typed member (a Handle, a counterparty), carrying its source precedence. The aspect is the unit of resolution; a value field belongs
 to exactly one aspect, and consumer donors contribute aspects additively.
 
 **Survivorship** — how an aspect's asserted normal-rank statements resolve onto
-the operational row through `SOURCE_PRIORITY`. Preferred person statements always
-precede it; the winner is marked **applied** and its values materialise on the
-row. A re-derivation, never a migration, when a knob flips.
+the operational row through the model's source-priority ordering. Preferred
+person statements precede normal statements; the winner is marked **applied**
+and its values materialise on the row. Changing precedence re-derives that row.
 
 **SourceKind** — the assertion-time classification of the asserting principal:
 `PERSON`, `SYSTEM_OF_RECORD`, `DIRECTORY`, `NETWORK`, `IMPORT`, `SEED`,

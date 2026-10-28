@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import sys
 import time
@@ -50,16 +51,6 @@ class Command(BaseCommand):
             help="Bring the stack's Django runtime up from a fresh checkout.",
         )
         provision.add_argument(
-            "--demo",
-            action="store_true",
-            help="Load demo-tier resource data (resources load --include-demo).",
-        )
-        provision.add_argument(
-            "--bootstrap-admin",
-            action="store_true",
-            help="Create the first admin user from settings (bootstrap_admin).",
-        )
-        provision.add_argument(
             "--force-rebac",
             action="store_true",
             help="Force-overwrite REBAC schema on sync (rebac sync --force-overwrite).",
@@ -73,8 +64,8 @@ class Command(BaseCommand):
         )
         provision.add_argument("--post-build", action="store_true", help=SUPPRESS)
         provision.add_argument(
-            "--after-if-installed", action="append", default=[], metavar="COMMAND",
-            help="Run an installed addon's management command after provisioning (repeatable).",
+            "--after-if-installed", action="append", default=[], metavar="COMMAND_LINE",
+            help="Run an installed addon command with shell-quoted arguments (repeatable).",
         )
         provision.set_defaults(handler=self._handle_provision)
 
@@ -133,15 +124,12 @@ class Command(BaseCommand):
         4. ``migrate --noinput --skip-checks`` with checks deferred on every provision,
            then PostgreSQL ``ANALYZE`` of the tables of every app it migrated forward:
            neither Django nor autovacuum gathers statistics for a changed schema.
-        5. ``reconcile_permissions`` — prune stale package-managed REBAC schema
-           only after identity migrations have preserved moved rows.
-        6. ``rebac --skip-checks sync --yes`` (``--force-overwrite`` when
-           ``--force-rebac``) — replace old persisted policy before validating it.
-        7. ``check`` — enforce the complete model and persisted-REBAC contract
+        5. ``rebac --skip-checks sync --prune-stale --yes`` (``--force-overwrite``
+           when ``--force-rebac``) — retire removed declarations and synchronize
+           persisted policy after identity migrations have preserved moved rows.
+        6. ``check`` — enforce the complete model and persisted-REBAC contract
            after migration and sync, before user data or schema output proceeds.
-        8. ``resources load`` (``--include-demo`` when ``--demo``).
-        9. ``schema`` — render the GraphQL SDL.
-        10. ``bootstrap_admin`` — only when ``--bootstrap-admin``.
+        7. Explicit ``--after-if-installed`` commands, in declaration order.
 
         Build runs in the parent. One fresh interpreter then loads the emitted
         models and runs the remaining commands together via ``call_command``.
@@ -154,6 +142,16 @@ class Command(BaseCommand):
         boundary that makes the emitted runtime visible to subsequent commands.
         """
 
+        after_commands = []
+        for command_line in options.get("after_if_installed", ()):
+            try:
+                command = shlex.split(command_line)
+            except ValueError as error:
+                raise CommandError(f"Invalid addon command line {command_line!r}: {error}") from error
+            if not command:
+                raise CommandError("--after-if-installed requires a command line.")
+            after_commands.append(command)
+
         steps = self._provision_plan(options)
         if options["post_build"]:
             for step in steps[1:]:
@@ -161,17 +159,16 @@ class Command(BaseCommand):
                     self._migrate_and_analyze(step)
                 else:
                     self._run_step(step)
-            for command in options.get("after_if_installed", ()):
-                if command in get_commands():
-                    self._run_step([command])
+            for command in after_commands:
+                if command[0] in get_commands():
+                    self._run_step(command)
             return
 
         self._wait_for_database(options["wait_db"])
         self._run_step(steps[0])
         child = [sys.executable, self._manage_py_path(), "angee", "provision", "--post-build"]
-        for option in ("demo", "force_rebac", "bootstrap_admin"):
-            if options[option]:
-                child.append(f"--{option.replace('_', '-')}")
+        if options["force_rebac"]:
+            child.append("--force-rebac")
         for command in options.get("after_if_installed", ()):
             child.extend(("--after-if-installed", command))
         result = subprocess.run(child, check=False)
@@ -189,24 +186,16 @@ class Command(BaseCommand):
         a step here — it runs in-process before the plan executes.
         """
 
-        rebac_sync = ["rebac", "--skip-checks", "sync", "--yes"]
+        rebac_sync = ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes"]
         if options["force_rebac"]:
             rebac_sync.append("--force-overwrite")
-        resources_load = ["resources", "load"]
-        if options["demo"]:
-            resources_load.append("--include-demo")
         plan = [
             ["angee", "build"],
             ["makemigrations", "--noinput", "--skip-checks"],
             ["migrate", "--noinput", "--skip-checks"],
-            ["reconcile_permissions"],
             rebac_sync,
             ["check", "--database", "default"],
-            resources_load,
-            ["schema"],
         ]
-        if options["bootstrap_admin"]:
-            plan.append(["bootstrap_admin"])
         return plan
 
     @staticmethod

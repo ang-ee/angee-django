@@ -1,4 +1,4 @@
-"""Atomic replacement of text files shared by generators and settings writers."""
+"""Atomic file replacement shared by generators, settings writers and caches."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 
-def write_atomic(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` atomically, skipping an unchanged file.
+def write_atomic(path: Path, content: str | bytes) -> None:
+    """Write UTF-8 text or bytes atomically, skipping an unchanged file.
 
     A concurrent reader (another Django boot importing a generated module, the
     Vite dev server reading the SDL) sees either the old file or the new one,
@@ -22,19 +22,19 @@ def write_atomic(path: Path, text: str) -> None:
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and path.read_text(encoding="utf-8") == text:
+    data = content.encode("utf-8") if isinstance(content, str) else content
+    if path.exists() and path.read_bytes() == data:
         return
     tmp: Path | None = None
     try:
         with NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
+            "wb",
             dir=path.parent,
             prefix=f".{path.name}.",
             suffix=".tmp",
             delete=False,
         ) as handle:
-            handle.write(text)
+            handle.write(data)
             tmp = Path(handle.name)
         os.replace(tmp, path)
         tmp = None

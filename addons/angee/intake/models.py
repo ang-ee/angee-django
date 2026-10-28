@@ -20,13 +20,14 @@ from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
-from angee.actors import actor_user_id, instance_actor
+from rebac import user_subject_type
+from angee.base.permissions import actor_user_id, instance_actor
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.errors import DomainError, RecordAccessSubjectRefused
-from angee.fields import StateField
+from angee.base.fields.state import StateField
 from angee.intake.choices import NeedAccessAction
 from angee.intake.resources import NeedResource
-from angee.models import (
+from angee.base.models import (
     AngeeDataModel,
     AuditMixin,
     OptimisticLockMixin,
@@ -35,7 +36,6 @@ from angee.provenance.context import changeset, changeset_model, require_changes
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
-from angee.provenance.contrib.angee.serialization import creation_fingerprint
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
@@ -115,20 +115,19 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
         if scope is None:
             raise PermissionDenied("Filing a task requires a user actor.")
         values = dict(queue_id=queue.pk, title=title, note=body, due_date=due_date, estimate=estimate)
-        fingerprint = creation_fingerprint(
-            {"task": values, "party": party, "importance": importance},
-        )
+        claim_values = {"task": values, "party": party, "importance": importance}
 
         with changeset(fresh=True), transaction.atomic():
-            replay = changeset_model().objects.claim(
+            created = changeset_model().objects.claim_created(
                 f"intake.file-task:{scope}",
                 idempotency_key,
-                fingerprint=fingerprint,
+                values=claim_values,
+                model=task_model,
+                unavailable=ValidationError(
+                    {"idempotency_key": "The claimed task is unavailable."},
+                ),
             )
-            if replay is not None:
-                created = replay.created_row
-                if not isinstance(created, task_model):
-                    raise ValidationError({"idempotency_key": "The claimed task is unavailable."})
+            if created is not None:
                 return task_model.objects.with_actor(actor).get(pk=created.pk)
             task = task_model.objects.with_actor(actor).create(**values, created_by_id=scope)
             self.capture(target=task, party=party, body=body, importance=importance)
@@ -478,7 +477,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
     def _new_access_decision(self) -> Any:
         """Ask one question assigned to the target's current sharers."""
         with system_context(reason="intake.need.access_question"):
-            readers = backend().lookup_subjects(resource=to_object_ref(self), action="share", subject_type="auth/user")
+            readers = backend().lookup_subjects(resource=to_object_ref(self), action="share", subject_type=user_subject_type())
             assignees = tuple(
                 get_user_model().objects.filter(pk__in=[actor_user_id(ref) for ref in readers], is_active=True)
             )

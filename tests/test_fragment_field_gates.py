@@ -12,7 +12,7 @@ from rebac.models import SchemaDefinition
 from rebac.schema import parse_zed
 from rebac.schema.parser import validate_schema
 
-from angee.build import (
+from angee.base.build import (
     SchemaExtensionError,
     apply_schema_paths,
     extension_source_map,
@@ -23,7 +23,7 @@ from angee.build import (
 )
 from angee.compose.model_composition import ModelComposition
 from angee.compose.runtime import Runtime
-from angee.testing.permissions import installed_field_owners
+from angee.base.testing.permissions import installed_field_owners
 from tests.conftest import make_addon
 from tests.test_model_composition import modules as modules
 from tests.test_model_composition import source

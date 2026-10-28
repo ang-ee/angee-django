@@ -3,7 +3,7 @@ name = "angee.workflows_parties"
 description = "Party identity review and mapped same_as pair reviews"
 keywords = ["workflows", "parties", "reviews", "dedupe"]
 category = "Workflows"
-depends_on = ["angee.workflows", "angee.decisions", "angee.parties"]
+depends_on = ["angee.base", "angee.workflows", "angee.decisions", "angee.parties", "angee.provenance"]
 
 [resources]
 install = ["resources/install/100_workflows.workflow.yaml"]

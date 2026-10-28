@@ -683,7 +683,6 @@ def test_studio_native_field_reads_follow_monitor_on_every_path_and_batch(
     from rebac import actor_context
 
     from angee.knowledge import schema as knowledge_schema
-    from angee.workflows.testing.drivers import trigger_source
     from angee.workflows.testing.models import Trigger
     from tests.conftest import Vault, make_addon
 
@@ -695,7 +694,7 @@ def test_studio_native_field_reads_follow_monitor_on_every_path_and_batch(
         workflow.with_actor(admin).grant_record_access(relation, reader)
         run = start_run(workflow, actor=admin, subject=vault_for(admin, name=key))
         run.with_actor(admin).grant_record_access("reader", reader)
-        with actor_context(admin), trigger_source(Vault):
+        with actor_context(admin):
             Trigger.objects.create(workflow=workflow, source="record_changed", model_label="knowledge.vault")
         return workflow
 
@@ -895,8 +894,8 @@ def test_studio_success_keeps_nonblocking_config_diagnostics_and_publish_validat
 
 def test_studio_registry_projection_resolves_and_builds_each_choice_once(monkeypatch, register_step):
     """The rowless projection passes one resolved class to the common choice owner."""
-    from angee import impl as impl_owner
-    from angee.impl import resolve_all_impl_classes
+    from angee.base import implementations as impl_owner
+    from angee.base.implementations import resolve_all_impl_classes
     from angee.workflows.schema import WorkflowStepChoice
 
     class Projected(Step[Value, Value, None]):

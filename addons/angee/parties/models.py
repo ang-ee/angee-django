@@ -14,7 +14,7 @@ carries its legal name and domain.
 
 Parties are organised two ways, both human-owned facts: :class:`Circle` is a
 private, overlapping grouping (a party may belong to many circles; circles nest
-as a :class:`~angee.models.HierarchyMixin` tree), and :class:`Relationship`
+as a :class:`~angee.base.models.HierarchyMixin` tree), and :class:`Relationship`
 is a typed, directed party↔party edge whose vocabulary
 (:class:`RelationshipKind`) is catalogue data seeded from the XFN / vCard
 ``RELATED`` values — never a schema fact.
@@ -41,13 +41,14 @@ from phonenumbers import (
 from rebac import PermissionDenied, actor_context
 from rebac.mixins import RebacModelBase
 
-from angee.actors import instance_actor
-from angee.fields import ColorField, StateField
-from angee.identity import public_id_of
-from angee.impl import ImplClassField
+from angee.base.permissions import instance_actor
+from angee.base.fields.text import ColorField
+from angee.base.fields.state import StateField
+from angee.base.identity import public_id_of
+from angee.base.fields.implementation import ImplClassField
 from angee.integrate.models import Bridge, IntegrationCreateMode
-from angee.lineage import concrete_child, concrete_child_models
-from angee.models import (
+from angee.base.lineage import concrete_child, concrete_child_models
+from angee.base.models import (
     AngeeDataModel,
     AuditMixin,
     HierarchyMixin,
@@ -74,8 +75,10 @@ from angee.provenance.statements import (
     StatementsMixin,
     StatementSubjectManager,
 )
-from angee.refs import RetainedGenericRelation
+from angee.base.refs import RetainedGenericRelation
 from angee.tags.models import TaggedModel
+from angee.resources.mixins import ResourceLoadMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 
 
 class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel):
@@ -83,12 +86,14 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
 
     The parent owns the common contact identity — the public id, ownership, the
     display name, avatar, notes and tags. Ownership is the transferable ``owner``
-    (:class:`~angee.models.OwnerMixin`), which an insert defaults to the
+    (:class:`~angee.base.models.OwnerMixin`), which an insert defaults to the
     creator; ``created_by`` stays attribution. RecordLink owns directory payloads.
     The concrete kind (and its kind-specific fields) lives on the :class:`Person` /
     :class:`Organization` child row, which inherits the owner; a child's tags key
     on its party.
     """
+
+    _angee_base = AngeeHistoryMergeableUnscopedManager()
 
     runtime = True
     rebac_grantable = {"reader": "write"}
@@ -499,6 +504,8 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
     unknown sender is still a valid row. A handle carries tags of its own, apart
     from its party's (a consumer marks a company's accounts-payable address).
     """
+
+    _angee_base = AngeeHistoryMergeableUnscopedManager()
 
     runtime = True
     rebac_grantable = {"reader": "write"}
@@ -1027,7 +1034,7 @@ class Circle(HierarchyMixin, OwnerMixin, AngeeDataModel):
     address book): "Family", "Inner Circle", a climbing crew. A party may belong to
     many circles (:class:`CircleMember`), and circles nest as a tree — overlap
     comes from multi-membership, never from multiple parents. The tree is
-    :class:`~angee.models.HierarchyMixin`'s materialized path, so "everyone in
+    :class:`~angee.base.models.HierarchyMixin`'s materialized path, so "everyone in
     this circle including sub-circles" is an indexed prefix scan
     (``Circle.objects.subtree_of(circle)``), and ``hierarchy_scope_fields`` keeps a
     personal circle tree from straddling owners: the transferable ``owner`` scopes
@@ -1110,7 +1117,7 @@ class CircleMember(MembershipDecisionMixin, AuditMixin, AngeeDataModel):
         return f"{self.party_id}∈{self.circle_id}"
 
 
-class RelationshipKind(AuditMixin, AngeeDataModel):
+class RelationshipKind(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """The relationship vocabulary — types as catalogue data, never schema.
 
     One row expresses both directions of an asymmetric type through
@@ -1436,5 +1443,5 @@ class Directory(Bridge):
     def backend(self) -> DirectoryBackend:
         """Return this directory's selected backend, bound to this row."""
 
-        backend_class = cast("type[DirectoryBackend]", self.resolve_impl("backend_class"))
+        backend_class = self.get_backend_class_impl()
         return backend_class(self)

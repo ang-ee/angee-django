@@ -62,9 +62,6 @@ class Command(RunserverCommand):
             self.stdout.write("Performing system checks...\n\n")
             self.check(display_num_errors=True)
         self.check_migrations()
-        # The GraphQL addon's dev-SDL boot hook regenerates the SDL on each
-        # reloader child; set its gate before core ASGI dispatches addon hooks.
-        os.environ["ANGEE_DEV_SDL"] = "1"
         application = import_string(settings.ASGI_APPLICATION)
         uvicorn.Server(
             uvicorn.Config(

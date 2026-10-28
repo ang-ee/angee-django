@@ -14,7 +14,7 @@ class MessagingConfig(AppConfig):
     def ready(self) -> None:
         from angee.messaging.events import end_unreadable_follows
         from angee.messaging.models import ThreadedModelMixin
-        from angee.signals import connect_for_models, record_access_revoked
+        from angee.base.signals import connect_for_models, record_access_revoked
 
         connect_for_models(
             record_access_revoked,

@@ -51,7 +51,7 @@ from rebac import current_actor, system_context
 from strawberry.types import get_object_definition
 from strawberry.utils.str_converters import to_camel_case, to_snake_case
 
-from angee.actors import actor_user_id
+from angee.base.permissions import actor_user_id
 from angee.graphql.actions import ActionResult
 from angee.graphql.schema import GraphQLSchemas
 from angee.provenance.context import changeset

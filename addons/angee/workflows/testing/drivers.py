@@ -11,8 +11,6 @@ from unittest.mock import patch
 
 from django.apps import apps
 from django.conf import settings
-from django.db.models import Model
-from django.db.models.signals import post_save
 from rebac import system_context
 
 from angee.graphql.publishing import change_published
@@ -20,7 +18,6 @@ from angee.jobs.enqueue import celery_app
 from angee.workflows.runner import runner
 from angee.workflows.states import StepRunStatus
 from angee.workflows.steps import Step
-from angee.workflows.triggers import RecordChanged, RecordChangedOptIn
 
 
 @contextmanager
@@ -50,21 +47,6 @@ def observe(model: type[Any]) -> Iterator[list[Any]]:
         yield published
     finally:
         change_published.disconnect(collect, sender=model)
-
-
-@contextmanager
-def trigger_source(model: type[Model], *, connect: bool = False) -> Iterator[None]:
-    """Scope a declared test source's native save receiver when requested."""
-    if not issubclass(model, RecordChangedOptIn):
-        raise ValueError(f"{model._meta.label} must inherit RecordChangedOptIn.")
-    if connect:
-        RecordChanged.validate_model(model)
-        post_save.connect(RecordChanged.changed, sender=model, weak=False)
-    try:
-        yield
-    finally:
-        if connect:
-            post_save.disconnect(RecordChanged.changed, sender=model)
 
 
 @contextmanager

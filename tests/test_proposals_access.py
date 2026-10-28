@@ -26,7 +26,7 @@ from rebac import (
 
 from angee.errors import RecordAccessSubjectRefused
 from angee.messaging.testing.models import Person
-from angee.models import StaleRevisionError
+from angee.base.models import StaleRevisionError
 from angee.projects.testing.models import Project, Task
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import Backend, Drive, create_platform_admin

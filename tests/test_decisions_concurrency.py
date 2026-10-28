@@ -11,7 +11,7 @@ from rebac import system_context
 
 from angee.decisions.testing.drivers import seed_decision
 from angee.decisions.testing.models import Decision
-from angee.models import StaleRevisionError
+from angee.base.models import StaleRevisionError
 from tests.conftest import create_user, vault_for
 
 pytestmark = [

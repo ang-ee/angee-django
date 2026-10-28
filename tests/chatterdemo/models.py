@@ -22,9 +22,9 @@ from __future__ import annotations
 
 from django.db import models
 
-from angee.fields import StateField
+from angee.base.fields.state import StateField
 from angee.messaging.models import ThreadedModelMixin
-from angee.models import (
+from angee.base.models import (
     AngeeModel,
     AuditMixin,
     SqidMixin,

@@ -25,7 +25,7 @@ from angee.integrate.states import (
 from angee.integrate.testing.integration import Integration
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Channel
-from angee.models import AngeeQuerySet, AngeeUnscopedQuerySet
+from angee.base.models import AngeeQuerySet, AngeeUnscopedQuerySet
 from tests.conftest import current_stream, make_integration
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.stream_adapters import applied_history, failure_state

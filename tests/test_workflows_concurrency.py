@@ -21,7 +21,7 @@ from rebac import actor_context, system_context
 
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from angee.identity import public_id_of
+from angee.base.identity import public_id_of
 from angee.jobs.enqueue import celery_app
 from angee.workflows import tasks as workflow_tasks
 from angee.workflows.decision_steps import DecisionStep

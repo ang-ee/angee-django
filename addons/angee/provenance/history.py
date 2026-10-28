@@ -472,6 +472,6 @@ class HistoryMixin(models.Model):
 
         history = model_history(type(self))
         if history is not None and history.capture_enabled and not history.cascade_delete_history:
-            current_changeset(required=True, record=True)
+            current_changeset(required=True)
         with write_group():
             return super().delete(*args, **kwargs)

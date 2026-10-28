@@ -14,7 +14,7 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.identity import public_id_of
+from angee.base.identity import public_id_of
 from angee.messaging import session as messaging_session
 from angee.messaging.session import LiveChannelSession
 from angee.messaging.testing.models import Handle, Party, Person

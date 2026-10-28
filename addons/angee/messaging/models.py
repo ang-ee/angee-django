@@ -60,11 +60,11 @@ from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.resources import model_resource_type
 
-from angee.actors import actor_user_id
+from angee.base.permissions import actor_user_id
 from angee.errors import DomainError
-from angee.fields import StateField
-from angee.identity import instance_from_public_id
-from angee.impl import ImplClassField
+from angee.base.fields.state import StateField
+from angee.base.identity import instance_from_public_id
+from angee.base.fields.implementation import ImplClassField
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.delivery import queue_message_delivery
@@ -86,7 +86,7 @@ from angee.messaging.managers import (
 from angee.messaging.resources import MessageResource
 from angee.messaging.source_copies import SourceCopyMixin
 from angee.messaging.webforms import WebformSpec, default_webform_schema
-from angee.models import (
+from angee.base.models import (
     AngeeDataModel,
     AngeeModel,
     AuditMixin,
@@ -101,10 +101,12 @@ from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.statements import (
     SourceKind,
 )
-from angee.refs import RecordRef, RetainedGenericRelation, generic_pointer_model
+from angee.base.refs import RecordRef, RetainedGenericRelation, generic_pointer_model
 from angee.resources.mixins import ResourceLoadMixin
+from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
+from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 
 
 def _actor_user_id(instance: models.Model) -> Any | None:
@@ -256,12 +258,12 @@ class ThreadedModelMixin(models.Model):
     message write path.
 
     **Placement across MTI.** The chatter edge keys on the record's canonical target —
-    its topmost REBAC-typed MTI ancestor (:func:`angee.refs.generic_pointer_target`)
+    its topmost REBAC-typed MTI ancestor (:func:`angee.base.refs.generic_pointer_target`)
     — while target-delete policy discovers edges through that same type. Compose the mixin on that same
     topmost REBAC-typed ancestor (``parties.Party``, not ``parties.Person``), so the write
     content type and the teardown content type match; ``ensure_for_record`` fails fast on a
     child-composed / ancestor-uncomposed split (the placement invariant in
-    :mod:`angee.refs`).
+    :mod:`angee.base.refs`).
     """
 
     thread_attachment_role: ClassVar[str] = "chatter"
@@ -1065,14 +1067,14 @@ class Channel(Bridge):
     def backend(self) -> ChannelBackend:
         """Return this channel's selected backend, bound to this row."""
 
-        backend_class = cast("type[ChannelBackend]", self.resolve_impl("backend_class"))
+        backend_class = self.get_backend_class_impl()
         return backend_class(self)
 
     @property
     def source_kind(self) -> SourceKind | None:
         """The selected protocol declares whether this channel asserts statements, and as what."""
 
-        return cast("type[ChannelBackend]", self.resolve_impl("backend_class")).source_kind
+        return self.get_backend_class_impl().source_kind
 
     def can_reconcile_delivery(self) -> bool:
         """Read the concrete capability's backend declaration without opening it."""
@@ -1080,7 +1082,7 @@ class Channel(Bridge):
         capability = self.concrete_capability()
         if capability._meta.concrete_model is not self._meta.concrete_model:
             return bool(capability.can_reconcile_delivery())
-        return cast("type[ChannelBackend]", self.resolve_impl("backend_class")).reconciles_delivery()
+        return self.get_backend_class_impl().reconciles_delivery()
 
     def delivery_visibility_delay(self) -> timedelta:
         """Read the selected transport's propagation margin without opening it."""
@@ -1088,7 +1090,7 @@ class Channel(Bridge):
         capability = self.concrete_capability()
         if capability._meta.concrete_model is not self._meta.concrete_model:
             return cast(timedelta, capability.delivery_visibility_delay())
-        return cast("type[ChannelBackend]", self.resolve_impl("backend_class")).delivery_visibility_delay
+        return self.get_backend_class_impl().delivery_visibility_delay
 
     def validate_webform_answers(self, answers: dict[str, Any]) -> None:
         """Validate domain meaning after the public form's scalar validation.
@@ -1337,7 +1339,7 @@ class ChatterHistory(ModelHistory):
         return model._base_manager.using(using).filter(pk=object_id).first()
 
 
-class Thread(SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel):
+class Thread(ChangeBroadcastMixin, SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel):
     """An aggregation of related messages — an email conversation or a social post.
 
     Two orthogonal axes, both base-owned: ``modality`` (the *shape* — email thread /
@@ -1365,6 +1367,8 @@ class Thread(SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataMo
     record merge folds the retired record's chatter into the survivor's, and
     ``same_as`` evidence folds one channel's copy of a conversation into another's.
     """
+
+    _angee_base = AngeeHistoryMergeableUnscopedManager()
 
     history = ChatterHistory(inherit=True, excluded_fields=("message_count", "last_message_at"))
 
@@ -1870,7 +1874,7 @@ class WebformSubmission:
 
 
 class Message(
-    SourceCopyMixin, ResourceLoadMixin, TaggedModel, TrashMixin,
+    ChangeBroadcastMixin, SourceCopyMixin, ResourceLoadMixin, TaggedModel, TrashMixin,
     OptimisticLockMixin, AuditMixin, AngeeDataModel,
 ):
     """One message — the unit of a thread. The root post is itself a Message.
@@ -1893,7 +1897,7 @@ class Message(
     text survives as immutable content-addressed fragments — no per-save history
     table doubling the hot write path.
 
-    Moderation is trash (:class:`~angee.models.TrashMixin`): a trashed
+    Moderation is trash (:class:`~angee.base.models.TrashMixin`): a trashed
     message is withheld from every reader but channel managers and admins, and
     record chatter leaves it out of every read but its moderators' removed list.
     """

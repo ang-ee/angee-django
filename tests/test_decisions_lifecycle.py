@@ -10,7 +10,7 @@ from rebac.actors import is_sudo
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.signals import decision_answered
 from angee.decisions.testing.models import Decision
-from angee.models import StaleRevisionError
+from angee.base.models import StaleRevisionError
 from tests.conftest import create_platform_admin, create_user, vault_for
 
 

@@ -12,7 +12,12 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import os
+import subprocess
+import sys
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -22,8 +27,9 @@ from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.hashers import PBKDF2PasswordHasher
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.middleware import SessionMiddleware
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connection
+from django.db import connection, transaction
 from django.http import HttpResponse
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext, override_settings
@@ -34,14 +40,14 @@ from rebac.roles import grant as grant_role
 from strawberry.django.views import GraphQLView
 
 from angee.agents.testing.models import Agent
-from angee.data.field_classification import resource_field_kind, resource_field_widget
+from angee.graphql.data.resource_fields import resource_field_kind, resource_field_widget
 from angee.graphql import subscriptions
 from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.events import ChangePayload
 from angee.graphql.schema import AngeeSchema
 from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.graphql.views import graphql_endpoint
-from angee.identity import (
+from angee.base.identity import (
     instance_from_public_id,
     public_data_id_field,
     public_id_for,
@@ -66,6 +72,7 @@ from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
 from tests.iam_models import Group as IAMGroup
 from tests.tables import model_tables
+from tests.test_decisions_concurrency import submit, wait_for_lock
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -1164,12 +1171,12 @@ def test_credential_crud_create_delete_are_admin_only(
         assert credential.kind == CredentialKind.STATIC_TOKEN
         assert credential.oauth_client_id is None
     credential_id = str(credential.sqid)
-    scheduled: list[tuple[Any, bool]] = []
+    scheduled: list[tuple[Any, str | None, bool]] = []
     revoked: list[Any] = []
     monkeypatch.setattr(
         integrate_schema.transaction,
         "on_commit",
-        lambda callback, robust=False: scheduled.append((callback, robust)),
+        lambda callback, using=None, robust=False: scheduled.append((callback, using, robust)),
     )
     monkeypatch.setattr(Credential, "revoke_remote", lambda credential: revoked.append(credential.pk))
 
@@ -1189,7 +1196,8 @@ def test_credential_crud_create_delete_are_admin_only(
     assert deleted["total_deleted_count"] >= 1
     assert revoked == []
     assert len(scheduled) == 1
-    callback, robust = scheduled.pop()
+    callback, using, robust = scheduled.pop()
+    assert using == credential._state.db
     assert robust is True
     callback()
     assert revoked == [credential.pk]
@@ -1835,6 +1843,144 @@ def test_disconnect_account_blocks_last_oidc_sign_in_method_for_passwordless_use
     with system_context(reason="test assertions"):
         assert ExternalAccount.objects.get(pk=account.pk).owner_id == user.pk
         assert Credential.objects.filter(user=user, external_account=account).exists()
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
+@pytest.mark.parametrize("second_path", ("self_service", "administrator"))
+def test_competing_oidc_disconnects_keep_one_sign_in_method(
+    iam_connection_tables: None, monkeypatch: pytest.MonkeyPatch, second_path: str,
+) -> None:
+    """Both deletion entrypoints wait on the common user before counting accounts."""
+
+    user = User.objects.create_user(username=f"unlink-race-{second_path}")
+    admin = _platform_admin(f"unlink-race-admin-{second_path}")
+    oauth_clients = [_oauth_client(f"unlink-race-{second_path}-{index}") for index in range(2)]
+    accounts = [
+        ExternalAccount.objects.link(oauth_client, f"race-{index}", owner=user)
+        for index, oauth_client in enumerate(oauth_clients)
+    ]
+    credentials = [
+        Credential.objects.upsert_for_user(
+            user, oauth_client, CredentialKind.OAUTH,
+            {"access_token": f"race-token-{index}"}, external_account=account,
+        )
+        for index, (oauth_client, account) in enumerate(zip(oauth_clients, accounts, strict=True))
+    ]
+    monkeypatch.setattr(Credential, "revoke_remote", lambda credential: None)
+
+    def remove_other_account() -> bool:
+        with actor_context(admin if second_path == "administrator" else user):
+            if second_path == "administrator":
+                preview = integrate_schema.IntegrateCredentialMutation().delete_credential(
+                    id=credentials[1].public_id, confirm=True,
+                )
+                assert preview.refusals == ["This is your only sign-in method."]
+                return not preview.has_blockers
+            try:
+                return Credential.objects.disconnect_account(user, accounts[1].sqid)
+            except ValidationError as error:
+                assert error.code == "only_sign_in_method"
+                return False
+
+    with actor_context(user), ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            User._base_manager.select_for_update().get(pk=user.pk)
+            contender, pid = submit(pool, remove_other_account)
+            wait_for_lock(pid, contender)
+            assert Credential.objects.disconnect_account(user, accounts[0].sqid)
+        assert contender.result(timeout=10) is False
+
+    with system_context(reason="test.iam.remaining_sign_in_method"):
+        assert list(Credential.objects.filter(user=user).values_list("pk", flat=True)) == [credentials[1].pk]
+        assert ExternalAccount.objects.get(pk=accounts[1].pk).owner_id == user.pk
+
+
+def test_oidc_disconnect_policy_uses_the_persisted_credentials_database(tmp_path: Path) -> None:
+    """Conflicting default-db policy cannot authorize unlinking a secondary-db user's last account."""
+
+    package = tmp_path / "native_oidc"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "models.py").write_text("""
+from django.contrib.auth.base_user import AbstractBaseUser
+from django.db import models
+from angee.iam_integrate_oidc.models import CredentialOidc
+
+class User(AbstractBaseUser):
+    username = models.CharField(max_length=40, unique=True)
+    USERNAME_FIELD = "username"
+
+class OAuthClient(models.Model):
+    login_enabled = models.BooleanField(default=True)
+
+class ExternalAccount(models.Model):
+    pass
+
+class NativeCredential(models.Model):
+    kind = models.CharField(max_length=40, default="oauth")
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    oauth_client = models.ForeignKey(OAuthClient, on_delete=models.CASCADE)
+    external_account = models.ForeignKey(ExternalAccount, on_delete=models.CASCADE)
+
+    class Meta:
+        abstract = True
+
+    def check_disconnect(self):
+        pass
+
+class Credential(CredentialOidc, NativeCredential):
+    pass
+""")
+    script = """
+import os
+os.environ.pop("DJANGO_SETTINGS_MODULE", None)
+from django.conf import settings
+settings.configure(
+    INSTALLED_APPS=["django.contrib.contenttypes", "rebac", "native_oidc"],
+    AUTH_USER_MODEL="native_oidc.User",
+    DATABASES={alias: {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
+               for alias in ("default", "secondary")},
+    SECRET_KEY="oidc-alias-regression",
+)
+import django
+django.setup()
+from django.core.exceptions import ValidationError
+from django.db import connections, transaction
+from rebac.models import PermissionAuditEvent
+from native_oidc.models import Credential, ExternalAccount, OAuthClient, User
+
+for alias in ("default", "secondary"):
+    with connections[alias].schema_editor() as editor:
+        for model in (User, OAuthClient, ExternalAccount, Credential, PermissionAuditEvent):
+            editor.create_model(model)
+    user = User.objects.using(alias).create(username="identity", password="usable" if alias == "default" else "!")
+    client = OAuthClient.objects.using(alias).create(login_enabled=alias == "secondary")
+    for _ in range(3 if alias == "default" else 2):
+        account = ExternalAccount.objects.using(alias).create()
+        Credential.objects.using(alias).create(user=user, oauth_client=client, external_account=account)
+
+with transaction.atomic(using="secondary"):
+    first = Credential.objects.using("secondary").first()
+    first.check_disconnect()
+    first.delete(using="secondary")
+with transaction.atomic(using="secondary"):
+    remaining = Credential.objects.using("secondary").get()
+    try:
+        remaining.check_disconnect()
+    except ValidationError as error:
+        assert error.code == "only_sign_in_method"
+    else:
+        raise AssertionError("The secondary user's final sign-in method must remain linked.")
+assert Credential.objects.using("secondary").count() == 1
+assert Credential.objects.using("default").count() == 3
+"""
+    root = Path(__file__).resolve().parents[1]
+    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "addons"), str(tmp_path)))}
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=root, env=environment,
+        text=True, capture_output=True, timeout=60, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.fixture()

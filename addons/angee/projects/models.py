@@ -25,11 +25,13 @@ from rebac import (
 from rebac.backends import backend
 from rebac.field_backing import canonical_model
 
-from angee.actors import actor_user_id
+from rebac import user_subject_type
+from angee.base.permissions import actor_user_id
 from angee.errors import RecordAccessSubjectRefused
-from angee.fields import FractionalRankField, StateField
+from angee.base.fields.ordering import FractionalRankField
+from angee.base.fields.state import StateField
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
-from angee.models import (
+from angee.base.models import (
     AngeeDataModel,
     AuditMixin,
     HierarchyMixin,
@@ -59,10 +61,10 @@ from angee.provenance.context import changeset, changeset_model, require_changes
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
-from angee.provenance.contrib.angee.serialization import creation_fingerprint
 from angee.scheduling.fields import RecurrenceField
 from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
+from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 
 
 class ProjectSetupState(StrEnum):
@@ -124,7 +126,6 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
         actor_id = actor_user_id(actor)
         if actor_id is None:
             raise ValidationError({"idempotency_key": "Setup requires a user actor."})
-        fingerprint = creation_fingerprint(configuration)
         with changeset(fresh=True), transaction.atomic():
             locked = type(task).system_queryset(lock=("self",)).get(pk=task.pk)
             if actor is not None:
@@ -138,15 +139,16 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
                 if not bypass and not project.has_access("write"):
                     raise PermissionDenied("Project write access is required for setup.")
 
-            replay = changeset_model().objects.claim(
+            result = changeset_model().objects.claim_created(
                 f"projects.setup:{actor_id}:{locked.pk}",
                 idempotency_key,
-                fingerprint=fingerprint,
+                values=configuration,
+                model=self.model,
+                unavailable=ValidationError(
+                    {"idempotency_key": "The claimed setup result is unavailable."},
+                ),
             )
-            if replay is not None:
-                result = replay.created_row
-                if not isinstance(result, self.model):
-                    raise ValidationError({"idempotency_key": "The claimed setup result is unavailable."})
+            if result is not None:
                 if actor is not None:
                     result.with_actor(actor)
                 if not bypass and not result.has_access("write"):
@@ -948,6 +950,8 @@ class Task(
 ):
     """The platform's one table for a discrete human action."""
 
+    _angee_base = AngeeHistoryMergeableUnscopedManager()
+
     runtime = True
     sqid_prefix = "tsk_"
     MERGED_PERMISSION = "write"
@@ -1483,7 +1487,7 @@ class Task(
 
         super().validate_record_access_subject(relation, subject)
         reference = to_subject_ref(subject)
-        if self.subject_object_id is None or reference.optional_relation or reference.subject_type != "auth/user":
+        if self.subject_object_id is None or reference.optional_relation or reference.subject_type != user_subject_type():
             return
         if self.effective_actor()[1]:
             return

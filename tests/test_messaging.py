@@ -77,14 +77,14 @@ from angee.messaging.testing.models import (
     ThreadFollower,
     ThreadNotification,
 )
-from angee.models import (
+from angee.base.models import (
     AngeeModel,
     AuditMixin,
     SqidMixin,
 )
 from angee.projects.testing.models import Task as ProjectTask
 from angee.provenance.contrib.angee.history import HistoryMixin
-from angee.provenance.sources import source_kind_for
+from angee.provenance.statements import StatementSourceMixin
 from angee.provenance.statements import (
     SourceKind,
 )
@@ -172,11 +172,11 @@ def test_channel_source_kind_is_its_backends_declaration(channel: Any, monkeypat
     """A channel is admitted as a statement source only as the kind its protocol declares."""
 
     principal = to_subject_ref(channel.integration_ptr)
-    assert (channel.source_kind, source_kind_for(principal)) == (None, None)
+    assert (channel.source_kind, StatementSourceMixin.source_kind_for(principal)) == (None, None)
 
     # An import-only protocol declares its channels' classification once, on the backend class.
     monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.IMPORT)
-    assert (channel.source_kind, source_kind_for(principal)) == (SourceKind.IMPORT, SourceKind.IMPORT)
+    assert (channel.source_kind, StatementSourceMixin.source_kind_for(principal)) == (SourceKind.IMPORT, SourceKind.IMPORT)
 
 
 def _parsed(
@@ -1020,7 +1020,7 @@ def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: Non
     chatter edge, reverse ``thread_attachments`` relation and target-delete policy must all
     agree on the child's canonical content type. A leftover attachment on
     a reused primary key would mis-resolve, so the delete must remove it (the placement
-    invariant in ``angee.refs``).
+    invariant in ``angee.base.refs``).
     """
 
     del composed_tables

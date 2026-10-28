@@ -18,7 +18,7 @@ from django.db.models.deletion import (
 )
 from rebac import PermissionDenied, RebacMixin, current_actor, system_context
 
-from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
+from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.metadata import (
     DataResourceContribution,
@@ -28,9 +28,9 @@ from angee.graphql.data.metadata import (
     resource_wire_field_name,
 )
 from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE, require_instance_for_id
-from angee.identity import public_id_of
-from angee.models import AngeeModel
-from angee.permissions import require_rebac_queryset
+from angee.base.identity import public_id_of
+from angee.base.models import AngeeModel
+from angee.base.permissions import require_rebac_queryset
 from graphql import GraphQLError
 
 _PREVIEW_LEAF_LIMIT = 50

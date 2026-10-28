@@ -13,7 +13,7 @@ def test_stage_contract_retains_the_consumers_stage_type(tmp_path: Path) -> None
     declarations = """\
 from typing import assert_type
 from django.db.models import Model, QuerySet
-from angee.models.stages import Stage, StagedModelMixin
+from angee.base.models.stages import Stage, StagedModelMixin
 
 class DeliveryStage(Stage):
     class Meta:

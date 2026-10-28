@@ -11,7 +11,7 @@ from django.contrib.auth import get_user_model
 from strawberry import auto
 
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one

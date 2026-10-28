@@ -14,9 +14,9 @@ from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql.publishing import change_published
 from angee.graphql.schema import GraphQLSchemas
-from angee.identity import public_id_of
+from angee.base.identity import public_id_of
 from angee.provenance.context import changeset
-from angee.signals import bulk_updated
+from angee.base.signals import bulk_updated
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.states import RunStatus, WaitingKind
 from angee.workflows.testing.drivers import decide, load_workflow, run_until

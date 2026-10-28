@@ -270,7 +270,7 @@ def test_system_revoke_requires_an_explicit_boundary_and_remains_idempotent(gran
 
 
 def test_system_revoke_rolls_back_when_a_lifecycle_owner_fails(grant_case):
-    from angee.signals import record_access_revoked
+    from angee.base.signals import record_access_revoked
 
     row, owner, recipient = grant_case
     row.with_actor(owner).grant_record_access("reader", recipient)
