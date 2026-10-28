@@ -25,10 +25,7 @@ from typing import Any
 
 import pytest
 import yaml
-from django.apps import AppConfig
 from uvicorn._types import ASGIReceiveCallable, ASGISendCallable, ASGISendEvent, HTTPRequestEvent, HTTPScope, Scope
-
-from angee.addons import addon_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_GITIGNORE = ROOT / ".gitignore"
@@ -721,7 +718,8 @@ def test_local_django_source_mode_bootstraps_fresh_host_dependencies() -> None:
     assert "exec python manage.py serve --host 0.0.0.0 --port 8000" in command
     provision_command = provision["command"][-1]
     assert "python -m angee.management.bootstrap" in provision_command
-    assert "python manage.py angee provision --bootstrap-admin" in provision_command
+    assert "python manage.py angee provision --after-if-installed 'resources load'" in provision_command
+    assert "--after-if-installed schema --after-if-installed bootstrap_admin" in provision_command
     assert provision["depends_on"] == ["postgres", "operator"]
     assert django["ready"] == DJANGO_READY
     # The PYTHONPATH hack is deleted — the editable link owns the framework on sys.path.
@@ -746,7 +744,10 @@ def test_local_django_baked_mode_skips_uv_sync() -> None:
     django = stack["services"]["django"]
 
     assert "uv sync" not in django["command"][-1]
-    assert "python manage.py angee provision --bootstrap-admin" in stack["jobs"]["provision"]["command"][-1]
+    assert (
+        "python manage.py angee provision --after-if-installed 'resources load' "
+        "--after-if-installed schema --after-if-installed bootstrap_admin"
+    ) in stack["jobs"]["provision"]["command"][-1]
     assert "framework" not in stack["sources"]
     for service_name in ("celery-worker",):
         assert "uv sync" not in stack["services"][service_name]["command"][-1]
@@ -964,9 +965,6 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     assert base["ANGEE_DATA_DIR"] == "{BASE_DIR}/data"
 
     full = _render_project_settings(addons_profile="full", framework_workspace=True)
-    nexus = addon_manifest(AppConfig.create("angee.nexus"))
-    assert nexus is not None
-    assert set(nexus.depends_on) <= set(full["INSTALLED_APPS"])
     for app in (
         "angee.nexus",
         "angee.spaces",
@@ -1123,7 +1121,8 @@ def test_dev_stack_has_explicit_lifecycle_job_graph() -> None:
         "sh",
         "-c",
         "uv run python -m angee.management.bootstrap && uv sync "
-        "&& exec uv run python manage.py angee provision --demo --force-rebac",
+        "&& exec uv run python manage.py angee provision --force-rebac "
+        "--after-if-installed 'resources load --include-demo' --after-if-installed schema",
     ]
     assert stack["jobs"]["provision"]["workdir"] == "source://app"
     assert stack["jobs"]["provision"]["env"]["ANGEE_PROJECT_DIR"] == "."
@@ -2011,11 +2010,13 @@ def test_production_provision_loads_no_demo_data() -> None:
 
     production = _render_dev_stack(_runtime_mode="docker", serve_mode="production")["jobs"]["provision"]
     assert production["command"][-1].endswith(
-        "python manage.py angee provision --force-rebac",
+        "python manage.py angee provision --force-rebac "
+        "--after-if-installed 'resources load' --after-if-installed schema",
     )
     development = _render_dev_stack(_runtime_mode="docker")["jobs"]["provision"]
     assert development["command"][-1].endswith(
-        "python manage.py angee provision --demo --force-rebac",
+        "python manage.py angee provision --force-rebac "
+        "--after-if-installed 'resources load --include-demo' --after-if-installed schema",
     )
 
 

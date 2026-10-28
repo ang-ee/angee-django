@@ -50,16 +50,23 @@ def test_core_celery_app_uses_native_task_without_loading_provenance() -> None:
     """Jobs can construct its native app and task class with no provenance owner."""
 
     script = """
+import os
 import sys
 from django.conf import settings
 settings.configure(SECRET_KEY="native-jobs", INSTALLED_APPS=[], CELERY_BROKER_URL="memory://")
-from celery.app.task import Task
+from celery.contrib.django.task import DjangoTask
 from angee.jobs.celery import app
-assert app.task_cls == "celery.app.task:Task"
-assert issubclass(app.Task, Task)
+assert app.task_cls == "celery.contrib.django.task:DjangoTask"
+assert issubclass(app.Task, DjangoTask)
 assert not any(name == "angee.provenance" or name.startswith("angee.provenance.") for name in sys.modules)
+assert "ANGEE_PROJECT_DIR" not in os.environ
+assert "DJANGO_SETTINGS_MODULE" not in os.environ
 """
-    environment = {key: value for key, value in os.environ.items() if key != "DJANGO_SETTINGS_MODULE"}
+    environment = {
+        key: value for key, value in os.environ.items()
+        if key not in {"DJANGO_SETTINGS_MODULE", "ANGEE_PROJECT_DIR"}
+    }
+    environment["PYTHONPATH"] = os.pathsep.join(sys.path)
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, env=environment, timeout=30, check=False,
     )

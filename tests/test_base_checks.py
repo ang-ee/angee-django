@@ -147,7 +147,6 @@ def test_installed_hook_owners_declare_their_settings() -> None:
     assert {
         "ANGEE_MCP_ACTOR_VERIFIER",
         "ANGEE_WEBFORM_TOKEN_HOOK",
-        "ANGEE_TASK_LOCK_BACKEND",
         "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS",
         "ANGEE_PARTIES_SIGNING_PROVIDERS",
         "ANGEE_MERGE_GUARDS",

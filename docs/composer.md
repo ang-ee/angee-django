@@ -537,6 +537,10 @@ generated into the runtime directory.
 `angee.urls` walks the composed app registry in dependency order and aggregates
 URL patterns from opted-in addon `urls.py` modules.
 
+The shared [host bootstrap](../angee/project.py) respects an already configured
+Django application or an explicitly selected settings module. Importing an
+optional capability does not rediscover a surrounding Angee project.
+
 `angee.asgi` bootstraps the composed settings module for direct ASGI imports,
 builds Django's ASGI application, and wraps it only when installed addons
 contribute WebSocket patterns or HTTP sub-app mounts through `asgi.py`. The exact
