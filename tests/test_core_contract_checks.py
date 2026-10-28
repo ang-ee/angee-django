@@ -10,7 +10,7 @@ from angee.base.checks import (
     check_ownership,
     check_rebac_caveats,
 )
-from tests.core_persistence import OWNERSHIP_SCHEMA, OwnedRow
+from tests.core_persistence import OWNERSHIP_SCHEMA, OwnedRow, OwnershipContainer
 from tests.test_zed_extensions import _apply_emitted_schema_paths, _base_addon, _contrib_addon
 
 
@@ -20,7 +20,7 @@ def ownership_schema(tmp_path, monkeypatch):
     path = tmp_path / "ownership.zed"
     path.write_text(OWNERSHIP_SCHEMA)
     monkeypatch.setattr(config, "rebac_schema", str(path), raising=False)
-    monkeypatch.setattr(config, "get_models", lambda *args, **kwargs: iter([OwnedRow]))
+    monkeypatch.setattr(config, "get_models", lambda *args, **kwargs: iter([OwnedRow, OwnershipContainer]))
     return config, path
 
 
