@@ -412,22 +412,24 @@ def test_resolve_xref_accepts_addon_label_alias() -> None:
 
     with model_tables((ResolveExactTarget, ResolveExactLedger)):
         target = ResolveExactTarget._default_manager.create(name="target")
-        ResolveExactLedger.objects.create(
-            tier=Resource.Tier.MASTER,
-            source_addon="tests.resource_addon",
-            xref="target",
-            target_model="base.ResolveExactTarget",
-            target_id=str(target.pk),
-        )
+        with system_context(reason="test.resources.ledger_seed"):
+            ResolveExactLedger.objects.create(
+                tier=Resource.Tier.MASTER,
+                source_addon="tests.resource_addon",
+                xref="target",
+                target_model="base.ResolveExactTarget",
+                target_id=str(target.pk),
+            )
 
-        resolved = resolve_xref(
-            "resource_addon.target",
-            ResolveExactLedger,
-            {
-                "resource_addon": "tests.resource_addon",
-                "tests.resource_addon": "tests.resource_addon",
-            },
-        )
+        with system_context(reason="test.resources.xref_resolution"):
+            resolved = resolve_xref(
+                "resource_addon.target",
+                ResolveExactLedger,
+                {
+                    "resource_addon": "tests.resource_addon",
+                    "tests.resource_addon": "tests.resource_addon",
+                },
+            )
 
         assert resolved == target
 
@@ -472,27 +474,29 @@ def test_resolve_xref_reports_ambiguous_source_rows() -> None:
     with model_tables((ResolveAmbiguousTargetA, ResolveAmbiguousTargetB, ResolveAmbiguousLedger)):
         first = ResolveAmbiguousTargetA._default_manager.create(name="first")
         second = ResolveAmbiguousTargetB._default_manager.create(name="second")
-        ResolveAmbiguousLedger.objects.create(
-            tier=Resource.Tier.MASTER,
-            source_addon="tests.resource_addon",
-            xref="shared",
-            target_model="base.ResolveAmbiguousTargetA",
-            target_id=str(first.pk),
-        )
-        ResolveAmbiguousLedger.objects.create(
-            tier=Resource.Tier.MASTER,
-            source_addon="tests.resource_addon",
-            xref="shared",
-            target_model="base.ResolveAmbiguousTargetB",
-            target_id=str(second.pk),
-        )
+        with system_context(reason="test.resources.ledger_seed"):
+            ResolveAmbiguousLedger.objects.create(
+                tier=Resource.Tier.MASTER,
+                source_addon="tests.resource_addon",
+                xref="shared",
+                target_model="base.ResolveAmbiguousTargetA",
+                target_id=str(first.pk),
+            )
+            ResolveAmbiguousLedger.objects.create(
+                tier=Resource.Tier.MASTER,
+                source_addon="tests.resource_addon",
+                xref="shared",
+                target_model="base.ResolveAmbiguousTargetB",
+                target_id=str(second.pk),
+            )
 
         with pytest.raises(ValueError, match="ambiguous xref"):
-            resolve_xref(
-                "tests.resource_addon.shared",
-                ResolveAmbiguousLedger,
-                {"tests.resource_addon": "tests.resource_addon"},
-            )
+            with system_context(reason="test.resources.xref_resolution"):
+                resolve_xref(
+                    "tests.resource_addon.shared",
+                    ResolveAmbiguousLedger,
+                    {"tests.resource_addon": "tests.resource_addon"},
+                )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -609,29 +613,34 @@ def test_xref_widgets_resolve_mti_descendant_to_parent_fk() -> None:
             ("nope", "base.XrefMtiPeer"),
             ("bare", "base.XrefMtiParent"),
         ):
-            XrefMtiLedger.objects.create(
-                tier=Resource.Tier.MASTER,
-                source_addon="tests.resource_addon",
-                xref=xref,
-                target_model=target,
-                target_id=str({"acme": child, "nope": peer, "bare": parent_row}[xref].pk),
-            )
+            with system_context(reason="test.resources.ledger_seed"):
+                XrefMtiLedger.objects.create(
+                    tier=Resource.Tier.MASTER,
+                    source_addon="tests.resource_addon",
+                    xref=xref,
+                    target_model=target,
+                    target_id=str({"acme": child, "nope": peer, "bare": parent_row}[xref].pk),
+                )
 
         parent_fk = _bind(XrefForeignKeyWidget(model=XrefMtiParent))
         parent_m2m = _bind(XrefManyToManyWidget(model=XrefMtiParent))
 
         # The FK/M2M to the MTI parent accepts the child xref (the F-d fix).
-        assert parent_fk.clean("tests.resource_addon.acme") == child
-        assert parent_m2m.clean("tests.resource_addon.acme") == [child]
+        with system_context(reason="test.resources.xref_resolution"):
+            assert parent_fk.clean("tests.resource_addon.acme") == child
+        with system_context(reason="test.resources.xref_resolution"):
+            assert parent_m2m.clean("tests.resource_addon.acme") == [child]
 
         # A genuinely unrelated xref still fails fast.
         with pytest.raises(ValueError, match="not base.XrefMtiParent"):
-            parent_fk.clean("tests.resource_addon.nope")
+            with system_context(reason="test.resources.xref_resolution"):
+                parent_fk.clean("tests.resource_addon.nope")
 
         # A parent-only xref bound to a child relation fails fast (no downward reach).
         child_fk = _bind(XrefForeignKeyWidget(model=XrefMtiChild))
         with pytest.raises(ValueError, match="not base.XrefMtiChild"):
-            child_fk.clean("tests.resource_addon.bare")
+            with system_context(reason="test.resources.xref_resolution"):
+                child_fk.clean("tests.resource_addon.bare")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -684,7 +693,8 @@ def test_resource_manager_loads_rows_and_resolves_xrefs(
         with system_context(reason="resource load assertions"):
             alice = ImportUser.objects.get(username="alice")
             note = ImportNote.objects.get(title="Framework map")
-        ledger_xrefs = set(ResourceLedger.objects.values_list("xref", flat=True))
+        with system_context(reason="test.resources.ledger_observation"):
+            ledger_xrefs = set(ResourceLedger.objects.values_list("xref", flat=True))
 
         assert result.created == 2
         assert result.loaded == 2
@@ -790,10 +800,11 @@ def test_resource_manager_keeps_same_path_groups_addon_scoped(
         with system_context(reason="resource grouping assertions"):
             beta_user = SharedUser.objects.get(username="beta")
             beta_note = SharedNote.objects.get(title="Beta note")
-        ledgers = {
-            (row.source_addon, row.xref): row.target_model
-            for row in SharedLedger.objects.order_by("source_addon", "xref")
-        }
+        with system_context(reason="test.resources.ledger_observation"):
+            ledgers = {
+                (row.source_addon, row.xref): row.target_model
+                for row in SharedLedger.objects.order_by("source_addon", "xref")
+            }
 
         assert beta_note.created_by == beta_user
         assert ledgers[("tests.alpha", "alpha_user")] == "base.SharedUser"
@@ -910,11 +921,12 @@ def test_resource_load_moves_a_parent_xref_onto_its_child(tmp_path: Path) -> Non
         with system_context(reason="moved xref fixture"):
             existing = MovedNote.objects.create(title="Welcome", body="Existing")
             parent = MovedPage._default_manager.get(pk=existing.pk)
-        MovedLedger.objects.create(
-            source_addon=owner.name, source_path="resources/010_base.movedpage.csv", xref="welcome",
-            target_model=MovedPage._meta.label, target_id=parent.public_id,
-            content_hash="sha256:released", tier=Resource.Tier.INSTALL,
-        )
+        with system_context(reason="test.resources.ledger_seed"):
+            MovedLedger.objects.create(
+                source_addon=owner.name, source_path="resources/010_base.movedpage.csv", xref="welcome",
+                target_model=MovedPage._meta.label, target_id=parent.public_id,
+                content_hash="sha256:released", tier=Resource.Tier.INSTALL,
+            )
 
         result = MovedLedger.objects.load_addons((owner,), tiers=[Resource.Tier.INSTALL])
 
@@ -922,7 +934,8 @@ def test_resource_load_moves_a_parent_xref_onto_its_child(tmp_path: Path) -> Non
         existing.refresh_from_db()
         assert existing.body == "Seeded"
         assert MovedPage._base_manager.count() == 1
-        ledger = MovedLedger.objects.get(xref="welcome")
+        with system_context(reason="test.resources.ledger_observation"):
+            ledger = MovedLedger.objects.get(xref="welcome")
         assert (ledger.target_model, ledger.target_id) == (MovedNote._meta.label, existing.public_id)
 
 
@@ -1057,7 +1070,8 @@ def test_resource_adoption_is_opt_in(tmp_path: Path) -> None:
         assert result.skipped == 0
         with system_context(reason="resource adoption assertions"):
             assert AdoptUser.objects.count() == 1
-        assert AdoptLedger.objects.get(xref="existing").target_id
+        with system_context(reason="test.resources.ledger_observation"):
+            assert AdoptLedger.objects.get(xref="existing").target_id
         with pytest.raises(MissingActorError):
             AdoptUser.objects.count()
 
@@ -1124,7 +1138,8 @@ def test_resource_adoption_uses_explicit_unique_field(
         assert result.skipped == 0
         with system_context(reason="explicit adoption assertions"):
             assert ExplicitAdoptUser.objects.count() == 1
-        assert ExplicitAdoptLedger.objects.get(xref="existing").target_id
+        with system_context(reason="test.resources.ledger_observation"):
+            assert ExplicitAdoptLedger.objects.get(xref="existing").target_id
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1174,15 +1189,16 @@ def test_resource_adoption_repairs_stale_ledger_target(tmp_path: Path) -> None:
     with model_tables((StaleLedgerUser, StaleLedger)):
         with system_context(reason="stale-ledger adoption fixture"):
             existing = StaleLedgerUser.objects.create(username="admin", label="Existing")
-        StaleLedger.objects.create(
-            source_addon=owner.name,
-            source_path="resources/010_base.staleledgeruser.csv",
-            tier=Resource.Tier.INSTALL,
-            xref="admin",
-            content_hash="sha256:stale",
-            target_model=StaleLedgerUser._meta.label,
-            target_id="usr_stale",
-        )
+        with system_context(reason="test.resources.ledger_seed"):
+            StaleLedger.objects.create(
+                source_addon=owner.name,
+                source_path="resources/010_base.staleledgeruser.csv",
+                tier=Resource.Tier.INSTALL,
+                xref="admin",
+                content_hash="sha256:stale",
+                target_model=StaleLedgerUser._meta.label,
+                target_id="usr_stale",
+            )
 
         result = StaleLedger.objects.load_addons(
             (owner,),
@@ -1196,7 +1212,8 @@ def test_resource_adoption_repairs_stale_ledger_target(tmp_path: Path) -> None:
         assert existing.label == "Seeded"
         with system_context(reason="stale-ledger adoption assertions"):
             assert StaleLedgerUser.objects.count() == 1
-        assert StaleLedger.objects.get(xref="admin").target_id == existing.public_id
+        with system_context(reason="test.resources.ledger_observation"):
+            assert StaleLedger.objects.get(xref="admin").target_id == existing.public_id
 
         second = StaleLedger.objects.load_addons(
             (owner,),
@@ -1283,7 +1300,8 @@ def test_stale_ledger_pointer_to_wrong_live_row_is_repaired(tmp_path: Path) -> N
         with system_context(reason="stale-pointer assertions"):
             seeded = StalePointerUser.objects.get(username="admin")
             assert seeded.label == "Seeded"
-        assert StalePointerLedger.objects.get(xref="admin").target_id == seeded.public_id
+        with system_context(reason="test.resources.ledger_observation"):
+            assert StalePointerLedger.objects.get(xref="admin").target_id == seeded.public_id
 
         steady = StalePointerLedger.objects.load_addons(
             (owner,),
@@ -1359,7 +1377,8 @@ def test_resource_adoption_accepts_composite_unique_fields(tmp_path: Path) -> No
         assert result.skipped == 0
         existing.refresh_from_db()
         assert existing.label == "Seeded"
-        assert CompositeLedger.objects.get(xref="anthropic").target_id == existing.public_id
+        with system_context(reason="test.resources.ledger_observation"):
+            assert CompositeLedger.objects.get(xref="anthropic").target_id == existing.public_id
 
         second = CompositeLedger.objects.load_addons(
             (owner,),
@@ -1433,7 +1452,8 @@ def test_resource_adoption_accepts_mti_parent_unique_fields(tmp_path: Path) -> N
         assert (result.created, result.updated) == (0, 1)
         existing.refresh_from_db()
         assert existing.body == "Seeded"
-        assert DocumentLedger.objects.get(xref="document").target_id == existing.public_id
+        with system_context(reason="test.resources.ledger_observation"):
+            assert DocumentLedger.objects.get(xref="document").target_id == existing.public_id
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1514,7 +1534,8 @@ def test_resource_adoption_accepts_a_single_conditional_unique_field(tmp_path: P
         version.refresh_from_db()
         assert head.label == "Seeded"
         assert version.label == "Published version"
-        assert ConditionalKeyLedger.objects.get(xref="seeded").target_id == head.public_id
+        with system_context(reason="test.resources.ledger_observation"):
+            assert ConditionalKeyLedger.objects.get(xref="seeded").target_id == head.public_id
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1739,8 +1760,9 @@ def test_resource_adoption_accepts_conditional_composite_unique_fields(tmp_path:
             oauth_row = ConditionalCredential.objects.get(oauth_client="client-a")
         assert oauth_row.name == "api-key"
         assert oauth_row.label == "OAuth row"
-        assert ConditionalLedger.objects.get(xref="static-key").target_id == existing.public_id
-        assert ConditionalLedger.objects.get(xref="static-key-oauth").target_id == oauth_row.public_id
+        with system_context(reason="test.resources.ledger_observation"):
+            assert ConditionalLedger.objects.get(xref="static-key").target_id == existing.public_id
+            assert ConditionalLedger.objects.get(xref="static-key-oauth").target_id == oauth_row.public_id
 
         second = ConditionalLedger.objects.load_addons(
             (owner,),
@@ -1891,15 +1913,16 @@ def test_grant_tuple_resolves_xref_const_role_and_wildcard(tmp_path: Path) -> No
         aliases = {"tests.resource_addon": "tests.resource_addon", "resource_addon": "tests.resource_addon"}
         with system_context(reason="grant resolver setup"):
             doc = GrantDoc.objects.create(title="Doc")
-        GrantResolverLedger.objects.create(
-            source_addon="tests.resource_addon",
-            source_path="grants/010_demo.yaml",
-            tier=Resource.Tier.DEMO,
-            xref="doc",
-            content_hash="sha256:x",
-            target_model=GrantDoc._meta.label,
-            target_id=doc.public_id,
-        )
+        with system_context(reason="test.resources.ledger_seed"):
+            GrantResolverLedger.objects.create(
+                source_addon="tests.resource_addon",
+                source_path="grants/010_demo.yaml",
+                tier=Resource.Tier.DEMO,
+                xref="doc",
+                content_hash="sha256:x",
+                target_model=GrantDoc._meta.label,
+                target_id=doc.public_id,
+            )
         entry = ResourceEntry.from_declaration(
             addon(tmp_path), "demo", {"path": "grants/010_demo.yaml", "kind": "grants"}
         )
@@ -1963,15 +1986,16 @@ def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path, monkeypatch: Any
         call_command("rebac", "sync", verbosity=0)
         with system_context(reason="grant load setup"):
             alice = user_model.objects.create(username="grant-alice")
-        GrantLoadLedger.objects.create(
-            source_addon="tests.resource_addon",
-            source_path="grants/010_demo.yaml",
-            tier=Resource.Tier.DEMO,
-            xref="alice",
-            content_hash="sha256:x",
-            target_model=user_model._meta.label,
-            target_id=alice.public_id,
-        )
+        with system_context(reason="test.resources.ledger_seed"):
+            GrantLoadLedger.objects.create(
+                source_addon="tests.resource_addon",
+                source_path="grants/010_demo.yaml",
+                tier=Resource.Tier.DEMO,
+                xref="alice",
+                content_hash="sha256:x",
+                target_model=user_model._meta.label,
+                target_id=alice.public_id,
+            )
         grants_dir = tmp_path / "grants"
         grants_dir.mkdir()
         (grants_dir / "010_demo.yaml").write_text(
@@ -2178,15 +2202,16 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
             reader = user_model.objects.create(username="mti-reader")
             outsider = user_model.objects.create(username="mti-outsider")
         for row, xref in ((child, "child"), (plain, "plain"), (reader, "reader")):
-            MtiGrantLedger.objects.create(
-                source_addon="tests.resource_addon",
-                source_path="grants/010_demo.yaml",
-                tier=Resource.Tier.DEMO,
-                xref=xref,
-                content_hash="sha256:x",
-                target_model=type(row)._meta.label,
-                target_id=row.public_id,
-            )
+            with system_context(reason="test.resources.ledger_seed"):
+                MtiGrantLedger.objects.create(
+                    source_addon="tests.resource_addon",
+                    source_path="grants/010_demo.yaml",
+                    tier=Resource.Tier.DEMO,
+                    xref=xref,
+                    content_hash="sha256:x",
+                    target_model=type(row)._meta.label,
+                    target_id=row.public_id,
+                )
         entry = ResourceEntry.from_declaration(
             addon(tmp_path), "demo", {"path": "grants/010_demo.yaml", "kind": "grants"}
         )

@@ -245,9 +245,9 @@ def test_xref_driver_uses_native_publish_widget_defaults_and_retains_ledger(
     assert workflow.pk == replay.pk
     assert bool(workflow.published_id) is expected
     assert replay.published_id == workflow.published_id
-    assert Resource.objects.filter(source_addon=addon.name).count() == 1
-    assert Resource.objects.get(source_addon=addon.name).source_addon == addon.name
     with actor_context(actor):
+        assert Resource.objects.filter(source_addon=addon.name).count() == 1
+        assert Resource.objects.get(source_addon=addon.name).source_addon == addon.name
         assert Resource.objects.get(source_addon=addon.name).target_instance() == workflow
         if expected:
             assert workflow.published.published_by_id == actor.pk
@@ -266,7 +266,8 @@ def test_xref_driver_selects_longest_addon_prefix_and_only_requested_row(executi
 
     assert workflow.key == "resource-graph"
     assert list(Workflow.system_queryset().values_list("key", flat=True)) == ["resource-graph"]
-    assert list(Resource.objects.filter(source_addon=addon.name).values_list("xref", flat=True)) == ["graph.detail"]
+    with system_context(reason="test.workflow_resource.ledger_readback"):
+        assert list(Resource.objects.filter(source_addon=addon.name).values_list("xref", flat=True)) == ["graph.detail"]
     with system_context(reason="assert unrelated resource grants remain unimported"):
         assert (
             not active_relationship_model()
@@ -304,7 +305,8 @@ def test_xref_lookup_does_not_order_unrelated_external_dependencies(execution, w
 
     assert workflow.key == "resource-graph"
     assert list(Workflow.system_queryset().values_list("key", flat=True)) == ["resource-graph"]
-    assert list(Resource.objects.filter(source_addon=addon.name).values_list("xref", flat=True)) == ["graph"]
+    with system_context(reason="test.workflow_resource.ledger_readback"):
+        assert list(Resource.objects.filter(source_addon=addon.name).values_list("xref", flat=True)) == ["graph"]
 
 
 @pytest.mark.parametrize("ambient", [False, True])
@@ -322,7 +324,8 @@ def test_xref_driver_denies_unauthorized_unchanged_replay(execution, workflow_re
     else:
         with pytest.raises(PermissionDenied):
             drivers.load_workflow(handle, actor=other)
-    assert Resource.objects.filter(source_addon=addon.name).count() == 1
+    with system_context(reason="test.workflow_resource.ledger_readback"):
+        assert Resource.objects.filter(source_addon=addon.name).count() == 1
     assert WorkflowVersion.system_queryset().filter(workflow=workflow).count() == 1
 
 
@@ -333,7 +336,8 @@ def test_xref_loading_keeps_native_demo_tier_guard(execution, workflow_resource,
     settings.DEBUG = False
     with pytest.raises(ImproperlyConfigured, match="requires DEBUG"):
         drivers.load_workflow(handle, actor=actor)
-    assert not Resource.objects.filter(source_addon=addon.name).exists()
+    with system_context(reason="test.workflow_resource.ledger_readback"):
+        assert not Resource.objects.filter(source_addon=addon.name).exists()
     workflow = drivers.load_workflow(handle, actor=actor, allow_non_dev=True)
     assert settings.DEBUG is False
     assert drivers.load_workflow(handle, actor=actor, allow_non_dev=True).pk == workflow.pk
@@ -348,7 +352,8 @@ def test_xref_loading_rejects_missing_and_wrong_model_targets(execution, workflo
         drivers.load_workflow(f"{addon.name}.missing", actor=actor)
     with pytest.raises(ResourceLoadError, match="expected workflows.WorkflowVersion"):
         Resource.objects.load_xref(f"{addon.name}.graph", model=WorkflowVersion, actor=actor)
-    assert not Resource.objects.filter(source_addon=addon.name).exists()
+    with system_context(reason="test.workflow_resource.ledger_readback"):
+        assert not Resource.objects.filter(source_addon=addon.name).exists()
     assert not Workflow.system_queryset().exists()
 
 
@@ -357,4 +362,5 @@ def test_xref_loading_rejects_declaration_collisions(execution, workflow_resourc
     addon = workflow_resource([workflow_row(), workflow_row(key="collision")])
     with pytest.raises(ResourceLoadError, match="xref collision"):
         drivers.load_workflow(f"{addon.name}.graph", actor=actor)
-    assert not Resource.objects.filter(source_addon=addon.name).exists()
+    with system_context(reason="test.workflow_resource.ledger_readback"):
+        assert not Resource.objects.filter(source_addon=addon.name).exists()
