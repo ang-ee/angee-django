@@ -5,9 +5,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from sentry_sdk.integrations.strawberry import StrawberryIntegration
+
 from angee.graphql.constants import CHANGE_GROUP_EXPIRY_SECONDS, PUBLIC_ID_FIELD_NAME
 
 SETTINGS = {
+    # Native HTTP error capture sees coercion values before our safe log policy.
+    "SENTRY_DISABLED_INTEGRATIONS:append": [StrawberryIntegration],
     "ANGEE_HOOKS:append": ["ANGEE_GRAPHQL_RESOURCE_FILTERS"],
     "ANGEE_GRAPHQL_RESOURCE_FILTERS": [],
     "STRAWBERRY_DJANGO:append": {
@@ -41,8 +45,4 @@ def settings(namespace: Mapping[str, Any]) -> dict[str, str | None | dict[str, A
 def _channel_redis_url(namespace: Mapping[str, Any]) -> str:
     """Return the Redis URL used for the shared Channels layer."""
 
-    return str(
-        namespace.get("CHANNEL_REDIS_URL")
-        or namespace.get("REDIS_URL")
-        or ""
-    )
+    return str(namespace.get("CHANNEL_REDIS_URL") or namespace.get("REDIS_URL") or "")

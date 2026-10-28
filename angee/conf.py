@@ -69,8 +69,8 @@ class ProjectContract:
         Django may inspect the importing settings module during app discovery.
         Keeping work private prevents it from capturing a partial app graph, and
         a failed reload leaves the previously published settings intact. Error
-        reporting starts as soon as the project environment is read, so a
-        composition failure is reported too.
+        reporting starts with the composed addon policy, including when a
+        composition failure is about to propagate.
         """
 
         from angee.compose.composer import Composer
@@ -79,9 +79,11 @@ class ProjectContract:
         self.namespace = {}
         try:
             root = self.load()
-            self._start_error_reporting()
             prepend_import_paths((*self.namespace.get("ANGEE_ADDON_DIRS", ()), root))
-            Composer(self.namespace).compose_settings(project_apps=self._project_apps)
+            try:
+                Composer(self.namespace).compose_settings(project_apps=self._project_apps)
+            finally:
+                self._start_error_reporting()
             composed = self.namespace
         finally:
             self.namespace = published
@@ -96,14 +98,16 @@ class ProjectContract:
         and Celery integrations must start. The SDK reads ``SENTRY_DSN``,
         ``SENTRY_ENVIRONMENT`` and ``SENTRY_RELEASE`` itself.
 
-        Sentry enables its native integrations for installed libraries. Request
-        bodies and frame locals stay in the process. Capability-specific logging
-        policy belongs to each installed app's lifecycle.
+        Sentry enables its native integrations for installed libraries. Addons
+        contribute native integration classes to ``SENTRY_DISABLED_INTEGRATIONS``
+        when their own error policy replaces an integration's capture. Request
+        bodies and frame locals stay in the process.
         """
 
         if not self.env.str("SENTRY_DSN", default="") or sentry_sdk.is_initialized():
             return
         sentry_sdk.init(
+            disabled_integrations=self.namespace.get("SENTRY_DISABLED_INTEGRATIONS", ()),
             send_default_pii=False,
             include_local_variables=False,
             max_request_body_size="never",
@@ -127,10 +131,12 @@ class ProjectContract:
         project_settings = ModuleType(declarations.__name__)
         # Native yamlconf overlays traverse dictionaries in place. Keep the
         # cached Python declarations intact for subsequent configuration loads.
-        project_settings.__dict__.update({
-            name: deepcopy(value) if yamlconf.is_setting_name(name) and isinstance(value, dict) else value
-            for name, value in vars(declarations).items()
-        })
+        project_settings.__dict__.update(
+            {
+                name: deepcopy(value) if yamlconf.is_setting_name(name) and isinstance(value, dict) else value
+                for name, value in vars(declarations).items()
+            }
+        )
         predefined_settings = self._load_project_overlays(project_settings, root)
         self._reject_unexpected_sources(project_settings, root, settings_module)
         project_yaml_settings = self._project_yaml_settings(project_settings, root)
@@ -193,7 +199,7 @@ class ProjectContract:
                 continue
             try:
                 source_path = resolve_path(source)
-            except (ImproperlyConfigured, OSError, ValueError):
+            except ImproperlyConfigured, OSError, ValueError:
                 continue
             if source_path == project_yaml:
                 names.add(name)
@@ -219,7 +225,7 @@ class ProjectContract:
                     continue
                 try:
                     source_path = str(resolve_path(source))
-                except (ImproperlyConfigured, OSError, TypeError, ValueError):
+                except ImproperlyConfigured, OSError, TypeError, ValueError:
                     source_path = source
                 if source_path not in allowed_sources:
                     raise ImproperlyConfigured(f"Unexpected django-yamlconf source {source!r}")
@@ -300,7 +306,8 @@ class ProjectContract:
             if canonical in seed:
                 same = (
                     resolve_path(value) == resolve_path(seed[canonical])
-                    if suffix == "DIR" else value == seed[canonical]
+                    if suffix == "DIR"
+                    else value == seed[canonical]
                 )
                 if not same:
                     raise ImproperlyConfigured(f"{previous} and {canonical} must agree when both are declared.")
