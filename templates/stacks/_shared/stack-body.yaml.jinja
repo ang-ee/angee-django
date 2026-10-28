@@ -435,13 +435,13 @@ services:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
     # Let Celery finish a warm shutdown, then bound native supervisor updates.
     stop_grace_period: 30s
-{% if runtime_mode == "process" %}    command: ["uv", "run", "celery", "-A", "angee.jobs.celery:app", "worker", {% if role == "worker" %}"--beat"{% else %}"-Q", "{{ celery_queues }}", "--pool", "threads", "--concurrency", "{{ celery_queues|split:","|length * 8 }}"{% endif %}, "--loglevel=INFO"]
+{% if runtime_mode == "process" %}    command: ["uv", "run", "python", "manage.py", "celery", "worker", {% if role == "worker" %}"--beat"{% else %}"-Q", "{{ celery_queues }}", "--pool", "threads", "--concurrency", "{{ celery_queues|split:","|length * 8 }}"{% endif %}, "--loglevel=INFO"]
     after: [provision]
 {% else %}    command:
       - sh
       - "-c"
       - >-
-        {{ python_sync }}exec celery -A angee.jobs.celery:app worker {% if role == "worker" %}--beat{% else %}-Q {{ celery_queues }} --pool threads --concurrency {{ celery_queues|split:","|length * 8 }}{% endif %} --loglevel=INFO
+        {{ python_sync }}exec python manage.py celery worker {% if role == "worker" %}--beat{% else %}-Q {{ celery_queues }} --pool threads --concurrency {{ celery_queues|split:","|length * 8 }}{% endif %} --loglevel=INFO
     after: [provision{% if redis_mode == "external" %}{% else %}, redis{% endif %}]
 {% endif %}
 {% endif %}{% endfor %}
