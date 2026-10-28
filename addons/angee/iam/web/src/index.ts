@@ -1,5 +1,4 @@
-import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import type { BaseMenuItem } from "@angee/ui";
+import { defineBaseAddon, resourcePageRoutes, type MenuDeclarations } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { createElement } from "react";
 
@@ -48,39 +47,18 @@ export { USER_LIST_COLUMNS, USER_LIST_PRESETS, USER_LIST_PRESET_IDS, USER_MODEL 
 
 // IAM is a first-class app-rail destination; a route-less parent inherits its
 // first child's target.
-const identityMenu: readonly BaseMenuItem[] = [
-  {
-    // Route-less app root: the rail icon inherits its target from the first
-    // child (Overview), so `iam.overview` is referenced by exactly one menu item.
-    id: "iam",
-    label: "IAM",
-    icon: "auth",
-    children: [
-      { id: "iam.overview", label: "Overview", route: "iam.overview", icon: "home" },
-      {
-        id: "iam.users.group",
-        label: "Users",
-        icon: "users",
-        children: [
-          // The full user list is for people managers; anyone else opening the route lists no one.
-          { id: "iam.users", label: "Users", route: "iam.users", icon: "users", requires: "iam.User#list" },
-          { id: "iam.groups", label: "Groups", route: "iam.groups", icon: "users" },
-        ],
-      },
-      {
-        id: "iam.roles.group",
-        label: "Roles",
-        icon: "auth",
-        children: [
-          { id: "iam.roles", label: "Roles", route: "iam.roles", icon: "auth" },
-          { id: "iam.grants", label: "Grants", route: "iam.grants", icon: "check" },
-          { id: "iam.relationships", label: "Relationships", route: "iam.relationships", icon: "share" },
-          { id: "iam.schema", label: "Schema", route: "iam.schema", icon: "columns" },
-        ],
-      },
-    ],
-  },
-];
+const identityMenu: MenuDeclarations = {
+  "iam": { label: "IAM", icon: "auth" },
+  "iam.overview": { label: "Overview", route: "iam.overview", icon: "home", parent: "iam" },
+  "iam.users.group": { label: "Users", icon: "users", parent: "iam" },
+  "iam.users": { label: "Users", route: "iam.users", icon: "users", requires: "iam.User#list", parent: "iam.users.group" },
+  "iam.groups": { label: "Groups", route: "iam.groups", icon: "users", parent: "iam.users.group" },
+  "iam.roles.group": { label: "Roles", icon: "auth", parent: "iam" },
+  "iam.roles": { label: "Roles", route: "iam.roles", icon: "auth", parent: "iam.roles.group" },
+  "iam.grants": { label: "Grants", route: "iam.grants", icon: "check", parent: "iam.roles.group" },
+  "iam.relationships": { label: "Relationships", route: "iam.relationships", icon: "share", parent: "iam.roles.group" },
+  "iam.schema": { label: "Schema", route: "iam.schema", icon: "columns", parent: "iam.roles.group" },
+};
 
 const iam = defineBaseAddon({
   id: "iam",

@@ -1,9 +1,12 @@
+import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
 import { createRouteHref } from "@angee/ui";
 import type { ChatterTabContent, ChatterViewContext, ContainerChild } from "@angee/ui/runtime";
 import { describe, expect, test } from "vitest";
 
 import projects, { PROJECT_MODEL, TASK_MODEL } from "./index";
+
+const declaredMenus = composeAddons([{ id: projects.id, menus: projects.menus, routes: projects.routes }], { canonicalModelLabel: (model) => model }).menuComposition.logical;
 
 describe("projects addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -63,10 +66,10 @@ describe("projects addon manifest", () => {
   });
 
   test("owns one Projects place with four routed children", () => {
-    expect(projects.menus).toHaveLength(1);
-    expect(projects.menus?.[0]?.id).toBe("projects");
-    expect(projects.menus?.[0]?.route).toBeUndefined();
-    expect(projects.menus?.[0]?.children?.map((item) => item.route)).toEqual([
+    expect(declaredMenus).toHaveLength(1);
+    expect(declaredMenus?.[0]?.id).toBe("projects");
+    expect(declaredMenus?.[0]?.route).toBeUndefined();
+    expect(declaredMenus?.[0]?.children?.map((item) => item.route)).toEqual([
       "projects.my-work",
       "projects.projects",
       "projects.tasks",

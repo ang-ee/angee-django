@@ -1,8 +1,6 @@
 /// <reference path="./previews/assets.d.ts" />
-
 import type { BaseAddonRoute } from "@angee/app";
-import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import type { BaseMenuItem } from "@angee/ui";
+import { defineBaseAddon, resourcePageRoutes, type MenuDeclarations } from "@angee/app";
 import { Tab, useRecordChromeContext, useRouteSearch } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { ArchiveRestore, Download, HardDrive, Image, Pencil, Upload } from "lucide-react";
@@ -29,23 +27,11 @@ const storageRoutes: readonly BaseAddonRoute[] = [
   },
 ];
 
-const storageMenu: readonly BaseMenuItem[] = [
-  {
-    id: STORAGE_ID,
-    label: "Files",
-    icon: "files",
-    route: "storage.files",
-    children: [
-      { id: "storage.files", label: "Files", icon: "files", route: "storage.files" },
-      {
-        id: "storage.settings",
-        label: "Settings",
-        icon: "drive",
-        route: "storage.settings",
-      },
-    ],
-  },
-];
+const storageMenu: MenuDeclarations = {
+  [STORAGE_ID]: { label: "Files", icon: "files", route: "storage.files" },
+  "storage.files": { label: "Files", icon: "files", route: "storage.files", parent: STORAGE_ID },
+  "storage.settings": { label: "Settings", icon: "drive", route: "storage.settings", parent: STORAGE_ID },
+};
 
 // Glyphs the browser reaches for that the base registry doesn't carry; `file`,
 // `files`, and `trash` already live there.

@@ -1,9 +1,11 @@
+import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
-import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import { enKnowledgeMessages } from "./i18n";
 import knowledge from "./index";
+
+const declaredMenus = composeAddons([{ id: knowledge.id, menus: knowledge.menus, routes: knowledge.routes }], { canonicalModelLabel: (model) => model }).menuComposition.logical;
 
 describe("knowledge addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -37,8 +39,8 @@ describe("knowledge addon manifest", () => {
   });
 
   test("exposes a Knowledge menu with a Settings child", () => {
-    expect(knowledge.menus).toHaveLength(1);
-    const menu = knowledge.menus?.[0] as BaseMenuItem | undefined;
+    expect(declaredMenus).toHaveLength(1);
+    const menu = declaredMenus?.[0];
     expect(menu?.id).toBe("knowledge");
     expect(menu?.route).toBe("knowledge.home");
     // Knowledge is a domain app (top of the rail), so it carries no group.

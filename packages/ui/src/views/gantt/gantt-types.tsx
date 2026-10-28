@@ -55,8 +55,6 @@ interface GanttResource {
   children?: GanttResource[]
 }
 
-/** Preferred name for a tree node; `GanttResource` is the legacy alias. */
-type GanttNode = GanttResource
 
 /** Half-open: `start` inclusive, `end` exclusive. */
 interface GanttDateRange {
@@ -279,7 +277,6 @@ export type {
   GanttDragState,
   GanttBarId,
   GanttInteractions,
-  GanttNode,
   GanttOccurrence,
   GanttOffDaysConfig,
   GanttOverlapPolicy,

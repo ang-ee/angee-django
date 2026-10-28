@@ -17,11 +17,6 @@ depends_on = [
   "angee.web",
 ]
 
-[[migrations]]
-name = "retire_clarification_keys"
-app_label = "projects"
-module = "runtime_migrations.retire_clarification_keys"
-
 [resources]
 master = []
 demo = [

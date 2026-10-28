@@ -14,16 +14,9 @@ const storageIntegrate = defineBaseAddon({
     lazyRouteComponent(() => import("./views/MountsPage"), "MountsPage"),
     MOUNT_MODEL,
   ),
-  menus: [
-    {
-      id: "storage-integrate.mounts",
-      label: "Mounts",
-      route: "storage-integrate.mounts",
-      parentId: "storage",
-      icon: "drive",
-      description: "Connect and synchronize external storage folders",
-    },
-  ],
+  menus: {
+    "storage-integrate.mounts": { label: "Mounts", route: "storage-integrate.mounts", icon: "drive", description: "Connect and synchronize external storage folders", parent: "storage" },
+  },
   i18n: { "storage-integrate": enStorageIntegrateMessages },
   forms: { [MOUNT_MODEL]: mountForm },
   containers: {

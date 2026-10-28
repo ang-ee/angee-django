@@ -3,7 +3,6 @@
 // assertions hermetic.
 
 import { createElement, useEffect, type ReactElement, type ReactNode } from "react";
-import { isMenuDeclarationList } from "./menus";
 import { waitFor } from "@testing-library/react";
 import { useBreadcrumb as useRefineBreadcrumb } from "@refinedev/core";
 import type { Root } from "react-dom/client";
@@ -136,9 +135,7 @@ export function expectValidBaseAddon(
     if (route.icon) assertValidIconName(addon.id, `route "${route.name}"`, route.icon);
   }
   // Declared nodes render a glyph (their icon, else their id); alterations only when they set one.
-  const menuItems = isMenuDeclarationList(addon.menus)
-    ? addon.menus
-    : Object.entries(addon.menus ?? {}).flatMap(([id, { icon, label, route }]) =>
+  const menuItems = Object.entries(addon.menus ?? {}).flatMap(([id, { icon, label, route }]) =>
       icon || id === addon.id || id.startsWith(`${addon.id}.`) ? [{ id, icon, label, route }] : []);
   for (const item of menuItems) {
     assertValidMenuItem(addon.id, item);

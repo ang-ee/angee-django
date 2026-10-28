@@ -169,7 +169,7 @@ interface UseGanttStateOptions<TData = unknown> extends GanttCallbacks<TData> {
    * anchor slides instead (DOM stays bounded). Default 12.
    */
   maxRangeWindow?: number
-  /** Tree nodes of the gantt (GanttNode is the preferred type name). */
+  /** Tree resources rendered by the Gantt. */
   resources?: readonly GanttResource[]
   /**
    * What a gesture may do when it would overlap another schedule in the SAME
@@ -1165,13 +1165,8 @@ interface GanttResolvedLines {
  * and the row separators can never disagree.
  */
 function resolveTimelineLines(
-  value: GanttTimelineLines | "vertical" | "both" | "none" | undefined
+  value: GanttTimelineLines = {}
 ): GanttResolvedLines {
-  if (value === "none") return { vertical: null, horizontal: null }
-  if (value === "vertical") return { vertical: "solid", horizontal: null }
-  if (value === "both" || value === undefined) {
-    return { vertical: "solid", horizontal: "solid" }
-  }
   const stroke = (line: GanttGridLine | undefined) =>
     line === false ? null : line === true || line === undefined ? "solid" : line
   return {
@@ -1362,12 +1357,8 @@ interface GanttViewConfig<TData = unknown> {
    * Timeline gridlines. The object form controls the two axes independently
    * and gives each its own stroke: `{ vertical: "dashed", horizontal: true }`.
    * An omitted axis stays on and solid. `true` means solid.
-   *
-   * The three legacy shorthands still work: "none" (bare), "vertical" (unit
-   * boundaries only, rows separated by whitespace) and "both" (adds row
-   * separators).
    */
-  timelineLines: GanttTimelineLines | "vertical" | "both" | "none"
+  timelineLines: GanttTimelineLines
   /**
    * Bar title placement: "inside" (default) renders it in the bar, "outside"
    * beside the bar, "auto" moves it outside only when the bar is too short.
@@ -1522,7 +1513,7 @@ const DEFAULT_VIEW_CONFIG: GanttViewConfig = {
   wheelZoom: true,
   navButtonVariant: "ghost",
   navButtonSize: "sm",
-  timelineLines: "vertical",
+  timelineLines: { vertical: true, horizontal: false },
   barLabel: "inside",
   offscreenIndicators: true,
   infiniteScroll: true,

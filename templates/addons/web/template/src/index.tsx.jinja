@@ -13,14 +13,13 @@ const addon = defineBaseAddon({
     lazyRouteComponent(() => import("./views/{{ resource_name }}Page"), "{{ resource_name }}Page"),
     "{{ resource_name }}",
   ),
-  menus: [
-    {
-      id: "{{ addon_id }}",
+  menus: {
+    "{{ addon_id }}": {
       label: "{{ addon_title }}",
       icon: "file",
       route: "{{ addon_id }}.{{ resource_name | lower }}",
     },
-  ],
+  },
   i18n: {
     "{{ addon_id }}": en{{ addon_title | replace(" ", "") }}Messages,
   },

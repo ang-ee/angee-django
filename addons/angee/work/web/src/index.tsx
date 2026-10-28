@@ -1,13 +1,5 @@
-import {
-  defineBaseAddon,
-  resourcePageRoutes,
-  type BaseAddonRoute,
-} from "@angee/app";
-import {
-  Field,
-  Group,
-  type BaseMenuItem,
-} from "@angee/ui";
+import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute, type MenuDeclarations } from "@angee/app";
+import { Field, Group } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
   ArchiveRestore,
@@ -91,39 +83,13 @@ const workRoutes: readonly BaseAddonRoute[] = [
   },
 ];
 
-const workMenu: readonly BaseMenuItem[] = [
-  {
-    id: "work",
-    label: "Work",
-    icon: "work",
-    children: [
-      {
-        id: "work.queues",
-        label: "Queues",
-        icon: "list-ordered",
-        route: "work.queues",
-      },
-      {
-        id: "work.triage-hub",
-        label: "Triage",
-        icon: "work-triage",
-        route: "work.triage-hub",
-      },
-      {
-        id: "work.boards-hub",
-        label: "Boards",
-        icon: "work-board",
-        route: "work.boards-hub",
-      },
-      {
-        id: "work.cycles-hub",
-        label: "Cycles",
-        icon: "work-cycle",
-        route: "work.cycles-hub",
-      },
-    ],
-  },
-];
+const workMenu: MenuDeclarations = {
+  "work": { label: "Work", icon: "work" },
+  "work.queues": { label: "Queues", icon: "list-ordered", route: "work.queues", parent: "work" },
+  "work.triage-hub": { label: "Triage", icon: "work-triage", route: "work.triage-hub", parent: "work" },
+  "work.boards-hub": { label: "Boards", icon: "work-board", route: "work.boards-hub", parent: "work" },
+  "work.cycles-hub": { label: "Cycles", icon: "work-cycle", route: "work.cycles-hub", parent: "work" },
+};
 
 const work = defineBaseAddon({
   id: "work",

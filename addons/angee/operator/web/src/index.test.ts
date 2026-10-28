@@ -1,5 +1,5 @@
+import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
-import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import operator from "./index";
@@ -16,6 +16,8 @@ const SECTION_PATHS = [
   "/operator/templates",
   "/operator/secrets",
 ];
+
+const declaredMenus = composeAddons([{ id: operator.id, menus: operator.menus, routes: operator.routes }], { canonicalModelLabel: (model) => model }).menuComposition.logical;
 
 describe("operator addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -46,8 +48,8 @@ describe("operator addon manifest", () => {
   });
 
   test("contributes one Operator Settings category whose children mirror routes", () => {
-    expect(operator.menus).toHaveLength(1);
-    const menu = operator.menus?.[0] as BaseMenuItem | undefined;
+    expect(declaredMenus).toHaveLength(1);
+    const menu = declaredMenus?.[0];
     expect(menu?.id).toBe("operator");
     expect(menu?.icon).toBe("terminal");
     expect(menu?.parentId).toBeUndefined();

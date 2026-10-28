@@ -1,6 +1,5 @@
-import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
+import { defineBaseAddon, resourcePageRoutes, type MenuDeclarations } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import type { BaseMenuItem } from "@angee/ui";
 import { FolderGit2, GitBranch, GitFork, LayoutTemplate } from "lucide-react";
 
 import { enIntegrateVcsMessages } from "./i18n";
@@ -13,18 +12,13 @@ const routes = [
   ...resourcePageRoutes("integrate_vcs.templates", "/integrate/templates", lazyRouteComponent(() => import("./views/TemplatesPage"), "TemplatesPage"), "integrate_vcs.Template", { detailName: "integrate_vcs.template" }),
 ] as const;
 
-const menus: readonly BaseMenuItem[] = [{
-  id: "integrate_vcs",
-  label: "Sources",
-  icon: "source",
-  group: "platform",
-  children: [
-    { id: "integrate_vcs.sources", label: "Sources", icon: "source", route: "integrate_vcs.sources" },
-    { id: "integrate_vcs.templates", label: "Templates", icon: "integrate-template", route: "integrate_vcs.templates" },
-    { id: "integrate_vcs.repositories", label: "Repositories", icon: "repository", route: "integrate_vcs.repositories" },
-    { id: "integrate_vcs.vcs", label: "VCS bridges", icon: "vcs", route: "integrate_vcs.vcs" },
-  ],
-}];
+const menus: MenuDeclarations = {
+  "integrate_vcs": { label: "Sources", icon: "source", group: "platform" },
+  "integrate_vcs.sources": { label: "Sources", icon: "source", route: "integrate_vcs.sources", parent: "integrate_vcs" },
+  "integrate_vcs.templates": { label: "Templates", icon: "integrate-template", route: "integrate_vcs.templates", parent: "integrate_vcs" },
+  "integrate_vcs.repositories": { label: "Repositories", icon: "repository", route: "integrate_vcs.repositories", parent: "integrate_vcs" },
+  "integrate_vcs.vcs": { label: "VCS bridges", icon: "vcs", route: "integrate_vcs.vcs", parent: "integrate_vcs" },
+};
 
 const integrateVcs = defineBaseAddon({
   id: "integrate_vcs",

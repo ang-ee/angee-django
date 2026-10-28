@@ -201,15 +201,6 @@
   },
   {
     "package": "@angee/app",
-    "name": "isMenuDeclarationList",
-    "source": "packages/app/src/menus.ts",
-    "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/app",
     "name": "isUnauthorizedError",
     "source": "packages/app/src/providers/auth.tsx",
     "kind": null,
@@ -2818,15 +2809,6 @@
     "name": "LARGE_VIEWPORT_QUERY",
     "source": "packages/ui/src/lib/use-media-query.ts",
     "kind": "token",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "LEGACY_THEME_STORAGE_KEY",
-    "source": "packages/ui/src/lib/color-scheme.ts",
-    "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
     "status": "stable",
     "storyId": null
   },
@@ -6714,24 +6696,6 @@
     "name": "metricStripVariants",
     "source": "packages/ui/src/fragments/MetricStrip.tsx",
     "kind": "token",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "migrateThemeCustomization",
-    "source": "packages/ui/src/theme/runtime.d.ts",
-    "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "migrateThemeCustomizationFromV1",
-    "source": "packages/ui/src/theme/runtime.d.ts",
-    "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
     "storyId": null
   },

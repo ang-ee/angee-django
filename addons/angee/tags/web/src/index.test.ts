@@ -1,8 +1,10 @@
+import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
-import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import tags from "./index";
+
+const declaredMenus = composeAddons([{ id: tags.id, menus: tags.menus, routes: tags.routes }], { canonicalModelLabel: (model) => model }).menuComposition.logical;
 
 describe("angee.tags addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -21,7 +23,7 @@ describe("angee.tags addon manifest", () => {
   });
 
   test("contributes Tags as a Settings category", () => {
-    const root = tags.menus?.[0] as BaseMenuItem | undefined;
+    const root = declaredMenus?.[0];
     expect(root).toMatchObject({
       id: "tags",
       label: "Tags",
