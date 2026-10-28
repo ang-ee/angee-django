@@ -961,6 +961,9 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     base = _render_project_settings()
     assert "example.notes" not in base["INSTALLED_APPS"]
     assert "angee.messaging_integrate_whatsapp" not in base["INSTALLED_APPS"]
+    assert "angee.knowledge_integrate_notion" not in base["INSTALLED_APPS"]
+    assert "angee.proposals_work" not in base["INSTALLED_APPS"]
+    assert "angee.workflows_messaging" not in base["INSTALLED_APPS"]
     assert base["ANGEE_ADDON_DIRS"] == ["{BASE_DIR}/addons"]
     assert base["ANGEE_DATA_DIR"] == "{BASE_DIR}/data"
 
@@ -971,11 +974,14 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
         "angee.tags",
         "angee.agents",
         "angee.knowledge",
+        "angee.knowledge_integrate_notion",
         "angee.workflows",
+        "angee.workflows_messaging",
         "angee.work",
         "angee.intake",
         "angee.money",
         "angee.proposals",
+        "angee.proposals_work",
         "angee.portfolio",
         "angee.messaging_integrate_whatsapp",
         "angee.messaging_integrate_telegram",
