@@ -308,7 +308,13 @@ Use these owners instead of maintaining another contract in an addon:
   allocates outside the stored context and requested destinations; the owning
   writer stages and finalizes through its native queryset/model lifecycle in
   one transaction. Both phases retain capture and a failure rolls back the whole
-  reorder. Never guess an epsilon or reuse a rank.
+  reorder. Never guess an epsilon or reuse a rank. Task board drops use the
+  projects-owned `task_order` input extension: visible neighbor ids express
+  intent, while Task resolves its persisted project scope (including no project)
+  and the field allocates between adjacent stored ranks. Assignee/stage lanes
+  never define uniqueness. Task's ordering transaction covers ordinary explicit
+  rank writers and creation too; the Hasura adapter acquires it before its row
+  lock. Explicit numeric ranks, including Stage positions, retain exact values.
 - `runtime/`, generated schemas, migrations, and codegen stubs are output.
   Change the source, not the artifact.
 - REBAC is structural and owned by `django-zed-rebac`. Addons declare
