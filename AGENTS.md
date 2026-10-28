@@ -204,6 +204,33 @@ see [Where Knowledge Lives](#where-knowledge-lives).
 Use [Checks](docs/checks.md) for area-specific commands and prerequisites.
 Meaningful UI changes require browser verification as well as relevant tests.
 
+## Common Errors
+
+- **Testing instead of building.** Finish the agreed owner changes and caller
+  migrations before a consolidated final verification pass. During implementation,
+  use a focused check only to resolve a concrete uncertainty or failure. Carry
+  forward valid evidence for unchanged code; repeat a suite only when a new change,
+  failure, or unresolved concern justifies it. Passing checks never replace
+  unfinished implementation, and required final checks remain delivery gates.
+- **Repeating settled research.** Keep one current ownership and completion
+  ledger. Reuse delegated findings and recorded evidence; reopen an audit only
+  when new code or conflicting evidence changes its conclusion. Turn findings
+  into owned changes and deletions instead of another overlapping checklist.
+- **Serializing independent work.** When parallel agent work is requested, assign
+  distinct owners and run implementation, dependency work, and independent review
+  concurrently where their dependencies permit. Integrate completed lanes as they
+  become ready; do not spend the run waiting on one lane or protecting an
+  unrequested credit budget.
+- **Letting one blocker stop everything.** Identify the exact action blocked by
+  missing information or authorization, surface it promptly, and continue useful
+  independent work. Prepare the concrete result before seeking publication or
+  release approval. Mark the whole task blocked only when no authorized useful
+  work remains; do not silently leave an expected ongoing run idle.
+- **Confusing activity with completion.** Report delivered behavior, remaining
+  checklist items, and concrete blockers. Test counts, audit volume, elapsed work,
+  and a partial green run do not establish that the agreed target is built. Keep
+  implementation, verification, integration, and publication status explicit.
+
 ## Mechanical Overrides
 
 - Before structural refactors, remove dead code first.
