@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import types as _types
 from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping, Sequence
+from copy import copy
 from dataclasses import dataclass
 from functools import cache, partial
 from typing import TYPE_CHECKING, Any, cast
@@ -48,6 +49,7 @@ from strawberry_django_hasura import (
 from strawberry_django_hasura.filtering import filter_queryset, where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
+from angee.base.fields.ordering import FractionalRankField
 from angee.base.identity import (
     instance_from_public_id,
     instances_from_public_ids,
@@ -129,13 +131,13 @@ class HasuraLines:
     (decoded on write). ``node`` is the child GraphQL node, used only to name the
     child field metadata the frontend line cells render. ``defaults`` seeds scalar
     cells on a newly added row and may name only writable child fields.
-    ``position_field`` names the integer order column (advertised so the composer
+    ``position_field`` names the numeric order column (advertised so the composer
     maintains it).
 
     Lines are owned parts: rows that exist only as part of their parent and are
     saved with it. Their writes are the user's writes, elevated only because the
     parent write authorizes them, so they never bypass the child's own guards. A
-    child composing :class:`~angee.models.RowLockMixin` has each row checked
+    child composing :class:`~angee.base.models.RowLockMixin` has each row checked
     against its persisted lock before the elevated write: a line may not change a
     locked field, delete a system row, or create or turn into one. Its node must
     project the same fact as ``locked_fields``, which the metadata advertises as
@@ -410,6 +412,28 @@ class AngeeHasuraWriteBackend:
                     child_model._base_manager.filter(pk__in=removed).delete()
                 except (models.ProtectedError, models.RestrictedError) as error:
                     raise ValidationError(_line_removal_refusal(child_model, error)) from error
+            try:
+                position = child_model._meta.get_field(self.lines.position_field)
+            except FieldDoesNotExist:
+                position = None
+            if isinstance(position, FractionalRankField):
+                moving = [
+                    by_public_id[public_id]
+                    for public_id, decoded in prepared
+                    if public_id is not None and decoded.get(position.name) is not None
+                    and position.to_python(decoded[position.name]) != getattr(by_public_id[public_id], position.attname)
+                ]
+                temporary = position.get_temporary_ranks(
+                    moving, (decoded.get(position.name) for _public_id, decoded in prepared), using=children.db,
+                )
+                if moving:
+                    # Immediate uniqueness forbids cyclic swaps. Stage through
+                    # the native guarded/captured queryset, then save exact final
+                    # values through the unchanged model resolver below.
+                    staged = [copy(child) for child in moving]
+                    for child, rank in zip(staged, temporary, strict=True):
+                        setattr(child, position.attname, rank)
+                    children.bulk_update(staged, [position.name])
             for public_id, decoded in prepared:
                 extensions = _pop_input_extensions(child_model, decoded)
                 if public_id is not None:

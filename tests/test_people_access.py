@@ -65,14 +65,12 @@ def test_record_readers_use_effective_index_and_following_subjects(
         calls.append(args)
         return target, ["reader"]
     monkeypatch.setattr(schema, "authorized_record_access", authorized)
-    monkeypatch.setattr(schema.apps, "get_model", lambda *_args: SimpleNamespace(objects=SimpleNamespace(
-        subjects_for_record=lambda _target: (direct,),
-    )))
+    monkeypatch.setattr(ThreadFollower.objects, "subjects_for_record", lambda _target: (direct,))
     monkeypatch.setattr(schema, "rebac_backend", lambda: SimpleNamespace(
         lookup_subjects=lambda **_kwargs: (direct, derived, service),
     ))
     monkeypatch.setattr(schema, "to_object_ref", lambda value: value)
-    monkeypatch.setattr(schema, "resolve_subjects", lambda _refs: users)
+    monkeypatch.setattr(schema, "resolve_subjects", lambda _refs, **_kwargs: users)
     monkeypatch.setattr(schema, "session_user", lambda _info: viewer)
     monkeypatch.setattr(schema, "to_subject_ref", lambda value: value)
     monkeypatch.setattr(schema, "public_subject_ref", lambda ref: ref)

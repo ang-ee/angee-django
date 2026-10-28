@@ -345,10 +345,13 @@ def test_binding_edits_and_deletes_require_authority(project_access_schema: Any)
         second = Folder.objects.create(drive=drive, name="Second", owner=owner)
     with actor_context(owner):
         binding = ProjectBinding.objects.bind(project=project, target=first)
-    with actor_context(outsider), pytest.raises(PermissionDenied):
-        ProjectBinding.objects.unbind(project=project, target=first)
-    with actor_context(outsider), pytest.raises(PermissionDenied):
-        ProjectBinding.objects.filter(pk=binding.pk).delete()
+    with actor_context(outsider):
+        assert ProjectBinding.objects.unbind(project=project, target=first) == 0
+        assert ProjectBinding.objects.filter(pk=binding.pk).delete() == (0, {})
+    with system_context(reason="test project binding scoped deletion"):
+        stored = ProjectBinding.objects.get(pk=binding.pk)
+        assert stored.project_id == project.pk
+        assert stored.target == first
     with actor_context(outsider), pytest.raises(PermissionDenied):
         binding.with_actor(outsider).delete()
     with actor_context(outsider), pytest.raises(PermissionDenied):

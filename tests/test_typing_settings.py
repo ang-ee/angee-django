@@ -192,7 +192,7 @@ def test_immutable_migration_imports_retain_typed_caller_errors(tmp_path: Path) 
         "from historical_fixture.runtime_migrations.retained import forward\n"
         "valid: int = forward(1)\ninvalid: str = forward(1)\n"
     )
-    env = dict(os.environ, PYTHONPATH=str(root), MYPYPATH=str(tmp_path))
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(root), str(root / "addons"))), MYPYPATH=str(tmp_path))
     env.pop("ANGEE_PROJECT_DIR", None)
     result = subprocess.run([
         sys.executable, "-m", "mypy", "--config-file", str(root / "pyproject.toml"),

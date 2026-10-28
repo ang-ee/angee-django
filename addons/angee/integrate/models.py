@@ -878,9 +878,10 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             )
             if credential is None:
                 return False
-            assert credential.external_account_id is not None
+            account = credential.external_account
+            assert account is not None
             self.prepare_disconnect(credential)
-            ExternalAccount.objects.db_manager(using).filter(pk=credential.external_account_id).release(user)
+            type(account).objects.db_manager(using).filter(pk=account.pk).release(user)
             deleted, _details = self.filter(pk=credential.pk).with_action("delete").delete()
         return deleted > 0
 

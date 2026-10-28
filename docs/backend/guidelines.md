@@ -304,7 +304,11 @@ Use these owners instead of maintaining another contract in an addon:
   `UniqueConstraint` over their context fields and rank. Use the field's
   append allocation when a rank is omitted. `FractionalRankExhausted` refuses
   the write; an ordering owner must perform any deliberate contextual reranking
-  under its own lock. Never guess an epsilon or reuse a rank.
+  under its own lock. For cyclic reorders, the field's `get_temporary_ranks`
+  allocates outside the stored context and requested destinations; the owning
+  writer stages and finalizes through its native queryset/model lifecycle in
+  one transaction. Both phases retain capture and a failure rolls back the whole
+  reorder. Never guess an epsilon or reuse a rank.
 - `runtime/`, generated schemas, migrations, and codegen stubs are output.
   Change the source, not the artifact.
 - REBAC is structural and owned by `django-zed-rebac`. Addons declare
@@ -1163,8 +1167,12 @@ and current contracts before applying a historical example to a new deployment.
   queryset through its public `QuerySet.update()` path. Queryset and
   instance deletion overrides do not protect against every collector path; choose
   FK policies deliberately, including generic relations that can cascade into
-  retained rows. This is a modelling rule, not a mechanical system check. Shared
-  retained models compose [`AppendOnlyModel`](../../addons/angee/base/models/append_only.py) and
+  retained rows. This is a modelling rule, not a mechanical system check. Generic collection-update guards share
+  [`ClosedUpdateQuerySet`](../../addons/angee/base/querysets.py). Its closed
+  `update`/`bulk_update` rule and protected `owner_update` live together; compose
+  that guard before downstream policy and native capture. Bank identity-style
+  models can reuse this edit policy while retaining their own insert/delete rules.
+  Retained models compose [`AppendOnlyModel`](../../addons/angee/base/models/append_only.py) and
   their default managers compose `AppendOnlyQuerySet`. The model closes ordinary instance
   writes and declares a guarded base manager through `Meta.base_manager_name`;
   `angee.E034` checks its default manager's queryset composition. The queryset
@@ -1176,7 +1184,10 @@ and current contracts before applying a historical example to a new deployment.
   owner's guard and retain downstream authorization and queryset guards. Each
   owner supplies its validated predicates and allowed fields. `HierarchyQuerySet`
   exposes the same `owner_update` contract for derived path maintenance. They do
-  not reopen generic mutations or replace model/FK invariants. `AuditMixin` uses its serializable
+  not reopen generic mutations or replace model/FK invariants. `AuditMixin` dispatches
+  collector-owned nulls through the selected queryset; a closed-update policy
+  uses its protected owner verb, preserving every downstream guard and capture.
+  It uses its serializable
   `retained_set_null` FK policy to schedule nulling inside Django's delete
   transaction under `system_context(reason="delete.retain")`. Removing that
   retained edge is part of the authorized target deletion, for tracked and
@@ -1188,12 +1199,17 @@ and current contracts before applying a historical example to a new deployment.
   Bounded diagnostics and persisted model labels use `DiagnosticTextField` and
   `ModelLabelField` from [`angee.base.fields`](../../addons/angee/base/fields/__init__.py), so
   instance saves and queryset writes share their storage rules.
-  **Messaging field adoption debt:**
   [`MessageSubtype.model_label`](../../addons/angee/messaging/models.py) and
   [`ThreadNotification.failure_reason`](../../addons/angee/messaging/models.py)
-  still use plain Django fields. Adopt `ModelLabelField` and
-  `DiagnosticTextField` at those models after live-data migrations preserve and
-  normalize existing values; the required migration is the blocker.
+  compose these field owners. Their declared
+  [`adopt_field_contracts`](../../addons/angee/messaging/runtime_migrations/adopt_field_contracts.py)
+  migration refuses unknown/colliding subtype labels before canonicalization,
+  retains subtype IDs/keys and global blank semantics, and refuses any existing
+  diagnostic the bounded field would change. The error identifies the affected
+  row, which needs an explicit retention decision before retrying; the migration
+  never discards retained text. The persisted subtype key `activity_done` is a
+  separate compatibility contract; renaming it requires mapping stored subtype
+  rows, follower choices and callers together.
   Never replace these rules with a database trigger or function.
 - **Resource imports use the native import-export lifecycle.** Models composing
   [`ResourceLoadMixin`](../../addons/angee/resources/mixins.py) may declare

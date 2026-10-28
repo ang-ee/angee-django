@@ -211,6 +211,7 @@ def test_addon_serving_modules_never_import_build_owners() -> None:
     root = PROJECT_ROOT / "addons/angee"
     typing_paths = {root / "base/typing.py", root / "provenance/typing.py"}
     build_paths = set(root.glob("*/build.py")) | typing_paths
+    fixture_paths = {root / "base/testing/permissions.py", root / "base/testing/fixtures.py"}
     build_modules = {"angee.base.build", "angee.web"} | {
         "angee." + ".".join(path.relative_to(root).with_suffix("").parts)
         for path in build_paths
@@ -222,7 +223,7 @@ def test_addon_serving_modules_never_import_build_owners() -> None:
             or any(name == module or name.startswith(module + ".") for module in build_modules)
         )
         for path in root.rglob("*.py")
-        if "tests" not in path.relative_to(root).parts and path not in build_paths
+        if "tests" not in path.relative_to(root).parts and path not in build_paths | fixture_paths
     }
     assert not {path: names for path, names in violations.items() if names}
 

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from django.apps import apps
 from django.db import connections, router
 from django.db.models import Model
-from django.db.models.signals import class_prepared
+from django.db.models.signals import class_prepared, post_save
 from django.dispatch import Signal
 
 pre_merge = Signal()
@@ -31,6 +31,23 @@ record_access_revoked = Signal()
 The subject is the normalized native SubjectRef. Receivers run synchronously
 inside the relationship write transaction, including for an absent tuple.
 """
+
+
+def send_created_batch(
+    *, sender: type[Model], instances: Iterable[Model], using: str, **kwargs: Any,
+) -> None:
+    """Send every native creation event, carrying the immutable persisted batch.
+
+    Batch-aware observers act on its final send; all ordinary receivers still
+    receive each instance. Callers finish initialization and actor binding first.
+    """
+
+    rows = tuple(instances)
+    for instance in rows:
+        post_save.send(
+            sender=sender, instance=instance, created=True, raw=False, using=using,
+            update_fields=None, created_batch=rows, **kwargs,
+        )
 
 
 def migrated_model(*, app_config: object, using: str, app_label: str, model_name: str) -> type[Model] | None:

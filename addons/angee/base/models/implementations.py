@@ -178,7 +178,12 @@ class ImplDefaultsMixin(models.Model):
     def validate_impl_configs(self, *, update_fields: Any = None) -> None:
         """Validate declared config models on save, leaving untyped row config alone."""
 
-        if not self._state.adding and update_fields is not None and "config" not in update_fields:
+        if not self._state.adding and (
+            (update_fields is not None and "config" not in update_fields)
+            or (update_fields is None and "config" in self.get_deferred_fields())
+        ):
+            # Django omits deferred columns from an ordinary save. Resolving a
+            # deferred selector first would load and write an untouched column.
             return
         for field in self._meta.get_fields():
             if not isinstance(field, ImplClassField):

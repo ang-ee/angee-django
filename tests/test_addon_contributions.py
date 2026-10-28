@@ -12,7 +12,7 @@ from django.core.exceptions import ImproperlyConfigured
 from angee.addons import addon_contribution, addon_manifest
 from angee.graphql.schema import schema_parts_for
 from angee.mcp.server import tool_registrar
-from angee.web import WebRuntime
+from angee.web.build import WebRuntime
 from tests.conftest import make_addon, write_addon_manifest
 
 

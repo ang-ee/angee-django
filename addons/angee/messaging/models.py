@@ -60,6 +60,7 @@ from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.resources import model_resource_type
 
+from angee.base.fields import DiagnosticTextField, ModelLabelField
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.identity import instance_from_public_id
@@ -1794,7 +1795,7 @@ class MessageSubtype(AuditMixin, AngeeDataModel):
     # No standalone index: ``model_label`` is the leading column of
     # ``uq_message_subtype_model_key``, whose btree already serves a lone
     # ``model_label`` lookup — a separate single-column index would be redundant.
-    model_label = models.CharField(max_length=128, blank=True, default="")
+    model_label = ModelLabelField(max_length=128, blank=True, default="")
     name = models.CharField(max_length=160)
     description = models.TextField(blank=True, default="")
     internal = models.BooleanField(default=False)
@@ -2586,7 +2587,7 @@ class ThreadNotification(AuditMixin, AngeeDataModel):
         db_index=False,
     )
     failure_type = models.CharField(max_length=64, blank=True, default="")
-    failure_reason = models.TextField(blank=True, default="")
+    failure_reason = DiagnosticTextField(blank=True, default="")
     read_at = models.DateTimeField(null=True, blank=True)
     metadata = models.JSONField(blank=True, default=dict)
 

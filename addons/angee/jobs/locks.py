@@ -138,6 +138,13 @@ class PostgresAdvisoryLockBackend:
         connection = connections[self.alias]
         if connection.vendor != "postgresql":
             raise ImproperlyConfigured("PostgresAdvisoryLockBackend requires a PostgreSQL database connection.")
+        # PostgreSQL session locks are reentrant, while a task key excludes
+        # another acquisition even on this connection. Reuse the native lock
+        # catalogue probe. Django binds the connection to this thread and this
+        # synchronous path yields no control between probe and acquisition;
+        # pg_try_advisory_lock still arbitrates a competing connection's race.
+        if self.is_held(key):
+            return None
         advisory_key = _advisory_pair(key.name)
         with connection.cursor() as cursor:
             cursor.execute("SELECT pg_try_advisory_lock(%s, %s)", advisory_key)

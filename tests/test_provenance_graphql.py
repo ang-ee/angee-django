@@ -461,7 +461,7 @@ def test_history_names_a_statements_related_row_by_its_public_id() -> None:
 def test_metadata_marks_a_resource_that_keeps_history() -> None:
     """A gated, tracked record is flagged; a statement shadow table, read through its subject, is not."""
 
-    schema = addon_schema(knowledge_schema.schemas, "console", parties_schema.schemas)
+    schema = addon_schema(knowledge_schema.schemas, "console", parties_schema.schemas, provenance_schema.schemas)
     resources = {item.model_label: item for item in schema.angee_resources}
     assert resources["knowledge.Page"].history is True
     assert resources["parties.Party"].history is True

@@ -1,4 +1,4 @@
-"""Sentry starts only for a configured DSN and never receives sanitized GraphQL data."""
+"""Configured Sentry clients receive only the GraphQL owner's safe diagnostic events."""
 
 from __future__ import annotations
 

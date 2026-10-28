@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "tests.settings.BareComposeConfig",
     "angee",
     "angee.base",
+    "angee.web",
     "angee.provenance",
     "tests.settings.BareGraphQLConfig",
     "angee.timeline",

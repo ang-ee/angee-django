@@ -17,13 +17,17 @@ def test_stack_names_celery_not_procrastinate() -> None:
     assert "| Procrastinate |" not in text
 
 
-def test_pyproject_uses_celery_and_keeps_only_the_channels_seam() -> None:
-    """The wheel carries jobs and Channels while Redis fanout stays addon-owned."""
+def test_task_and_web_dependencies_belong_to_their_addons() -> None:
+    """Jobs owns task transport; core and GraphQL declare native Channels usage."""
 
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = set(data["project"]["dependencies"])
 
-    assert any(dependency.startswith("celery[redis]") for dependency in dependencies)
+    jobs = tomllib.loads((ROOT / "addons/angee/jobs/addon.toml").read_text())["addon"]["dependencies"]
+    graphql = tomllib.loads((ROOT / "addons/angee/graphql/addon.toml").read_text())["addon"]["dependencies"]
+    assert any(dependency.startswith("celery[redis]") for dependency in jobs)
+    assert any(dependency.startswith("channels>=") for dependency in graphql)
+    assert not any(dependency.startswith("celery") for dependency in dependencies)
     assert any(dependency.startswith("channels>=") for dependency in dependencies)
     assert not any(dependency.startswith("channels-redis") for dependency in dependencies)
     assert not any("procrastinate" in dependency for dependency in dependencies)

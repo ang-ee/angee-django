@@ -694,6 +694,33 @@ def test_fractional_rank_appends_within_its_unique_context(monkeypatch: pytest.M
 
 
 @pytest.mark.django_db(transaction=True)
+def test_fractional_reordering_reserves_the_complete_context_and_destinations() -> None:
+    """A partial reorder avoids unseen rows and requested ranks in its context."""
+
+    class ReorderedItem(models.Model):
+        lane = models.CharField(max_length=8)
+        rank = FractionalRankField()
+
+        class Meta:
+            app_label = "auth"
+            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="reordered_item_lane_rank"),)
+
+    with model_tables((ReorderedItem,)):
+        first = ReorderedItem.objects.create(lane="a", rank=0)
+        second = ReorderedItem.objects.create(lane="a", rank=1)
+        ReorderedItem.objects.create(lane="a", rank=9000)
+        ReorderedItem.objects.create(lane="other", rank=math.nextafter(math.inf, 0.0))
+        field = ReorderedItem._meta.get_field("rank")
+        before = list(ReorderedItem.objects.order_by("pk").values_list("pk", "rank"))
+        allocated = field.get_temporary_ranks([first, second], [20000, None], using=connection.alias)
+        assert len(set(allocated)) == 2
+        assert all(math.isfinite(rank) and rank > 20000 for rank in allocated)
+        with pytest.raises(FractionalRankExhausted):
+            field.get_temporary_ranks([first, second], [math.nextafter(math.inf, 0.0)], using=connection.alias)
+        assert list(ReorderedItem.objects.order_by("pk").values_list("pk", "rank")) == before
+
+
+@pytest.mark.django_db(transaction=True)
 def test_fractional_rank_column_backfills_existing_rows_without_changing_allocation() -> None:
     """Schema backfill uses STEP; later ORM inserts still append in context."""
 
@@ -888,6 +915,9 @@ def test_fractional_rank_allocation_uses_explicit_write_alias(
             assert [row.rank for row in rows] == [expected, FractionalRankField.STEP + 200.0, 7.0]
             stored = AliasRank.objects.using(alias).filter(pk__in=[row.pk for row in rows]).order_by("lane")
             assert list(stored.values_list("rank", flat=True)) == [expected, FractionalRankField.STEP + 200.0, 7.0]
+            field = AliasRank._meta.get_field("rank")
+            temporary = field.get_temporary_ranks([created, saved], [0, 1], using=alias)
+            assert min(temporary) > expected
             AliasRank.objects.using(alias).create(lane="exhausted", rank=math.nextafter(math.inf, 0.0))
             exhausted = AliasRank(lane="exhausted")
             with pytest.raises(FractionalRankExhausted):

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from pytest_django.fixtures import SettingsWrapper
+from pytest_django.fixtures import Settings
 
 from angee.graphql import asgi as graphql_asgi
 from angee.graphql.schema import GraphQLSchemas
@@ -102,7 +102,7 @@ def test_emit_if_stale_prunes_removed_schema_buckets(tmp_path: Path) -> None:
 
 
 def test_graphql_asgi_boot_emits_sdl_only_in_debug(
-    monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper,
+    monkeypatch: pytest.MonkeyPatch, settings: Settings,
 ) -> None:
     """GraphQL follows native Django DEBUG for every ASGI serving entrypoint."""
 

@@ -30,6 +30,9 @@ management.main(["manage.py", "check"])
 assert seen == [["manage.py", "check"]]
 for forbidden in ("angee.provenance", "angee.compose", "rebac"):
     assert not any(name == forbidden or name.startswith(forbidden + ".") for name in sys.modules), forbidden
+import angee.management.bootstrap
+management.main(["manage.py", "check"])
+assert seen == [["manage.py", "check"], ["manage.py", "check"]]
 """
     environment = {key: value for key, value in os.environ.items() if key != "DJANGO_SETTINGS_MODULE"}
     result = subprocess.run(

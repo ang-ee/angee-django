@@ -2,7 +2,9 @@
 
 Only positions change: primary keys, public identities, relations and categories
 remain intact. Reverse is deliberately refused: later fractional edits cannot be
-safely cast back to integer positions. The old stable order is (queue, position, sqid).
+safely cast back to integer positions. Preserve the former SQL order by queue,
+position, then primary key: the live SQID field orders by its underlying ID column,
+while historical migration models expose only that concrete column.
 """
 
 from django.db import migrations, models, router
@@ -29,7 +31,7 @@ def forwards(apps, schema_editor):
         return
     rows = stage._base_manager.using(alias)
     # Snapshot the former order before changing the indexed sort column.
-    identities = list(rows.order_by("queue_id", "position", "sqid").values_list("pk", "queue_id"))
+    identities = list(rows.order_by("queue_id", "position", "pk").values_list("pk", "queue_id"))
     previous_container = None
     previous_rank = None
     batch = []
@@ -44,6 +46,8 @@ def forwards(apps, schema_editor):
             batch = []
     if batch:
         rows.bulk_update(batch, ["position"])
+    # Complete deferred FK checks before the following schema operation.
+    schema_editor.connection.check_constraints(table_names=[stage._meta.db_table])
 
 
 class Migration(migrations.Migration):

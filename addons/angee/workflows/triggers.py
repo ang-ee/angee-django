@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Hashable
 from contextvars import Context
 from dataclasses import dataclass, field, replace
 from inspect import getattr_static
@@ -13,7 +14,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import DatabaseError, transaction
-from django.db.models import F, Q
+from django.db.models import F, Model, Q
 from django.db.models.functions import Now
 from django.db.models.signals import post_save
 from django.utils.text import capfirst
@@ -286,27 +287,43 @@ class TriggerSource(ImplBase):
         raise ValidationError("This model has no registered workflow observation.")
 
     @classmethod
-    def dispatch(cls, model: Any, record: Any) -> None:
-        """Capture once under the record lock, never taking a waiting run's lock.
+    def dispatch(
+        cls, model: Any, record: Any, *, created_batch: tuple[Any, ...] | None = None,
+    ) -> None:
+        """Capture one native save or a completed creation batch under target locks.
 
-        One native event feeds the ledger of this source and of each registered
-        refinement, then the watches. Locking also covers autocommit saves whose
-        UPDATE preceded post_save. A savepoint contains capture failures without
-        undoing the source write.
+        Batch-aware capture runs on the final native send. All preceding rows
+        have reached their ordinary receivers; admission and watch owners inspect
+        their configuration once, retaining per-record scope and failure isolation.
         """
+        if created_batch is not None:
+            if not created_batch or record is not created_batch[-1]:
+                return
+            records = created_batch
+        else:
+            records = (record,)
         try:
             with transaction.atomic(), system_context(reason="workflows.source_dispatch"):
                 cls.validate_model(model)
-                target = generic_target(record)
-                target_model = target.content_type.model_class()
-                assert target_model is not None
-                records = target_model._default_manager.filter(pk=target.object_id)
-                if records.select_for_update(no_key=True, of=row_lock_paths(target_model)).first() is None:
-                    return
+                targets = [(item, generic_target(item)) for item in records]
+                groups: dict[type[Model], set[Hashable]] = {}
+                for _item, target in targets:
+                    target_model = target.content_type.model_class()
+                    assert target_model is not None
+                    groups.setdefault(target_model, set()).add(target.object_id)
+                present: set[tuple[type[Model], Hashable]] = set()
+                for target_model, keys in sorted(groups.items(), key=lambda item: item[0]._meta.label_lower):
+                    rows = target_model._default_manager.filter(pk__in=keys).order_by("pk")
+                    locked = rows.select_for_update(no_key=True, of=row_lock_paths(target_model))
+                    present.update((target_model, key) for key in locked.values_list("pk", flat=True))
+                records = tuple(
+                    item for item, target in targets
+                    if (target.content_type.model_class(), target.object_id) in present
+                )
                 events = apps.get_model("workflows", "TriggerEvent").objects
                 for source in cls.registered():
-                    events.record_change(model, record, source=source.key)
-                apps.get_model("workflows", "StepWatch").objects.record_change(record)
+                    events.record_changes(model, records, source=source.key)
+                apps.get_model("workflows", "StepWatch").objects.record_changes(records)
         except Exception:
             logger.exception("Workflow source capture failed.")
 
@@ -349,13 +366,14 @@ class TriggerSource(ImplBase):
         instance: Any,
         raw: bool = False,
         update_fields: frozenset[str] | None = None,
+        created_batch: tuple[Any, ...] | None = None,
         **kwargs: Any,
     ) -> None:
         """Ignore fixture loads and saves that cannot change a watched predicate."""
 
         del kwargs
         if not raw and (update_fields is None or not cls.fields or set(cls.fields).intersection(update_fields)):
-            cls.dispatch(sender, instance)
+            cls.dispatch(sender, instance, created_batch=created_batch)
 
 
 class TriggerSourceField(ImplClassField[TriggerSource]):
@@ -396,10 +414,13 @@ class RecordChanged(TriggerSource):
         )
 
     @classmethod
-    def changed(cls, sender: Any, *, instance: Any, raw: bool = False, **kwargs: Any) -> None:
+    def changed(
+        cls, sender: Any, *, instance: Any, raw: bool = False,
+        created_batch: tuple[Any, ...] | None = None, **kwargs: Any,
+    ) -> None:
         """Ignore fixture loading and delegate all durable capture to its owner."""
         if not raw:
-            cls.dispatch(sender, instance)
+            cls.dispatch(sender, instance, created_batch=created_batch)
 
 
 def check_record_changed_models(**kwargs: Any) -> list[checks.CheckMessage]:
@@ -432,12 +453,13 @@ class TriggerEventManager[T: TriggerEvent](_TriggerEventManagerBase[T]):
     """Capture without compromising the transaction that changed the record."""
 
     def record_change(self, model: Any, record: Any, *, source: str = "record_changed") -> None:
-        """Upsert concrete reference columns, re-arming rejects; never raise.
+        """Capture one source record through the same batch-aware owner."""
+        self.record_changes(model, (record,), source=source)
 
-        Sources call this through TriggerSource.dispatch so watches also observe
-        their event. The savepoint preserves writes when ledger capture fails.
-        """
-        if record.pk is None:
+    def record_changes(self, model: Any, records: tuple[Any, ...], *, source: str = "record_changed") -> None:
+        """Resolve a batch's source once; retain scoped, failure-isolated upserts."""
+        records = tuple(record for record in records if record.pk is not None)
+        if not records:
             return
         try:
             triggers = apps.get_model("workflows", "Trigger")
@@ -448,19 +470,28 @@ class TriggerEventManager[T: TriggerEvent](_TriggerEventManagerBase[T]):
             try:
                 implementation.validate_model(model)
             except ValidationError:
-                return  # This source does not observe the model.
-            with transaction.atomic(), system_context(reason="workflows.capture"):
-                queryset = triggers.system_queryset().filter(enabled=True, source=source)
-                if not implementation.model_label:
-                    queryset = queryset.filter(model_label=model._meta.label)
-                content_type = ContentType.objects.get_for_model(model)
-                for trigger in implementation.matching_triggers(queryset, record).order_by("pk"):
-                    self.model.system_queryset().update_or_create(
-                        trigger=trigger, record_content_type=content_type, record_object_id=record.pk,
-                        defaults={"changed_at": Now()},
-                    )
+                return
+            queryset = triggers.system_queryset().filter(enabled=True, source=source)
+            if not implementation.model_label:
+                queryset = queryset.filter(model_label=model._meta.label)
+            if len(records) > 1:
+                with system_context(reason="workflows.capture"):
+                    if not queryset.exists():
+                        return
+            content_type = ContentType.objects.get_for_model(model)
         except Exception:
             logger.exception("Workflow trigger capture failed.")
+            return
+        for record in records:
+            try:
+                with transaction.atomic(), system_context(reason="workflows.capture"):
+                    for trigger in implementation.matching_triggers(queryset, record).order_by("pk"):
+                        self.model.system_queryset().update_or_create(
+                            trigger=trigger, record_content_type=content_type, record_object_id=record.pk,
+                            defaults={"changed_at": Now()},
+                        )
+            except Exception:
+                logger.exception("Workflow trigger capture failed.")
 
 
 class TriggerQuerySet[T: Trigger](AngeeQuerySet[T]):

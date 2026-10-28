@@ -64,6 +64,7 @@ from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
+from angee.base.fields import DiagnosticTextField
 from angee.base.identity import instances_from_public_ids
 from angee.base.models import (
     AngeeManager,
@@ -426,6 +427,12 @@ def _edit_history_entry(*, edited_by_id: Any, prev_fragment_hashes: list[str]) -
     return entry
 
 
+def _subtype_scope_label(value: str) -> str:
+    """Preserve subtype boundary whitespace/NUL cleanup before native field validation."""
+
+    return strip_null_bytes(value or "").strip()
+
+
 def message_subtype_options(model_label: str = "") -> tuple[dict[str, Any], ...]:
     """Return follower-selectable subtype options for ``model_label``.
 
@@ -435,7 +442,7 @@ def message_subtype_options(model_label: str = "") -> tuple[dict[str, Any], ...]
 
     subtype_model = apps.get_model("messaging", "MessageSubtype")
     options = subtype_model.builtin_options()
-    labels = ["", strip_null_bytes(model_label or "").strip()]
+    labels = ["", _subtype_scope_label(model_label)]
     for subtype in subtype_model._base_manager.filter(model_label__in=labels, hidden=False).order_by(
         "sequence",
         "key",
@@ -2068,7 +2075,8 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         if status not in ThreadNotificationQuerySet.DELIVERY_ERROR_STATUSES:
             raise ValueError("Delivery failure status must be 'bounce' or 'exception'.")
         cleaned_failure_type = strip_null_bytes(failure_type or "unknown")
-        cleaned_failure_reason = strip_null_bytes(failure_reason or "")
+        failure_field = cast(DiagnosticTextField, self.model._meta.get_field("failure_reason"))
+        cleaned_failure_reason = failure_field.get_prep_value(failure_reason or "")
         now = timezone.now()
         self.model._base_manager.filter(pk=notification.pk).update(
             notification_status=status,
@@ -2307,7 +2315,7 @@ def _message_subtype(
     subtype_key = strip_null_bytes(subtype_key or "").strip()
     if not subtype_key:
         return None
-    model_label = strip_null_bytes(model_label or "").strip()
+    model_label = _subtype_scope_label(model_label)
     subtype_model = apps.get_model("messaging", "MessageSubtype")
     name, description = subtype_model.builtin_default(subtype_key) or (
         _humanize_key(subtype_key),

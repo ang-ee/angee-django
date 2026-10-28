@@ -351,4 +351,4 @@ def test_task_audience_list_projection_has_constant_query_count(campaign: Propos
             assert len(rows) == limit
             counts.append(len(queries))
         # Constant in rows; a record task's subject types and trash authority add arrow sources to each verb.
-        assert counts == [68, 68], counts
+        assert counts == [61, 61], counts

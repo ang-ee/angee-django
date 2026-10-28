@@ -13,7 +13,7 @@ from django.core.exceptions import ImproperlyConfigured
 from angee.addons import addon_manifest
 from angee.graphql.schema import schema_parts_for
 from angee.resources.entries import ResourceEntry, resource_manifest_for
-from angee.web import WebRuntime
+from angee.web.build import WebRuntime
 from tests.conftest import make_addon
 
 
@@ -38,14 +38,15 @@ def _resource_rows(config: AppConfig, tier: str, path: str) -> dict[str, dict[st
     }
 
 
-def test_base_config_is_a_plain_core_app() -> None:
-    """The model foundation is always installed but has no addon contract."""
+def test_base_addon_keeps_its_label_and_core_has_no_addon_contract() -> None:
+    """Foundation owns its manifest while the native host stays lifecycle-only."""
 
     base = apps.get_app_config("base")
     contract = addon_manifest(base)
 
-    assert base.name == "angee"
-    assert contract is None
+    assert base.name == "angee.base"
+    assert contract is not None and contract.name == "angee.base"
+    assert addon_manifest(apps.get_app_config("angee")) is None
 
 
 def test_resource_manifest_normalizes_tiers_and_entries(monkeypatch) -> None:
