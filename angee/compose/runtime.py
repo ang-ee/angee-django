@@ -187,6 +187,13 @@ class Runtime:
             sources[root / "models.py"] = render_models(
                 self.composition, label, runtime_module=self.runtime_module, declarations=self.model_declarations,
             )
+            initializer = root / "migrations" / "__init__.py"
+            if migration_modules[label] == f"{self.runtime_module}.{label}.migrations" and not (
+                self.runtime_dir / initializer
+            ).exists():
+                # Django's unlabelled makemigrations discovers only migration
+                # packages. Existing native history remains an untouched input.
+                sources[initializer] = ""
         for integration in self.integrations:
             contributed = integration.render_sources(self)
             self._validate_artifacts(contributed)
