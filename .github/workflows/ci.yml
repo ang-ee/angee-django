@@ -22,4 +22,4 @@ jobs:
       framework-repository: ${{ github.repository }}
       framework-ref: ${{ github.sha }}
       # Match the bridge dependency artifacts to this framework's manifests.
-      bridges-ref: "e1a2dc5308db292e23014c98e55bf61138d4c777"
+      bridges-ref: "cea4d65c24e14e255c1270bd0d084aa8629d82f5"
