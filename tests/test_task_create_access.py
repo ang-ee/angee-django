@@ -34,6 +34,7 @@ from tests.conftest import (
     create_user,
     execute_schema,
     result_data,
+    standalone_relation,
 )
 from tests.scopedemo.models import Scope
 
@@ -43,6 +44,9 @@ class ProjectAccessTask(AbstractTask):
 
     sqid_prefix = "pat_"
     owner_container = None
+    assignee = standalone_relation(AbstractTask, "assignee")
+    delegate = standalone_relation(AbstractTask, "delegate")
+    activity_type = standalone_relation(AbstractTask, "activity_type")
     project = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
     milestone = None
     milestone_id = None
