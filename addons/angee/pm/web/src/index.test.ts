@@ -34,12 +34,13 @@ function suite(triagePath: string): readonly BaseAddon[] {
   const upstream = [
     defineBaseAddon({ id: "projects",
       routes: [{ name: "projects.my-work", path: "/projects/my-work", layout: "console", component: Page }],
-      menus: [{ id: "projects", children: [
-        { id: "projects.my-work", label: "My work", route: "projects.my-work" },
-        { id: "projects.projects", label: "Projects" },
-        { id: "projects.tasks", label: "Tasks" },
-        { id: "projects.board", label: "Board" },
-      ] }] }),
+      menus: {
+        "projects": {},
+        "projects.my-work": { label: "My work", route: "projects.my-work", parent: "projects" },
+        "projects.projects": { label: "Projects", parent: "projects" },
+        "projects.tasks": { label: "Tasks", parent: "projects" },
+        "projects.board": { label: "Board", parent: "projects" },
+      } }),
     defineBaseAddon({ id: "work",
       i18n: { work: { "queue.settings": "Queue settings" } },
       routes: [
@@ -48,21 +49,24 @@ function suite(triagePath: string): readonly BaseAddon[] {
         { name: "work.triage-hub", path: "/work/triage", layout: "console", component: Page },
         { name: "work.triage", path: triagePath, layout: "console", menu: "work.triage-hub", component: Page },
       ],
-      menus: [{ id: "work", children: [
-        { id: "work.queues", label: "Queues", route: "work.queues" },
-        { id: "work.triage-hub", label: "Triage", route: "work.triage-hub" },
-        { id: "work.boards-hub", label: "Boards" },
-        { id: "work.cycles-hub", label: "Cycles" },
-      ] }] }),
-    defineBaseAddon({ id: "portfolio", menus: [{ id: "portfolio", children: [
-      { id: "portfolio.roadmap", label: "Roadmap" },
-      { id: "portfolio.products", label: "Products" },
-      { id: "portfolio.initiatives", label: "Initiatives" },
-    ] }] }),
-    defineBaseAddon({ id: "proposals", menus: [{ id: "proposals", children: [
-      { id: "proposals.rounds", label: "Rounds" },
-      { id: "proposals.proposals", label: "Responses" },
-    ] }] }),
+      menus: {
+        "work": {},
+        "work.queues": { label: "Queues", route: "work.queues", parent: "work" },
+        "work.triage-hub": { label: "Triage", route: "work.triage-hub", parent: "work" },
+        "work.boards-hub": { label: "Boards", parent: "work" },
+        "work.cycles-hub": { label: "Cycles", parent: "work" },
+      } }),
+    defineBaseAddon({ id: "portfolio", menus: {
+      "portfolio": {},
+      "portfolio.roadmap": { label: "Roadmap", parent: "portfolio" },
+      "portfolio.products": { label: "Products", parent: "portfolio" },
+      "portfolio.initiatives": { label: "Initiatives", parent: "portfolio" },
+    } }),
+    defineBaseAddon({ id: "proposals", menus: {
+      "proposals": {},
+      "proposals.rounds": { label: "Rounds", parent: "proposals" },
+      "proposals.proposals": { label: "Responses", parent: "proposals" },
+    } }),
   ];
   return [...upstream, { ...pm, dependsOn: upstream.map(({ id }) => id) }];
 }

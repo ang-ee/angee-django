@@ -30,6 +30,7 @@ from django.utils import timezone
 from angee.addons import addon_manifest
 from angee.base.fields.identity import SqidField
 from angee.compose.migrations import DropGuardAutodetector, RuntimeMigrations
+from angee.compose.runtime import Runtime
 from angee.resources.entries import resource_manifest_for, retired_models_for
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
 from tests.conftest import make_addon, write_addon_manifest
@@ -151,6 +152,40 @@ class Migration(migrations.Migration):
         labels=("resources",),
     )
     return materializer, addon, source_path, runtime_dir, source_root
+
+
+def test_retiring_the_last_model_preserves_the_declared_migration_app(runtime_migration_probe) -> None:
+    """A future migration still owns its app after its final source model is gone."""
+
+    _, addon, _, runtime_dir, source_root = runtime_migration_probe
+    _write_module(source_root / "runtime_migrations" / "retire_last.py", """\
+from django.db import migrations
+
+
+def applies(state):
+    return ("demo", "retired") in state.models
+
+
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = [migrations.DeleteModel(name="Retired")]
+""")
+    write_addon_manifest(addon, migrations=({
+        "name": "retire_last", "app_label": addon.label, "module": "runtime_migrations.retire_last",
+    },))
+    runtime = Runtime.discover((addon,), runtime_dir=runtime_dir, integrations=())
+    assert runtime.labels == (addon.label,)
+    sources = runtime.render_sources()
+    assert Path(addon.label, "migrations", "__init__.py") in sources
+    assert "Retired" not in sources[Path(addon.label, "models.py")]
+    state = ProjectState()
+    state.add_model(ModelState(addon.label, "Retired", [("id", models.AutoField(primary_key=True))]))
+    origin = f"{addon.name}:retire_last"
+    planned = runtime.runtime_migrations().schedule(state, only=(origin,))
+    assert [entry.origin for entry in planned] == [origin]
+    retired = planned[0].migration_class("retire_last", addon.label).mutate_state(state)
+    assert (addon.label, "retired") not in retired.models
+    assert runtime.runtime_migrations().schedule(retired, only=(origin,)) == ()
 
 
 def test_reset_migration_history_replaces_only_composed_history(tmp_path: Path) -> None:

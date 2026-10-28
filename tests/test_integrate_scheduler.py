@@ -21,6 +21,7 @@ from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.registry import models_with
 from angee.integrate.scheduler import enqueue_due_bridges
+from angee.integrate.states import StreamDefinition
 from angee.integrate.sync import BridgeProgressReporter, current_bridge_progress
 from tests.conftest import (
     Integration,
@@ -40,7 +41,7 @@ class SchedulerBridge(Bridge, Integration):
         rebac_resource_type = "tests/scheduler_bridge"
 
     def sync(self) -> int:
-        """Pretend to synchronize vendor rows and persist a cursor."""
+        """Pretend to synchronize vendor rows and persist canonical stream progress."""
 
         if self.config.get("mode") == "error":
             raise RuntimeError("vendor unavailable")
@@ -64,7 +65,9 @@ class SchedulerBridge(Bridge, Integration):
                 message="Reached the sync budget",
                 details={"items": items, "budget_exhausted": True, "cursor": {"seen": items}},
             )
-        self.cursor = {"seen": items}
+        manager = self.sync_streams.model.objects
+        stream = manager.current(self, StreamDefinition(key="records"))
+        manager.advance(stream, {"seen": items}, exhausted=True)
         return items
 
     def handle_webhook(self, payload: Any) -> None:
@@ -165,9 +168,9 @@ def test_enqueued_due_bridges_run_only_due_rows(transactional_db: None) -> None:
     due.refresh_from_db()
     future.refresh_from_db()
     unscheduled.refresh_from_db()
-    assert due.cursor == {"seen": 2}
-    assert future.cursor == {}
-    assert unscheduled.cursor == {}
+    assert due.sync_streams.model.objects.current_for_bridge(due, "records").get().cursor == {"seen": 2}
+    assert not future.sync_streams.model.objects.current_for_bridge(future, "records").exists()
+    assert not unscheduled.sync_streams.model.objects.current_for_bridge(unscheduled, "records").exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -201,7 +204,7 @@ def test_enqueued_due_bridge_persists_success_telemetry(transactional_db: None) 
     assert bridge.sync_progress["stage"] == Bridge.SyncStage.COMPLETED
     assert bridge.sync_progress["items"] == 7
     assert bridge.last_sync_summary["items"] == 7
-    assert bridge.cursor == {"seen": 7}
+    assert bridge.sync_streams.model.objects.current_for_bridge(bridge, "records").get().cursor == {"seen": 7}
     assert bridge.next_sync_at == bridge.last_sync_completed_at + timedelta(seconds=42)
     assert integration.lifecycle == IntegrationLifecycle.CONNECTED
     assert integration.runtime_status == IntegrationRuntimeStatus.OK
@@ -233,7 +236,7 @@ def test_paused_manual_sync_stays_one_shot_and_out_of_periodic_due_scan(
 
     assert result == {"ok": True, "items": 3, "skipped": False}
     bridge.refresh_from_db()
-    assert bridge.cursor == {"seen": 3}
+    assert bridge.sync_streams.model.objects.current_for_bridge(bridge, "records").get().cursor == {"seen": 3}
     assert bridge.next_sync_at is None
     with system_context(reason="test paused legacy due marker"):
         bridge.next_sync_at = now
@@ -639,7 +642,7 @@ def test_run_bridge_sync_job_holds_the_live_lock(transactional_db: None) -> None
 
     assert result == {"ok": True, "items": 6, "skipped": False}
     bridge.refresh_from_db()
-    assert bridge.cursor == {"seen": 6}
+    assert bridge.sync_streams.model.objects.current_for_bridge(bridge, "records").get().cursor == {"seen": 6}
     assert bridge.sync_stage == Bridge.SyncStage.COMPLETED
 
 
@@ -732,7 +735,7 @@ def test_stale_bridge_sync_task_payload_is_skipped(
 
     assert stale == {"ok": True, "items": 0, "skipped": True, "stale": True}
     bridge.refresh_from_db()
-    assert bridge.cursor == {}
+    assert not bridge.sync_streams.model.objects.current_for_bridge(bridge, "records").exists()
     assert bridge.sync_stage == Bridge.SyncStage.QUEUED
     assert bridge.sync_progress == {"stage": Bridge.SyncStage.QUEUED, "queued_at": second.isoformat()}
 

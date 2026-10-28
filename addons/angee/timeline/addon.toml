@@ -4,13 +4,3 @@ description = "One chronology per record, read directly from owner queries throu
 keywords = ["timeline", "activity", "history"]
 category = "Foundation"
 depends_on = ["angee.base", "angee.graphql", "angee.web"]
-
-[[migrations]]
-name = "rebuild_ledger"
-app_label = "timeline"
-module = "runtime_migrations.rebuild_ledger"
-
-[[migrations]]
-name = "retire_ledger"
-app_label = "timeline"
-module = "runtime_migrations.retire_ledger"

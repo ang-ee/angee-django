@@ -31,7 +31,7 @@ export function registerForm(
  */
 export function useRegisteredForm(resource: string): RegisteredForm | undefined {
   const value = useFormOverride(resource);
-  if (value == null || React.isValidElement(value)) return undefined;
+  if (value == null) return undefined;
   if (
     typeof value === "object"
     && "resource" in value

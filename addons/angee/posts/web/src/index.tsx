@@ -14,14 +14,9 @@ const posts = defineBaseAddon({
     lazyRouteComponent(() => import("./FeedsPage"), "FeedsPage"),
     "posts.Feed",
   ),
-  menus: [
-    {
-      id: "posts",
-      label: "Posts",
-      icon: "posts",
-      route: "posts.feeds",
-    },
-  ],
+  menus: {
+    "posts": { label: "Posts", icon: "posts", route: "posts.feeds" },
+  },
   icons: { posts: Rss },
   i18n: { posts: enPostsMessages },
   forms: { "posts.Feed": feedForm },

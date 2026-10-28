@@ -3969,37 +3969,6 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { kind: "ssh" } });
   });
 
-  test("uses an addon-registered form override on create, not on edit", async () => {
-    const override = <Field name="overrideName" label="Override Name" />;
-
-    // Create (id null): the override replaces the declared fields.
-    sdkMocks.record = null;
-    sdkMocks.mutate.mockClear();
-    renderWithProviders(
-      <FormView resource="Widget">
-        <Field name="declaredName" label="Declared Name" />
-      </FormView>,
-      undefined,
-      { Widget: override },
-    );
-    expect(screen.getByLabelText("Override Name")).toBeTruthy();
-    expect(screen.queryByLabelText("Declared Name")).toBeNull();
-
-    cleanup();
-
-    // Edit (id set): the override is ignored; the declared lifecycle form renders.
-    sdkMocks.record = { id: "w-1", declaredName: "kept" };
-    renderWithProviders(
-      <FormView resource="Widget" id="w-1">
-        <Field name="declaredName" label="Declared Name" />
-      </FormView>,
-      undefined,
-      { Widget: override },
-    );
-    expect(await screen.findByLabelText("Declared Name")).toBeTruthy();
-    expect(screen.queryByLabelText("Override Name")).toBeNull();
-  });
-
   test("shows a title-field server error in the header", async () => {
     sdkMocks.record = null;
     sdkMocks.mutate.mockClear();

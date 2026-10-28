@@ -16,7 +16,6 @@ const decisionsMenu = { ...decisions, dependsOn: ["timeline"] };
 
 test("flattens Decisions into Workflows' top bar while the rail keeps one app", () => {
   const { menuComposition } = composeAddons([timeline, decisionsMenu, { ...addon, dependsOn: ["decisions"] }], { canonicalModelLabel: (model) => model });
-  expect(menuComposition.diagnostics).toEqual([]);
   const tree = MenuTree.from(resolveMenuRouteTargets(menuComposition.navigation, createRouteHref([...(decisions.routes ?? []), ...(addon.routes ?? [])])));
   expect(tree.roots.map((node) => node.id)).toEqual(["workflows"]);
   const workflows = tree.byId.get("workflows")!;

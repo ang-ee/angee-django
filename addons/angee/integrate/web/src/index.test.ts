@@ -1,13 +1,6 @@
 import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
-import {
-  MenuTree,
-  resolveContainer,
-  type BaseMenuItem,
-  type RelatedGroupContent,
-  type ChromeMenuItem,
-  type ContainerChild,
-} from "@angee/ui";
+import { MenuTree, resolveContainer, type RelatedGroupContent, type ContainerChild } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import integrate from "./index";
@@ -19,6 +12,8 @@ const composed = composeAddons([integrate], { canonicalModelLabel: (model) => mo
 /** The child ids one form container resolves for a subtype record. */
 const childIds = (address: string, models: readonly string[]) =>
   resolveContainer(composed, address, { models }).map((child) => child.id);
+
+const declaredMenus = composeAddons([{ id: integrate.id, menus: integrate.menus, routes: integrate.routes }], { canonicalModelLabel: (model) => model }).menuComposition.logical;
 
 describe("integrate addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -63,8 +58,8 @@ describe("integrate addon manifest", () => {
   });
 
   test("exposes an Integrations menu grouped by integration, OAuth, and credentials concern", () => {
-    expect(integrate.menus).toHaveLength(1);
-    const menu = integrate.menus?.[0] as BaseMenuItem | undefined;
+    expect(declaredMenus).toHaveLength(1);
+    const menu = declaredMenus?.[0];
     expect(menu?.id).toBe("integrate");
     // Route-less root: target inherited from the first child (Integrations).
     expect(menu?.route).toBeUndefined();
@@ -78,7 +73,7 @@ describe("integrate addon manifest", () => {
   });
 
   test("groups integration records with vendors and webhooks", () => {
-    const menu = integrate.menus?.[0] as BaseMenuItem | undefined;
+    const menu = declaredMenus?.[0];
     const group = menu?.children?.find(
       (child) => child.id === "integrate.integrations.group",
     );
@@ -92,7 +87,7 @@ describe("integrate addon manifest", () => {
   });
 
   test("groups OAuth setup with external accounts", () => {
-    const menu = integrate.menus?.[0] as BaseMenuItem | undefined;
+    const menu = declaredMenus?.[0];
     const oauth = menu?.children?.find(
       (child) => child.id === "integrate.oauth.group",
     );
@@ -105,7 +100,7 @@ describe("integrate addon manifest", () => {
   });
 
   test("keeps credentials as a top-level integration section", () => {
-    const menu = integrate.menus?.[0] as BaseMenuItem | undefined;
+    const menu = declaredMenus?.[0];
     const credentials = menu?.children?.find(
       (child) => child.id === "integrate.credentials",
     );
@@ -154,7 +149,7 @@ describe("integrate addon manifest", () => {
   });
 
   test("references the landing route from exactly one menu item (chrome derivation)", () => {
-    const tree = MenuTree.from(integrate.menus as readonly ChromeMenuItem[]);
+    const tree = MenuTree.from(declaredMenus);
     expect(tree.itemsForRoute("integrate.integrations")).toHaveLength(1);
   });
 

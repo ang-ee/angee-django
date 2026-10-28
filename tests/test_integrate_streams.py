@@ -12,7 +12,6 @@ from typing import Any, ClassVar
 
 import pytest
 from django.db import (
-    DatabaseError,
     DataError,
     OperationalError,
     close_old_connections,
@@ -1650,56 +1649,16 @@ def test_opening_an_existing_partition_applies_its_changed_declaration(stream_br
 
 
 @pytest.mark.parametrize("cursor", [[], 0, ""])
-def test_seed_rejects_falsy_non_object_cursors(stream_bridge: Channel, cursor: Any) -> None:
-    class InvalidSeedAdapter(MemoryAdapter):
-        def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> Any:
-            return cursor
+def test_stream_declaration_rejects_falsy_non_object_cursors(stream_bridge: Channel, cursor: Any) -> None:
+    class InvalidDeclarationAdapter(MemoryAdapter):
+        def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
+            return (StreamDefinition(key="records", cursor=cursor),)
 
-    stream_bridge.cursor = {"legacy": 1}
-    stream_bridge.save(update_fields=["cursor"])
-    adapter = InvalidSeedAdapter()
+    adapter = InvalidDeclarationAdapter()
     adapter.integration = stream_bridge
-
     with pytest.raises(AdapterContractError, match="plain finite JSON"):
         open_stream(stream_bridge, "records", "", adapter)
-
-    stream = SyncStream.objects.current_for_bridge(stream_bridge, "records").get()
-    assert stream.cursor == {}
-    assert stream.last_advanced_at is None
-
-
-def test_seed_cutover_locks_bridge_before_stream(stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch) -> None:
-    if connection.vendor != "postgresql":
-        pytest.skip("Bridge cutover row-lock ordering requires PostgreSQL.")
-    stream_bridge.cursor = {"legacy": 1}
-    stream_bridge.save(update_fields=["cursor"])
-    current_stream(stream_bridge, "records")
-    manager_class = type(SyncStream.objects)
-    lock_current = manager_class.lock_current
-
-    def try_bridge_lock() -> None:
-        close_old_connections()
-        try:
-            with (
-                system_context(reason="test competing bridge cutover"),
-                pytest.raises(DatabaseError) as denied,
-                transaction.atomic(),
-            ):
-                Channel.objects.select_for_update(nowait=True).get(pk=stream_bridge.pk)
-            assert denied.value.__cause__.sqlstate == "55P03"
-        finally:
-            connections.close_all()
-
-    def verify_bridge_locked(manager: Any, stream: Any) -> Any:
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            pool.submit(try_bridge_lock).result(timeout=10)
-        return lock_current(manager, stream)
-
-    monkeypatch.setattr(manager_class, "lock_current", verify_bridge_locked)
-    adapter = MemoryAdapter()
-    adapter.integration = stream_bridge
-    stream = open_stream(stream_bridge, "records", "", adapter)
-    assert stream.last_advanced_at is not None
+    assert not SyncStream.objects.current_for_bridge(stream_bridge, "records").exists()
 
 
 @pytest.mark.parametrize("boundary", ["page", "reset", "definition"])

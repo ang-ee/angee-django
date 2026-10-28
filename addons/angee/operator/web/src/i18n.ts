@@ -1,13 +1,14 @@
-import { createNamespaceT, type BaseMenuItem } from "@angee/ui";
+import type { MenuDeclarations } from "@angee/app";
+import { createNamespaceT } from "@angee/ui";
 import type { I18nResources } from "@angee/refine";
 
 export function enOperatorBundleForMenu(
-  menu: BaseMenuItem,
+  menu: MenuDeclarations,
+  parent: string,
 ): I18nResources {
   const titles: Record<string, string> = {};
-  for (const section of menu.children ?? []) {
-    const sectionId = section.id ?? section.route;
-    if (!sectionId || !section.label) continue;
+  for (const [sectionId, section] of Object.entries(menu)) {
+    if (section.parent !== parent || !section.label) continue;
     titles[`section.${sectionId}.title`] = section.label;
   }
   return { operator: titles } satisfies I18nResources;

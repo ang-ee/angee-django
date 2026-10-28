@@ -58,14 +58,17 @@ host checks the full framework composition as before. The CI target is the
 consumer's entire `addons` directory, including optional addons when their
 declared composition is checked; it does not select only recently changed files.
 
-Digest-pinned `runtime_migrations` are historical executable artifacts, so native
-mypy recursive discovery excludes their bodies, matching the Ruff source
-boundary. Imports from migration-integrity tests use `follow_imports = "silent"`:
-their exported types remain available and caller errors remain visible. Do not
-edit applied migration digests for checker diagnostics. The
-[runtime-migration integrity tests](../tests/test_runtime_migrations.py) retain
-their execution and immutability coverage. Generated `typing_runtime` model
-declarations remain followed because they are required typing inputs.
+A declared addon transition is a temporary executable input: its materialized
+copy carries a source fingerprint until it is applied and the stack's history is
+consolidated. Native mypy/Ruff discovery excludes those bodies; integrity-test
+imports remain followed silently so their types are available. Do not change an
+applied copy or digest to fix checker diagnostics. The
+[runtime-migration mechanism tests](../tests/test_runtime_migrations.py) cover
+materialization, fingerprints, replay and guarded history replacement through
+neutral fixtures. Completed transition declarations and bodies are retired after
+the [snapshot/reset cutoff](composer.md#foundation-and-provenance-upgrade-cutoff),
+not retained indefinitely as compatibility APIs. Generated `typing_runtime`
+model declarations remain followed because they are required typing inputs.
 
 [`tests/test_layering.py`](../tests/test_layering.py) guards framework import
 boundaries and optional state-field declarations. See the

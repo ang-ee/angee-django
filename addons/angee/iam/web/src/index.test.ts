@@ -1,12 +1,11 @@
+import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
-import {
-  MenuTree,
-  type BaseMenuItem,
-  type ChromeMenuItem,
-} from "@angee/ui";
+import { MenuTree } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import iam, { IAM_LOGIN_BACKGROUND_IMAGE_URLS } from "./index";
+
+const declaredMenus = composeAddons([{ id: iam.id, menus: iam.menus, routes: iam.routes }], { canonicalModelLabel: (model) => model }).menuComposition.logical;
 
 describe("iam addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -50,7 +49,7 @@ describe("iam addon manifest", () => {
   });
 
   test("contributes the top-level IAM menu with a Roles dropdown", () => {
-    const menu = iam.menus?.[0] as BaseMenuItem | undefined;
+    const menu = declaredMenus?.[0];
     expect(menu?.id).toBe("iam");
     expect(menu?.label).toBe("IAM");
     expect(menu?.icon).toBe("auth");
@@ -83,7 +82,7 @@ describe("iam addon manifest", () => {
   test("references the landing route from exactly one menu item (chrome derivation)", () => {
     // Regression: a route-ful root + an Overview child both pointing at
     // iam.overview makes createApp throw "referenced by multiple menu items".
-    const tree = MenuTree.from(iam.menus as readonly ChromeMenuItem[]);
+    const tree = MenuTree.from(declaredMenus);
     expect(tree.itemsForRoute("iam.overview")).toHaveLength(1);
   });
 
