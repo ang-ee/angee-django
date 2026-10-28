@@ -53,6 +53,7 @@ into a remote permission store.
 | tldextract >= 5.3, < 6 | Public Suffix List registrable-domain parsing, including private suffixes | Bundled PSL snapshot with request-time networking disabled |
 | Django >= 6.1.2, < 6.2 | ORM, migrations, admin, auth contract, app registry, response security headers (`SecurityMiddleware`, `ContentSecurityPolicyMiddleware` with per-view `csp_override`) | Abstract bases and build-time composition into runtime apps; the Angee host autoconfig installs both security middlewares. [`base.expressions`](../addons/angee/base/expressions.py) supplies an ordered JSON subquery across PostgreSQL/SQLite and adapts Django's text SHA256 to PostgreSQL's built-in digest without requiring pgcrypto. |
 | strawberry-graphql (ang-ee fork) + strawberry-graphql-django (imported as `strawberry_django`) >= 0.89.2 | Strawberry: schema, object/input/enum/union/lazy types, scalars, extensions, the Channels subscription transport and the Django view; strawberry-django: GraphQL types, dataloaders, schema printing, nested query optimization through the active schema's merged definitions, and the create resolver, which without a pre-save hook persists through `manager.create(**kwargs)`; on a REBAC manager that composes `RebacQuerySet.insert`, so queryset factories and the candidate gate run for GraphQL creates. Upstream PR strawberry-graphql/strawberry-django#959 proposes persisting the same prepared instance the resolver validated | Merge addon schema parts into named schemas, public-ID decoding, `changes` subscription shortcuts, emit SDL, serve per name; the write backend passes no pre-save hook |
+| graphql-core >= 3.3.1, < 3.4 | GraphQL input coercion, validation diagnostics and execution | The [GraphQL manifest](../addons/angee/graphql/addon.toml) owns the version contract. `GraphQLSchemas.resource_filter` uses native `coerce_input_value` and `validate_input_value` before Strawberry argument conversion, preserving field-specific Django validation errors for stored conditions |
 | django-choices-field | Enum-backed model fields, precise nullable descriptors, and runtime generic field subscriptions | Base owns `StateField` and the implementation field; its [manifest](../addons/angee/base/addon.toml) pins the native correction |
 | django-countries >= 9, < 10 | Configurable ISO 3166-1 country choices, overrides, localized names, and translated display names | `angee.parties.fields.CountryCodeField` preserves configured codes and names, stores alpha-2 as a plain string, and exposes the upstream choices through resource metadata |
 | pycountry >= 26, < 27 | Complete ISO country code and official/common-name lookup | `angee.parties.fields.CountryCodeField` uses the upstream catalogue only when the configured django-countries catalogue has no match |
@@ -169,8 +170,9 @@ serializes synchronous GraphQL requests, so local page-burst timings do not
 represent production concurrency.
 Instances keep their built SPA and single uvicorn worker in development.
 Production uses `manage.py serve` to run the composed `angee.asgi:application`
-under uvicorn without autoreload. GraphQL regenerates SDL at ASGI boot only when
-Django `DEBUG` is enabled; production keeps it disabled.
+under uvicorn without autoreload. The explicit `schema` management command emits
+GraphQL SDL during provisioning; ASGI startup imports prebuilt runtime state and
+does not regenerate artifacts, including in development.
 `serve_workers: 0` uses CPU count (at least two); an explicit value must be at
 least two. Uvicorn starts the ASGI lifespan in every worker. The MCP session
 manager and process memory are worker-local; Redis owns shared cache and channel
@@ -349,7 +351,7 @@ calendar.
 | happy-dom | DOM environment for Vitest | Per-file env opt-in for hook and component tests |
 | @testing-library/react | React component and hook test rendering | Provider-wrapped render and hook harnesses |
 | Playwright | Browser tests | `@angee/e2e` harness: workspace-isolated runner, role `storageState` login, GraphQL `api` fixture, Page Object base ([E2E guide](frontend/e2e.md)) |
-| @playwright/mcp | Interactive browser-driving for host coding agents | Repo-root `.mcp.json` server (npx-run, pinned), bound to the base stack's `chrome-profile` (`.angee/data/chrome`); the agent navigates to the stack's `ANGEE_UI_PORT` (`:5173`). Distinct from `@angee/e2e` (the deterministic test runner) and `agents.MCPServer` (the MCP config rendered for operator-provisioned product agents) |
+| @playwright/mcp | Interactive browser-driving for host coding agents | Repo-root `.mcp.json` server (npx-run, pinned), using Playwright MCP's native per-project persistent profile in the OS cache; source checkouts own no browser state. The agent navigates to the stack's configured `ANGEE_UI_PORT`. Container MCP services keep their declared stack-owned profile mount. Distinct from `@angee/e2e` (the deterministic test runner) and `agents.MCPServer` (the MCP config rendered for operator-provisioned product agents) |
 | Storybook | Component workshop | `@angee/ui` and addon previews |
 | GitHub Actions | CI | Implemented build/type/test lanes and repository policies; [Checks](checks.md#what-ci-actually-runs) distinguishes local requirements and manual browser verification |
 | Copier | Project and addon templates | Angee templates |

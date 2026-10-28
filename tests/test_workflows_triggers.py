@@ -536,7 +536,7 @@ def test_recursive_and_non_opted_models_are_refused(trigger_setup, model_label):
 def test_resource_condition_rejects_field_gated_reads(execution):
     """The compiler uses the resource catalogue, which excludes read__error fields."""
     owner = GraphQLSchemas([make_addon(schemas=workflow_schema.schemas)])
-    with pytest.raises(ValidationError, match="error.*not defined"):
+    with pytest.raises(ValidationError, match="unknown field 'error'"):
         owner.resource_filter(StepAttempt, {"error": {"_eq": "hidden"}})
 
 
