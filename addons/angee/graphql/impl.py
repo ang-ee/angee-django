@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from functools import partial
 from typing import Any, Self, cast
 
 import strawberry
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.db import models
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_snake_case
 
 from angee.base.fields import ImplClassField
 from angee.base.implementations import ImplChoice as BaseImplChoice
+from angee.base.implementations import impl_choices as registry_impl_choices
 from angee.base.models.implementations import readable_impl_defaults
 from angee.graphql.mixins import ImplementationChoicesMixin
 
@@ -47,14 +50,23 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
 
     django_model = _model_for_label(model)
     field_name = _field_name(field)
-    try:
-        model_field = ImplClassField.for_model(django_model, field_name)
-    except FieldDoesNotExist as error:
-        raise ImproperlyConfigured(str(error)) from error
-    choices = [ImplChoice.from_choice(choice) for choice in model_field.impl_choices()]
+    choices = [ImplChoice.from_choice(choice) for choice in model_impl_choices(django_model, field_name)]
     for choice in choices:
         choice.defaults = JSON(readable_impl_defaults(django_model, cast(dict[str, Any], choice.defaults)))
     return choices
+
+
+def model_impl_choices(model: type[models.Model], field_name: str) -> list[BaseImplChoice]:
+    """Project one native selector through its model-owned picker policy."""
+
+    try:
+        field = model._meta.get_field(field_name)
+    except FieldDoesNotExist as error:
+        raise ImproperlyConfigured(str(error)) from error
+    if not isinstance(field, ImplClassField) or field.base_class is None:
+        raise ImproperlyConfigured(f"{model.__name__}.{field_name} is not an active ImplClassField.")
+    include = partial(model.include_impl_choice, field_name) if issubclass(model, ImplementationChoicesMixin) else None
+    return registry_impl_choices(field.base_class, include=include)
 
 
 def can_read_impl_choices(model: str, field: str, actor: Any) -> bool:

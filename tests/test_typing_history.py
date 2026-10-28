@@ -16,7 +16,8 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "from pathlib import Path\n"
         "SECRET_KEY = 'native-history-typing'\n"
         "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', 'angee', 'angee.base', "
-        "'tests.typing_history.apps.TypingHistoryConfig', 'angee.compose', 'tests.typing_host.TypingHostConfig']\n"
+        "'tests.typing_history.apps.TypingHistoryConfig', 'tests.typing_host.TypingHostConfig', "
+        "'angee.compose.apps.BuildComposeConfig']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
         f"COMPOSE_RUNTIME_DIR = Path({str(runtime)!r})\n"
@@ -54,15 +55,17 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
             "== {'HistoricalSubject', 'HistoricalSubjectStatement', 'SubjectStatement'}",
             "foreign = settings.COMPOSE_RUNTIME_DIR.parent / 'foreign'",
             "foreign.mkdir()",
-            "(foreign / 'unrelated.txt').write_text('preserve')",
+            "(foreign / 'typing_history').mkdir()",
+            "foreign_model = foreign / 'typing_history/models.py'",
+            "foreign_model.write_text('preserve')",
             "try:",
             "    with override_settings(COMPOSE_RUNTIME_DIR=foreign):",
             "        project_history_models()",
             "except RuntimeError as error:",
-            "    assert 'not an Angee runtime directory' in str(error)",
+            "    assert 'lacks the required generated-output marker' in str(error)",
             "else:",
             "    raise AssertionError('Projection accepted a foreign output tree')",
-            "assert list(foreign.iterdir()) == [foreign / 'unrelated.txt']",
+            "assert foreign_model.read_text() == 'preserve'",
         ])],
         cwd=root, env=env, capture_output=True, text=True, check=False,
     )

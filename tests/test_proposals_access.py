@@ -24,8 +24,8 @@ from rebac import (
     write_relationships,
 )
 
-from angee.base.models import StaleRevisionError
-from angee.base.permissions import RecordAccessSubjectRefused
+from angee.base.exceptions import RecordAccessSubjectRefused
+from angee.base.models.locks import StaleRevisionError
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Project, Task
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict

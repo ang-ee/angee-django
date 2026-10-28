@@ -20,7 +20,8 @@ from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.base.identity import public_id_of, public_subject_ref
+from angee.base.identity import public_subject_ref
+from angee.base.models.identity import public_id_of
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.knowledge import schema as knowledge_schema

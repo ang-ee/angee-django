@@ -20,7 +20,7 @@ from rebac.errors import MissingActorError
 from rebac.testing import install_schema
 
 from angee.addons import addon_manifest
-from angee.base.models import AngeeModel
+from angee.base.models.base import AngeeModel
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import _grant_tuples, materialize_grant_groups

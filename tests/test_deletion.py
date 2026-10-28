@@ -17,7 +17,7 @@ from rebac import PermissionDenied, RebacMixin, SubjectRef, actor_context, syste
 from rebac.models import active_relationship_model
 
 import angee.graphql.deletion as deletion_module
-from angee.base.models import AngeeModel
+from angee.base.models.base import AngeeModel
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.deletion import (
     DeletePreview,

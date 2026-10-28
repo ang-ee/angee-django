@@ -33,8 +33,8 @@ from strawberry.types import get_object_definition
 from strawberry_django.pagination import OffsetPaginated
 from strawberry_django.utils.requests import get_request
 
-from angee.base.identity import public_id_of
-from angee.errors import exception_text
+from angee.base.exceptions import exception_text
+from angee.base.models.identity import public_id_of
 from angee.graphql.actions import (
     ActionResult,
     action_guard,

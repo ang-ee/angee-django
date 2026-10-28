@@ -1,8 +1,12 @@
 # Local Angee instance = a git-controlled project at the stack root (ANGEE_ROOT=.).
-# This OVERWRITES the project's .gitignore: here runtime/ is COMMITTED (a local
-# instance is a real deployment, so the built concrete apps + SDL are the pinned
-# artifact you deploy and review) — so, unlike the project default, /runtime/ is NOT
-# ignored. Commit what you author; ignore what a tool regenerates.
+# The project-specific wheel contains the generated runtime. Native Django history
+# beside runtime models is authored, reviewed and committed; other runtime files and
+# distribution outputs remain disposable build artifacts.
+/runtime/*
+!/runtime/*/
+/runtime/*/*
+!/runtime/*/migrations/
+/dist/
 
 # The operator's compiled bring-up artifacts and resolved secrets.
 /.env

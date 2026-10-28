@@ -4,8 +4,7 @@
 it owns where generated schema artifacts live (``runtime/schemas/<name>.graphql`` and
 ``runtime/schemas/<name>.metadata.json``), renders them from the discovered
 :class:`~angee.graphql.schema.GraphQLSchemas`, and reconciles disk against that render.
-The ``schema`` management command and the dev-serve boot hook
-(:mod:`angee.graphql.asgi`) both delegate here. Shared filesystem lifecycle logic
+The explicit ``schema`` management command delegates here during provisioning. Shared filesystem lifecycle logic
 lives in :class:`angee.utils.artifacts.GeneratedTree`; this owner supplies the GraphQL render and
 owned-suffix policy.
 """
@@ -57,15 +56,6 @@ class GraphQLSdl:
         """Reconcile the owned schema directory to the rendered schemas."""
 
         self._generated_tree().reconcile(prune=True)
-
-    def emit_if_stale(self) -> bool:
-        """Reconcile drifted schema artifacts and orphans; return whether any changed.
-
-        Mirrors :meth:`angee.compose.runtime.Runtime.emit_if_stale`: drift-gated,
-        idempotent, and converges the owned directory to the render.
-        """
-
-        return self._generated_tree().reconcile(prune=True)
 
     def check(self) -> None:
         """Raise when on-disk schema artifacts differ from the render."""

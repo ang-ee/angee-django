@@ -75,7 +75,7 @@ def test_generated_tree_reconcile_converges_with_orphan_directories(tmp_path: Pa
 
 
 @pytest.mark.parametrize("preserved", [Path("kept/notes.md"), Path("kept/migrations/0001.py")])
-def test_generated_tree_reconcile_preserves_unowned_and_migration_directories(
+def test_generated_tree_reconcile_preserves_caller_exclusions(
     tmp_path: Path, preserved: Path,
 ) -> None:
     """A preserved descendant protects its parents during orphan pruning."""
@@ -85,7 +85,7 @@ def test_generated_tree_reconcile_preserves_unowned_and_migration_directories(
     retained.write_text("keep", encoding="utf-8")
     orphan = Path("kept/orphan")
     (tmp_path / orphan).mkdir()
-    tree = GeneratedTree(tmp_path, {}, owns=lambda path: path.suffix != ".md")
+    tree = GeneratedTree(tmp_path, {}, owns=lambda path: path.suffix != ".md" and "migrations" not in path.parts)
 
     assert tree.drift() == [orphan]
     assert tree.reconcile(prune=True) is True
@@ -93,19 +93,19 @@ def test_generated_tree_reconcile_preserves_unowned_and_migration_directories(
     assert tree.drift() == []
 
 
-def test_generated_tree_cleanup_guards_and_migration_preservation(tmp_path: Path) -> None:
-    """Cleanup requires the configured generated root and preserves all migrations."""
+def test_generated_tree_cleanup_guards_and_caller_exclusions(tmp_path: Path) -> None:
+    """Cleanup enforces the root guard and preserves caller-owned exclusions."""
 
     root = tmp_path / "generated"
     root.mkdir()
     (root / "__init__.py").write_text("# wrong\n", encoding="utf-8")
     sentinel = (Path("__init__.py"), "# generated")
 
-    with pytest.raises(RuntimeError, match="not an Angee runtime directory"):
+    with pytest.raises(RuntimeError, match="lacks the required generated-output marker"):
         GeneratedTree(root, {}, owns=lambda path: True, sentinel=sentinel).clean()
 
     (root / "__init__.py").write_text("# generated\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="not the configured runtime dir"):
+    with pytest.raises(RuntimeError, match="not the configured output directory"):
         GeneratedTree(root, {}, owns=lambda path: True, sentinel=sentinel, clean_root=tmp_path / "other").clean()
 
     migration = root / "app" / "migrations" / "archive" / "snapshot.txt"
@@ -113,22 +113,19 @@ def test_generated_tree_cleanup_guards_and_migration_preservation(tmp_path: Path
     migration.write_text("keep", encoding="utf-8")
     (root / "stale.txt").write_text("delete", encoding="utf-8")
 
-    GeneratedTree(root, {}, owns=lambda path: True, sentinel=sentinel).clean()
+    GeneratedTree(root, {}, owns=lambda path: "migrations" not in path.parts, sentinel=sentinel).clean()
     assert [migration.exists(), (root / "__init__.py").exists(), (root / "stale.txt").exists()] == [True, True, False]
 
 
-def test_generated_tree_drift_never_reports_preserved_migration_files(tmp_path: Path) -> None:
-    """A stray non-.py file under a live migrations/ dir is preserved, not drift.
-
-    Pins the post-GeneratedTree semantics: everything with ``migrations`` in its
-    parts is outside the drift set (the old Runtime reported such files stale,
-    breaking ``--check`` for e.g. django-linear-migrations' max_migration.txt).
-    """
+def test_generated_tree_drift_respects_history_owner_exclusion(tmp_path: Path) -> None:
+    """A caller may exclude native history, including non-Python metadata."""
 
     root = tmp_path / "generated"
     (root / "app" / "migrations").mkdir(parents=True)
     (root / "app" / "migrations" / "max_migration.txt").write_text("0002_x", encoding="utf-8")
-    tree = GeneratedTree(root, {Path("app") / "models.py": "code"}, owns=lambda path: True)
+    tree = GeneratedTree(
+        root, {Path("app") / "models.py": "code"}, owns=lambda path: "migrations" not in path.parts,
+    )
     assert tree.drift() == [Path("app") / "models.py"]
 
 
@@ -136,7 +133,7 @@ def test_generated_tree_drift_never_reports_preserved_migration_files(tmp_path: 
 def test_generated_tree_rejects_artifacts_through_escaping_directory_symlinks(
     tmp_path: Path, operation: str,
 ) -> None:
-    """Every path is checked before boot repair can write through a directory link."""
+    """Every path is checked before reconciliation can write through a directory link."""
 
     root = tmp_path / "generated"
     root.mkdir()
@@ -171,3 +168,35 @@ def test_generated_tree_accepts_a_configured_symlink_root(tmp_path: Path) -> Non
     assert tree.reconcile(prune=False) is True
     assert (destination / "app/models.py").read_text(encoding="utf-8") == "generated"
     assert tree.drift() == []
+
+
+def test_generated_tree_initialization_preserves_only_caller_owned_input(tmp_path: Path) -> None:
+    """A clean checkout can hold retained inputs before its first generated marker."""
+
+    retained = tmp_path / "authored" / "history.data"
+    retained.parent.mkdir()
+    retained.write_bytes(b"native-history-bytes\n")
+    tree = GeneratedTree(
+        tmp_path, {Path("__init__.py"): "# generated\n", Path("model.py"): "output\n"},
+        owns=lambda path: path.suffix == ".py", sentinel=(Path("__init__.py"), "# generated"),
+    )
+    with pytest.raises(RuntimeError, match="lacks the required generated-output marker"):
+        tree.clean()
+    assert tree.reconcile(prune=True) is True
+    assert retained.read_bytes() == b"native-history-bytes\n"
+    assert (tmp_path / "model.py").read_text() == "output\n"
+
+
+@pytest.mark.parametrize("foreign", ["model.py", "orphan.py"])
+def test_generated_tree_initialization_never_adopts_existing_owned_files(tmp_path: Path, foreign: str) -> None:
+    """Neither an expected file nor an orphan authorizes an unmarked target."""
+
+    (tmp_path / foreign).write_text("foreign\n")
+    tree = GeneratedTree(
+        tmp_path, {Path("__init__.py"): "# generated\n", Path("model.py"): "output\n"},
+        owns=lambda path: path.suffix == ".py", sentinel=(Path("__init__.py"), "# generated"),
+    )
+    with pytest.raises(RuntimeError, match="lacks the required generated-output marker"):
+        tree.reconcile(prune=True)
+    assert (tmp_path / foreign).read_text() == "foreign\n"
+    assert not (tmp_path / "__init__.py").exists()

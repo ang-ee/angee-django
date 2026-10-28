@@ -5,13 +5,13 @@ import pytest
 from django.apps import apps
 from django.core.checks.registry import registry
 
-from angee.base.build import apply_schema_paths, extension_source_map
+from angee.base.build import extension_source_map
 from angee.base.checks import (
     check_ownership,
     check_rebac_caveats,
 )
 from tests.core_persistence import OWNERSHIP_SCHEMA, OwnedRow
-from tests.test_zed_extensions import _base_addon, _contrib_addon
+from tests.test_zed_extensions import _apply_emitted_schema_paths, _base_addon, _contrib_addon
 
 
 @pytest.fixture
@@ -109,7 +109,7 @@ definition demo/thing {{
         output = runtime / relative
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(text)
-    apply_schema_paths([base, fragment], runtime, sources=sources)
+    _apply_emitted_schema_paths([base, fragment], runtime, sources=sources)
     errors = check_rebac_caveats([base])
     if caveated:
         [error] = errors

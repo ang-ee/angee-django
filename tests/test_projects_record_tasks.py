@@ -21,7 +21,7 @@ from rebac import (
     write_relationships,
 )
 
-from angee.base.permissions import RecordAccessSubjectRefused
+from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.messaging.testing.models import Message, Part, ThreadAttachment
 from angee.projects.testing.models import Project, Queue, Task
 from tests.chatterdemo.models import ChatterDoc

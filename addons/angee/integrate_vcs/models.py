@@ -14,7 +14,9 @@ from rebac import system_context
 from angee.base.fields.encrypted import EncryptedField
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
-from angee.base.models import AngeeDataModel, AngeeManager, AuditMixin
+from angee.base.managers import AngeeManager
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate_vcs import registry
 from angee.integrate_vcs.backend import VCSBackend

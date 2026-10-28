@@ -15,7 +15,11 @@ from django.db.models.functions import Cast, Replace
 
 from angee.base.fields.ordering import FractionalRankField
 from angee.base.indexes import PatternOpsIndex
-from angee.base.querysets import SystemQuerysetMixin, _AngeeQuerySetMixin, query_batch_size
+from angee.base.models.persistence import PersistenceMixin
+from angee.base.querysets import _AngeeQuerySetMixin, query_batch_size
+
+if TYPE_CHECKING:
+    from django.db.models.fetch_modes import FetchMode
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _HierarchyModelT = TypeVar("_HierarchyModelT", bound="HierarchyMixin")
@@ -217,7 +221,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
         return super().update(**kwargs)
 
 
-class HierarchyMixin(SystemQuerysetMixin):
+class HierarchyMixin(PersistenceMixin):
     """Materialized-path tree membership for a self-parented model.
 
     Adds a ``parent`` self-FK and a maintained ``path`` column of zero-padded,
@@ -360,7 +364,9 @@ class HierarchyMixin(SystemQuerysetMixin):
         return field
 
     @classmethod
-    def from_db(cls, db: Any, field_names: Collection[str], values: Collection[Any]) -> Self:
+    def from_db(
+        cls, db: Any, field_names: Collection[str], values: Collection[Any], *, fetch_mode: FetchMode | None = None,
+    ) -> Self:
         """Record the loaded ``parent`` so :meth:`save` can detect a reparent.
 
         Only when ``parent`` was actually loaded: seeding the baseline off a
@@ -370,7 +376,7 @@ class HierarchyMixin(SystemQuerysetMixin):
         deferred load simply stays lazy.
         """
 
-        instance = super().from_db(db, field_names, values)
+        instance = super().from_db(db, field_names, values, fetch_mode=fetch_mode)
         if "parent_id" in field_names:
             instance._hierarchy_saved_parent_id = instance.parent_id
         return instance

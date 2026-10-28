@@ -13,7 +13,7 @@ from rebac import RebacMixin, current_actor
 from rebac.schema.walker import field_gated_actions
 
 from angee.base.fields.state import StateField
-from angee.base.identity import instance_from_public_id, public_id_for
+from angee.base.models.identity import instance_from_public_id, public_id_for
 from angee.base.permissions import effective_rebac_definition, require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 from angee.graphql.data.metadata import data_resource_contributions

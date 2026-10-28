@@ -24,7 +24,7 @@ from django.db.models.expressions import BaseExpression
 from django.db.models.functions import Coalesce
 from pydantic import BaseModel, ConfigDict
 
-from angee.base.models.expressions import WindowSum
+from angee.base.expressions import WindowSum
 from angee.messaging.inbox import InboxPage
 
 

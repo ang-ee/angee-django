@@ -8,7 +8,7 @@ from django.db import connection, models
 from django.test.utils import CaptureQueriesContext, isolate_apps
 from rebac import actor_context
 
-from angee.base.models import RecordRefMixin
+from angee.base.models.refs import RecordRefMixin
 from angee.decisions import schema as decision_schema
 from angee.decisions.testing.drivers import seed_decision
 from angee.decisions.testing.models import Decision, DecisionRecord

@@ -13,8 +13,8 @@ from rebac import (
 )
 from rebac.actors import is_sudo
 
-from angee.base.querysets import SystemQuerysetMixin
-from angee.errors import DomainError
+from angee.base.exceptions import DomainError
+from angee.base.models.persistence import PersistenceMixin
 
 
 class ImmutableFieldsMixin(models.Model):
@@ -186,7 +186,7 @@ def require_revision(*, expected: Any, current: int | None, minimum: int = 1) ->
         raise StaleRevisionError(expected, current)
 
 
-class OptimisticLockMixin(SystemQuerysetMixin, models.Model):
+class OptimisticLockMixin(PersistenceMixin, models.Model):
     """Count instance saves and optionally compare the revision in the UPDATE.
 
     Compose before the model base. Inserts start at one; nonempty updates bump
@@ -226,7 +226,7 @@ class OptimisticLockMixin(SystemQuerysetMixin, models.Model):
                 raise ValidationError({"expected_revision": "An expected revision requires an existing row."})
         counter = self.REVISION_FIELD
         owner = self._meta.get_field(counter).model
-        if not issubclass(owner, SystemQuerysetMixin):
+        if not issubclass(owner, PersistenceMixin):
             raise ImproperlyConfigured(f"{owner._meta.label} must own system queries for its revision counter.")
         manager = owner._base_manager.db_manager(hints={"instance": self})
         using = manager.db

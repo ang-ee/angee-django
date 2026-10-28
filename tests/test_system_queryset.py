@@ -13,7 +13,9 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac.managers import TrackedQuerySet
 
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, AngeeUnscopedQuerySet
+from angee.base.managers import AngeeManager, AngeeUnscopedManager
+from angee.base.models.base import AngeeModel
+from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet
 from tests.conftest import Drive, File, Integration
 from tests.tables import model_tables
 

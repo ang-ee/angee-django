@@ -8,7 +8,6 @@ It retains native model classes, never copies their metadata into another model.
 
 from __future__ import annotations
 
-import importlib
 import inspect
 import sys
 from collections.abc import Iterable
@@ -19,7 +18,6 @@ from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.utils import make_model_tuple
-from django.utils.module_loading import module_has_submodule
 
 from angee.compose.declarations import AppDeclarationSource
 
@@ -143,7 +141,7 @@ class ModelComposition:
     def discover(
         cls, app_configs: Iterable[AppConfig], *, declarations: AppDeclarationSource | None = None,
     ) -> ModelComposition:
-        """Import source modules during Django phase 2 and collect own declarations.
+        """Collect declarations from model modules loaded by native AppConfig hooks.
 
         App order supplies donor precedence; module namespace order supplies the
         order of multiple donors from one addon. Foreign re-exports and abstract
@@ -154,14 +152,18 @@ class ModelComposition:
         extensions: dict[str, list[type[models.Model]]] = {}
         model_owners: dict[type[models.Model], str] = {}
         declarations = declarations if declarations is not None else AppDeclarationSource.configured()
-        for config in app_configs:
-            if any(item.get("app_label") == config.label for item in declarations.migrations(config)):
-                # An addon still owns its migration graph after retiring its last
-                # model. Keep an empty native app so Django can apply that cutover.
+        configs = tuple(app_configs)
+        migration_targets = {
+            item.get("app_label")
+            for config in configs
+            for item in declarations.migrations(config)
+        }
+        for config in configs:
+            if config.label in migration_targets:
+                # A selected addon may contribute an upgrade for another installed
+                # app after its last model retires. Keep that native target label.
                 sources_by_label.setdefault(config.label, [])
             source = config.models_module
-            if source is None and module_has_submodule(config.module, "models"):
-                source = importlib.import_module(f"{config.name}.models")
             if source is None:
                 continue
             seen: set[type[models.Model]] = set()

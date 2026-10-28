@@ -2,21 +2,17 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from functools import partialmethod
+from functools import cache, partialmethod
 from typing import Any, cast
 
 from django.core import checks
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django_choices_field import TextChoicesField
 
 from angee.base.fields.state import enum_member_for
 from angee.base.implementations import (
-    ImplChoice,
-    _impl_choices_enum,
-    declared_impl_registries,
-    impl_choices,
-    impl_choices_enum,
+    check_impl_registry,
     impl_registry,
     resolve_impl_class,
 )
@@ -63,7 +59,7 @@ class ImplClassField[T = object](TextChoicesField):
         return name, path, args, kwargs
 
     def check(self, **kwargs: Any) -> list[checks.CheckMessage]:
-        """Validate the field's base declaration; the base check owns registry content."""
+        """Validate this selector and every entry of its bound implementation mapping."""
 
         errors = super().check(**kwargs)
         if not isinstance(self.base_class, type):
@@ -83,25 +79,9 @@ class ImplClassField[T = object](TextChoicesField):
                     id="angee.E002",
                 )
             )
-        elif isinstance(self.base_class, type) and (
-            f"{self.base_class.__module__}.{self.base_class.__qualname__}" not in declared_impl_registries()
-        ):
-            errors.append(
-                checks.Error(
-                    f"{self.base_class.__name__} is not declared in settings.ANGEE_IMPL_REGISTRIES.",
-                    obj=self,
-                    id="angee.E032",
-                )
-            )
+        elif isinstance(self.base_class, type):
+            errors.extend(check_impl_registry(self.base_class, obj=self))
         return errors
-
-    @classmethod
-    def for_model(cls, model: type[models.Model], field_name: str) -> ImplClassField[T]:
-        """Return the typed implementation field a model declares."""
-        field = model._meta.get_field(field_name)
-        if not isinstance(field, cls):
-            raise FieldDoesNotExist(f"{model.__name__}.{field_name} is not an ImplClassField.")
-        return field
 
     def contribute_to_class(
         self, cls: type[models.Model], name: str, private_only: bool = False,
@@ -156,13 +136,31 @@ class ImplClassField[T = object](TextChoicesField):
             return _impl_choices_enum(self.registry_setting, keys)
         return impl_choices_enum(self.base_class)
 
-    def impl_choices(self) -> list[ImplChoice]:
-        """Return pickable choices for the registry in deterministic key order."""
-
-        return impl_choices(cast(type, self.base_class))
-
 
 def _resolve_bound_implementation[T](
     instance: models.Model, *, field: ImplClassField[T], default: str | None = None,
 ) -> type[T]:
     return field.resolve_for(instance, default=default)
+
+
+def impl_choices_enum(base_class: type[object]) -> type[models.TextChoices]:
+    """Return the shared native enum for the current non-empty registry key set."""
+
+    registry_setting = getattr(base_class, "registry_setting")
+    keys = tuple(sorted(impl_registry(registry_setting)))
+    if not keys:
+        raise ImproperlyConfigured(
+            f"Implementation registry settings.{registry_setting} is empty; "
+            "at least one implementation is required to build its enum."
+        )
+    return _impl_choices_enum(registry_setting, keys)
+
+
+@cache
+def _impl_choices_enum(registry_setting: str, keys: tuple[str, ...]) -> type[models.TextChoices]:
+    """Share enum identity across projections while settings changes select new keys."""
+
+    core = registry_setting.removeprefix("ANGEE_").removesuffix("_CLASSES")
+    camel = "".join(part.capitalize() for part in core.split("_") if part)
+    members = [(key.upper(), (key, key)) for key in keys]
+    return models.TextChoices(f"{camel or 'Impl'}Impl", members)

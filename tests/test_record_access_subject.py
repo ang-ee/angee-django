@@ -9,8 +9,7 @@ from rebac.backends import reset_backend
 from rebac.errors import PermissionDenied
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
-from angee.base.permissions import RecordAccessSubjectRefused
-from angee.errors import DomainError
+from angee.base.exceptions import DomainError, RecordAccessSubjectRefused
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow, ownership_tables  # noqa: F401
 from tests.core_seam_models import SubjectGuardedRow, subject_tables  # noqa: F401

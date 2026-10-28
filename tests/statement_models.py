@@ -2,9 +2,7 @@
 
 from django.db import models
 
-from angee.base.models import (
-    AngeeDataModel,
-)
+from angee.base.models.base import AngeeDataModel
 from angee.money.fields import MoneyField
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.statements import (

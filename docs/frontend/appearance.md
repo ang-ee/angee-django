@@ -275,7 +275,7 @@ configurable variants.
 
 ## Build outputs and migration
 
-`angee build` discovers `./themes` only for composed addon packages and writes
+The Hatch runtime build discovers `./themes` only for composed addon packages and writes
 `runtime/web/themes.css` plus `runtime/web/themes.catalog.json`. The project CSS
 entry imports the generated stylesheet; Vite resolves theme-relative images and
 fonts through its normal asset pipeline. Browser composition also checks that
@@ -283,7 +283,7 @@ each addon contribution references its canonical discovered definition.
 
 Projects created before this feature need a template update. Re-render the
 project template, review the explicit `/src/index.css` head link and virtual
-`virtual:angee-appearance` wiring, then run the normal Angee build and production
+`virtual:angee-appearance` wiring, then run the runtime build and production
 web build. Import `ColorSchemePreference` and `useColorSchemePreference` and
 target `data-color-scheme`.
 

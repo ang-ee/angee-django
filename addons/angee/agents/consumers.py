@@ -19,7 +19,7 @@ from rebac import evaluator_scope
 from rebac.graphql.strawberry import RebacChannelsConsumerMixin
 
 from angee.agents.acp_server import SessionAgent, V1SessionAgent, V2SessionAgent
-from angee.base.identity import instance_from_public_id
+from angee.base.models.identity import instance_from_public_id
 from angee.iam.permissions import is_authenticated
 
 logger = logging.getLogger(__name__)

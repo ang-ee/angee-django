@@ -14,8 +14,8 @@ from django.test import TransactionTestCase, override_settings
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
-from angee.base.implementations import impl_choices_enum
-from angee.base.models import AngeeQuerySet
+from angee.base.fields.implementation import impl_choices_enum
+from angee.base.querysets import AngeeQuerySet
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import GraphQLSchemas
 from angee.jobs.enqueue import celery_app

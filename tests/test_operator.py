@@ -321,7 +321,7 @@ def test_file_tools_call_the_files_api_and_carry_the_etag(monkeypatch: pytest.Mo
 # --- endpoint resolution ------------------------------------------------------
 #
 # The daemon resolves from Django settings only. Dev stack env and project YAML
-# are normalized by ``angee.settings`` before apps read configuration.
+# are normalized by ``the generated settings module`` before apps read configuration.
 
 
 def test_endpoint_defaults_to_same_origin_proxy() -> None:

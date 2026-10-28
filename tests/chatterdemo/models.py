@@ -23,14 +23,10 @@ from __future__ import annotations
 from django.db import models
 
 from angee.base.fields.state import StateField
-from angee.base.models import (
-    AngeeModel,
-    AuditMixin,
-    SqidMixin,
-    StateTransitions,
-    save_state,
-    transition,
-)
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeModel
+from angee.base.models.identity import SqidMixin
+from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.messaging.models import ThreadedModelMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 

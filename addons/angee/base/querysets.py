@@ -2,25 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Sequence
 from itertools import batched
 from typing import Any, Self, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet, ValidationError
 from django.db import connections, models
 from django.db.models.functions import Coalesce
-from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, to_subject_ref
-from rebac.backends import backend
+from rebac import current_actor
 from rebac.managers import RebacQuerySet, TrackedQuerySet
-from rebac.resources import model_resource_type
-from rebac.schema import Definition
-from rebac.schema.introspection import relation_dependencies
 from rebac.watch import KEY_CHUNK
 from rebac.watch import by_key as native_by_key
 
-from angee.base.identity import instance_from_public_id
+from angee.base.models.identity import instance_from_public_id
 from angee.base.pagination import KeysetOrder, KeysetPage, keyset_signer
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -56,102 +50,6 @@ class ClosedUpdateQuerySet(models.QuerySet[_ModelT]):
         """Reject every batched edit."""
 
         raise self.immutable_error("bulk_update")
-
-
-class SystemQuerysetMixin(models.Model):
-    """Elevated unscoped reads for models that own internal persistence work."""
-
-    class Meta:
-        abstract = True
-
-    @classmethod
-    @contextmanager
-    def initialize_rows(cls, rows: Sequence[models.Model], *, using: str) -> Iterator[bool]:
-        """Bracket final derived creation values; observers may defer intermediate writes.
-
-        The terminal lifecycle has no observer. A cooperative capability yields
-        true while it owns one final observation after successful initialization.
-        """
-
-        del rows, using
-        yield False
-
-    @classmethod
-    def retained_reference_exists(cls, record: models.Model, lookup: Mapping[str, Any]) -> bool:
-        """Whether an owned retained representation still names this target."""
-
-        del record, lookup
-        return False
-
-    def lock_subject(self, members: Mapping[str, Any] | None = None) -> Self:
-        """Lock and reload this subject through its row-bound base manager."""
-
-        del members
-        model = type(self)
-        manager = model._base_manager.db_manager(hints={"instance": self})
-        return manager.all().select_for_update(of=row_lock_paths(model)).get(pk=self.pk)
-
-    @classmethod
-    def system_queryset(
-        cls,
-        *,
-        lock: tuple[str, ...] | None = None,
-    ) -> models.QuerySet[Self]:
-        """Return an elevated unscoped queryset with the shared lock contract."""
-
-        model = cls
-        queryset = model._default_manager.get_queryset()
-        if isinstance(queryset, RebacQuerySet):
-            queryset = queryset.system_context(reason=f"{model._meta.label_lower}.system_queryset")
-        if lock is None:
-            return queryset
-        if isinstance(queryset, _AngeeQuerySetMixin):
-            return queryset.lock_if_supported(of=lock)
-        return queryset.select_for_update(of=row_lock_paths(model, lock))
-
-
-@dataclass(frozen=True, slots=True)
-class CandidateRelationships:
-    """The relations a row would carry for one action, as rebac's candidate preflight reads them.
-
-    This adapter composes rebac's public field-backed candidate projection.
-    A caller asks about a row that is not, or not yet, the stored one (an
-    unsaved task's assignee, a retained history snapshot) and checks a subject
-    against the relations its fields and ledger would give it.
-    """
-
-    resource_type: str
-    definition: Definition
-    required: frozenset[str]
-    relationships: dict[str, tuple[SubjectRef, ...] | None]
-
-    def allows(self, subject: Any, action: str) -> bool:
-        """Whether ``subject`` may perform ``action`` on the candidate these relations describe."""
-
-        return check_new(
-            subject=to_subject_ref(subject), action=action, resource_type=self.resource_type,
-            relationships=self.relationships,
-        ).allowed
-
-
-def candidate_relationships(instance: models.Model, action: str) -> CandidateRelationships | None:
-    """Read the relations ``instance`` would carry for ``action``; ``None`` when its type has no definition."""
-
-    resource_type = model_resource_type(type(instance))
-    if resource_type is None:
-        return None
-    schema = backend().schema()
-    definition = schema.get_definition(resource_type)
-    if definition is None:
-        return None
-    required = frozenset(relation_dependencies(schema, resource_type, action))
-    relationships = proposed_forward_relationships(
-        instance,
-        definition,
-        required_relations=required,
-        using=instance._state.db,
-    )
-    return CandidateRelationships(resource_type, definition, required, relationships)
 
 
 def query_batch_size(queryset: models.QuerySet[Any], *, width: int = 1) -> int:
@@ -259,12 +157,7 @@ class MergeableQuerySet(CanonicalQuerySet[_ModelT]):
 
 
 class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
-    """Shared lookup, locking and history capture, preserving each manager's policy.
-
-    Bulk updates dispatch through Django's native update batches. Each executed
-    batch opens its own write group, so repeated rows across batches retain every
-    stored state. SQL execution always delegates to the downstream REBAC owner.
-    """
+    """Shared native lookup and locking, preserving each manager's policy."""
 
     model: type[_ModelT]
 

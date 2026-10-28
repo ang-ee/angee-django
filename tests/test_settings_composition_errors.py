@@ -7,12 +7,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+from angee.conf import project_settings_source
 from angee.project import PROJECT_DIR_ENV, PROJECT_SETTINGS_ENV
 
 
 def _project(tmp_path: Path) -> None:
     """Declare one valid root before an addon with a missing dependency."""
 
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "__init__.py").write_text("", encoding="utf-8")
+    (runtime / "settings.yaml").write_text("{}\n", encoding="utf-8")
+    (runtime / "settings.py").write_text(project_settings_source(authored_module="settings"), encoding="utf-8")
     addon = tmp_path / "addons" / "missing_dependency"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("", encoding="utf-8")
@@ -31,13 +37,13 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     """Inherit the runner's environment while selecting this isolated project."""
 
     environment = dict(os.environ)
-    python_path = [str(Path(__file__).resolve().parents[1] / "addons")]
+    python_path = [str(tmp_path), str(Path(__file__).resolve().parents[1] / "addons")]
     if environment.get("PYTHONPATH"):
         python_path.append(environment["PYTHONPATH"])
     environment.update({
         PROJECT_DIR_ENV: str(tmp_path),
         PROJECT_SETTINGS_ENV: "settings",
-        "DJANGO_SETTINGS_MODULE": "angee.settings",
+        "DJANGO_SETTINGS_MODULE": "runtime.settings",
         "PYTHONPATH": os.pathsep.join(python_path),
     })
     return environment

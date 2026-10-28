@@ -9,8 +9,6 @@ _Settings = TypedDict(
     "_Settings",
     {
         "COMPOSE_INTEGRATIONS:append": list[str],
-        "ANGEE_IMPL_REGISTRIES": list[str],
-        "ANGEE_HOOKS": list[str],
         "ANGEE_MERGE_GUARDS": list[str],
         "REBAC_BACKEND": str,
         "REBAC_LOCAL_BACKEND_STORAGE": str,
@@ -24,8 +22,6 @@ _Settings = TypedDict(
 
 SETTINGS: _Settings = {
     "COMPOSE_INTEGRATIONS:append": ["angee.base.build.PermissionIntegration"],
-    "ANGEE_IMPL_REGISTRIES": [],
-    "ANGEE_HOOKS": ["ANGEE_MERGE_GUARDS"],
     # Additive guards refuse removal before one record is folded into another.
     "ANGEE_MERGE_GUARDS": [],
     "REBAC_BACKEND": "local",

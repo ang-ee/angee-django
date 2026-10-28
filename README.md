@@ -60,7 +60,7 @@ are.*
    │                                                              │
    │    addons  (source models · GraphQL · REBAC · React views)   │
    │        │                                                     │
-   │        │  manage.py angee build                              │
+   │        │  uv build · native Hatch composition                │
    │        ▼                                                     │
    │    runtime/   →   Django + GraphQL + React application       │
    └──────────────────────────────────────────────────────────────┘

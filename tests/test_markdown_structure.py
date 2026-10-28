@@ -208,8 +208,8 @@ def test_spliced_section_rejects_unknown_op() -> None:
 def test_spliced_unique_replaces_single_occurrence() -> None:
     """One match is replaced exactly, the rest left alone."""
 
-    result = MarkdownPage.spliced_unique(SAMPLE, "Run `angee dev`.", "Run `angee build`.")
-    assert "Run `angee build`." in result
+    result = MarkdownPage.spliced_unique(SAMPLE, "Run `angee dev`.", "Run `uv build`.")
+    assert "Run `uv build`." in result
     assert "Run `angee dev`." not in result
 
 

@@ -242,7 +242,6 @@ def test_sample_preview_is_a_paged_query_with_no_mutation_or_dead_output(
         saved = Channel.objects.get(sqid=channel["id"])
         stream = current_stream(saved, "messages", "INBOX")
         assert stream.cursor == {"uidvalidity": 100, "last_uid": 1}
-        assert saved.cursor == {}
 
 
 def test_sample_preview_denies_non_admin_before_mailbox_probe(

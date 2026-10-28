@@ -13,9 +13,10 @@ from django.db import models
 from django.test.utils import isolate_apps
 from mypy import api as mypy_api  # noqa: F401 -- initialize the compiled plugin import graph.
 from mypy.nodes import GDEF, Block, ClassDef, SymbolTable, SymbolTableNode, TypeInfo
-from rebac.mixins import RebacModelBase
+from rebac.managers import TrackedManager
+from rebac.mixins import INJECTED_BASE_MANAGER, RebacModelBase
 
-from angee.compose.typing import CompositionContext
+from angee.base.typing import BaseCompositionContext
 
 
 @pytest.mark.parametrize("name", ("_default_manager", "_base_manager"))
@@ -63,9 +64,10 @@ def test_required_parent_manager_preserves_explicit_native_selection(
                 base_manager_name = "alternate"
                 default_manager_name = "alternate"
 
-        assert Fallback._meta.base_manager.auto_created
+        assert isinstance(Fallback._meta.base_manager, TrackedManager)
+        assert Fallback._meta.base_manager.name == INJECTED_BASE_MANAGER
         assert Fallback._meta.default_manager.auto_created
-        context = object.__new__(CompositionContext)
+        context = object.__new__(BaseCompositionContext)
         context.required_parents = {Fallback: Parent, Explicit: Parent, ExplicitMeta: Parent}
         context.composed = {f"{Parent.__module__}.{Parent.__qualname__}": Parent}
 
@@ -95,11 +97,10 @@ def test_checked_parent_keeps_manager_methods_and_model_rows(tmp_path: Path) -> 
     app = tmp_path / "manager_contract"
     app.mkdir()
     (app / "__init__.py").write_text("")
-    (app / "models.py").write_text("""\
-from typing import ClassVar
+    (app / "models.py").write_text("""from typing import ClassVar
 from django.db import models
-from rebac.mixins import RebacModelBase
-from angee.base.models import AngeeModel
+from rebac.mixins import INJECTED_BASE_MANAGER, RebacModelBase
+from angee.base.models.base import AngeeModel
 from angee.base.managers import AngeeUnscopedManager
 class ParentManager[T: models.Model](AngeeUnscopedManager[T]):
     def parent_method(self) -> str:
@@ -135,7 +136,7 @@ class Explicit(Capability):
         "from pathlib import Path\n"
         "SECRET_KEY = 'manager-typing'\n"
         "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', "
-        "'angee', 'angee.base', 'manager_contract', 'angee.compose']\n"
+        "'angee', 'angee.base', 'manager_contract', 'angee.compose.apps.BuildComposeConfig']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
         f"COMPOSE_RUNTIME_DIR = Path({str(tmp_path / 'manager_runtime')!r})\n"

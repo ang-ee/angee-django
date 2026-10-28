@@ -13,9 +13,11 @@ class WorkflowsConfig(AppConfig):
     def ready(self) -> None:
         """Connect native sources alongside decision and deletion hooks."""
         from angee.workflows.signals import connect
+        from angee.workflows.steps import check_step_registry
         from angee.workflows.subjects import check_run_subject_models
         from angee.workflows.triggers import TriggerSource, check_record_changed_models
 
+        checks.register(check_step_registry, checks.Tags.models)
         checks.register(check_record_changed_models, checks.Tags.models)
         checks.register(check_run_subject_models, checks.Tags.models)
         connect()

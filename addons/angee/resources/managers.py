@@ -15,10 +15,13 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
+from angee.base.fields.identity import SqidField
 from angee.base.fields.text import ModelLabelField
-from angee.base.identity import SqidPublicIdentity, public_id_of
 from angee.base.implementations import resolve_impl_class
-from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet, SqidMixin
+from angee.base.managers import AngeeManager
+from angee.base.models.base import AngeeModel
+from angee.base.models.identity import SqidMixin, public_id_of
+from angee.base.querysets import AngeeQuerySet
 from angee.base.schemas.forms import relation_positions
 from angee.resources.entries import (
     GRANT_KIND,
@@ -48,7 +51,7 @@ if TYPE_CHECKING:
     from angee.resources.models import Resource
 
 
-class ResourceQuerySet[LedgerT: Resource](AngeeUnscopedQuerySet[LedgerT]):
+class ResourceQuerySet[LedgerT: Resource](AngeeQuerySet[LedgerT]):
     """Reusable filtered reads over resource-ledger rows."""
 
     def counts_by_addon(self) -> dict[str, int]:
@@ -75,9 +78,9 @@ class ResourceQuerySet[LedgerT: Resource](AngeeUnscopedQuerySet[LedgerT]):
         """Return the primary keys of ``model_label`` rows ``source_addons``' resource files seeded.
 
         The model's code may already be gone, so a ledger's public id decodes without
-        it: a sqid id through :class:`SqidPublicIdentity` under its own prefix, kept
-        only when it re-encodes to itself; any other id is the row's primary key as
-        text (:func:`public_id_of`). Callers convert keys to the model's key type.
+        it: the unbound SqidField codec admits canonical ids under their own
+        prefix; any other id remains the row's primary key as text
+        (:func:`public_id_of`). Callers convert keys to the model's key type.
         """
 
         sqid = SqidMixin._meta.get_field("sqid")
@@ -90,9 +93,11 @@ class ResourceQuerySet[LedgerT: Resource](AngeeUnscopedQuerySet[LedgerT]):
         for public_id in public_ids:
             prefix, separator, _encoded = public_id.partition("_")
             if separator:
-                identity = SqidPublicIdentity(prefix=f"{prefix}_", min_length=sqid.min_length, alphabet=sqid.alphabet)
-                value = identity.public_id_to_pk(public_id)
-                if value is not None and identity.public_id_from_pk(value) == public_id:
+                identity = SqidField(
+                    real_field_name="id", prefix=f"{prefix}_", min_length=sqid.min_length, alphabet=sqid.alphabet,
+                )
+                value = identity.public_id_to_value(public_id)
+                if value is not None:
                     keys.add(value)
                     continue
             keys.add(public_id)
@@ -126,7 +131,7 @@ def seeded_record_merge_guard(record: models.Model) -> str | None:
     return f"{record} is loaded from {ledger.source_addon} resources, which would recreate it; keep it instead."
 
 
-_ResourceManagerBase = AngeeUnscopedManager.from_queryset(ResourceQuerySet)
+_ResourceManagerBase = AngeeManager.from_queryset(ResourceQuerySet)
 
 
 class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):

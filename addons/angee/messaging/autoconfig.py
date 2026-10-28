@@ -12,10 +12,8 @@ _Settings = TypedDict(
     "_Settings",
     {
         "CELERY_BEAT_SCHEDULE:append": dict[str, dict[str, object]],
-        "ANGEE_HOOKS:append": list[str],
         "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS:append": list[str],
         "ANGEE_PARTIES_SIGNING_PROVIDERS:append": list[str],
-        "ANGEE_IMPL_REGISTRIES:append": list[str],
         "ANGEE_TIMELINE_KINDS:append": list[str],
         "ANGEE_CHANNEL_BACKEND_CLASSES": dict[str, str],
         "ANGEE_WEBFORM_MAX_BODY_BYTES": int,
@@ -32,10 +30,8 @@ SETTINGS: _Settings = {
     "CELERY_BEAT_SCHEDULE:append": {
         RELEASE_MESSAGES_TASK: {"task": RELEASE_MESSAGES_TASK, "schedule": 60.0},
     },
-    "ANGEE_HOOKS:append": ["ANGEE_WEBFORM_TOKEN_HOOK"],
     "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS:append": ["angee.messaging.evidence.shared_senders"],
     "ANGEE_PARTIES_SIGNING_PROVIDERS:append": ["angee.messaging.evidence.signings"],
-    "ANGEE_IMPL_REGISTRIES:append": ["angee.messaging.backends.ChannelBackend"],
     "ANGEE_TIMELINE_KINDS:append": ["angee.messaging.timeline.timeline_kinds"],
     # Channel backends a ``messaging.Channel`` row may select. ``manual`` is the
     # neutral null-object (no source; ``ImplClassField`` requires a non-empty

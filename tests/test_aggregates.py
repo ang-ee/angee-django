@@ -19,7 +19,7 @@ from strawberry import auto
 from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
 from strawberry_django_hasura import hasura_config
 
-from angee.base.models import AngeeDataModel
+from angee.base.models.base import AngeeDataModel
 from angee.graphql.data import metadata as metadata_module
 from angee.graphql.data.contracts import (
     DataAggregateMeasureMetadata,

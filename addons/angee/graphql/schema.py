@@ -32,9 +32,9 @@ from strawberry.types.union import StrawberryUnion
 from strawberry_django_hasura import hasura_config
 
 from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
-from angee.base.models import StaleRevisionError
+from angee.base.exceptions import DomainError, classify_error, validation_error
+from angee.base.models.locks import StaleRevisionError
 from angee.base.permissions import require_rebac_queryset
-from angee.errors import DomainError, classify_error, validation_error
 from angee.graphql.data.contracts import DataResourceMetadata
 from angee.graphql.data.metadata import (
     data_resource_contributions,

@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 from django.apps import AppConfig
 from django.core import checks
 from sentry_sdk.integrations.logging import ignore_logger
+
+from angee.hooks import check_hooks
+
+check_settings = partial(check_hooks, ("ANGEE_GRAPHQL_RESOURCE_FILTERS",))
 
 
 class GraphQLConfig(AppConfig):
@@ -28,6 +34,8 @@ class GraphQLConfig(AppConfig):
         from angee.graphql import field_types  # noqa: F401
         from angee.graphql.checks import check_graphql_schemas
         from angee.graphql.schema import GraphQLSchemas
+
+        checks.register(check_settings, checks.Tags.models)
 
         checks.register(check_graphql_schemas)
         GraphQLSchemas.from_discovery().connect_change_publishers()

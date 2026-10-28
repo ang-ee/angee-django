@@ -8,9 +8,9 @@ from django.db import transaction
 from pydantic import BaseModel, ConfigDict, Field
 from rebac import actor_context
 
-from angee.base.identity import public_id_of
-from angee.base.models import row_lock_paths
+from angee.base.models.identity import public_id_of
 from angee.base.permissions import require_rebac_queryset
+from angee.base.querysets import row_lock_paths
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRequest
 from angee.workflows.states import DONE_OUTCOME
 from angee.workflows.steps import Settlement, Step, StepMode

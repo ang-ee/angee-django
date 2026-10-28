@@ -26,7 +26,7 @@ import angee.platform.discovery as discovery_module
 import tests.test_platform_install  # noqa: F401 -- register the fixture model graph before database setup
 from angee.addons import addon_manifest, resolve_manifest_roots
 from angee.compose.appgraph import AppGraph
-from angee.management.dependencies import AddonDependencyGroup
+from angee.conf import ManifestDeclarations
 from angee.platform import models as platform_models
 from angee.platform.discovery import available_addons, resolve_app_config
 from angee.resources.models import Resource as AbstractResource
@@ -80,14 +80,13 @@ def test_manifest_binding_reuses_native_parse_and_refreshes_a_new_graph(tmp_path
         return manifest
 
     monkeypatch.setattr(addon_module, "parse_manifest", parse)
-    assert AppGraph().resolve((config,)) == (config,)
+    assert AppGraph(ManifestDeclarations()).resolve((config,)) == (config,)
     manifest = addon_manifest(config)
     assert isinstance(manifest, AddonManifest)
-    assert AddonDependencyGroup.from_app_configs((config,), project_dir=None).manifests == (manifest,)
     assert len(parsed) == 1
     assert manifest is parsed[0]
     (tmp_path / "addon.toml").write_text('[addon]\nname = "example.demo"\ndescription = "updated"\n')
-    AppGraph().resolve((config,))
+    AppGraph(ManifestDeclarations()).resolve((config,))
     assert addon_manifest(config).description == "updated"
     assert len(parsed) == 2
     assert addon_manifest(config) is parsed[1]
@@ -116,7 +115,7 @@ def test_new_graph_observes_previously_missing_manifest(tmp_path) -> None:
     marker.unlink()
     assert addon_manifest(config) is None
     marker.write_text('[addon]\nname = "example.demo"\n')
-    AppGraph().resolve((config,))
+    AppGraph(ManifestDeclarations()).resolve((config,))
     assert addon_manifest(config).name == "example.demo"
 
 
@@ -625,7 +624,7 @@ def test_loaded_root_pending_and_forced_admission_follow_the_composed_graph(
         addon = apps.get_model("platform", "Addon")
         root = make_addon(name="example.root", path=tmp_path / "root", depends_on=("example.dep",))
         dependency = make_addon(name="example.dep", path=tmp_path / "dep")
-        configs = AppGraph().resolve((root, dependency), declared_roots=(root,))
+        configs = AppGraph(ManifestDeclarations()).resolve((root, dependency), declared_roots=(root,))
         for config in configs:
             config.apps = apps
             config.models = {}
@@ -661,6 +660,6 @@ def test_failed_refresh_cannot_leave_a_previous_manifest_available(tmp_path) -> 
     assert addon_manifest(config).name == "example.demo"
     (tmp_path / "addon.toml").write_text("invalid toml", encoding="utf-8")
     with pytest.raises(ImproperlyConfigured):
-        AppGraph().resolve((config,))
+        AppGraph(ManifestDeclarations()).resolve((config,))
     with pytest.raises(ImproperlyConfigured):
         addon_manifest(config)

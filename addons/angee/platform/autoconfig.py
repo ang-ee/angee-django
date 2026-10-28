@@ -7,14 +7,12 @@ from typing import TypedDict
 _Settings = TypedDict(
     "_Settings",
     {
-        "ANGEE_IMPL_REGISTRIES:append": list[str],
         "ANGEE_ADDON_INSTALLER_BACKEND": str,
         "ANGEE_ADDON_INSTALLER_BACKEND_CLASSES": dict[str, str],
     },
 )
 
 SETTINGS: _Settings = {
-    "ANGEE_IMPL_REGISTRIES:append": ["angee.platform.installer.AddonInstallerBackend"],
     # The AddonInstaller backend selection + registry (the row-less ImplClassField
     # shape). ``local`` (the dev default) edits the local settings.yaml. The
     # ``operator`` entry is contributed by the

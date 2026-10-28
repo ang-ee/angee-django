@@ -35,14 +35,12 @@ from rebac.resources import model_resource_type
 from rebac.schema.walker import subject_allowed_by_relation
 
 from angee.base.fields.state import StateField
-from angee.base.models import (
-    AngeeDataModel,
-    AngeeUnscopedManager,
-    MergePolicy,
-    RecordRefMixin,
-    SqidMixin,
-    role_anchor,
-)
+from angee.base.managers import AngeeUnscopedManager
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.identity import SqidMixin
+from angee.base.models.merge_references import MergePolicy
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.roles import role_anchor
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.signals import bulk_updated
 from angee.provenance.context import changeset, current_changeset

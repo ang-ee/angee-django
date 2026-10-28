@@ -11,16 +11,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
 
-def declared_hooks() -> tuple[str, ...]:
-    """Return hook setting names declared by installed addons."""
-
-    declared = getattr(settings, "ANGEE_HOOKS", ())
-    if not isinstance(declared, list | tuple) or not all(isinstance(name, str) for name in declared):
-        raise ImproperlyConfigured("settings.ANGEE_HOOKS must be a list of hook setting names.")
-    return tuple(declared)
-
-
-def _hook_paths(setting: str, *, sorted_unique: bool = False) -> tuple[str, ...]:
+def _hook_paths(setting: str) -> tuple[str, ...]:
     """Read one single or ordered multi-hook declaration without importing it."""
 
     configured = getattr(settings, setting, "")
@@ -32,7 +23,7 @@ def _hook_paths(setting: str, *, sorted_unique: bool = False) -> tuple[str, ...]
         raise ImproperlyConfigured(f"settings.{setting} must be a dotted path or a list of dotted paths.")
     if not all(paths):
         raise ImproperlyConfigured(f"settings.{setting} contains an empty hook path.")
-    return tuple(sorted(set(paths))) if sorted_unique else paths
+    return paths
 
 
 def _resolve_hook_path(setting: str, path: str) -> Callable[..., Any]:
@@ -47,10 +38,10 @@ def _resolve_hook_path(setting: str, path: str) -> Callable[..., Any]:
     return hook
 
 
-def resolve_hooks(setting: str, *, sorted_unique: bool = False) -> tuple[Callable[..., Any], ...]:
-    """Resolve an ordered hook list; owners may request sorted unique paths."""
+def resolve_hooks(setting: str) -> tuple[Callable[..., Any], ...]:
+    """Resolve one declared hook list in its configured order."""
 
-    return tuple(_resolve_hook_path(setting, path) for path in _hook_paths(setting, sorted_unique=sorted_unique))
+    return tuple(_resolve_hook_path(setting, path) for path in _hook_paths(setting))
 
 
 def resolve_hook(setting: str) -> Callable[..., Any] | None:
@@ -62,17 +53,29 @@ def resolve_hook(setting: str) -> Callable[..., Any] | None:
     return _resolve_hook_path(setting, paths[0]) if paths else None
 
 
-def check_hooks(
+def check_hook(
+    name: str,
     app_configs: Sequence[AppConfig] | None = None,
     **kwargs: object,
 ) -> list[checks.CheckMessage]:
-    """Validate every callable hook declared by installed addons."""
+    """Validate the same optional-single contract used by the actual caller."""
 
     del app_configs, kwargs
     try:
-        names = declared_hooks()
+        resolve_hook(name)
     except ImproperlyConfigured as error:
         return [checks.Error(str(error), id="angee.E033")]
+    return []
+
+
+def check_hooks(
+    names: Sequence[str],
+    app_configs: Sequence[AppConfig] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Validate the callable settings explicitly owned by one installed capability."""
+
+    del app_configs, kwargs
     errors: list[checks.CheckMessage] = []
     for name in names:
         try:
