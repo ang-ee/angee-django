@@ -3,17 +3,30 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 from django.core.exceptions import ValidationError
 from django.db import models, router
 
 from angee.provenance.context import _ChangesetScope, changeset, changeset_model, current_changeset
 
+SERVER_COMMANDS = frozenset({"celery", "runserver", "serve", "test"})
+"""Commands whose units of work own their boundaries instead of the process.
 
-def management_context(command: str) -> _ChangesetScope:
-    """Attribute one non-server management command through the host's native hook."""
+``serve`` and ``runserver`` run the composed ASGI application: the request
+middleware, the WebSocket scope middleware and Celery tasks attribute each unit of
+work, and a process-wide changeset would merge every request of a one-worker
+server into one row. ``celery`` lets each task own its boundary; ``test`` lets each
+test own its boundary. Everything else, interactive shells included, is one
+logical write and keeps the command boundary.
+"""
 
+
+def management_context(command: str) -> _ChangesetScope | nullcontext[None]:
+    """Attribute command writes while servers, workers and tests own their boundaries."""
+
+    if command in SERVER_COMMANDS:
+        return nullcontext()
     return changeset(fresh=True, activity="system", change_reason=f"manage.{command}", process=True)
 
 

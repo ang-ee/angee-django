@@ -7,7 +7,7 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, Field
 
-from angee.base.identity import public_id_of
+from angee.base.models.identity import public_id_of
 from angee.decisions.contracts import (
     DecisionContext,
     DecisionFact,

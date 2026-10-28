@@ -58,7 +58,6 @@ from angee.agents.testing.models import InferenceModel, InferenceProvider, Skill
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from angee.agents_integrate_ollama.backend import OllamaInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
-from angee.base.fields import ImplClassField
 from angee.integrate.credentials import CredentialKind
 from tests.conftest import make_integration
 from tests.test_integrate_vcs import (
@@ -105,7 +104,7 @@ SKILL_BLOBS = {
 def test_agent_runtime_registry_matches_implementation_keys() -> None:
     """Every selectable runtime declares the same stable key as its registry entry."""
 
-    assert ImplClassField.for_model(AbstractAgent, "runtime_class").check() == []
+    assert AbstractAgent._meta.get_field("runtime_class").check() == []
 
 
 # --- parse_skill_meta (pure) --------------------------------------------------

@@ -3,17 +3,21 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable, Collection, Iterable, Mapping
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 
-from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.core import checks
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from rebac import system_context
 
 from angee.base.fields.implementation import ImplClassField
-from angee.base.identity import public_id_of
-from angee.base.implementations import ImplBase
+from angee.base.implementations import ImplBase, resolve_all_impl_classes
+from angee.base.models.identity import public_id_of
 from angee.base.permissions import require_rebac_queryset
+
+if TYPE_CHECKING:
+    from django.db.models.fetch_modes import FetchMode
 
 
 class ImplDefaultsMixin(models.Model):
@@ -26,15 +30,61 @@ class ImplDefaultsMixin(models.Model):
     """
 
     class Meta:
-        """Abstract: contributes the create-time default seeding only."""
+        """Own row defaults, typed config and persisted selector invariants."""
 
         abstract = True
 
     @classmethod
-    def from_db(cls, db: str | None, field_names: Collection[str], values: Collection[Any]) -> Self:
+    def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Require one concrete JSON config owner for typed row implementations.
+
+        Plain field defaults and rowless implementations do not declare a row
+        config contract. Native effective fields account for inherited and
+        overridden selectors on the final composed model.
+        """
+
+        errors = super().check(**kwargs)
+        if cls._meta.abstract:
+            return errors
+        selectors: list[ImplClassField[Any]] = []
+        for field in cls._meta.get_fields():
+            if not isinstance(field, ImplClassField) or field.base_class is None:
+                continue
+            try:
+                implementations = resolve_all_impl_classes(field.base_class)
+            except ImportError, ImproperlyConfigured:
+                # The installed registry check owns invalid declarations; this
+                # model check owns only the row/config relationship.
+                continue
+            if any(
+                issubclass(impl, ImplBase) and impl.config_model is not None
+                for impl in implementations
+            ):
+                selectors.append(field)
+        if not selectors:
+            return errors
+        try:
+            cls._config_field()
+        except FieldDoesNotExist as error:
+            errors.append(checks.Error(str(error), obj=cls, id="angee.E046"))
+        if len(selectors) > 1:
+            errors.append(checks.Error(
+                f"{cls._meta.label} has multiple typed config selectors: "
+                f"{', '.join(field.name for field in selectors)}.",
+                hint="One implementation selector owns the model's config JSON column.",
+                obj=cls,
+                id="angee.E047",
+            ))
+        return errors
+
+    @classmethod
+    def from_db(
+        cls, db: str | None, field_names: Collection[str], values: Collection[Any],
+        *, fetch_mode: FetchMode | None = None,
+    ) -> Self:
         """Remember loaded impl keys so every persisted write ingress enforces immutability."""
 
-        instance = super().from_db(db, field_names, values)
+        instance = super().from_db(db, field_names, values, fetch_mode=fetch_mode)
         loaded = dict(zip(field_names, values, strict=True))
         instance._loaded_impl_keys = {
             field.attname: loaded[field.attname]
@@ -144,13 +194,14 @@ class ImplDefaultsMixin(models.Model):
             if getattr(self, field.attname) != loaded[field.attname]:
                 raise ValidationError({field.name: "Implementation selection is create-only."})
 
-    def _config_field(self) -> models.Field[Any, Any]:
-        """Resolve the concrete config column supplied by the composed model."""
+    @classmethod
+    def _config_field(cls) -> models.JSONField:
+        """Resolve the single conventional JSON config column on this model."""
 
-        model: type[models.Model] = type(self)
+        model: type[models.Model] = cls
         field = model._meta.get_field("config")
-        if not isinstance(field, models.Field):
-            raise FieldDoesNotExist(f"{model._meta.label}.config must be a concrete model field.")
+        if not isinstance(field, models.JSONField) or not field.concrete:
+            raise FieldDoesNotExist(f"{cls._meta.label}.config must be a concrete JSONField.")
         return field
 
     def apply_config_patch(self, patch: object) -> set[str]:

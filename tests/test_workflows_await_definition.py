@@ -6,7 +6,7 @@ import pytest
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict
 
-from angee.base.identity import public_id_of
+from angee.base.models.identity import public_id_of
 from angee.base.schemas.references import schemas_match
 from angee.base.validators import validator
 from angee.workflows.awaits import AwaitRun, AwaitRunConfig, AwaitRunInput, _AwaitedRun

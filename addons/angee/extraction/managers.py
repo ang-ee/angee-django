@@ -12,9 +12,11 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import generic_target, system_context, to_subject_ref
 
-from angee.base.identity import public_id_of
-from angee.base.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet
+from angee.base.managers import AngeeManager
+from angee.base.models.append_only import AppendOnlyQuerySet
+from angee.base.models.identity import public_id_of
 from angee.base.permissions import actor_user_id
+from angee.base.querysets import AngeeQuerySet
 from angee.base.refs import RecordRef
 from angee.base.validators import validate
 from angee.extraction.acquisition import ExtractionConfig, PageCarrier, PartCarrier, PreparedDocument, prepare_pages

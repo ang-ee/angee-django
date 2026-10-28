@@ -5,7 +5,7 @@ from pathlib import Path
 
 from rebac.errors import MissingActorError
 
-from angee.errors import DomainError
+from angee.base.exceptions import DomainError
 from angee.provenance.context import ChangesetRequired as ContextRequired
 
 

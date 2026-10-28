@@ -10,7 +10,7 @@ from django.db.models.expressions import CombinedExpression
 from django.db.models.signals import post_save, pre_save
 from django.test.utils import CaptureQueriesContext
 
-from angee.base.models import StaleRevisionError, require_revision
+from angee.base.models.locks import StaleRevisionError, require_revision
 from tests.core_persistence import RenamedRevisionRow, RevisionChild, RevisionRow
 
 pytestmark = pytest.mark.django_db

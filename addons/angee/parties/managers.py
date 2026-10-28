@@ -38,14 +38,11 @@ from rebac import (
 )
 from rebac.actors import to_subject_ref
 
-from angee.base.identity import instances_from_public_ids
-from angee.base.models import (
-    ArchiveQuerySet,
-    HierarchyQuerySet,
-    MergeableQuerySet,
-    by_key,
-)
+from angee.base.models.hierarchy import HierarchyQuerySet
+from angee.base.models.identity import instances_from_public_ids
+from angee.base.models.trash import ArchiveQuerySet
 from angee.base.permissions import actor_user_id
+from angee.base.querysets import MergeableQuerySet, by_key
 from angee.hooks import resolve_hooks
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
@@ -820,6 +817,9 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         actor, unscoped = self.effective_actor(strict=True)
         visible = self.canonical().scoped_for_aggregate().values("pk")
         statements = self.model.same_as.model.statements.applied()
+        statements = (
+            statements.sudo(reason="parties.same_as_pairs") if unscoped else statements.with_actor(actor)
+        )
         pairs = (
             self.model.same_as.model._base_manager.filter(
                 left_id__in=Subquery(visible),

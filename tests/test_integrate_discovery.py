@@ -17,7 +17,7 @@ from rebac import actor_context, system_context
 from rebac.backends import backend
 from rebac.testing import install_schema
 
-from angee.base.identity import public_id_of
+from angee.base.models.identity import public_id_of
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode

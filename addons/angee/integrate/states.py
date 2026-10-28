@@ -15,7 +15,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from angee.base.identity import public_id_of
+from angee.base.models.identity import public_id_of
 
 if TYPE_CHECKING:
     from angee.integrate.mixins import SyncStateMixin

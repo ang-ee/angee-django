@@ -45,19 +45,15 @@ from rebac.resources import model_resource_type
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
-from angee.base.models import (
-    AngeeDataModel,
-    AuditMixin,
-    HierarchyMixin,
-    HierarchyQuerySet,
-    MergePolicy,
-    OwnerMixin,
-    RecordRefMixin,
-    TrashMixin,
-    TrashQuerySet,
-    row_lock_paths,
-)
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
+from angee.base.models.merge_references import MergePolicy
+from angee.base.models.ownership import OwnerMixin
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.trash import TrashMixin, TrashQuerySet
 from angee.base.permissions import actor_user_id
+from angee.base.querysets import row_lock_paths
 from angee.base.refs import RecordRef
 from angee.base.signals import send_created_batch
 from angee.knowledge.retrieval import RetrievalBackend
@@ -359,13 +355,13 @@ class Vault(OwnerMixin, TrashMixin, HistoryMixin, AngeeDataModel):
         The single public resolution seam over the vault-owned ``retrieval_class``
         registry: callers (this model's ``retrieval`` property, a semantic plugin
         forcing its own ``key``) ask the vault rather than re-deriving the field's
-        internals — so ``ImplClassField`` stays the only thing that decodes the
-        registry, and the boundary is a method, not ``_meta`` shape-probing.
+        internals. The native declared field owns value normalization and the
+        trusted registry resolver owns class loading.
         """
 
         backend_class = cast(
-            "type[RetrievalBackend]", ImplClassField.for_model(type(self), "retrieval_class").resolve_class(key)
-        )
+            ImplClassField[RetrievalBackend], type(self)._meta.get_field("retrieval_class"),
+        ).resolve_class(key)
         return backend_class(self)
 
 

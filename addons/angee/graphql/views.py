@@ -16,7 +16,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from strawberry.django.views import GraphQLView
 from strawberry.types import ExecutionResult
 
-from angee.base.identity import public_id_of
+from angee.base.models.identity import public_id_of
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.view_as import ViewAs
 from graphql import GraphQLError, get_operation_ast, parse

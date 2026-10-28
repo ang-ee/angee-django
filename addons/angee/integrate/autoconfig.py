@@ -10,7 +10,6 @@ from angee.integrate.constants import ENSURE_SESSIONS_TASK, RECONCILER_INTERVAL
 _Settings = TypedDict(
     "_Settings",
     {
-        "ANGEE_IMPL_REGISTRIES:append": list[str],
         "CELERY_BEAT_SCHEDULE:append": dict[str, dict[str, object]],
         "ANGEE_INTEGRATE_OAUTH_CLIENTS": Sequence[Mapping[str, object]] | Mapping[str, Mapping[str, object]],
         "ANGEE_INTEGRATE_OAUTH_STATE_TTL": int,
@@ -20,7 +19,6 @@ _Settings = TypedDict(
 )
 
 SETTINGS: _Settings = {
-    "ANGEE_IMPL_REGISTRIES:append": ["angee.integrate.oauth.providers.OAuthProviderType"],
     "CELERY_BEAT_SCHEDULE:append": {
         "integrate.sync_due_bridges": {
             "task": "integrate.sync_due_bridges",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -34,7 +35,8 @@ def inspect(container: Model, record: DeliveryRecord, stages: QuerySet[DeliveryS
     command = [
         sys.executable, "-m", "mypy", "--config-file", str(root / "tests/typing_app/mypy.ini"), str(source),
     ]
-    positive = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "addons")))}
+    positive = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, check=False)
     assert positive.returncode == 0, positive.stdout + positive.stderr
 
     invalid = """\
@@ -43,7 +45,7 @@ def inspect(container: Model, record: DeliveryRecord, stages: QuerySet[DeliveryS
     incompatible: str = DeliveryStage.resolve_default(container)
 """
     source.write_text(declarations + invalid)
-    negative = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
+    negative = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, check=False)
     assert negative.returncode == 1, negative.stdout + negative.stderr
     for line in range(len(declarations.splitlines()) + 1, len((declarations + invalid).splitlines()) + 1):
         assert f"stage_types.py:{line}: error:" in negative.stdout, negative.stdout

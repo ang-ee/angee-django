@@ -36,7 +36,7 @@ package name):
 - Extending a definition no installed package declares is a hard error.
 
 The merged definition's identity changes whenever any contribution changes: the
-relation/arm lines move the file's bytes (so ``angee build --check`` drifts) and
+relation/arm lines move the file's bytes (so ``angee check`` reports drift) and
 the per-relation/permission payload hash moves (so ``rebac sync`` re-applies).
 The emitted header additionally records each contributor and its fragment
 revision in ``@rebac_extended_by`` for provenance. The base package does **not**
@@ -67,7 +67,7 @@ from rebac.schema import render_zed as render_schema
 from angee.addons import addon_manifest
 from angee.base.permissions import declared_grants
 from angee.compose.declarations import BuildIntegration, DeclarationValue, ModelDeclaration
-from angee.utils.artifacts import GENERATED_SENTINEL
+from angee.compose.runtime import GENERATED_SENTINEL
 
 if TYPE_CHECKING:
     from angee.compose.model_composition import ModelComposition
@@ -80,7 +80,7 @@ __all__ = [
     "field_gate_owners",
     "SchemaExtensionError",
     "extension_source_map",
-    "apply_schema_paths",
+    "schema_path_wiring",
     "merged_schemas",
     "merged_schema_relpath",
 ]
@@ -388,31 +388,73 @@ def extension_source_map(
     }
 
 
-def apply_schema_paths(
-    app_configs: Iterable[AppConfig],
-    runtime_dir: Path,
-    *,
-    sources: Mapping[Path, str],
-) -> None:
-    """Bind upstream paths after emission, using the already-rendered source map.
+PERMISSION_WIRING = Path("_permission_paths.py")
 
-    Addon manifests supply declarations; ``rebac_schema`` is derived integration
-    consumed by django-zed-rebac. Ordinary Django apps keep their native schema
-    declaration. Binding never parses or merges an extension a second time.
-    """
 
+def schema_path_wiring(
+    app_configs: Iterable[AppConfig], *, sources: Mapping[Path, str],
+) -> str:
+    """Render native REBAC path assignments; serving does not import this compiler."""
+
+    lines = [
+        '"""Generated native REBAC schema paths."""',
+        "from pathlib import Path",
+        "from django.apps import apps",
+        "from django.core.exceptions import ImproperlyConfigured",
+        "from rebac.schema import resolve_schema_path",
+        "",
+    ]
     for app_config in app_configs:
-        effective: str | None
         source = declared_schema_path(app_config)
         merged = merged_schema_relpath(app_config.name)
-        if merged in sources:
-            effective = str((runtime_dir / merged).resolve())
-        elif addon_manifest(app_config) is not None or "_angee_rebac_schema_effective" in app_config.__dict__:
-            effective = str(source.resolve()) if source is not None else None
-        else:
+        manifest = addon_manifest(app_config)
+        if (
+            merged not in sources
+            and "_angee_rebac_schema_effective" not in app_config.__dict__
+            and (manifest is None or source is None)
+        ):
             continue
-        setattr(app_config, "rebac_schema", effective)
-        setattr(app_config, "_angee_rebac_schema_effective", effective)
+        lines.append(f"app = apps.get_app_config({app_config.label!r})")
+        if source is None:
+            source_expression = "None"
+        elif source.is_relative_to(Path(app_config.path)):
+            relative = source.relative_to(Path(app_config.path))
+            source_expression = f"Path(app.path) / {str(relative)!r}"
+        elif manifest is not None:
+            # An explicit manifest path remains the source of truth even when
+            # absolute; native AppConfig resolution does not read addon.toml.
+            source_expression = f"Path({manifest.permissions!r})"
+        else:
+            # Native external declarations remain late-bound to their AppConfig;
+            # an already-bound config retains its original source on reimport.
+            source_expression = (
+                "getattr(app, '_angee_rebac_schema_source', None) "
+                "if getattr(app, 'rebac_schema', None) == "
+                "getattr(app, '_angee_rebac_schema_effective', object()) "
+                "else resolve_schema_path(app)"
+            )
+        lines.append(f"app._angee_rebac_schema_source = {source_expression}")
+        if source is not None and (manifest is not None or source.is_relative_to(Path(app_config.path))):
+            lines.extend((
+                "if not app._angee_rebac_schema_source.is_file():",
+                "    raise ImproperlyConfigured("
+                f"{f'Missing packaged permission source for {app_config.name}; rebuild explicitly'!r})",
+            ))
+        if merged in sources:
+            lines.extend((
+                f"effective = Path(__file__).resolve().parent / {str(merged)!r}",
+                "if not effective.is_file():",
+                "    raise ImproperlyConfigured("
+                f"{f'Missing prebuilt permission schema for {app_config.name}; rebuild explicitly'!r})",
+                "app.rebac_schema = str(effective)",
+            ))
+        else:
+            lines.append(
+                "app.rebac_schema = str(app._angee_rebac_schema_source.resolve()) "
+                "if app._angee_rebac_schema_source is not None else None"
+            )
+        lines.extend(("app._angee_rebac_schema_effective = app.rebac_schema", ""))
+    return "\n".join(lines) + "\n"
 
 
 class PermissionIntegration(BuildIntegration):
@@ -439,12 +481,14 @@ class PermissionIntegration(BuildIntegration):
     def render_sources(self, runtime: Runtime) -> Mapping[Path, str]:
         """Render effective permission files using the compiler's donor facts."""
 
-        return extension_source_map(runtime.addons, field_owners=field_gate_owners(runtime.composition))
+        sources = extension_source_map(runtime.addons, field_owners=field_gate_owners(runtime.composition))
+        sources[PERMISSION_WIRING] = schema_path_wiring(runtime.addons, sources=sources)
+        return sources
 
-    def bind(self, runtime: Runtime, sources: Mapping[Path, str]) -> None:
-        """Point native REBAC discovery at the already-emitted effective files."""
+    def runtime_imports(self, runtime: Runtime) -> tuple[str, ...]:
+        """Import the same native path assignments during build and serving."""
 
-        apply_schema_paths(runtime.addons, runtime.runtime_dir, sources=sources)
+        return (f"{runtime.runtime_module}.{PERMISSION_WIRING.stem}",)
 
 
 def composed_grants(composition: ModelComposition, source: type[models.Model]) -> dict[str, str]:

@@ -10,18 +10,9 @@ from django.db import models
 from rebac import MissingActorError, RebacMixin, SubjectRef, system_context
 
 from angee.base import identity as identity_module
-from angee.base.identity import (
-    canonical_subject_ref,
-    instance_from_public_id,
-    public_data_id_field,
-    public_id_for,
-    public_id_of,
-    public_subject_ref,
-)
-from angee.base.models import (
-    AngeeDataModel,
-    AngeeModel,
-)
+from angee.base.identity import canonical_subject_ref, public_data_id_field, public_subject_ref
+from angee.base.models.base import AngeeDataModel, AngeeModel
+from angee.base.models.identity import instance_from_public_id, public_id_for, public_id_of
 from tests.tables import model_tables
 
 

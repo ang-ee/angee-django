@@ -21,7 +21,7 @@ from angee.base.fields.identity import SqidField
 from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField, ModelLabelField
-from angee.base.models import SqidMixin
+from angee.base.models.identity import SqidMixin
 from tests.tables import model_tables
 
 

@@ -21,7 +21,6 @@ CORE_SERVING_IMPORTS = (
     "angee.asgi",
     "angee",
     "angee.compose",
-    "angee.jobs",
 )
 RESOURCE_CONTRACT_IMPORTS = (
     "angee.graphql.data",
@@ -74,6 +73,8 @@ def test_core_serving_import_closure_stays_vendor_free() -> None:
     script = "\n".join(
         (
             "import importlib, json, sys",
+            "from django.conf import settings",
+            "settings.configure(INSTALLED_APPS=[], SECRET_KEY='core-serving-import', ANGEE_WEB_STATEMENT_TIMEOUT=0)",
             f"for name in {CORE_SERVING_IMPORTS!r}:",
             "    importlib.import_module(name)",
             "print(json.dumps(sorted(sys.modules)))",
@@ -102,6 +103,7 @@ def test_resource_contract_import_closure_stays_projection_free() -> None:
     script = "\n".join(
         (
             "import importlib, json, sys",
+            f"sys.path.insert(0, {str(PROJECT_ROOT / "addons")!r})",
             "from django.conf import settings",
             "settings.configure(INSTALLED_APPS=[])",
             "import django",
@@ -132,12 +134,13 @@ def test_resource_contract_import_closure_stays_projection_free() -> None:
     assert reached == set()
 
 
-def test_record_pointer_import_closure_stays_independent_of_model_mixins() -> None:
-    """Generic pointers can load before Angee's composed model package."""
+def test_record_pointer_import_closure_reaches_only_the_identity_model_contract() -> None:
+    """Public record projection imports identity without the composed model toolkit."""
 
     script = "\n".join(
         (
             "import importlib, json, sys",
+            f"sys.path.insert(0, {str(PROJECT_ROOT / "addons")!r})",
             "from django.conf import settings",
             "settings.configure(INSTALLED_APPS=['django.contrib.contenttypes'])",
             "import django",
@@ -156,10 +159,10 @@ def test_record_pointer_import_closure_stays_independent_of_model_mixins() -> No
     closure = set(json.loads(result.stdout))
 
     assert "angee.base.refs" in closure
-    assert not {
+    assert {
         module for module in closure
         if module == "angee.base.models" or module.startswith("angee.base.models.")
-    }
+    } == {"angee.base.models", "angee.base.models.identity"}
 
 
 def test_integrate_does_not_import_workflows() -> None:

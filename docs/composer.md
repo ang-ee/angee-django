@@ -19,32 +19,36 @@ classes, and docstrings linked below.
 
 ## Flow
 
-Composition has three phases.
+A normal project declares `INSTALLED_APPS` and overrides in `settings.yaml`.
+Addon defaults and derived settings remain with their addons; native yamlconf
+merges the ordered contributions. Deployment settings and secrets stay late-bound.
 
-1. **Settings bootstrap** - Django imports `angee.settings`. The settings
-   module finds the project root, loads project settings, applies Angee defaults,
-   resolves the addon graph, and mutates the namespace Django is importing.
-2. **App loading** - Django populates the resolved `INSTALLED_APPS`.
-   In population phase 2, `ComposeConfig.import_models()` discovers abstract
-   sources, binds migration modules, repairs generated sources, binds effective
-   permission paths, and imports the concrete models under the source app labels.
-   Native `ready()` hooks run afterward, once the model registry is complete.
-3. **Serving and lifecycle commands** - stable framework entrypoints such as
-   `angee.urls`, `angee.asgi`, `schema`, `resources`, and `rebac sync` read the
-   finished Django app registry. Each lifecycle consumes only the app
-   declarations or conventional modules it owns.
+1. **Explicit prebuild** — native `uv sync` invokes the host's Hatch hook for
+   editable development; `uv build` creates the project-specific distribution.
+   The hook selects `ProjectBuildConfig` in an isolated process. Native source
+   `import_models()` hooks run once, then the compiler emits and imports ordinary
+   concrete modules before any `ready()` callback. Builds never provision a DB.
+2. **Serving startup** — Django imports generated `runtime.settings`, which calls
+   the same project settings loader. The normal composer AppConfig validates the
+   built ordered native app identities, then imports prebuilt concrete modules
+   during phase 2. It never scans source declarations, renders, writes or repairs.
+   A changed app closure requires rebuilding, including plain or donor-only apps.
+3. **Native history authoring** — after an editable build, `makemigrations` binds
+   authored addon upgrades and creates native history beside generated models in tracked
+   `runtime/<label>/migrations/` packages. Review and commit it before building a distribution.
+4. **Provisioning** — the installed prebuilt project runs one native Django
+   process for read-only history drift validation, migrate, policy sync and
+   declared addon commands. Production installation uses `uv sync --no-editable`.
 
-Settings composition never imports source models or permission runtime code.
-The phase-2 hook binds derived migration and permission paths explicitly; source
-rendering does not choose project settings. Normal startup repairs files without
-pruning. Explicit build and clean retain the guarded cleanup policy described
-below.
+`uv run --no-sync python manage.py angee check` explicitly checks build drift
+without writing. It is not an automatic serving-time scan. Missing prebuilt
+output fails clearly; installation through the Hatch hook creates the first artifact.
 
 ## Owner Map
 
 | Concern | Owner |
 |---|---|
-| Project-root discovery and project settings/bootstrap environment | [`ProjectContract`](../angee/conf.py), called by [`angee.settings`](../angee/settings.py) |
+| Project-root discovery and project settings/bootstrap environment | [`ProjectContract`](../angee/conf.py), called by generated `runtime.settings` |
 | Bounded project YAML loading and accepted source provenance | [`ProjectContract`](../angee/conf.py) |
 | Native YAML settings merge and source inspection | [`angee.compose.yamlconf`](../angee/compose/yamlconf.py) |
 | Overridable framework defaults and ordered always-on core apps | [`angee.defaults`](../angee/defaults.py) |
@@ -64,7 +68,8 @@ below.
 | Artifact assembly and explicit build/check/cleanup orchestration | [`Runtime`](../angee/compose/runtime.py) |
 | Shared generated-artifact drift and guarded filesystem cleanup | [`GeneratedTree`](../angee/utils/artifacts.py) |
 | Addon migration materialization | [`RuntimeMigrations`](../angee/compose/migrations.py) |
-| Host command lifecycle and dependency projection | [`angee.management`](../angee/management/__init__.py), native [`angee` command](../angee/management/commands/angee.py), [`AddonDependencyGroup`](../angee/management/dependencies.py) |
+| Native package metadata and isolated compiler invocation | [`angee.hatch`](../angee/hatch.py) |
+| Prebuilt command lifecycle | [`angee.management`](../angee/management/__init__.py), native [`angee` command](../angee/management/commands/angee.py) |
 | Autodetected drop guards | [`RuntimeMigrations`](../angee/compose/migrations.py) refuses deleting a still-owned table at build; [`DropGuardAutodetector`](../angee/compose/migrations.py) refuses dropping a populated column or table in `makemigrations`, apart from rows the retiring addon declares seeded |
 | Runtime import during Django app population | [`ComposeConfig.import_models()`](../angee/compose/apps.py) |
 | HTTP route aggregation | [`angee.urls`](../angee/urls.py) |
@@ -77,16 +82,14 @@ This document should point there, not repeat the contract.
 
 ## Settings Bootstrap
 
-Django imports `angee.settings`, which delegates to `ProjectContract`.
-That owner finds the project root, loads or synthesizes its settings module,
+Django imports generated `runtime.settings`, which delegates to `ProjectContract`.
+That owner finds the project root and loads project Python settings or a private YAML merge namespace,
 applies the bounded django-yamlconf adapter, evaluates Angee defaults, makes
-configured addon roots importable, and calls `Composer`. The same loader serves
-the import-free dependency bootstrap without constructing Django app configs.
+configured addon roots importable, and calls `Composer`. The native metadata hook uses the same declaration loader without populating Django.
 The compiler owns `COMPOSE_RUNTIME_DIR` and `COMPOSE_RUNTIME_MODULE`.
-`ProjectContract` translates earlier `ANGEE_RUNTIME_*` project inputs before
-applying defaults; only the canonical names reach Django settings. Conflicting
-old and new declarations refuse boot. Native YAML input provenance remains
-available so existing project references retain their normal expansion.
+Only canonical `COMPOSE_RUNTIME_*` names configure generated output. Native
+YAML provenance and reference expansion remain available. Ordered addon defaults
+and derived values are evaluated at settings load, not frozen into output.
 
 The baked runtime image supplies its folder-addon roots through the native
 `YAMLCONF_CONFFILE` overlay, [docker/addon-settings.yaml](../docker/addon-settings.yaml).
@@ -178,8 +181,9 @@ the process environment; the generic default accepts none. Angee's host declares
 `("ANGEE_",)`. Native `YAMLCONF_*` project definitions retain django-yamlconf's
 own loading semantics. Apps still read `django.conf.settings`; process environment is
 normalized during composition.
-An addon that owns an implementation base appends its dotted class path to
-`ANGEE_IMPL_REGISTRIES`; contributors add entries to the base's named setting.
+Implementation contributors add entries to the base's named setting. Native
+`ImplClassField.check()` validates the bound mapping; the owning addon registers
+a native system check for a rowless contract. No second registry declaration is needed.
 
 Derived `settings(namespace)` hooks read only their supplied namespace.
 `AutoConfig` gives enabled environment values precedence over project values,
@@ -197,14 +201,13 @@ real addon needs item-level ordering later, that belongs in `AutoConfig`, not in
 ## Runtime Build And Import
 
 The generated runtime is output, not source. It exists because Django concrete
-model classes must live in importable modules with migration packages.
+model classes must live in importable modules; native migration history lives in the host.
 
 `Runtime.from_django()` explicitly discovers the installed sources through
 `ModelComposition`; it does not bind settings or write output. A `Runtime`
 instance coordinates that composition with declared build integrations, migration
 and filesystem owners. Each write or drift operation renders one source map and
-passes it to `GeneratedTree`. Host dependency projection belongs to the Angee
-management command, outside the compiler's build and drift operations.
+passes it to `GeneratedTree`. Host dependency metadata belongs to the native Hatch metadata hook.
 `GeneratedTree` validates every artifact against the effective root before reading
 or writing it, including native model output. A configured root may itself be a
 symlink; artifact paths must stay within its resolved destination.
@@ -247,7 +250,7 @@ must declare an unfiltered history-capable manager explicitly. Resource
 participants inherit the resources-owned
 [`ResourceLoadMixin`](../addons/angee/resources/mixins.py) and delegate through
 `super()`. Installed build integrations contribute literal feature attributes,
-custom Meta options, generated text and post-emission path binding through
+custom Meta options, generated text and explicit generated Python wiring through
 [`declarations.py`](../angee/compose/declarations.py). They cannot replace native
 fields, managers, methods or the compiler's structural declarations. Source/donor
 ordering and collisions remain compiler-owned; REBAC and catalogue semantics
@@ -260,8 +263,8 @@ whose upgrade needs earlier snapshots declares that in its own runtime migration
 (simple-history's `bulk_history_create` on the historical model); the composer
 emits no checkpoint of its own.
 
-The composer emits package/model files, static web projections and effective
-permission extensions, and explicitly materializes addon-owned migrations.
+The compiler emits package/model files, static web projections and effective
+permission extensions. Native makemigrations materializes addon-owned upgrades.
 Django owns the resulting model and migration graphs, `makemigrations`, execution,
 rollback, routing and recording. GraphQL SDL and frontend codegen have separate
 owners, so composer drift checks ignore their outputs. Explicit reset/cleanup
@@ -286,60 +289,69 @@ an addon package such as `runtime_migrations/`, never the conventional
 `migrations/` package: Django would discover the latter as a migration of the
 abstract source app before the composer can attach it to the downstream graph.
 
-Explicit `angee build` evaluates declarations in addon and manifest order. For
-each applicable origin it copies the complete source module to
-`runtime/<app_label>/migrations/`, gives it the next numeric name, and attaches
-it to the target app's single current leaf. The footer records the stable
-`<addon>:<name>` origin and source digest. Existing materialized bodies are
-immutable and repeated builds are idempotent. Changed source digests,
-copied-body edits, duplicate origins, split leaves, and invalid graphs fail before
-migration execution. A guarded app-label adoption may deliberately
-write reviewed staging nodes and then stop at the physical-table-owner drop check.
-This gives downstream migrations a concrete new graph without allowing the
-following `makemigrations` command to delete retained tables. The exact validation
-contract belongs to [`RuntimeMigrations`](../angee/compose/migrations.py) and its
-[mechanism tests](../tests/test_runtime_migrations.py). A dependency on
-`(<app_label>, "__latest__")` is resolved to a concrete current leaf when copied.
-`RuntimeMigrations.schedule(state, only=...)` runs the same round loop for the named
-origins from a given state without a migration graph.
+After an editable runtime build, the native `makemigrations` command binds
+declarations into Django's migration graph before evaluating guards or simulating
+model state. New native filenames use the
+declared `name`, so a migration can depend on a pending transition through ordinary
+Django `dependencies`, for example `("resources", "copy_legacy")`. Manifest order
+is not an execution dependency. Declare cross-app dependencies and `run_before`
+explicitly; the composer does not infer data ordering from changes to schema.
 
-A stack's composed migration history is disposable: after every upgrade,
-`reset_migration_history` verifies and replaces it with fresh initials; a data
-transition that `makemigrations` cannot express uses `[[migrations]]` only as a
-write → apply on every stack → delete in the next change vehicle, never as released
-history or a reason for a compatibility import.
+The target app's existing leaf is a prerequisite. The copied footer freezes the
+resolved `dependencies` and `run_before`, including symbolic `__first__` and
+`__latest__` references, and records the `<addon>:<name>` origin and source digest.
+Existing names, including older numeric names, and copied source bodies remain
+immutable. Repeated authoring does not create another node. Duplicate names/origins,
+changed source or body digests, missing prerequisites, split leaves, invalid
+states and cycles fail before source emission or database execution. Source
+callbacks are copied with the migration so later addon changes do not replace
+historical Python bodies.
 
-The reset preserves matching migration records, records missing fresh nodes
-through Django's recorder, and removes only obsolete composed records in one
-transaction. Applied external migrations keep their composed dependencies, and
-an exception restores the original migration sources and recorder state.
+Django's `MIGRATION_MODULES` owns the output package. Angee's host build defaults
+each composed label to `<runtime_module>.<app_label>.migrations`, beside its generated models;
+explicit mappings remain authoritative. Native `makemigrations` creates missing
+packages when authoring ordinary migrations. Read-only planning never creates a
+missing package, and an explicit `None` disables migrations for that app. A
+requested authored transition or history reset cannot target a disabled app.
+Keep released migration files as durable deployment inputs, including histories
+for retired models. An ignored generated directory alone is not a history
+retention policy. The implementation and its exact contracts live in
+[`RuntimeMigrations`](../angee/compose/migrations.py) and its
+[mechanism tests](../tests/test_runtime_migrations.py).
 
-If an already copied declaration needs a source correction, first use
-`manage.py reset_migration_history --database default` on its fully applied,
-model-clean stack. This guarded reset can load the immutable copied graph even
-when its source digest has changed; do not edit the copy or its footer. Then run
-`manage.py angee build` and `manage.py migrate` so the corrected declaration is
-materialized with its resolved dependencies and applied. A data-only declaration
-whose schema guard still holds can be emitted again after a reset; its body must
-therefore preserve safe replay until the declaration is retired.
+A pure `applies(ProjectState)` guard checks whether a declaration is valid after
+its declared prerequisites. `False` cannot prove that a data-only backfill ran.
+An ambiguous pending declaration is refused rather than silently skipped. Fresh
+installations need a valid native migration chain or a reviewed native squash
+covering the complete chain. Keep the original migrations while partially
+upgraded installations remain supported: Django selects the original chain when
+only some replacement targets have applied. Merely listing a missing original
+node in `replaces`, an initial-looking schema, or `--fake-initial` does not supply
+that original upgrade path. A baseline must retain required data operations.
 
-For a conversion followed by retirement, declare the fold first and guard the
-retirement against its completed schema. The composer attaches retirement to the
-fold's concrete leaf. Keep data verification in the copied migration body, since
-schema guards alone cannot prove that the conversion preserved every row.
+For a conversion followed by retirement, the retirement explicitly depends on
+the conversion. Its native migration body verifies retained data before removing
+fields or models. The shared physical-table ownership guard also refuses an
+autodetected deletion while another model still owns that table. A validated
+adoption may leave staging files available for a consumer cutover, but no build
+executes database operations.
 
-Guards are evaluated in rounds against the state each round starts from, and a
-declaration planned in a later round depends on every other app's leaf planned so
-far. A guard therefore returns `False` for the state an earlier declaration of the
-same build still has to produce (a pending predecessor is not a partial history).
+`reset_migration_history` is an exceptional, explicit upgrade cutoff. It is not
+part of normal deployment or a way to correct an already published migration.
+Add a new forward migration for a correction. Reset requires a fully applied,
+model-clean graph; it replaces selected app histories and updates Django's
+recorder in one transaction without recreating tables. External records remain
+intact, and failure restores the original files and recorder state. Removing
+history can permit a still-declared data transition to run again, so a reset
+requires a deliberate support cutoff and retirement of superseded declarations.
 
-Normal app boot and `emit_if_stale()` never materialize migrations.
-`angee build --check` validates existing history and reports applicable pending
-origins without writing migration files. Django setup still repairs generated
-sources before command dispatch, so the management command as a whole is not a
-read-only filesystem probe. After a successful build, normal `makemigrations` may
-generate any remaining lossless changes and Django handles the rest of the
-migration lifecycle.
+Normal serving only imports prebuilt artifacts. The explicit `angee check`
+compares generated output and reports pending declarations without writing files.
+Use an editable `uv sync` to compose models, then native `makemigrations` to bind
+authored transitions and generate remaining lossless changes. Review and commit
+the resulting native history before `uv build`: packaging validates the sealed
+history offline and never authors it. Provisioning checks for model drift and
+uses native `migrate` for execution, database aliases, routing and recording.
 
 `makemigrations` never drops a column or a table that still holds data.
 `angee.compose` gives Django's `makemigrations` and `migrate` the shared
@@ -361,33 +373,33 @@ Both proofs run on every database that may receive the migration; without
 `DATABASE_ROUTERS` that is `default` alone, as in Django's history consistency
 check. A database that cannot be checked refuses the drop. The guard runs only
 inside `makemigrations` and `migrate`, which need the database anyway;
-`angee build` never probes it. Empty columns and tables drop automatically, so
+`uv build` never probes it. Empty columns and tables drop automatically, so
 toggling a layer in development stays free. Retire populated data with a
 cutover: an addon runtime migration, declared by an addon that stays installed,
-that preserves or retires the data and removes the field or model. Build
-materializes it first, so the reviewed removal is never autodetected.
+that preserves or retires the data and removes the field or model. Native
+`makemigrations` materializes it first, so the reviewed removal is never
+autodetected.
 
 Follow the [migration policy](backend/guidelines.md#migrations-and-runtime) when
 authoring a data transition or resetting composed history.
 
-[`angee provision`](../angee/management/commands/angee.py) owns full
-runtime preparation. It builds in the initial process, then starts one fresh
-process to load the emitted models and run the remaining commands together.
-Keep that post-build boundary; native command loaders and cache invalidation
-allow subsequent database preparation, checks and schema output to share the
-initialized registry. Each command retains its own transactions and failures
-stop later steps. Provision runs `makemigrations --noinput`; missing required
-migration defaults and populated column or table drops fail immediately so their
-defaults or cutovers can be authored before retrying.
+[`angee provision`](../angee/management/commands/angee.py) prepares the database
+from a prebuilt runtime in one native Django process. The operator's
+`runtime-build` job completes first. Provision waits for the database, runs
+`makemigrations --check --dry-run --noinput`, applies native migrations, refreshes
+PostgreSQL statistics, syncs REBAC and runs native checks. It never builds
+models or authors migration files. Pending transitions or model drift require
+reviewed migration authoring before retrying. Each command retains its own
+transactions, and a failure stops later steps.
 
 Optional addon commands can follow provision through `--after-if-installed`;
 the composer runs an explicitly named command only when Django's registry
 contains it. The timeline reads source rows directly and requires no backfill.
-While an addon declares a transition for its own app label, the composer keeps
-that native runtime app even after its last model retires, so Django can apply
-the cutover. After application and history consolidation, retire the declaration
-and body; do not retain an otherwise empty addon solely as permanent transition
-history.
+An installed app targeted by a selected addon's transition retains its composed
+label even after its last model retires, so Django can apply the cutover. Removing
+the declaration, body or app then requires retiring every supported historical
+consumer through an explicit upgrade cutoff; a completed local migration alone
+does not authorize deleting the released upgrade path.
 
 #### Foundation and provenance upgrade cutoff
 
@@ -435,60 +447,42 @@ directly; no second provenance or foundation implementation remains at an old pa
 
 ### Composed addon dependencies
 
-Each addon's `addon.toml` owns its third-party `dependencies`. After runtime
-emission, explicit `angee build` passes the manifests for the resolved Django app
-graph to hatch-angee and writes their exact sorted union into the host
-`pyproject.toml` as the generated `[dependency-groups].addons` key. The framework
-core has no manifests; its dependencies live in the wheel's package metadata.
-Other plain Django apps and addons that are available but not composed contribute
-nothing.
+Each addon's `addon.toml` owns its third-party requirements. The host opts into
+Angee's native Hatch metadata and build hooks. The metadata hook uses the existing
+manifest closure and hatch-angee dependency compiler to combine selected addon
+requirements with the host's declared requirements into native `Requires-Dist`.
+There is no generated dependency group, source pyproject writer or inner installer.
+Core requirements remain in the core wheel; unavailable or unselected addons
+contribute nothing.
 
-The hatch-angee writer preserves unrelated TOML comments and formatting, writes
-atomically, and leaves an identical file untouched. A bare host with no
-`pyproject.toml` is an explicit build-time skip so framework unit tests and minimal
-Django projects can still emit a runtime. A fresh generated host must bootstrap
-before Django loads addon apps: run `uv sync`, then
-`uv run python -m angee.management.bootstrap` to resolve the root addons'
-manifest-only dependency closure and materialize the addon group, `uv sync`
-again to install that group, and only then `uv run manage.py angee build`. The
-standalone bootstrap reuses `ProjectContract`'s bounded django-yamlconf loader
-and the same `AddonDependencyGroup` compile/write core as the normal build path;
-it never creates an `AppConfig` or touches Django's app registry.
-
-Import-free bootstrap expects canonical addon module names in project roots and
-manifest dependencies. An arbitrary external AppConfig class path cannot identify
-its addon without importing Python; such roots require their dependencies to be
-installed before normal Django composition.
+`uv sync` builds the editable host with the same hook used by `uv build`. The hook
+stages the authored config and addon source closure in a portable layout before
+compiling. Raw environment references remain references; resolved secrets and
+`.env` are never serialized. Native history is version controlled beside generated models under
+`runtime/<label>/migrations/` and bundled with the project-specific wheel. A normal wheel
+build validates history and model drift without generating migrations or using a
+DB. The [native history workflow](#addon-owned-runtime-migrations) explains authoring.
 
 ### Runtime cleanup
 
-`ComposeConfig.import_models()` is the Django app-loading hook. In population
-phase 2 it discovers sources, calls `configure_migration_modules()`, repairs output
-with `emit_if_stale()`, and imports generated models. The transition owner's
-native `class_prepared` receiver validates the final MRO before installing guards,
-including for models constructed outside the composer.
+The normal `ComposeConfig` only imports prebuilt concrete models. Explicit
+`BuildComposeConfig` uses the same compiler after native source model hooks and
+imports concrete models before `ready()`. Missing output never triggers serving
+repair.
 
-- `emit_if_stale()` is write-only and idempotent. It repairs missing or stale
-  generated sources file by file before import, and it never resets, cleans, or
-  materializes addon migrations. A nonempty runtime must already carry the
-  generated sentinel before boot writes; boot cannot mark a foreign tree as safe
-  for later cleanup. Missing or empty runtime directories can be initialized.
-- On runtime-source drift, explicit `angee build` verifies the generated sentinel
-  and configured root before clearing output and emitting the current source map.
-  Orphaned generated files, empty label directories, and bytecode left under
-  retired labels count as drift. Cleanup covers the whole runtime, including
-  SDL/codegen and labels no longer composed; it is not limited to paths in the
-  current source map.
-- `angee clean` uses the same guarded whole-tree cleanup without discovering or
-  rendering sources in its handler; an empty source map does not restrict cleanup.
-  Django setup still precedes management-command dispatch, so normal boot repair
-  also precedes `angee clean` and `angee build --check`.
+Explicit build reconciles only its owned files. Declared external producer
+outputs such as GraphQL SDL, codegen and web bundles survive a model rebuild.
+Owned stale files and empty directories are pruned deterministically after the
+configured root and marker have been checked. Shared `GeneratedTree` implements
+neutral IO; Runtime supplies its own marker and history-preserving ownership.
 
-Both cleanup operations preserve current `migrations/` subtrees; migration history
-changes only through `reset_migration_history`, after its applied-plan and model-drift
-guards pass. During app population, [`Runtime`](../angee/compose/runtime.py) binds
-migration modules for current composed labels while preserving unrelated
-project-owned bindings.
+`angee clean` removes generated producer outputs under that guarded runtime,
+while retaining native migration history and the marker when retained content
+remains. It does not render source declarations. Ordinary command setup remains
+import-only, so cleanup and read-only checks cannot silently recreate output.
+Native project `MIGRATION_MODULES` overrides remain authoritative; generation
+never creates competing history under the default runtime path for custom or
+disabled mappings. History reset is a separate guarded explicit command.
 
 ## Addon Declarations
 
@@ -580,9 +574,9 @@ ANGEE_DATA_DIR: "{BASE_DIR}/../../.angee/data"
 ```
 
 The installed Angee host supplies URL and ASGI defaults, which project settings
-may override. The phase-2 integration binds `MIGRATION_MODULES` for emitted labels
-and preserves unrelated project entries. Conflicting paths, including an explicit
-`None` disabling migrations for an emitted label, fail clearly.
+may override. The host build factory defaults emitted labels to `<runtime_module>.<label>.migrations`
+and preserves explicit mappings, including `None`. The artifact records the effective
+native mapping; changing it after packaging requires rebuilding.
 
 ## Invariants
 
@@ -591,9 +585,9 @@ and preserves unrelated project entries. Conflicting paths, including an explici
 - Project settings are composed before app loading; phase 2 binds derived migration and permission paths.
 - Settings composition does not import source models.
 - Rendering produces artifacts; explicit lifecycle operations bind derived integration paths.
-- Normal startup heals the runtime in place but never resets or prunes it.
-- Composer drift checks cover runtime sources, the generated host dependency
-  group, and addon migration declarations; GraphQL SDL and frontend codegen checks
+- Normal startup imports prebuilt artifacts only; it never scans declarations or writes.
+- Explicit composer drift checks cover runtime sources and addon migration
+  declarations; GraphQL SDL and frontend codegen checks
   belong to their respective owners.
 - Apps read `django.conf.settings`; process environment is normalized during
   settings composition.

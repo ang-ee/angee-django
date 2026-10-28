@@ -172,27 +172,35 @@ Django, Vite, ASGI servers, workers, or watchers separately. The following
 one-shot commands run from the **stack root**, through its host environment.
 They are distinct lifecycle operations, not a mandatory sequence for every task:
 
+Install the environment only on a new or stopped host. For a running stack, use
+its declared restart job through the operator; see
+[Restart the running stack](howto/getstarted.md#restart-the-running-stack).
+Management checks use `--no-sync` so invoking one cannot install or rebuild first.
+
 | Purpose | Command | Prerequisite / effect |
 |---|---|---|
-| Prepare the complete runtime | `uv run manage.py angee provision` | Builds, then runs the remaining preparation in one fresh process; the [command owner](../angee/management/commands/angee.py) defines ordering and options |
-| Build composed runtime | `uv run manage.py angee build` | Updates generated runtime, prunes obsolete generated sources, updates host dependency declarations and materializes pending addon migrations |
-| Clean generated runtime | `uv run manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves current migration directories |
-| Check composition drift | `uv run --locked manage.py angee build --check` | Checks composer-owned artifacts, dependency projection, and addon declarations; Django bootstrap can repair runtime sources before dispatch |
-| Author schema migrations | `uv run manage.py makemigrations <app-labels>` | After composition |
-| Apply migrations | `uv run manage.py migrate` | Operates on the selected stack database |
-| Sync permissions | `uv run manage.py rebac sync` | After migrations when permissions change |
-| Load declared resource data | `uv run manage.py resources load` | After migrations when resource data changes |
-| Validate runtime contracts | `uv run --locked manage.py check` | Includes construction of every named GraphQL schema; run against deployment code and settings before starting writer tiers |
-| Emit GraphQL SDL | `uv run manage.py schema` | Uses the emitted concrete models; provision reuses its post-build registry and checked schemas |
-| Check GraphQL SDL | `uv run --locked manage.py schema --check` | Separate from the composer drift check |
+| Install/build for development | `uv sync` | Native Hatch editable build on a stopped/new host; no database operations |
+| Install for production | `uv sync --no-editable` | The same native Hatch hook validates the sealed project/history; no database operations |
+| Package the sealed project | `uv build` | Validates and bundles tracked native history and portable composed runtime |
+| Prepare the installed runtime | `uv run --no-sync python manage.py angee provision` | One prebuilt native process; the [command owner](../angee/management/commands/angee.py) defines ordering and options |
+| Clean generated runtime | `uv run --no-sync python manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves current migration directories |
+| Check composition drift | `uv run --no-sync python manage.py angee check` | Explicit read-only check of composer artifacts and addon upgrade declarations; startup never repairs output |
+| Author schema migrations | `uv run --no-sync python manage.py makemigrations <app-labels>` | After editable build; review and commit `runtime/<label>/migrations/` before packaging |
+| Apply migrations | `uv run --no-sync python manage.py migrate` | Operates on the selected stack database |
+| Sync permissions | `uv run --no-sync python manage.py rebac sync` | After migrations when permissions change |
+| Load declared resource data | `uv run --no-sync python manage.py resources load` | After migrations when resource data changes |
+| Validate runtime contracts | `uv run --no-sync python manage.py check` | Includes construction of every named GraphQL schema; run against deployment code and settings before starting writer tiers |
+| Emit GraphQL SDL | `uv run --no-sync python manage.py schema` | Uses the emitted concrete models; provision reuses its prebuilt registry and checked schemas |
+| Check GraphQL SDL | `uv run --no-sync python manage.py schema --check` | Separate from the composer drift check |
 
 Run only lifecycle steps needed for the change and within the user's authorized
 scope.
 For containerized stacks, use the declared service/job environment; a host shell
 without the runtime dependencies cannot run these commands directly.
 
-After a schema change, emit runtime sources as needed, emit SDL, then run the
-host web package's codegen **before** checking addon fragments. From the stack
+After a model change, rebuild through the native runtime-build job and author
+required native history before provision. Emit SDL, then run the host web
+package's codegen **before** checking addon fragments. From the stack
 root, for the default `web_path=web`:
 
 ```sh
@@ -332,7 +340,7 @@ its own host, resolves native manifest dependencies, composes/provisions it, and
 collects the declared Python paths with `python_files=test*.py` on PostgreSQL.
 Four native pytest-xdist workers use `--dist worksteal` inside each shard, so long
 consumer intake modules can use every worker. Each worker loads the configured
-host through `angee.settings`; pytest-django owns its separate test
+host through generated `runtime.settings`; pytest-django owns its separate test
 database. Pytest emits a thread dump after five minutes in one test protocol,
 including setup and teardown, without changing its outcome. Shared test plugins
 must defer model imports until Django's app registry is populated. Check tools

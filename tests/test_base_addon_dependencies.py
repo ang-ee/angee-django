@@ -34,9 +34,8 @@ def test_addon_dependency_group_matches_manifests() -> None:
 def test_addon_manifests_leave_core_pins_to_core() -> None:
     """A distribution the core wheel requires is pinned exactly by the core alone.
 
-    A second exact pin in a manifest is copied into every host's generated group,
-    and a core bump then leaves the two unresolvable before ``angee build`` can
-    rewrite the group.
+    A second exact pin in a manifest enters the host's composed requirements,
+    so a core bump can make the native package resolution unsatisfiable.
     """
 
     core = {

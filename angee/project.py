@@ -80,9 +80,9 @@ def bootstrap(*, argv: Sequence[str] | None = None) -> None:
     discovery. Management, ASGI, and Celery share this pre-Django boundary.
     """
 
-    if settings.configured or os.environ.get("DJANGO_SETTINGS_MODULE") not in {None, "angee.settings"}:
+    if settings.configured or os.environ.get("DJANGO_SETTINGS_MODULE") not in {None, "runtime.settings"}:
         return
     discovered = find_project_dir(argv=argv)
     if discovered is not None:
         os.environ.setdefault(PROJECT_DIR_ENV, str(discovered))
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.settings")
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "runtime.settings")

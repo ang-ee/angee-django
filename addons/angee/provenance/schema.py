@@ -27,8 +27,9 @@ from rebac.resources import model_for_subject_type, model_resource_type
 from simple_history.utils import get_history_manager_for_model
 from strawberry.scalars import JSON
 
-from angee.base.identity import public_id_for, public_id_of, public_subject_ref
-from angee.base.models import record_display_label
+from angee.base.identity import public_subject_ref
+from angee.base.models.base import record_display_label
+from angee.base.models.identity import public_id_for, public_id_of
 from angee.base.permissions import require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target

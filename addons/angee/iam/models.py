@@ -43,16 +43,15 @@ from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.resources import model_resource_type
 from rebac.roles import ROLE_RELATION
 
+from angee.base.exceptions import DomainError
 from angee.base.fields.state import StateField
-from angee.base.identity import canonical_subject_ref, instance_from_public_id
-from angee.base.models import (
-    AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
-    OptimisticLockMixin,
-    role_anchor,
-)
-from angee.errors import DomainError
+from angee.base.identity import canonical_subject_ref
+from angee.base.managers import AngeeManager
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.identity import instance_from_public_id
+from angee.base.models.locks import OptimisticLockMixin
+from angee.base.models.roles import role_anchor
+from angee.base.querysets import AngeeQuerySet
 from angee.iam.events import person_created
 from angee.iam.identity import user_label
 from angee.iam.roles import protected_account_holders

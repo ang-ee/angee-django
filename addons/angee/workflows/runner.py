@@ -22,7 +22,7 @@ from django.utils import timezone
 from rebac import actor_context, generic_target, system_context
 from rebac.actors import is_sudo
 
-from angee.errors import exception_text
+from angee.base.exceptions import exception_text
 from angee.graphql.publishing import publish_change
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset

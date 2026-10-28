@@ -46,7 +46,7 @@ from angee.agents.sessions import run_next_turn
 from angee.agents.testing.drivers import FakeRunner, update_chunk
 from angee.agents_runtime_pydantic.runtime import PydanticAIRuntime
 from angee.agents_runtime_pydantic.toolsets import AngeeToolset, ToolGrantAccess
-from angee.base.identity import instance_from_public_id
+from angee.base.models.identity import instance_from_public_id
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.posts.backends import ParsedPost

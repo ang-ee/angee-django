@@ -26,17 +26,12 @@ from rebac import actor_context, generic_target, system_context, to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError
 
 from angee.base.fields.text import ModelLabelField
-from angee.base.identity import public_id_of
-from angee.base.models import (
-    AngeeManager,
-    AngeeQuerySet,
-    AppendOnlyQuerySet,
-    StaleRevisionError,
-    require_revision,
-    row_lock_paths,
-)
+from angee.base.managers import AngeeManager
+from angee.base.models.append_only import AppendOnlyQuerySet
+from angee.base.models.identity import public_id_of
+from angee.base.models.locks import StaleRevisionError, require_revision
 from angee.base.permissions import actor_user_id
-from angee.base.querysets import by_key, query_batch_size
+from angee.base.querysets import AngeeQuerySet, by_key, query_batch_size, row_lock_paths
 from angee.base.signals import bulk_updated
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.publishing import changes_muted, mute_changes, publish_change

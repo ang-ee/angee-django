@@ -7,7 +7,6 @@ from typing import TypedDict
 _Settings = TypedDict(
     "_Settings",
     {
-        "ANGEE_IMPL_REGISTRIES:append": list[str],
         "ANGEE_STORAGE_DEFAULT_DRIVE": str,
         "ANGEE_STORAGE_PROXY_UPLOAD_MAX_BYTES": int,
         "ANGEE_STORAGE_IMAGE_DRIVE": str,
@@ -21,7 +20,6 @@ _Settings = TypedDict(
 )
 
 SETTINGS: _Settings = {
-    "ANGEE_IMPL_REGISTRIES:append": ["angee.storage.backends.StorageBackend"],
     "ANGEE_STORAGE_DEFAULT_DRIVE": "assets",
     "ANGEE_STORAGE_PROXY_UPLOAD_MAX_BYTES": 64 * 1024 * 1024,
     # Images a server ingests to render inline (avatars): raster types only,

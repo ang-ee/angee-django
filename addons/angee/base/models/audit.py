@@ -10,7 +10,7 @@ from django.db import models
 from rebac import system_context
 from rebac.managers import TrackedQuerySet
 
-from angee.base.models.identity import update_fields_with_auto_now
+from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.querysets import ClosedUpdateQuerySet, _AngeeQuerySetMixin, by_key
 

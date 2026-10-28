@@ -18,8 +18,8 @@ from django.db.models.deletion import (
 )
 from rebac import PermissionDenied, RebacMixin, current_actor, system_context
 
-from angee.base.identity import public_id_of
-from angee.base.models import AngeeModel
+from angee.base.models.base import AngeeModel
+from angee.base.models.identity import public_id_of
 from angee.base.permissions import require_rebac_queryset
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames

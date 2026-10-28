@@ -34,15 +34,12 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import GenericTarget, generic_target
 
-from angee.base.models import (
-    AngeeDataModel,
-    ArchiveMixin,
-    ArchiveQuerySet,
-    MergePolicy,
-    RecordRefMixin,
-    role_anchor,
-)
-from angee.base.querysets import SystemQuerysetMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.merge_references import MergePolicy
+from angee.base.models.persistence import PersistenceMixin
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.roles import role_anchor
+from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
 from angee.money.rounding import RoundingMode, rounding_constant
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -288,7 +285,7 @@ class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
         except ValueError as error:
             raise ValidationError("A contextual currency rate requires one saved, typed context.") from error
         model = canonical.content_type.model_class()
-        if model is None or not issubclass(model, SystemQuerysetMixin):
+        if model is None or not issubclass(model, PersistenceMixin):
             raise ValidationError("The currency-rate context is not a canonical resource.")
         if not model.system_queryset().filter(pk=canonical.object_id).exists():
             raise ValidationError("The currency-rate context is unavailable.")
@@ -458,5 +455,5 @@ class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel):
 
 MoneyRole = role_anchor("money/role")
 """The ``money/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective money manager. See :func:`angee.base.models.role_anchor`.
+an effective money manager. See :func:`angee.base.models.roles.role_anchor`.
 """

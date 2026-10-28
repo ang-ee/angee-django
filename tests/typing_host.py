@@ -35,10 +35,10 @@ def project_history_models() -> bool:
     from simple_history.manager import HistoryDescriptor
 
     from angee.compose.rendering import render_models
-    from angee.compose.runtime import Runtime
+    from angee.compose.runtime import GENERATED_SENTINEL, Runtime
     from angee.provenance.history import ModelHistoryManager
     from angee.provenance.statements import StatementManager, StatementPairManager
-    from angee.utils.artifacts import GENERATED_SENTINEL, GeneratedTree
+    from angee.utils.artifacts import GeneratedTree
 
     runtime = Runtime.from_django()
     generated: dict[str, dict[str, type[models.Model]]] = defaultdict(dict)

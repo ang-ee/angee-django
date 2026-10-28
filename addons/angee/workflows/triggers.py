@@ -7,7 +7,7 @@ from collections.abc import Hashable
 from contextvars import Context
 from dataclasses import dataclass, field, replace
 from inspect import getattr_static
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
@@ -35,15 +35,16 @@ from rebac.relationships import delete_relationship, write_relationships
 from rebac.resources import model_for_resource_type
 from rebac.schema import FieldBinding
 
+from angee.base.exceptions import exception_text
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.text import ModelLabelField
-from angee.base.identity import public_id_of
 from angee.base.implementations import ImplBase, resolve_all_impl_classes
-from angee.base.models import AngeeManager, AngeeQuerySet, record_display_label, row_lock_paths
+from angee.base.managers import AngeeManager
+from angee.base.models.base import record_display_label
+from angee.base.models.identity import public_id_of
 from angee.base.permissions import effective_rebac_definition
-from angee.base.querysets import by_key
+from angee.base.querysets import AngeeQuerySet, by_key, row_lock_paths
 from angee.base.signals import connect_for_models
-from angee.errors import exception_text
 from angee.iam.identity import group_subject_type, user_label
 from angee.iam.service_users import sync_service_user
 
@@ -381,11 +382,8 @@ class TriggerSource(ImplBase):
             cls.dispatch(sender, instance, created_batch=created_batch)
 
 
-class TriggerSourceField(ImplClassField[TriggerSource]):
-    """Offer only admission-capable entries from the one observation registry."""
-
-    def impl_choices(self) -> list[Any]:
-        return [choice for choice in super().impl_choices() if not self.resolve_class(choice.key).watch_only]
+TriggerSourceField = ImplClassField
+"""Historical import required by the host's materialized workflow migration."""
 
 
 class RecordChanged(TriggerSource):
@@ -469,9 +467,9 @@ class TriggerEventManager[T: TriggerEvent](_TriggerEventManagerBase[T]):
         try:
             triggers = apps.get_model("workflows", "Trigger")
             field = triggers._meta.get_field("source")
-            if not isinstance(field, TriggerSourceField):
-                raise ImproperlyConfigured("Workflow trigger sources require a TriggerSourceField.")
-            implementation = field.resolve_class(source)
+            if not isinstance(field, ImplClassField):
+                raise ImproperlyConfigured("Workflow trigger sources require an ImplClassField.")
+            implementation = cast(ImplClassField[TriggerSource], field).resolve_class(source)
             try:
                 implementation.validate_model(model)
             except ValidationError:

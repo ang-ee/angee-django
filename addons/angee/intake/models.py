@@ -28,15 +28,13 @@ from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
+from angee.base.exceptions import DomainError, RecordAccessSubjectRefused
 from angee.base.fields.state import StateField
-from angee.base.models import (
-    AngeeDataModel,
-    AuditMixin,
-    OptimisticLockMixin,
-)
-from angee.base.permissions import RecordAccessSubjectRefused, actor_user_id, instance_actor
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.locks import OptimisticLockMixin
+from angee.base.permissions import actor_user_id, instance_actor
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
-from angee.errors import DomainError
 from angee.intake.choices import NeedAccessAction
 from angee.intake.resources import NeedResource
 from angee.provenance.context import changeset, changeset_model, require_changeset

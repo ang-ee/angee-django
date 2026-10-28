@@ -143,7 +143,6 @@ ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
 
 AutoConfig.apply_installed(globals(), environment=False)
 CELERY_BROKER_URL = "memory://"
-globals()["ANGEE_IMPL_REGISTRIES"].append("tests.integrate_fixtures.ConnectionAdapter")
 ANGEE_TEST_CONNECTION_CLASSES = {
     "connection": "tests.integrate_fixtures.ConnectionAdapter",
     "live": "tests.integrate_fixtures.LiveConnectionAdapter",

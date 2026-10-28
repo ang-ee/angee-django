@@ -21,18 +21,14 @@ from strawberry import auto
 
 import tests.test_messaging  # noqa: F401 -- register related models before native database setup
 from angee.base.fields.state import StateField
-from angee.base.models import (
-    AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
-    AuditMixin,
-    MergeableMixin,
-    MergeableQuerySet,
-    StagedModelMixin,
-    TrashMixin,
-    TrashQuerySet,
-)
-from angee.base.models import Stage as OrderedStage
+from angee.base.managers import AngeeManager
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.merge import MergeableMixin
+from angee.base.models.stages import Stage as OrderedStage
+from angee.base.models.stages import StagedModelMixin
+from angee.base.models.trash import TrashMixin, TrashQuerySet
+from angee.base.querysets import AngeeQuerySet, MergeableQuerySet
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
