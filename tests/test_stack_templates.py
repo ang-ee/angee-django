@@ -733,7 +733,9 @@ def test_local_django_source_mode_bootstraps_fresh_host_dependencies() -> None:
         celery_command = service["command"][-1]
         source_sync = "uv sync --frozen --inexact --extra postgres --project sources/angee"
         assert source_sync in celery_command
-        assert celery_command.index(source_sync) < celery_command.index("uv sync --inexact && exec celery")
+        assert celery_command.index(source_sync) < celery_command.index(
+            "uv sync --inexact && exec python manage.py celery",
+        )
         assert service["after"] == ["provision", "redis"]
 
 
@@ -788,8 +790,8 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     assert "redis" in stack["services"]
     assert stack["services"]["django"]["env"]["REDIS_URL"] == "redis://redis:6379/0"
     assert stack["services"]["django"]["env"]["CELERY_BROKER_URL"] == "redis://redis:6379/1"
-    assert "celery -A angee.jobs.celery:app worker" in stack["services"]["celery-worker"]["command"][-1]
-    assert "celery -A angee.jobs.celery:app worker --beat" in stack["services"]["celery-worker"]["command"][-1]
+    assert "python manage.py celery worker" in stack["services"]["celery-worker"]["command"][-1]
+    assert "python manage.py celery worker --beat" in stack["services"]["celery-worker"]["command"][-1]
 
     caddy = stack["services"]["caddy"]
     assert caddy["ports"] == ["5173:80"]
@@ -1550,7 +1552,7 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert django["after"] == ["provision"]
     for name in ("celery-worker",):
         celery_command = stack["services"][name]["command"][-1]
-        assert "uv sync --inexact && exec celery" in celery_command
+        assert "uv sync --inexact && exec python manage.py celery" in celery_command
         assert stack["services"][name]["after"] == ["provision", "redis"]
 
     frontend = stack["services"]["frontend"]
@@ -2193,7 +2195,7 @@ def test_celery_queues_share_one_queue_worker_in_both_modes() -> None:
     dev_docker = _render_dev_docker_stack(celery_queues="whatsapp")
     dev_docker_service = dev_docker["services"]["celery-queues"]
     assert dev_docker_service["runtime"] == "container"
-    assert "uv sync --inexact && exec celery" in dev_docker_service["command"][-1]
+    assert "uv sync --inexact && exec python manage.py celery" in dev_docker_service["command"][-1]
     assert "worker -Q whatsapp --pool threads --concurrency 8" in dev_docker_service["command"][-1]
     assert dev_docker_service["env"] == dev_docker["services"]["celery-worker"]["env"]
 

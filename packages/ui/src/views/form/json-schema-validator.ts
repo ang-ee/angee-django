@@ -15,4 +15,3 @@ export function createJsonSchemaAjv(options: Options = {}): Ajv2020 {
   }
   return ajv;
 }
-

@@ -46,6 +46,7 @@ from tests.conftest import (
     create_platform_admin,
     execute_schema,
     result_data,
+    standalone_relation,
 )
 from tests.tables import model_tables
 
@@ -144,6 +145,7 @@ class CreateTask(TaskWork, CreateTaskHost, MergeableMixin, TrashMixin, AuditMixi
     """Native Work donor over the lifecycle columns it projects; duplicates are retained merges, removal is trash."""
 
     sqid_prefix = "ctk_"
+    queue = standalone_relation(TaskWork, "queue")
     TaskStatus = AbstractTask.TaskStatus
     TaskDroppedReason = AbstractTask.TaskDroppedReason
     title = models.CharField(max_length=240)
