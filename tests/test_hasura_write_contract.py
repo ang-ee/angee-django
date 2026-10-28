@@ -73,12 +73,14 @@ def test_input_donors_reach_native_create_and_update_envelopes() -> None:
     @strawberry.input(name=get_object_definition(resource.set_input_type, strict=True).name, extend=True)
     class UpdateExtras:
         details: list[WriteContractDetailInput] | None = strawberry.UNSET
+        detail: WriteContractDetailInput | None = strawberry.UNSET
         note: str | None = strawberry.UNSET
 
-    schema = GraphQLSchemas([make_addon(schemas={"public": {
+    schemas = GraphQLSchemas([make_addon(schemas={"public": {
         "query": [resource.query], "mutation": [resource.mutation],
         "types": [WriteContractDocType, *resource.types], "input_extensions": (InsertExtras, UpdateExtras),
-    }})]).build("public")
+    }})])
+    schema = schemas.build("public")
     # This backend captures inputs without persisting a row. Native response
     # projection is exercised by persisted-backend tests, not this envelope test.
     with DjangoOptimizerExtension.disabled():
@@ -87,14 +89,20 @@ def test_input_donors_reach_native_create_and_update_envelopes() -> None:
             title: "Inserted", details: [{value: "First"}, {value: "Second", note: null}]
           }) { title }
           update_write_contract_docs_by_pk(pk_columns: {id: "public-key"}, _set: {
-            title: "Updated", note: null
+            title: "Updated", note: null, detail: {value: "Pinned"}
           }) { title }
         }"""))
 
     assert backend.calls == [
         ("create", None, {"title": "Inserted", "details": [{"value": "First"}, {"value": "Second", "note": None}]}),
-        ("update", "public-key", {"title": "Updated", "note": None}),
+        ("update", "public-key", {"title": "Updated", "note": None, "detail": {"value": "Pinned"}}),
     ]
+
+    metadata = next(item for item in schemas.resources("public") if item.model is SharedDoc)
+    detail = next(field for field in metadata.fields if field.name == "detail")
+    assert (detail.kind, detail.scalar, detail.readable, detail.creatable, detail.updatable) == (
+        "object", None, False, False, True,
+    )
 
 
 @strawberry_django.type(Tag)

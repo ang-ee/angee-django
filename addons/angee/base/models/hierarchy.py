@@ -13,6 +13,7 @@ from django.db import NotSupportedError, connections, models, router, transactio
 from django.db.models import F, Value
 from django.db.models.functions import Cast, Replace
 
+from angee.base.fields.ordering import FractionalRankField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.querysets import SystemQuerysetMixin, _AngeeQuerySetMixin, query_batch_size
 
@@ -149,33 +150,61 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
             parent = parents[id(row)]
             if parent is not None and any(getattr(row, name) != getattr(parent, name) for name in scope):
                 raise ValidationError({"parent": "Parent must belong to the same scope."})
-            # Django refuses to insert a row naming an unsaved parent; the link lands below.
-            row.parent = None
-        with transaction.atomic(using=using), model.initialize_rows(rows, using=using):
-            # Below the hierarchy guard and deferred observers: the creation version
-            # below records each row with its parent and path.
-            super(_AngeeQuerySetMixin, cast(_AngeeQuerySetMixin, self)).bulk_create(rows)
-            for row in order:
-                parent = parents[id(row)]
-                row.parent = parent
-                row.path = row._hierarchy_path(parent)
-            # Each row adds a filter key and two key/value CASE pairs.
-            for chunk in batched(rows, query_batch_size(self, width=5)):
-                # The caller's queryset carries its authority (a sudo) to this write.
-                batch = cast(_AngeeQuerySetMixin, self.filter(pk__in=[row.pk for row in chunk]))
-                super(_AngeeQuerySetMixin, batch).update(
-                    parent_id=Cast(
-                        models.Case(
-                            *(models.When(pk=row.pk, then=models.Value(row.parent_id)) for row in chunk),
-                            output_field=field.target_field,
+        with transaction.atomic(using=using):
+            rank_fields = tuple(
+                column for column in model._meta.concrete_fields if isinstance(column, FractionalRankField)
+            )
+            for column in rank_fields:
+                column.allocate_missing_ranks(rows, using=using)
+            final_ranks = {
+                column: tuple(getattr(row, column.attname) for row in rows)
+                for column in rank_fields if field in column._unique_context_fields(model)
+            }
+            # Django refuses an unsaved parent. Stage parent-context ranks too:
+            # every insert temporarily occupies the persisted NULL-parent scope.
+            for row in rows:
+                row.parent = None
+            for column, values in final_ranks.items():
+                temporary = column.get_temporary_ranks(rows, values, using=using)
+                for row, rank in zip(rows, temporary, strict=True):
+                    setattr(row, column.attname, rank)
+            with model.initialize_rows(rows, using=using):
+                # Below the hierarchy guard and deferred observers: the creation version
+                # below records each row with its parent and path.
+                super(_AngeeQuerySetMixin, cast(_AngeeQuerySetMixin, self)).bulk_create(rows)
+                for row in order:
+                    parent = parents[id(row)]
+                    row.parent = parent
+                    row.path = row._hierarchy_path(parent)
+                for column, values in final_ranks.items():
+                    for row, rank in zip(rows, values, strict=True):
+                        setattr(row, column.attname, rank)
+                # One filter key plus one key/value CASE pair per initialized column.
+                width = 5 + 2 * len(final_ranks)
+                for chunk in batched(rows, query_batch_size(self, width=width)):
+                    # The caller's queryset carries its authority (a sudo) to this write.
+                    batch = cast(_AngeeQuerySetMixin, self.filter(pk__in=[row.pk for row in chunk]))
+                    super(_AngeeQuerySetMixin, batch).update(
+                        parent_id=Cast(
+                            models.Case(
+                                *(models.When(pk=row.pk, then=models.Value(row.parent_id)) for row in chunk),
+                                output_field=field.target_field,
+                            ),
+                            field.target_field,
                         ),
-                        field.target_field,
-                    ),
-                    path=models.Case(
-                        *(models.When(pk=row.pk, then=models.Value(row.path)) for row in chunk),
-                        output_field=model._hierarchy_column("path"),
-                    ),
-                )
+                        path=models.Case(
+                            *(models.When(pk=row.pk, then=models.Value(row.path)) for row in chunk),
+                            output_field=model._hierarchy_column("path"),
+                        ),
+                        **{
+                            column.name: models.Case(
+                                *(models.When(pk=row.pk, then=models.Value(getattr(row, column.attname)))
+                                  for row in chunk),
+                                output_field=column,
+                            )
+                            for column in final_ranks
+                        },
+                    )
         return rows
 
     def owner_update(self, **kwargs: Any) -> int:

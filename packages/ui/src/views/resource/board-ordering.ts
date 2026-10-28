@@ -1,7 +1,8 @@
-import type { Row } from "@angee/metadata";
+import { rowPublicId, type Row } from "@angee/metadata";
 import type { Row as TableRowModel } from "@tanstack/react-table";
 
 import type { RowGroup } from "./resource-view-list-body";
+import type { BoardOrderIntent } from "./resource-view-types";
 
 /** The clean spread owned by `FractionalRankField` on the server. */
 export const FRACTIONAL_RANK_STEP = 1024;
@@ -14,6 +15,7 @@ export interface BoardDropTarget {
 export interface BoardDropMove {
   laneId: string;
   rank?: number;
+  order?: BoardOrderIntent;
 }
 
 /**
@@ -40,13 +42,14 @@ export function fractionalRankBetween(
   return Number.isFinite(candidate) ? candidate : previous;
 }
 
-/** Resolve one drop to a lane plus its optional requested rank. */
+/** Resolve a loaded insertion to a lane plus numeric rank or neighbor intent. */
 export function boardMoveForDrop<TRow extends Row>({
   activeRowId,
   activeLaneId,
   target,
   groups,
   rankField,
+  rankInputField,
   rankForRow,
 }: {
   activeRowId: string;
@@ -54,6 +57,7 @@ export function boardMoveForDrop<TRow extends Row>({
   target: BoardDropTarget;
   groups: readonly RowGroup<TRow>[];
   rankField?: string;
+  rankInputField?: string;
   rankForRow: (row: TableRowModel<TRow>) => number | undefined;
 }): BoardDropMove | null {
   if (target.rowId === activeRowId) return null;
@@ -77,6 +81,20 @@ export function boardMoveForDrop<TRow extends Row>({
     const nextOrder = remainingRows.map((row) => row.id);
     nextOrder.splice(insertIndex, 0, activeRowId);
     if (sameOrder(currentOrder, nextOrder)) return null;
+  }
+
+  if (rankInputField) {
+    const publicIds = (rows: readonly TableRowModel<TRow>[]) => rows.flatMap((row) => {
+      const id = rowPublicId(row.original);
+      return id ? [id] : [];
+    });
+    return {
+      laneId: target.laneId,
+      order: {
+        preceding: publicIds(remainingRows.slice(0, insertIndex)),
+        following: publicIds(remainingRows.slice(insertIndex)),
+      },
+    };
   }
 
   return {

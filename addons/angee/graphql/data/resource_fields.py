@@ -24,6 +24,7 @@ from angee.graphql.data import contracts as data_contract
 from angee.graphql.introspection import is_to_many_relation, surface_field_names, surface_name
 from graphql import (
     GraphQLEnumType,
+    GraphQLInputObjectType,
     GraphQLList,
     GraphQLNonNull,
     GraphQLObjectType,
@@ -411,7 +412,7 @@ def final_input_only_resource_fields(
         named = get_named_type(graphql_field.type)
         is_list = _graphql_type_is_list(graphql_field.type)
         is_enum = isinstance(named, GraphQLEnumType)
-        is_object = isinstance(named, GraphQLObjectType)
+        is_object = isinstance(named, (GraphQLObjectType, GraphQLInputObjectType))
         kind = resource_field_kind(
             model_field,
             is_list=is_list,

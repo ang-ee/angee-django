@@ -129,6 +129,7 @@ function expectBoardStageScope(
   expect(props?.laneSource).toEqual({
     field: "stage",
     rankField: "sort_order",
+    rankInputField: "task_order",
     filters: [
       { field: "queue", operator: "eq", value: "que_eng" },
       { field: "category", operator: "ne", value: "triage" },

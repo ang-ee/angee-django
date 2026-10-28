@@ -24,3 +24,11 @@ class MilestoneTemplate(BaseModel):
         """Translate template errors into the standard model validation contract."""
 
         return validate_value(cls, value, field="milestones").model_dump()
+
+
+class TaskOrder(BaseModel):
+    """Visible neighbors around one board drop; Task owns their persisted scope."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    preceding: list[str]
+    following: list[str]

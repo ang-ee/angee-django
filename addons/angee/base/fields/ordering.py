@@ -10,6 +10,7 @@ from typing import Any, cast
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.backends.base.base import BaseDatabaseWrapper
+from django.utils.hashable import make_hashable
 
 
 class FractionalRankExhausted(ValueError):
@@ -100,11 +101,7 @@ class FractionalRankField(models.FloatField):
         """Read the next rank within the instance's context on its write database."""
 
         model = type(instance)
-        context_fields = self._unique_context_fields(model)
-        context = {
-            context_field.attname: getattr(instance, context_field.attname)
-            for context_field in context_fields
-        }
+        context = self._context_values(instance)
         previous = (
             model._base_manager.all()
             .using(using)
@@ -114,6 +111,50 @@ class FractionalRankField(models.FloatField):
             .first()
         )
         return self.get_append_rank(previous)
+
+    def _context_values(self, instance: models.Model) -> dict[str, Any]:
+        """Read this field's declared unique context from one row."""
+
+        return {
+            field.attname: getattr(instance, field.attname)
+            for field in self._unique_context_fields(self.model)
+        }
+
+    def allocate_missing_ranks(self, instances: Sequence[models.Model], *, using: str) -> None:
+        """Allocate omitted ranks before a native multirow INSERT under its owner's lock.
+
+        One INSERT cannot see its own earlier rows during field preparation.
+        Read each declared context once and include explicit batch destinations,
+        then allocate only omitted values in input order. Literal ranks stay exact.
+        An unsaved related context is new, distinct from persisted NULL: local
+        object identity groups its rows without becoming any emitted value.
+        """
+
+        groups: dict[tuple[Any, ...], list[models.Model]] = {}
+        context_fields = self._unique_context_fields(self.model)
+        for instance in instances:
+            pending = []
+            for field in context_fields:
+                related = field.get_cached_value(instance, None) if isinstance(field, models.ForeignKey) else None
+                pending.append(id(related) if related is not None and related.pk is None else None)
+            key = (make_hashable(tuple(self._context_values(instance).values())), tuple(pending))
+            groups.setdefault(key, []).append(instance)
+        for (_context, pending), rows in groups.items():
+            omitted = [row for row in rows if getattr(row, self.attname) is None]
+            if not omitted:
+                continue
+            previous = (
+                None if any(pending) else
+                self.model._base_manager.using(using).filter(**self._context_values(rows[0]))
+                .order_by(f"-{self.name}").values_list(self.name, flat=True).first()
+            )
+            for row in rows:
+                rank = self.to_python(getattr(row, self.attname))
+                if rank is not None and (previous is None or rank > previous):
+                    previous = rank
+            for row in omitted:
+                previous = self.get_append_rank(previous)
+                setattr(row, self.attname, previous)
 
     def _unique_context_fields(
         self,
@@ -168,6 +209,29 @@ class FractionalRankField(models.FloatField):
             raise FractionalRankExhausted("No finite append rank remains in this ordering context.")
         return candidate
 
+    @classmethod
+    def get_rank_between(cls, previous: float | None, following: float | None) -> float:
+        """Allocate one finite rank strictly between adjacent stored endpoints.
+
+        The ordering owner supplies the full persisted context under its write
+        lock; visible lane neighbors are not sufficient endpoints. Explicit
+        numeric writes never call this allocator and retain their exact values.
+        """
+
+        if following is None:
+            return cls.get_append_rank(previous)
+        upper = cls._coerce_endpoint(following, name="following")
+        if previous is None:
+            candidate = upper - cls.STEP
+            valid = math.isfinite(candidate) and candidate < upper
+        else:
+            lower = cls._coerce_endpoint(previous, name="previous")
+            candidate = lower / 2 + upper / 2
+            valid = lower < candidate < upper
+        if not valid:
+            raise FractionalRankExhausted("No finite rank remains between these ordering neighbors.")
+        return candidate
+
     def get_temporary_ranks(
         self,
         instances: Sequence[models.Model],
@@ -186,12 +250,13 @@ class FractionalRankField(models.FloatField):
 
         if not instances:
             return ()
-        context_fields = self._unique_context_fields(self.model)
+        distinct_contexts = {
+            make_hashable(tuple(context.items())): context
+            for instance in instances for context in (self._context_values(instance),)
+        }
         contexts = models.Q()
-        for instance in instances:
-            contexts |= models.Q(**{
-                field.attname: getattr(instance, field.attname) for field in context_fields
-            })
+        for context in distinct_contexts.values():
+            contexts |= models.Q(**context)
         previous = (
             self.model._base_manager.using(using).filter(contexts)
             .order_by(f"-{self.name}").values_list(self.name, flat=True).first()

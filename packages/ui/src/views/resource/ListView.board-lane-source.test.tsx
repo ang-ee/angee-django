@@ -259,6 +259,52 @@ describe("ListView board laneSource", () => {
     ]);
   });
 
+  test("sends neighbor intent and settles against the server canonical rank", async () => {
+    harness.tableRows[0]!.sort_order = 1024;
+    let finishMove: () => void = () => undefined;
+    harness.mutateAsync.mockImplementation((variables: unknown) => {
+      harness.updateCalls.push(variables);
+      return new Promise((resolve) => {
+        finishMove = () => {
+          harness.tableRows = [{ ...harness.tableRows[0]!, stage: { id: "stg_qualified", name: "Qualified" }, sort_order: 1792 }];
+          resolve({ data: harness.tableRows[0] });
+        };
+      });
+    });
+    renderLeadBoard({ laneSource: { field: "stage", rankField: "sort_order", rankInputField: "task_order" } });
+    await waitFor(() => expect(harness.boardProps?.rankInputField).toBe("task_order"));
+    const intent = { preceding: ["led_before"], following: ["led_after"] };
+    let move: void | Promise<void> = undefined;
+    act(() => { move = harness.boardProps?.onCardMove?.(harness.tableRows[0]!, "stg_qualified", intent); });
+    await waitFor(() => expect(rowIdsByLane().stg_qualified).toEqual(["led_1"]));
+    expect(harness.boardProps?.optimisticPlacementByRowId?.get("led_1")).toEqual({ laneId: "stg_qualified" });
+    expect(harness.updateCalls).toEqual([{ id: "led_1", values: { stage: "stg_qualified", task_order: intent } }]);
+    await act(async () => { finishMove(); await move; });
+    expect(harness.boardProps?.optimisticPlacementByRowId?.size).toBe(0);
+    expect(rowIdsByLane().stg_qualified).toEqual(["led_1"]);
+    expect(harness.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("an older intent completion cannot clear a newer move of the same card", async () => {
+    const finishes: (() => void)[] = [];
+    harness.mutateAsync.mockImplementation(() => new Promise((resolve) => {
+      finishes.push(() => resolve({ data: { id: "led_1" } }));
+    }));
+    renderLeadBoard({ laneSource: { field: "stage", rankField: "sort_order", rankInputField: "task_order" } });
+    await waitFor(() => expect(harness.boardProps?.onCardMove).toBeDefined());
+    const intent = { preceding: [], following: [] };
+    let first: void | Promise<void> = undefined;
+    let second: void | Promise<void> = undefined;
+    act(() => { first = harness.boardProps?.onCardMove?.(harness.tableRows[0]!, "stg_qualified", intent); });
+    await waitFor(() => expect(rowIdsByLane().stg_qualified).toEqual(["led_1"]));
+    act(() => { second = harness.boardProps?.onCardMove?.(harness.tableRows[0]!, "stg_proposal", intent); });
+    await waitFor(() => expect(rowIdsByLane().stg_proposal).toEqual(["led_1"]));
+    await act(async () => { finishes[0]!(); await first; });
+    expect(harness.boardProps?.optimisticPlacementByRowId?.get("led_1")?.laneId).toBe("stg_proposal");
+    await act(async () => { finishes[1]!(); await second; });
+    expect(harness.boardProps?.optimisticPlacementByRowId?.size).toBe(0);
+  });
+
   test("reads a declared lane fold fact as the initial collapsed state", async () => {
     harness.laneRows = [
       { id: "stg_new", name: "New", fold: true },
@@ -304,6 +350,16 @@ describe("ListView board laneSource", () => {
 
     cleanup();
     renderLeadBoard({ metadata: leadMetadata({ stageWritable: false }) });
+    await waitFor(() => expect(harness.boardProps).not.toBeNull());
+    expect(harness.boardProps?.dragEnabled).toBe(false);
+    expect(harness.boardProps?.onCardMove).toBeUndefined();
+  });
+
+  test("requires the declared neighbor input to be writable before enabling drag", async () => {
+    renderLeadBoard({
+      laneSource: { field: "stage", rankField: "sort_order", rankInputField: "task_order" },
+      metadata: leadMetadata({ orderWritable: false }),
+    });
     await waitFor(() => expect(harness.boardProps).not.toBeNull());
     expect(harness.boardProps?.dragEnabled).toBe(false);
     expect(harness.boardProps?.onCardMove).toBeUndefined();
@@ -500,10 +556,12 @@ function leadMetadata(
   {
     stageNullable = true,
     stageWritable = true,
+    orderWritable = true,
     rowModel = "server",
   }: {
     stageNullable?: boolean;
     stageWritable?: boolean;
+    orderWritable?: boolean;
     rowModel?: "client" | "server";
   } = {},
 ): SchemaFieldMetadata {
@@ -530,6 +588,7 @@ function leadMetadata(
         field("id", { scalar: "ID", updatable: false }),
         field("name", { scalar: "String" }),
         field("sort_order", { scalar: "Float" }),
+        field("task_order", { scalar: "JSON", updatable: orderWritable }),
         field("stage", {
           kind: "relation",
           relationModelLabel: "crm.Stage",
@@ -545,7 +604,7 @@ function leadMetadata(
       ],
       query: leadQuery,
       aggregateFields: ["id"],
-      updateFields: stageWritable ? ["name", "stage", "sort_order"] : ["name", "sort_order"],
+      updateFields: stageWritable ? ["name", "stage", "sort_order", "task_order"] : ["name", "sort_order", "task_order"],
     },
     {
       schemaName: "console",
