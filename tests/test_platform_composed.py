@@ -7,6 +7,7 @@ from typing import Any, NoReturn
 import pytest
 from django.apps import apps
 
+from angee.base.implementations import impl_choices
 from angee.platform import composed
 
 
@@ -101,7 +102,7 @@ def test_implementation_row_factory_retains_field_choice_and_optional_addon(
 
     model = apps.get_model("storage", "Backend")
     field = model._meta.get_field("backend_class")
-    choice = next(choice for choice in field.impl_choices() if choice.key == "local")
+    choice = next(choice for choice in impl_choices(field.base_class) if choice.key == "local")
     configs = [apps.get_app_config("storage")] if installed else []
     with monkeypatch.context() as patch:
         patch.setattr(composed.inspect, "getsourcelines", _unexpected)

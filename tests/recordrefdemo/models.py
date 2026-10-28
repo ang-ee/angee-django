@@ -1,4 +1,4 @@
-"""Concrete probes for :class:`~angee.base.models.RecordRefMixin` targets and edges, and for merge moves."""
+"""Concrete probes for :class:`~angee.base.models.refs.RecordRefMixin` targets and edges, and for merge moves."""
 
 from __future__ import annotations
 
@@ -7,7 +7,10 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models.functions import Lower
 
-from angee.base.models import AngeeModel, MergeableMixin, RecordRefMixin, SqidMixin
+from angee.base.models.base import AngeeModel
+from angee.base.models.identity import SqidMixin
+from angee.base.models.merge import MergeableMixin
+from angee.base.models.refs import RecordRefMixin
 
 
 class RecordRefTypedTarget(SqidMixin, AngeeModel):

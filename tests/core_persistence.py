@@ -12,17 +12,11 @@ from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.base.models import (
-    AngeeModel,
-    ImmutableFieldsMixin,
-    ItemOwnershipMixin,
-    OptimisticLockMixin,
-    OwnerMixin,
-    OwnerQuerySet,
-    TimestampMixin,
-    TrashMixin,
-    TrashQuerySet,
-)
+from angee.base.models.base import AngeeModel
+from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
+from angee.base.models.ownership import ItemOwnershipMixin, OwnerMixin, OwnerQuerySet
+from angee.base.models.timestamps import TimestampMixin
+from angee.base.models.trash import TrashMixin, TrashQuerySet
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 

@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from angee import management
+from angee.provenance.contrib.angee.context import SERVER_COMMANDS
 
 
 def test_management_import_and_core_command_do_not_load_optional_owners() -> None:
@@ -30,7 +31,7 @@ management.main(["manage.py", "check"])
 assert seen == [["manage.py", "check"]]
 for forbidden in ("angee.provenance", "angee.compose", "rebac"):
     assert not any(name == forbidden or name.startswith(forbidden + ".") for name in sys.modules), forbidden
-import angee.management.bootstrap
+import angee.management.provision
 management.main(["manage.py", "check"])
 assert seen == [["manage.py", "check"], ["manage.py", "check"]]
 """
@@ -76,12 +77,12 @@ def test_management_context_wraps_dispatch_and_unwinds_on_failure(
     assert events == [("enter", "migrate"), ("dispatch", "migrate"), ("exit", "migrate")]
 
 
-@pytest.mark.parametrize("command", sorted(management.SERVER_COMMANDS))
+@pytest.mark.parametrize("command", sorted(SERVER_COMMANDS))
 def test_long_running_commands_keep_their_own_contexts(
     settings: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, command: str,
 ) -> None:
     monkeypatch.setenv("ANGEE_PROJECT_DIR", str(tmp_path))
-    settings.ANGEE_MANAGEMENT_CONTEXT = "missing_optional_addon.open_context"
+    settings.ANGEE_MANAGEMENT_CONTEXT = "angee.provenance.contrib.angee.context.management_context"
     seen = []
     monkeypatch.setattr(management, "execute_from_command_line", lambda argv: seen.append(argv))
     argv = [str(tmp_path / "manage.py"), command]

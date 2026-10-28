@@ -600,11 +600,14 @@ wheels = [
 
 [[package]]
 name = "cron-descriptor"
-version = "1.4.5"
+version = "2.2.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/02/83/70bd410dc6965e33a5460b7da84cf0c5a7330a68d6d5d4c3dfdb72ca117e/cron_descriptor-1.4.5.tar.gz", hash = "sha256:f51ce4ffc1d1f2816939add8524f206c376a42c87a5fca3091ce26725b3b1bca", size = 30666, upload-time = "2024-08-24T18:16:48.654Z" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/41/6b/9ebac1857c0e90d5ba487090f4f9b23e8bf9adead62922550621de21cbf2/cron_descriptor-2.2.1.tar.gz", hash = "sha256:6759056f43b3cabca274b5df182bb63571f2f383bdd4d9d3ff4662c527430a65", size = 53562, upload-time = "2026-10-13T12:39:33.386Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/88/20/2cfe598ead23a715a00beb716477cfddd3e5948cf203c372d02221e5b0c6/cron_descriptor-1.4.5-py3-none-any.whl", hash = "sha256:736b3ae9d1a99bc3dbfc5b55b5e6e7c12031e7ba5de716625772f8b02dcd6013", size = 50370, upload-time = "2024-08-24T18:16:46.783Z" },
+    { url = "https://files.pythonhosted.org/packages/87/f8/c9c61b0fd465aaa2b2ac2f51c77dfe49e09dc6c907a8d476c4870b738f2a/cron_descriptor-2.2.1-py3-none-any.whl", hash = "sha256:23b42aca983841333aaf28095024e0457f005621d03e658edbd7316a5f2bbd42", size = 76628, upload-time = "2026-10-13T12:39:31.663Z" },
 ]
 
 [[package]]
@@ -731,16 +734,16 @@ wheels = [
 
 [[package]]
 name = "django"
-version = "6.0.6"
+version = "6.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asgiref" },
     { name = "sqlparse" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/78/29/ac41e16097af67066d97a7d5775c5d8e7efc5d0284f6b0a159e07b9adb92/django-6.0.6.tar.gz", hash = "sha256:ad03916ba59523d781ae5c3f631960c23d69a9d9c43cecda52fc23b47e953713", size = 10905525, upload-time = "2026-06-03T13:02:46.503Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/89/24/20d187a22ac821288b53c53b8f696019dcb0c7b4f973f052ade19392c74d/django-6.1.2.tar.gz", hash = "sha256:a1e92451ccb8b514e91bbb3b6d186d20b4030558f116b5d9de6535455ff210b7", size = 11251425, upload-time = "2026-10-06T12:53:29.622Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/eb/50/23f9dc45483419a3cc2085b498b25adfbf10642b2941c73e6d2dfaffc9ab/django-6.0.6-py3-none-any.whl", hash = "sha256:25148b1194c47c2e685e5f5e9c5d59c78b075dfd282cb9618861ba6c1708f4d2", size = 8373354, upload-time = "2026-06-03T13:02:41.72Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/83/90ff2dbfac7b519ed77620bdbb827cd2d1a83faf00d076bf95056428bce7/django-6.1.2-py3-none-any.whl", hash = "sha256:141efee6ec64d1db6db90683bf734c550102450f444fb099063b0be1bd27d991", size = 8420684, upload-time = "2026-10-06T12:53:17.381Z" },
 ]
 
 [[package]]
@@ -752,7 +755,6 @@ dependencies = [
     { name = "django" },
     { name = "django-environ" },
     { name = "django-yamlconf" },
-    { name = "django-zed-rebac" },
     { name = "hatch-angee" },
     { name = "sentry-sdk" },
     { name = "uvicorn", extra = ["standard"] },
@@ -838,10 +840,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "channels", specifier = ">=4.0" },
-    { name = "django", specifier = ">=6.0,<6.1" },
+    { name = "django", specifier = ">=6.1.2,<6.2" },
     { name = "django-environ", specifier = ">=0.12" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=70b4e2e5fa04ad3cf05f2a541cf3007c19d35adb" },
     { name = "hatch-angee", specifier = ">=0.2.6" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "sentry-sdk", specifier = ">=2.71.0" },
@@ -862,13 +863,14 @@ addons = [
     { name = "deepdiff", specifier = ">=9.1.0" },
     { name = "django-anymail", specifier = ">=15.1" },
     { name = "django-axes", specifier = ">=8.0" },
-    { name = "django-celery-beat", specifier = ">=2.9" },
+    { name = "django-celery-beat", git = "https://github.com/celery/django-celery-beat.git?rev=b5e3443d647baf910c0168f25b512dd388ba669e" },
     { name = "django-choices-field", git = "https://github.com/ang-ee/django-choices-field.git?rev=b02c1488660d0bf1f4483d2e73bc842b41b70632" },
     { name = "django-countries", specifier = ">=9,<10" },
     { name = "django-import-export", specifier = ">=4.4" },
     { name = "django-simple-history", specifier = ">=3.13" },
     { name = "django-sqids", specifier = ">=0.1" },
-    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.27.0" },
+    { name = "django-zed-rebac", specifier = ">=0.30.0" },
+    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.30.0" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
     { name = "httpcore2", specifier = ">=2.10,<3" },
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
@@ -910,8 +912,8 @@ addons = [
 ]
 dev = [
     { name = "daphne", specifier = ">=4.0" },
-    { name = "django-stubs", extras = ["compatible-mypy"], git = "https://github.com/ang-ee/django-stubs.git?rev=c742042283a82c3248c68493c697f5f30e2fdc6a" },
-    { name = "django-zed-rebac", extras = ["caveats"], specifier = "==0.28.0" },
+    { name = "django-stubs", extras = ["compatible-mypy"], git = "https://github.com/ang-ee/django-stubs.git?rev=423ed850e5f2d7ea9e67f3e0f9e8bee4be215988" },
+    { name = "django-zed-rebac", extras = ["caveats"], specifier = ">=0.30.0" },
     { name = "faker", specifier = ">=30.0" },
     { name = "mypy", git = "https://github.com/ang-ee/mypy.git?rev=ac3de6e4c34b04728e768e07d4842f4309ff6c45" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
@@ -955,7 +957,7 @@ wheels = [
 [[package]]
 name = "django-celery-beat"
 version = "2.9.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/celery/django-celery-beat.git?rev=b5e3443d647baf910c0168f25b512dd388ba669e#b5e3443d647baf910c0168f25b512dd388ba669e" }
 dependencies = [
     { name = "celery" },
     { name = "cron-descriptor" },
@@ -963,10 +965,6 @@ dependencies = [
     { name = "django-timezone-field" },
     { name = "python-crontab" },
     { name = "tzdata" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/05/45/fc97bc1d9af8e7dc07f1e37044d9551a30e6793249864cef802341e2e3a8/django_celery_beat-2.9.0.tar.gz", hash = "sha256:92404650f52fcb44cf08e2b09635cb1558327c54b1a5d570f0e2d3a22130934c", size = 177667, upload-time = "2026-02-28T16:45:34.749Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/71/ae/9befa7ae37f5e5c41be636a254fcf47ff30dd5c88bd115070e252f6b9162/django_celery_beat-2.9.0-py3-none-any.whl", hash = "sha256:4a9e5ebe26d6f8d7215e1fc5c46e466016279dc102435a28141108649bdf2157", size = 105013, upload-time = "2026-02-28T16:45:32.822Z" },
 ]
 
 [[package]]
@@ -1040,8 +1038,8 @@ wheels = [
 
 [[package]]
 name = "django-stubs"
-version = "6.0.9"
-source = { git = "https://github.com/ang-ee/django-stubs.git?rev=c742042283a82c3248c68493c697f5f30e2fdc6a#c742042283a82c3248c68493c697f5f30e2fdc6a" }
+version = "6.1.2"
+source = { git = "https://github.com/ang-ee/django-stubs.git?rev=423ed850e5f2d7ea9e67f3e0f9e8bee4be215988#423ed850e5f2d7ea9e67f3e0f9e8bee4be215988" }
 dependencies = [
     { name = "django" },
     { name = "django-stubs-ext" },
@@ -1056,8 +1054,8 @@ compatible-mypy = [
 
 [[package]]
 name = "django-stubs-ext"
-version = "6.0.9"
-source = { git = "https://github.com/ang-ee/django-stubs.git?subdirectory=ext&rev=c742042283a82c3248c68493c697f5f30e2fdc6a#c742042283a82c3248c68493c697f5f30e2fdc6a" }
+version = "6.1.2"
+source = { git = "https://github.com/ang-ee/django-stubs.git?subdirectory=ext&rev=423ed850e5f2d7ea9e67f3e0f9e8bee4be215988#423ed850e5f2d7ea9e67f3e0f9e8bee4be215988" }
 dependencies = [
     { name = "django" },
     { name = "typing-extensions" },
@@ -1088,10 +1086,14 @@ wheels = [
 
 [[package]]
 name = "django-zed-rebac"
-version = "0.28.0"
-source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=70b4e2e5fa04ad3cf05f2a541cf3007c19d35adb#70b4e2e5fa04ad3cf05f2a541cf3007c19d35adb" }
+version = "0.30.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a2/49/f1673ceb1a7005f227e15898c19b697f809776e7145241e501903c372054/django_zed_rebac-0.30.0.tar.gz", hash = "sha256:1076fef6672240dd5112155c44fcb4e40b6fbf10fb1e1061e116a48ef49546ea", size = 626414, upload-time = "2026-10-28T18:29:31.1Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ef/af/d6f5d998ce4bf6c4b3e4c057c6ffcd903af97cf0cb9f98337731be94a960/django_zed_rebac-0.30.0-py3-none-any.whl", hash = "sha256:beecdc57722be095b69ad71178dc3d67b06339b05cbfc77030ad11286e37fdf5", size = 324991, upload-time = "2026-10-28T18:29:29.685Z" },
 ]
 
 [package.optional-dependencies]

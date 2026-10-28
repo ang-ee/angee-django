@@ -19,7 +19,7 @@ from django.db import models
 from rebac.resources import model_for_resource_type, model_resource_type
 
 from angee.base.fields.encrypted import EncryptedField
-from angee.base.identity import instance_from_public_id, public_id_of
+from angee.base.models.identity import instance_from_public_id, public_id_of
 
 _PREVIEW_CAP = 20
 """Most rows previewed for a list/dashboard view — full bodies come from the MCP tools."""

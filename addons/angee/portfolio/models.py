@@ -24,16 +24,13 @@ from rebac import (
 
 from angee.base.fields.ordering import FractionalRankField
 from angee.base.fields.state import StateField
-from angee.base.models import (
-    AngeeDataModel,
-    AuditMixin,
-    HierarchyMixin,
-    HierarchyQuerySet,
-    MergePolicy,
-    OwnerMixin,
-    RecordRefMixin,
-    role_anchor,
-)
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
+from angee.base.models.merge_references import MergePolicy
+from angee.base.models.ownership import OwnerMixin
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.roles import role_anchor
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet

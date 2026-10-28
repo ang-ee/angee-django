@@ -53,16 +53,12 @@ from angee.agents.skills import parse_skill_meta
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
-from angee.base.models import (
-    AngeeDataModel,
-    AuditMixin,
-    OwnerMixin,
-    StateTransitions,
-    role_anchor,
-    save_state,
-    transition,
-)
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
 from angee.base.models.implementations import ImplDefaultsMixin
+from angee.base.models.ownership import OwnerMixin
+from angee.base.models.roles import role_anchor
+from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.graphql.events import ChangeRelatedRecord
 from angee.iam.service_users import sync_service_user
@@ -905,7 +901,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     into the workspace, and the model's API credential into the service. ``service`` and
     ``workspace`` hold the operator instance names once rendered.
 
-    Ownership is transferable (:class:`~angee.base.models.OwnerMixin`). An agent
+    Ownership is transferable (:class:`~angee.base.models.ownership.OwnerMixin`). An agent
     installed before any user exists loads without an owner until an
     administrator transfers it, and deleting the owner clears it, leaving the
     agent to platform administrators.

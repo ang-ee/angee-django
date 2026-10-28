@@ -9,7 +9,8 @@ from zoneinfo import ZoneInfo
 from django.db import models, transaction
 from django.utils import timezone
 
-from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.managers import AngeeManager
+from angee.base.querysets import AngeeQuerySet
 
 if TYPE_CHECKING:
     from angee.posts.models import FeedFollow, PostMetrics, Quota

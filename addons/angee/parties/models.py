@@ -14,7 +14,7 @@ carries its legal name and domain.
 
 Parties are organised two ways, both human-owned facts: :class:`Circle` is a
 private, overlapping grouping (a party may belong to many circles; circles nest
-as a :class:`~angee.base.models.HierarchyMixin` tree), and :class:`Relationship`
+as a :class:`~angee.base.models.hierarchy.HierarchyMixin` tree), and :class:`Relationship`
 is a typed, directed party↔party edge whose vocabulary
 (:class:`RelationshipKind`) is catalogue data seeded from the XFN / vCard
 ``RELATED`` values — never a schema fact.
@@ -42,20 +42,18 @@ from rebac import PermissionDenied, actor_context
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
+from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
 from angee.base.fields.text import ColorField
-from angee.base.identity import public_id_of
 from angee.base.lineage import concrete_child, concrete_child_models
-from angee.base.models import (
-    AngeeDataModel,
-    AuditMixin,
-    HierarchyMixin,
-    MergeableMixin,
-    OwnerMixin,
-    TrashMixin,
-)
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.hierarchy import HierarchyMixin
+from angee.base.models.identity import public_id_of
+from angee.base.models.merge import MergeableMixin
+from angee.base.models.ownership import OwnerMixin
+from angee.base.models.trash import TrashMixin
 from angee.base.permissions import instance_actor
-from angee.base.refs import RetainedGenericRelation
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.parties.backends import DirectoryBackend
 from angee.parties.fields import CountryCodeField
@@ -85,7 +83,7 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
 
     The parent owns the common contact identity — the public id, ownership, the
     display name, avatar, notes and tags. Ownership is the transferable ``owner``
-    (:class:`~angee.base.models.OwnerMixin`), which an insert defaults to the
+    (:class:`~angee.base.models.ownership.OwnerMixin`), which an insert defaults to the
     creator; ``created_by`` stays attribution. RecordLink owns directory payloads.
     The concrete kind (and its kind-specific fields) lives on the :class:`Person` /
     :class:`Organization` child row, which inherits the owner; a child's tags key
@@ -1033,7 +1031,7 @@ class Circle(HierarchyMixin, OwnerMixin, AngeeDataModel):
     address book): "Family", "Inner Circle", a climbing crew. A party may belong to
     many circles (:class:`CircleMember`), and circles nest as a tree — overlap
     comes from multi-membership, never from multiple parents. The tree is
-    :class:`~angee.base.models.HierarchyMixin`'s materialized path, so "everyone in
+    :class:`~angee.base.models.hierarchy.HierarchyMixin`'s materialized path, so "everyone in
     this circle including sub-circles" is an indexed prefix scan
     (``Circle.objects.subtree_of(circle)``), and ``hierarchy_scope_fields`` keeps a
     personal circle tree from straddling owners: the transferable ``owner`` scopes

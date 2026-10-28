@@ -17,8 +17,8 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.utils.requests import get_request
 
-from angee.base.identity import instance_from_public_id
-from angee.base.models import StaleRevisionError
+from angee.base.models.identity import instance_from_public_id
+from angee.base.models.locks import StaleRevisionError
 from angee.dashboards.models import Dashboard as DashboardModel
 from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot, widget_visibility_answers
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field

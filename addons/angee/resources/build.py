@@ -7,6 +7,7 @@ from typing import Any
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError, models
+from rebac import system_context
 
 from angee.compose.declarations import BuildIntegration, DeclarationValue, ModelDeclaration
 from angee.compose.model_composition import ModelComposition
@@ -46,7 +47,8 @@ class CatalogueIntegration(BuildIntegration):
         except LookupError:
             return set()
         try:
-            candidates = ledger.objects.using(alias).retired_seed_keys(model._meta.label)
+            with system_context(reason="resources.retired_primary_keys"):
+                candidates = ledger.objects.using(alias).retired_seed_keys(model._meta.label)
         except DatabaseError:
             return set()
         keys = set()

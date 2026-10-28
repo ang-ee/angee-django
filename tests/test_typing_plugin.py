@@ -254,13 +254,14 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "    record.save_without_historical_record(unknown=True)\n"
         "    record.save_without_historical_record(force_update='bad')\n"
     )
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "addons")))}
     command = [sys.executable, "-m", "mypy", "--config-file", str(config)]
     positive = subprocess.run(
         [*command, str(valid), str(root / "addons/angee/base/managers.py")],
-        cwd=root, capture_output=True, text=True, check=False,
+        cwd=root, env=env, capture_output=True, text=True, check=False,
     )
     assert positive.returncode == 0, positive.stdout + positive.stderr
-    negative = subprocess.run([*command, str(invalid)], cwd=root, capture_output=True, text=True, check=False)
+    negative = subprocess.run([*command, str(invalid)], cwd=root, env=env, capture_output=True, text=True, check=False)
     assert negative.returncode == 1, negative.stdout + negative.stderr
     for line in (2, 3, 4, 5, 6, 11, 13, 14, 15, 16, 17, 19, 20, 21, 23, 24, 25, 27, 28, 29, 31, 33, 34, 35, 38, 39):
         assert f"invalid.py:{line}: error:" in negative.stdout, negative.stdout
@@ -280,7 +281,9 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "assert_type(require_changeset(), ChangesetLike)\n"
     )
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(tmp_path), env.get("PYTHONPATH"))))
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH")))
+    )
     disabled = subprocess.run(
         [sys.executable, "-m", "mypy", "--config-file", str(disabled_config), str(disabled_source)],
         cwd=root, env=env, capture_output=True, text=True, check=False,

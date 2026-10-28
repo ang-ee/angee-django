@@ -36,7 +36,9 @@ from rebac import PermissionDenied, system_context
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
-from angee.base.models import AngeeDataModel, AuditMixin, update_fields_with_auto_now
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.integrate.models import IntegrationCreateMode
 from angee.posts.backends import FeedBackend
 from angee.posts.managers import (

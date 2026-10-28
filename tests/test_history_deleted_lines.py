@@ -13,7 +13,7 @@ from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.base.identity import public_id_of
+from angee.base.models.identity import public_id_of
 from angee.provenance.context import changeset
 from angee.provenance.querysets import model_history
 from angee.provenance.schema import RecordHistory

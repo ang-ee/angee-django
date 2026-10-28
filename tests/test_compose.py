@@ -22,21 +22,19 @@ import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
 from angee.addons import addon_manifest
 from angee.base.build import PermissionIntegration, composed_grants
-from angee.base.models import (
-    AngeeModel,
-    role_anchor,
-)
+from angee.base.models.base import AngeeModel
+from angee.base.models.roles import role_anchor
 from angee.compose.appgraph import AppGraph
-from angee.compose.apps import ComposeConfig
-from angee.compose.declarations import model_declaration
+from angee.compose.apps import BuildComposeConfig, ComposeConfig
+from angee.compose.declarations import AppDeclarationSource, model_declaration
 from angee.compose.model_composition import ModelComposition
 from angee.compose.rendering import render_models
-from angee.compose.runtime import Runtime
-from angee.conf import ProjectContract
+from angee.compose.runtime import GENERATED_SENTINEL, Runtime
+from angee.conf import ManifestDeclarations, ProjectContract
+from angee.management import provision
 from angee.management.commands.angee import Command
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.resources.mixins import ResourceLoadMixin
-from angee.utils.artifacts import GENERATED_SENTINEL
 from angee.web.build import WebRuntime
 from tests.conftest import make_addon
 
@@ -257,8 +255,11 @@ def test_runtime_validates_donor_grants_with_model_owner(invalid: Any) -> None:
 
 def test_runtime_honors_explicit_label_when_module_terminal_differs(
     tmp_path: Path,
+    settings: Any,
 ) -> None:
     """A source module ending in ``base`` may emit under its explicit app label."""
+
+    settings.MIGRATION_MODULES = {**settings.MIGRATION_MODULES, "beta": None}
 
     def temp_config(name: str, label: str, module: ModuleType, *, depends_on: tuple[str, ...] = ()) -> AppConfig:
         config = make_addon(name=name, label=label, path=tmp_path / label, depends_on=depends_on)
@@ -272,7 +273,7 @@ def test_runtime_honors_explicit_label_when_module_terminal_differs(
     beta.models_module = beta_models
     alpha = temp_config("tests.alpha", "alpha", ModuleType("tests.alpha"), depends_on=("beta",))
 
-    ordered = AppGraph().resolve((alpha, beta))
+    ordered = AppGraph(ManifestDeclarations()).resolve((alpha, beta))
     assert [config.label for config in ordered[:2]] == ["beta", "alpha"]
 
     runtime = Runtime.discover((beta,), runtime_dir=tmp_path / "runtime")
@@ -342,7 +343,7 @@ def test_web_runtime_projects_package_ancestry_through_backend_only_addons() -> 
 def test_nexus_aggregation_dependencies_reach_web_runtime() -> None:
     """Nexus alone pulls in every app whose menu it includes, already in the test host."""
 
-    configs = AppGraph().resolve(("angee.nexus",))
+    configs = AppGraph(ManifestDeclarations()).resolve(("angee.nexus",))
     assert {config.name for config in configs if addon_manifest(config) is not None} <= {
         config.name for config in apps.get_app_configs()
     }
@@ -354,8 +355,8 @@ def test_nexus_aggregation_dependencies_reach_web_runtime() -> None:
 def test_oidc_web_documents_follow_the_enabled_backend_addon() -> None:
     """An IAM-only host never scans operations belonging to the optional OIDC schema."""
 
-    iam_configs = AppGraph().resolve(("angee.iam",))
-    oidc_configs = AppGraph().resolve(("angee.iam_integrate_oidc",))
+    iam_configs = AppGraph(ManifestDeclarations()).resolve(("angee.iam",))
+    oidc_configs = AppGraph(ManifestDeclarations()).resolve(("angee.iam_integrate_oidc",))
     iam_manifest = WebRuntime(iam_configs).manifest
     oidc_manifest = WebRuntime(oidc_configs).manifest
 
@@ -478,33 +479,17 @@ def test_web_runtime_rejects_invalid_package_names() -> None:
         WebRuntime((broken,))
 
 
-def test_runtime_configures_migrations_for_runtime_labels(tmp_path: Path, settings: Any) -> None:
-    """Runtime owns migration redirects for labels it materializes."""
+def test_runtime_records_native_effective_migration_mapping(tmp_path: Path, settings: Any) -> None:
+    """The compiler projects native history ownership without changing it."""
 
     runtime = runtime_for(tmp_path)
-    settings.MIGRATION_MODULES = {
-        "custom": "custom.migrations",
-        "disabled": None,
-        "foreign": "other_runtime.foreign.migrations",
-    }
-
-    runtime.configure_migration_modules()
-    assert settings.MIGRATION_MODULES == {
-        "custom": "custom.migrations",
-        "disabled": None,
-        "foreign": "other_runtime.foreign.migrations",
-        "resources": "runtime.resources.migrations",
-    }
-
-
-def test_runtime_migration_module_conflicts_fail_fast(tmp_path: Path, settings: Any) -> None:
-    """Projects cannot silently move migrations for emitted runtime apps."""
-
-    runtime = runtime_for(tmp_path)
-    settings.MIGRATION_MODULES = {"resources": "custom.resources.migrations"}
-
-    with pytest.raises(ImproperlyConfigured, match=r"MIGRATION_MODULES\['resources'\]"):
-        runtime.configure_migration_modules()
+    mapping = {"resources": "migrations.resources", "foreign": None}
+    settings.MIGRATION_MODULES = mapping.copy()
+    namespace: dict[str, Any] = {}
+    exec(runtime.render_sources()[Path("__init__.py")], namespace)
+    assert namespace["RUNTIME_MIGRATION_MODULES"] == {"resources": "migrations.resources"}
+    assert settings.MIGRATION_MODULES == mapping
+    assert not any("migrations" in path.parts for path in runtime.render_sources())
 
 
 def test_runtime_renders_iam_user_sources(tmp_path: Path) -> None:
@@ -620,9 +605,10 @@ def test_runtime_emits_only_models_marked_runtime(tmp_path: Path) -> None:
     assert "class SkippedRuntimeThing" not in source
 
 
-def test_runtime_carries_catalogue_markers_on_emitted_concrete_model(tmp_path: Path) -> None:
+def test_runtime_carries_catalogue_markers_on_emitted_concrete_model(tmp_path: Path, settings: Any) -> None:
     """Catalogue declarations survive the abstract-source to concrete-runtime hop."""
 
+    settings.MIGRATION_MODULES = {**settings.MIGRATION_MODULES, "catalogue": None}
     module = ModuleType("tests.catalogue_emission.models")
     CatalogueThing = type(
         "CatalogueThing",
@@ -701,9 +687,10 @@ def test_runtime_renders_materialized_child_extension(tmp_path: Path, monkeypatc
     assert "class RuntimeChild(AbstractRuntimeChild, DecoratedHistoryThing):" in source
 
 
-def test_runtime_renders_materialized_child_extension_across_apps(tmp_path: Path) -> None:
+def test_runtime_renders_materialized_child_extension_across_apps(tmp_path: Path, settings: Any) -> None:
     """Materialized children import the generated parent from the target runtime app."""
 
+    settings.MIGRATION_MODULES = {**settings.MIGRATION_MODULES, "target": None, "child": None}
     target_module = ModuleType("tests.target.models")
     child_module = ModuleType("tests.child.models")
     TargetRuntime = type(
@@ -813,11 +800,11 @@ def test_runtime_rejects_mismatched_extension_model_label(tmp_path: Path, monkey
         Runtime.discover((target_config, extension_config), runtime_dir=tmp_path / "runtime")
 
 
-def test_runtime_boot_repairs_drift_without_pruning_but_build_prunes(tmp_path: Path) -> None:
-    """Checks see all drift, boot repairs files only, and explicit build cleans."""
+def test_explicit_source_emission_repairs_drift_and_prunes_removed_artifacts(tmp_path: Path) -> None:
+    """Only explicit compilation repairs stale sources and removes obsolete output."""
 
     runtime = runtime_for(tmp_path)
-    runtime.emit_if_stale()
+    runtime.emit_sources()
     runtime.check()
     models_path = runtime.runtime_dir / "resources" / "models.py"
     models_path.write_text("# stale\n", encoding="utf-8")
@@ -827,10 +814,8 @@ def test_runtime_boot_repairs_drift_without_pruning_but_build_prunes(tmp_path: P
 
     with pytest.raises(RuntimeError, match="stale"):
         runtime.check()
-    assert runtime.emit_if_stale() is True
+    assert runtime.emit_sources() is True
     assert models_path.read_text(encoding="utf-8") == runtime.render_sources()[Path("resources/models.py")]
-    assert orphan.exists()
-    runtime.build()
     assert not orphan.exists()
     runtime.check()
 
@@ -839,7 +824,7 @@ def test_runtime_check_ignores_schema_command_output(tmp_path: Path) -> None:
     """GraphQL SDL files are checked by the schema command, not build."""
 
     runtime = runtime_for(tmp_path)
-    runtime.emit_if_stale()
+    runtime.emit_sources()
     schema_path = tmp_path / "runtime" / "schemas" / "public.graphql"
     schema_path.parent.mkdir()
     schema_path.write_text("type Query { ok: Boolean! }\n", encoding="utf-8")
@@ -851,7 +836,7 @@ def test_runtime_check_ignores_graphql_codegen_output(tmp_path: Path) -> None:
     """Generated GraphQL client code is checked by its frontend owner, not build."""
 
     runtime = runtime_for(tmp_path)
-    runtime.emit_if_stale()
+    runtime.emit_sources()
     gql_path = tmp_path / "runtime" / "gql" / "public" / "graphql.ts"
     gql_path.parent.mkdir(parents=True)
     gql_path.write_text("export const ok = true;\n", encoding="utf-8")
@@ -863,7 +848,7 @@ def test_runtime_check_ignores_web_codegen_output(tmp_path: Path) -> None:
     """Generated web entry code is checked by the frontend CLI, not build."""
 
     runtime = runtime_for(tmp_path)
-    runtime.emit_if_stale()
+    runtime.emit_sources()
     app_path = tmp_path / "runtime" / "web" / "app.ts"
     app_path.write_text("export const ok = true;\n", encoding="utf-8")
     routes_path = tmp_path / "runtime" / "web" / "routes.gen.ts"
@@ -872,9 +857,10 @@ def test_runtime_check_ignores_web_codegen_output(tmp_path: Path) -> None:
     runtime.check()
 
 
-def test_runtime_extensions_follow_app_graph_order_not_class_names(tmp_path: Path) -> None:
+def test_runtime_extensions_follow_app_graph_order_not_class_names(tmp_path: Path, settings: Any) -> None:
     """Renaming extension classes must not change extension base precedence."""
 
+    settings.MIGRATION_MODULES = {**settings.MIGRATION_MODULES, "target": None}
     target_module = ModuleType("tests.target.models")
     preferred_module = ModuleType("tests.preferred.models")
     fallback_module = ModuleType("tests.fallback.models")
@@ -941,9 +927,9 @@ def test_runtime_extensions_follow_app_graph_order_not_class_names(tmp_path: Pat
     assert "class TargetRuntime(TargetRuntimeExtension1, TargetRuntimeExtension2, AbstractTargetRuntime):" in source
 
 
-@pytest.mark.parametrize("operation", ["clean_configured", "build", "emit_if_stale"])
+@pytest.mark.parametrize("operation", ["clean_configured", "emit_sources"])
 def test_runtime_writes_require_generated_sentinel(tmp_path: Path, settings: Any, operation: str) -> None:
-    """Boot repair cannot authorize a foreign directory by writing its sentinel."""
+    """Explicit emission cannot authorize a foreign directory by writing its sentinel."""
 
     runtime = runtime_for(tmp_path)
     settings.COMPOSE_RUNTIME_DIR = runtime.runtime_dir
@@ -953,36 +939,36 @@ def test_runtime_writes_require_generated_sentinel(tmp_path: Path, settings: Any
         encoding="utf-8",
     )
 
-    with pytest.raises(RuntimeError, match="not an Angee runtime directory"):
+    with pytest.raises(RuntimeError, match="lacks the required generated-output marker"):
         getattr(runtime, operation)()
 
     assert (runtime.runtime_dir / "handwritten.py").read_text(encoding="utf-8") == "# keep\n"
     assert not (runtime.runtime_dir / "__init__.py").exists()
 
 
-@pytest.mark.parametrize("operation", ["build", "emit_if_stale"])
+@pytest.mark.parametrize("operation", ["emit_sources"])
 def test_runtime_writes_require_configured_directory(tmp_path: Path, settings: Any, operation: str) -> None:
     """A generated sentinel never authorizes writes outside the configured root."""
 
     runtime = runtime_for(tmp_path)
-    runtime.emit_if_stale()
+    runtime.emit_sources()
     stale = runtime.runtime_dir / "stale.py"
     stale.write_text("# keep\n", encoding="utf-8")
     settings.COMPOSE_RUNTIME_DIR = tmp_path / "other_runtime"
 
-    with pytest.raises(RuntimeError, match="not the configured runtime dir"):
+    with pytest.raises(RuntimeError, match="not the configured output directory"):
         getattr(runtime, operation)()
 
     assert stale.read_text(encoding="utf-8") == "# keep\n"
     assert (runtime.runtime_dir / "resources" / "models.py").exists()
 
 
-def test_clean_then_boot_repair_is_idempotent(tmp_path: Path, settings: Any) -> None:
+def test_clean_then_explicit_emission_is_idempotent(tmp_path: Path, settings: Any) -> None:
     """A cleaned runtime with preserved migrations keeps its cleanup sentinel."""
 
     runtime = runtime_for(tmp_path)
     settings.COMPOSE_RUNTIME_DIR = runtime.runtime_dir
-    runtime.emit_if_stale()
+    runtime.emit_sources()
     migration_paths = (
         runtime.runtime_dir / "resources" / "migrations" / "0001_initial.py",
         runtime.runtime_dir / "resources" / "migrations" / "archive" / "snapshot.txt",
@@ -994,7 +980,7 @@ def test_clean_then_boot_repair_is_idempotent(tmp_path: Path, settings: Any) -> 
 
     Runtime.clean_configured()
     assert "ANGEE GENERATED RUNTIME" in (runtime.runtime_dir / "__init__.py").read_text(encoding="utf-8")
-    runtime.emit_if_stale()
+    runtime.emit_sources()
 
     assert "ANGEE GENERATED RUNTIME" in (runtime.runtime_dir / "__init__.py").read_text(encoding="utf-8")
     assert all(path.read_text(encoding="utf-8") == "migration\n" for path in migration_paths)
@@ -1013,36 +999,28 @@ def test_runtime_clean_refuses_migrations_without_sentinel(tmp_path: Path, setti
     migration_path.parent.mkdir(parents=True)
     migration_path.write_text("# migration\n", encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="not an Angee runtime directory"):
+    with pytest.raises(RuntimeError, match="lacks the required generated-output marker"):
         Runtime.clean_configured()
 
 
-def _compose_config() -> ComposeConfig:
+def _compose_config() -> BuildComposeConfig:
     """Return a ComposeConfig bound enough for a direct import_models call."""
 
-    config = ComposeConfig("angee.compose", compose_package)
+    config = BuildComposeConfig("angee.compose", compose_package)
     config.apps = apps
     return config
 
 
-def test_compose_config_heals_stale_runtime_then_imports(
+def test_explicit_build_config_emits_then_imports_before_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """App population emits a stale runtime, then imports generated models.
-
-    The hook is write-only and unconditional: it always heals drift before
-    importing, so a fresh or partially-deleted runtime is repaired in-process
-    rather than surfacing as a cryptic swappable-model resolution error.
-    """
+    """Only the explicitly selected build lifecycle emits before concrete import."""
 
     calls: list[str] = []
 
     class FakeRuntime:
-        def configure_migration_modules(self) -> None:
-            calls.append("migration_modules")
-
-        def emit_if_stale(self) -> bool:
-            calls.append("emit_if_stale")
+        def emit_sources(self) -> bool:
+            calls.append("emit_sources")
             return True
 
         def import_generated_models(self) -> None:
@@ -1050,15 +1028,17 @@ def test_compose_config_heals_stale_runtime_then_imports(
 
     monkeypatch.setattr(runtime_module.Runtime, "from_django", classmethod(lambda cls: FakeRuntime()))
 
-    _compose_config().import_models()
+    config = _compose_config()
+    monkeypatch.setattr(apps, "get_app_configs", lambda: (config,))
+    config.import_models()
 
-    assert calls == ["migration_modules", "emit_if_stale", "import"]
+    assert calls == ["emit_sources", "import"]
 
 
 def test_build_check_reports_command_error_when_runtime_is_stale(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``angee build --check`` converts runtime drift into a clean command error."""
+    """``angee check`` converts runtime drift into a clean command error."""
 
     class FakeRuntime:
         addons = ()
@@ -1069,28 +1049,7 @@ def test_build_check_reports_command_error_when_runtime_is_stale(
     monkeypatch.setattr(runtime_module.Runtime, "from_django", classmethod(lambda cls: FakeRuntime()))
 
     with pytest.raises(CommandError, match="generated runtime is stale"):
-        Command()._handle_build({"check": True})
-
-
-def test_build_command_delegates_the_complete_write_lifecycle(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The build command delegates source emission and migration writes to Runtime."""
-
-    calls: list[str] = []
-
-    class FakeRuntime:
-        addons = ()
-
-        def build(self) -> None:
-            calls.append("build")
-
-    monkeypatch.setattr(runtime_module.Runtime, "from_django", classmethod(lambda cls: FakeRuntime()))
-
-    monkeypatch.setattr("angee.management.commands.angee.find_project_dir", lambda: None)
-    Command()._handle_build({"check": False})
-
-    assert calls == ["build"]
+        Command()._handle_check({})
 
 
 def test_runtime_build_emits_stale_sources_once_before_materializing(tmp_path: Path, monkeypatch, settings) -> None:
@@ -1113,14 +1072,15 @@ def test_runtime_build_emits_stale_sources_once_before_materializing(tmp_path: P
     monkeypatch.setattr(runtime, "render_sources", render)
     monkeypatch.setattr(runtime, "runtime_migrations", lambda: FakeMigrations())
 
-    assert runtime.build() is None
+    runtime.emit_sources()
+    runtime.runtime_migrations().materialize(apps=apps)
     assert calls == ["render", "materialize"]
 
 
 def test_runtime_build_materializes_without_rewriting_current_sources(tmp_path: Path, monkeypatch, settings) -> None:
     runtime = runtime_for(tmp_path)
     settings.MIGRATION_MODULES = {}
-    runtime.emit_if_stale()
+    runtime.emit_sources()
     path = runtime.runtime_dir / "resources" / "models.py"
     modified = path.stat().st_mtime_ns
     caches = (
@@ -1140,11 +1100,12 @@ def test_runtime_build_materializes_without_rewriting_current_sources(tmp_path: 
 
     monkeypatch.setattr(runtime, "runtime_migrations", lambda: FakeMigrations())
 
-    assert runtime.build() is None
+    runtime.emit_sources()
+    runtime.runtime_migrations().materialize(apps=apps)
     assert calls == ["materialize"]
     assert path.stat().st_mtime_ns == modified
     assert all(cache.exists() for cache in caches)
-    assert runtime.emit_if_stale() is False
+    assert runtime.emit_sources() is False
 
 
 @pytest.mark.parametrize("contents", ["empty", "models", "bytecode"])
@@ -1156,7 +1117,7 @@ def test_runtime_build_prunes_removed_labels_before_materializing(
     runtime = runtime_for(tmp_path)
     settings.COMPOSE_RUNTIME_DIR = runtime.runtime_dir
     settings.MIGRATION_MODULES = {}
-    runtime.emit_if_stale()
+    runtime.emit_sources()
     removed = runtime.runtime_dir / "removed"
     removed.mkdir()
     if contents == "models":
@@ -1175,15 +1136,16 @@ def test_runtime_build_prunes_removed_labels_before_materializing(
 
     monkeypatch.setattr(runtime, "runtime_migrations", lambda: FakeMigrations())
 
-    assert runtime.build() is None
+    runtime.emit_sources()
+    runtime.runtime_migrations().materialize(apps=apps)
     assert not removed.exists()
-    assert runtime.emit_if_stale() is False
+    assert runtime.emit_sources() is False
     assert "Preserved migration directories" not in caplog.text
 
 
 def test_runtime_check_validates_migrations_after_source_drift_is_clean(tmp_path: Path, monkeypatch) -> None:
     runtime = runtime_for(tmp_path)
-    runtime.emit_if_stale()
+    runtime.emit_sources()
     calls: list[str] = []
 
     class FakeMigrations:
@@ -1199,7 +1161,7 @@ def test_runtime_check_validates_migrations_after_source_drift_is_clean(tmp_path
 
 def test_runtime_check_does_not_plan_migrations_while_sources_are_stale(tmp_path: Path, monkeypatch) -> None:
     runtime = runtime_for(tmp_path)
-    runtime.emit_if_stale()
+    runtime.emit_sources()
     (runtime.runtime_dir / "resources" / "models.py").write_text("# stale\n", encoding="utf-8")
     calls: list[str] = []
     monkeypatch.setattr(runtime, "runtime_migrations", lambda: calls.append("migration_check"))
@@ -1210,9 +1172,9 @@ def test_runtime_check_does_not_plan_migrations_while_sources_are_stale(tmp_path
     assert calls == []
 
 
-def test_emit_if_stale_never_constructs_runtime_migrations(tmp_path: Path, monkeypatch) -> None:
+def test_emit_sources_never_constructs_runtime_migrations(tmp_path: Path, monkeypatch) -> None:
     runtime = runtime_for(tmp_path)
-    runtime.emit_if_stale()
+    runtime.emit_sources()
     monkeypatch.setattr(
         runtime,
         "runtime_migrations",
@@ -1220,7 +1182,7 @@ def test_emit_if_stale_never_constructs_runtime_migrations(tmp_path: Path, monke
         raising=False,
     )
 
-    assert runtime.emit_if_stale() is False
+    assert runtime.emit_sources() is False
 
 
 def _provision_options(**overrides: Any) -> dict[str, Any]:
@@ -1230,18 +1192,16 @@ def _provision_options(**overrides: Any) -> dict[str, Any]:
         "after_if_installed": [],
         "force_rebac": False,
         "wait_db": 60,
-        "post_build": False,
     }
     options.update(overrides)
     return options
 
 
 def test_provision_plan_default_flags_covers_the_no_flag_lifecycle() -> None:
-    """The native plan builds, migrates, synchronizes permissions and checks; addons are explicit."""
+    """The prebuilt native plan migrates, synchronizes permissions and checks; addons are explicit."""
 
-    assert Command._provision_plan(_provision_options()) == [
-        ["angee", "build"],
-        ["makemigrations", "--noinput", "--skip-checks"],
+    assert provision.plan(_provision_options()) == [
+        ["makemigrations", "--check", "--dry-run", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
         ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes"],
         ["check", "--database", "default"],
@@ -1249,7 +1209,7 @@ def test_provision_plan_default_flags_covers_the_no_flag_lifecycle() -> None:
 
 
 def test_provision_parser_preserves_explicit_addon_command_lines() -> None:
-    """The native CLI preserves quoted addon arguments for the post-build owner."""
+    """The native CLI preserves quoted addon arguments for the provision owner."""
     parser = Command().create_parser("manage.py", "angee")
     options = vars(parser.parse_args([
         "provision", "--after-if-installed", "resources load --include-demo",
@@ -1263,13 +1223,13 @@ def test_provision_parser_preserves_explicit_addon_command_lines() -> None:
 def test_provision_plan_force_rebac_force_overwrites_the_sync() -> None:
     """``--force-rebac`` appends ``--force-overwrite`` to the rebac sync step only."""
 
-    plan = Command._provision_plan(_provision_options(force_rebac=True))
+    plan = provision.plan(_provision_options(force_rebac=True))
 
     assert ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes", "--force-overwrite"] in plan
     assert ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes"] not in plan
 
 
-@pytest.mark.parametrize("flag", ["--demo", "--bootstrap-admin"])
+@pytest.mark.parametrize("flag", ["--demo", "--bootstrap-admin", "--post-build"])
 def test_provision_parser_rejects_retired_capability_flags(flag: str) -> None:
     """Product actions are explicit addon commands, so retired host flags fail loudly."""
     parser = Command().create_parser("manage.py", "angee")
@@ -1282,7 +1242,7 @@ def test_provision_rejects_invalid_addon_commands_before_work(command_line, monk
     """A malformed explicit addon request never starts provisioning."""
     command = Command()
     monkeypatch.setattr(
-        command, "_wait_for_database", lambda seconds: pytest.fail("invalid command began provisioning"),
+        provision, 'wait_for_database', lambda _command, seconds: pytest.fail('invalid command began provisioning'),
     )
     with pytest.raises(CommandError, match="command line"):
         command._handle_provision(_provision_options(after_if_installed=[command_line]))
@@ -1291,41 +1251,35 @@ def test_provision_rejects_invalid_addon_commands_before_work(command_line, monk
 def test_provision_plan_combines_every_flag() -> None:
     """Addon requests do not change the mandatory native migration/check plan."""
 
-    plan = Command._provision_plan(_provision_options(
+    plan = provision.plan(_provision_options(
         force_rebac=True, after_if_installed=["resources load --include-demo", "schema", "bootstrap_admin"],
     ))
 
     assert plan == [
-        ["angee", "build"],
-        ["makemigrations", "--noinput", "--skip-checks"],
+        ["makemigrations", "--check", "--dry-run", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
         ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes", "--force-overwrite"],
         ["check", "--database", "default"],
     ]
 
 
-def test_provision_plan_builds_before_it_migrates() -> None:
-    """The composer must emit concrete models before migrations run against them."""
+def test_provision_only_orders_native_commands_for_a_prebuilt_runtime() -> None:
+    """Build is the preceding operator job; provision never compiles sources."""
 
-    for options in (
-        _provision_options(),
-        _provision_options(
-            force_rebac=True, after_if_installed=["resources load --include-demo", "schema", "bootstrap_admin"],
-        ),
-    ):
-        plan = Command._provision_plan(options)
-        makemigrations = plan.index(["makemigrations", "--noinput", "--skip-checks"])
-        migrate = plan.index(["migrate", "--noinput", "--skip-checks"])
-        assert plan.index(["angee", "build"]) < makemigrations < migrate
+    steps = provision.plan(_provision_options())
+    assert all(step[0] != "angee" for step in steps)
+    assert steps.index(["makemigrations", "--check", "--dry-run", "--noinput", "--skip-checks"]) < steps.index(
+        ["migrate", "--noinput", "--skip-checks"],
+    )
 
 
 def test_provision_defers_checks_only_across_the_schema_identity_transition() -> None:
     """Persisted REBAC labels may lag emitted models until migrations finish."""
 
-    plan = Command._provision_plan(_provision_options())
+    plan = provision.plan(_provision_options())
 
     assert [step for step in plan if "--skip-checks" in step] == [
-        ["makemigrations", "--noinput", "--skip-checks"],
+        ["makemigrations", "--check", "--dry-run", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
         ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes"],
     ]
@@ -1345,8 +1299,8 @@ def test_provision_analyzes_the_existing_tables_of_apps_migrated_forward() -> No
         (migrations.Migration("0004_backward", "sessions"), True),
     ]
 
-    assert Command._analyzed_tables(plan, ["django_content_type", "django_session"]) == ["django_content_type"]
-    assert Command._analyzed_tables(plan, ["django_session"]) == []
+    assert provision.analyzed_tables(plan, ["django_content_type", "django_session"]) == ["django_content_type"]
+    assert provision.analyzed_tables(plan, ["django_session"]) == []
 
 
 @pytest.mark.django_db
@@ -1369,153 +1323,49 @@ def test_provision_plan_can_cross_an_old_persisted_rebac_identity() -> None:
         source.save(update_fields=["allowed_subjects"])
         call_command("check", "--tag", "rebac", verbosity=0)
 
-    plan = Command._provision_plan(_provision_options())
-    assert plan[1:6] == [
-        ["makemigrations", "--noinput", "--skip-checks"],
+    plan = provision.plan(_provision_options())
+    assert plan == [
+        ["makemigrations", "--check", "--dry-run", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
         ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes"],
         ["check", "--database", "default"],
     ]
 
 
-def test_provision_builds_then_starts_one_post_build_child(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The parent builds once, then crosses one fresh-registry boundary."""
-
-    events: list[object] = []
-
-    def fake_run(argv: list[str], check: bool = False) -> SimpleNamespace:
-        events.append(("child", argv, check))
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr("angee.management.commands.angee.subprocess.run", fake_run)
-
+def test_provision_runs_native_steps_and_addon_commands_in_one_process(monkeypatch) -> None:
+    calls = []
+    waits = []
     command = Command()
-    messages: list[str] = []
-    monkeypatch.setattr(command.stdout, "write", lambda message, *args, **kwargs: messages.append(message))
-    monkeypatch.setattr(command, "_wait_for_database", lambda seconds: events.append(("wait", seconds)))
-    monkeypatch.setattr(command, "_run_step", lambda step: events.append(("step", step)))
-    options = _provision_options(
-        force_rebac=True,
-        after_if_installed=["resources load --include-demo", "schema", "bootstrap_admin"],
-        wait_db=12,
-    )
+    monkeypatch.setattr(provision, "wait_for_database", lambda _command, seconds: waits.append(seconds))
+    monkeypatch.setattr(provision, "run_step", lambda _command, step: calls.append(step))
+    monkeypatch.setattr(provision, "get_commands", lambda: {"schema": "graphql"})
+    options = _provision_options(after_if_installed=["schema", "absent"])
 
     command._handle_provision(options)
 
-    manage_py = Command._manage_py_path()
-    assert events == [
-        ("wait", 12),
-        ("step", ["angee", "build"]),
-        (
-            "child",
-            [
-                sys.executable,
-                manage_py,
-                "angee",
-                "provision",
-                "--post-build",
-                "--force-rebac",
-                "--after-if-installed", "resources load --include-demo",
-                "--after-if-installed", "schema",
-                "--after-if-installed", "bootstrap_admin",
-            ],
-            False,
-        ),
-    ]
-    assert messages[-1] == "angee provision: ok"
-
-
-def test_provision_reports_a_failed_post_build_child(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A non-zero child result stops the parent and reports the process boundary."""
-
-    monkeypatch.setattr(
-        "angee.management.commands.angee.subprocess.run",
-        lambda argv, check=False: SimpleNamespace(returncode=7),
-    )
-    command = Command()
-    monkeypatch.setattr(command, "_wait_for_database", lambda seconds: None)
-    monkeypatch.setattr(command, "_run_step", lambda step: None)
-
-    with pytest.raises(CommandError, match=r"post-build commands failed \(exit 7\)"):
-        command._handle_provision(_provision_options())
-
-
-def test_provision_build_failure_never_starts_the_post_build_child(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The fresh process boundary is crossed only after a successful build."""
-
-    def fail_build(step: list[str]) -> None:
-        raise CommandError("build failed")
-
-    command = Command()
-    monkeypatch.setattr(command, "_wait_for_database", lambda seconds: None)
-    monkeypatch.setattr(command, "_run_step", fail_build)
-    monkeypatch.setattr(
-        "angee.management.commands.angee.subprocess.run",
-        lambda *args, **kwargs: pytest.fail("a failed build must not spawn the post-build child"),
-    )
-
-    with pytest.raises(CommandError, match="build failed"):
-        command._handle_provision(_provision_options())
-
-
-def test_provision_post_build_runs_remaining_steps_in_order_without_respawning(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The child reuses one populated registry and never repeats parent work."""
-
-    calls: list[list[str]] = []
-    options = _provision_options(
-        post_build=True, after_if_installed=["resources load --include-demo", "schema", "bootstrap_admin"],
-    )
-    command = Command()
-    messages: list[str] = []
-    monkeypatch.setattr(command.stdout, "write", lambda message, *args, **kwargs: messages.append(message))
-    monkeypatch.setattr(command, "_run_step", lambda step: calls.append(step))
-    monkeypatch.setattr(
-        command,
-        "_wait_for_database",
-        lambda seconds: pytest.fail("the post-build child must not wait for the database"),
-    )
-    monkeypatch.setattr(
-        "angee.management.commands.angee.subprocess.run",
-        lambda *args, **kwargs: pytest.fail("the post-build child must not spawn another child"),
-    )
-
-    monkeypatch.setattr(
-        "angee.management.commands.angee.get_commands",
-        lambda: {"resources": "resources", "schema": "graphql", "bootstrap_admin": "iam"},
-    )
-    command._handle_provision(options)
-
-    assert calls == [*Command._provision_plan(options)[1:],
-                     ["resources", "load", "--include-demo"], ["schema"], ["bootstrap_admin"]]
-    assert "angee provision: ok" not in messages
+    assert waits == [60]
+    assert calls == [*provision.plan(options), ["schema"]]
 
 
 def test_provision_runs_declared_installed_addon_commands_after_migrations(monkeypatch) -> None:
     calls = []
     command = Command()
-    monkeypatch.setattr(command, "_run_step", calls.append)
+    monkeypatch.setattr(provision, "wait_for_database", lambda _command, seconds: None)
+    monkeypatch.setattr(provision, 'run_step', lambda _command, argument: (calls.append)(argument))
     monkeypatch.setattr(
-        "angee.management.commands.angee.get_commands", lambda: {"addon_post_build": "timeline"},
+        "angee.management.provision.get_commands", lambda: {"addon_post_build": "timeline"},
     )
     command._handle_provision(_provision_options(
-        post_build=True, after_if_installed=["addon_post_build", "absent_addon_command"],
+        after_if_installed=["addon_post_build", "absent_addon_command"],
     ))
     assert calls[-1] == ["addon_post_build"]
     assert calls.index(["migrate", "--noinput", "--skip-checks"]) < len(calls) - 1
 
 
-def test_provision_post_build_aborts_on_the_first_failed_step(
+def test_provision_aborts_on_the_first_failed_native_step(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An in-process command failure stops the remaining post-build sequence."""
+    """A native command failure stops every subsequent provision step."""
 
     calls: list[list[str]] = []
 
@@ -1525,13 +1375,14 @@ def test_provision_post_build_aborts_on_the_first_failed_step(
             raise CommandError("angee provision: step 'migrate --noinput --skip-checks' failed: boom")
 
     command = Command()
-    monkeypatch.setattr(command, "_run_step", fake_step)
+    monkeypatch.setattr(provision, "wait_for_database", lambda _command, seconds: None)
+    monkeypatch.setattr(provision, 'run_step', lambda _command, argument: (fake_step)(argument))
 
     with pytest.raises(CommandError, match="step 'migrate --noinput --skip-checks' failed"):
-        command._handle_provision(_provision_options(post_build=True))
+        command._handle_provision(_provision_options())
 
     assert calls == [
-        ["makemigrations", "--noinput", "--skip-checks"],
+        ["makemigrations", "--check", "--dry-run", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
     ]
 
@@ -1546,14 +1397,13 @@ def test_provision_run_step_preserves_each_commands_cli_check_policy(
     def fake_call_command(command: BaseCommand, *args: str, **options: Any) -> None:
         calls.append((command.__class__.__module__, args, options.get("skip_checks")))
 
-    monkeypatch.setattr("angee.management.commands.angee.call_command", fake_call_command)
+    monkeypatch.setattr("angee.management.provision.call_command", fake_call_command)
     command = Command()
-    for step in Command._provision_plan(_provision_options()):
-        command._run_step(step)
+    for step in provision.plan(_provision_options()):
+        provision.run_step(command, step)
 
     policies = [(module.rsplit(".", 1)[-1], policy) for module, _args, policy in calls]
     assert policies == [
-        ("angee", None),
         ("makemigrations", True),
         ("migrate", True),
         ("rebac", True),
@@ -1561,15 +1411,18 @@ def test_provision_run_step_preserves_each_commands_cli_check_policy(
     ]
 
 
-def test_provision_run_step_calls_actual_check_free_angee_build(
+def test_provision_run_step_calls_actual_check_free_schema_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A check-free command executes without the parser-rejected ``skip_checks`` option."""
 
     handled: list[dict[str, Any]] = []
-    monkeypatch.setattr(Command, "_handle_build", lambda self, options: handled.append(options))
+    monkeypatch.setattr(
+        "angee.graphql.management.commands.schema.Command.handle",
+        lambda self, *args, **options: handled.append(options),
+    )
 
-    Command()._run_step(["angee", "build"])
+    provision.run_step(Command(), ["schema"])
 
     assert len(handled) == 1
     assert handled[0]["check"] is False
@@ -1581,10 +1434,10 @@ def test_provision_run_step_names_a_failing_command(monkeypatch: pytest.MonkeyPa
     def fail(*args: Any, **options: Any) -> None:
         raise RuntimeError("broken schema")
 
-    monkeypatch.setattr("angee.management.commands.angee.call_command", fail)
+    monkeypatch.setattr("angee.management.provision.call_command", fail)
 
     with pytest.raises(CommandError, match="step 'schema' failed: broken schema"):
-        Command()._run_step(["schema"])
+        provision.run_step(Command(), ["schema"])
 
 
 @pytest.mark.parametrize("fails", [False, True])
@@ -1604,13 +1457,13 @@ def test_provision_run_step_flushes_command_output_before_returning(
     command = Command()
     monkeypatch.setattr(command.stdout, "flush", lambda: events.append("stdout-flush"))
     monkeypatch.setattr(command.stderr, "flush", lambda: events.append("stderr-flush"))
-    monkeypatch.setattr("angee.management.commands.angee.call_command", run)
+    monkeypatch.setattr("angee.management.provision.call_command", run)
 
     if fails:
         with pytest.raises(CommandError, match="step 'schema' failed: failed"):
-            command._run_step(["schema"])
+            provision.run_step(command, ["schema"])
     else:
-        command._run_step(["schema"])
+        provision.run_step(command, ["schema"])
 
     assert events == [
         "stdout-flush",
@@ -1630,9 +1483,9 @@ def test_provision_run_step_accepts_successful_system_exit(
     def exit_successfully(*args: Any, **kwargs: Any) -> None:
         raise SystemExit(exit_code)
 
-    monkeypatch.setattr("angee.management.commands.angee.call_command", exit_successfully)
+    monkeypatch.setattr("angee.management.provision.call_command", exit_successfully)
 
-    Command()._run_step(["schema"])
+    provision.run_step(Command(), ["schema"])
 
 
 def test_provision_run_step_names_a_nonzero_system_exit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1641,10 +1494,10 @@ def test_provision_run_step_names_a_nonzero_system_exit(monkeypatch: pytest.Monk
     def exit_with_failure(*args: Any, **kwargs: Any) -> None:
         raise SystemExit(4)
 
-    monkeypatch.setattr("angee.management.commands.angee.call_command", exit_with_failure)
+    monkeypatch.setattr("angee.management.provision.call_command", exit_with_failure)
 
     with pytest.raises(CommandError, match=r"step 'schema' failed \(exit 4\)"):
-        Command()._run_step(["schema"])
+        provision.run_step(Command(), ["schema"])
 
 
 def test_provision_run_step_explicitly_runs_delegated_prechecks(
@@ -1668,35 +1521,21 @@ def test_provision_run_step_explicitly_runs_delegated_prechecks(
         def handle(self, *args: Any, **options: Any) -> None:
             lifecycle.append("handle")
 
-    monkeypatch.setattr("angee.management.commands.angee.get_commands", lambda: {"rebac": "fake"})
+    monkeypatch.setattr("angee.management.provision.get_commands", lambda: {"rebac": "fake"})
     monkeypatch.setattr(
-        "angee.management.commands.angee.load_command_class",
+        "angee.management.provision.load_command_class",
         lambda app_name, name: CheckedCommand(),
     )
 
-    Command()._run_step(["rebac", "sync", "--yes"])
+    provision.run_step(Command(), ["rebac", "sync", "--yes"])
 
     assert lifecycle == ["check", "handle"]
 
 
-def test_provision_parser_accepts_the_internal_post_build_entrypoint() -> None:
-    """Django's native parser carries flags into the internal child invocation."""
-
-    parser = Command().create_parser("manage.py", "angee")
-
-    options = vars(parser.parse_args([
-        "provision", "--post-build", "--force-rebac", "--after-if-installed", "bootstrap_admin",
-    ]))
-
-    assert options["post_build"] is True
-    assert options["force_rebac"] is True
-    assert options["after_if_installed"] == ["bootstrap_admin"]
-
-
-def test_provision_help_hides_the_internal_post_build_entrypoint(
+def test_provision_help_has_no_retired_child_switch(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The implementation-only child switch stays out of the public CLI help."""
+    """Provision exposes no subprocess-child lifecycle switch."""
 
     parser = Command().create_parser("manage.py", "angee")
 
@@ -1729,10 +1568,10 @@ def test_provision_wait_retries_then_closes_the_probe_connection(
     """The wait loop retries until the database answers, then closes the probe."""
 
     connection = _FakeConnection(fail_times=2)
-    monkeypatch.setattr("angee.management.commands.angee.connections", {"default": connection})
-    monkeypatch.setattr("angee.management.commands.angee.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("angee.management.provision.connections", {"default": connection})
+    monkeypatch.setattr("angee.management.provision.time.sleep", lambda seconds: None)
 
-    Command()._wait_for_database(10)
+    provision.wait_for_database(Command(), 10)
 
     assert connection.attempts == 3
     assert connection.closed is True
@@ -1744,22 +1583,13 @@ def test_provision_wait_times_out_with_the_last_connection_error(
     """A database that never answers raises CommandError with the last error."""
 
     connection = _FakeConnection(fail_times=99)
-    monkeypatch.setattr("angee.management.commands.angee.connections", {"default": connection})
-    monkeypatch.setattr("angee.management.commands.angee.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("angee.management.provision.connections", {"default": connection})
+    monkeypatch.setattr("angee.management.provision.time.sleep", lambda seconds: None)
 
     with pytest.raises(CommandError, match="within 3s: connection refused"):
-        Command()._wait_for_database(3)
+        provision.wait_for_database(Command(), 3)
 
     assert connection.attempts == 3
-
-
-def test_provision_manage_py_path_is_absolute() -> None:
-    """The child entrypoint is the resolved absolute ``manage.py`` path."""
-
-    manage_py = Command._manage_py_path()
-
-    assert Path(manage_py).is_absolute()
-    assert Path(manage_py) == Path(sys.argv[0]).resolve()
 
 
 def test_appgraph_annotates_roots_and_dependencies() -> None:
@@ -1769,7 +1599,7 @@ def test_appgraph_annotates_roots_and_dependencies() -> None:
     composed graph (``addons/angee/platform/schema.py``).
     """
 
-    graph = AppGraph()
+    graph = AppGraph(ManifestDeclarations())
     configs = {config.name: config for config in graph.resolve(["angee.iam"])}
 
     iam = configs["angee.iam"]
@@ -1792,13 +1622,16 @@ def test_appgraph_rejects_duplicate_roots() -> None:
     """A repeated explicit root app is a settings error, not hidden dedupe."""
 
     with pytest.raises(ImproperlyConfigured, match="Duplicate Django app 'angee.resources'"):
-        AppGraph().resolve(["angee.resources", "angee.resources"])
+        AppGraph(ManifestDeclarations()).resolve(["angee.resources", "angee.resources"])
 
 
 def test_appgraph_root_wins_when_also_a_dependency() -> None:
     """An app declared as a root remains a root even if another root depends on it."""
 
-    configs = {config.name: config for config in AppGraph().resolve(["angee.iam", "angee.resources"])}
+    configs = {
+        config.name: config
+        for config in AppGraph(ManifestDeclarations()).resolve(["angee.iam", "angee.resources"])
+    }
 
     assert configs["angee.iam"].compose_root is True
     assert configs["angee.resources"].compose_root is True
@@ -1808,7 +1641,7 @@ def test_appgraph_preserves_authored_app_config_root_declaration() -> None:
     """Runtime drift compares the exact root spelling authored in settings YAML."""
 
     declaration = "angee.iam.apps.IAMConfig"
-    configs = {config.name: config for config in AppGraph().resolve([declaration])}
+    configs = {config.name: config for config in AppGraph(ManifestDeclarations()).resolve([declaration])}
 
     assert configs["angee.iam"].compose_root_declaration == declaration
 
@@ -1819,7 +1652,7 @@ def test_appgraph_distinguishes_project_roots_from_injected_runtime_roots() -> N
     declaration = "angee.iam.apps.IAMConfig"
     configs = {
         config.name: config
-        for config in AppGraph().resolve(
+        for config in AppGraph(ManifestDeclarations()).resolve(
             ["django.contrib.contenttypes", declaration],
             declared_roots=[declaration],
         )
@@ -1837,7 +1670,7 @@ def test_appgraph_rejects_duplicate_dependencies() -> None:
     config = make_addon(name="tests.duplicate_dependency", depends_on=("angee", "angee"))
 
     with pytest.raises(ImproperlyConfigured, match="duplicate dependency"):
-        AppGraph().resolve([config])
+        AppGraph(ManifestDeclarations()).resolve([config])
 
 
 def test_project_env_file_loads_without_overriding_process_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1994,7 +1827,7 @@ def test_postgres_pool_timeout_is_explicit(postgres_pool_connection: Any, django
     assert isinstance(error.value.__cause__, PoolTimeout)
 
 
-def test_runtime_boot_repair_renders_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_explicit_source_emission_renders_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = runtime_for(tmp_path)
     original = runtime.render_sources
     calls = []
@@ -2004,9 +1837,22 @@ def test_runtime_boot_repair_renders_once(tmp_path: Path, monkeypatch: pytest.Mo
         return original()
 
     monkeypatch.setattr(runtime, "render_sources", render)
-    runtime.emit_if_stale()
+    runtime.emit_sources()
     assert calls == ["render"]
     assert (runtime.runtime_dir / "resources" / "models.py").is_file()
+
+
+
+def test_source_emission_preserves_an_authored_history_package_initializer(tmp_path):
+    runtime = runtime_for(tmp_path)
+    initializer = runtime.runtime_dir / "resources" / "migrations" / "__init__.py"
+    initializer.parent.mkdir(parents=True)
+    initializer.write_text("# Host-owned historical imports remain intact.\n")
+
+    runtime.emit_sources()
+
+    assert initializer.read_text() == "# Host-owned historical imports remain intact.\n"
+    assert Path("resources/migrations/__init__.py") not in runtime.render_sources()
 
 
 def test_runtime_from_django_does_not_bind_migrations_or_write_sources(
@@ -2064,11 +1910,12 @@ def test_configured_cleanup_requires_no_discovery_or_rendering(
     runtime.runtime_module = runtime_module_name
     settings.COMPOSE_RUNTIME_MODULE = runtime_module_name
     settings.MIGRATION_MODULES = {"removed": f"{runtime.runtime_module}.removed.migrations"}
-    runtime.emit_if_stale()
+    runtime.emit_sources()
     module = ModuleType(runtime_module_name)
     exec(compile(runtime.render_sources()[Path("__init__.py")], module.__name__, "exec"), vars(module))
     monkeypatch.setitem(sys.modules, runtime_module_name, module)
     migration = runtime.runtime_dir / "resources" / "migrations" / "0001_saved.py"
+    migration.parent.mkdir(parents=True)
     migration.write_text("# preserved migration\n")
     removed_migration = runtime.runtime_dir / "removed" / "migrations" / "0001_stale.py"
     removed_migration.parent.mkdir(parents=True)
@@ -2081,7 +1928,7 @@ def test_configured_cleanup_requires_no_discovery_or_rendering(
     monkeypatch.setattr(ModelComposition, "discover", forbidden)
     monkeypatch.setattr(Runtime, "render_sources", forbidden)
     monkeypatch.setattr(runtime_module.apps, "get_models", forbidden)
-    with caplog.at_level(logging.WARNING, logger="angee.utils.artifacts"):
+    with caplog.at_level(logging.WARNING, logger="angee.compose.runtime"):
         Runtime.clean_configured()
     assert migration.read_text() == "# preserved migration\n"
     assert removed_migration.read_text(encoding="utf-8") == "import deleted_addon\n"
@@ -2104,7 +1951,7 @@ def test_settings_and_bootstrap_import_without_loading_model_runtime() -> None:
 import sys
 from django.conf import settings
 import angee.conf
-import angee.management.bootstrap
+import angee.management.provision
 import angee.compose.composer
 assert not settings.configured
 for module in ('angee.compose.runtime', 'angee.base.models', 'rebac.models'):
@@ -2131,3 +1978,57 @@ def test_tailwind_sources_resolve_workspace_package_links(tmp_path: Path) -> Non
     assert '@source "../../slot/packages/app/src";' in css
     assert "node_modules" not in css
     assert css == WebRuntime((), runtime_dir=runtime).tailwind_sources_css()
+
+
+@pytest.mark.parametrize("changed_app", ["example.plain", "example.donor"])
+@pytest.mark.parametrize("operation", ["add", "remove"])
+def test_prebuilt_runtime_refuses_a_changed_native_app_closure_before_model_import(
+    monkeypatch: pytest.MonkeyPatch, settings: Any, changed_app: str, operation: str,
+) -> None:
+    """Plain apps and donor-only apps are structural inputs even without model output."""
+
+    config = ComposeConfig("angee.compose", compose_package)
+    config.apps = apps
+    changed = SimpleNamespace(name=changed_app, label=changed_app.rsplit(".", 1)[1])
+    baseline = (config,)
+    expanded = (changed, config)
+    built, current = (baseline, expanded) if operation == "add" else (expanded, baseline)
+    artifact = SimpleNamespace(
+        RUNTIME_APPS=(),
+        RUNTIME_APP_IDENTITIES=tuple((app.name, app.label) for app in built),
+        RUNTIME_MODEL_MODULES=("sealed_runtime.example.models",),
+        RUNTIME_INTEGRATION_MODULES=(),
+        RUNTIME_MIGRATION_MODULES={},
+    )
+    settings.COMPOSE_RUNTIME_MODULE = "sealed_runtime"
+    monkeypatch.setattr(apps, "get_app_configs", lambda: current)
+    imported: list[str] = []
+    original_import = runtime_module.importlib.import_module
+
+    def import_module(name: str, package: str | None = None):
+        if name == "sealed_runtime":
+            return artifact
+        if name.startswith("sealed_runtime."):
+            imported.append(name)
+            raise AssertionError("Generated model imported before sealed-closure validation")
+        return original_import(name, package)
+
+    monkeypatch.setattr(runtime_module.importlib, "import_module", import_module)
+    with pytest.raises(ImproperlyConfigured, match="Installed Django apps differ.*rebuild"):
+        config.import_models()
+    assert imported == []
+
+
+def test_composition_retains_an_installed_empty_cross_addon_migration_target() -> None:
+    """A contributing app need not own the installed history label it upgrades."""
+
+    class UpgradeDeclarations(AppDeclarationSource):
+        def migrations(self, app):
+            if app.label == "contributor":
+                return ({"app_label": "retired", "name": "retire_rows", "module": "contributor.upgrade"},)
+            return ()
+
+    target = SimpleNamespace(name="example.retired", label="retired", models_module=None)
+    contributor = SimpleNamespace(name="example.contributor", label="contributor", models_module=None)
+    composition = ModelComposition.discover((target, contributor), declarations=UpgradeDeclarations())
+    assert composition.labels == ("retired",)

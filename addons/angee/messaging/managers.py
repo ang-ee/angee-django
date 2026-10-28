@@ -65,18 +65,14 @@ from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.base.fields import DiagnosticTextField
-from angee.base.identity import instances_from_public_ids
-from angee.base.models import (
-    AngeeManager,
-    AngeeModel,
-    AngeeQuerySet,
-    MergeableQuerySet,
-    OwnerQuerySet,
-    TrashQuerySet,
-    row_lock_paths,
-)
+from angee.base.managers import AngeeManager
+from angee.base.models.base import AngeeModel
+from angee.base.models.identity import instances_from_public_ids
+from angee.base.models.ownership import OwnerQuerySet
+from angee.base.models.trash import TrashQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.permissions import actor_user_id, require_rebac_queryset
+from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
 from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.graphql.publishing import mute_changes
@@ -1831,7 +1827,9 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         if party_id is None:
             return False
         follower = (
-            self.sudo(reason="messaging.follower.effective").effective_for_thread(message.thread).filter(party_id=party_id)
+            self.sudo(reason="messaging.follower.effective")
+            .effective_for_thread(message.thread)
+            .filter(party_id=party_id)
             .select_related("last_read_message")
             .first()
         )

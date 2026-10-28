@@ -7,6 +7,7 @@ cases exercise it against Angee's real IAM and record-edge declarations.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -303,6 +304,7 @@ assert not apps.apps_ready
 assert not apps.models_ready
 """],
         cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "addons")},
         capture_output=True,
         text=True,
         timeout=30,

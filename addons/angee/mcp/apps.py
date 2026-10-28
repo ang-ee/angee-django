@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 from django.apps import AppConfig
 from django.core import checks
 
+from angee.hooks import check_hook
+
+check_settings = partial(check_hook, "ANGEE_MCP_ACTOR_VERIFIER")
 _CHECKS_REGISTERED = False
 
 
@@ -22,6 +27,8 @@ class MCPConfig(AppConfig):
         if _CHECKS_REGISTERED:
             return
         from angee.mcp.resource_tools import check_resource_tool_specs
+
+        checks.register(check_settings, checks.Tags.models)
 
         checks.register(check_resource_tool_specs)
         _CHECKS_REGISTERED = True

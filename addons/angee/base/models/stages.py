@@ -1,7 +1,7 @@
 """Ordered, data-owned pipeline stages.
 
 Lifecycles whose vocabulary belongs to code use
-:class:`angee.base.models.StateTransitions`.  A pipeline whose names and
+:class:`angee.base.models.transitions.StateTransitions`.  A pipeline whose names and
 ordering belong to users composes :class:`Stage` into an addon-owned concrete
 stage model instead.  The concrete model supplies only its container relation
 and optional category field; records compose :class:`StagedModelMixin` and

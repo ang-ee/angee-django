@@ -20,7 +20,7 @@ from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
-from angee.errors import exception_text
+from angee.base.exceptions import exception_text
 from angee.integrate.errors import RequestNotSentError
 from angee.integrate.http import HttpClient
 from angee.resources import sources

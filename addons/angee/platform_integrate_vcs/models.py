@@ -10,7 +10,8 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.models import AngeeManager, AngeeModel
+from angee.base.managers import AngeeManager
+from angee.base.models.base import AngeeModel
 from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
 from angee.platform.discovery import available_addons
 from angee.platform_integrate_vcs.catalog import parse_addon_meta

@@ -17,9 +17,9 @@ from strawberry.scalars import JSON
 from strawberry_django.auth.utils import get_current_user
 from strawberry_django.queryset import run_type_get_queryset
 
-from angee.base.identity import public_id_for
 from angee.base.implementations import resolve_all_impl_classes
-from angee.base.models import record_display_label
+from angee.base.models.base import record_display_label
+from angee.base.models.identity import public_id_for
 from angee.decisions.schema import DecisionType
 from angee.graphql.actions import (
     ActionResult,

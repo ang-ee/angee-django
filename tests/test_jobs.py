@@ -272,7 +272,7 @@ def test_addons_own_their_periodic_celery_schedules() -> None:
 def test_celery_command_loads_declared_roots_before_importing_jobs(
     tmp_path: Path, installed: bool, arguments: list[str], code: int, message: str,
 ) -> None:
-    """A real manage.py starts with only the core importable and no process attribution."""
+    """A prebuilt host loads declared addon paths without process attribution."""
 
     source = Path(__file__).resolve().parents[1]
     (tmp_path / "settings.yaml").write_text(
@@ -281,7 +281,6 @@ def test_celery_command_loads_declared_roots_before_importing_jobs(
         "COMPOSE_RUNTIME_MODULE: runtime\n"
         f"ANGEE_ADDON_DIRS: [{str(source / 'addons')!r}]\n"
         f"INSTALLED_APPS: {['angee.jobs'] if installed else []!r}\n"
-        "ANGEE_MANAGEMENT_CONTEXT: missing_process_context.open_context\n"
         "DATABASES:\n  default:\n    ENGINE: django.db.backends.sqlite3\n    NAME: ':memory:'\n",
     )
     (tmp_path / "manage.py").write_text(
@@ -300,6 +299,13 @@ def test_celery_command_loads_declared_roots_before_importing_jobs(
     }
     # This is the installed core's path, deliberately excluding its addon roots.
     environment["PYTHONPATH"] = str(source)
+    built = subprocess.run(
+        [sys.executable, "-c",
+         "from pathlib import Path; from angee.hatch import build_runtime; "
+         "build_runtime(Path.cwd(), Path('runtime'), check_history=False)"],
+        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert built.returncode == 0, built.stdout + built.stderr
     result = subprocess.run(
         [sys.executable, str(tmp_path / "manage.py"), "celery", *arguments],
         cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=30, check=False,

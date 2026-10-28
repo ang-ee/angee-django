@@ -19,18 +19,16 @@ from django.utils.functional import cached_property
 from rebac import system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
+from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField, ModelLabelField
-from angee.base.identity import public_id_for
-from angee.base.models import (
-    AngeeDataModel,
-    AppendOnlyModel,
-    AppendOnlyQuerySet,
-    MergePolicy,
-    OwnerMixin,
-    RecordRefMixin,
-    update_fields_with_auto_now,
-)
+from angee.base.models.append_only import AppendOnlyModel, AppendOnlyQuerySet
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.identity import public_id_for
+from angee.base.models.merge_references import MergePolicy
+from angee.base.models.ownership import OwnerMixin
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.graphql.schema import GraphQLSchemas
@@ -66,7 +64,6 @@ from angee.workflows.triggers import (
     TriggerGrantTarget,
     TriggerManager,
     TriggerSource,
-    TriggerSourceField,
 )
 
 
@@ -149,7 +146,7 @@ class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     """Editable identity and draft, pointing to one immutable published version.
 
     A workflow is a grant root with transferable ownership
-    (:class:`~angee.base.models.OwnerMixin`); ``created_by`` stays attribution.
+    (:class:`~angee.base.models.ownership.OwnerMixin`); ``created_by`` stays attribution.
     An install without a user-backed actor leaves it ownerless, for platform
     administrators to manage or transfer.
     """
@@ -884,7 +881,7 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel):
     resource_class = TriggerResource
     sqid_prefix = "wft_"
     workflow = models.ForeignKey("workflows.Workflow", on_delete=models.CASCADE, related_name="triggers")
-    source = TriggerSourceField(TriggerSource)
+    source = ImplClassField(TriggerSource)
     model_label = ModelLabelField(max_length=200, blank=True, default="")
     condition = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=False, editable=False)
@@ -892,6 +889,14 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel):
     """Targets this trigger contributes to the workflow principal's direct tuples."""
     disabled_reason = DiagnosticTextField(blank=True, default="", editable=False)
     objects = TriggerManager()
+
+    @classmethod
+    def include_impl_choice(cls, field_name: str, implementation: type[object]) -> bool:
+        """Keep observation-only sources out of trigger admission pickers."""
+
+        if field_name == "source" and issubclass(implementation, TriggerSource):
+            return not implementation.watch_only
+        return super().include_impl_choice(field_name, implementation)
 
     @classmethod
     def can_read_impl_choices(cls, field_name: str, actor: Any) -> bool:
@@ -908,7 +913,7 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel):
         """Resolve source behavior through its declared implementation field."""
         try:
             field = self._meta.get_field("source")
-            assert isinstance(field, TriggerSourceField)
+            assert isinstance(field, ImplClassField)
             return field.resolve_for(self)
         except ImportError as error:
             raise ImproperlyConfigured(f"Trigger source {self.source!r} cannot be loaded: {error}") from error

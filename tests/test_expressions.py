@@ -10,7 +10,7 @@ from django.db import models
 from django.db.models.functions import Cast, JSONObject
 from django.test.utils import isolate_apps
 
-from angee.base.models.expressions import JSONArraySubquery, TextSHA256
+from angee.base.expressions import JSONArraySubquery, TextSHA256
 from tests.tables import model_tables
 
 

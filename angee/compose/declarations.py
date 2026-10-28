@@ -80,7 +80,7 @@ class BuildIntegration:
 
     App autoconfig appends dotted class paths to COMPOSE_INTEGRATIONS. Instances
     have no registry or lifecycle beyond one Runtime. Rendering is read-only;
-    bind receives the exact emitted source map, including on an unchanged boot.
+    generated imports execute after concrete models and before native ready().
     """
 
     def model_declaration(self, composition: ModelComposition, source: type[models.Model]) -> ModelDeclaration:
@@ -93,8 +93,10 @@ class BuildIntegration:
 
         return {}
 
-    def bind(self, runtime: Runtime, sources: Mapping[Path, str]) -> None:
-        """Bind generated paths after successful emission, without rerendering."""
+    def runtime_imports(self, runtime: Runtime) -> tuple[str, ...]:
+        """Name emitted ordinary modules required after concrete model imports."""
+
+        return ()
 
     def retired_primary_keys(self, model: type[models.Model], alias: str) -> Iterable[Any]:
         """Return rows the capability explicitly permits to retire with a model.

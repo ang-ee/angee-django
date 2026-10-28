@@ -14,14 +14,13 @@ from rebac.schema.parser import validate_schema
 
 from angee.base.build import (
     SchemaExtensionError,
-    apply_schema_paths,
     extension_source_map,
     field_gate_owners,
     merged_schema_relpath,
     merged_schemas,
     render_zed,
 )
-from angee.base.testing.permissions import installed_field_owners
+from angee.base.testing.permissions import emit_permissions, installed_field_owners
 from angee.compose.model_composition import ModelComposition
 from angee.compose.runtime import Runtime
 from tests.conftest import make_addon
@@ -136,6 +135,10 @@ def test_composer_maps_only_canonical_donor_columns_and_runtime_emits_the_gate(m
         members=models.ManyToManyField("auth.User"),
     )
     source(donor_module, "PlainExtension", donor.label, extends=f"{base.label}.Plain", code=models.IntegerField())
+    settings.MIGRATION_MODULES = {
+        **settings.MIGRATION_MODULES,
+        **{config.label: f"{config.name}.migrations" for config in (base, donor)},
+    }
     target = f"{prefix}demo/thing"
     (Path(base.path) / "permissions.zed").write_text(f"definition {target} {{ permission read = authenticated }}")
     (Path(donor.path) / "permissions.extends.zed").write_text(
@@ -160,11 +163,7 @@ def test_emitted_gate_is_stored_after_native_permission_sync(tmp_path):
     owners.setdefault("scopedemo/doc", {})["receipt"] = donor.name
     sources = extension_source_map(configs, field_owners=owners)
     runtime = tmp_path / "runtime"
-    for relative, text in sources.items():
-        path = runtime / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-    apply_schema_paths(configs, runtime, sources=sources)
+    emit_permissions(configs, runtime, sources=sources)
     call_command("rebac", "sync", verbosity=0)
     definition = SchemaDefinition.objects.get(resource_type="scopedemo/doc")
     assert definition.permissions.filter(name="read__receipt").exists()

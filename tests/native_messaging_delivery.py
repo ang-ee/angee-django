@@ -35,7 +35,7 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout, ReadTimeout
 from urllib3.exceptions import MaxRetryError, NameResolutionError, NewConnectionError, ProtocolError
 
-from angee.base.models import StaleRevisionError
+from angee.base.models.locks import StaleRevisionError
 from angee.graphql.actions import MAX_ACTION_SELECTION, ActionSelectionInput
 from angee.graphql.ids import PublicID
 from angee.graphql.schema import GraphQLSchemas

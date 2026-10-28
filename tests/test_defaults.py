@@ -25,8 +25,8 @@ def test_defaults_prefixes_the_ordered_core_app_set(tmp_path: Path) -> None:
     assert defaults["INSTALLED_APPS"] == [*CORE_APP_NAMES, "example.product"]
 
 
-def test_core_fixture_preserves_declared_native_app_order(tmp_path: Path) -> None:
-    """The native fixture retains the host's declared core app ordering."""
+def test_core_fixture_orders_composer_after_native_source_apps(tmp_path: Path) -> None:
+    """The final native import hook runs after all declared source apps."""
 
     settings = {
         "INSTALLED_APPS": (*CORE_APP_NAMES,),
@@ -35,7 +35,9 @@ def test_core_fixture_preserves_declared_native_app_order(tmp_path: Path) -> Non
 
     Composer(settings).compose_settings()
 
-    assert [config.name for config in settings["INSTALLED_APPS"]] == CORE_APP_NAMES
+    assert [config.name for config in settings["INSTALLED_APPS"]] == [
+        "django_yamlconf", "angee", "angee.base", "angee.compose",
+    ]
 
 
 @pytest.mark.parametrize("composed", (False, True), ids=("bare", "composed"))

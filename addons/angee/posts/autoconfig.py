@@ -7,7 +7,6 @@ from typing import TypedDict
 _Settings = TypedDict(
     "_Settings",
     {
-        "ANGEE_IMPL_REGISTRIES:append": list[str],
         "ANGEE_CHANNEL_BACKEND_CLASSES.feed": str,
         "ANGEE_MESSAGING_PROTECTED_LOCAL_KEYS:append": list[str],
         "ANGEE_POSTS_FEED_BACKEND_CLASSES": dict[str, str],
@@ -15,7 +14,6 @@ _Settings = TypedDict(
 )
 
 SETTINGS: _Settings = {
-    "ANGEE_IMPL_REGISTRIES:append": ["angee.posts.backends.FeedBackend"],
     "ANGEE_CHANNEL_BACKEND_CLASSES.feed": "angee.posts.backends.FeedChannelBackend",
     "ANGEE_MESSAGING_PROTECTED_LOCAL_KEYS:append": ["provider_hidden"],
     # Feed backends a ``posts.Feed`` row may select. ``manual`` is the neutral

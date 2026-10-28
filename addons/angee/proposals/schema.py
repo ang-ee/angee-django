@@ -17,7 +17,7 @@ from strawberry import auto
 from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 
-from angee.base.models import StaleRevisionError
+from angee.base.models.locks import StaleRevisionError
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,

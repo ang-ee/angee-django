@@ -18,7 +18,7 @@ from strawberry_django.optimizer import optimize
 from strawberry_django.utils.requests import get_request
 
 from angee.base.fields.identity import SqidField
-from angee.base.identity import instance_from_public_id
+from angee.base.models.identity import instance_from_public_id
 from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.contracts import DataResourceSubtitleMetadata

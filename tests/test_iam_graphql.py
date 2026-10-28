@@ -40,12 +40,8 @@ from rebac.roles import grant as grant_role
 from strawberry.django.views import GraphQLView
 
 from angee.agents.testing.models import Agent
-from angee.base.identity import (
-    instance_from_public_id,
-    public_data_id_field,
-    public_id_for,
-    public_id_of,
-)
+from angee.base.identity import public_data_id_field
+from angee.base.models.identity import instance_from_public_id, public_id_for, public_id_of
 from angee.graphql import subscriptions
 from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.data.resource_fields import resource_field_kind, resource_field_widget

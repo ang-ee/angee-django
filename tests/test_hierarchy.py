@@ -1,4 +1,4 @@
-"""Behaviour of :class:`~angee.base.models.HierarchyMixin` (F-hier, foundation R3).
+"""Behaviour of :class:`~angee.base.models.hierarchy.HierarchyMixin` (F-hier, foundation R3).
 
 The mixin gives a self-parented model a maintained materialized ``path`` so
 subtree membership is a database prefix test, not a client-side ``parent`` walk.
@@ -23,7 +23,7 @@ from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
-from angee.base.models import AngeeQuerySet
+from angee.base.querysets import AngeeQuerySet
 from tests.hierdemo.models import HierNode, PlainManagerHierNode, ScopedHierNode
 from tests.scopedemo.models import Scope
 

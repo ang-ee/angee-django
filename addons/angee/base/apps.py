@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 from django.apps import AppConfig
 from django.core import checks
+
+from angee.hooks import check_hooks
+
+check_settings = partial(check_hooks, ("ANGEE_MERGE_GUARDS",))
 
 
 class BaseConfig(AppConfig):
@@ -34,15 +40,13 @@ class BaseConfig(AppConfig):
             dispatch_uid="angee.record_refs.target_delete",
         )
 
-        # The check imports REBAC models, which require completed app population.
+        # Model-owned checks require completed app population.
         from angee.base.checks import (
             check_ownership,
             check_rebac_caveats,
-            check_rebac_database,
         )
-        from angee.base.implementations import check_impl_registries
 
-        checks.register(check_rebac_database, checks.Tags.models)
-        checks.register(check_impl_registries, checks.Tags.models)
+        checks.register(check_settings, checks.Tags.models)
+
         checks.register(check_ownership, checks.Tags.models)
         checks.register(check_rebac_caveats, checks.Tags.models)

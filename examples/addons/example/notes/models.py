@@ -11,11 +11,9 @@ from django.db import models, transaction
 from rebac import ObjectRef
 
 from angee.base.fields.state import StateField
-from angee.base.models import (
-    AngeeDataModel,
-    AuditMixin,
-    OwnerMixin,
-)
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.ownership import OwnerMixin
 from angee.messaging.models import ThreadedModelMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget

@@ -4,15 +4,21 @@
 # runtime are all regenerable here. Commit what you author; ignore what a tool
 # regenerates.
 
-# Generated composer output — emitted by `manage.py angee build`, never edited.
-/runtime/
+# Generated composer output — emitted by the native Hatch runtime hook, never edited.
+/runtime/*
+!/runtime/*/
+/runtime/*/*
+!/runtime/*/migrations/
+/dist/
 
 # The operator's compiled bring-up artifacts and resolved secrets.
 /.env
+/.env.*
 /process-compose.yaml
 /docker-compose.yaml
 /.copier-answers.stack.yml
 /run/
+/.angee/
 
 # Operator-materialized source machinery: clone caches, workspace worktree slots,
 # and the `templates` symlink into the consolidated angee cache.
@@ -26,6 +32,7 @@
 
 # Stack-owned tool caches (uv's cache-dir per pyproject.toml and friends).
 /caches/
+/.pnpm-store/
 
 # Python
 __pycache__/
@@ -39,6 +46,10 @@ node_modules/
 /{{ web_path }}/.vite/
 
 # Scratch / reports
+/backups/
+/tmp/
+/output/
+/*.pre-*
 /.playwright-mcp/
 /test-results/
 /playwright-report/

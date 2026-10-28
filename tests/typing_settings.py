@@ -54,6 +54,6 @@ _NAMESPACE = runpy.run_module(
 )
 _NAMESPACE = {name: value for name, value in _NAMESPACE.items() if name.isupper() and not name.startswith("_")}
 prepend_import_paths(_ADDON_DIRS)
-Composer(_NAMESPACE).compose_settings()
 _NAMESPACE["INSTALLED_APPS"].append("tests.typing_host.TypingHostConfig")
+Composer(_NAMESPACE).compose_settings(compose_config="angee.compose.apps.BuildComposeConfig")
 globals().update(_NAMESPACE)

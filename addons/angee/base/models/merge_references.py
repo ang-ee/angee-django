@@ -18,15 +18,16 @@ from django.db.models import DO_NOTHING, Exists, OuterRef, Q
 from django.db.models.deletion import get_candidate_relations_to_delete
 from django.db.models.functions import Cast
 from django.utils import timezone
+from rebac import model_identities
 from rebac.actors import model_can_resolve_subject
 from rebac.models import active_relationship_model
-from rebac.resources import model_identities, model_resource_type
+from rebac.resources import model_resource_type
 
 from angee.base.lineage import concrete_lineage
 from angee.base.models.append_only import AppendOnlyModel
 from angee.base.models.audit import AuditMixin
-from angee.base.models.identity import auto_now_stamps
-from angee.base.querysets import SystemQuerysetMixin
+from angee.base.models.persistence import PersistenceMixin
+from angee.base.models.timestamps import auto_now_stamps
 from angee.base.refs import generic_pointer_model, generic_pointer_target
 
 
@@ -190,7 +191,7 @@ class Reference:
 
         if self.rows(record).exists():
             return True
-        return issubclass(self.model, SystemQuerysetMixin) and self.model.retained_reference_exists(
+        return issubclass(self.model, PersistenceMixin) and self.model.retained_reference_exists(
             record, self.lookup(record),
         )
 

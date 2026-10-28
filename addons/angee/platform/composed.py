@@ -17,7 +17,7 @@ from pydantic import BaseModel, PrivateAttr
 
 from angee.addons import is_angee_addon
 from angee.base.fields.implementation import ImplClassField
-from angee.base.implementations import ImplChoice
+from angee.base.implementations import ImplChoice, impl_choices
 
 
 class PlatformFieldRow(BaseModel):
@@ -351,7 +351,9 @@ def implementation_rows() -> list[PlatformImplementationRow]:
                 if not isinstance(field, ImplClassField):
                     continue
                 keys = field.registered_keys()
-                choices = {choice.key: choice for choice in field.impl_choices()}
+                if field.base_class is None:
+                    continue
+                choices = {choice.key: choice for choice in impl_choices(field.base_class)}
                 rows.extend(
                     PlatformImplementationRow.from_field(model, field, key, choices[key], configs) for key in keys
                 )

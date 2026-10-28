@@ -43,11 +43,9 @@ from rebac.actors import current_sudo_reason, is_sudo
 import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
 from angee.agents.testing.models import Agent
-from angee.base.models import (
-    AngeeModel,
-    AuditMixin,
-    SqidMixin,
-)
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeModel
+from angee.base.models.identity import SqidMixin
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload

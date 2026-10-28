@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import partial
 
+from django.db import models
 from mypy.nodes import ARG_NAMED_OPT, GDEF, Argument, NameExpr, PlaceholderNode, SymbolTableNode, TypeInfo, Var
 from mypy.plugin import AttributeContext, ClassDefContext, DynamicClassDefContext
 from mypy.plugins.common import add_method_to_class
@@ -14,12 +15,24 @@ from mypy.types import Type as MypyType
 from mypy_django_plugin.lib import fullnames, helpers
 
 from angee.base.fields.implementation import ImplClassField
-from angee.compose.typing import CompositionPlugin
+from angee.compose.typing import CompositionContext, CompositionPlugin
+
+
+class BaseCompositionContext(CompositionContext):
+    """Project checked parent contracts through native REBAC manager injection."""
+
+    def is_fallback_manager(self, manager: models.Manager[models.Model]) -> bool:
+        # Native model imports require Django's completed setup, supplied by the
+        # context before manager projection begins.
+        from rebac.mixins import INJECTED_BASE_MANAGER
+
+        return super().is_fallback_manager(manager) or manager.name == INJECTED_BASE_MANAGER
 
 
 class BasePlugin(CompositionPlugin):
     """Project model-toolkit contracts for Angee hosts."""
 
+    context_class = BaseCompositionContext
     default_settings_module = "angee.defaults"
 
     def get_base_class_hook(self, fullname: str) -> Callable[[ClassDefContext], None] | None:
@@ -58,7 +71,7 @@ class BasePlugin(CompositionPlugin):
             info = self._get_typeinfo_or_none(class_name)
             symbol = info.get(method_name) if info is not None else None
             if symbol is not None and symbol.node is not None and symbol.node.fullname == (
-                "angee.base.querysets.SystemQuerysetMixin.system_queryset"
+                "angee.base.models.persistence.PersistenceMixin.system_queryset"
             ):
                 return self._system_queryset
         return super().get_class_attribute_hook(fullname)
@@ -85,7 +98,7 @@ class BasePlugin(CompositionPlugin):
         return ctx.default_attr_type
 
     def get_dynamic_class_hook(self, fullname: str) -> Callable[[DynamicClassDefContext], None] | None:
-        if fullname == "angee.base.models.base.role_anchor":
+        if fullname == "angee.base.models.roles.role_anchor":
             return self._role_anchor
         return super().get_dynamic_class_hook(fullname)
 

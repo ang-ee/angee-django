@@ -6,8 +6,7 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 
 from angee.base.fields.state import StateField, ToneField
-from angee.base.models import Stage
-from angee.base.models.stages import StageTone
+from angee.base.models.stages import Stage, StageTone
 from angee.graphql.data.contracts import DataResourceFieldMetadata
 from angee.graphql.data.resource_fields import _validate_resource_field, resource_field_widget
 

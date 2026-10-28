@@ -16,7 +16,7 @@ _angee:
     root), settings.yaml, the consumer-addon namespace, and the Vite + React web
     package. The composed runtime graph owns frontend package discovery, Tailwind
     source scanning, app addon/schema wiring, and typed GraphQL operation codegen
-    through `runtime/web/*` artifacts emitted by `manage.py angee build`.
+    through `runtime/web/*` artifacts emitted by the native Hatch runtime hook.
 
 # Machine name of the project — the slug used for the SECRET_KEY, the manage.py
 # docstring, and (by default) the web package's npm scope. Lowercase, no spaces.

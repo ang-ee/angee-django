@@ -2,41 +2,27 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from django.apps import apps
-from django.conf import settings
 from django.core import checks
 from django.core.checks.registry import registry
 from django.db import models
 from django.test import override_settings
 from django.test.utils import isolate_apps
-from rebac import RebacMixin
-from rebac.models import RebacResource, Relationship, RelationshipRegistry
 
-from angee.base import checks as base_checks
 from angee.base.apps import BaseConfig
-from angee.base.checks import (
-    check_ownership,
-    check_rebac_database,
-)
+from angee.base.checks import check_ownership
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
-from angee.base.implementations import check_impl_registries
-from angee.base.models import (
-    AngeeManager,
-    AngeeModel,
-    AppendOnlyModel,
-    AppendOnlyQuerySet,
-    AuditMixin,
-    HierarchyMixin,
-    HierarchyQuerySet,
-    OwnerMixin,
-    TrashMixin,
-    TrashQuerySet,
-)
-from angee.hooks import check_hooks
+from angee.base.implementations import check_impl_registry
+from angee.base.managers import AngeeManager
+from angee.base.models.append_only import AppendOnlyModel, AppendOnlyQuerySet
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeModel
+from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
+from angee.base.models.ownership import OwnerMixin
+from angee.base.models.trash import TrashMixin, TrashQuerySet
+from angee.hooks import check_hook, check_hooks
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
 
@@ -91,43 +77,54 @@ def test_installed_append_only_default_managers_compose_guard() -> None:
 
 
 def test_impl_registry_check_covers_bad_paths_wrong_bases_and_keys() -> None:
-    """The base check validates rowless catalogues without a model field."""
+    """The shared validator covers every entry without a separate declaration list."""
 
     with override_settings(
-        ANGEE_IMPL_REGISTRIES=["tests.test_impl._BaseImpl", "tests.test_impl.MissingBase"],
         ANGEE_TEST_IMPLS={
             "missing": "tests.test_impl.MissingImpl",
             "wrong_base": "builtins.str",
             "wrong_key": "tests.test_impl._BaseImpl",
         },
     ):
-        errors = check_impl_registries()
-    assert [error.id for error in errors] == ["angee.E003", "angee.E004", "angee.E004", "angee.E031"]
+        errors = check_impl_registry(_BaseImpl)
+    assert [error.id for error in errors] == ["angee.E003", "angee.E004", "angee.E004"]
     assert "MissingImpl" in errors[0].msg
     assert "is not a _BaseImpl" in errors[1].msg
     assert "with key 'base'" in errors[2].msg
-    assert "MissingBase" in errors[3].msg
 
 
-def test_impl_registry_check_accepts_empty_catalogue_and_rejects_unlisted_field() -> None:
-    """An empty rowless registry is valid, while model selectors must be declared."""
+def test_impl_checks_need_no_meta_declaration_and_preserve_empty_rowless_catalogues() -> None:
+    from tests.test_impl import _EmptyImpl
 
-    with override_settings(ANGEE_IMPL_REGISTRIES=["tests.test_impl._EmptyImpl"], ANGEE_EMPTY_IMPLS={}):
-        assert check_impl_registries() == []
-    with override_settings(ANGEE_IMPL_REGISTRIES=[], ANGEE_TEST_IMPLS={"base": "tests.test_impl._BaseImpl"}):
-        [error] = ImplClassField(_BaseImpl).check()
-    assert error.id == "angee.E032"
+    with override_settings(ANGEE_EMPTY_IMPLS={}):
+        assert check_impl_registry(_EmptyImpl) == []
+    with override_settings(ANGEE_TEST_IMPLS={"base": "tests.test_impl._BaseImpl"}):
+        assert ImplClassField(_BaseImpl).check() == []
+
+
+def test_rowless_resource_check_validates_unused_entries_and_registers_once() -> None:
+    from angee.resources.sources import check_source_registry
+
+    config = apps.get_app_config("resources")
+    config.ready()
+    config.ready()
+    assert sum(check is check_source_registry for check in registry.registered_checks) == 1
+    with override_settings(ANGEE_RESOURCE_SOURCE_CLASSES={
+        "path": "angee.resources.sources.PathSource", "unused": "builtins.MissingSource",
+    }):
+        errors = check_source_registry(app_configs=None)
+    assert [error.id for error in errors] == ["angee.E003"]
+    assert "MissingSource" in errors[0].msg
 
 
 def test_hook_check_imports_every_declared_path() -> None:
     """A bad optional hook and each bad list entry fail at Django startup."""
 
     with override_settings(
-        ANGEE_HOOKS=["ANGEE_TEST_SINGLE_HOOK", "ANGEE_TEST_HOOKS"],
         ANGEE_TEST_SINGLE_HOOK="builtins.MissingHook",
         ANGEE_TEST_HOOKS=["builtins.len", "builtins.Ellipsis", "builtins.MissingHook"],
     ):
-        errors = check_hooks()
+        errors = [*check_hook("ANGEE_TEST_SINGLE_HOOK"), *check_hooks(("ANGEE_TEST_HOOKS",))]
     assert [error.id for error in errors] == ["angee.E033"] * 3
     assert "MissingHook" in errors[0].msg
     assert "not callable" in errors[1].msg
@@ -136,22 +133,45 @@ def test_hook_check_imports_every_declared_path() -> None:
 
 def test_hook_check_accepts_unset_optional_hook_and_declared_list_order() -> None:
     with override_settings(
-        ANGEE_HOOKS=["ANGEE_TEST_SINGLE_HOOK", "ANGEE_TEST_HOOKS"],
         ANGEE_TEST_SINGLE_HOOK="",
         ANGEE_TEST_HOOKS=["builtins.sorted", "builtins.len"],
     ):
-        assert check_hooks() == []
+        assert check_hook("ANGEE_TEST_SINGLE_HOOK") == []
+        assert check_hooks(("ANGEE_TEST_HOOKS",)) == []
 
 
-def test_installed_hook_owners_declare_their_settings() -> None:
-    assert {
-        "ANGEE_MCP_ACTOR_VERIFIER",
-        "ANGEE_WEBFORM_TOKEN_HOOK",
-        "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS",
-        "ANGEE_PARTIES_SIGNING_PROVIDERS",
-        "ANGEE_MERGE_GUARDS",
-    } <= set(settings.ANGEE_HOOKS)
-    assert check_hooks() == []
+def test_single_hook_owner_checks_reject_multiple_valid_callables() -> None:
+    from angee.mcp.apps import check_settings as mcp_settings
+    from angee.messaging.apps import check_settings as messaging_settings
+
+    for owner_check, name in (
+        (mcp_settings, "ANGEE_MCP_ACTOR_VERIFIER"),
+        (messaging_settings, "ANGEE_WEBFORM_TOKEN_HOOK"),
+    ):
+        with override_settings(**{name: ["builtins.len", "builtins.sorted"]}):
+            [error] = owner_check()
+        assert error.id == "angee.E033"
+        assert "at most one" in error.msg
+
+
+def test_installed_hook_owners_register_their_checks(monkeypatch) -> None:
+    from angee.base.apps import check_settings as base_settings
+    from angee.graphql.apps import GraphQLConfig
+    from angee.graphql.apps import check_settings as graphql_settings
+    from angee.mcp.apps import check_settings as mcp_settings
+    from angee.messaging.apps import check_settings as messaging_settings
+    from angee.parties.apps import check_settings as parties_settings
+    from angee.timeline.apps import check_settings as timeline_settings
+
+    # The source test host deliberately uses BareGraphQLConfig; exercise its
+    # production ready hook explicitly without leaking check registrations.
+    monkeypatch.setattr(registry, "registered_checks", registry.registered_checks.copy())
+    GraphQLConfig("angee.graphql", apps.get_app_config("graphql").module).ready()
+    for owner_check in (
+        base_settings, graphql_settings, mcp_settings, messaging_settings, parties_settings, timeline_settings,
+    ):
+        assert owner_check in registry.registered_checks
+        assert owner_check() == []
 
 
 @pytest.mark.parametrize("value", ("names", "values", "labels", "choices"))
@@ -169,63 +189,22 @@ def test_named_roster_state_survives_historical_reconstruction() -> None:
     assert not field.check()
 
 
-@pytest.mark.parametrize("write_alias", [None, "default", "external"])
-@pytest.mark.parametrize("selected_apps", [False, True])
-def test_rebac_check_requires_default_write_routing(
-    monkeypatch: pytest.MonkeyPatch,
-    write_alias: str | None,
-    selected_apps: bool,
-) -> None:
-    """The native router determines writes; unrelated models and reads are ignored."""
+def test_native_rebac_database_check_and_base_checks_are_registered() -> None:
+    """Native REBAC owns alias consistency; base registers only its own policies."""
 
-    with isolate_apps("django.contrib.contenttypes") as registry:
-
-        class Managed(RebacMixin):
-            class Meta:
-                app_label = "contenttypes"
-                rebac_resource_type = "tests/routing-check"
-
-        class Unmanaged(models.Model):
-            class Meta:
-                app_label = "contenttypes"
-
-        class Router:
-            def db_for_write(self, model: type[models.Model], **hints: Any) -> str | None:
-                return write_alias if model is Managed else "external"
-
-            def db_for_read(self, model: type[models.Model], **hints: Any) -> str:
-                return "replica"
-
-        monkeypatch.setattr(base_checks, "apps", registry)
-        app_configs = list(registry.get_app_configs()) if selected_apps else None
-        with override_settings(DATABASE_ROUTERS=[Router()]):
-            errors = check_rebac_database(app_configs)
-
-        if write_alias in (None, "default"):
-            assert errors == []
-        else:
-            [error] = errors
-            assert error.id == "angee.E020"
-            assert error.obj is Managed
-            assert error.msg == (
-                "REBAC-managed model contenttypes.Managed routes writes to 'external'; "
-                "REBAC requires the default database."
-            )
-            assert error.hint == "Update DATABASE_ROUTERS so REBAC-managed models write to 'default'."
-
-
-def test_rebac_database_check_registered_by_base() -> None:
-    """The base app registers the contract even when GraphQL ready hooks are absent."""
+    from rebac.checks import check_policy_models
 
     config = apps.get_app_config("base")
     assert isinstance(config, BaseConfig)
     assert config.name == "angee.base"
     config.ready()
     config.ready()
-    assert sum(check is check_rebac_database for check in registry.registered_checks) == 1
-    assert checks.Tags.models in check_rebac_database.tags
-    assert sum(check is check_hooks for check in registry.registered_checks) == 1
-    assert checks.Tags.models in check_hooks.tags
+    assert check_policy_models in registry.registered_checks
+    assert checks.Tags.database in check_policy_models.tags
+    from angee.base.apps import check_settings
+
+    assert sum(check is check_settings for check in registry.registered_checks) == 1
+    assert checks.Tags.models in check_settings.tags
 
 
 @pytest.mark.parametrize("ordering", ["first", "last", "override", "inherited", "plain"])
@@ -268,21 +247,6 @@ def test_hierarchy_queryset_order_checks_every_declared_manager(ordering: str) -
         assert "contenttypes.Node.hierarchy" in error.msg
     else:
         assert errors == []
-
-
-@pytest.mark.parametrize("store_model", [Relationship, RelationshipRegistry, RebacResource])
-def test_rebac_database_check_covers_relationship_and_resource_stores(store_model) -> None:
-    """A store without a resource type still participates in REBAC persistence."""
-
-    class Router:
-        def db_for_write(self, model: type[models.Model], **hints: Any) -> str | None:
-            return "external" if model is store_model else None
-
-    with override_settings(DATABASE_ROUTERS=[Router()]):
-        [error] = check_rebac_database()
-
-    assert error.id == "angee.E020"
-    assert error.obj is store_model
 
 
 @pytest.mark.parametrize("mutation", ["valid", "missing", "wrong", "widened", "stored-parent", "wrong-parent"])

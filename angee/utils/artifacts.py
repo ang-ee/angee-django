@@ -2,26 +2,20 @@
 
 from __future__ import annotations
 
-import logging
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from angee.utils.files import write_atomic
-
-logger = logging.getLogger(__name__)
-
-GENERATED_SENTINEL = "# ANGEE GENERATED RUNTIME - DO NOT EDIT"
-"""Stable marker checked before generated runtime cleanup."""
 
 
 @dataclass(slots=True)
 class GeneratedTree:
     """Synchronize a rendered map of generated text artifacts with a directory.
 
-    ``owns`` scopes orphan detection. Pruning removes owned files, symlinks,
-    and directories made empty by those removals. Cleanup can require a sentinel
-    and root; every ``migrations`` subtree is protected.
+    ``owns`` scopes both pruning and cleanup. Only owned files, symlinks and
+    directories made empty by those removals are deleted. The caller supplies
+    any required marker and root guard.
     """
 
     root: Path
@@ -39,12 +33,12 @@ class GeneratedTree:
     def reconcile(self, *, prune: bool) -> bool:
         """Repair artifacts, optionally pruning owned orphan files and directories.
 
-        Validate a configured guard before writing, so boot repair cannot turn
+        Validate a configured guard before writing, so reconciliation cannot turn
         a foreign directory into generated output by writing its sentinel.
         Consumers without a guard rely on ``owns`` to scope surgical pruning.
         """
 
-        self._validate_root()
+        self._validate_root(initializing=True)
         changed, orphans = self._changes()
         removed = False
         if prune:
@@ -60,28 +54,15 @@ class GeneratedTree:
             write_atomic(self.root / relative_path, self.artifacts[relative_path])
         return bool(changed or removed)
 
-    def reset(self) -> None:
-        """Clean the generated root, then recreate it for emission."""
-
-        self.clean()
-        self.root.mkdir(parents=True, exist_ok=True)
-
-    def clean(self, *, current_roots: Iterable[str] = ()) -> None:
-        """Clean the guarded root; report history outside current artifact roots.
-
-        ``current_roots`` supplies known roots when cleanup has no source map.
-        """
+    def clean(self) -> tuple[Path, ...]:
+        """Delete owned output and return retained paths relative to the root."""
 
         self._validate_root()
         paths = sorted(self.root.rglob("*"), reverse=True)
-        preserved = sorted({
-            Path(*relative_path.parts[:relative_path.parts.index("migrations") + 1])
-            for path in paths
-            if self._is_preserved(relative_path := path.relative_to(self.root))
-        })
+        preserved = any(not self.owns(path.relative_to(self.root)) for path in paths)
         for path in paths:
             relative_path = path.relative_to(self.root)
-            if self._is_preserved(relative_path) or (
+            if not self.owns(relative_path) or (
                 preserved and self.sentinel is not None and relative_path == self.sentinel[0]
             ):
                 continue
@@ -92,14 +73,7 @@ class GeneratedTree:
                     path.rmdir()
                 except OSError:
                     pass
-        roots = {path.parts[0] for path in self.artifacts} | set(current_roots)
-        retired = [path for path in preserved if path.parts[0] not in roots]
-        if retired:
-            logger.warning(
-                "Preserved migration directories during cleanup: %s. "
-                "Review their database history before an explicitly authorized removal.",
-                ", ".join(str(self.root / path) for path in retired),
-            )
+        return tuple(sorted(path.relative_to(self.root) for path in self.root.rglob("*")))
 
     @staticmethod
     def validate_artifacts(root: Path, artifacts: Mapping[Path, str]) -> None:
@@ -126,7 +100,7 @@ class GeneratedTree:
         orphans: set[Path] = set()
         for path in sorted(self.root.rglob("*"), reverse=True):
             relative_path = path.relative_to(self.root)
-            if relative_path in expected or not self.owns(relative_path) or self._is_preserved(relative_path):
+            if relative_path in expected or not self.owns(relative_path):
                 continue
             if path.is_symlink() or path.is_file() or (
                 path.is_dir() and all(child.relative_to(self.root) in orphans for child in path.iterdir())
@@ -134,18 +108,27 @@ class GeneratedTree:
                 orphans.add(relative_path)
         return changed, orphans
 
-    def _is_preserved(self, path: Path) -> bool:
-        return "migrations" in path.parts
-
-    def _validate_root(self) -> None:
+    def _validate_root(self, *, initializing: bool = False) -> None:
         """Verify the configured root and existing marker before any mutation."""
 
         if self.clean_root is not None and self.root.resolve() != self.clean_root.resolve():
-            raise RuntimeError(f"{self.root} is not the configured runtime dir")
+            raise RuntimeError(f"{self.root} is not the configured output directory")
         if not self.root.exists():
             return
         if any(self.root.iterdir()) and self.sentinel is not None:
             sentinel_path, marker = self.sentinel
             sentinel_path = self.root / sentinel_path
             if not sentinel_path.is_file() or marker not in sentinel_path.read_text(encoding="utf-8"):
-                raise RuntimeError(f"{self.root} is not an Angee runtime directory")
+                if initializing:
+                    # A source checkout may contain only caller-owned retained
+                    # inputs. Initial output may be added without overwriting
+                    # an owned file or deleting an owned orphan. Cleanup never
+                    # uses this exception and still requires the marker.
+                    _changed, orphans = self._changes()
+                    owned_files = any(
+                        self.owns(path.relative_to(self.root)) and (path.is_file() or path.is_symlink())
+                        for path in self.root.rglob("*")
+                    )
+                    if not orphans and not owned_files:
+                        return
+                raise RuntimeError(f"{self.root} lacks the required generated-output marker")

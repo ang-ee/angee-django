@@ -27,7 +27,7 @@ from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry_django.utils.requests import get_request
 
-from angee.base.identity import instance_from_public_id
+from angee.base.models.identity import instance_from_public_id
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
