@@ -1,6 +1,6 @@
 import { Filter, ResourceQuery, holdsPermission, useModelMetadata, type QueryFilter } from "@angee/metadata";
 import { useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import {
   CollectionTreeView, EmptyState, ErrorBanner, InlineTextAction, PaneToolbarMenu, RemovedRecords,
@@ -44,7 +44,10 @@ export function KnowledgePage() {
   const detail = useAuthoredQuery(KnowledgePageQuery, { id: openId ?? "" }, {
     enabled: Boolean(openId), models: PAGE_READ_MODELS,
   }).data?.pages_by_pk;
-  const vaultId = openId ? detail?.vault : selectedVault;
+  const vaultId = (openId ? detail?.vault : undefined) ?? selectedVault;
+  useEffect(() => {
+    if (detail?.vault) setSelectedVault(detail.vault);
+  }, [detail?.vault]);
   const vault = useAuthoredQuery(KnowledgeVault, { id: vaultId ?? "" }, {
     enabled: Boolean(vaultId), models: ["knowledge.Vault"],
   });
@@ -65,7 +68,6 @@ export function KnowledgePage() {
   useBreadcrumbLeafLabel(detail?.title ?? null);
   useBreadcrumbCollectionLink(home, openId ? home : null);
   const openPage = useCallback((id: string, context?: ListViewNavigationScope) => {
-    setSelectedVault(undefined);
     void navigate({ to: href("knowledge.page", { id }),
       search: (current: Record<string, unknown>) => recordNavigationSearch(current, metadata?.resource, context ?? null) });
   }, [href, metadata, navigate]);
