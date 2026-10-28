@@ -46,7 +46,7 @@ export interface CollectionTreeViewProps<TRow extends Row> extends Pick<TreeView
   badge?: keyof TRow & string;
   selectedId?: string;
   renderRow?: (row: TRow) => ReactNode;
-  /** Readable path to a directly opened node, retained independently of paged siblings. */
+  /** Readable detail/path retained independently of paged siblings; missing ancestors pin only its UI projection at root. */
   revealRows?: readonly TRow[];
   /** Selection carries the exact paged branch which supplied the row. */
   onRowClick?: (row: TRow, request: CollectionPageRequest) => void;
@@ -122,14 +122,31 @@ export function CollectionTreeView<TRow extends Row>(
         ...Object.fromEntries(clamped.map(({ id, ...page }) => [id, page])),
       }));
   }, [children, requests, view.setPaginationByScope]);
-  const rows = useMemo(
-    () => [...new Map([
+  const rows = useMemo(() => {
+    const loaded = new Map<string, TRow>([
       ...surface.rows.map((row) => ({ ...row, [props.parent]: null })),
       ...[...children.values()].flatMap((result) => result.data?.rows ?? []),
-      ...(props.revealRows ?? []),
-    ].map((row) => [String(row[props.rowKey]), row])).values()],
-    [surface.rows, children, props.parent, props.revealRows, props.rowKey],
-  );
+    ].map((row) => [String(row[props.rowKey]), row]));
+    const knownIds = new Set([
+      ...loaded.keys(), ...(props.revealRows ?? []).map((row) => String(row[props.rowKey])),
+    ]);
+    const visible = new Map(loaded);
+    for (const row of props.revealRows ?? []) {
+      const id = String(row[props.rowKey]);
+      const existing = loaded.get(id);
+      // A detail read may know a parent outside the current sibling page. Pin
+      // that orphan in this UI projection, while loaded pages own their edges.
+      const parent = existing ? existing[props.parent] : row[props.parent];
+      visible.set(id, { ...row, [props.parent]: parent && !knownIds.has(String(parent)) ? null : parent });
+    }
+    const visibleParents = new Set([...visible.values()].map((row) => String(row[props.parent] ?? "")));
+    return [...visible.values()].map((row) => {
+      const id = String(row[props.rowKey]);
+      const branch = children.get(id);
+      return branch?.data?.total === 0 && !branch.fetching && !branch.error && !visibleParents.has(id)
+        ? { ...row, [props.hasChildren]: false } : row;
+    });
+  }, [surface.rows, children, props.parent, props.revealRows, props.rowKey, props.hasChildren]);
   const catalog = useSearchCatalog({
     query: props.source.query,
     search: props.search,

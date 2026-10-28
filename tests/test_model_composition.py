@@ -14,10 +14,25 @@ from django.db.migrations.operations import CreateModel
 from django.db.migrations.state import ModelState, ProjectState
 from django.test.utils import isolate_apps
 
+from angee.base.models import (
+    SqidMixin,
+)
 from angee.compose.model_composition import ModelComposition
 from angee.compose.rendering import render_models
-from angee.models import HistoryMixin, SqidMixin
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
 from tests.tables import model_tables
+
+
+class HistorySource(HistoryMixin, models.Model):
+    """Plain Django tracking declares its capture manager at the model owner."""
+
+    objects = AngeeHistoryUnscopedManager()
+
+    class Meta:
+        abstract = True
+        app_label = "tests"
+        base_manager_name = "objects"
 
 
 @pytest.fixture
@@ -52,9 +67,6 @@ def modules(monkeypatch: pytest.MonkeyPatch, tmp_path):
                 vars(module),
             )
             emitted[label] = module
-        composition.validate_concrete(
-            getattr(emitted[source._meta.app_label], source.__name__) for source in composition.ordered_models
-        )
         return emitted
 
     return create, emit
@@ -126,6 +138,8 @@ def test_native_donor_and_child_mro_fields_managers_and_meta(modules):
     assert {field.name for field in concrete.Child._meta.local_fields} == {"parent_ptr", "child", "extra"}
     assert concrete.Child._meta.get_field("title").model is concrete.Parent
     assert type(concrete.Parent._default_manager) is ParentManager
+    assert concrete.Parent._base_manager._queryset_class is models.QuerySet
+    assert "_angee_base" not in concrete.Parent._meta.managers_map
     assert isinstance(concrete.Child._default_manager.all(), ChildQuerySet)
     assert concrete.Child._meta.ordering == ("title",)
     assert [constraint.name for constraint in concrete.Child._meta.constraints] == ["native_extra_nonnegative"]
@@ -163,7 +177,7 @@ def test_rendered_model_exports_donor_field_provenance(modules):
     assert composition.contributed_field_origins(Root) == (("external_id", donor_config.name),)
     (field,) = composition.contributed_fields(Root)
     assert field is donor_module.RootExtension._meta.get_field("external_id")
-    assert concrete.angee_contributed_field_origins == (("external_id", donor_config.name),)
+    assert concrete.compose_contributed_field_origins == (("external_id", donor_config.name),)
 
 
 @isolate_apps()
@@ -292,9 +306,9 @@ def test_final_composed_transition_metadata_is_validated(modules):
     exec(
         """
 from django.db import models
-from angee.fields import StateField
-from angee.models import AngeeModel
-from angee.models import StateTransitions, transition, save_state
+from angee.base.fields import StateField
+from angee.base.models import AngeeModel
+from angee.base.models import StateTransitions, transition, save_state
 class Status(models.TextChoices):
     DRAFT = "draft", "Draft"
     DONE = "done", "Done"
@@ -388,7 +402,7 @@ def test_native_history_change_reason_fields_belong_to_each_historical_model(mod
     create, emit = modules
     config, module = create("native_history_reasons")
     for name in ("First", "Second"):
-        source(module, name, config.label, bases=(HistoryMixin, models.Model), runtime=True)
+        source(module, name, config.label, bases=(HistorySource,), runtime=True)
 
     generated = emit(ModelComposition.discover((config,)))[config.label]
     histories = (generated.First.history.model, generated.Second.history.model)
@@ -413,7 +427,8 @@ def test_native_history_excludes_generated_fields_from_final_model(modules):
         module,
         "Tracked",
         config.label,
-        bases=(HistoryMixin, models.Model),
+        bases=(HistorySource,),
+        meta={"base_manager_name": "objects"},
         runtime=True,
         value=models.IntegerField(),
         doubled=models.GeneratedField(
@@ -459,7 +474,8 @@ def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modul
         module,
         "Tracked",
         config.label,
-        bases=(SqidMixin, HistoryMixin, models.Model),
+        bases=(SqidMixin, HistorySource),
+        meta={"base_manager_name": "objects"},
         runtime=True,
         title=models.CharField(max_length=32),
     )
@@ -469,6 +485,8 @@ def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modul
         config.label,
         runtime=True,
         extends=f"{config.label}.Tracked",
+        objects=AngeeHistoryUnscopedManager(),
+        meta={"base_manager_name": "objects"},
         extra=models.IntegerField(default=0),
     )
     composition = ModelComposition.discover((config,))
@@ -498,7 +516,7 @@ def test_native_history_mti_reference_has_a_migration_dependency(modules):
         module,
         "Tracked",
         config.label,
-        bases=(HistoryMixin, models.Model),
+        bases=(HistorySource,),
         runtime=True,
         title=models.CharField(max_length=32),
     )
@@ -506,7 +524,7 @@ def test_native_history_mti_reference_has_a_migration_dependency(modules):
         module,
         "Child",
         config.label,
-        bases=(HistoryMixin, models.Model),
+        bases=(HistorySource,),
         runtime=True,
         extends=f"{config.label}.Tracked",
         extra=models.IntegerField(default=0),
@@ -578,9 +596,9 @@ def test_final_composition_rejects_a_donor_transition_outside_the_owner_graph(mo
     exec(
         """
 from django.db import models
-from angee.fields import StateField
-from angee.models import AngeeModel
-from angee.models import StateTransitions, transition
+from angee.base.fields import StateField
+from angee.base.models import AngeeModel
+from angee.base.models import StateTransitions, transition
 class Status(models.TextChoices):
     DRAFT = "draft", "Draft"
     DONE = "done", "Done"
@@ -684,3 +702,28 @@ def test_required_parent_applies_to_donors_and_leaves_undeclared_mixins_unchange
     assert composition.required_parents == {Capability: Parent}
     assert composition.parent(Child) is Parent
     assert not issubclass(Capability, Parent)
+
+
+@isolate_apps()
+def test_native_history_refuses_an_explicit_uncaptured_base_manager(modules):
+    create, emit = modules
+    config, module = create("native_uncaptured_history")
+    source(
+        module, "Uncaptured", config.label, bases=(HistoryMixin, models.Model), runtime=True,
+        objects=models.Manager(), meta={"base_manager_name": "objects"},
+    )
+    with pytest.raises(ImproperlyConfigured, match="history-capable base manager"):
+        emit(ModelComposition.discover((config,)))
+
+
+@isolate_apps()
+def test_native_history_refuses_an_uncaptured_default_manager_with_a_captured_base(modules):
+    create, emit = modules
+    config, module = create("native_uncaptured_default_history")
+    source(
+        module, "UncapturedDefault", config.label, bases=(HistoryMixin, models.Model), runtime=True,
+        objects=models.Manager(), _angee_base=AngeeHistoryUnscopedManager(),
+        meta={"base_manager_name": "_angee_base", "default_manager_name": "objects"},
+    )
+    with pytest.raises(ImproperlyConfigured, match="history-capable default manager"):
+        emit(ModelComposition.discover((config,)))

@@ -18,7 +18,6 @@ from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import to_subject_ref
 
-from angee.actors import source_kind_for
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.backends import ManualChannelBackend
@@ -40,9 +39,12 @@ from angee.messaging.testing.models import (
     RelationshipKind,
     Thread,
 )
-from angee.models import SourceKind
 from angee.parties.backends import ParsedAddress, ParsedContact
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
+from angee.provenance.statements import (
+    SourceKind,
+    StatementSourceMixin,
+)
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import current_stream, make_integration
 from tests.test_messaging import _grant
@@ -527,7 +529,7 @@ def test_a_moved_import_statement_stays_beside_the_directorys_and_the_directory_
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
         takeout = make_integration("move-mixed-takeout", model=Channel, backend_class="manual").integration_ptr
         directory = make_integration("move-mixed-directory", model=Directory)
-        assert source_kind_for(to_subject_ref(takeout)) == SourceKind.IMPORT
+        assert StatementSourceMixin.source_kind_for(to_subject_ref(takeout)) == SourceKind.IMPORT
         imported, carded = (
             statements._base_manager.create(
                 subject=party,

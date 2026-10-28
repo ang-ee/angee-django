@@ -231,7 +231,7 @@ workspaces:
 {# The template chooses the entry job; the operator follows only declared edges. #}
 {% set restart_job = "deps" %}{% if stack_flavor == "instance" %}{% set restart_job = "provision" %}{% endif %}
 {% set python_sync = "" %}{% set python_bootstrap = "" %}
-{% if runtime_mode == "docker" %}{% if stack_flavor == "framework" %}{% set python_sync = "uv sync --inexact && " %}{% set python_bootstrap = "uv sync --inexact && python -m angee.compose.bootstrap && uv sync --inexact && " %}{% else %}{% if framework == "source" %}{% set python_sync = "uv sync --frozen --inexact --extra postgres --project sources/angee && uv sync --inexact && " %}{% set python_bootstrap = "uv sync --frozen --inexact --extra postgres --project sources/angee && python -m angee.compose.bootstrap && uv sync --inexact && " %}{% endif %}{% endif %}{% endif %}
+{% if runtime_mode == "docker" %}{% if stack_flavor == "framework" %}{% set python_sync = "uv sync --inexact && " %}{% set python_bootstrap = "uv sync --inexact && python -m angee.management.bootstrap && uv sync --inexact && " %}{% else %}{% if framework == "source" %}{% set python_sync = "uv sync --frozen --inexact --extra postgres --project sources/angee && uv sync --inexact && " %}{% set python_bootstrap = "uv sync --frozen --inexact --extra postgres --project sources/angee && python -m angee.management.bootstrap && uv sync --inexact && " %}{% endif %}{% endif %}{% endif %}
 
 # Jobs finish successfully before their dependents start. Re-running the entry
 # job with chained_restart applies this same graph to the running application.
@@ -260,13 +260,13 @@ jobs:
 {% if stack_flavor == "instance" %}      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"
-{% endif %}{% if runtime_mode == "process" %}    command: ["sh", "-c", "uv run python -m angee.compose.bootstrap && uv sync && exec uv run python manage.py angee provision --demo --force-rebac"]
+{% endif %}{% if runtime_mode == "process" %}    command: ["sh", "-c", "uv run python -m angee.management.bootstrap && uv sync && exec uv run python manage.py angee provision --force-rebac --after-if-installed 'resources load --include-demo' --after-if-installed schema"]
     depends_on: [deps, operator]
 {% else %}    command:
       - sh
       - "-c"
       - >-
-        {{ python_bootstrap }}exec python manage.py angee provision {% if stack_flavor == "framework" %}{% if effective_serve_mode == "production" %}--force-rebac{% else %}--demo --force-rebac{% endif %}{% else %}--bootstrap-admin{% endif %}
+        {{ python_bootstrap }}exec python manage.py angee provision {% if stack_flavor == "framework" %}--force-rebac --after-if-installed 'resources load{% if effective_serve_mode != "production" %} --include-demo{% endif %}'{% else %}--after-if-installed 'resources load'{% endif %} --after-if-installed schema{% if stack_flavor != "framework" %} --after-if-installed bootstrap_admin{% endif %}
     depends_on: [{% if postgres_mode == "external" %}{% else %}postgres, {% endif %}operator{% if stack_flavor == "framework" %}, deps{% endif %}]
 {% endif %}
 

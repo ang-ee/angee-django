@@ -8,7 +8,6 @@ from django.db import connection, transaction
 from rebac import RelationshipTuple, actor_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.models import active_relationship_model
 
-from angee.workflows.testing.drivers import trigger_source
 from angee.workflows.testing.models import Trigger, TriggerEvent, WorkflowRun
 from tests.conftest import Vault, create_user, vault_for
 from tests.test_workflows_review_concurrency import submit, wait_for_lock
@@ -105,24 +104,23 @@ def test_reentrant_capture_does_not_lock_other_triggers(trigger_setup, monkeypat
             captured.set()
             assert release_writer.wait(15)
 
-    with trigger_source(type(record), connect=True):
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            admission, _ = submit(pool, lambda: Trigger.objects.admit(event))
-            try:
-                assert entered.wait(10)
-                saved, _ = submit(pool, save)
-                assert captured.wait(10)
-                release_hook.set()
-                assert admission.result(timeout=10)
-            finally:
-                release_hook.set()
-                release_writer.set()
-            saved.result(timeout=10)
-        assert TriggerEvent.system_queryset().count() == 4
-        assert Trigger.objects.drain() == 3
-        assert Trigger.objects.drain() == 0
-        assert WorkflowRun.system_queryset().count() == 4
-        assert "Workflow trigger capture failed" not in caplog.text
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        admission, _ = submit(pool, lambda: Trigger.objects.admit(event))
+        try:
+            assert entered.wait(10)
+            saved, _ = submit(pool, save)
+            assert captured.wait(10)
+            release_hook.set()
+            assert admission.result(timeout=10)
+        finally:
+            release_hook.set()
+            release_writer.set()
+        saved.result(timeout=10)
+    assert TriggerEvent.system_queryset().count() == 4
+    assert Trigger.objects.drain() == 3
+    assert Trigger.objects.drain() == 0
+    assert WorkflowRun.system_queryset().count() == 4
+    assert "Workflow trigger capture failed" not in caplog.text
 
 
 def test_domain_hook_write_and_concurrent_save_share_record_first_lock_order(trigger_setup, monkeypatch):

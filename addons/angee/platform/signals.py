@@ -2,7 +2,7 @@
 
 Mirrors Django's content-type / permission sync (``create_contenttypes``): a thin
 ``post_migrate`` receiver that delegates the work to ``AddonManager`` once
-:func:`~angee.signals.migrated_model` admits the routed, created table.
+:func:`~angee.base.signals.migrated_model` admits the routed, created table.
 (Angee's other derived facts use explicit post-migrate commands; this one
 follows Django's signal pattern because it reflects the same kind of
 composer-derived metadata content types do.)
@@ -13,8 +13,8 @@ from __future__ import annotations
 from django.db.models.signals import post_migrate
 from rebac import system_context
 
+from angee.base.signals import migrated_model
 from angee.platform.models import AddonManager
-from angee.signals import migrated_model
 
 
 def connect() -> None:

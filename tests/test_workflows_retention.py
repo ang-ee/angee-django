@@ -195,8 +195,6 @@ def test_protected_attempt_rolls_back_the_whole_owned_tree_and_wait_links(child_
     assert WorkflowRun.objects.prune() == 2
 
 
-
-
 def test_prune_checks_only_twenty_five_roots_and_marked_blockers_do_not_starve_later_batches(child_graph):
     """The bound includes blocked candidates; their marks admit later roots next tick."""
     actor, _, admitted, build = child_graph

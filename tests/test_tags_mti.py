@@ -13,9 +13,9 @@ import pytest
 import strawberry_django
 from rebac import actor_context, system_context
 
-from angee.graphql.data import hasura_model_resource
+from angee.base.refs import canonical_link_path
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.node import AngeeNode
-from angee.refs import canonical_link_path
 from angee.tags.schema import TaggedNode
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import MarkdownPage, Page, addon_schema, create_user, execute_schema, result_data, vault_for

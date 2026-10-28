@@ -55,14 +55,13 @@ def test_observe_scopes_model_and_disconnects_after_exit():
     assert published == [payload]
 
 
-def test_trigger_source_restores_opt_in_and_native_receiver():
-    """The mixin declares opt-in; the driver scopes its native receiver."""
-    assert issubclass(Vault, drivers.RecordChangedOptIn)
-    with drivers.trigger_source(Vault, connect=True):
-        receivers = post_save.send(sender=Vault, instance=object(), raw=True, created=False)
-        assert any(receiver == drivers.RecordChanged.changed for receiver, _ in receivers)
+def test_declared_trigger_source_has_one_native_receiver():
+    """App population binds the declared source once without a test-only driver."""
+    from angee.workflows.triggers import RecordChanged, RecordChangedOptIn
+
+    assert issubclass(Vault, RecordChangedOptIn)
     receivers = post_save.send(sender=Vault, instance=object(), raw=True, created=False)
-    assert not any(receiver == drivers.RecordChanged.changed for receiver, _ in receivers)
+    assert sum(receiver == RecordChanged.changed for receiver, _ in receivers) == 1
 
 
 @pytest.fixture

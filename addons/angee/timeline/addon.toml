@@ -3,7 +3,7 @@ name = "angee.timeline"
 description = "One chronology per record, read directly from owner queries through their target policies"
 keywords = ["timeline", "activity", "history"]
 category = "Foundation"
-depends_on = ["angee.graphql"]
+depends_on = ["angee.base", "angee.graphql", "angee.web"]
 
 [[migrations]]
 name = "rebuild_ledger"

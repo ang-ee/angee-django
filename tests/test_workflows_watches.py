@@ -12,7 +12,7 @@ from angee.workflows import schema as workflow_schema
 from angee.workflows import tasks
 from angee.workflows.runner import runner
 from angee.workflows.steps import StepMode
-from angee.workflows.testing.drivers import load_workflow, run_until, start_run, trigger_source
+from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun, StepWatch, WorkflowRun
 from tests.conftest import Vault, addon_schema, create_user, execute_schema, result_data, vault_for
 from tests.workflow_steps import Echo, document
@@ -24,9 +24,8 @@ pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("
 def watched_source(execution):
     """Use the native save signal and restore both its opt-in and receiver afterward."""
     actor, sent = execution
-    with trigger_source(Vault, connect=True):
-        record = vault_for(actor, name="Waiting")
-        yield actor, sent, record
+    record = vault_for(actor, name="Waiting")
+    yield actor, sent, record
 
 
 def start_watcher(step, record, actor, *, key="watch"):

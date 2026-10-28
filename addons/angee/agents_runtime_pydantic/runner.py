@@ -16,9 +16,8 @@ from pydantic_ai.messages import BinaryContent, ModelMessagesTypeAdapter
 from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
 from pydantic_core import to_jsonable_python
-from rebac import SubjectRef, actor_context
+from rebac import SubjectRef, actor_context, user_subject_type
 
-from angee.actors import user_subject_type
 from angee.agents.context import render_view_context
 from angee.agents.models import normalize_inference_usage
 from angee.agents.runners import SessionRunner, SessionUpdateSink, TurnOutcome

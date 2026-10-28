@@ -1,4 +1,4 @@
-"""Autoconfig loading plus settings fragments required by the composer app."""
+"""Apply installed apps' autoconfig through django-yamlconf's settings merge."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import os
 from collections import ChainMap
 from collections.abc import Mapping, MutableMapping
 from types import ModuleType
-from typing import Any, TypedDict
+from typing import Any
 
 import django_yamlconf
 from django.apps import AppConfig
@@ -23,7 +23,7 @@ from angee.compose.yamlconf import (
     setting_name,
 )
 
-COMPOSER_OWNED_SETTINGS = frozenset({"ANGEE_RUNTIME_DIR", "ASGI_APPLICATION", "INSTALLED_APPS", "ROOT_URLCONF"})
+COMPOSER_OWNED_SETTINGS = frozenset({"COMPOSE_RUNTIME_DIR", "COMPOSE_RUNTIME_MODULE", "INSTALLED_APPS"})
 
 
 class AutoConfig:
@@ -33,13 +33,11 @@ class AutoConfig:
         self,
         namespace: MutableMapping[str, Any],
         *,
-        reserved_settings: frozenset[str] = COMPOSER_OWNED_SETTINGS,
         environment: bool = True,
     ) -> None:
         """Store the settings namespace being mutated."""
 
         self.namespace = namespace
-        self.reserved_settings = reserved_settings
         self.environment = os.environ if environment else {}
         self.settings_module = ModuleType("angee.compose.effective_settings")
         self.settings_module.__dict__.update(namespace)
@@ -82,17 +80,20 @@ class AutoConfig:
             key = str(raw_key)
             name = setting_name(key)
             declared_names.add(name)
-            if name in self.reserved_settings:
+            if name in COMPOSER_OWNED_SETTINGS:
                 raise ImproperlyConfigured(f"{app_config.name}.autoconfig must not define {name}")
             if ":" not in key and "." not in key and name in self.namespace and not (
                 name in derived and name in self.environment
             ):
                 continue
             attributes[key] = copy.deepcopy(value)
+        prefixes = self.namespace.get("COMPOSE_ENV_PREFIXES", contributed.get("COMPOSE_ENV_PREFIXES", ()))
+        if not isinstance(prefixes, (tuple, list)) or not all(isinstance(prefix, str) for prefix in prefixes):
+            raise ImproperlyConfigured("COMPOSE_ENV_PREFIXES must be a list or tuple of setting-name prefixes.")
         env_attributes = {
             name: self.environment[name]
             for name in sorted(declared_names)
-            if name.startswith("ANGEE_") and name not in self.reserved_settings and name in self.environment
+            if name.startswith(tuple(prefixes)) and name not in COMPOSER_OWNED_SETTINGS and name in self.environment
         }
         if not attributes and not env_attributes:
             return
@@ -136,27 +137,3 @@ class AutoConfig:
         if not isinstance(derived, Mapping):
             raise ImproperlyConfigured(f"{app_config.name}.autoconfig.settings() must return a mapping")
         return contributed, derived
-
-
-_Settings = TypedDict(
-    "_Settings",
-    {
-        "MIDDLEWARE:prepend": list[str],
-        "MIDDLEWARE:append": list[str],
-        "ANGEE_WEB_STATEMENT_TIMEOUT": int,
-    },
-)
-
-SETTINGS: _Settings = {
-    # Django's response security headers (SECURE_* settings, nosniff among them) lead
-    # the stack; its CSP middleware applies SECURE_CSP and each view's csp_override.
-    "MIDDLEWARE:prepend": ["django.middleware.security.SecurityMiddleware"],
-    "MIDDLEWARE:append": [
-        "django.middleware.common.CommonMiddleware",
-        "django.middleware.csp.ContentSecurityPolicyMiddleware",
-    ],
-    # Seconds one PostgreSQL statement may run in a web process; 0 disables the
-    # bound. ``angee.asgi`` applies it; workers and commands keep the server's.
-    "ANGEE_WEB_STATEMENT_TIMEOUT": 60,
-}
-"""Django settings contributed when the composer is installed."""

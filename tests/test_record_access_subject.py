@@ -9,7 +9,8 @@ from rebac.backends import reset_backend
 from rebac.errors import PermissionDenied
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
-from angee.errors import DomainError, RecordAccessSubjectRefused
+from angee.base.permissions import RecordAccessSubjectRefused
+from angee.errors import DomainError
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow, ownership_tables  # noqa: F401
 from tests.core_seam_models import SubjectGuardedRow, subject_tables  # noqa: F401
@@ -270,7 +271,7 @@ def test_system_revoke_requires_an_explicit_boundary_and_remains_idempotent(gran
 
 
 def test_system_revoke_rolls_back_when_a_lifecycle_owner_fails(grant_case):
-    from angee.signals import record_access_revoked
+    from angee.base.signals import record_access_revoked
 
     row, owner, recipient = grant_case
     row.with_actor(owner).grant_record_access("reader", recipient)

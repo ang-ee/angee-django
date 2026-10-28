@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Callable
 
+from django.conf import settings
 from django.urls import re_path
 
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
@@ -14,9 +14,9 @@ from angee.graphql.sdl import GraphQLSdl
 
 
 def _emit_dev_sdl() -> None:
-    """Regenerate GraphQL SDL once per dev-serve worker boot when requested."""
+    """Regenerate GraphQL SDL at ASGI boot when Django DEBUG is enabled."""
 
-    if os.environ.get("ANGEE_DEV_SDL") == "1":
+    if settings.DEBUG:
         GraphQLSdl.from_discovery().emit_if_stale()
 
 

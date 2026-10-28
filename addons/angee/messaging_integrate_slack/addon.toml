@@ -5,7 +5,7 @@ name = "angee.messaging_integrate_slack"
 description = "Slack messaging sync — polls workspace conversations into chat threads"
 keywords = ["slack", "chat", "messaging", "sync"]
 category = "Integration"
-depends_on = ["angee.messaging", "angee.integrate", "angee.parties"]
+depends_on = ["angee.messaging", "angee.integrate", "angee.parties", "angee.web"]
 dependencies = [
   "slack-sdk>=3.43.0",
 ]

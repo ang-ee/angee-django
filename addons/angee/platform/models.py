@@ -29,10 +29,11 @@ from django.db import DatabaseError, models, transaction
 from hatch_angee import AddonManifest
 from rebac import system_context
 
-from angee.addons import addon_manifest, available_addons, resolve_app_config, resolve_manifest_roots
-from angee.fields import StateField
-from angee.models import AngeeManager, AngeeModel
+from angee.addons import addon_manifest, resolve_manifest_roots
+from angee.base.fields.state import StateField
+from angee.base.models import AngeeManager, AngeeModel
 from angee.platform import composed
+from angee.platform.discovery import available_addons, resolve_app_config
 from angee.platform.installer import (
     AddonInstaller,
     InstallResult,
@@ -192,7 +193,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
                 AddonChangeImpact(
                     name=config.name,
                     label=config.label,
-                    root=bool(getattr(config, "angee_addon_root", False)),
+                    root=bool(getattr(config, "compose_root", False)),
                     depends_on=tuple(manifest.depends_on) if manifest else (),
                 )
             )
@@ -240,7 +241,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         """Refuse loaded dependencies or unknown targets, ignoring stale catalogue flags."""
 
         config = loaded.get(name)
-        if config is not None and getattr(config, "angee_forced", False):
+        if config is not None and getattr(config, "compose_required", False):
             manifests = (
                 manifest for candidate in loaded.values() if (manifest := addon_manifest(candidate)) is not None
             )
@@ -365,12 +366,12 @@ class AddonManager[T: Addon](AngeeManager[T]):
                 if config is None:
                     config = resolve_app_config(name, expected_name=name)
                 enabled = name in loaded
-                root = enabled and bool(getattr(config, "angee_addon_root", False))
+                root = enabled and bool(getattr(config, "compose_root", False))
                 runtime_facts = self.model.reset_runtime_facts()
                 if enabled:
                     data_models = composed.data_models(loaded[name])
                     runtime_facts.update(
-                        forced=bool(getattr(config, "angee_forced", False)),
+                        forced=bool(getattr(config, "compose_required", False)),
                         model_count=len(data_models),
                         field_count=sum(len(composed.own_fields(model)) for model in data_models),
                         resource_count=counts.get(name, 0),

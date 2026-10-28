@@ -12,11 +12,7 @@ from strawberry import auto
 
 from angee.graphql.actions import authorized_action_target, authorized_permission_target
 from angee.graphql.capabilities import permissions_field
-from angee.graphql.data import (
-    AngeeHasuraWriteBackend,
-    hasura_model_resource,
-    public_pk_decoder,
-)
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one

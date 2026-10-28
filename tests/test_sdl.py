@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from pytest_django.fixtures import Settings
 
 from angee.graphql import asgi as graphql_asgi
 from angee.graphql.schema import GraphQLSchemas
@@ -100,8 +101,10 @@ def test_emit_if_stale_prunes_removed_schema_buckets(tmp_path: Path) -> None:
     sdl.check()
 
 
-def test_graphql_asgi_boot_emits_sdl_only_for_dev_serve(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The GraphQL addon owns the dev-SDL hook behind the runserver gate."""
+def test_graphql_asgi_boot_emits_sdl_only_in_debug(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings,
+) -> None:
+    """GraphQL follows native Django DEBUG for every ASGI serving entrypoint."""
 
     calls: list[str] = []
 
@@ -114,11 +117,11 @@ def test_graphql_asgi_boot_emits_sdl_only_for_dev_serve(monkeypatch: pytest.Monk
             calls.append("emit")
 
     monkeypatch.setattr(graphql_asgi, "GraphQLSdl", _StubSdl)
-    monkeypatch.delenv("ANGEE_DEV_SDL", raising=False)
+    settings.DEBUG = False
     graphql_asgi.boot_hooks[0]()
     assert calls == []
 
-    monkeypatch.setenv("ANGEE_DEV_SDL", "1")
+    settings.DEBUG = True
     graphql_asgi.boot_hooks[0]()
     assert calls == ["emit"]
 

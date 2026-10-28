@@ -8,17 +8,16 @@ from ``angee.workflows.testing.models`` and drivers from
 in ``angee.workflows.autoconfig``.
 
 Django's native test database setup creates the shared tables. For permission
-synchronization, follow the fixture contract in ``angee.testing``. Production
+synchronization, follow the fixture contract in ``angee.base.testing``. Production
 settings and serving code must not depend on this test support.
 
 Pytest suites opt into ``angee.workflows.testing.fixtures`` alongside
-``angee.testing.fixtures``. ``capture_tasks`` captures task sends; ``execution``
+``angee.base.testing.fixtures``. ``capture_tasks`` captures task sends; ``execution``
 also supplies an acting administrator. ``composed_permissions`` lives in core
-``angee.testing.fixtures`` and composes installed permission contributions.
-``observe(model)`` collects committed change publications. ``trigger_source(model)``
-temporarily enables a model's declared ``RecordChangedOptIn``; the model must
-implement ``record_changed_grant_targets``. Pass ``connect=True`` to exercise
-native save capture. Both are scoped context managers.
+``angee.base.testing.fixtures`` and composes installed permission contributions.
+``observe(model)`` collects committed change publications in a scoped context.
+Models declare ``RecordChangedOptIn`` and ``record_changed_grant_targets``;
+Django app population binds their native save receiver, including test models.
 ``register_step`` contributes a class to the existing registry through the
 ``register_steps`` context manager in ``testing.drivers``,
 also available to ``TransactionTestCase``. Bind ``run_factory(workflow, actor=...)``

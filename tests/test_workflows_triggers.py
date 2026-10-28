@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
-from django.db import IntegrityError, OperationalError, models, transaction
+from django.db import IntegrityError, OperationalError, connection, models, transaction
 from django.db.models.functions import Now, Upper
 from django.db.models.signals import post_save
 from rebac import RelationshipTuple, actor_context, current_actor, system_context, to_object_ref, to_subject_ref
@@ -14,17 +14,17 @@ from rebac.actors import is_sudo
 from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationship
 
-from angee.graphql.data import hasura_model_resource
+from angee.base.implementations import impl_choices_enum
+from angee.base.models import row_lock_paths
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.impl import impl_choices_enum
 from angee.knowledge import schema as knowledge_schema
-from angee.models import row_lock_paths
 from angee.workflows import schema as workflow_schema
 from angee.workflows import triggers
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import load_workflow, run_until, trigger_source
+from angee.workflows.testing.drivers import load_workflow, run_until
 from angee.workflows.testing.models import (
     StepAttempt,
     StepRecord,
@@ -34,7 +34,7 @@ from angee.workflows.testing.models import (
     WorkflowRun,
 )
 from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
-from tests.mtidemo.models import MtiParent
+from tests.mtidemo.models import MtiParent, TypedCaptureChild, UntypedCaptureParent
 from tests.test_workflows_watches import Watch, record_deliveries, start_watcher
 from tests.workflow_steps import Value, document
 
@@ -46,8 +46,7 @@ def trigger_resource_schema(monkeypatch):
     """Bare tests install just their real, composed resource owner, restoring it afterward."""
     owner = GraphQLSchemas([make_addon(schemas=knowledge_schema.schemas)])
     monkeypatch.setattr(GraphQLSchemas, "_discovered", owner)
-    with trigger_source(Vault):
-        yield owner
+    yield owner
 
 
 @pytest.fixture
@@ -114,12 +113,11 @@ def test_disabled_triggers_write_nothing_and_native_save_skips_raw(trigger_setup
     capture(record)
     assert not TriggerEvent.system_queryset().exists()
     Trigger.objects.enable(trigger, actor=actor)
-    with trigger_source(Vault, connect=True):
-        post_save.send(sender=Vault, instance=record, raw=True, created=False)
-        assert not TriggerEvent.system_queryset().exists()
-        with actor_context(actor):
-            record.save()
-        assert TriggerEvent.system_queryset().count() == 1
+    post_save.send(sender=Vault, instance=record, raw=True, created=False)
+    assert not TriggerEvent.system_queryset().exists()
+    with actor_context(actor):
+        record.save()
+    assert TriggerEvent.system_queryset().count() == 1
 
 
 def test_enable_cannot_persist_an_actorless_system_trigger(trigger_setup):
@@ -519,11 +517,10 @@ def test_watch_capture_failure_preserves_the_native_save(trigger_setup, monkeypa
         raise IntegrityError("watch capture failed")
 
     monkeypatch.setattr(type(StepWatch.objects), "record_change", fail)
-    with trigger_source(Vault, connect=True):
-        with transaction.atomic(), actor_context(actor):
-            record.name = "Retained despite capture failure"
-            record.save()
-            assert Vault.objects.filter(pk=record.pk, name=record.name).exists()
+    with transaction.atomic(), actor_context(actor):
+        record.name = "Retained despite capture failure"
+        record.save()
+        assert Vault.objects.filter(pk=record.pk, name=record.name).exists()
     assert not TriggerEvent.system_queryset().exists()
     assert "Workflow source capture failed" in caplog.text
 
@@ -577,27 +574,26 @@ def test_enabled_configuration_edits_require_disable(
     editor = create_user("trigger-co-editor")
     workflow.with_actor(actor).grant_record_access("editor", editor)
     register_other_changed(settings, monkeypatch)
-    with trigger_source(Page):
-        with actor_context(actor):
-            trigger = Trigger.objects.create(workflow=workflow, source="record_changed", model_label="knowledge.vault")
-        trigger = Trigger.objects.enable(trigger, actor=actor)
-        trigger.with_actor(editor)
-        replacement = {"condition": {"name": {"_eq": "Ready"}}, "source": "other_changed",
-                       "model_label": "knowledge.page"}[field]
-        setattr(trigger, field, replacement)
-        with actor_context(editor), pytest.raises(ValidationError, match="Disable the trigger before editing"):
-            trigger.save(**({"update_fields": (field,)} if partial else {}))
-        trigger.refresh_from_db()
-        assert trigger.enabled and trigger.workflow.user_id != actor.pk
-        assert getattr(trigger, field) != replacement
-        trigger = Trigger.objects.disable(trigger, actor=editor)
-        trigger.with_actor(editor)
-        setattr(trigger, field, replacement)
-        with actor_context(editor):
-            trigger.save(**({"update_fields": (field,)} if partial else {}))
-        trigger.refresh_from_db()
-        expected = Page._meta.label if field == "model_label" else replacement
-        assert not trigger.enabled and getattr(trigger, field) == expected
+    with actor_context(actor):
+        trigger = Trigger.objects.create(workflow=workflow, source="record_changed", model_label="knowledge.vault")
+    trigger = Trigger.objects.enable(trigger, actor=actor)
+    trigger.with_actor(editor)
+    replacement = {"condition": {"name": {"_eq": "Ready"}}, "source": "other_changed",
+                   "model_label": "knowledge.page"}[field]
+    setattr(trigger, field, replacement)
+    with actor_context(editor), pytest.raises(ValidationError, match="Disable the trigger before editing"):
+        trigger.save(**({"update_fields": (field,)} if partial else {}))
+    trigger.refresh_from_db()
+    assert trigger.enabled and trigger.workflow.user_id != actor.pk
+    assert getattr(trigger, field) != replacement
+    trigger = Trigger.objects.disable(trigger, actor=editor)
+    trigger.with_actor(editor)
+    setattr(trigger, field, replacement)
+    with actor_context(editor):
+        trigger.save(**({"update_fields": (field,)} if partial else {}))
+    trigger.refresh_from_db()
+    expected = Page._meta.label if field == "model_label" else replacement
+    assert not trigger.enabled and getattr(trigger, field) == expected
 
 
 class OtherChanged(triggers.RecordChanged):
@@ -647,7 +643,7 @@ def test_refined_source_shares_the_one_capture_of_its_bases_event(
     assert [kwargs for model, kwargs in locked if model is Vault] == [expected_lock, expected_lock]
     locked.clear()
     sent.clear()
-    with trigger_source(Vault, connect=True), actor_context(actor):
+    with actor_context(actor):
         record.name = "Ready"
         record.save(update_fields=("name",))
     monkeypatch.setattr(models.QuerySet, "select_for_update", lock)
@@ -891,3 +887,31 @@ def test_trigger_hook_contributions_are_source_scoped_and_conflicts_fail():
 
     with pytest.raises(ImproperlyConfigured, match="Multiple trigger_input"):
         Trigger._trigger_hooks(Conflict(), "trigger_input")
+
+
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires native PostgreSQL table lock modes.")
+def test_source_capture_locks_untyped_concrete_ancestors(monkeypatch):
+    """Selecting only the child's PK must not silently drop its parent's OF lock."""
+    with system_context(reason="native source ancestor lock fixture"):
+        record = TypedCaptureChild.objects.create(title="Parent", detail="Observed child")
+    seen = []
+    manager = TriggerEvent.objects
+    native = manager.record_changes
+
+    def observe(model, records, *, source="record_changed"):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT relation::regclass::text FROM pg_locks "
+                "WHERE pid = pg_backend_pid() AND mode = 'RowShareLock' "
+                "AND relation IN (%s::regclass, %s::regclass)",
+                [UntypedCaptureParent._meta.db_table, TypedCaptureChild._meta.db_table],
+            )
+            seen.append({row[0] for row in cursor.fetchall()})
+        return native(model, records, source=source)
+
+    monkeypatch.setattr(manager, "record_changes", observe)
+    triggers.RecordChanged.dispatch(TypedCaptureChild, record)
+    assert seen and all(
+        tables == {UntypedCaptureParent._meta.db_table, TypedCaptureChild._meta.db_table}
+        for tables in seen
+    )

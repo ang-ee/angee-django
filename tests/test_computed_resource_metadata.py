@@ -18,12 +18,7 @@ from django.core.exceptions import ImproperlyConfigured
 from strawberry_django_hasura import hasura_config
 from strawberry_django_hasura.comparisons import IntComparison, StringComparison
 
-from angee.data.metadata import (
-    DataResourceRoots,
-    DataResourceSubtitleMetadata,
-    DataResourceTypeNames,
-    serialize_data_resources,
-)
+from angee.graphql.data.contracts import DataResourceRoots, DataResourceSubtitleMetadata, DataResourceTypeNames
 from angee.graphql.data.metadata import (
     DataResourceContribution,
     DataResourcePolicy,
@@ -127,7 +122,7 @@ def test_computed_resource_metadata_is_model_optional() -> None:
     field_names = {field.name for field in metadata.fields}
     assert {"id", "label", "model_count"} <= field_names
 
-    [wire] = serialize_data_resources((metadata,), schema_name="console")
+    [wire] = [item.as_wire(schema_name="console") for item in (metadata,)]
     assert "model" not in wire  # the Python model handle never reaches the wire
     assert wire["modelLabel"] == "platform.addon"
     assert wire["recordRepresentation"] == "label"
@@ -340,7 +335,7 @@ def test_resource_metadata_row_model_defaults_to_server() -> None:
     )
 
     assert metadata.row_model == "server"
-    [wire] = serialize_data_resources((metadata,), schema_name="console")
+    [wire] = [item.as_wire(schema_name="console") for item in (metadata,)]
     assert wire["rowModel"] == "server"
 
 
@@ -357,7 +352,7 @@ def test_resource_metadata_row_model_client_reaches_wire() -> None:
     )
 
     assert metadata.row_model == "client"
-    [wire] = serialize_data_resources((metadata,), schema_name="console")
+    [wire] = [item.as_wire(schema_name="console") for item in (metadata,)]
     assert wire["rowModel"] == "client"
 
 
@@ -496,7 +491,7 @@ def test_resource_row_model_collision_names_both_contributors() -> None:
                 model=None,
                 model_label="platform.addon",
                 roots=DataResourceRoots(),
-                type_names=DataResourceTypeNames(),
+                type_names=DataResourceTypeNames(node="SubtitlePageType"),
                 capabilities=(),
                 policy=DataResourcePolicy(row_model=row_model),
             ),
@@ -517,6 +512,7 @@ def test_resource_row_model_collision_names_both_contributors() -> None:
                     {
                         "public": {
                             "query": [ServerRowsContribution, ClientRowsContribution],
+                            "types": [SubtitlePageType],
                         }
                     }
                 )

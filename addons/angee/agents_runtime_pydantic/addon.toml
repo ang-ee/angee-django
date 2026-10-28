@@ -5,7 +5,7 @@ name = "angee.agents_runtime_pydantic"
 description = "In-process pydantic-ai runtime for persisted agent sessions"
 keywords = ["agents", "pydantic-ai", "runtime"]
 category = "Agents"
-depends_on = ["angee.agents", "angee.integrate", "angee.mcp"]
+depends_on = ["angee.base", "angee.agents", "angee.integrate", "angee.mcp"]
 dependencies = [
   "pydantic-ai-slim[mcp]>=2.13",
 ]

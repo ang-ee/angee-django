@@ -15,7 +15,7 @@ from django.test import TransactionTestCase
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
-from angee.fields import SqidField
+from angee.base.fields.identity import SqidField
 from angee.jobs.enqueue import celery_app
 from angee.workflows.context import StepContext
 from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
@@ -124,6 +124,17 @@ class ArchiveWorkflowTests(TransactionTestCase):
             context.begin_effect.assert_not_called()
             execute.assert_not_called()
 
+            # Canonical public identity is required even for an authorized
+            # writer. The padded alternate spelling is never decoded upstream.
+            context.actor = self.actor
+            with self.assertRaises(PermissionDenied):
+                ArchiveExecute().run(context)
+            context.input = ArchiveMappingUnit(extractor="test_drive", target=canonical)
+            context.actor = reader
+            with self.assertRaises(PermissionDenied):
+                ArchiveExecute().run(context)
+            context.begin_effect.assert_not_called()
+            execute.assert_not_called()
             context.actor = self.actor
             result = ArchiveExecute().run(context)
             self.assertEqual(result.target, canonical)

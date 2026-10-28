@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 
-from angee.data import metadata as data_contract
+from angee.graphql.data import contracts as data_contract
 from graphql import GraphQLSchema
 
 __all__ = ["final_schema_references"]

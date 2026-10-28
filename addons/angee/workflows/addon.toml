@@ -5,7 +5,17 @@ name = "angee.workflows"
 description = "Immutable workflow graphs and actor-scoped execution"
 keywords = ["workflows", "automation", "orchestration"]
 category = "Workflows"
-depends_on = ["angee.iam", "angee.jobs", "angee.resources", "angee.graphql", "angee.decisions", "angee.provenance", "angee.timeline"]
+depends_on = [
+  "angee.base",
+  "angee.iam",
+  "angee.jobs",
+  "angee.resources",
+  "angee.graphql",
+  "angee.decisions",
+  "angee.provenance",
+  "angee.timeline",
+  "angee.web",
+]
 
 [[migrations]]
 name = "owner_column"

@@ -288,8 +288,8 @@ def test_composition_fields_identity_and_cache_follow_native_declarations(tmp_pa
         "'angee', 'typing_composition', 'angee.compose']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
-        f"ANGEE_RUNTIME_DIR = Path({str(tmp_path / 'composition_runtime')!r})\n"
-        "ANGEE_RUNTIME_MODULE = 'composition_runtime'\n"
+        f"COMPOSE_RUNTIME_DIR = Path({str(tmp_path / 'composition_runtime')!r})\n"
+        "COMPOSE_RUNTIME_MODULE = 'composition_runtime'\n"
     )
     config = tmp_path / "mypy.ini"
     config.write_text(

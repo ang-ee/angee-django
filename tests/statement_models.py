@@ -2,8 +2,17 @@
 
 from django.db import models
 
-from angee.models import AngeeDataModel, Aspect, HistoryMixin, PairAspect, StatementRecords, StatementsMixin
+from angee.base.models import (
+    AngeeDataModel,
+)
 from angee.money.fields import MoneyField
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.statements import (
+    Aspect,
+    PairAspect,
+    StatementRecords,
+    StatementsMixin,
+)
 
 
 class StatementSubject(StatementsMixin, HistoryMixin, AngeeDataModel):

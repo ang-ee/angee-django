@@ -22,7 +22,7 @@ from rebac import (
 )
 from strawberry import Schema
 
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.messaging.testing.models import Person
@@ -30,7 +30,6 @@ from angee.projects.testing.models import Milestone, Project, Task
 from angee.spaces.testing.models import Group, Membership
 from tests.conftest import Backend, Drive, SchemaAddon
 from tests.proposals_models import Answer, Proposal, Round, Topic
-from tests.test_project_access import project_access_schema as project_access_schema
 
 
 @strawberry_django.type(Proposal)

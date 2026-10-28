@@ -41,7 +41,10 @@ const folder: KnowledgePageDetail = {
 beforeEach(() => { route.id = null; route.navigate.mockReset(); route.preview = { viewAs: null, pending: false }; });
 afterEach(() => { cleanup(); clearClients(); });
 
-function fixture(options: { detail?: KnowledgePageDetail; noVaults?: boolean; writable?: boolean; scope?: QueryFilter } = {}) {
+function fixture(options: {
+  detail?: KnowledgePageDetail; noVaults?: boolean; writable?: boolean; scope?: QueryFilter;
+  beforeVaultSearch?: () => Promise<void>;
+} = {}) {
   const vaults = options.noVaults ? [] : [{ id: "vlt_1", name: "Reference", permissions: options.writable === false ? [] : ["write"], is_trashed: false }];
   const rows = [{ ...folder, navigation_root: true }, { ...folder, id: "pg_child", title: "Child", kind: "note", parent: folder.id, has_children: false, navigation_root: false }];
   const create = vi.fn(async () => ({ create_page: { id: "pg_created" } }));
@@ -50,7 +53,10 @@ function fixture(options: { detail?: KnowledgePageDetail; noVaults?: boolean; wr
     if (meta?.gqlMutation === KnowledgeCreatePage) return { data: await create() };
     if (meta?.gqlQuery === PageDocument) return { data: { pages_by_pk: options.detail ?? null } };
     if (meta?.gqlQuery === KnowledgeVault) return { data: { vaults_by_pk: vaults.find((vault) => vault.id === variables.id) ?? null } };
-    if (meta?.gqlQuery === KnowledgeVaults) return { data: { vaults: vaults.filter((vault) => vaultQuery.matches(vault, vaultQuery.fromWhere(variables.where))) } };
+    if (meta?.gqlQuery === KnowledgeVaults) {
+      await options.beforeVaultSearch?.();
+      return { data: { vaults: vaults.filter((vault) => vaultQuery.matches(vault, vaultQuery.fromWhere(variables.where))) } };
+    }
     if (meta?.gqlQuery === KnowledgePages) {
       const filtered = rows.filter((row) => pageQuery.matches(row, pageQuery.fromWhere(variables.where)));
       return { data: { pages: filtered, pages_aggregate: { aggregate: { count: filtered.length } } } };
@@ -102,6 +108,37 @@ test("a directly opened page owns the vault after a prior picker selection", asy
   await waitFor(() => expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({
     meta: expect.objectContaining({ gqlQuery: KnowledgeVault, gqlVariables: { id: "vlt_2" } }),
   })));
+});
+
+test("vault search keeps the initial vault and a clearable picker through pending and empty results", async () => {
+  let resolvePending!: () => void;
+  const pending = new Promise<void>((resolve) => { resolvePending = resolve; });
+  let searching = false;
+  const searchRead = vi.fn(async () => { if (searching) await pending; });
+  const f = fixture({ beforeVaultSearch: searchRead });
+  await screen.findByText("Projects");
+  fireEvent.click(await screen.findByRole("combobox", { name: "Vault: Reference" }));
+  const input = await screen.findByPlaceholderText("Search vaults…");
+  searching = true;
+  searchRead.mockClear();
+  fireEvent.change(input, { target: { value: "Missing" } });
+  await waitFor(() => expect(searchRead).toHaveBeenCalledOnce());
+  expect(screen.getByPlaceholderText("Search vaults…")).toBe(input);
+  expect(screen.getByRole("combobox", { name: "Vault: Reference" })).toBeTruthy();
+  expect(screen.getByText("Projects")).toBeTruthy();
+
+  resolvePending();
+  await waitFor(() => expect(screen.queryByText("Searching…")).toBeNull());
+  expect(screen.getByPlaceholderText("Search vaults…")).toBe(input);
+  expect(screen.getByRole("combobox", { name: "Vault: Reference" })).toBeTruthy();
+  expect(screen.getByText("Projects")).toBeTruthy();
+  fireEvent.change(input, { target: { value: "" } });
+  expect(await screen.findByRole("option", { name: "Reference" })).toBeTruthy();
+  expect(route.navigate).not.toHaveBeenCalled();
+  const requests = f.custom.mock.calls.filter(([call]) => call.meta?.gqlQuery === KnowledgePages);
+  expect(requests.length).toBeGreaterThan(0);
+  expect(requests.every(([call]) => Filter.from(pageQuery.fromWhere(call.meta?.gqlVariables?.where))
+    .conjunctions().some(({ field, operator, value }) => field === "vault" && operator === "exact" && value === "vlt_1"))).toBe(true);
 });
 
 test("server search finds descendants while the unfiltered navigator requests only roots", async () => {

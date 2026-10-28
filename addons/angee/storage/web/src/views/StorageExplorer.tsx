@@ -1,46 +1,38 @@
-import { useAuthoredQuery, useAuthoredQueryBatch, useInvalidateAuthoredModels } from "@angee/refine";
+import { useModelMetadata } from "@angee/metadata";
+import { useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
-  EmptyState, InlineTextAction, LoadingPanel, PaneToolbar, PaneToolbarMenu, ScopedExplorerPane, TreeView,
-  useConfirm, useFilePicker, useLatestRef, type FieldDescriptor, type ScopedExplorerController,
+  CollectionTreeView, EmptyState, ErrorBanner, InlineTextAction, LoadingPanel, PaneToolbar, PaneToolbarMenu,
+  ResourceViewProvider, ScopedExplorerPane, TreeView, useConfirm, useFilePicker, useLatestRef,
+  type FieldDescriptor, type ScopedExplorerController,
 } from "@angee/ui";
-
-import {
-  STORAGE_CATALOGUE_LIMIT, StorageBackends, StorageDrives, StorageFolderChildren, StorageFolderRoots,
-  type StorageDrive, type StorageFile,
-} from "../data/documents";
-import { ALL_SCOPE, STORAGE_FILE_DND, TRASH_SCOPE, folderTreeRows, type FileDragData, type StorageTreeRow } from "../data/file-rows";
+import { StorageFolderById, type StorageDrive, type StorageFile } from "../data/documents";
+import { ALL_SCOPE, STORAGE_FILE_DND, TRASH_SCOPE, fileDragData, folderTreeRows,
+  type FileDragData, type StorageTreeRow } from "../data/file-rows";
+import { FOLDER_MODEL, FOLDER_MODELS, folderSource } from "../data/folder-source";
 import type { FileActions } from "../data/use-file-actions";
-import type { StorageUpload } from "../data/use-upload";
+import type { StorageUpload, UploadTarget } from "../data/use-upload";
 import { useFolderActions } from "../data/use-folder-actions";
+import { useDrivePicker } from "../data/use-drive-picker";
 import { useStorageT } from "../i18n";
 
-const FOLDER_MODEL = "storage.Folder";
-const FOLDER_MODELS = [FOLDER_MODEL] as const;
-// Each expanded parent loads independently; the file list has its own pagination.
-const FOLDER_PAGE_LIMIT = 5000;
-
-// Stable field projections for the drive tree roots: module-scope so the
-// explorer's option list keeps a stable identity (the navigator is published
-// into the shell primary pane and must not churn on every render).
 const driveRootId = (drive: StorageDrive): string => drive.id;
-
-export type StorageExplorerController = ScopedExplorerController<
-  StorageDrive,
-  StorageTreeRow
->;
-
-interface ExpandedFolderRequest {
-  key: string;
-  drive: string;
-  parent: string;
+type ScopedStorageController = ScopedExplorerController<StorageDrive, StorageTreeRow>;
+export interface StorageExplorerController extends ScopedStorageController {
+  /** A readable resolved scope is required before any upload surface can dispatch. */
+  uploadTarget: UploadTarget | null;
 }
 
-function expandedFolderKey(drive: string, parent: string): string {
-  return `${drive}\0${parent}`;
+function storageController(controller: ScopedStorageController): StorageExplorerController {
+  const scope = controller.selectedId ?? ALL_SCOPE;
+  const folder = controller.selectedRow?.kind === "folder" ? controller.selectedRow : null;
+  const uploadTarget = !controller.rootId || scope === TRASH_SCOPE ? null
+    : scope === ALL_SCOPE ? { driveId: controller.rootId, folderId: null }
+      : folder ? { driveId: controller.rootId, folderId: folder.id } : null;
+  return { ...controller, uploadTarget };
 }
 
-/** Storage's lazy folder tree and folder verbs, composed into the shared explorer. */
+/** Storage declares scope and verbs; shared relation/collection owners page every readable row. */
 export function StorageExplorer({ openFile, openFileId, folderScope, selectScope, openFileRoute, fileActions, uploads, children }: {
   openFile: StorageFile | null;
   openFileId: string | null;
@@ -48,144 +40,42 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
   selectScope: (scope: string | null) => void;
   openFileRoute: (id: string) => void;
   fileActions: FileActions;
-  /** The upload owner; present on the files page, where "New" offers Upload. */
   uploads?: StorageUpload;
   children: (controller: StorageExplorerController) => ReactNode;
 }): ReactElement {
   const t = useStorageT();
-  // A drive is named by its name alone; its slug is an address, never a label.
   const driveRootLabel = useCallback((drive: StorageDrive): string => drive.name || t("drive.unnamed"), [t]);
-  const catalogueVariables = useMemo(
-    () => ({ offset: 0, limit: STORAGE_CATALOGUE_LIMIT }),
-    [],
-  );
-  const drivesQuery = useAuthoredQuery(StorageDrives, catalogueVariables);
-  // Admin-only catalogue for the inline drive-create form's backend picker.
-  const backendsQuery = useAuthoredQuery(StorageBackends, catalogueVariables);
-
-  const drives = drivesQuery.data?.drives ?? [];
-  const backends = backendsQuery.data?.backends ?? [];
-
+  const requestedFolder = folderScope !== ALL_SCOPE && folderScope !== TRASH_SCOPE ? folderScope : openFile?.folder ?? "";
+  const folderRead = useAuthoredQuery(StorageFolderById, { id: requestedFolder }, {
+    enabled: Boolean(requestedFolder), models: FOLDER_MODELS,
+  });
+  const folder = folderRead.data?.folders_by_pk?.id === requestedFolder ? folderRead.data.folders_by_pk : null;
   const [activeDriveId, setActiveDriveId] = useState<string | null>(null);
-  const folderDriveId =
-    openFile?.drive ?? activeDriveId ?? drives[0]?.id ?? "";
+  const explicitDriveId = openFile?.drive ?? folder?.drive ?? activeDriveId;
+  const { selectedId: folderDriveId, picker: driveOptions, roots: drives, initial: initialDrives } = useDrivePicker(explicitDriveId);
   useEffect(() => {
     if (openFile?.drive) setActiveDriveId(openFile.drive);
   }, [openFile?.drive]);
-  const rootsQuery = useAuthoredQuery(
-    StorageFolderRoots,
-    { drive: folderDriveId, limit: FOLDER_PAGE_LIMIT },
-    { enabled: folderDriveId !== "", models: [FOLDER_MODEL] },
-  );
-  // The only local tree fact is which folders the user has asked to expand.
-  // Keep requests from prior drives warm for instant re-expansion; this list
-  // grows only with the user's expansions, while inactive-drive entries do not
-  // enter the current batch.
-  const [expandedFolders, setExpandedFolders] = useState<
-    readonly ExpandedFolderRequest[]
-  >([]);
-  const activeExpandedFolders = useMemo(
-    () => expandedFolders.filter((request) => request.drive === folderDriveId),
-    [expandedFolders, folderDriveId],
-  );
-  const folderChildScopes = useMemo(
-    () =>
-      activeExpandedFolders.map((request) => ({
-        key: request.key,
-        document: StorageFolderChildren,
-        variables: {
-          drive: request.drive,
-          parent: request.parent,
-          limit: FOLDER_PAGE_LIMIT,
-        },
-        models: FOLDER_MODELS,
-      })),
-    [activeExpandedFolders],
-  );
-  const folderChildQueries = useAuthoredQueryBatch(folderChildScopes, {
-    enabled: folderDriveId !== "",
-  });
-  const folderChildQueriesRef = useLatestRef(folderChildQueries);
-  const handleExpandFolder = useCallback(
-    (nodeId: string) => {
-      if (!folderDriveId) return;
-      const key = expandedFolderKey(folderDriveId, nodeId);
-      const current = folderChildQueriesRef.current.get(key);
-      if (current?.error) {
-        current.refetch();
-        return;
-      }
-      setExpandedFolders((previous) =>
-        previous.some((request) => request.key === key)
-          ? previous
-          : [...previous, { key, drive: folderDriveId, parent: nodeId }],
-      );
-    },
-    [folderChildQueriesRef, folderDriveId],
-  );
   const invalidateAuthoredModels = useInvalidateAuthoredModels();
-  // Folder CRUD invalidates every authored Folder read through its model key;
-  // server-originated writes arrive through storage's `folderChanged` schema
-  // subscription and the same authored-query metadata.
   const handleFolderMutation = useCallback(() => {
     invalidateAuthoredModels(FOLDER_MODELS);
   }, [invalidateAuthoredModels]);
-  const rootFolders = rootsQuery.data?.folders;
-  const folderTreeState = useMemo(
-    () => {
-      const folders = [...(rootFolders ?? [])];
-      const resolvedParents = new Set<string>();
-      const loadingParents = new Set<string>();
-      for (const request of activeExpandedFolders) {
-        const query = folderChildQueries.get(request.key);
-        if (query?.isFetching) loadingParents.add(request.parent);
-        if (query?.data === undefined) continue;
-        resolvedParents.add(request.parent);
-        folders.push(...query.data.folders);
-      }
-      return { folders, resolvedParents, loadingParents };
-    },
-    [activeExpandedFolders, folderChildQueries, rootFolders],
-  );
-  const getTreeRows = useCallback(
-    (rootId: string) =>
-      folderTreeRows(
-        folderTreeState.folders,
-        rootId,
-        folderTreeState.resolvedParents,
-        openFile,
-        folderTreeState.loadingParents,
-      ),
-    [folderTreeState, openFile],
-  );
-  // The inline drive-create form. `name` is the record title (prefilled with the
-  // typed query); `backend` is the required FK, picked from the catalogue above.
-  // This stays a passed `fields` (not a `forms:` registration) because its
-  // `backend` options are fetched at runtime — a static module-scope form override
-  // cannot carry them (cf. the static `Vault` form in the knowledge manifest).
-  const driveCreateFields = useMemo<readonly FieldDescriptor[]>(
-    () => [
-      { name: "name", label: t("drive.create.name") },
-      { name: "slug", label: t("drive.create.slug"), placeholder: t("drive.create.slugPlaceholder") },
-      {
-        // A bare-ID FK (DriveType.backend is `ID`, not an object), so this is a
-        // plain `select` — `many2one` would make the form select `backend.id`,
-        // which the scalar field has no subfield for.
-        name: "backend",
-        label: t("drive.create.backend"),
-        widget: "select",
-        options: backends.map((backend) => ({ value: backend.id, label: backend.label })),
-      },
-      { name: "prefix", label: t("drive.create.prefix"), placeholder: t("drive.create.prefixPlaceholder") },
-      { name: "description", label: t("drive.create.description"), widget: "textarea" },
-    ],
-    [backends, t],
-  );
+  // Scope/detail reads are independent of sibling pages. They retain the requested
+  // folder for actions and deep links without copying the collection's row cache.
+  const getTreeRows = useCallback((rootId: string) => folderTreeRows(
+    folder && !folder.is_virtual ? [folder] : [], rootId, openFile,
+  ), [folder, openFile]);
+  const driveCreateFields = useMemo<readonly FieldDescriptor[]>(() => [
+    { name: "name", label: t("drive.create.name") },
+    { name: "slug", label: t("drive.create.slug"), placeholder: t("drive.create.slugPlaceholder") },
+    { name: "backend", label: t("drive.create.backend"), widget: "many2one" },
+    { name: "prefix", label: t("drive.create.prefix"), placeholder: t("drive.create.prefixPlaceholder") },
+    { name: "description", label: t("drive.create.description"), widget: "textarea" },
+  ], [t]);
   const folderActions = useFolderActions({
     onChanged: handleFolderMutation,
   });
   const confirm = useConfirm();
-  const { refetch: refetchDrives } = drivesQuery;
   // The action hooks return a fresh object each render; the navigator is
   // published into the shell primary pane, so its callbacks read the live
   // actions through a ref and stay referentially stable across renders.
@@ -207,13 +97,16 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
       "aria-label": t("drive.label"),
       placeholder: t("drive.placeholder"),
       searchPlaceholder: t("drive.searchPlaceholder"),
+      onOpenChange: driveOptions.onOpenChange,
+      onSearchChange: driveOptions.onSearchChange,
+      searchState: driveOptions.searchState,
       create: { resource: "storage.Drive", fields: driveCreateFields },
       onCreated: (id: string) => {
         setActiveDriveId(id);
-        void refetchDrives();
+        selectScope(ALL_SCOPE);
       },
     }),
-    [driveCreateFields, refetchDrives, t],
+    [driveCreateFields, driveOptions.onOpenChange, driveOptions.onSearchChange, driveOptions.searchState, selectScope, t],
   );
   // The folder verbs happen where the user looks: New folder is typed as a row in
   // the tree under the selected folder; Rename edits the selected folder's own row.
@@ -221,7 +114,7 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
   // The upload owner and its destination are read live so the published navigator
   // stays stable across renders; the tree render keeps the destination current.
   const uploadsRef = useLatestRef(uploads);
-  const uploadTargetRef = useRef<{ driveId: string; folderId: string | null } | null>(null);
+  const uploadTargetRef = useRef<UploadTarget | null>(null);
   const canUpload = uploads !== undefined;
   const picker = useFilePicker({
     label: t("upload.chooseFiles"),
@@ -238,9 +131,7 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
         effectiveScope !== ALL_SCOPE && effectiveScope !== TRASH_SCOPE
           ? controller.selectedRow
           : undefined;
-      uploadTargetRef.current = controller.rootId
-        ? { driveId: controller.rootId, folderId: selectedFolder ? effectiveScope : null }
-        : null;
+      uploadTargetRef.current = controller.uploadTarget;
       const submit = async (name: string): Promise<void> => {
         if (folderEdit === "rename") {
           await folderActionsRef.current.rename(effectiveScope, name);
@@ -270,43 +161,30 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
       );
       return (
         <>
+          {folderRead.error ? <ErrorBanner description={folderRead.error.message} /> : null}
           <TreeView<StorageTreeRow>
-            rows={controller.treeRows}
-            parent="parent"
-            label="name"
-            rowKey="id"
-            icon="icon"
-            hasChildren="hasChildren"
-            loading="loading"
-            onExpand={handleExpandFolder}
-            selectedId={openFileId ?? (controller.selectedId ?? ALL_SCOPE)}
-            onSelect={(row) => {
-              if (row.kind === "file") {
-                openFileRoute(row.id);
-                return;
-              }
-              // Writes the scope to the URL (via onSelectedIdChange) and lands on the
-              // list route, closing any open preview.
-              controller.setSelectedId(row.id);
-            }}
-            renderRow={folderEdit === "rename" && selectedFolder
-              ? (row) => (row.id === selectedFolder.id ? field(selectedFolder.name) : row.name)
-              : undefined}
-            insertion={folderEdit === "create"
-              ? { parentId: selectedFolder ? effectiveScope : null, node: field() }
-              : null}
-            dropAccept={STORAGE_FILE_DND}
-            canDropOnNode={(_nodeId, row) => row.kind !== "file"}
-            onNodeDrop={(nodeId, payload) =>
-              handleFileDrop(nodeId, payload.data as FileDragData)
-            }
-            className="min-h-0 flex-1 overflow-auto"
+            rows={controller.treeRows.filter((row) => row.kind === "scope" || row.kind === "file" && row.parent === ALL_SCOPE)}
+            parent="parent" label="name" rowKey="id" icon="icon"
+            selectedId={openFileId ?? controller.selectedId ?? ALL_SCOPE}
+            onSelect={(row) => row.kind === "file" ? openFileRoute(row.id) : controller.setSelectedId(row.id)}
+            dropAccept={STORAGE_FILE_DND} canDropOnNode={(_id, row) => row.kind !== "file"}
+            onNodeDrop={(id, payload) => { const file = fileDragData(payload.data); if (file) handleFileDrop(id, file); }}
           />
+          <ResourceViewProvider key={controller.rootId} scope="local" resource={FOLDER_MODEL}
+            initialState={{ pageSize: 50, sort: { field: "name", dir: "asc" } }}>
+            <StorageFolders drive={controller.rootId} selectedId={openFileId ?? controller.selectedId}
+              revealRows={controller.treeRows.filter((row) => row.kind === "folder" || row.kind === "file" && row.parent !== ALL_SCOPE)}
+              onSelect={(row) => row.kind === "file" ? openFileRoute(row.id) : controller.setSelectedId(row.id)}
+              onFileDrop={handleFileDrop}
+              renderRow={(row) => folderEdit === "rename" && row.id === effectiveScope ? field(row.name) : row.name}
+              insertion={folderEdit === "create"
+                ? { parentId: selectedFolder ? effectiveScope : null, node: field() } : null} />
+          </ResourceViewProvider>
           {canUpload ? picker.input : null}
         </>
       );
     },
-    [canUpload, folderActions.busy, folderActionsRef, folderEdit, handleExpandFolder, handleFileDrop, openFileId, openFileRoute, picker.input, t],
+    [canUpload, folderRead.error, folderActions.busy, folderActionsRef, folderEdit, handleFileDrop, openFileId, openFileRoute, picker.input, t],
   );
   const explorerToolbar = useCallback(
     (controller: StorageExplorerController) => {
@@ -328,13 +206,14 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
           .remove(effectiveScope)
           .then(() => controller.setSelectedId(ALL_SCOPE));
       };
-      const busy = folderActions.busy || !controller.rootId;
+      const busy = folderActions.busy || !controller.rootId
+        || (effectiveScope !== ALL_SCOPE && effectiveScope !== TRASH_SCOPE && !selectedFolder);
       return {
         actions: [{
           icon: "plus", label: t("new.menu"), text: true, disabled: busy,
           items: [
             { icon: "folder", label: t("new.folder"), onClick: () => setFolderEdit("create") },
-            ...(canUpload ? [{ icon: "upload", label: t("new.upload"), onClick: picker.open }] : []),
+            ...(canUpload ? [{ icon: "upload", label: t("new.upload"), onClick: picker.open, disabled: !controller.uploadTarget }] : []),
           ],
         }],
         overflow: selectedFolder ? (
@@ -347,10 +226,13 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
     },
     [canUpload, confirm, folderActions.busy, folderActionsRef, picker.open, t],
   );
-  const renderNavigator = useCallback((controller: StorageExplorerController, selector: ReactNode) => <>
-    <PaneToolbar {...explorerToolbar(controller)} selector={selector} />
-    {renderTree(controller)}
-  </>, [explorerToolbar, renderTree]);
+  const renderNavigator = useCallback((controller: ScopedStorageController, selector: ReactNode) => {
+    const storage = storageController(controller);
+    return <>
+      <PaneToolbar {...explorerToolbar(storage)} selector={selector} />
+      {renderTree(storage)}
+    </>;
+  }, [explorerToolbar, renderTree]);
   const handleRootChange = useCallback(
     (rootId: string) => {
       setFolderEdit(null);
@@ -362,6 +244,11 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
     [selectScope],
   );
 
+  const isSelectedIdValid = useCallback((id: string, rows: readonly StorageTreeRow[]) =>
+    id === ALL_SCOPE || id === TRASH_SCOPE || rows.some((row) => row.id === id)
+      || id === requestedFolder,
+  [requestedFolder]);
+
   return (
     <ScopedExplorerPane<StorageDrive, StorageTreeRow>
       roots={drives}
@@ -371,33 +258,49 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
       selectedId={folderScope}
       onSelectedIdChange={selectScope}
       defaultSelectedId={ALL_SCOPE}
-      selectedRootId={openFile?.drive ?? activeDriveId}
-      isSelectedIdValid={(id, rows) =>
-        id === ALL_SCOPE || id === TRASH_SCOPE || rows.some((row) => row.id === id)
-      }
+      rootId={folderDriveId}
+      isSelectedIdValid={isSelectedIdValid}
       navigatorLabel={t("nav.label")}
       rootPicker={driveRootPicker}
       onRootChange={handleRootChange}
       renderTree={renderNavigator}
       renderContentWithoutRoots={openFileId !== null}
-      loading={drivesQuery.isFetching && drives.length === 0}
+      loading={initialDrives.fetching && drives.length === 0}
       loadingContent={<LoadingPanel message={t("loading")} />}
       emptyContent={
         <EmptyState
           fill
           icon="drive"
           title={
-            drivesQuery.error
+            (driveOptions.list.error ?? initialDrives.error)
               ? t("drives.unavailableTitle")
               : t("drives.emptyTitle")
           }
           description={
-            drivesQuery.error?.message ?? t("drives.emptyDescription")
+            driveOptions.list.error ?? initialDrives.error ?? t("drives.emptyDescription")
           }
         />
       }
     >
-      {children}
+      {(controller) => children(storageController(controller))}
     </ScopedExplorerPane>
   );
+}
+
+function StorageFolders({ drive, selectedId, revealRows, onSelect, onFileDrop, renderRow, insertion }: {
+  drive: string; selectedId: string | undefined; revealRows: readonly StorageTreeRow[];
+  onSelect: (row: StorageTreeRow) => void; onFileDrop: (id: string, file: FileDragData) => void;
+  renderRow: (row: StorageTreeRow) => ReactNode;
+  insertion: { parentId: string | null; node: ReactNode } | null;
+}): ReactElement | null {
+  const t = useStorageT();
+  const metadata = useModelMetadata(FOLDER_MODEL);
+  const source = useMemo(() => metadata ? folderSource(metadata, drive) : null, [drive, metadata]);
+  if (!source) return null;
+  return <CollectionTreeView<StorageTreeRow> source={source} resource={FOLDER_MODEL} presentation="workspace" pane={{}}
+    columns={[{ field: "name", header: t("folder.nameLabel") }]} textFilterField="name" search={{ box: true }}
+    rowKey="id" parent="parent" label="name" icon="icon" hasChildren="hasChildren"
+    selectedId={selectedId} revealRows={revealRows} onRowClick={onSelect} renderRow={renderRow} insertion={insertion}
+    dropAccept={STORAGE_FILE_DND} canDropOnNode={(_id, row) => row.kind !== "file"}
+    onNodeDrop={(id, payload) => { const file = fileDragData(payload.data); if (file) onFileDrop(id, file); }} />;
 }

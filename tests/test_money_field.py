@@ -20,22 +20,16 @@ from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.state import ModelState, ProjectState
 from strawberry import auto
 
-import angee.fields as base_fields
-from angee.data.field_classification import (
+from angee.base import fields as base_fields
+from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
+from angee.graphql.data.metadata import _finalize_data_resource
+from angee.graphql.data.resource_fields import (
     MONEY_CURRENCY_FIELD_METADATA_KEY,
     STATUS_DISPLAY_METADATA_KEY,
-    model_field_scalar,
     money_currency_field,
     resource_field_widget,
     status_display,
 )
-from angee.data.metadata import (
-    DataResourceRoots,
-    DataResourceTypeNames,
-    serialize_data_resources,
-)
-from angee.fields import SqidField
-from angee.graphql.data.metadata import _finalize_data_resource
 from angee.money.fields import MoneyField
 from tests.money_models import MoneyDocument, MoneyLine, MoneyStatement
 
@@ -44,7 +38,6 @@ class DeclaredProjectionField(models.Field):
     """Synthetic field proving projection facts are declaration-driven."""
 
     angee_widget = "money"
-    angee_scalar_hint = "Decimal"
     angee_currency_field = "currency"
     angee_status_display = "dot"
 
@@ -54,7 +47,6 @@ def test_declared_projection_facts_classify_without_concrete_field_type() -> Non
 
     field = DeclaredProjectionField()
 
-    assert model_field_scalar(field) == "Decimal"
     assert resource_field_widget(field, "scalar") == "money"
     assert money_currency_field(field) == "currency"
     assert status_display(field) == "dot"
@@ -71,10 +63,6 @@ def test_declared_projection_facts_classify_without_concrete_field_type() -> Non
     assert status_display(field, {STATUS_DISPLAY_METADATA_KEY: "text"}) == "text"
 
 
-def test_sqid_field_declares_id_scalar_for_metadata() -> None:
-    """The metadata-JSON path treats SqidField as an ID, matching public-id surfaces."""
-
-    assert model_field_scalar(SqidField()) == "ID"
 
 
 def test_moneyfield_is_owned_by_money_fields_module() -> None:
@@ -222,7 +210,7 @@ def test_resource_metadata_wire_projects_the_money_widget_and_currency_path() ->
         filter_fields=("id", "amount"),
     )
 
-    [wire] = serialize_data_resources((metadata,), schema_name="console")
+    [wire] = [item.as_wire(schema_name="console") for item in (metadata,)]
     wire_fields = cast("list[dict[str, object]]", wire["fields"])
     amount = next(field for field in wire_fields if field["name"] == "amount")
     assert amount["scalar"] == "Decimal"

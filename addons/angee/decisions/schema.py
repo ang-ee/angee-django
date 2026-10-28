@@ -12,11 +12,16 @@ from django.db import models
 from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
 from strawberry.scalars import JSON
+from strawberry_django.auth.utils import get_current_user
 
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permission_expression, permissions_field
-from angee.graphql.data import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
-from angee.graphql.data.hasura import with_filter_aliases
+from angee.graphql.data.hasura import (
+    declared_hasura_resource_fields,
+    hasura_model_resource,
+    public_pk_decoder,
+    with_filter_aliases,
+)
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import (
@@ -26,7 +31,6 @@ from angee.graphql.relations import (
     with_record_reference_access,
 )
 from angee.graphql.subscriptions import changes
-from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
 
 Decision = apps.get_model("decisions", "Decision")
@@ -76,7 +80,7 @@ class DecisionType(AngeeNode):
         One read per decision when selected: the dashboard's attention table names the bill
         beside the question; the inbox list links the records through ``records`` instead.
         """
-        actor = request_from_info(info).user
+        actor = get_current_user(info)
         links = DecisionRecord.objects.with_actor(actor).filter(decision_id=cast(Any, self).pk)
         return "; ".join(str(link.record) for link in with_record_reference_access(links)
                          if link._angee_record_readable and link.record is not None)
@@ -109,7 +113,7 @@ class DecisionMutation:
         self, info: strawberry.Info, id: PublicID, chosen: list[str], revision: int, values: JSON | None = None,
     ) -> ActionResult:
         decision = authorized_permission_target(info, Decision, id, "act")
-        decision = decision.decide(actor=info.context.request.user, revision=revision, chosen=chosen, values=values)
+        decision = decision.decide(actor=get_current_user(info), revision=revision, chosen=chosen, values=values)
         return ActionResult(ok=True, message="Decision recorded.", id=decision.sqid)
 
 
@@ -121,7 +125,7 @@ class DecisionQuery:
     ) -> list[DecisionType]:
         """Newest answered decisions attached to one actor-readable record."""
 
-        actor = request_from_info(info).user
+        actor = get_current_user(info)
         record_model = apps.get_model(model)
         record = require_instance_for_id(record_model, str(id), queryset=record_model.objects.with_actor(actor))
         queryset = (

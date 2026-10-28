@@ -5,11 +5,11 @@ import pytest
 from django.apps import apps
 from django.core.checks.registry import registry
 
-from angee.checks import (
+from angee.base.build import apply_schema_paths, extension_source_map
+from angee.base.checks import (
     check_ownership,
     check_rebac_caveats,
 )
-from angee.compose.permissions import apply_schema_paths, extension_source_map
 from tests.core_persistence import OWNERSHIP_SCHEMA, OwnedRow
 from tests.test_zed_extensions import _base_addon, _contrib_addon
 
@@ -46,7 +46,7 @@ def test_ownership_requires_transfer_backing_and_the_owner_gate(ownership_schema
     elif mutation == "widened-owner-gate":
         text = text.replace("write__owner = transfer", "write__owner = transfer + write")
     path.write_text(text)
-    errors = check_ownership([config])
+    errors = [*check_ownership([config]), *OwnedRow.check()]
     if mutation == "valid":
         assert errors == []
     elif mutation == "no-definition":
@@ -71,18 +71,18 @@ def test_ownership_requires_transfer_backing_and_the_owner_gate(ownership_schema
 def test_ownership_honors_the_models_declared_transfer_permission(ownership_schema, monkeypatch):
     config, path = ownership_schema
     monkeypatch.setattr(OwnedRow, "owner_transfer_permission", "reassign")
-    assert [error.id for error in check_ownership([config])] == ["angee.E022", "angee.E027"]
+    assert [error.id for error in OwnedRow.check()] == ["angee.E022", "angee.E027"]
     path.write_text(OWNERSHIP_SCHEMA.replace("permission transfer", "permission reassign"))
-    assert [error.id for error in check_ownership([config])] == ["angee.E027"]
+    assert [error.id for error in OwnedRow.check()] == ["angee.E027"]
     path.write_text(OWNERSHIP_SCHEMA.replace("transfer", "reassign"))
-    assert check_ownership([config]) == []
+    assert OwnedRow.check() == []
 
 
 @pytest.mark.parametrize("container", [None, "container", "missing", "title", "owner"])
 def test_e025_requires_a_foreign_key_to_an_item_owning_model(ownership_schema, monkeypatch, container):
     config, _path = ownership_schema
     monkeypatch.setattr(OwnedRow, "owner_container", container)
-    errors = check_ownership([config])
+    errors = [*check_ownership([config]), *OwnedRow.check()]
     if container in (None, "container"):
         assert errors == []
     else:

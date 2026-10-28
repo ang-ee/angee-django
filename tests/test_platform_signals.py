@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from angee import signals as base_signals
+from angee.base import signals as base_signals
 from angee.platform import signals
 from angee.platform.models import AddonManager
 

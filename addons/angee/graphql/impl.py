@@ -8,15 +8,13 @@ from typing import Any, Self, cast
 import strawberry
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
-from django.db import models
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_snake_case
 
-from angee.identity import public_id_of
-from angee.impl import ImplBase
-from angee.impl import ImplChoice as BaseImplChoice
-from angee.models import AngeeModel
-from angee.permissions import require_rebac_queryset
+from angee.base.fields import ImplClassField
+from angee.base.implementations import ImplChoice as BaseImplChoice
+from angee.base.models.implementations import readable_impl_defaults
+from angee.graphql.mixins import ImplementationChoicesMixin
 
 
 @strawberry.type
@@ -50,39 +48,19 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
     django_model = _model_for_label(model)
     field_name = _field_name(field)
     try:
-        model_field = cast(type[AngeeModel], django_model).impl_field(field_name)
-    except AttributeError as error:
-        raise ImproperlyConfigured(f"{django_model._meta.label}.{field_name} is not an ImplClassField.") from error
+        model_field = ImplClassField.for_model(django_model, field_name)
     except FieldDoesNotExist as error:
-        if str(error).endswith(" is not an ImplClassField."):
-            message = f"{django_model._meta.label}.{field_name} is not an ImplClassField."
-        else:
-            message = f"{django_model._meta.label} has no field {field!r}."
-        raise ImproperlyConfigured(message) from error
+        raise ImproperlyConfigured(str(error)) from error
     choices = [ImplChoice.from_choice(choice) for choice in model_field.impl_choices()]
     for choice in choices:
-        defaults = cast(dict[str, Any], choice.defaults)
-        for name, value in tuple(defaults.items()):
-            try:
-                default_field = django_model._meta.get_field(name)
-            except FieldDoesNotExist:
-                continue
-            if default_field.many_to_one and isinstance(value, str):
-                related_model = cast(type[models.Model], default_field.related_model)
-                target = ImplBase.relation_default_queryset(
-                    default_field, value, queryset=require_rebac_queryset(related_model).scoped(),
-                ).first()
-                if target is None:
-                    del defaults[name]
-                else:
-                    defaults[name] = public_id_of(target)
+        choice.defaults = JSON(readable_impl_defaults(django_model, cast(dict[str, Any], choice.defaults)))
     return choices
 
 
 def can_read_impl_choices(model: str, field: str, actor: Any) -> bool:
     """Delegate additional implementation metadata visibility to its model owner."""
     owner = _model_for_label(model)
-    return issubclass(owner, AngeeModel) and owner.can_read_impl_choices(_field_name(field), actor)
+    return issubclass(owner, ImplementationChoicesMixin) and owner.can_read_impl_choices(_field_name(field), actor)
 
 
 def _model_for_label(label: str) -> type[Any]:

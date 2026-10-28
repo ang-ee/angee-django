@@ -37,7 +37,6 @@ class MoneyField(models.DecimalField):
     """
 
     angee_widget = "money"
-    angee_scalar_hint = "Decimal"
 
     def __init__(self, *args: Any, currency_field: str = "currency", **kwargs: Any) -> None:
         """Record the currency path and default the money decimal precision."""

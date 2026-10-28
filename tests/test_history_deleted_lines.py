@@ -13,9 +13,9 @@ from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.changesets import changeset
-from angee.identity import public_id_of
-from angee.models import model_history
+from angee.base.identity import public_id_of
+from angee.provenance.context import changeset
+from angee.provenance.querysets import model_history
 from angee.provenance.schema import RecordHistory
 from tests.conftest import create_user
 

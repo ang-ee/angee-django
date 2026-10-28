@@ -7,6 +7,7 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, Field
 
+from angee.base.identity import public_id_of
 from angee.decisions.contracts import (
     DecisionContext,
     DecisionFact,
@@ -14,9 +15,8 @@ from angee.decisions.contracts import (
     DecisionRecordReference,
     DecisionRequest,
 )
-from angee.evidence import FactAuthority
-from angee.identity import public_id_of
 from angee.parties.backends import ParsedAddress
+from angee.provenance.evidence import FactAuthority
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.steps import Settlement, Step
 

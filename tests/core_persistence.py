@@ -12,10 +12,8 @@ from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.models import (
+from angee.base.models import (
     AngeeModel,
-    AngeeQuerySet,
-    HistoryMixin,
     ImmutableFieldsMixin,
     ItemOwnershipMixin,
     OptimisticLockMixin,
@@ -25,6 +23,8 @@ from angee.models import (
     TrashMixin,
     TrashQuerySet,
 )
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 
 
 class RevisionRow(OptimisticLockMixin):
@@ -60,7 +60,7 @@ class OwnershipContainer(ItemOwnershipMixin):
         app_label = "scopedemo"
 
 
-class OwnedRows(OwnerQuerySet, AngeeQuerySet):
+class OwnedRows(OwnerQuerySet, AngeeHistoryQuerySet):
     """Compose release with the framework's ordinary queryset mechanics."""
 
 

@@ -13,8 +13,8 @@ from typing import Any
 import pytest
 from django.apps import AppConfig, apps
 
-from angee.compose.bootstrap import bootstrap_dependency_group
-from angee.compose.dependencies import AddonDependencyGroup, AddonDependencyGroupResult
+from angee.management.bootstrap import bootstrap_dependency_group
+from angee.management.dependencies import AddonDependencyGroup, AddonDependencyGroupResult
 from angee.project import PROJECT_DIR_ENV, PROJECT_SETTINGS_ENV
 
 
@@ -88,7 +88,7 @@ def test_manifest_bootstrap_matches_resolved_app_config_projection(
         "  - example.root\n"
         "ANGEE_ADDON_DIRS:\n"
         '  - "{BASE_DIR}/addons"\n'
-        'ANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"\n',
+        'COMPOSE_RUNTIME_DIR: "{BASE_DIR}/runtime"\n',
         encoding="utf-8",
     )
 
@@ -141,11 +141,11 @@ class ImportBoundary(MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         forbidden = (
             "example", "rebac", "angee.compose.composer", "angee.compose.runtime",
-            "angee.compose.permissions", "angee.compose.model_composition", "angee.compose.rendering",
+            "angee.base.build", "angee.compose.model_composition", "angee.compose.rendering",
         )
         assert not any(fullname == name or fullname.startswith(name + ".") for name in forbidden), fullname
 sys.meta_path.insert(0, ImportBoundary())
-from angee.compose.bootstrap import bootstrap_dependency_group
+from angee.management.bootstrap import bootstrap_dependency_group
 from django.apps import apps
 assert bootstrap_dependency_group().value == "written"
 assert not apps.app_configs

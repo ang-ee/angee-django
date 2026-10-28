@@ -12,15 +12,13 @@ from django.db.migrations.state import ModelState
 from django.db.migrations.writer import MigrationWriter
 from rebac import system_context
 
-from angee.models import (
-    AngeeQuerySet,
-    AppendOnlyBaseQuerySet,
-    AppendOnlyModel,
-    AppendOnlyQuerySet,
-    AuditMixin,
-    retained_set_null,
-)
+from angee.base.models import AngeeQuerySet, AppendOnlyBaseQuerySet, AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
+from angee.base.models.audit import retained_set_null
+from angee.base.models.hierarchy import HierarchyQuerySet
+from angee.base.querysets import ClosedUpdateQuerySet
+from angee.provenance.contrib.angee.querysets import AngeeHistoryUnscopedQuerySet
 from tests.conftest import create_user
+from tests.hierdemo.models import HierNode
 
 
 class RetainedEvidenceQuerySet(AppendOnlyQuerySet["RetainedEvidence"], AngeeQuerySet["RetainedEvidence"]):
@@ -62,17 +60,14 @@ def test_audit_foreign_keys_declare_serializable_materialized_nullification() ->
         on_delete = RetainedEvidence._meta.get_field(name).remote_field.on_delete
         assert on_delete is retained_set_null
         serialized, imports = MigrationWriter.serialize(on_delete)
-        assert serialized == "angee.models.audit.retained_set_null"
-        assert imports == {"import angee.models.audit"}
+        assert serialized == "angee.base.models.audit.retained_set_null"
+        assert imports == {"import angee.base.models.audit"}
 
 
 def test_historical_audit_imports_preserve_field_migration_state() -> None:
-    from angee.models.audit import AuditMixin as NativeAuditMixin
-    from angee.models.audit import retained_set_null as native_delete
-    from angee.models.ownership import AuditMixin as HistoricalAuditMixin
+    from angee.base.models.audit import retained_set_null as native_delete
     from angee.models.ownership import retained_set_null as historical_delete
 
-    assert HistoricalAuditMixin is NativeAuditMixin
     assert historical_delete is native_delete is retained_set_null
     state = ModelState.from_model(RetainedEvidence)
     historical_state = state.clone()
@@ -158,3 +153,34 @@ def test_owner_writes_preserve_downstream_queryset_guards(monkeypatch: pytest.Mo
         queryset.owner_update(name="changed")
     with pytest.raises(PermissionDenied, match="downstream write guard"):
         queryset.owner_bulk_create([RetainedEvidence(name="new")])
+
+
+def test_closed_owner_update_preserves_downstream_independent_guard() -> None:
+    """The protected verb skips its one closed-edit guard, not later policy."""
+
+    class IndependentGuard(models.QuerySet):
+        def update(self, **kwargs: Any) -> int:
+            raise PermissionDenied("downstream independent guard")
+
+    class Combined(ClosedUpdateQuerySet, IndependentGuard):
+        pass
+
+    rows = Combined(model=ContentType)
+    with pytest.raises(ValidationError, match="cannot be edited"):
+        rows.update()
+    with pytest.raises(PermissionDenied, match="downstream independent guard"):
+        rows.owner_update(name="changed")
+
+
+def test_closed_owner_update_keeps_hierarchy_and_capture_downstream() -> None:
+    """A combined native queryset retains hierarchy refusal before capture/SQL."""
+
+    class Combined(AppendOnlyBaseQuerySet, HierarchyQuerySet, AngeeHistoryUnscopedQuerySet):
+        pass
+
+    lineage = Combined.__mro__
+    assert lineage.index(ClosedUpdateQuerySet) < lineage.index(HierarchyQuerySet)
+    assert lineage.index(HierarchyQuerySet) < lineage.index(AngeeHistoryUnscopedQuerySet)
+    assert Combined.owner_update is ClosedUpdateQuerySet.owner_update
+    with pytest.raises(ValidationError, match="hierarchy parent, scope and path"):
+        Combined(model=HierNode).owner_update(parent_id=None)

@@ -7,7 +7,6 @@ import uuid
 
 import psycopg
 import pytest
-from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
 from psycopg import sql
 
@@ -148,10 +147,10 @@ def test_postgres_advisory_probe_ignores_same_pair_in_other_database() -> None:
                 cursor.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(database_name)))
 
 
-def test_task_lock_releases_after_context(settings) -> None:
+@pytest.mark.django_db
+def test_task_lock_releases_after_context() -> None:
     """The context helper releases an acquired lock when the task body exits."""
 
-    settings.ANGEE_TASK_LOCK_BACKEND = "angee.jobs.locks.LocalLockBackend"
     key = record_lock_key("messaging.Channel", 42, "sync")
 
     with task_lock(key) as acquired:
@@ -163,10 +162,10 @@ def test_task_lock_releases_after_context(settings) -> None:
         assert acquired_again is True
 
 
-def test_task_lock_reports_held_state(settings) -> None:
-    """Read-side lock checks use the same configured backend."""
+@pytest.mark.django_db
+def test_task_lock_reports_held_state() -> None:
+    """Read-side lock checks use the same database-selected backend."""
 
-    settings.ANGEE_TASK_LOCK_BACKEND = "angee.jobs.locks.LocalLockBackend"
     key = record_lock_key("messaging.Channel", 84, "sync")
 
     assert task_lock_is_held(key) is False
@@ -176,7 +175,8 @@ def test_task_lock_reports_held_state(settings) -> None:
     assert task_lock_is_held(key) is False
 
 
-def test_task_lock_backend_requires_callable_factory(settings) -> None:
-    settings.ANGEE_TASK_LOCK_BACKEND = "builtins.Ellipsis"
-    with pytest.raises(ImproperlyConfigured, match="not callable"):
-        locks.get_lock_backend()
+def test_task_lock_backend_matches_the_native_database() -> None:
+    backend = locks.get_lock_backend()
+    expected = locks.PostgresAdvisoryLockBackend if connection.vendor == "postgresql" else LocalLockBackend
+    assert isinstance(backend, expected)
+    assert backend.cross_process is (connection.vendor == "postgresql")

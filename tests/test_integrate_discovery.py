@@ -17,11 +17,11 @@ from rebac import actor_context, system_context
 from rebac.backends import backend
 from rebac.testing import install_schema
 
-from angee.graphql.data import hasura_model_resource
+from angee.base.identity import public_id_of
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.identity import public_id_of
 from angee.integrate import scheduler, tasks
 from angee.integrate.connect import complete_account_connect, complete_external_account_link
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK
@@ -34,7 +34,6 @@ from angee.integrate.schema import (
     IntegrationActionMutation,
     IntegrationCredentialMutation,
     IntegrationWriteBackend,
-    _attach_completed_integration,
 )
 from angee.integrate.session_runner import run_bridge_session_job
 from angee.integrate.signals import discovery_finished
@@ -213,13 +212,15 @@ def test_oauth_completion_preserves_discovery_for_the_same_identity(
         ))
 
     monkeypatch.setattr(OAuthClientProtocol, "__init__", with_transport)
-    info = connection_info(bridge)
     sent_tasks.clear()
     with actor_context(bridge.owner):
         completed = complete_account_connect(
             client, code="code", state_token=token, redirect_uri="https://app.example/callback",
         )
-        _attach_completed_integration(info, completed.integration_id, bridge.owner, completed.credential)
+        bridge._meta.apps.get_model("integrate", "Integration").objects.attach_completed_connect(
+            completed.integration_id, bridge.owner, completed.credential,
+            exposed_model_labels={bridge._meta.label},
+        )
     bridge.refresh_from_db()
     assert bridge.discovery_generation == generation + int(derived or disconnected)
     assert bridge.lifecycle == "connected"

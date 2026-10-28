@@ -1,0 +1,11 @@
+[addon]
+name = "angee.jobs"
+description = "Deferred and periodic execution through native Celery"
+keywords = ["jobs", "celery", "scheduling"]
+category = "Foundation"
+depends_on = ["django_celery_beat"]
+dependencies = [
+  "celery[redis]>=5.5",
+  "billiard>=4.2.1,<4.3",
+  "django-celery-beat>=2.9",
+]

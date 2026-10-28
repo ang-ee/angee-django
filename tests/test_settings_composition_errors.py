@@ -22,7 +22,7 @@ def _project(tmp_path: Path) -> None:
     (tmp_path / "settings.yaml").write_text(
         "SECRET_KEY: isolated-composition-test\n"
         "INSTALLED_APPS: [angee.money, missing_dependency]\n"
-        'ANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"\n',
+        'COMPOSE_RUNTIME_DIR: "{BASE_DIR}/runtime"\n',
         encoding="utf-8",
     )
 
@@ -37,7 +37,7 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     environment.update({
         PROJECT_DIR_ENV: str(tmp_path),
         PROJECT_SETTINGS_ENV: "settings",
-        "DJANGO_SETTINGS_MODULE": "angee.compose.settings",
+        "DJANGO_SETTINGS_MODULE": "angee.settings",
         "PYTHONPATH": os.pathsep.join(python_path),
     })
     return environment
@@ -71,7 +71,7 @@ def test_failed_composition_preserves_published_settings(tmp_path: Path) -> None
             sys.executable, "-c",
             """
 from django.core.exceptions import ImproperlyConfigured
-from angee.compose.project import ProjectContract
+from angee.conf import ProjectContract
 
 published = {"__name__": "published_settings", "INSTALLED_APPS": ["retained"], "RETAINED": True}
 previous = dict(published)

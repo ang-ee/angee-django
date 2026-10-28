@@ -16,17 +16,12 @@ from django.db.models import F, Value
 from django.db.models.functions import Concat
 from django.test.utils import isolate_apps, override_settings
 
-from angee.fields import (
-    DiagnosticTextField,
-    EncryptedField,
-    FractionalRankExhausted,
-    FractionalRankField,
-    ModelLabelField,
-    SqidField,
-    StateField,
-    _derive_fernet,
-)
-from angee.models import SqidMixin
+from angee.base.fields.encrypted import EncryptedField, _derive_fernet
+from angee.base.fields.identity import SqidField
+from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
+from angee.base.fields.state import StateField
+from angee.base.fields.text import DiagnosticTextField, ModelLabelField
+from angee.base.models import SqidMixin
 from tests.tables import model_tables
 
 
@@ -177,7 +172,7 @@ def test_encrypted_field_caches_bound_fernet(monkeypatch: pytest.MonkeyPatch) ->
         calls.append(label)
         return _derive_fernet(label)
 
-    monkeypatch.setattr("angee.fields._derive_fernet", derive)
+    monkeypatch.setattr("angee.base.fields.encrypted._derive_fernet", derive)
 
     first = field._fernet()
     second = field._fernet()
@@ -699,6 +694,33 @@ def test_fractional_rank_appends_within_its_unique_context(monkeypatch: pytest.M
 
 
 @pytest.mark.django_db(transaction=True)
+def test_fractional_reordering_reserves_the_complete_context_and_destinations() -> None:
+    """A partial reorder avoids unseen rows and requested ranks in its context."""
+
+    class ReorderedItem(models.Model):
+        lane = models.CharField(max_length=8)
+        rank = FractionalRankField()
+
+        class Meta:
+            app_label = "auth"
+            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="reordered_item_lane_rank"),)
+
+    with model_tables((ReorderedItem,)):
+        first = ReorderedItem.objects.create(lane="a", rank=0)
+        second = ReorderedItem.objects.create(lane="a", rank=1)
+        ReorderedItem.objects.create(lane="a", rank=9000)
+        ReorderedItem.objects.create(lane="other", rank=math.nextafter(math.inf, 0.0))
+        field = ReorderedItem._meta.get_field("rank")
+        before = list(ReorderedItem.objects.order_by("pk").values_list("pk", "rank"))
+        allocated = field.get_temporary_ranks([first, second], [20000, None], using=connection.alias)
+        assert len(set(allocated)) == 2
+        assert all(math.isfinite(rank) and rank > 20000 for rank in allocated)
+        with pytest.raises(FractionalRankExhausted):
+            field.get_temporary_ranks([first, second], [math.nextafter(math.inf, 0.0)], using=connection.alias)
+        assert list(ReorderedItem.objects.order_by("pk").values_list("pk", "rank")) == before
+
+
+@pytest.mark.django_db(transaction=True)
 def test_fractional_rank_column_backfills_existing_rows_without_changing_allocation() -> None:
     """Schema backfill uses STEP; later ORM inserts still append in context."""
 
@@ -819,23 +841,6 @@ def test_get_append_rank_steps_and_exhausts() -> None:
         FractionalRankField.get_append_rank(float("1e308") * 1.7976)
 
 
-def test_get_rank_between_midpoints_and_edges() -> None:
-    """Between-neighbor ranks midpoint, prepend, append, and exhaust."""
-
-    step = FractionalRankField.STEP
-
-    assert FractionalRankField.get_rank_between(None, None) == step
-    assert FractionalRankField.get_rank_between(step, None) == step * 2
-    assert FractionalRankField.get_rank_between(None, step) == 0.0
-    midpoint = FractionalRankField.get_rank_between(step, step * 2)
-    assert step < midpoint < step * 2
-    with pytest.raises(ValueError, match="strictly less"):
-        FractionalRankField.get_rank_between(step * 2, step)
-    adjacent = math.nextafter(1.0, 2.0)
-    with pytest.raises(FractionalRankExhausted):
-        FractionalRankField.get_rank_between(1.0, adjacent)
-
-
 def test_fractional_rank_rejects_non_finite_values() -> None:
     """NaN and infinity are refused on both coercion boundaries."""
 
@@ -846,115 +851,6 @@ def test_fractional_rank_rejects_non_finite_values() -> None:
             field.to_python(bad)
         with pytest.raises(ValidationError):
             field.get_prep_value(bad)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_fractional_rank_rebalance_rewrites_a_clean_spread() -> None:
-    """Rebalance rewrites one context to clean steps and reports the changes."""
-
-    class RankedRebalance(models.Model):
-        """Concrete model used for rank rebalance tests."""
-
-        lane = models.CharField(max_length=8)
-        rank = FractionalRankField()
-
-        class Meta:
-            """Django model options for the test model."""
-
-            app_label = "auth"
-            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="ranked_rebalance_lane_rank"),)
-
-    with model_tables((RankedRebalance,)):
-        RankedRebalance.objects.create(lane="a", rank=0.25)
-        RankedRebalance.objects.create(lane="a", rank=0.5)
-        RankedRebalance.objects.create(lane="a", rank=9000.0)
-        untouched = RankedRebalance.objects.create(lane="b", rank=7.0)
-
-        field = RankedRebalance._meta.get_field("rank")
-        changed = field.rebalance(context={"lane": "a"})
-
-        assert changed == 3
-        ranks = list(RankedRebalance.objects.filter(lane="a").order_by("rank").values_list("rank", flat=True))
-        step = FractionalRankField.STEP
-        assert ranks == [step, step * 2, step * 3]
-        untouched.refresh_from_db()
-        assert untouched.rank == 7.0
-
-        assert field.rebalance(context={"lane": "a"}) == 0
-
-        # Every row shifts up into the rank its successor currently holds, so
-        # writing the clean spread directly (no staging pass) trips the unique
-        # constraint mid-statement; only the staged rewrite survives.
-        for occupied in (step / 2, step, step * 2):
-            RankedRebalance.objects.create(lane="c", rank=occupied)
-        assert field.rebalance(context={"lane": "c"}) == 3
-        crowded = list(RankedRebalance.objects.filter(lane="c").order_by("rank").values_list("rank", flat=True))
-        assert crowded == [step, step * 2, step * 3]
-
-
-@pytest.mark.django_db(transaction=True)
-def test_fractional_rank_rebalance_rolls_back_staging_on_its_routed_database(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, django_db_blocker: Any,
-) -> None:
-    """Both staged rank writes share the transaction of the model's native router."""
-
-    class RoutedRank(models.Model):
-        lane = models.CharField(max_length=8)
-        rank = FractionalRankField()
-
-        class Meta:
-            app_label = "auth"
-            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="routed_rank_lane_rank"),)
-
-    alias = "rank_router_probe"
-
-    class RankRouter:
-        def db_for_read(self, model: type[models.Model], **hints: Any) -> str | None:
-            return "default" if model is RoutedRank else None
-
-        def db_for_write(self, model: type[models.Model], **hints: Any) -> str | None:
-            return alias if model is RoutedRank else None
-
-    monkeypatch.setattr(router, "routers", [RankRouter()])
-    connections.databases[alias] = {
-        **connections.databases["default"],
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": str(tmp_path / "routed-rank.sqlite3"),
-        "OPTIONS": {},
-        "CONN_MAX_AGE": 0,
-    }
-    database = connections[alias]
-    try:
-        with django_db_blocker.unblock():
-            with database.schema_editor() as editor:
-                editor.create_model(RoutedRank)
-            for rank in (0.25, 0.5):
-                RoutedRank.objects.create(lane="a", rank=rank)
-            assert RoutedRank.objects.create(lane="b").rank == FractionalRankField.STEP
-            bulk_update = models.QuerySet.bulk_update
-            passes = 0
-
-            def fail_clean_pass(queryset: models.QuerySet[Any], *args: Any, **kwargs: Any) -> int:
-                nonlocal passes
-                assert queryset.db == alias
-                assert database.in_atomic_block
-                passes += 1
-                if passes == 2:
-                    raise RuntimeError("clean pass failed")
-                return bulk_update(queryset, *args, **kwargs)
-
-            monkeypatch.setattr(models.QuerySet, "bulk_update", fail_clean_pass)
-            field = RoutedRank._meta.get_field("rank")
-            with pytest.raises(RuntimeError, match="clean pass failed"):
-                field.rebalance(context={"lane": "a"})
-            assert passes == 2
-            assert list(RoutedRank.objects.using(alias).filter(lane="a").order_by("rank").values_list(
-                "rank", flat=True,
-            )) == [0.25, 0.5]
-    finally:
-        database.close()
-        del connections[alias]
-        del connections.databases[alias]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1019,6 +915,9 @@ def test_fractional_rank_allocation_uses_explicit_write_alias(
             assert [row.rank for row in rows] == [expected, FractionalRankField.STEP + 200.0, 7.0]
             stored = AliasRank.objects.using(alias).filter(pk__in=[row.pk for row in rows]).order_by("lane")
             assert list(stored.values_list("rank", flat=True)) == [expected, FractionalRankField.STEP + 200.0, 7.0]
+            field = AliasRank._meta.get_field("rank")
+            temporary = field.get_temporary_ranks([created, saved], [0, 1], using=alias)
+            assert min(temporary) > expected
             AliasRank.objects.using(alias).create(lane="exhausted", rank=math.nextafter(math.inf, 0.0))
             exhausted = AliasRank(lane="exhausted")
             with pytest.raises(FractionalRankExhausted):
@@ -1033,54 +932,34 @@ def test_fractional_rank_allocation_uses_explicit_write_alias(
         del connections.databases[alias]
 
 
-def test_fractional_rank_rebalance_rejects_traversal_context_keys() -> None:
-    """Context keys must be direct model fields, never lookups or the rank."""
-
-    class RankedContextGuard(models.Model):
-        """Concrete model used for rebalance-context validation tests."""
-
-        lane = models.CharField(max_length=8)
-        rank = FractionalRankField()
-
-        class Meta:
-            """Django model options for the test model."""
-
-            app_label = "auth"
-            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="ranked_guard_lane_rank"),)
-
-    field = RankedContextGuard._meta.get_field("rank")
-    for bad_context in ({"lane__icontains": "a"}, {"missing": 1}, {"rank": 1.0}):
-        with pytest.raises(ImproperlyConfigured):
-            field.rebalance(context=bad_context)
 
 
-@pytest.mark.django_db(transaction=True)
-def test_fractional_rank_rebalance_accepts_a_relation_attname_context() -> None:
-    """A relation context key works as the field name or its column attname."""
+@isolate_apps("django.contrib.contenttypes")
+def test_state_field_does_not_cache_unresolved_pending_foreign_key() -> None:
+    """Forward guard discovery must not resolve unrelated reverse metadata early."""
 
-    class RankOwner(models.Model):
-        """Concrete relation target for relation-context rebalance tests."""
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+
+    class StateParent(models.Model):
+        state = StateField(choices_enum=Status, default=Status.OPEN)
 
         class Meta:
-            """Django model options for the test model."""
+            app_label = "contenttypes"
+            abstract = True
 
-            app_label = "auth"
-
-    class RankedRelationContext(models.Model):
-        """Concrete model used for relation-context rebalance tests."""
-
-        owner = models.ForeignKey(RankOwner, on_delete=models.CASCADE, null=True)
-        rank = FractionalRankField()
+    class Waiting(models.Model):
+        target = models.ForeignKey("contenttypes.StateTarget", on_delete=models.CASCADE)
 
         class Meta:
-            """Django model options for the test model."""
+            app_label = "contenttypes"
 
-            app_label = "auth"
-            constraints = (models.UniqueConstraint(fields=("owner", "rank"), name="ranked_rel_owner_rank"),)
+    class StateTarget(StateParent):
+        extra_state = StateField(choices_enum=Status, default=Status.OPEN)
 
-    with model_tables((RankOwner, RankedRelationContext)):
-        field = RankedRelationContext._meta.get_field("rank")
-        # Django resolves the column attname to the relation field itself, so
-        # both spellings address the same exact-match context.
-        assert field.rebalance(context={"owner": None}) == 0
-        assert field.rebalance(context={"owner_id": None}) == 0
+        class Meta:
+            app_label = "contenttypes"
+
+    relation = Waiting._meta.get_field("target")
+    assert relation.remote_field.model is StateTarget
+    assert relation.related_model is StateTarget

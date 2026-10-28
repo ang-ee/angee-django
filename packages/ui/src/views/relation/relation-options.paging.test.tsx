@@ -2,11 +2,11 @@
 
 import { ResourceQuery } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { createUiTestProviders } from "../../testing";
-import { useRelationOptions } from "./relation-options";
+import { useRelationOptions, useRelationPickerOptions } from "./relation-options";
 
 const resource = testDataResource("example.Lane", {
   recordRepresentation: "name",
@@ -71,4 +71,32 @@ describe("relation catalogue paging", () => {
     expect(result.current.options).toEqual([]);
     expect(dataProvider.getList).toHaveBeenCalledTimes(1);
   });
+
+  test("picker continuation and search retain a selected id outside the current page", async () => {
+    dataProvider.getList.mockImplementation(async ({ pagination, filters }) => {
+      const searching = Boolean(filters?.length);
+      return {
+        data: [{ id: searching ? "match" : pagination?.currentPage === 2 ? "second" : "first", name: searching ? "Match" : "Page row" }],
+        total: searching ? 1 : 21,
+      };
+    });
+    const selected = { value: "pinned", label: "Selected elsewhere" };
+    const { result } = renderHook(() => useRelationPickerOptions(relation, {
+      value: selected.value, selectedOption: selected, pageSize: 10,
+    }), { wrapper: Provider });
+    expect(dataProvider.getList).not.toHaveBeenCalled();
+    act(() => result.current.onOpenChange(true));
+    await waitFor(() => expect(result.current.options.some((option) => option.value === "first")).toBe(true));
+    expect(result.current.searchState.pagination?.total).toBe(21);
+    act(() => result.current.searchState.pagination?.onPageChange?.(2));
+    await waitFor(() => expect(result.current.options.some((option) => option.value === "second")).toBe(true));
+    expect(result.current.options).toContainEqual(selected);
+    expect(result.current.searchState.pagination?.page).toBe(2);
+    act(() => result.current.onSearchChange("Match"));
+    await waitFor(() => expect(result.current.options.some((option) => option.value === "match")).toBe(true));
+    expect(result.current.searchState.pagination?.page).toBe(1);
+    expect(result.current.searchState.pagination?.total).toBe(1);
+    expect(result.current.options).toContainEqual(selected);
+  });
+
 });

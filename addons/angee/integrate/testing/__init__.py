@@ -12,6 +12,6 @@ Suites composing the projects extension can import the optional concrete
 setup instead of declaring their own model.
 
 Django's native test database setup creates the shared tables. For permission
-synchronization, follow the fixture contract in ``angee.testing``. Production
+synchronization, follow the fixture contract in ``angee.base.testing``. Production
 settings and serving code must not depend on this test support.
 """

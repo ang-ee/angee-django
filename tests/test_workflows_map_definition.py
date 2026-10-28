@@ -6,7 +6,8 @@ import pytest
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict
 
-from angee.jsonschema import schemas_match, validator
+from angee.base.schemas.references import schemas_match
+from angee.base.validators import validator
 from angee.workflows.definition import Definition
 from angee.workflows.maps import Map, MapItem
 from angee.workflows.steps import Step

@@ -20,16 +20,18 @@ from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.changesets import changeset
-from angee.evidence import EvidenceReference
-from angee.identity import public_id_of, public_subject_ref
+from angee.base.identity import public_id_of, public_subject_ref
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.knowledge import schema as knowledge_schema
 from angee.messaging.testing.models import Channel
-from angee.models import SourceKind
 from angee.parties import schema as parties_schema
 from angee.provenance import schema as provenance_schema
+from angee.provenance.context import changeset
+from angee.provenance.evidence import EvidenceReference
+from angee.provenance.statements import (
+    SourceKind,
+)
 from tests.conftest import (
     Page,
     addon_schema,
@@ -459,7 +461,7 @@ def test_history_names_a_statements_related_row_by_its_public_id() -> None:
 def test_metadata_marks_a_resource_that_keeps_history() -> None:
     """A gated, tracked record is flagged; a statement shadow table, read through its subject, is not."""
 
-    schema = addon_schema(knowledge_schema.schemas, "console", parties_schema.schemas)
+    schema = addon_schema(knowledge_schema.schemas, "console", parties_schema.schemas, provenance_schema.schemas)
     resources = {item.model_label: item for item in schema.angee_resources}
     assert resources["knowledge.Page"].history is True
     assert resources["parties.Party"].history is True

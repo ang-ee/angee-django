@@ -38,8 +38,14 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Python/addon/template handoff: full SQLite suite; required for core changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
-| Python types | `uv run --locked python -m mypy angee addons` |
+| Python types | `PYTHONPATH=.:addons uv run --locked python -m mypy angee addons` |
 | Dead-code review | `uv run --locked python -m vulture` |
+
+Mypy imports addon-owned plugins before its Django settings host runs. The
+invocation supplies the declared source roots on native `PYTHONPATH` so those
+plugin modules can load; `mypy_path` controls static resolution and does not
+change the interpreter's import paths. Consumer CI passes the framework root
+and the typing host's declared `ANGEE_ADDON_DIRS` to its mypy subprocess.
 
 The consumer CI lane uses the same framework mypy policy and
 [`tests.typing_settings`](../tests/typing_settings.py), with its existing
@@ -111,13 +117,16 @@ package docstrings own the adoption contract. Other reusable concrete
 compositions, including [`decisions`](../addons/angee/decisions/testing/models.py)
 and [`messaging`](../addons/angee/messaging/testing/models.py), register once
 through imports in the root conftest before database setup. The framework-generic
-[`composed_tables`](../angee/testing/fixtures.py) fixture uses native transactional
+[`composed_tables`](../addons/angee/base/testing/fixtures.py) fixture uses native transactional
 isolation and synchronizes REBAC after each flush; use the native `db` fixture
 when a test needs neither transaction behavior nor permission synchronization.
 Composed hosts also install their schema during native database setup. Register
-`angee.testing.fixtures` through the root conftest's `pytest_plugins`; a runner
-that loads it explicitly must pass `-p django -p angee.testing.fixtures` in that
+`angee.base.testing.fixtures` through the root conftest's `pytest_plugins`; a runner
+that loads it explicitly must pass `-p django -p angee.base.testing.fixtures` in that
 order so pytest-django cannot shadow the shared `django_db_setup` override.
+Hosts installing provenance also register
+[`angee.provenance.testing.fixtures`](../addons/angee/provenance/testing/fixtures.py)
+for test attribution; the generic framework plugin does not install that boundary.
 A test that reaches a statement source needs the install-tier `provenance.Rule`
 principals parties declares: list
 [`angee.parties.testing.fixtures`](../addons/angee/parties/testing/fixtures.py) in
@@ -128,8 +137,8 @@ Workflow tests reach execution states through the shared `load_workflow`,
 `start_run`, `run_until`, `decide` and `run_factory(...).at(...)` drivers. These compose
 production admission and transition verbs; do not fabricate step runs or attempts
 to stand in for execution. The scoped `capture_tasks` and `observe(model)`
-helpers capture task sends and publications; `trigger_source(model)` opts a
-declared source into signal capture. Decisions-only suites use
+helpers capture task sends and publications. Declared trigger sources bind
+through their native app lifecycle. Decisions-only suites use
 `angee.decisions.testing` drivers with central concrete models. Name Python
 test modules `test_<concern>.py` and tests
 `test_<behavior>` so native discovery and focused file selection agree.
@@ -162,7 +171,7 @@ They are distinct lifecycle operations, not a mandatory sequence for every task:
 
 | Purpose | Command | Prerequisite / effect |
 |---|---|---|
-| Prepare the complete runtime | `uv run manage.py angee provision` | Builds, then runs the remaining preparation in one fresh process; the [command owner](../angee/compose/management/commands/angee.py) defines ordering and options |
+| Prepare the complete runtime | `uv run manage.py angee provision` | Builds, then runs the remaining preparation in one fresh process; the [command owner](../angee/management/commands/angee.py) defines ordering and options |
 | Build composed runtime | `uv run manage.py angee build` | Updates generated runtime, prunes obsolete generated sources, updates host dependency declarations and materializes pending addon migrations |
 | Clean generated runtime | `uv run manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves current migration directories |
 | Check composition drift | `uv run --locked manage.py angee build --check` | Checks composer-owned artifacts, dependency projection, and addon declarations; Django bootstrap can repair runtime sources before dispatch |
@@ -320,7 +329,7 @@ its own host, resolves native manifest dependencies, composes/provisions it, and
 collects the declared Python paths with `python_files=test*.py` on PostgreSQL.
 Four native pytest-xdist workers use `--dist worksteal` inside each shard, so long
 consumer intake modules can use every worker. Each worker loads the configured
-host through `angee.compose.settings`; pytest-django owns its separate test
+host through `angee.settings`; pytest-django owns its separate test
 database. Pytest emits a thread dump after five minutes in one test protocol,
 including setup and teardown, without changing its outcome. Shared test plugins
 must defer model imports until Django's app registry is populated. Check tools

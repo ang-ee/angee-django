@@ -10,7 +10,7 @@ import { type ResourceListOrder, type ResourceViewFilter, type ResourceViewGroup
 import { type GroupedListItem, type GroupMeasure, type RowGroup, type VisibleFieldOption } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
-import type { BoardCardPlacement } from "../resource-view-types";
+import type { BoardCardPlacement, BoardOrder } from "../resource-view-types";
 import type { CollectionSource } from "../collection-source";
 export type RowRecord = BaseRecord & Row;
 export type ResourceFilterInput = Record<string, unknown>;
@@ -109,11 +109,12 @@ export interface FlatResourceViewPresentationSurface<TRow extends Row = Row>
   groupedRows: readonly RowGroup<TRow>[];
   boardDragEnabled: boolean;
   boardRankField?: string;
+  boardRankInputField?: string;
   boardOptimisticPlacementByRowId: ReadonlyMap<string, BoardCardPlacement>;
   onBoardCardMove?: (
     row: TRow,
     laneId: string | null,
-    rank?: number,
+    order?: BoardOrder,
   ) => void | Promise<void>;
 }
 

@@ -13,18 +13,15 @@ import inspect
 import sys
 from collections.abc import Iterable
 from graphlib import CycleError, TopologicalSorter
-from typing import Any, cast
+from typing import cast
 
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.utils import make_model_tuple
 from django.utils.module_loading import module_has_submodule
-from rebac.mixins import INJECTED_BASE_MANAGER
-from rebac.resources import model_resource_type
 
-from angee.addons import addon_manifest
-from angee.models import AngeeModel, revalidate_transition_metadata
+from angee.compose.declarations import AppDeclarationSource
 
 
 def _model_reference(model: type[models.Model], attribute: str) -> str | None:
@@ -141,11 +138,11 @@ class ModelComposition:
         self.required_parents = self._validate_required_parents()
         self._validate_fields()
         self._validate_donor_managers()
-        for source in self.ordered_models:
-            self.grantable(source)
 
     @classmethod
-    def discover(cls, app_configs: Iterable[AppConfig]) -> ModelComposition:
+    def discover(
+        cls, app_configs: Iterable[AppConfig], *, declarations: AppDeclarationSource | None = None,
+    ) -> ModelComposition:
         """Import source modules during Django phase 2 and collect own declarations.
 
         App order supplies donor precedence; module namespace order supplies the
@@ -156,9 +153,9 @@ class ModelComposition:
         sources_by_label: dict[str, list[type[models.Model]]] = {}
         extensions: dict[str, list[type[models.Model]]] = {}
         model_owners: dict[type[models.Model], str] = {}
+        declarations = declarations if declarations is not None else AppDeclarationSource.configured()
         for config in app_configs:
-            manifest = addon_manifest(config)
-            if manifest is not None and any(item.get("app_label") == config.label for item in manifest.migrations):
+            if any(item.get("app_label") == config.label for item in declarations.migrations(config)):
                 # An addon still owns its migration graph after retiring its last
                 # model. Keep an empty native app so Django can apply that cutover.
                 sources_by_label.setdefault(config.label, [])
@@ -217,7 +214,7 @@ class ModelComposition:
             raise ImproperlyConfigured(
                 f"{model.__name__!r} does not bind in {model.__module__!r}; "
                 "source models must be importable by their declared module and name. "
-                "For role_anchor wrappers, pass module=__name__ explicitly."
+                "Declare the source module explicitly when using a model factory."
             )
 
     def parent(self, source: type[models.Model]) -> type[models.Model] | None:
@@ -229,27 +226,6 @@ class ModelComposition:
         """Return the donor classes themselves in addon/namespace precedence order."""
 
         return self.extensions.get(source._meta.label_lower, ())
-
-    def grantable(self, source: type[models.Model]) -> dict[str, str]:
-        """Merge explicit same-record grants without inheriting parent authority.
-
-        Donors may add relationships, but cannot silently change the permission
-        required to grant a relationship already declared by another owner.
-        """
-
-        grantable: dict[str, str] = {}
-        for owner in (source, *self.donors(source)):
-            # Donors may be plain abstract Django models. Bind the existing
-            # validator to their own declaration, without inheriting grants.
-            declaration = cast(Any, AngeeModel.get_rebac_grantable).__func__(owner)
-            for relation, permission in declaration.items():
-                previous = grantable.setdefault(relation, permission)
-                if previous != permission:
-                    raise ImproperlyConfigured(
-                        f"{source._meta.label_lower} composes conflicting rebac_grantable "
-                        f"permissions for {relation!r}: {previous!r} and {permission!r}."
-                    )
-        return grantable
 
     def contributed_field_origins(self, source: type[models.Model]) -> tuple[tuple[str, str], ...]:
         """Return ``(field name, addon name)`` for fields supplied by source donors."""
@@ -269,31 +245,6 @@ class ModelComposition:
         """
 
         return tuple(field for field, _ in self._contributed_fields.get(source, ()))
-
-    def field_gate_owners(self) -> dict[str, dict[str, str]]:
-        """Map resource types to the packages owning their concrete donor columns.
-
-        Field names are canonical Django names, never foreign-key attnames.
-        Many-to-many and private fields cannot carry field gates.
-        """
-
-        owners: dict[str, dict[str, str]] = {}
-        for source in self.ordered_models:
-            resource_type = model_resource_type(source)
-            if not resource_type:
-                continue
-            columns = {
-                field.name
-                for donor in self.donors(source)
-                for field in donor._meta.local_fields
-                if field.concrete
-            }
-            owners[resource_type] = {
-                name: package
-                for name, package in sorted(self.contributed_field_origins(source))
-                if name in columns
-            }
-        return dict(sorted(owners.items()))
 
     def _validate_required_parents(self) -> dict[type[models.Model], type[models.Model]]:
         """Validate abstract capabilities against each materialized parent chain.
@@ -376,7 +327,7 @@ class ModelComposition:
             owners: dict[str, tuple[models.Manager, type[models.Model]]] = {}
             for donor in self.donors(source):
                 for manager in donor._meta.local_managers:
-                    if manager.name == INJECTED_BASE_MANAGER:
+                    if manager.auto_created:
                         continue
                     previous = owners.setdefault(manager.name, (manager, donor))
                     if previous[0].creation_counter != manager.creation_counter:
@@ -384,10 +335,3 @@ class ModelComposition:
                             f"{source._meta.label_lower} composes manager {manager.name!r} from "
                             f"both {previous[1]._meta.label} and {donor._meta.label}"
                         )
-
-    def validate_concrete(self, concrete_models: Iterable[type[models.Model]]) -> None:
-        """Validate transition declarations against final Django classes after import."""
-
-        for model in concrete_models:
-            if model._meta.label_lower in self.models_by_label:
-                revalidate_transition_metadata(model)

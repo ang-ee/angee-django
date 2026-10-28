@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from angee.impl import ImplBase
+from angee.base.implementations import ImplBase
 
 if TYPE_CHECKING:
     from angee.integrate.oauth.client import OAuthClientProtocol

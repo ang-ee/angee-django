@@ -209,10 +209,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   schema. Optional schema contributions keep their documents and UI registrations
   in the contributing addon's web package, so hosts without it never scan those
   operations; see [OIDC sign-in](../../addons/angee/iam_integrate_oidc/web/src/index.ts).
-  An opaque `JSON`-scalar value is parsed at its domain owner with a
-  valibot schema (`safeParse`), never asserted into an application shape; a
-  recursive shape a declarative schema cannot express may wrap its type guard
-  in `v.custom`, keeping the parse boundary in the schema.
+  An opaque `JSON`-scalar value is parsed at its domain owner with its declared
+  schema, never asserted into an application shape. Resource metadata uses
+  Valibot `safeParse`; FormSpec uses the standalone Ajv validator generated from
+  its shared [JSON Schema](../../addons/angee/base/schemas/form_spec.schema.json).
+  Reuse the existing contract and validator instead of maintaining another schema.
 - **Eligible ActionResult mutations are derived, not authored.** Codegen in
   `packages/app/bin/angee-web-codegen.mjs` derives mutations with at least one
   argument when every argument is required (non-null without a default), or
@@ -372,7 +373,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   multiword terminal widget name, matching the web widget registry. Backend field
   metadata and the owning addon's `widgets` contribution use the identical key,
   for example `angee.integrate.integrationSyncCursor`. The validator in
-  [`angee.data.field_classification`](../../angee/data/field_classification.py)
+  [`angee.graphql.data.resource_fields`](../../addons/angee/graphql/data/resource_fields.py)
   also accepts existing underscore names; unknown bare names remain errors.
 - **A resource registry key is the emitted canonical `modelLabel`** (for example
   `"integrate.OAuthClient"`). Addon composition may accept a unique bare or
@@ -1031,7 +1032,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   the resource's declared `subjectField`; never construct a subject from a
   public display id. The shared package owns presentation, and IAM owns the
   generated GraphQL document adapter.
-- Never poll for data freshness. Live updates ride GraphQL subscriptions through
+- Live model updates ride GraphQL subscriptions through
   refine's live provider and react-query invalidation, not a `setInterval`
   refetch loop. Opt a model into live cross-actor refresh by declaring
   `changes(Model, field="<model>Changed")` in its `schema.py`; local writes
@@ -1043,10 +1044,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   resolver actually reads. Refine's own resource hooks still invalidate per
   push. Stream foreign-system state (e.g. the operator
   daemon's `onWorkspaceStatusChange`) over its own subscriptions.
-  A timed `setInterval` is only ever for non-data UI motion (a carousel) or
-  rotating a short-lived credential before it expires — never to re-read a
-  resolver hoping it changed. If a foreign system publishes no change
-  subscription, add one there rather than polling it from the client.
+  A dashboard widget may explicitly declare interval refresh through its
+  [refresh contract](../../packages/ui/src/dashboard/headless.ts). Its data
+  adapter forwards that interval to native Query `refetchInterval`; Query owns
+  scheduling and observer cleanup. This declaration does not authorize a
+  private polling loop in a page or addon. Use `setInterval` only for non-data
+  UI motion or rotating a short-lived credential. Foreign systems should
+  publish their own change subscriptions.
 - Authored mutation result envelopes are decoded at the hook boundary. Pass
   `errorFrom` to `useAuthoredMutation` for `{error, error_code}` payloads; the
   hook throws before invalidating, so pages do not repeat result-error checks or

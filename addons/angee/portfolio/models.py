@@ -22,20 +22,21 @@ from rebac import (
     system_context,
 )
 
-from angee.fields import FractionalRankField, StateField
-from angee.models import (
+from angee.base.fields.ordering import FractionalRankField
+from angee.base.fields.state import StateField
+from angee.base.models import (
     AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
     AuditMixin,
     HierarchyMixin,
     HierarchyQuerySet,
-    HistoryMixin,
     MergePolicy,
     OwnerMixin,
     RecordRefMixin,
     role_anchor,
 )
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
@@ -98,7 +99,7 @@ class ReleaseStatus(models.TextChoices):
     DROPPED = "dropped", "Dropped"
 
 
-class ProductManager[ProductT: Product](AngeeManager[ProductT]):
+class ProductManager[ProductT: Product](AngeeHistoryManager[ProductT]):
     """Own the idempotent Project-to-Product maturation write."""
 
     def from_project(self, project: Project) -> ProductT:
@@ -181,11 +182,11 @@ class Product(OwnerMixin, HistoryMixin, AngeeDataModel):
         return self.name
 
 
-class InitiativeQuerySet[InitiativeT: Initiative](HierarchyQuerySet[InitiativeT], AngeeQuerySet[InitiativeT]):
+class InitiativeQuerySet[InitiativeT: Initiative](HierarchyQuerySet[InitiativeT], AngeeHistoryQuerySet[InitiativeT]):
     """Initiative hierarchy writes use the shared saved-row contract."""
 
 
-_InitiativeManager = AngeeManager.from_queryset(InitiativeQuerySet)
+_InitiativeManager = AngeeHistoryManager.from_queryset(InitiativeQuerySet)
 
 
 class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
@@ -404,7 +405,7 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                 report.sudo(reason="portfolio.demo.report").save()
 
 
-class UpdateManager[UpdateT: Update](AngeeManager[UpdateT]):
+class UpdateManager[UpdateT: Update](AngeeHistoryManager[UpdateT]):
     """Own target validation and health-report creation.
 
     ``permissions.zed`` backs the update's ``project`` and ``initiative``

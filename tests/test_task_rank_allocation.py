@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from typing import Any
 
@@ -9,7 +10,7 @@ import pytest
 from django.db import connection
 from rebac import system_context
 
-from angee.fields import FractionalRankField
+from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
 from angee.projects.testing.models import Task
 
 
@@ -40,3 +41,21 @@ def test_task_ordering_allocation_retains_explicit_ranks() -> None:
         task.refresh_from_db(using=connection.alias)
         assert task.sort_order == 12.5
         assert task.sub_sort_order == 4096.0 + FractionalRankField.STEP
+
+
+@pytest.mark.parametrize(("previous", "following", "expected"), [
+    (None, None, 1024.0), (None, 1024.0, 0.0),
+    (1024.0, 2048.0, 1536.0), (2048.0, None, 3072.0),
+    (-1e308, 1e308, 0.0),
+])
+def test_persisted_rank_gap_allocation(previous, following, expected):
+    """The numeric owner allocates strict gaps without overflowing endpoints."""
+
+    assert FractionalRankField.get_rank_between(previous, following) == expected
+
+
+def test_persisted_rank_gap_exhaustion_refuses_instead_of_reusing_a_neighbor():
+    """Adjacent binary64 endpoints cannot silently turn a move into a collision."""
+
+    with pytest.raises(FractionalRankExhausted):
+        FractionalRankField.get_rank_between(1.0, math.nextafter(1.0, math.inf))

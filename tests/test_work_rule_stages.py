@@ -69,7 +69,8 @@ class RuleStageTests(WorkCase):
 
     def test_manual_categories_skip_reserved_stages(self):
         task = self.task()
-        self.Stage._base_manager.filter(rule_owned=True).update(position=1)
+        for rank, stage in enumerate(self.Stage._base_manager.filter(rule_owned=True).order_by("pk"), start=1):
+            self.Stage._base_manager.filter(pk=stage.pk).update(position=-rank)
         with actor_context(self.owner):
             self.as_user(task).complete()
             task.refresh_from_db()

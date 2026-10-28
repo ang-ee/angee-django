@@ -4,16 +4,18 @@ from typing import cast
 
 from django.db import models
 
-from angee.models import (
+from angee.base.models import (
     AngeeDataModel,
+    role_anchor,
+)
+from angee.base.refs import RetainedGenericRelation
+from angee.provenance.statements import (
     Aspect,
     SourceKind,
     StatementQuerySet,
     StatementRecords,
     StatementsMixin,
-    role_anchor,
 )
-from angee.refs import RetainedGenericRelation
 
 Role = role_anchor("extcontrib/role", name="Role")
 
