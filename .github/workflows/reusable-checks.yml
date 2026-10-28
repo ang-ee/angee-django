@@ -106,15 +106,13 @@ jobs:
 
   # The suite runs as six contiguous shards of equal stored time
   # (.test_durations, pytest-split); a test missing from it still runs in one.
-  # loadfile keeps a file on one worker, so the heaviest files set a floor near
-  # 25 minutes on CI: three campaign files of about 700 stored seconds each, whose
-  # cost is per-test fixture setup (a rebac sync per test). Lowering that setup is
-  # how this limit comes down; 40 minutes keeps that shard from being flaky.
+  # loadfile keeps a file on one worker. Allow for long file-scoped campaigns
+  # and runner cleanup; retain per-test timings for balancing the shards.
   uv-shard:
     name: uv ${{ matrix.group }}/6
     if: ${{ inputs.uv-enabled }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

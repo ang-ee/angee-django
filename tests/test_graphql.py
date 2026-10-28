@@ -827,7 +827,7 @@ def test_variable_coercion_errors_preserve_client_details_without_logging(caplog
     assert result.errors is not None
     assert result.errors[0].formatted == {
         "message": (
-            "Variable '$value' got invalid value 'not-an-int-secret'; "
+            "Variable '$value' has invalid value: "
             "Int cannot represent non-integer value: 'not-an-int-secret'"
         ),
         "locations": [{"line": 1, "column": 9}],
