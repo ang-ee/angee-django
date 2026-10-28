@@ -745,25 +745,15 @@ wheels = [
 
 [[package]]
 name = "django-angee"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
-    { name = "billiard" },
-    { name = "celery", extra = ["redis"] },
     { name = "channels" },
-    { name = "cryptography" },
     { name = "django" },
-    { name = "django-celery-beat" },
-    { name = "django-choices-field" },
     { name = "django-environ" },
-    { name = "django-simple-history" },
-    { name = "django-sqids" },
     { name = "django-yamlconf" },
     { name = "django-zed-rebac" },
     { name = "hatch-angee" },
-    { name = "jsonschema", extra = ["format-nongpl"] },
-    { name = "pydantic" },
-    { name = "referencing" },
     { name = "sentry-sdk" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -778,13 +768,20 @@ addons = [
     { name = "agent-client-protocol" },
     { name = "anthropic" },
     { name = "authlib" },
+    { name = "billiard" },
+    { name = "celery", extra = ["redis"] },
     { name = "channels" },
     { name = "channels-redis" },
+    { name = "cryptography" },
     { name = "deepdiff" },
     { name = "django-anymail" },
     { name = "django-axes" },
+    { name = "django-celery-beat" },
+    { name = "django-choices-field" },
     { name = "django-countries" },
     { name = "django-import-export" },
+    { name = "django-simple-history" },
+    { name = "django-sqids" },
     { name = "django-zed-rebac", extra = ["strawberry-django"] },
     { name = "fastmcp" },
     { name = "httpcore2" },
@@ -792,6 +789,7 @@ addons = [
     { name = "httpx2" },
     { name = "imapclient" },
     { name = "jsonpointer" },
+    { name = "jsonschema", extra = ["format-nongpl"] },
     { name = "mail-parser-reply" },
     { name = "markdown-it-py" },
     { name = "mcp" },
@@ -799,6 +797,7 @@ addons = [
     { name = "phonenumbers" },
     { name = "pillow" },
     { name = "pycountry" },
+    { name = "pydantic" },
     { name = "pydantic-ai-slim", extra = ["anthropic", "mcp", "openai"] },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pypdfium2" },
@@ -806,9 +805,12 @@ addons = [
     { name = "python-magic" },
     { name = "pyyaml" },
     { name = "qrcode", extra = ["pil"] },
+    { name = "referencing" },
     { name = "requests" },
     { name = "ruamel-yaml" },
+    { name = "sentry-sdk" },
     { name = "slack-sdk" },
+    { name = "sqids" },
     { name = "strawberry-django-aggregates" },
     { name = "strawberry-django-hasura" },
     { name = "strawberry-graphql" },
@@ -835,23 +837,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "billiard", specifier = ">=4.2.1,<4.3" },
-    { name = "celery", extras = ["redis"], specifier = ">=5.5" },
     { name = "channels", specifier = ">=4.0" },
-    { name = "cryptography", specifier = ">=44" },
     { name = "django", specifier = ">=6.0,<6.1" },
-    { name = "django-celery-beat", specifier = ">=2.9" },
-    { name = "django-choices-field", git = "https://github.com/ang-ee/django-choices-field.git?rev=b02c1488660d0bf1f4483d2e73bc842b41b70632" },
     { name = "django-environ", specifier = ">=0.12" },
-    { name = "django-simple-history", specifier = ">=3.13" },
-    { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=48ab2a222cac603e6b5cba4c3d8e93e5aa2ebef0" },
-    { name = "hatch-angee", specifier = ">=0.2.5" },
-    { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
+    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=70b4e2e5fa04ad3cf05f2a541cf3007c19d35adb" },
+    { name = "hatch-angee", specifier = ">=0.2.6" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
-    { name = "pydantic", specifier = ">=2.13" },
-    { name = "referencing", specifier = ">=0.37" },
     { name = "sentry-sdk", specifier = ">=2.71.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
@@ -862,13 +854,20 @@ addons = [
     { name = "agent-client-protocol", specifier = "==1.0.0rc2" },
     { name = "anthropic", specifier = ">=0.109.2" },
     { name = "authlib", specifier = ">=1.8.0" },
+    { name = "billiard", specifier = ">=4.2.1,<4.3" },
+    { name = "celery", extras = ["redis"], specifier = ">=5.5" },
     { name = "channels", specifier = ">=4.0" },
     { name = "channels-redis", specifier = ">=4.2" },
+    { name = "cryptography", specifier = ">=44" },
     { name = "deepdiff", specifier = ">=9.1.0" },
     { name = "django-anymail", specifier = ">=15.1" },
     { name = "django-axes", specifier = ">=8.0" },
+    { name = "django-celery-beat", specifier = ">=2.9" },
+    { name = "django-choices-field", git = "https://github.com/ang-ee/django-choices-field.git?rev=b02c1488660d0bf1f4483d2e73bc842b41b70632" },
     { name = "django-countries", specifier = ">=9,<10" },
     { name = "django-import-export", specifier = ">=4.4" },
+    { name = "django-simple-history", specifier = ">=3.13" },
+    { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.27.0" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
     { name = "httpcore2", specifier = ">=2.10,<3" },
@@ -876,6 +875,7 @@ addons = [
     { name = "httpx2", specifier = ">=2.10,<3" },
     { name = "imapclient", specifier = ">=3.1.0" },
     { name = "jsonpointer", specifier = ">=3.1" },
+    { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "mail-parser-reply", specifier = ">=1.36" },
     { name = "markdown-it-py", specifier = ">=4.2" },
     { name = "mcp", specifier = ">=1.2" },
@@ -883,6 +883,7 @@ addons = [
     { name = "phonenumbers", specifier = ">=9.0" },
     { name = "pillow", specifier = ">=11.0" },
     { name = "pycountry", specifier = ">=26,<27" },
+    { name = "pydantic", specifier = ">=2.13" },
     { name = "pydantic-ai-slim", specifier = ">=2.13" },
     { name = "pydantic-ai-slim", extras = ["anthropic"], specifier = ">=2.13" },
     { name = "pydantic-ai-slim", extras = ["mcp"], specifier = ">=2.13" },
@@ -893,9 +894,12 @@ addons = [
     { name = "python-magic", specifier = ">=0.4.27" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
+    { name = "referencing", specifier = ">=0.37" },
     { name = "requests", specifier = ">=2.32" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
+    { name = "sentry-sdk", specifier = ">=2.71.0" },
     { name = "slack-sdk", specifier = ">=3.43.0" },
+    { name = "sqids", specifier = ">=0.4.1" },
     { name = "strawberry-django-aggregates", git = "https://github.com/ang-ee/strawberry-django-aggregates.git?rev=0f374854d19b2709b6d77ae872090ab2a751f1dc" },
     { name = "strawberry-django-hasura", git = "https://github.com/ang-ee/strawberry-django-hasura.git?rev=4e1c2da2bcbbc90cc586fef3db8d70f5cd6ccfc0" },
     { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=273bf0456d914d4df535222c4cbae73dff46a376" },
@@ -907,7 +911,7 @@ addons = [
 dev = [
     { name = "daphne", specifier = ">=4.0" },
     { name = "django-stubs", extras = ["compatible-mypy"], git = "https://github.com/ang-ee/django-stubs.git?rev=c742042283a82c3248c68493c697f5f30e2fdc6a" },
-    { name = "django-zed-rebac", extras = ["caveats"], specifier = "==0.27.3" },
+    { name = "django-zed-rebac", extras = ["caveats"], specifier = "==0.28.0" },
     { name = "faker", specifier = ">=30.0" },
     { name = "mypy", git = "https://github.com/ang-ee/mypy.git?rev=ac3de6e4c34b04728e768e07d4842f4309ff6c45" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
@@ -1084,8 +1088,8 @@ wheels = [
 
 [[package]]
 name = "django-zed-rebac"
-version = "0.27.3"
-source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=48ab2a222cac603e6b5cba4c3d8e93e5aa2ebef0#48ab2a222cac603e6b5cba4c3d8e93e5aa2ebef0" }
+version = "0.28.0"
+source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=70b4e2e5fa04ad3cf05f2a541cf3007c19d35adb#70b4e2e5fa04ad3cf05f2a541cf3007c19d35adb" }
 dependencies = [
     { name = "django" },
 ]
@@ -1292,16 +1296,16 @@ wheels = [
 
 [[package]]
 name = "hatch-angee"
-version = "0.2.5"
+version = "0.2.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "hatchling" },
     { name = "packaging" },
     { name = "tomlkit" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/75/46/d30e871b397c3d1d5b12d32c08ce1ca3f7d2ad79df7eda6d9684eab75f4e/hatch_angee-0.2.5.tar.gz", hash = "sha256:5f6ff9663465ed2fa465f89f874c3c2c323ca9f8959565576475014b3fad752d", size = 55765, upload-time = "2026-10-27T23:54:01.958Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b3/65/15b6edc69fc1024f1e0fc56c0b2e5fa84526d06bb302f771aa3f41842689/hatch_angee-0.2.6.tar.gz", hash = "sha256:c1f68cac1b322999f01ead2e320345048bfb58c287bbdb40d959f431cd3cb899", size = 56466, upload-time = "2026-10-28T11:16:27.223Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4c/37/a60af13fe93402772990710ad97c493b9ac545802b3623054d0ac491cfeb/hatch_angee-0.2.5-py3-none-any.whl", hash = "sha256:3c959e2928dc4832d2fb28e06cae3bb09951c796f35057d95af79e43b99b3d14", size = 27892, upload-time = "2026-10-27T23:54:01Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/27/ed1077e4225c961abe90b4589b5e13920cf6ffbc824d18cff46a3fb50014/hatch_angee-0.2.6-py3-none-any.whl", hash = "sha256:5daf9a12b8579509f7fbefbab92e01d37e4082ad90b695fb6b225a902be5e4c1", size = 28135, upload-time = "2026-10-28T11:16:26.215Z" },
 ]
 
 [[package]]
