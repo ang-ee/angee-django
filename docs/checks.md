@@ -313,7 +313,7 @@ Consumer repositories call the same reusable checks with `uv-enabled: false`,
 `consumer-sources` (repository, sibling slot path, ref), `consumer-roots`,
 `consumer-path`, `consumer-tests`, and optional `consumer-pytest-plugins` inputs.
 The caller revision replaces its source ref; dependency revisions remain explicit.
-The full declared Python collection runs once across three `stack-shard` jobs,
+The full declared Python collection runs once across six `stack-shard` jobs,
 using native pytest-split `least_duration` assignment. Without stored consumer
 timings, the plugin balances test counts with equal weights. Each shard renders
 its own host, resolves native manifest dependencies, composes/provisions it, and
@@ -321,8 +321,10 @@ collects the declared Python paths with `python_files=test*.py` on PostgreSQL.
 Four native pytest-xdist workers use `--dist worksteal` inside each shard, so long
 consumer intake modules can use every worker. Each worker loads the configured
 host through `angee.compose.settings`; pytest-django owns its separate test
-database. Shared test plugins must defer model imports until Django's app
-registry is populated. Check tools come from the framework lockfile.
+database. Pytest emits a thread dump after five minutes in one test protocol,
+including setup and teardown, without changing its outcome. Shared test plugins
+must defer model imports until Django's app registry is populated. Check tools
+come from the framework lockfile.
 
 Group 1 runs consumer Ruff/mypy and, after host SDL/codegen, the consumer's web
 fragment typechecks and tests. Optional full-profile bridge tests also run only
