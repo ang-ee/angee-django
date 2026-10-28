@@ -280,7 +280,11 @@ def test_related_sort_values_ignore_denied_labels_and_regate_elevated_parents() 
         ]
     for old_axis in ("thread__title__text", "channel__vendor__display_name"):
         result = execute_schema(schema, "{ messages(order_by: [{" + old_axis + ": asc}]) { id } }", user=owner)
-        assert result.errors and "not defined by type 'messages_order_by'" in result.errors[0].message
+        assert result.errors
+        assert (
+            f"Expected value of type 'messages_order_by' not to include unknown field '{old_axis}'"
+            in result.errors[0].message
+        )
 
 
 def test_related_selected_sort_values_have_bounded_sql_and_native_ties() -> None:
