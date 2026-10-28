@@ -97,7 +97,9 @@ def rejected(row: Row) -> None:
     StateField(choices=[('enabled', 'Enabled')], null='yes')
 ''')
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH"))))
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH")))
+    )
     env["DJANGO_SETTINGS_MODULE"] = "state_typing_settings"
     command = [sys.executable, "-m", "mypy", "--config-file", str(config)]
 

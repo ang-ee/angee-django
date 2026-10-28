@@ -1,4 +1,4 @@
-"""Historical field imports retained for serialized migrations.
+"""Historical field imports retained for authored and serialized migrations.
 
 Runtime callers use angee.base.fields. These aliases preserve released migration
 bodies until the documented history cutoff.
@@ -9,6 +9,7 @@ from angee.base.fields import (
     EncryptedField,
     FractionalRankField,
     ModelLabelField,
+    SqidField,
     StateField,
     ToneField,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "EncryptedField",
     "FractionalRankField",
     "ModelLabelField",
+    "SqidField",
     "StateField",
     "ToneField",
 ]
