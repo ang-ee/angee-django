@@ -292,7 +292,7 @@ pushes to `main`. The current tiers are:
   pytest-split cuts into contiguous chunks of equal stored time from the
   committed [durations](../.test_durations), so each test file stays in one or two
   shards. Each shard runs
-  `-n auto --dist loadfile` with a 40-minute limit and prints its 25 slowest test
+  `-n auto --dist loadfile` with a 60-minute limit and prints its 25 slowest test
   durations, with migrations enabled and `DATABASE_URL` unset. Structural tests
   remain part of this suite. Per-file scheduling keeps a file on one worker, so the
   heaviest files (the proposals access, owner-gate adopters and agents GraphQL
@@ -300,7 +300,7 @@ pushes to `main`. The current tiers are:
   Their cost is per-test fixture setup, a `rebac sync` before every test; making
   that setup cheaper is how the limit comes down.
 - **PostgreSQL:** in three shards of its own beside the SQLite ones, split the
-  same way and with the same limit, the named workflow, decision and agent session
+  same way and with a 40-minute limit, the named workflow, decision and agent session
   selection runs with `-n 4 --dist loadfile --nomigrations` and prints its 25
   slowest test durations; each shard writes JUnit output and checks that it did
   not skip tests. Its server runs with `max_locks_per_transaction = 256`, since
