@@ -16,12 +16,12 @@ describe("posts addon manifest", () => {
   });
 
   test("registers the Posts menu at the feeds route", () => {
-    expect(posts.menus).toEqual([
-      expect.objectContaining({
-        id: "posts",
+    expect(posts.menus).toEqual({
+      posts: {
         label: "Posts",
+        icon: "posts",
         route: "posts.feeds",
-      }),
-    ]);
+      },
+    });
   });
 });
