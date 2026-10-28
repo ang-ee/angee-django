@@ -92,5 +92,3 @@ def resolve_app_config(declaration: str, *, expected_name: str | None = None) ->
     if expected_name is not None and config.name != expected_name:
         raise ImproperlyConfigured(f"Addon name {expected_name!r} disagrees with AppConfig.name {config.name!r}")
     return config
-
-

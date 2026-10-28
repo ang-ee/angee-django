@@ -12,14 +12,15 @@ from django.utils.module_loading import import_string
 
 from angee import project
 
-SERVER_COMMANDS = frozenset({"runserver", "serve", "test"})
+SERVER_COMMANDS = frozenset({"celery", "runserver", "serve", "test"})
 """Commands whose units of work own their boundaries instead of the process.
 
 ``serve`` and ``runserver`` run the composed ASGI application: the request
 middleware, the WebSocket scope middleware and Celery tasks attribute each unit of
 work, and a process-wide changeset would merge every request of a one-worker
-server into one row. ``test`` lets each test own its boundary. Everything else,
-interactive shells included, is one logical write and keeps the command boundary.
+server into one row. ``celery`` lets each task own its boundary; ``test`` lets each
+test own its boundary. Everything else, interactive shells included, is one
+logical write and keeps the command boundary.
 """
 
 

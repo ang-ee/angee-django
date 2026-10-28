@@ -351,5 +351,3 @@ def reference_blockers(model: type[models.Model]) -> tuple[tuple[Q, str], ...]:
         for reference in references(cast(Any, model))
         if reference.policy == MergePolicy.BLOCK
     )
-
-

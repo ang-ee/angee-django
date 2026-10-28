@@ -6,6 +6,7 @@ Angee seam when they need framework-owned defaults.
 
 Kept import-light because Django imports the package during app population.
 Callers import the concrete seam from ``angee.jobs.enqueue``,
-``angee.jobs.locks`` or ``angee.jobs.timeouts``; Celery imports
-``angee.jobs.celery`` as its application.
+``angee.jobs.locks`` or ``angee.jobs.timeouts``. Start the configured CLI with
+``python manage.py celery`` so Django loads declared addon roots before the
+command imports ``angee.jobs.celery``.
 """
