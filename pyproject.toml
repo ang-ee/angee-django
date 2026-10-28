@@ -3,7 +3,7 @@ requires = [
   # hatch-angee supports older hatchling releases, but PEP 639 license-files
   # metadata requires hatchling 1.27 or newer.
   "hatchling>=1.27",
-  "hatch-angee>=0.2.5",
+  "hatch-angee>=0.2.6",
 ]
 build-backend = "hatch_angee.build"
 
@@ -37,12 +37,11 @@ requires-python = ">=3.14"
 # build backend (build-backend above) — see [tool.hatch-angee] below.
 dependencies = [
   "channels>=4.0",
-  # Required before this owner cutover ships: publish and pin native sync --prune-stale.
-  "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@48ab2a222cac603e6b5cba4c3d8e93e5aa2ebef0",
+  "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@70b4e2e5fa04ad3cf05f2a541cf3007c19d35adb",
   # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
   # override does not accept it yet; lift the cap when rebac supports 6.1.
   "django>=6.0,<6.1",
-  "hatch-angee>=0.2.5",
+  "hatch-angee>=0.2.6",
   "django-yamlconf>=1.5.0",
   "django-environ>=0.12",
   # ASGI server: serves the composed app and addon-contributed channels WebSocket
@@ -77,7 +76,7 @@ dev = [
   # not a runtime dependency — Angee serves with uvicorn (see [project.dependencies]).
   "daphne>=4.0",
   # Test-only: E024 fixtures retain and validate CEL caveat declarations.
-  "django-zed-rebac[caveats]==0.27.3",
+  "django-zed-rebac[caveats]==0.28.0",
   "faker>=30.0",
   # Source-addon tests import django.contrib.postgres field types even when the
   # test database is SQLite; the former base wrapper selected the core extra.
