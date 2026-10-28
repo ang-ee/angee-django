@@ -41,20 +41,22 @@ def prepend_import_paths(paths: Iterable[Path]) -> None:
 
     ``generated runtime settings`` imports the host package before project addon roots are
     known. Its namespace path must gain the configured ``angee`` portions after
-    those roots enter ``sys.path``.
+    those roots enter ``sys.path``. Canonical directory identity prevents symlinked
+    environments from exposing one namespace portion twice to Django.
     """
 
     import_paths = tuple(path.resolve() for path in paths if path.exists())
-    for import_path in reversed(import_paths):
-        sys_path_entry = str(import_path)
-        if sys_path_entry in sys.path:
-            sys.path.remove(sys_path_entry)
-        sys.path.insert(0, sys_path_entry)
+    ordered_paths: dict[Path, str] = {}
+    for entry in (*(str(path) for path in import_paths), *sys.path):
+        ordered_paths.setdefault(Path(entry).resolve(), entry)
+    sys.path[:] = ordered_paths.values()
     package = sys.modules.get("angee")
     package_path = getattr(package, "__path__", None)
     portions = tuple(str(path / "angee") for path in import_paths if (path / "angee").is_dir())
     if package is not None and package_path is not None and portions:
-        package.__path__ = list(dict.fromkeys((*portions, *(str(path) for path in package_path))))
+        package.__path__ = list(
+            dict.fromkeys(str(Path(path).resolve()) for path in (*portions, *package_path))
+        )
 
 
 class ProjectContract:

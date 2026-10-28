@@ -891,7 +891,6 @@ _PARTY_STATEMENT_RESOURCE = hasura_model_resource(
         .for_reader(session_user(info))
         .with_readable_records(session_user(info))
         .members()
-        .select_related("subject", "handle")
     ),
 )
 _CIRCLE_RESOURCE = hasura_model_resource(
