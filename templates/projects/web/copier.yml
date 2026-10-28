@@ -73,8 +73,8 @@ include_operator_installer:
   help: Include angee.platform_integrate_operator in INSTALLED_APPS.
 
 # Which addon roster the host composes. `base` is the consumer scaffold: the
-# foundation base addons plus the project's own consumer addons. `full` is the
-# whole platform composition — every base addon, the messaging bridges, and the
+# foundation and selected framework addons plus the project's consumer addons. `full` is the
+# whole platform composition — every framework addon, the messaging bridges, and the
 # notes example — the roster the framework-dev stack chains in.
 addons_profile:
   type: str

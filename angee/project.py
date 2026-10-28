@@ -7,6 +7,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
 from angee.utils.paths import resolve_path
@@ -74,10 +75,13 @@ def project_dir(
 def bootstrap(*, argv: Sequence[str] | None = None) -> None:
     """Point a host process at its project and canonical Django settings module.
 
-    Explicit environment values remain authoritative across child processes.
-    Management, ASGI, and Celery use this same pre-Django boundary.
+    An already configured Django host or an explicitly selected settings module
+    owns its configuration. Only an unconfigured Angee host needs project-root
+    discovery. Management, ASGI, and Celery share this pre-Django boundary.
     """
 
+    if settings.configured or os.environ.get("DJANGO_SETTINGS_MODULE") not in {None, "angee.settings"}:
+        return
     discovered = find_project_dir(argv=argv)
     if discovered is not None:
         os.environ.setdefault(PROJECT_DIR_ENV, str(discovered))

@@ -18,13 +18,13 @@ ALLOWED_HOSTS:
   - "*"
 ALLOWED_HOSTS:jsonenv: true
 
-# {{ project_title }} composes the Angee base addons as its foundation —
+# {{ project_title }} composes Angee framework capabilities —
 # identity & permissions (iam), tiered data (resources), files (storage),
 # connectors (integrate), partners (parties), messaging, OIDC login, platform,
 # the VCS-backed marketplace tier, and the operator console — and adds its own
 # capabilities as consumer addons under addons/{{ addon_namespace }}/*.
 {% if addons_profile == "full" %}
-# The `full` profile is the whole platform composition: every base addon, the
+# The `full` profile is the whole platform composition: every framework addon, the
 # personal-messaging bridges, and the framework notes example — the roster the
 # framework-dev stack composes and CI renders to exercise the composed schema.
 {% endif %}
