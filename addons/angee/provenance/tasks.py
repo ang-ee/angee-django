@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from celery import Task as CeleryTask
+from celery.contrib.django.task import DjangoTask as CeleryTask
 
 from angee.provenance.context import changeset
 

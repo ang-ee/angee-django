@@ -1,4 +1,4 @@
-"""The additive REBAC-schema extension seam (``angee.build``).
+"""The additive REBAC-schema extension seam (``angee.base.build``).
 
 A consumer addon contributes relations and permission arms to a definition owned
 by another addon through a sibling ``permissions.extends.zed`` fragment, instead
@@ -23,7 +23,7 @@ from rebac.backends import backend
 from rebac.schema.parser import parse_zed, validate_schema
 from rebac.types import ObjectRef
 
-from angee.build import (
+from angee.base.build import (
     SchemaExtensionError,
     apply_schema_paths,
     extension_source_map,
@@ -31,7 +31,7 @@ from angee.build import (
     merged_schemas,
     render_zed,
 )
-from angee.testing.permissions import installed_field_owners
+from angee.base.testing.permissions import installed_field_owners
 from angee.utils.files import write_atomic
 
 User = get_user_model()
@@ -345,7 +345,7 @@ def test_render_retains_authored_metadata_and_directives():
 
 
 def test_effective_source_rewrites_do_not_leave_stale_field_gates(tmp_path, monkeypatch):
-    from angee.permissions import effective_rebac_definition
+    from angee.base.permissions import effective_rebac_definition
     from tests.scopedemo.models import Scope
 
     config = apps.get_app_config(Scope._meta.app_label)
@@ -392,7 +392,7 @@ def test_manifest_permission_file_is_checked_before_any_fragment(tmp_path):
 def test_permission_binding_does_not_repeat_merge(tmp_path, monkeypatch):
     """Binding uses the exact rendered map, without parsing source files again."""
 
-    import angee.build as permissions
+    import angee.base.build as permissions
 
     base = _base_addon(tmp_path)
     contrib = _contrib_addon(tmp_path, "definition demo/thing { permission read = anonymous }")

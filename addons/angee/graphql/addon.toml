@@ -5,9 +5,10 @@ name = "angee.graphql"
 description = "The GraphQL runtime — schema buckets, auto-CRUD, subscriptions, and SDL"
 keywords = ["graphql", "schema", "api"]
 category = "Foundation"
-depends_on = ["angee", "channels"]
+depends_on = ["angee.base", "channels"]
 schemas = "records.schemas"
 dependencies = [
+  "pydantic>=2.13",
   "channels>=4.0",
   "channels-redis>=4.2",
   # The core wheel pins the exact django-zed-rebac release; this addon only adds

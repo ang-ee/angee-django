@@ -18,7 +18,7 @@ from strawberry.types import ExecutionResult
 
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.view_as import ViewAs
-from angee.identity import public_id_of
+from angee.base.identity import public_id_of
 from graphql import GraphQLError, get_operation_ast, parse
 
 logger = logging.getLogger("angee.graphql.view_as")

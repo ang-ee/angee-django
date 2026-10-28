@@ -16,7 +16,7 @@ from rebac import actor_context, system_context
 from angee.decisions import schema as decisions_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest, RecordActions
 from angee.decisions.testing.models import Decision
-from angee.graphql.data import hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
 from angee.graphql.schema import SchemaParts
@@ -230,12 +230,12 @@ def test_empty_concerns_are_rejected(records):
 
 def test_change_concerns_deduplicate_before_querying_child_models(composed_tables):
     from angee.graphql.events import ChangeRelatedRecord
-    from angee.refs import record_ref_for
+    from angee.base.refs import RecordRef
     from tests.mtidemo.models import MtiChild, MtiParent
 
     with system_context(reason="test.batch_concerns"):
         children = [MtiChild.objects.create(title=str(index)) for index in range(3)]
-        refs = [record_ref_for(MtiParent.objects.get(pk=child.pk)) for child in children]
+        refs = [RecordRef.from_instance(MtiParent.objects.get(pk=child.pk)) for child in children]
         with CaptureQueriesContext(connection) as captured:
             result = ChangeRelatedRecord.for_records(*refs, *refs)
     assert len(result) == 6

@@ -42,13 +42,14 @@ from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.resources import model_resource_type
 from rebac.roles import ROLE_RELATION
 
+from rebac import user_subject_type
 from angee.errors import DomainError
-from angee.fields import StateField
+from angee.base.fields.state import StateField
 from angee.iam.events import person_created
 from angee.iam.identity import user_label
 from angee.iam.roles import protected_account_holders
-from angee.identity import canonical_subject_ref, instance_from_public_id
-from angee.models import (
+from angee.base.identity import canonical_subject_ref, instance_from_public_id
+from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -114,8 +115,8 @@ class Group(AngeeDataModel):
         """Validate one canonical user subject accepted by group membership."""
 
         subject = canonical_subject_ref(value)
-        if subject.subject_type != "auth/user" or subject.optional_relation:
-            raise ValueError("Group members must use canonical 'auth/user:<id>' subjects.")
+        if subject.subject_type != user_subject_type() or subject.optional_relation:
+            raise ValueError(f"Group members must use canonical '{user_subject_type()}:<id>' subjects.")
         if require_existing and subject not in resolve_subjects((subject,)):
             raise ValueError(f"Group member {value!r} was not found.")
         return subject

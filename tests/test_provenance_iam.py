@@ -29,7 +29,7 @@ selected = {
 }[sys.argv[1]]
 settings.configure(
     INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth", "rebac", "simple_history",
-                    "angee", "__main__.BareGraphQL", *selected],
+                    "angee", "angee.base", "__main__.BareGraphQL", *selected],
     DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
     SECRET_KEY="optional-iam-donor", ANGEE_CHANGESET_MODEL="provenance.Changeset",
 )
@@ -39,7 +39,7 @@ from django.apps import apps
 from django.db.migrations.state import ModelState
 if sys.argv[1] == "iam-only":
     from angee.iam.models import User
-    assert not hasattr(User, "statement_source")
+    assert not any(base.__name__ == "StatementSourceMixin" for base in User.__mro__)
     assert not any(name == "angee.provenance" or name.startswith("angee.provenance.") for name in sys.modules)
     raise SystemExit(0)
 from angee.provenance import models as provenance

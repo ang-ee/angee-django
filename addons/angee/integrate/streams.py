@@ -21,7 +21,6 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from deepdiff import DeepDiff
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import DataError, close_old_connections, connection, connections, transaction
 from django.db.models import Q
@@ -44,6 +43,7 @@ from angee.integrate.states import (
     SyncFailureKind,
 )
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
+from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset, current_changeset
 from angee.serialization import canonical_json, canonical_json_sha256
 
@@ -1248,8 +1248,8 @@ def sync_bridge(bridge: Any) -> int:
     """Drive declared partitions within the existing bridge task's time budget."""
 
     config = bridge.config
-    soft_limit = float(settings.CELERY_TASK_SOFT_TIME_LIMIT)
-    deadline = monotonic() + max(0.0, float(config.get("sync_time_budget", max(60.0, soft_limit - 60.0))))
+    worker_budget = task_time_budget().total_seconds()
+    deadline = monotonic() + max(0.0, min(worker_budget, float(config.get("sync_time_budget", worker_budget))))
     adapter = bridge.capability_impl
     try:
         with system_context(reason="integrate.bridge.streams"):

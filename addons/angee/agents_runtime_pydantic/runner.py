@@ -18,7 +18,7 @@ from pydantic_ai.usage import UsageLimits
 from pydantic_core import to_jsonable_python
 from rebac import SubjectRef, actor_context
 
-from angee.actors import user_subject_type
+from rebac import user_subject_type
 from angee.agents.context import render_view_context
 from angee.agents.models import normalize_inference_usage
 from angee.agents.runners import SessionRunner, SessionUpdateSink, TurnOutcome

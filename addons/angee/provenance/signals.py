@@ -1,4 +1,4 @@
-"""Native merge lifecycle integration for provenance attribution."""
+"""Native operation boundaries that contribute provenance attribution."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Any
 from django.db import models
 
 from angee.provenance.contrib.angee.context import merge_context
+from angee.provenance.context import changeset, current_changeset
 
 
 def capture_merge(
@@ -21,3 +22,10 @@ def capture_merge(
     """Attribute every fold, even when only its referencing models keep history."""
 
     contexts.enter_context(merge_context(survivor, join=join))
+
+
+def capture_resource_load(sender: type[models.Model], *, contexts: ExitStack, **kwargs: Any) -> None:
+    """Capture one resource batch with seed attribution inside its transaction."""
+
+    contexts.enter_context(changeset(fresh=True, activity="seed"))
+    current_changeset(record=True)

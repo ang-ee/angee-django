@@ -4,6 +4,7 @@ import {
   AppRuntimeProvider,
   EmptyState,
   PrimaryPaneProvider,
+  PaneToolbar,
   ScopedExplorerPane,
   TreeView,
   baseIcons,
@@ -72,17 +73,20 @@ function ScopedExplorerDemo(): React.ReactElement {
               getTreeRows={(rootId) => rowsByRoot[rootId] ?? []}
               navigatorLabel="Library"
               rootPicker={{ "aria-label": "Library root" }}
-              renderTree={(controller) => (
-                <TreeView<TreeRow>
-                  rows={controller.treeRows}
-                  parent="parent"
-                  rowKey="id"
-                  label="title"
-                  icon="icon"
-                  selectedId={controller.selectedId}
-                  onSelect={(row) => controller.setSelectedId(row.id)}
-                  className="min-h-0 flex-1 overflow-auto"
-                />
+              renderTree={(controller, selector) => (
+                <>
+                  <PaneToolbar selector={selector} />
+                  <TreeView<TreeRow>
+                    rows={controller.treeRows}
+                    parent="parent"
+                    rowKey="id"
+                    label="title"
+                    icon="icon"
+                    selectedId={controller.selectedId}
+                    onSelect={(row) => controller.setSelectedId(row.id)}
+                    className="min-h-0 flex-1 overflow-auto"
+                  />
+                </>
               )}
               emptyContent={
                 <EmptyState

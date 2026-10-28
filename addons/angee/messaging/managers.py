@@ -64,10 +64,12 @@ from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
-from angee.actors import actor_user_id
+from angee.serialization import STRINGIFIED_JSON, canonical_json_sha256
+
+from angee.base.permissions import actor_user_id
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.graphql.publishing import mute_changes
-from angee.identity import instances_from_public_ids
+from angee.base.identity import instances_from_public_ids
 from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
@@ -83,7 +85,7 @@ from angee.messaging.delivery import (
 from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
 from angee.messaging.source_copies import observe_email_identity
-from angee.models import (
+from angee.base.models import (
     AngeeManager,
     AngeeModel,
     AngeeQuerySet,
@@ -92,15 +94,14 @@ from angee.models import (
     TrashQuerySet,
     row_lock_paths,
 )
-from angee.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
+from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.parties.managers import Signing
 from angee.parties.models import Handle
-from angee.permissions import require_rebac_queryset
+from angee.base.permissions import require_rebac_queryset
 from angee.provenance.context import changeset, changeset_model, require_changeset
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
-from angee.provenance.contrib.angee.serialization import creation_fingerprint
-from angee.refs import generic_pointer_model, generic_pointer_target
+from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.serialization import strip_null_bytes
 from angee.storage.uploads import attachment_extension, fallback_attachment_name, truncate_filename
 
@@ -385,13 +386,7 @@ def _bounded_message_metadata(value: dict[str, Any]) -> dict[str, Any]:
     """Return null-safe metadata or reject an envelope above the 512 KiB bound."""
 
     metadata = strip_null_bytes(value)
-    encoded = json.dumps(
-        metadata,
-        sort_keys=True,
-        ensure_ascii=False,
-        default=str,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    encoded = STRINGIFIED_JSON.encode(metadata).encode("utf-8")
     if len(encoded) > _MESSAGE_METADATA_MAX_BYTES:
         raise ValidationError({"metadata": f"message metadata exceeds {_MESSAGE_METADATA_MAX_BYTES} UTF-8 JSON bytes"})
     return cast(dict[str, Any], metadata)
@@ -592,8 +587,9 @@ def _parsed_sync_hash(
         # Present only when set: non-reply hashes stay stable across the reply-pointer
         # rollout, so a full re-import rewrites exactly the rows that gain a parent.
         payload["in_reply_to"] = parsed.in_reply_to
+    # Existing source hashes include native JSON's spaces; preserve that persisted spelling.
     canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return canonical_json_sha256(chunks=(canonical,))
 
 
 class FragmentManager[FragmentT: Fragment](AngeeManager[FragmentT]):
@@ -1037,7 +1033,7 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
 class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryManager[ThreadAttachmentT]):
     """Owns the polymorphic edge from a model row to its chatter thread.
 
-    The edge names its record by :func:`angee.refs.generic_pointer_target`: a gated
+    The edge names its record by :func:`angee.base.refs.generic_pointer_target`: a gated
     record and each of its REBAC-typed MTI ancestors share one chatter thread,
     and an ungated host keeps its own content type. ``permissions.zed``
     backs one relation per attachable record type with ``target``, so a source
@@ -2227,10 +2223,10 @@ def _assert_canonical_composes_thread_mixin(record: Any, canonical_content_type:
 
     ``ThreadedModelMixin`` owns the reverse ``thread_attachments`` GenericRelation while
     the attachment row and target-delete policy key on the *canonical* (topmost REBAC-typed) target
-    (:func:`angee.refs.generic_pointer_target`). If a child composes the mixin but its canonical ancestor
+    (:func:`angee.base.refs.generic_pointer_target`). If a child composes the mixin but its canonical ancestor
     does not, the ancestor cannot collect the child's attachment on delete and a reused
     primary key would mis-resolve. Guard it where the write keys — the placement
-    invariant stated in :mod:`angee.refs`.
+    invariant stated in :mod:`angee.base.refs`.
     """
 
     from angee.messaging.models import ThreadedModelMixin
@@ -2831,27 +2827,25 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         values = dict(local or {})
         if any(key.startswith("delivery_") for key in values):
             raise ValidationError({"local": "Delivery facts are owned by messaging."})
-        fingerprint = (
-            creation_fingerprint({
-                "parent": parent, "body": body, "sender": sender, "local": values,
-            })
-            if idempotency_key is not None
-            else ""
+        claim_values = (
+            {"parent": parent, "body": body, "sender": sender, "local": values}
+            if idempotency_key is not None else None
         )
         actor_ref = to_subject_ref(actor)
         created_by_id = actor_user_id(actor_ref)
         claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
         with actor_context(actor), claim_boundary, transaction.atomic():
             if idempotency_key is not None:
-                replay = changeset_model().objects.claim(
+                reply = changeset_model().objects.claim_created(
                     f"messaging.reply:{actor_ref}",
                     idempotency_key,
-                    fingerprint=fingerprint,
+                    values=claim_values,
+                    model=self.model,
+                    unavailable=ValidationError(
+                        {"idempotency_key": "The claimed reply is unavailable."},
+                    ),
                 )
-                if replay is not None:
-                    reply = replay.created_row
-                    if not isinstance(reply, self.model):
-                        raise ValidationError({"idempotency_key": "The claimed reply is unavailable."})
+                if reply is not None:
                     if reply.is_trashed:
                         raise ValidationError("This idempotency key belongs to a discarded reply.")
                     return reply.with_actor(actor)
@@ -3447,13 +3441,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
         body = strip_null_bytes(body or "").strip()
         kind = strip_null_bytes(message_type or self.model.MessageKind.COMMENT)
-        fingerprint = ""
+        claim_values: dict[str, object] = {}
         actor = None
         if idempotency_key is not None:
             actor = idempotency_actor or current_actor()
             if actor is None or is_anonymous_actor(actor):
                 raise ValueError("An idempotent message requires an actor.")
-            content = {
+            claim_values = {
                 "thread": str(thread.pk),
                 "attachment": str(attachment.pk) if attachment is not None else None,
                 "body": body,
@@ -3464,7 +3458,6 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 "recipient_user_ids": sorted({str(user_id) for user_id in recipient_user_ids}),
                 "autofollow_recipients": autofollow_recipients,
             }
-            fingerprint = creation_fingerprint(content)
         if not body and not attachments:
             raise ValueError("Message body or attachment is required.")
         if parent is not None and not thread.member_threads().filter(pk=parent.thread_id).exists():
@@ -3478,15 +3471,16 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
         with claim_boundary, transaction.atomic():
             if idempotency_key is not None:
-                replay = changeset_model().objects.claim(
+                message = changeset_model().objects.claim_created(
                     f"messaging.post:{actor}",
                     idempotency_key,
-                    fingerprint=fingerprint,
+                    values=claim_values,
+                    model=self.model,
+                    unavailable=ValidationError(
+                        {"idempotency_key": "The claimed message is unavailable."},
+                    ),
                 )
-                if replay is not None:
-                    message = replay.created_row
-                    if not isinstance(message, self.model):
-                        raise ValidationError({"idempotency_key": "The claimed message is unavailable."})
+                if message is not None:
                     if message.is_trashed:
                         raise ValidationError("This idempotency key belongs to a discarded message.")
                     return message

@@ -15,7 +15,7 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 from pydantic import BaseModel
 
-from angee.impl import check_impl_registry
+from angee.base.implementations import check_impl_registry
 from angee.platform.installer import (
     AddonInstaller,
     AddonInstallerBackend,

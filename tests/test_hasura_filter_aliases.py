@@ -12,7 +12,7 @@ from angee.graphql.data.hasura import _declared_aliases, _declared_filter_expres
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.iam.permissions import session_user
-from angee.models import AngeeDataModel
+from angee.base.models import AngeeDataModel
 from tests.composed_host import run_composed_tests
 from tests.conftest import create_user, execute_schema, make_addon, result_data
 from tests.scopedemo.models import Scope

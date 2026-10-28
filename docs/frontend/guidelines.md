@@ -372,7 +372,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   multiword terminal widget name, matching the web widget registry. Backend field
   metadata and the owning addon's `widgets` contribution use the identical key,
   for example `angee.integrate.integrationSyncCursor`. The validator in
-  [`angee.data.field_classification`](../../angee/data/field_classification.py)
+  [`angee.graphql.data.resource_fields`](../../addons/angee/graphql/data/resource_fields.py)
   also accepts existing underscore names; unknown bare names remain errors.
 - **A resource registry key is the emitted canonical `modelLabel`** (for example
   `"integrate.OAuthClient"`). Addon composition may accept a unique bare or
@@ -1031,7 +1031,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   the resource's declared `subjectField`; never construct a subject from a
   public display id. The shared package owns presentation, and IAM owns the
   generated GraphQL document adapter.
-- Never poll for data freshness. Live updates ride GraphQL subscriptions through
+- Live model updates ride GraphQL subscriptions through
   refine's live provider and react-query invalidation, not a `setInterval`
   refetch loop. Opt a model into live cross-actor refresh by declaring
   `changes(Model, field="<model>Changed")` in its `schema.py`; local writes
@@ -1043,10 +1043,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   resolver actually reads. Refine's own resource hooks still invalidate per
   push. Stream foreign-system state (e.g. the operator
   daemon's `onWorkspaceStatusChange`) over its own subscriptions.
-  A timed `setInterval` is only ever for non-data UI motion (a carousel) or
-  rotating a short-lived credential before it expires — never to re-read a
-  resolver hoping it changed. If a foreign system publishes no change
-  subscription, add one there rather than polling it from the client.
+  A dashboard widget may explicitly declare interval refresh through its
+  [refresh contract](../../packages/ui/src/dashboard/headless.ts). Its data
+  adapter forwards that interval to native Query `refetchInterval`; Query owns
+  scheduling and observer cleanup. This declaration does not authorize a
+  private polling loop in a page or addon. Use `setInterval` only for non-data
+  UI motion or rotating a short-lived credential. Foreign systems should
+  publish their own change subscriptions.
 - Authored mutation result envelopes are decoded at the hook boundary. Pass
   `errorFrom` to `useAuthoredMutation` for `{error, error_code}` payloads; the
   hook throws before invalidating, so pages do not repeat result-error checks or

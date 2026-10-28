@@ -14,12 +14,14 @@ from rebac import system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry_django.optimizer import optimize
+from strawberry_django.auth.utils import get_current_user
+from strawberry_django.utils.requests import get_request
 
-from angee.data.metadata import DataResourceSubtitleMetadata
-from angee.fields import SqidField
+from angee.graphql.data.contracts import DataResourceSubtitleMetadata
+from angee.base.fields.identity import SqidField
 from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.capabilities import permission_expression, permissions_field
-from angee.graphql.data import (
+from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
     declared_hasura_write_relation_fields,
@@ -38,8 +40,8 @@ from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
 from angee.iam.identity import user_display_label, user_label, user_public_id
-from angee.iam.permissions import request_from_info, session_user
-from angee.identity import instance_from_public_id
+from angee.iam.permissions import session_user
+from angee.base.identity import instance_from_public_id
 from angee.knowledge.models import (
     AmbiguousMatchError,
     PageQuerySet,
@@ -93,7 +95,7 @@ class VaultType(TrashedRefMixin, AngeeNode):
         if hasattr(self, "_iam_owner_label_source"):
             user = cast(Any, self)._iam_owner_label_source
             return user_label(user) if user is not None else None
-        return user_display_label(cast(Any, self).owner_id, request=request_from_info(info))
+        return user_display_label(cast(Any, self).owner_id, request=get_request(info))
 
 
 @strawberry.type
@@ -401,7 +403,7 @@ class VaultWriteBackend(AngeeHasuraWriteBackend):
     def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
         """Create a vault owned by the requesting user."""
 
-        user = getattr(info.context.request, "user", None)
+        user = get_current_user(info)
         fields = dict(data)
         # The factory stamps attribution; the shared backend already validated scope.
         fields.pop("created_by_id", None)

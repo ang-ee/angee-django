@@ -33,7 +33,7 @@ from rebac.evaluator import evaluator_scope
 from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter
 
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.messaging.testing.models import Handle, Organization, Party, Person, Thread, ThreadFollower
 from angee.nexus.testing.models import Cadence, Tie
 from angee.spaces.testing.models import Group, Membership

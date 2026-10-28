@@ -131,9 +131,9 @@ def test_available_addons_excludes_core_and_enumerates_folder_addons(settings) -
     """The catalog contains capability addons, not the framework core apps."""
 
     available = available_addons(settings.ANGEE_ADDON_DIRS)
-    for name in ("angee", "angee.compose", "angee.jobs"):
+    for name in ("angee", "angee.compose"):
         assert name not in available
-    for name in ("angee.graphql", "angee.iam", "angee.storage"):
+    for name in ("angee.base", "angee.jobs", "angee.web", "angee.graphql", "angee.iam", "angee.storage"):
         assert name in available, f"{name!r} not discovered from ANGEE_ADDON_DIRS"
         manifest, origin = available[name]
         assert manifest.name == name

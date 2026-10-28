@@ -20,6 +20,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from angee.operator.daemon import OperatorDaemon
+from angee.utils.files import write_atomic
 
 
 def sdl_path() -> Path:
@@ -55,6 +56,5 @@ class Command(BaseCommand):
         if sdl is None:
             raise CommandError(f"operator daemon unreachable after {options['retries']} attempts; SDL not refreshed")
         path = sdl_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(sdl if sdl.endswith("\n") else f"{sdl}\n")
+        write_atomic(path, sdl if sdl.endswith("\n") else f"{sdl}\n")
         self.stdout.write(self.style.SUCCESS(f"operator schema -> {path}"))

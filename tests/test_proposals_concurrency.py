@@ -17,9 +17,13 @@ from strawberry.types import ExecutionResult
 
 from angee.projects.testing.models import Project, Task
 from tests.proposals_campaign import ProposalCampaign, as_actor
+from tests.proposals_campaign import campaign as campaign
+from tests.proposals_campaign import campaign_schema as campaign_schema
+from tests.proposals_campaign import campaign_store as campaign_store
+from tests.proposals_campaign import proposal_delete_schema as proposal_delete_schema
 from tests.proposals_models import Proposal, Round
+from tests.test_project_access import project_access_schema as project_access_schema
 
-pytest_plugins = ("tests.proposals_campaign",)
 pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),

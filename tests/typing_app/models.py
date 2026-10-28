@@ -6,8 +6,8 @@ from typing import Self, cast
 
 from django.db import models
 
-from angee.models.manager import AngeeManager
-from angee.models.query import AngeeQuerySet, SystemQuerysetMixin
+from angee.base.managers import AngeeManager
+from angee.base.querysets import AngeeQuerySet, SystemQuerysetMixin
 from tests.typing_app.factory import OtherFactory
 
 factory_result = OtherFactory.from_queryset(1)

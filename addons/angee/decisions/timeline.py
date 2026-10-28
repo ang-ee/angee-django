@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
-from angee.refs import generic_pointer_model
+from angee.base.refs import generic_pointer_model
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
 
 KIND = "decisions.decision"

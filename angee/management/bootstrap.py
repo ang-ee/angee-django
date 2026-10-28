@@ -26,7 +26,11 @@ def _strings(value: Any, *, setting: str) -> tuple[str, ...]:
 
 
 def bootstrap_dependency_group() -> AddonDependencyGroupResult:
-    """Project the root addons' manifest closure before Django app loading."""
+    """Project the host's default and declared addon closure before Django loads.
+
+    ProjectContract applies the host profile first, so the always-installed base
+    foundation is included even when a project declares no product addons.
+    """
 
     namespace: dict[str, Any] = {}
     root = ProjectContract(namespace).load()

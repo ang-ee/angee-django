@@ -9,7 +9,7 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.agents.testing.models import Agent
-from angee.checks import check_ownership
+from angee.base.checks import check_ownership
 from angee.messaging.testing.models import Folder, Party, Person, Thread
 from angee.projects.testing.models import Project, Queue, Task
 from angee.spaces.testing.models import Group, Membership

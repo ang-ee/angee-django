@@ -8,7 +8,7 @@ from django.db.models import Value
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
-from angee.graphql.data import row_annotations
+from angee.graphql.data.hasura import row_annotations
 from angee.tags.testing.models import Tag
 
 pytestmark = pytest.mark.django_db

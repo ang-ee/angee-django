@@ -21,18 +21,11 @@ from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
 from angee.graphql import records
-from angee.identity import public_id_of
+from angee.base.identity import public_id_of
 from angee.messaging.testing.models import Directory, Participant, Party, Reaction
-from angee.models import (
-    EdgeReference,
-    ForeignKeyReference,
-    MergeContractMixin,
-    MergePolicy,
-    RecordRefMixin,
-    fold_records,
-    references,
-)
-from angee.models import merge as merge_module
+from angee.base.models.merge_references import EdgeReference, ForeignKeyReference, MergeContractMixin
+from angee.base.models import MergePolicy, RecordRefMixin, references
+from angee.base.models import merge as merge_module
 from angee.projects.testing.models import Link, Project, Queue, Task
 from angee.provenance.context import changeset
 from angee.provenance.statements import (
@@ -45,8 +38,7 @@ from angee.tags.testing.models import Tag, TagAssignment
 from angee.workflows.testing.models import StepWatch, Workflow, WorkflowRun
 from tests.conftest import addon_schema, create_user, execute_schema, make_integration, result_data
 from tests.mtidemo.models import MtiChild, MtiParent
-from tests.recordrefdemo.models import CustomColumnEdge, SelfLinkedNode, TagSlot
-from tests.scopedemo.models import ProjectionDoc
+from tests.recordrefdemo.models import CustomColumnEdge, MergeReferenceNode, SelfLinkedNode, TagSlot
 from tests.workflow_steps import document
 
 pytestmark = pytest.mark.usefixtures("composed_permissions")
@@ -235,15 +227,14 @@ def test_a_survivor_referring_to_a_merged_record_refuses_before_anything_moves()
     """Moving the survivor's own reference would point it at itself, so the fold refuses and nothing moves."""
 
     with system_context(reason="merge test self reference"):
-        merged = ProjectionDoc.objects.create(title="merged")
-        survivor = ProjectionDoc.objects.create(title="survivor", parent=merged)
-        child = ProjectionDoc.objects.create(title="child", parent=merged)
-    retired: list[Any] = []
-    with pytest.raises(ValidationError, match="refers to"):
-        fold_records(survivor, [merged], carry=lambda: None, retire=retired.append, blockers=())
-    assert retired == []
+        merged = MergeReferenceNode.objects.create(title="merged")
+        survivor = MergeReferenceNode.objects.create(title="survivor", parent=merged)
+        child = MergeReferenceNode.objects.create(title="child", parent=merged)
+        with pytest.raises(ValidationError, match="refers to"):
+            survivor.fold([merged])
     with system_context(reason="merge test read"):
-        assert set(ProjectionDoc._base_manager.filter(parent=merged).values_list("pk", flat=True)) == {
+        assert MergeReferenceNode._base_manager.filter(pk=merged.pk).exists()
+        assert set(MergeReferenceNode._base_manager.filter(parent=merged).values_list("pk", flat=True)) == {
             survivor.pk,
             child.pk,
         }

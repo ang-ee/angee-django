@@ -12,14 +12,8 @@ from django.db.migrations.state import ModelState
 from django.db.migrations.writer import MigrationWriter
 from rebac import system_context
 
-from angee.models import (
-    AngeeQuerySet,
-    AppendOnlyBaseQuerySet,
-    AppendOnlyModel,
-    AppendOnlyQuerySet,
-    AuditMixin,
-    retained_set_null,
-)
+from angee.base.models import AngeeQuerySet, AppendOnlyBaseQuerySet, AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
+from angee.base.models.audit import retained_set_null
 from tests.conftest import create_user
 
 
@@ -62,17 +56,14 @@ def test_audit_foreign_keys_declare_serializable_materialized_nullification() ->
         on_delete = RetainedEvidence._meta.get_field(name).remote_field.on_delete
         assert on_delete is retained_set_null
         serialized, imports = MigrationWriter.serialize(on_delete)
-        assert serialized == "angee.models.audit.retained_set_null"
-        assert imports == {"import angee.models.audit"}
+        assert serialized == "angee.base.models.audit.retained_set_null"
+        assert imports == {"import angee.base.models.audit"}
 
 
 def test_historical_audit_imports_preserve_field_migration_state() -> None:
-    from angee.models.audit import AuditMixin as NativeAuditMixin
-    from angee.models.audit import retained_set_null as native_delete
-    from angee.models.ownership import AuditMixin as HistoricalAuditMixin
+    from angee.base.models.audit import retained_set_null as native_delete
     from angee.models.ownership import retained_set_null as historical_delete
 
-    assert HistoricalAuditMixin is NativeAuditMixin
     assert historical_delete is native_delete is retained_set_null
     state = ModelState.from_model(RetainedEvidence)
     historical_state = state.clone()

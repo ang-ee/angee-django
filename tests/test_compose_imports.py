@@ -23,7 +23,7 @@ def test_manifest_adapter_is_safe_before_settings_and_model_loading() -> None:
         "assert len(configs) == 1",
         "assert not settings.configured",
         "assert 'rebac.mixins' not in sys.modules",
-        "assert not any(name.startswith('angee.models') for name in sys.modules)",
+        "assert not any(name.startswith('angee.base.models') for name in sys.modules)",
     ))
     result = subprocess.run(
         [sys.executable, "-c", script],
@@ -42,7 +42,7 @@ def test_generic_composer_imports_without_host_or_addon_policy() -> None:
         "import angee.compose.model_composition, angee.compose.runtime, angee.compose.typing",
         "from django.conf import settings",
         "assert not settings.configured",
-        "for name in ('angee.addons', 'angee.conf', 'angee.build', 'angee.models', 'angee.provenance'):",
+        "for name in ('angee.addons', 'angee.conf', 'angee.base.build', 'angee.base.models', 'angee.provenance'):",
         "    assert not any(module == name or module.startswith(name + '.') for module in sys.modules), name",
     ))
     result = subprocess.run(
@@ -95,7 +95,7 @@ def test_shared_artifact_utilities_import_without_models_or_composer() -> None:
         "import angee.utils.artifacts, angee.utils.files, angee.utils.paths",
         "assert not any(name == 'angee.compose' or name.startswith('angee.compose.') for name in sys.modules)",
         "assert 'django.db.models' not in sys.modules",
-        "assert 'angee.models' not in sys.modules",
+        "assert 'angee.base.models' not in sys.modules",
     ))
     result = subprocess.run(
         [sys.executable, "-c", script],

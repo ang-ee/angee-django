@@ -1,6 +1,8 @@
 import * as React from "react";
 import { get } from "react-hook-form";
 import { stableSerialize } from "@angee/refine";
+import type { CrudFilter } from "@refinedev/core";
+import type { Filter as FormSpecFilter } from "./form-spec.generated";
 
 import { useAppRuntime, type WidgetMap } from "../../runtime";
 import {
@@ -373,11 +375,19 @@ function deserializeField(
     ...(options ? { options } : {}),
     ...(choices?.valueCodec && (widget === "select" || widget === "selection" || widget === "combobox")
       ? { valueCodec: choices.valueCodec } : {}),
-    ...(relation ? { relation } : {}),
+    ...(relation ? { relation: { ...relation, filters: relation.filters?.map(relationFilter) } } : {}),
     ...(rowTemplate ? { rowTemplate } : {}),
     ...(objectTemplate ? { objectTemplate } : {}),
     ...(itemTemplate ? { itemTemplate } : {}),
   };
+}
+
+/** Project validated wire filters into Refine's required value slot. */
+function relationFilter(filter: FormSpecFilter): CrudFilter {
+  if (filter.operator === "and" || filter.operator === "or") {
+    return { ...filter, value: filter.value.map(relationFilter) };
+  }
+  return { ...filter, value: filter.value };
 }
 
 /** A decimal accepted as a number or a numeric string (optionally null) edits as a number. */

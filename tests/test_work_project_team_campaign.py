@@ -11,7 +11,7 @@ from rebac.evaluator import evaluator_scope
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Project
 from angee.spaces.testing.models import Group, Membership
-from angee.testing.permissions import installed_field_owners
+from angee.base.testing.permissions import installed_field_owners
 from angee.work.models import ProjectWork
 from tests.test_productivity_write_behavior import Queue, Stage
 from tests.test_project_access import project_access_schema as project_access_schema

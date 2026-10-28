@@ -27,8 +27,8 @@ from angee.extraction.contracts import (
 )
 from angee.extraction.managers import StaleExtraction
 from angee.extraction.profiles import EvidenceLayout, ExtractionProfile
-from angee.fields import StateField
-from angee.models import DerivedFrom
+from angee.base.fields.state import StateField
+from angee.base.models import DerivedFrom
 from angee.provenance.evidence import FactAuthority
 from angee.storage.models import File as AbstractFile
 from angee.workflows_extraction.steps import InferEvidenceInput, InferEvidenceStep

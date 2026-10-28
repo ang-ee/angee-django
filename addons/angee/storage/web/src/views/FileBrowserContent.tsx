@@ -17,8 +17,7 @@ export interface FileBrowserContentProps {
   bulkActions: ListProps<StorageFileRow>["bulkActions"];
   onListStateChange: (state: ResourceListSnapshot<StorageFileRow>) => void;
   uploads: StorageUpload;
-  uploadTarget: UploadTarget;
-  canUpload: boolean;
+  uploadTarget: UploadTarget | null;
 }
 
 const FILE_LIST_FIELDS = [
@@ -44,13 +43,12 @@ export function FileBrowserContent({
   onListStateChange,
   uploads,
   uploadTarget,
-  canUpload,
 }: FileBrowserContentProps): ReactElement {
   const t = useStorageT();
   const fileTypeLabel = useFileTypeLabel();
 
   function startUpload(files: readonly File[]): void {
-    if (!canUpload || files.length === 0) return;
+    if (!uploadTarget || files.length === 0) return;
     uploads.upload(Array.from(files), uploadTarget);
   }
 
@@ -65,7 +63,7 @@ export function FileBrowserContent({
       renderCard={fileGalleryCard}
       onListStateChange={onListStateChange}
       // Upload is the navigator's New ▾ verb; the list keeps the drop target and the empty hint.
-      emptyContent={canUpload ? t("list.emptyUpload") : t("list.empty")}
+      emptyContent={uploadTarget ? t("list.emptyUpload") : t("list.empty")}
     >
       <Column<StorageFileRow>
         field="title"
@@ -131,7 +129,7 @@ export function FileBrowserContent({
   return (
     <UploadDropTarget
       className="relative flex h-full min-h-0 flex-col"
-      disabled={!canUpload}
+      disabled={!uploadTarget}
       overlay={t("upload.dropOverlay")}
       onFiles={startUpload}
     >

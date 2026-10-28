@@ -12,7 +12,7 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from angee.integrate.states import SyncFailure, SyncFailureKind, SyncFailureStatus
-from angee.models.query import AngeeQuerySet
+from angee.base.querysets import AngeeQuerySet
 
 if TYPE_CHECKING:
     from angee.integrate.models import SyncStream

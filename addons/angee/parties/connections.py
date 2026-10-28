@@ -25,7 +25,7 @@ from rebac import system_context
 from rebac.actors import to_subject_ref
 
 from angee.provenance.evidence import EvidenceReference
-from angee.provenance.sources import source_kind_for
+from angee.provenance.statements import StatementSourceMixin
 from angee.provenance.statements import (
     SourceKind,
 )
@@ -84,7 +84,7 @@ def ingest_connections(
     in separate transactions, so one bad record fails alone.
     """
 
-    if source_kind_for(to_subject_ref(asserted_by)) != SourceKind.IMPORT:
+    if StatementSourceMixin.source_kind_for(to_subject_ref(asserted_by)) != SourceKind.IMPORT:
         raise ValidationError("Connection exports require an identified IMPORT integration.")
     party_model = apps.get_model("parties", "Party")
     kind_model = apps.get_model("parties", "RelationshipKind")

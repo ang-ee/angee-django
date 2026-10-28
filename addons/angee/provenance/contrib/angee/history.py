@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from itertools import groupby
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
@@ -22,12 +23,15 @@ from rebac.field_backing import resolve_field_backing
 from rebac.field_visibility import gated_read_fields, redacted_fields
 from rebac.resources import model_resource_type
 from rebac.schema import ConstBinding, FieldBinding
+from simple_history.exceptions import NotHistoricalModelError
+from simple_history.manager import HistoryManager
 from simple_history.utils import get_history_manager_for_model
 
-from angee.lineage import concrete_child_models, concrete_lineage
-from angee.models.manager import AngeeManager, AngeeUnscopedManager
-from angee.models.query import candidate_relationships
-from angee.models.trash import TrashMixin
+from angee.base.lineage import concrete_child_models, concrete_lineage
+from angee.base.managers import AngeeManager, AngeeUnscopedManager
+from angee.base.models.merge_references import MergeContractMixin
+from angee.base.querysets import SystemQuerysetMixin, candidate_relationships
+from angee.base.models.trash import TrashMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
 from angee.provenance.history import (
     _UNLOADED,
@@ -41,6 +45,53 @@ from angee.provenance.history import (
 from angee.provenance.querysets import model_history
 
 
+class HistoryDocumentMixin(models.Model):
+    """Noncapturing document-history extension contract for sibling capabilities.
+
+    Declaring document contributions does not install a history descriptor or
+    capture managers. HistoryMixin opts into capture separately.
+    """
+
+    class Meta:
+        abstract = True
+
+    @classmethod
+    def history_related_columns(cls) -> dict[type[models.Model], tuple[str, ...]]:
+        """Related snapshot columns that identify this document's record."""
+
+        return {}
+
+    @classmethod
+    def history_related_scopes(
+        cls, predicate: Q, root_pk: Any, *, direct: bool, using: str | None,
+    ) -> dict[type[models.Model], Q]:
+        """Predicates on owned representations admitted with this document."""
+
+        return {}
+
+
+class HistoricalReferenceMixin(MergeContractMixin):
+    """Native historical snapshots retain identity without blocking creation undo."""
+
+    class Meta:
+        abstract = True
+
+    @classmethod
+    def blocks_target_delete(cls, target: type[models.Model]) -> bool:
+        return False
+
+
+def record_history(model: type[models.Model]) -> HistoryManager | None:
+    """Read captured record history only through its own native REBAC identity."""
+
+    if not model_resource_type(model):
+        return None
+    try:
+        return get_history_manager_for_model(model._meta.concrete_model or model)
+    except NotHistoricalModelError:
+        return None
+
+
 class ModelHistory(CaptureHistory):
     """Native history adapted to abstract sources and generated module names.
 
@@ -48,6 +99,10 @@ class ModelHistory(CaptureHistory):
     MTI children. Native history construction receives a detached
     snapshot with stored gated values, never the caller's redacted projection.
     """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.bases = (*self.bases, HistoricalReferenceMixin)
 
     def capture_children(self, model: type[models.Model]) -> tuple[type[models.Model], ...]:
         """Share Angee's structural lineage owner for composed and isolated models."""
@@ -284,7 +339,7 @@ class ModelHistory(CaptureHistory):
         return extra
 
 
-class HistoryMixin(CaptureHistoryMixin):
+class HistoryMixin(CaptureHistoryMixin, SystemQuerysetMixin, HistoryDocumentMixin):
     """Track concrete models through django-simple-history's inherited descriptor."""
 
     history = ModelHistory(inherit=True)
@@ -303,6 +358,38 @@ class HistoryMixin(CaptureHistoryMixin):
     These are document parts, not arbitrary references or separately owned work.
     Each child keeps its own capture and permission policy.
     """
+
+    @classmethod
+    def retained_reference_exists(cls, record: models.Model, lookup: Mapping[str, Any]) -> bool:
+        """Include stored pointer versions even while capture is disabled."""
+
+        return get_history_manager_for_model(cls).db_manager(hints={"instance": record}).filter(**lookup).exists()
+
+    @classmethod
+    @contextmanager
+    def initialize_rows(cls, rows: Sequence[models.Model], *, using: str) -> Iterator[bool]:
+        """Capture one complete creation after all model-owned derived values land."""
+
+        history = model_history(cls)
+        if history is None:
+            with super().initialize_rows(rows, using=using) as deferred:
+                yield deferred
+            return
+        absent = object()
+        prior = [(row, row.__dict__.get("skip_history_when_saving", absent)) for row in rows]
+        for row, _previous in prior:
+            row.__dict__["skip_history_when_saving"] = True
+        try:
+            with super().initialize_rows(rows, using=using):
+                yield True
+        finally:
+            for row, previous in prior:
+                if previous is absent:
+                    row.__dict__.pop("skip_history_when_saving", None)
+                else:
+                    row.__dict__["skip_history_when_saving"] = previous
+        if rows:
+            get_history_manager_for_model(cls).db_manager(using).bulk_history_create(rows)
 
     def history_tables(self) -> tuple[type[models.Model], ...]:
         """Return the concrete tables participating in this record's history."""
@@ -329,11 +416,9 @@ class HistoryMixin(CaptureHistoryMixin):
                 raise ImproperlyConfigured(f"{child._meta.label}: an owned history relation must keep history.")
             columns[child] = (*columns.get(child, ()), relation.field.attname)
         for owner in self.history_tables():
-            pair_models = getattr(owner, "pair_models", None)
-            if pair_models is None:
-                continue
-            for pair in pair_models():
-                columns[pair] = (*columns.get(pair, ()), "left_id", "right_id")
+            if issubclass(owner, HistoryDocumentMixin):
+                for related, names in owner.history_related_columns().items():
+                    columns[related] = (*columns.get(related, ()), *names)
         return columns
 
     def history_scope(self) -> dict[type[models.Model], Q]:
@@ -351,26 +436,17 @@ class HistoryMixin(CaptureHistoryMixin):
         """Return document and generated-statement predicates for this record."""
 
         scopes = self.history_scope()
-        statements: dict[type[models.Model], Q] = {}
+        related: dict[type[models.Model], Q] = {}
         tables = frozenset(self.history_tables())
         for model, predicate in scopes.items():
-            statement_models = getattr(model, "statement_models", None)
-            if statement_models is None:
+            if not issubclass(model, HistoryDocumentMixin):
                 continue
-            subjects = (
-                get_history_manager_for_model(model)
-                .using(self._state.db)
-                .filter(predicate)
-                .values(
-                    model._meta.pk.attname,
-                )
-            )
-            subject_scope = Q(subject_id=self.pk) if model in tables else Q(subject_id__in=models.Subquery(subjects))
-            for statement in statement_models():
-                statements[statement] = (
-                    statements[statement] | subject_scope if statement in statements else subject_scope
-                )
-        return {**scopes, **statements}
+            for representation, scope in model.history_related_scopes(
+                predicate, self.pk, direct=model in tables, using=self._state.db,
+            ).items():
+                related[representation] = related[representation] | scope if representation in related else scope
+        return {**scopes, **related}
+
 
     def admitted_reverts(self, changesets: Iterable[Any]) -> frozenset[Any]:
         """Return page changeset keys belonging wholly to this history document.

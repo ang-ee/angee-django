@@ -11,8 +11,8 @@ from rebac import system_context
 
 from angee.graphql.events import ChangePayload
 from angee.graphql.publishing import broadcast_related_records, changes_muted
-from angee.models.merge import MergeableMixin
-from angee.refs import generic_pointer_model
+from angee.base.models.merge import MergeableMixin
+from angee.base.refs import generic_pointer_model
 from angee.timeline.kinds import TimelineKind, timeline_kinds
 
 log = logging.getLogger(__name__)

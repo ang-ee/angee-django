@@ -12,11 +12,12 @@ from django.db import IntegrityError, connections, models, transaction
 from django.db.models import Q
 from simple_history.utils import get_history_manager_for_model
 
-from angee.models.manager import AngeeManager
-from angee.models.query import AngeeQuerySet
+from angee.base.managers import AngeeManager
+from angee.base.querysets import AngeeQuerySet
 from angee.provenance.context import current_changeset, discard_changeset_claim, require_changeset
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.serialization import creation_fingerprint
 from angee.provenance.querysets import model_history
 
 if TYPE_CHECKING:
@@ -165,3 +166,26 @@ class ChangesetManager[ChangesetT: Changeset](_ChangesetManagerBase[ChangesetT])
                 raise CreationKeyConflict("This idempotency key was already used for different content.")
             return existing
         return None
+
+    def claim_created[CreatedT: models.Model](
+        self,
+        scope: str,
+        key: str,
+        *,
+        values: Any,
+        model: type[CreatedT],
+        unavailable: Exception,
+    ) -> CreatedT | None:
+        """Claim creation content or return its typed result, before domain replay policy.
+
+        The caller still owns its transaction, authorization and every refusal
+        specific to the returned row. The storage owner alone fingerprints the
+        creation values and validates the receipt's result identity.
+        """
+        replay = self.claim(scope, key, fingerprint=creation_fingerprint(values))
+        if replay is None:
+            return None
+        created = replay.created_row
+        if not isinstance(created, model):
+            raise unavailable
+        return created

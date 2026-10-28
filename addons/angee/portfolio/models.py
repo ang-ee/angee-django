@@ -22,8 +22,9 @@ from rebac import (
     system_context,
 )
 
-from angee.fields import FractionalRankField, StateField
-from angee.models import (
+from angee.base.fields.ordering import FractionalRankField
+from angee.base.fields.state import StateField
+from angee.base.models import (
     AngeeDataModel,
     AuditMixin,
     HierarchyMixin,

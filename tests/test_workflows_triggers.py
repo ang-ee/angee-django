@@ -14,17 +14,17 @@ from rebac.actors import is_sudo
 from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationship
 
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.impl import impl_choices_enum
+from angee.base.implementations import impl_choices_enum
 from angee.knowledge import schema as knowledge_schema
-from angee.models import row_lock_paths
+from angee.base.models import row_lock_paths
 from angee.workflows import schema as workflow_schema
 from angee.workflows import triggers
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import load_workflow, run_until, trigger_source
+from angee.workflows.testing.drivers import load_workflow, run_until
 from angee.workflows.testing.models import (
     StepAttempt,
     StepRecord,
@@ -46,8 +46,7 @@ def trigger_resource_schema(monkeypatch):
     """Bare tests install just their real, composed resource owner, restoring it afterward."""
     owner = GraphQLSchemas([make_addon(schemas=knowledge_schema.schemas)])
     monkeypatch.setattr(GraphQLSchemas, "_discovered", owner)
-    with trigger_source(Vault):
-        yield owner
+    yield owner
 
 
 @pytest.fixture
@@ -114,12 +113,11 @@ def test_disabled_triggers_write_nothing_and_native_save_skips_raw(trigger_setup
     capture(record)
     assert not TriggerEvent.system_queryset().exists()
     Trigger.objects.enable(trigger, actor=actor)
-    with trigger_source(Vault, connect=True):
-        post_save.send(sender=Vault, instance=record, raw=True, created=False)
-        assert not TriggerEvent.system_queryset().exists()
-        with actor_context(actor):
-            record.save()
-        assert TriggerEvent.system_queryset().count() == 1
+    post_save.send(sender=Vault, instance=record, raw=True, created=False)
+    assert not TriggerEvent.system_queryset().exists()
+    with actor_context(actor):
+        record.save()
+    assert TriggerEvent.system_queryset().count() == 1
 
 
 def test_enable_cannot_persist_an_actorless_system_trigger(trigger_setup):
@@ -519,11 +517,10 @@ def test_watch_capture_failure_preserves_the_native_save(trigger_setup, monkeypa
         raise IntegrityError("watch capture failed")
 
     monkeypatch.setattr(type(StepWatch.objects), "record_change", fail)
-    with trigger_source(Vault, connect=True):
-        with transaction.atomic(), actor_context(actor):
-            record.name = "Retained despite capture failure"
-            record.save()
-            assert Vault.objects.filter(pk=record.pk, name=record.name).exists()
+    with transaction.atomic(), actor_context(actor):
+        record.name = "Retained despite capture failure"
+        record.save()
+        assert Vault.objects.filter(pk=record.pk, name=record.name).exists()
     assert not TriggerEvent.system_queryset().exists()
     assert "Workflow source capture failed" in caplog.text
 
@@ -577,27 +574,26 @@ def test_enabled_configuration_edits_require_disable(
     editor = create_user("trigger-co-editor")
     workflow.with_actor(actor).grant_record_access("editor", editor)
     register_other_changed(settings, monkeypatch)
-    with trigger_source(Page):
-        with actor_context(actor):
-            trigger = Trigger.objects.create(workflow=workflow, source="record_changed", model_label="knowledge.vault")
-        trigger = Trigger.objects.enable(trigger, actor=actor)
-        trigger.with_actor(editor)
-        replacement = {"condition": {"name": {"_eq": "Ready"}}, "source": "other_changed",
-                       "model_label": "knowledge.page"}[field]
-        setattr(trigger, field, replacement)
-        with actor_context(editor), pytest.raises(ValidationError, match="Disable the trigger before editing"):
-            trigger.save(**({"update_fields": (field,)} if partial else {}))
-        trigger.refresh_from_db()
-        assert trigger.enabled and trigger.workflow.user_id != actor.pk
-        assert getattr(trigger, field) != replacement
-        trigger = Trigger.objects.disable(trigger, actor=editor)
-        trigger.with_actor(editor)
-        setattr(trigger, field, replacement)
-        with actor_context(editor):
-            trigger.save(**({"update_fields": (field,)} if partial else {}))
-        trigger.refresh_from_db()
-        expected = Page._meta.label if field == "model_label" else replacement
-        assert not trigger.enabled and getattr(trigger, field) == expected
+    with actor_context(actor):
+        trigger = Trigger.objects.create(workflow=workflow, source="record_changed", model_label="knowledge.vault")
+    trigger = Trigger.objects.enable(trigger, actor=actor)
+    trigger.with_actor(editor)
+    replacement = {"condition": {"name": {"_eq": "Ready"}}, "source": "other_changed",
+                   "model_label": "knowledge.page"}[field]
+    setattr(trigger, field, replacement)
+    with actor_context(editor), pytest.raises(ValidationError, match="Disable the trigger before editing"):
+        trigger.save(**({"update_fields": (field,)} if partial else {}))
+    trigger.refresh_from_db()
+    assert trigger.enabled and trigger.workflow.user_id != actor.pk
+    assert getattr(trigger, field) != replacement
+    trigger = Trigger.objects.disable(trigger, actor=editor)
+    trigger.with_actor(editor)
+    setattr(trigger, field, replacement)
+    with actor_context(editor):
+        trigger.save(**({"update_fields": (field,)} if partial else {}))
+    trigger.refresh_from_db()
+    expected = Page._meta.label if field == "model_label" else replacement
+    assert not trigger.enabled and getattr(trigger, field) == expected
 
 
 class OtherChanged(triggers.RecordChanged):
@@ -647,7 +643,7 @@ def test_refined_source_shares_the_one_capture_of_its_bases_event(
     assert [kwargs for model, kwargs in locked if model is Vault] == [expected_lock, expected_lock]
     locked.clear()
     sent.clear()
-    with trigger_source(Vault, connect=True), actor_context(actor):
+    with actor_context(actor):
         record.name = "Ready"
         record.save(update_fields=("name",))
     monkeypatch.setattr(models.QuerySet, "select_for_update", lock)

@@ -13,7 +13,7 @@ from asgiref.sync import sync_to_async
 from django.db import close_old_connections, models
 from rebac import current_actor
 
-from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
+from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.constants import CHANGE_GROUP_RENEW_SECONDS
 from angee.graphql.data.metadata import (

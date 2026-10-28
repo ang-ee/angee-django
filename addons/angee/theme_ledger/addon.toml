@@ -3,4 +3,4 @@ name = "angee.theme_ledger"
 description = "Ink-on-paper ledger theme with a solar accent"
 keywords = ["theme", "appearance", "ledger", "ink"]
 category = "User interface"
-depends_on = []
+depends_on = ["angee.web"]

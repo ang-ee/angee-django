@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
+from contextlib import ExitStack
 from typing import TYPE_CHECKING, Any, Self, overload
 
 from django.apps import apps
@@ -14,12 +15,11 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
-from angee.fields import ModelLabelField
-from angee.identity import SqidPublicIdentity, public_id_of
-from angee.impl import resolve_impl_class
-from angee.jsonschema import relation_positions
-from angee.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet, SqidMixin
-from angee.provenance.context import changeset, current_changeset
+from angee.base.fields.text import ModelLabelField
+from angee.base.identity import SqidPublicIdentity, public_id_of
+from angee.base.implementations import resolve_impl_class
+from angee.base.schemas.forms import relation_positions
+from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet, SqidMixin
 from angee.resources.entries import (
     GRANT_KIND,
     ROW_KIND,
@@ -41,6 +41,7 @@ from angee.resources.loader import (
     build_resource,
 )
 from angee.resources.mixins import ResourceLoadMixin
+from angee.resources.signals import pre_load
 from angee.resources.widgets import is_xref, resolve_xref, split_xref
 
 if TYPE_CHECKING:
@@ -354,10 +355,10 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
             reason = "resources.validate" if dry_run else "resources.load"
             with (
                 system_context(reason=reason),
-                changeset(fresh=True, activity="seed"),
+                ExitStack() as contexts,
                 transaction.atomic(),
             ):
-                current_changeset(record=True)
+                pre_load.send(sender=self.model, contexts=contexts)
                 resource_classes = {
                     group.model.resource_class
                     for group, _ in loaded_groups

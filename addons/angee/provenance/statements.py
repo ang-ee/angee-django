@@ -11,7 +11,6 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass
-from enum import StrEnum
 from itertools import batched, groupby
 from typing import Any, ClassVar, Self, cast
 
@@ -35,19 +34,20 @@ from rebac.actors import is_sudo
 from rebac.resources import model_for_subject_type, model_resource_type
 from simple_history.manager import HistoryDescriptor
 from simple_history.models import HistoricalRecords
+from simple_history.utils import get_history_manager_for_model
 
-from angee.actors import instance_actor
-from angee.fields import StateField
-from angee.lineage import most_derived_concrete
-from angee.models.identity import SqidMixin, TimestampMixin, update_fields_with_auto_now
-from angee.models.locks import OptimisticLockMixin
-from angee.models.manager import AngeeManager
-from angee.models.merge_references import MergeContractMixin
-from angee.models.query import AngeeUnscopedQuerySet, SystemQuerysetMixin, by_key, query_batch_size
-from angee.models.trash import TrashMixin, TrashQuerySet
-from angee.permissions import require_rebac_queryset
+from angee.base.permissions import instance_actor
+from angee.base.fields.state import StateField
+from angee.base.lineage import most_derived_concrete
+from angee.base.models.identity import SqidMixin, TimestampMixin, update_fields_with_auto_now
+from angee.base.models.locks import OptimisticLockMixin
+from angee.base.managers import AngeeManager
+from angee.base.models.merge_references import MergeContractMixin
+from angee.base.querysets import AngeeUnscopedQuerySet, SystemQuerysetMixin, by_key, query_batch_size
+from angee.base.models.trash import TrashMixin, TrashQuerySet
+from angee.base.permissions import require_rebac_queryset
 from angee.provenance.context import current_changeset
-from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
+from angee.provenance.contrib.angee.history import HistoryDocumentMixin, HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet, AngeeHistoryUnscopedQuerySet
 from angee.provenance.evidence import (
     EvidenceReference,
@@ -57,8 +57,7 @@ from angee.provenance.evidence import (
     readable_records,
 )
 from angee.provenance.history import _ChangesetHistory
-from angee.provenance.sources import source_kind_for
-from angee.validation import validate_value
+from angee.base.validators import validate_value
 
 
 def _statement_column(model: type[models.Model], name: str) -> models.Field:
@@ -313,14 +312,14 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
         basis_hash: str,
     ) -> tuple[SubjectRef, dict[str, Any], dict[str, Any]]:
         source = self.asserting_source(asserted_by)
-        kind = source_kind_for(source)
+        kind = StatementSourceMixin.source_kind_for(source)
         if kind is None:
             raise ValidationError("The source must declare a known per-row source_kind.")
         rank = self.model.StatementRank.NORMAL if rank is None else rank
         snak = self.model.StatementSnak.VALUE if snak is None else snak
         if rank == self.model.StatementRank.PREFERRED and kind not in (
-            self.model.SourceKind.PERSON,
-            self.model.SourceKind.SEED,
+            SourceKind.PERSON,
+            SourceKind.SEED,
         ):
             # A preferred statement is a standing decision: a person's, or seeded install
             # data's (a keep-separate recorded without a person, by ruling).
@@ -329,7 +328,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
         if set(values) - set(declaration.fields) or (snak != self.model.StatementSnak.VALUE and values):
             raise ValidationError("Only value snaks carry the declared aspect's values.")
         refs = validate_value(list[EvidenceReference], list(evidence), field="evidence")
-        if kind == self.model.SourceKind.PERSON:
+        if kind == SourceKind.PERSON:
             readable_records(refs, (source,))
         members = declaration.coerce_members(self.model, source, member_key, kind=SourceKind(kind))
         defaults = {name: values.get(name) for name in declaration.fields}
@@ -659,14 +658,30 @@ class StatementSourceMixin(models.Model):
     property, field or constant. Unknown principals cannot assert statements.
     """
 
-    statement_source: ClassVar[bool] = True
-
     class Meta:
         abstract = True
 
     @property
     def source_kind(self) -> SourceKind | None:
         raise ImproperlyConfigured("Statement principals must implement source_kind.")
+
+    @classmethod
+    def source_kind_for(cls, subject: Any) -> SourceKind | None:
+        """Classify a persisted principal through its declared model contract."""
+
+        source = to_subject_ref(subject)
+        resolved = model_for_subject_type(source.subject_type)
+        if resolved is None or source.optional_relation or source.subject_id == "*":
+            return None
+        model, id_attr = resolved
+        if not issubclass(model, cls):
+            return None
+        try:
+            principal = model._base_manager.get(**{id_attr: source.subject_id})
+            kind = principal.source_kind
+            return SourceKind(kind) if kind is not None else None
+        except (model.DoesNotExist, TypeError, ValueError, ImproperlyConfigured, ValidationError):
+            return None
 
 class StatementLinkMixin(models.Model):
     """Contract of the model a ``StatementRecords(link=…)`` declaration names.
@@ -687,17 +702,6 @@ class StatementLinkMixin(models.Model):
         return False
 
 
-class Survivorship(StrEnum):
-    """The statement engine's single source-priority survivorship rule."""
-
-    SOURCE_PRIORITY = "source_priority"
-
-    def sort_key(self, aspect: Aspect, row: Any) -> tuple[Any, ...]:
-        """Delegate to the row's one trust ordering."""
-
-        return row.sort_key(aspect)
-
-
 @dataclass(frozen=True)
 class Aspect:
     """One field group and its optional typed membership identity.
@@ -708,7 +712,6 @@ class Aspect:
 
     fields: tuple[str, ...] = ()
     member: str | Mapping[str, models.Field] | None = None
-    survivorship: Survivorship = Survivorship.SOURCE_PRIORITY
     precedence: tuple[SourceKind, ...] = ()
     allow_fill: bool = False
     candidates: Callable[[Any, Sequence[Any]], Sequence[Any]] | None = None
@@ -768,11 +771,33 @@ class Aspect:
         return members
 
 
-class StatementsMixin(SystemQuerysetMixin):
+class StatementsMixin(SystemQuerysetMixin, HistoryDocumentMixin):
     """Subject-owned eligibility and application hooks for typed statements."""
 
     class Meta:
         abstract = True
+
+    @classmethod
+    def history_related_columns(cls) -> dict[type[models.Model], tuple[str, ...]]:
+        """Include pair endpoint identities without making participation imply capture."""
+
+        columns = super().history_related_columns()
+        for pair in cls.pair_models():
+            columns[pair] = (*columns.get(pair, ()), "left_id", "right_id")
+        return columns
+
+    @classmethod
+    def history_related_scopes(
+        cls, predicate: Q, root_pk: Any, *, direct: bool, using: str | None,
+    ) -> dict[type[models.Model], Q]:
+        """Contribute assertions for direct subjects or the document's retained owned lines."""
+
+        scopes = super().history_related_scopes(predicate, root_pk, direct=direct, using=using)
+        subjects = get_history_manager_for_model(cls).using(using).filter(predicate).values(cls._meta.pk.attname)
+        subject_scope = Q(subject_id=root_pk) if direct else Q(subject_id__in=models.Subquery(subjects))
+        for statement in cls.statement_models():
+            scopes[statement] = scopes[statement] | subject_scope if statement in scopes else subject_scope
+        return scopes
 
     @classmethod
     def statement_models(cls) -> Iterable[type[Statement]]:
@@ -841,7 +866,7 @@ class StatementsMixin(SystemQuerysetMixin):
             super().save(*args, **kwargs)
             return
         actor = instance_actor(self)
-        if actor is None or source_kind_for(actor) != SourceKind.PERSON:
+        if actor is None or StatementSourceMixin.source_kind_for(actor) != SourceKind.PERSON:
             super().save(*args, **kwargs)
             return
         using = type(self)._base_manager.db_manager(hints={"instance": self}).db
@@ -1053,7 +1078,6 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
         QUARANTINED = "quarantined"
         DEPRECATED = "deprecated"
 
-    SourceKind = SourceKind
     history = StatementHistory(inherit=True)
     objects = StatementManager()
     _angee_base = StatementManager()
@@ -1125,7 +1149,7 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
             return errors
 
         def error(message: str, code: str) -> None:
-            errors.append(checks.Error(message, obj=cls, id=f"angee.{code}"))
+            errors.append(checks.Error(message, obj=cls, id=f"provenance.{code}"))
 
         if not issubclass(cls.statement_subject_model, StatementsMixin) or not cls.statement_aspects:
             error("StatementRecords requires StatementsMixin and at least one aspect.", "E039")
@@ -1144,11 +1168,10 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
                 error("A value field belongs to exactly one aspect.", "E041")
             claimed.update(aspect.fields)
             if (
-                aspect.survivorship != Survivorship.SOURCE_PRIORITY
-                or len(set(aspect.precedence)) != len(aspect.precedence)
+                len(set(aspect.precedence)) != len(aspect.precedence)
                 or any(kind not in SourceKind.values for kind in aspect.precedence)
             ):
-                error(f"Invalid survivorship or precedence on {key!r}.", "E042")
+                error(f"Invalid source precedence on {key!r}.", "E042")
             columns = {name: cls.statement_subject_model._meta.get_field(name) for name in aspect.fields}
             members = (
                 aspect.member
@@ -1179,7 +1202,7 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
         """The one trust ordering: preferred rank, source precedence, confidence, ties, recency, identity.
 
         Survivorship, cross-subject member resolution and merge collapse all sort
-        by this key; :class:`Survivorship` strategies reorder its components.
+        by this key.
         Recency is ``updated_at``, when the source last changed its stance
         (:meth:`save`).
         """

@@ -1,6 +1,6 @@
 """Reusable GraphQL projection of audit user-references.
 
-``AuditMixin`` (``angee.models``) stamps ``created_by`` / ``updated_by``
+``AuditMixin`` (``angee.base.models``) stamps ``created_by`` / ``updated_by``
 foreign keys on a row. Every audited GraphQL type needs the same projection of
 those keys: the actor's public id plus a display label, resolved **without**
 exposing the guarded user object — the id goes through IAM's ``user_public_id``
@@ -22,11 +22,11 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
+from strawberry_django.utils.requests import get_request
 from django.db.models import Prefetch
 
 from angee.graphql.ids import optional_public_id
 from angee.iam.identity import user_display_label, user_label, user_label_queryset, user_public_id
-from angee.iam.permissions import request_from_info
 
 
 def user_label_prefetch(relation: str, _info: strawberry.Info) -> Prefetch:
@@ -57,7 +57,7 @@ class AuthoredRefMixin:
         if hasattr(self, "_iam_created_by_label_source"):
             user = cast(Any, self)._iam_created_by_label_source
             return user_label(user) if user is not None else None
-        return user_display_label(cast(Any, self).created_by_id, request=request_from_info(info))
+        return user_display_label(cast(Any, self).created_by_id, request=get_request(info))
 
     @strawberry_django.field(only=["updated_by_id"])
     def updated_by(self) -> strawberry.ID | None:
@@ -72,7 +72,7 @@ class AuthoredRefMixin:
         if hasattr(self, "_iam_updated_by_label_source"):
             user = cast(Any, self)._iam_updated_by_label_source
             return user_label(user) if user is not None else None
-        return user_display_label(cast(Any, self).updated_by_id, request=request_from_info(info))
+        return user_display_label(cast(Any, self).updated_by_id, request=get_request(info))
 
 
 @strawberry.type
@@ -102,4 +102,4 @@ class TrashedRefMixin:
         if hasattr(self, "_iam_trashed_by_label_source"):
             user = cast(Any, self)._iam_trashed_by_label_source
             return user_label(user) if user is not None else None
-        return user_display_label(cast(Any, self).trashed_by_id, request=request_from_info(info))
+        return user_display_label(cast(Any, self).trashed_by_id, request=get_request(info))

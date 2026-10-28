@@ -19,7 +19,7 @@ from rebac.backends import backend
 from rebac.relationships import write_relationships
 
 from angee.iam.roles import principal_access
-from angee.identity import public_subject_ref
+from angee.base.identity import public_subject_ref
 from angee.messaging.testing.models import Channel, Message, Thread
 from angee.projects.testing.models import Project, ProjectBinding
 from tests.conftest import Backend, Drive, Folder, Vendor

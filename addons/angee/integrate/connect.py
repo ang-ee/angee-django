@@ -11,12 +11,13 @@ not required).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.db import models, transaction
+from django.http import HttpRequest
 from rebac import system_context
 
 from angee.integrate.credentials import CredentialKind
@@ -28,6 +29,46 @@ from angee.integrate.oauth.errors import (
     OAuthFlowError,
 )
 from angee.integrate.oauth.state import StateFlow, StateRecord
+
+
+if TYPE_CHECKING:
+    from angee.integrate.models import Integration, OAuthClient
+    from angee.integrate.models import Credential as CredentialModel
+
+
+def connect_integration_target(
+    integration: Integration,
+    oauth_client: OAuthClient,
+    *,
+    user: AbstractBaseUser,
+    request: HttpRequest,
+    redirect_uri: str,
+    next_path: str,
+) -> flow.OAuthStart | None:
+    """Attach an owned reusable credential, or start the owner's bound OAuth flow.
+
+    None means attachment completed. OAuthStart is the existing native browser
+    flow contract; transports own authentication/exposure and result projection.
+    """
+
+    integration.require_connect(user)
+    oauth_client.require_configured()
+    credential_model = cast("type[CredentialModel]", apps.get_model("integrate", "Credential"))
+    credential = credential_model.objects.live_oauth_for_user(user, oauth_client)
+    if credential is not None:
+        integration.attach_credential(credential)
+        return None
+    if not redirect_uri:
+        raise OAuthFlowError("redirect_uri_required", 400, "OAuth redirect URI is required.")
+    return flow.start(
+        request,
+        oauth_client,
+        redirect_uri,
+        user_id=str(user.pk),
+        next_path=flow.coerce_next_path(next_path, request),
+        flow=StateFlow.CONNECT,
+        integration_id=str(integration.sqid),
+    )
 
 
 @dataclass(frozen=True, slots=True)

@@ -13,7 +13,7 @@ from typing import Any
 from django.apps import apps
 from django.db.models.signals import post_save
 
-from angee.signals import bulk_updated
+from angee.base.signals import bulk_updated, connect_for_models
 
 _MARKDOWN_LABEL = "knowledge.markdownpage"
 
@@ -21,8 +21,15 @@ _MARKDOWN_LABEL = "knowledge.markdownpage"
 def connect() -> None:
     """Wire knowledge-owned receivers after app population."""
 
-    post_save.connect(rebuild_backlinks, dispatch_uid="angee.knowledge.backlinks")
-    bulk_updated.connect(refresh_bulk_targets, dispatch_uid="angee.knowledge.backlinks.bulk")
+    def is_page(model: type[Any]) -> bool:
+        return model._meta.label_lower in {_MARKDOWN_LABEL, "knowledge.page"}
+
+    connect_for_models(
+        post_save, rebuild_backlinks, applies=is_page, dispatch_uid="angee.knowledge.backlinks",
+    )
+    connect_for_models(
+        bulk_updated, refresh_bulk_targets, applies=is_page, dispatch_uid="angee.knowledge.backlinks.bulk",
+    )
 
 
 def rebuild_backlinks(

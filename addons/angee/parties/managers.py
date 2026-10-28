@@ -38,10 +38,10 @@ from rebac import (
 )
 from rebac.actors import to_subject_ref
 
-from angee.actors import actor_user_id
-from angee.identity import instances_from_public_ids
-from angee.impl import resolve_hooks
-from angee.models import (
+from angee.base.permissions import actor_user_id
+from angee.base.identity import instances_from_public_ids
+from angee.hooks import resolve_hooks
+from angee.base.models import (
     ArchiveQuerySet,
     HierarchyQuerySet,
     MergeableQuerySet,

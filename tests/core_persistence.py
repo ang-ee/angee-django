@@ -12,7 +12,7 @@ from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.models import (
+from angee.base.models import (
     AngeeModel,
     ImmutableFieldsMixin,
     ItemOwnershipMixin,

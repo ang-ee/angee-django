@@ -1,0 +1,516 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FormSpecDocument",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "#/$defs/Field"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "object"
+    }
+  },
+  "$defs": {
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        }
+      ],
+      "title": "JsonValue"
+    },
+    "Filter": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "operator",
+            "value"
+          ],
+          "properties": {
+            "operator": {
+              "enum": [
+                "and",
+                "or"
+              ]
+            },
+            "key": {
+              "type": "string"
+            },
+            "value": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Filter"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "operator",
+            "field"
+          ],
+          "properties": {
+            "operator": {
+              "enum": [
+                "eq",
+                "ne",
+                "eqs",
+                "nes",
+                "lt",
+                "gt",
+                "lte",
+                "gte",
+                "in",
+                "nin",
+                "ina",
+                "nina",
+                "contains",
+                "ncontains",
+                "containss",
+                "ncontainss",
+                "between",
+                "nbetween",
+                "null",
+                "nnull",
+                "startswith",
+                "nstartswith",
+                "startswiths",
+                "nstartswiths",
+                "endswith",
+                "nendswith",
+                "endswiths",
+                "nendswiths"
+              ]
+            },
+            "field": {
+              "type": "string",
+              "minLength": 1
+            },
+            "value": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "additionalProperties": false
+        }
+      ],
+      "title": "Filter"
+    },
+    "Relation": {
+      "type": "object",
+      "required": [
+        "resource"
+      ],
+      "properties": {
+        "resource": {
+          "type": "string",
+          "minLength": 1
+        },
+        "permission": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "labelField": {
+          "type": "string",
+          "minLength": 1
+        },
+        "filters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Filter"
+          }
+        },
+        "create": {
+          "type": "object",
+          "required": [
+            "resource"
+          ],
+          "properties": {
+            "resource": {
+              "type": "string",
+              "minLength": 1
+            },
+            "defaultValues": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              }
+            },
+            "actionLabel": {
+              "type": "string",
+              "minLength": 1
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "title": "Relation"
+    },
+    "Field": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "anyOf": [
+            {
+              "enum": [
+                "string",
+                "integer",
+                "number",
+                "boolean",
+                "object",
+                "array",
+                "any",
+                "null"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean",
+                  "object",
+                  "array",
+                  "null"
+                ]
+              }
+            }
+          ]
+        },
+        "required": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "nullable": {
+          "type": "boolean"
+        },
+        "minimum": {
+          "type": "number"
+        },
+        "maximum": {
+          "type": "number"
+        },
+        "default": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "const": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pattern": {
+          "type": "string"
+        },
+        "enum": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        "discriminator": {
+          "type": "object",
+          "required": [
+            "propertyName"
+          ],
+          "properties": {
+            "propertyName": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "propertyOrder": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "widget": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "addLabel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "removeLabel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "placeholder": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hidden": {
+          "type": "boolean"
+        },
+        "layout": {
+          "enum": [
+            "context",
+            "input"
+          ]
+        },
+        "omittable": {
+          "type": "boolean"
+        },
+        "presenceRequired": {
+          "type": "boolean"
+        },
+        "defaultValue": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "disabled": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          }
+        },
+        "relation": {
+          "$ref": "#/$defs/Relation"
+        },
+        "minLength": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxLength": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "minItems": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxItems": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Field"
+          }
+        },
+        "$defs": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Field"
+          }
+        },
+        "definitions": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Field"
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/Field"
+        },
+        "if": {
+          "$ref": "#/$defs/Field"
+        },
+        "then": {
+          "$ref": "#/$defs/Field"
+        },
+        "else": {
+          "$ref": "#/$defs/Field"
+        },
+        "not": {
+          "$ref": "#/$defs/Field"
+        },
+        "oneOf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Field"
+          }
+        },
+        "anyOf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Field"
+          }
+        },
+        "allOf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Field"
+          }
+        },
+        "$ref": {
+          "type": "string"
+        },
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/Field"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "title": "FormSpecWire"
+    },
+    "Annotations": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "propertyOrder": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "widget": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "addLabel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "removeLabel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "placeholder": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hidden": {
+          "type": "boolean"
+        },
+        "layout": {
+          "enum": [
+            "context",
+            "input"
+          ]
+        },
+        "omittable": {
+          "type": "boolean"
+        },
+        "presenceRequired": {
+          "type": "boolean"
+        },
+        "defaultValue": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "disabled": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          }
+        },
+        "relation": {
+          "$ref": "#/$defs/Relation"
+        }
+      },
+      "title": "Annotations"
+    }
+  }
+}

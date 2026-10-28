@@ -9,7 +9,7 @@ from django.db.models.signals import post_delete, pre_delete
 
 from angee.agents.models import ACTIVE_TURN_DELETE_MESSAGE, Agent, AgentSession, AgentTurn
 from angee.iam.service_users import deactivate_service_user
-from angee.signals import connect_for_models
+from angee.base.signals import connect_for_models
 
 
 def connect() -> None:

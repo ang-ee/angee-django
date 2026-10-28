@@ -145,10 +145,12 @@ already been loaded. Read the relevant owner before acting.
 
 The first question for any change is *what level does it belong to?*
 
-- **Framework core** — the composition language, model/data toolkit, serving
-  seams, and jobs seam inherited by every project. The core is not an addon.
-- **Framework addon** — a reusable product capability that ships with Angee;
-  also called a base addon. API protocols are capabilities too.
+- **Framework core** — generic Django composition, the Angee host, serving
+  entrypoints and small shared primitives. Core owns no product models.
+- **Foundation addon (`angee.base`)** — reusable Django models, fields, managers,
+  querysets, identity, validation and permission integration. Its app label is `base`.
+- **Framework addon** — a reusable capability that ships with Angee. Provenance,
+  jobs, web and API protocols have their own optional addon owners.
 - **Consumer addon** — product logic for a specific project.
 
 Never solve at the consumer level what the framework should own, and never push
@@ -158,8 +160,8 @@ product specifics down into the framework. Every fact lives at its owning level.
 
 ```text
 .                    # consolidated framework source slot
-├── angee/           # django-angee core: models/, data/, compose/, jobs/, serving seams
-├── addons/          # standard angee.* folder addons with co-located web fragments
+├── angee/           # django-angee host, generic compose/, serving seams and shared primitives
+├── addons/          # angee.base foundation and capability addons; co-located web fragments
 ├── packages/        # schema-independent @angee/* packages and workshop/test tooling
 ├── examples/        # consumer addons and reference browser suite
 ├── templates/       # Copier project, stack, workspace, service, and addon sources

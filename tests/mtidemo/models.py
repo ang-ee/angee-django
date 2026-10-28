@@ -17,7 +17,7 @@ from __future__ import annotations
 from django.db import models
 from rebac import to_object_ref
 
-from angee.models import AngeeDataModel
+from angee.base.models import AngeeDataModel
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 
 

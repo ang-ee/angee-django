@@ -12,8 +12,8 @@ from django.db import connection, models
 from strawberry_django_aggregates import TimeGranularity, group_by_alias
 from strawberry_django_hasura.filtering import PORTABLE_LOOKUPS
 
-from angee.data.field_classification import is_to_one_relation
-from angee.data.metadata import (
+from angee.graphql.introspection import is_to_one_relation
+from angee.graphql.data.contracts import (
     DataDefaultSortMetadata,
     DataQueryAxis,
     DataQueryDrill,

@@ -11,11 +11,12 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
-from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import DatabaseError, transaction
 from django.db.models import F, Q
 from django.db.models.functions import Now
 from django.db.models.signals import post_save
+from django.utils.text import capfirst
 from rebac import (
     ObjectRef,
     RelationshipTuple,
@@ -30,15 +31,19 @@ from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.relationships import delete_relationship, write_relationships
 from rebac.resources import model_for_resource_type
+from rebac.schema import FieldBinding
 
 from angee.errors import exception_text
-from angee.fields import ModelLabelField
-from angee.iam.identity import user_label
+from angee.base.fields.text import ModelLabelField
+from angee.iam.identity import group_subject_type, user_label
 from angee.iam.service_users import sync_service_user
-from angee.identity import public_id_of
-from angee.impl import ImplBase, ImplClassField, resolve_all_impl_classes
-from angee.models import AngeeManager, AngeeQuerySet, record_display_label, row_lock_paths
-from angee.permissions import rebac_relation_label
+from angee.base.identity import public_id_of
+from angee.base.implementations import ImplBase, resolve_all_impl_classes
+from angee.base.fields.implementation import ImplClassField
+from angee.base.models import AngeeManager, AngeeQuerySet, record_display_label, row_lock_paths
+from rebac import user_subject_type
+from angee.base.permissions import effective_rebac_definition
+from angee.base.signals import connect_for_models
 
 if TYPE_CHECKING:
     from angee.workflows.models import Trigger, TriggerEvent
@@ -79,7 +84,21 @@ class TriggerGrantTarget:
     def relation_label(self) -> str:
         """Use the relation owner's display name for this grant."""
 
-        return rebac_relation_label(self.resource.resource_type, self.relation)
+        model = model_for_resource_type(self.resource.resource_type)
+        if model is not None:
+            definition = effective_rebac_definition(model)
+            relation = (
+                next((item for item in definition.relations if item.name == self.relation), None)
+                if definition else None
+            )
+            if relation is not None and isinstance(relation.backing, FieldBinding) and "__" not in relation.backing.path:
+                try:
+                    field = model._meta.get_field(relation.backing.path)
+                except FieldDoesNotExist:
+                    pass
+                else:
+                    return capfirst(str(field.verbose_name))
+        return capfirst(self.relation.replace("_", " "))
 
     def readable_target_label(self, actor: Any) -> str | None:
         """Return the record label only when the actor can read that row."""
@@ -364,11 +383,13 @@ class RecordChanged(TriggerSource):
     @classmethod
     def connect(cls) -> None:
         """Connect opted-in senders independently of live broadcasting policy."""
-        for model in apps.get_models():
-            if issubclass(model, RecordChangedOptIn):
-                cls.validate_model(model)
-                post_save.connect(cls.changed, sender=model, weak=False,
-                                  dispatch_uid=f"workflows.record_changed.{model._meta.label_lower}")
+        connect_for_models(
+            post_save,
+            cls.changed,
+            applies=lambda model: issubclass(model, RecordChangedOptIn),
+            prepare=cls.validate_model,
+            dispatch_uid="workflows.record_changed",
+        )
 
     @classmethod
     def changed(cls, sender: Any, *, instance: Any, raw: bool = False, **kwargs: Any) -> None:
@@ -527,11 +548,11 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
             return None
         resource = to_object_ref(trigger.workflow)
         readers: list[str] = []
-        for subject_type, label in (("auth/user", "User"), ("auth/group", "Group")):
+        for subject_type, label in ((user_subject_type(), "User"), (group_subject_type(), "Group")):
             refs = backend().lookup_subjects(resource=resource, action="monitor", subject_type=subject_type)
             with system_context(reason="workflows.enable_preview readers"):
                 resolved = resolve_subjects(refs)
-            readers.extend(f"{label}: {user_label(row) if subject_type == 'auth/user' else row}"
+            readers.extend(f"{label}: {user_label(row) if subject_type == user_subject_type() else row}"
                            for row in resolved.values())
         return TriggerEnablePreview(
             grants=tuple(sorted(

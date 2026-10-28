@@ -16,8 +16,6 @@ import environ
 import sentry_sdk
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
-from sentry_sdk.integrations.celery import CeleryIntegration
-from sentry_sdk.integrations.django import DjangoIntegration
 from sentry_sdk.integrations.logging import ignore_logger
 
 from angee.addons import addon_manifest
@@ -37,10 +35,9 @@ DEFAULTS_SETTINGS_MODULE = "angee.defaults"
 def prepend_import_paths(paths: Iterable[Path]) -> None:
     """Put import paths first and refresh the already-loaded framework package.
 
-    ``angee.settings`` necessarily imports the foundation package before
-    project addon roots are known.  Since the foundation now lives directly in
-    that regular package, its pkgutil path must gain the configured ``angee``
-    portions after those roots enter ``sys.path``.
+    ``angee.settings`` imports the host package before project addon roots are
+    known. Its namespace path must gain the configured ``angee`` portions after
+    those roots enter ``sys.path``.
     """
 
     import_paths = tuple(path.resolve() for path in paths if path.exists())
@@ -99,8 +96,8 @@ class ProjectContract:
         and Celery integrations must start. The SDK reads ``SENTRY_DSN``,
         ``SENTRY_ENVIRONMENT`` and ``SENTRY_RELEASE`` itself.
 
-        Only the Django and Celery integrations are enabled, and request bodies
-        and frame locals stay in the process. Unexpected GraphQL resolver errors
+        Sentry enables its native integrations for installed libraries. Request
+        bodies and frame locals stay in the process. Unexpected GraphQL resolver errors
         reach Sentry only through the schema sanitizer's log record, which omits
         exception values. Strawberry's own error logger is ignored so each failure
         is reported once.
@@ -113,8 +110,6 @@ class ProjectContract:
             send_default_pii=False,
             include_local_variables=False,
             max_request_body_size="never",
-            auto_enabling_integrations=False,
-            integrations=[DjangoIntegration(), CeleryIntegration()],
         )
 
     def load(self) -> Path:

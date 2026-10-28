@@ -42,13 +42,13 @@ from rebac.mixins import RebacModelBase
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
-from angee.actors import actor_user_id
-from angee.fields import StateField
-from angee.impl import ImplClassField
+from angee.base.permissions import actor_user_id
+from angee.base.fields.state import StateField
+from angee.base.fields.implementation import ImplClassField
 from angee.knowledge.retrieval import RetrievalBackend
-from angee.lineage import concrete_child, concrete_child_accessor, concrete_child_models
+from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
 from angee.messaging.models import ThreadedModelMixin
-from angee.models import (
+from angee.base.models import (
     AngeeDataModel,
     AuditMixin,
     HierarchyMixin,
@@ -64,8 +64,7 @@ from angee.provenance.context import changeset, changeset_model, require_changes
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
-from angee.provenance.contrib.angee.serialization import creation_fingerprint
-from angee.refs import RecordRef
+from angee.base.refs import RecordRef
 from angee.tags.models import TaggedModel
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")
@@ -212,7 +211,7 @@ class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
         user_id = actor_user_id(actor)
         if user_id is None:
             raise PermissionDenied("Cloning a vault requires a user actor.")
-        fingerprint = creation_fingerprint([template.pk, name, owned])
+        claim_values = [template.pk, name, owned]
 
         def insert() -> VaultT:
             source = self.with_actor(actor).get(pk=template.pk)
@@ -260,15 +259,16 @@ class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
         claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
         with claim_boundary, transaction.atomic():
             if idempotency_key is not None:
-                replay = changeset_model().objects.claim(
+                vault = changeset_model().objects.claim_created(
                     f"knowledge.vault.clone:{user_id}",
                     idempotency_key,
-                    fingerprint=fingerprint,
+                    values=claim_values,
+                    model=self.model,
+                    unavailable=ValidationError(
+                        {"idempotency_key": "The claimed clone result is unavailable."},
+                    ),
                 )
-                if replay is not None:
-                    vault = replay.created_row
-                    if not isinstance(vault, self.model):
-                        raise ValidationError({"idempotency_key": "The claimed clone result is unavailable."})
+                if vault is not None:
                     return vault.with_actor(actor)
             vault = insert()
             if idempotency_key is not None:
@@ -362,7 +362,7 @@ class Vault(OwnerMixin, TrashMixin, HistoryMixin, AngeeDataModel):
         registry, and the boundary is a method, not ``_meta`` shape-probing.
         """
 
-        backend_class = cast("type[RetrievalBackend]", type(self).resolve_impl_class("retrieval_class", key))
+        backend_class = cast("type[RetrievalBackend]", ImplClassField.for_model(type(self), "retrieval_class").resolve_class(key))
         return backend_class(self)
 
 
@@ -624,17 +624,18 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
             raise ValidationError("Write a note before posting.")
         role = self._role(role)
         reference = generic_target(self._saved(target, "target"))
-        fingerprint = creation_fingerprint([reference.content_type.pk, reference.object_id, vault.pk, role, body])
+        claim_values = [reference.content_type.pk, reference.object_id, vault.pk, role, body]
         boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
         with boundary, transaction.atomic():
             if idempotency_key is not None:
-                replay = changeset_model().objects.claim(
-                    f"knowledge.record_note:{user_id}", idempotency_key, fingerprint=fingerprint,
+                binding = changeset_model().objects.claim_created(
+                    f"knowledge.record_note:{user_id}",
+                    idempotency_key,
+                    values=claim_values,
+                    model=self.model,
+                    unavailable=ValidationError("The claimed note is unavailable."),
                 )
-                if replay is not None:
-                    binding = replay.created_row
-                    if not isinstance(binding, self.model):
-                        raise ValidationError("The claimed note is unavailable.")
+                if binding is not None:
                     return binding.with_actor(actor)
             page_model = self.model._meta.apps.get_model("knowledge", "Page")
             title = f"{body.splitlines()[0][:100]} · {timezone.now().isoformat()}"

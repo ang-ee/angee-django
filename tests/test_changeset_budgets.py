@@ -15,7 +15,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import path
 from rebac import system_context
 
-from angee.lineage import concrete_child_models
+from angee.base.lineage import concrete_child_models
 from angee.messaging.testing.models import Party
 from angee.provenance.context import changeset, changeset_model_label, current_changeset
 from angee.serialization import canonical_json_sha256

@@ -16,11 +16,11 @@ from rebac.roles import grant as grant_role
 
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import GraphQLSchemas
-from angee.impl import impl_choices_enum
+from angee.base.implementations import impl_choices_enum
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedMessage, ParsedPart
 from angee.messaging.events import message_ingested
-from angee.models import AngeeQuerySet
+from angee.base.models import AngeeQuerySet
 from angee.workflows import triggers
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step

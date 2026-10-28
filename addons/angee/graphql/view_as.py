@@ -18,7 +18,7 @@ from strawberry.extensions import SchemaExtension
 from strawberry.types.graphql import OperationType
 
 from angee.errors import DomainError
-from angee.identity import public_id_of
+from angee.base.identity import public_id_of
 
 if TYPE_CHECKING:
     from django.contrib.auth.models import _User

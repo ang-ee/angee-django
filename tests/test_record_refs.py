@@ -17,19 +17,12 @@ from rebac import ObjectRef, generic_target, system_context
 from rebac.resources import model_resource_type
 
 from angee.knowledge import schema as knowledge_schema
-from angee.lineage import concrete_child, concrete_child_accessor, concrete_child_models
-from angee.models import RecordRefMixin
-from angee.models import refs as record_refs
-from angee.models.refs import delete_record_refs, record_edges_by_target
+from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
+from angee.base.models import RecordRefMixin
+from angee.base.models import refs as record_refs
+from angee.base.models.refs import delete_record_refs, record_edges_by_target
 from angee.projects.testing.models import Link, Task
-from angee.refs import (
-    RecordRef,
-    RetainedGenericRelation,
-    ancestor_object_refs,
-    generic_pointer_model,
-    generic_pointer_target,
-    record_ref_for,
-)
+from angee.base.refs import RecordRef, RetainedGenericRelation, ancestor_object_refs, generic_pointer_model, generic_pointer_target
 from angee.storage import schema as storage_schema
 from tests.conftest import File, FileAttachment, RecordBinding, addon_schema
 from tests.mtidemo.models import (
@@ -98,13 +91,13 @@ def test_record_ref_for_instance_projects_identity_and_rebac_type(record_ref_tab
         typed = RecordRefTypedTarget.objects.create(name="typed")
     plain = RecordRefPlainTarget.objects.create(name="plain")
 
-    assert record_ref_for(typed) == RecordRef(
+    assert RecordRef.from_instance(typed) == RecordRef(
         model_label="recordrefdemo.RecordRefTypedTarget",
         object_id=typed.pk,
         public_id=typed.public_id,
         resource_type="tests/record-ref-target",
     )
-    assert record_ref_for(plain) == RecordRef(
+    assert RecordRef.from_instance(plain) == RecordRef(
         model_label="recordrefdemo.RecordRefPlainTarget",
         object_id=plain.pk,
         public_id=plain.sqid,
@@ -211,7 +204,7 @@ def test_record_ref_mixin_uses_arbitrary_field_and_column_names(record_ref_table
     edge = RecordRefCustomEdge.objects.get(pk=edge.pk)
 
     with CaptureQueriesContext(connection) as queries:
-        assert edge.record_ref == record_ref_for(target)
+        assert edge.record_ref == RecordRef.from_instance(target)
 
     assert len(queries) == 0
 
@@ -253,7 +246,7 @@ def test_record_ref_mixin_projects_each_source_addon_reference(
     unrelated_relations = {field.attname: None for field in ConcreteReference._meta.fields if field.is_relation}
     edge = ConcreteReference(**unrelated_relations, **{reference_name: target})
 
-    assert edge.record_ref == record_ref_for(target)
+    assert edge.record_ref == RecordRef.from_instance(target)
 
 
 @isolate_apps()

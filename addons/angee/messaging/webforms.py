@@ -21,6 +21,9 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.core.validators import EmailValidator
 
+from angee.base.schemas.forms import validate_form_spec
+from angee.base.validators import validation_issues
+
 SCHEMA_VERSION = 1
 SCALAR_TYPES = frozenset({"string", "integer", "number", "boolean"})
 SUBMISSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -39,48 +42,27 @@ class WebformField:
     """One validated scalar property in a public form spec."""
 
     name: str
-    kind: str
     label: str
     required: bool
     read_only: bool
     email: bool
-    enum: tuple[Any, ...] | None
-    const: Any
-    has_const: bool
-    max_length: int | None
+    schema: dict[str, Any]
 
     def validate(self, value: Any, *, max_bytes: int) -> str | None:
-        """Return one answer error, or ``None`` when the scalar is valid."""
-
-        if self.kind == "string":
-            if not isinstance(value, str):
-                return "Enter text."
-            if self.required and not value.strip():
-                return "This field is required."
-            if self.max_length is not None and len(value) > self.max_length:
-                return f"Use at most {self.max_length} characters."
-            if self.email and value:
-                try:
-                    EmailValidator()(value)
-                except ValidationError:
-                    return "Enter a valid email address."
-        elif self.kind == "integer":
-            if isinstance(value, bool) or not isinstance(value, int):
-                return "Enter an integer."
-        elif self.kind == "number":
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                return "Enter a number."
+        """Apply the native scalar contract, then the public ingress policies."""
+        issues = validation_issues(self.schema, value)
+        if issues:
+            return next(iter(issues.values()))[0]
+        # Public JSON ingress preserves its exact integer representation contract.
+        if self.schema["type"] == "integer" and type(value) is not int:
+            return "Enter an integer."
+        if self.required and isinstance(value, str) and not value.strip():
+            return "This field is required."
+        if self.email and value:
             try:
-                json.dumps(value, allow_nan=False)
-            except TypeError, ValueError:
-                return "Enter a finite number."
-        elif self.kind == "boolean" and not isinstance(value, bool):
-            return "Choose true or false."
-
-        if self.enum is not None and value not in self.enum:
-            return "Choose one of the declared options."
-        if self.has_const and value != self.const:
-            return "Use the form's declared value."
+                EmailValidator()(value)
+            except ValidationError:
+                return "Enter a valid email address."
         if _scalar_size(value) > max_bytes:
             return f"This field exceeds {max_bytes} bytes."
         return None
@@ -88,7 +70,7 @@ class WebformField:
 
 @dataclass(frozen=True)
 class WebformSpec:
-    """The Python validation mirror of a versioned public form spec."""
+    """Messaging public-ingress policy over the canonical FormSpec contract."""
 
     version: int
     fields: tuple[WebformField, ...]
@@ -103,11 +85,11 @@ class WebformSpec:
             raise ValidationError({"form_schema_version": f"Unsupported webform schema version {version}."})
         if not isinstance(value, dict):
             raise ValidationError({"form_schema": "A form schema must be an object."})
-        if value.get("type", "object") != "object":
-            raise ValidationError({"form_schema": 'The form schema root type must be "object".'})
+        try:
+            validate_form_spec({key: item for key, item in value.items() if key != "success"})
+        except ValidationError as error:
+            raise ValidationError({"form_schema": error.messages}) from error
         properties = value.get("properties", {})
-        if not isinstance(properties, dict):
-            raise ValidationError({"form_schema": "Form schema properties must be an object."})
         if len(properties) > MAX_FIELDS:
             raise ValidationError({"form_schema": f"A public form may declare at most {MAX_FIELDS} fields."})
         required_value = value.get("required", [])
@@ -198,21 +180,11 @@ def _deserialize_field(name: Any, value: Any, *, required: bool) -> WebformField
     if kind not in SCALAR_TYPES:
         raise ValidationError({"form_schema": f"Field {name!r} must declare string, integer, number, or boolean type."})
     widget = value.get("widget")
-    if widget is not None and (not isinstance(widget, str) or not widget):
-        raise ValidationError({"form_schema": f"Field {name!r} widget must be a non-empty string."})
     email = widget == "email"
     if email and kind != "string":
         raise ValidationError({"form_schema": f"Email field {name!r} must have string type."})
     label = value.get("label", name)
-    if not isinstance(label, str):
-        raise ValidationError({"form_schema": f"Field {name!r} label must be a string."})
-    for presentation_key in ("description", "placeholder"):
-        presentation = value.get(presentation_key)
-        if presentation is not None and not isinstance(presentation, str):
-            raise ValidationError({"form_schema": f"Field {name!r} {presentation_key} must be a string."})
     read_only = value.get("readOnly", False)
-    if not isinstance(read_only, bool):
-        raise ValidationError({"form_schema": f"Field {name!r} readOnly must be a boolean."})
     if required and read_only:
         raise ValidationError({"form_schema": f"Required field {name!r} cannot be read-only."})
     max_length = value.get("maxLength")
@@ -234,21 +206,11 @@ def _deserialize_field(name: Any, value: Any, *, required: bool) -> WebformField
             )
         option_values: list[str] = []
         for index, option in enumerate(options_value):
-            if not isinstance(option, dict):
-                raise ValidationError({"form_schema": f"Field {name!r} option {index} must be an object."})
-            option_value = option.get("value")
-            option_label = option.get("label")
-            disabled = option.get("disabled", False)
+            option_value = option["value"]
             if not isinstance(option_value, str) or not option_value:
                 raise ValidationError(
                     {"form_schema": f"Field {name!r} option {index} value must be a non-empty string."}
                 )
-            if not isinstance(option_label, str) or not option_label:
-                raise ValidationError(
-                    {"form_schema": f"Field {name!r} option {index} label must be a non-empty string."}
-                )
-            if not isinstance(disabled, bool):
-                raise ValidationError({"form_schema": f"Field {name!r} option {index} disabled must be a boolean."})
             if option_value in option_values:
                 raise ValidationError({"form_schema": f"Field {name!r} option values must be unique."})
             option_values.append(option_value)
@@ -263,33 +225,22 @@ def _deserialize_field(name: Any, value: Any, *, required: bool) -> WebformField
         if len(set(enum_value)) != len(enum_value):
             raise ValidationError({"form_schema": f"Field {name!r} enum values must be unique."})
         enum = tuple(enum_value)
-        for item in enum:
-            error = WebformField(
-                name=name,
-                kind=kind,
-                label=label,
-                required=False,
-                read_only=False,
-                email=False,
-                enum=None,
-                const=None,
-                has_const=False,
-                max_length=max_length,
-            ).validate(item, max_bytes=1_048_576)
-            if error:
-                raise ValidationError({"form_schema": f"Field {name!r} enum contains an invalid {kind} value."})
+    scalar_schema = {**value, "type": kind}
+    if enum is not None:
+        scalar_schema["enum"] = list(enum)
     field = WebformField(
         name=name,
-        kind=kind,
         label=label,
         required=required,
         read_only=read_only,
         email=email,
-        enum=enum,
-        const=value.get("const"),
-        has_const="const" in value,
-        max_length=max_length,
+        schema=scalar_schema,
     )
+    if enum is not None:
+        # Choice declarations must themselves satisfy the field's native constraints.
+        enum_schema = {key: item for key, item in scalar_schema.items() if key != "const"}
+        if any(validation_issues(enum_schema, item) for item in enum):
+            raise ValidationError({"form_schema": f"Field {name!r} enum contains an invalid {kind} value."})
     for default_key in ("defaultValue", "const"):
         if default_key in value:
             error = field.validate(value[default_key], max_bytes=1_048_576)

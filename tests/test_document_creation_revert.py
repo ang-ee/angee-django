@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError
 from django.test import override_settings
 from rebac import actor_context
 
-from angee.identity import public_id_of
+from angee.base.identity import public_id_of
 from angee.provenance.context import changeset
 from angee.timeline import schema as timeline_schema
 from tests.conftest import addon_schema, create_user, execute_schema

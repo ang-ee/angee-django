@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from angee.validation import validate_value
+from angee.base.validators import validate_value
 
 
 class MilestoneTemplate(BaseModel):

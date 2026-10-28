@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict
 
 from angee.messaging.inbox import InboxCoverage, InboxPage, MessageInbox
 from angee.messaging.inbox_groups import InboxGroup, InboxGroupPage, InboxGroups, InboxGroupScope
-from angee.pagination import WindowSum
+from angee.base.pagination import WindowSum
 
 
 @dataclass(frozen=True)

@@ -15,7 +15,7 @@ def test_graphql_native_crud_does_not_load_optional_provenance(tmp_path: Path) -
         '[addon]\nname="native_graphql"\ndepends_on=["angee.graphql", "django.contrib.auth"]\n'
     )
     (addon / "models.py").write_text('''from django.db import models
-from angee.models import AngeeDataModel
+from angee.base.models import AngeeDataModel
 
 class Widget(AngeeDataModel):
     runtime = True
@@ -27,7 +27,7 @@ class Widget(AngeeDataModel):
     (addon / "schema.py").write_text('''from django.apps import apps
 import strawberry
 import strawberry_django
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.node import AngeeNode
 
 Widget = apps.get_model("native_graphql", "Widget")

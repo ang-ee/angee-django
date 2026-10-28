@@ -80,20 +80,6 @@ export function StorageListContent({ controller, fileResource, navigationScope, 
       ),
     [effectiveScope, fileActions, t],
   );
-  // Uploads land in the active drive, into the current folder (or its root); the
-  // Trash scope is not an upload target.
-  const canUpload = driveId !== "" && effectiveScope !== TRASH_SCOPE;
-  const uploadTarget = useMemo(
-    () => ({
-      driveId,
-      folderId:
-        effectiveScope === ALL_SCOPE || effectiveScope === TRASH_SCOPE
-          ? null
-          : effectiveScope,
-    }),
-    [driveId, effectiveScope],
-  );
-
   return <FileBrowserContent baseFilter={baseFilter} rowHref={rowHref} bulkActions={renderBulkActions}
-    onListStateChange={onListStateChange} uploads={uploads} uploadTarget={uploadTarget} canUpload={canUpload} />;
+    onListStateChange={onListStateChange} uploads={uploads} uploadTarget={controller.uploadTarget} />;
 }

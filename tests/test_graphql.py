@@ -40,7 +40,7 @@ from rebac.middleware import ActorMiddleware
 from strawberry.django.views import GraphQLView
 from strawberry.extensions import SchemaExtension
 
-from angee.fields import StateField
+from angee.base.fields.state import StateField
 from angee.graphql import schema as schema_module
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
@@ -53,8 +53,8 @@ from angee.graphql.schema import (
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.iam.permissions import session_user
-from angee.models import AngeeModel, TransitionNotAllowed
-from angee.permissions import require_rebac_queryset
+from angee.base.models import AngeeModel, TransitionNotAllowed
+from angee.base.permissions import require_rebac_queryset
 from tests.conftest import make_addon
 from tests.core_persistence import OwnedRow
 from tests.hierdemo.models import HierNode

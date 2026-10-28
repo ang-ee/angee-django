@@ -40,6 +40,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RequestUsage, RunUsage
 from rebac import system_context
 
+from angee.base.fields import ImplClassField
 from angee.agents.backends import InferenceBackend
 from angee.agents.models import (
     IMAGE_INFERENCE_MODEL_USES,
@@ -104,7 +105,7 @@ SKILL_BLOBS = {
 def test_agent_runtime_registry_matches_implementation_keys() -> None:
     """Every selectable runtime declares the same stable key as its registry entry."""
 
-    assert AbstractAgent.impl_field("runtime_class").check() == []
+    assert ImplClassField.for_model(AbstractAgent, "runtime_class").check() == []
 
 
 # --- parse_skill_meta (pure) --------------------------------------------------

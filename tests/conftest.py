@@ -90,7 +90,7 @@ os.environ.pop("SENTRY_DSN", None)
 def composed_tables(composed_tables: None) -> None:
     """The source host's composed tables also carry the declared statement principals.
 
-    Extends the ``angee.testing`` plugin fixture of the same name: after its REBAC
+    Extends the ``angee.base.testing`` plugin fixture of the same name: after its REBAC
     sync, the install-tier principals and grants that admission reads are loaded
     (``angee.provenance.testing.load_statement_sources``), exactly as the composed
     host does.

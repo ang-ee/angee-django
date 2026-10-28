@@ -5,8 +5,8 @@ import pytest
 from django.apps import apps
 from django.core.checks.registry import registry
 
-from angee.build import apply_schema_paths, extension_source_map
-from angee.checks import (
+from angee.base.build import apply_schema_paths, extension_source_map
+from angee.base.checks import (
     check_ownership,
     check_rebac_caveats,
 )

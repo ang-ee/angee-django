@@ -11,8 +11,8 @@ from pydantic import BaseModel, ConfigDict, StrictBool, field_validator
 
 from angee.extraction.contracts import DocumentPart, Result, Source
 from angee.extraction.enums import ExtractionRole
-from angee.impl import ImplBase
-from angee.jsonschema import check_schema
+from angee.base.implementations import ImplBase
+from angee.base.validators import check_schema
 
 
 class EvidenceLayout(BaseModel):

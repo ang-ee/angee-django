@@ -35,8 +35,6 @@ def validation_error(error: BaseException | None) -> ValidationError | None:
 def classify_error(error: BaseException | None) -> ErrorClassification:
     """Share domain, authentication, permission and validation wire policy."""
 
-    from angee.models.transitions import TransitionNotAllowed
-
     if isinstance(error, DomainError):
         return ErrorClassification(error.code, error.code)
     if isinstance(error, MissingActorError):
@@ -72,6 +70,10 @@ def exception_text(error: BaseException, *, diagnostic: bool = False) -> str:
         details.append(f"{type(current).__name__}: {message}")
         current = current.__cause__ or (current.__context__ if not current.__suppress_context__ else None)
     return "; caused by ".join(details)
+
+
+class TransitionNotAllowed(Exception):
+    """A declared state transition or direct state assignment was refused."""
 
 
 class DomainError(Exception):

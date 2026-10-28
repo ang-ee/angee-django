@@ -21,9 +21,10 @@ from django.db.models.signals import post_delete, post_save
 from django.dispatch import Signal
 
 from angee.graphql.events import ChangePayload, ChangeRelatedRecord, ReadableFields
+from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.graphql.schema import GraphQLSchemas
-from angee.refs import record_ref_for, record_view_refs
-from angee.signals import bulk_updated
+from angee.base.refs import RecordRef, record_view_refs
+from angee.base.signals import bulk_updated
 
 _INMEMORY_CHANNEL_LAYER = "channels.layers.InMemoryChannelLayer"
 change_published = Signal()
@@ -264,8 +265,9 @@ def publish_change(
         return
     # Broadcast policy governs transport, not local read invalidation observers.
     # Capture it while the row is live so deletion retains the same boundary.
-    broadcast_policy = getattr(instance, "broadcasts_changes", None)
-    broadcasts = broadcast and (bool(broadcast_policy()) if callable(broadcast_policy) else True)
+    broadcasts = broadcast and (
+        not isinstance(instance, ChangeBroadcastMixin) or instance.broadcasts_changes()
+    )
     model = type(instance)
 
     payload = ChangePayload.from_instance(
@@ -309,7 +311,7 @@ def broadcast_related_records(records: Iterable[models.Model]) -> None:
     for record in records:
         by_database.setdefault(record._state.db, []).append(record)
     for using, rows in by_database.items():
-        for reference in record_view_refs(*(record_ref_for(row) for row in rows), using=using):
+        for reference in record_view_refs(*(RecordRef.from_instance(row) for row in rows), using=using):
             model = apps.get_model(reference.model_label)
             if model._meta.label_lower not in feeds:
                 continue

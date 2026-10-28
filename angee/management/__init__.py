@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from collections.abc import Sequence
 from contextlib import nullcontext
@@ -11,7 +10,7 @@ from django.conf import settings
 from django.core.management import execute_from_command_line
 from django.utils.module_loading import import_string
 
-from angee.project import PROJECT_DIR_ENV, find_project_dir
+from angee.project import bootstrap
 
 SERVER_COMMANDS = frozenset({"runserver", "serve", "test"})
 """Commands whose units of work own their boundaries instead of the process.
@@ -35,10 +34,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     """
 
     arguments = list(sys.argv if argv is None else argv)
-    project = find_project_dir(argv=arguments)
-    if project is not None:
-        os.environ.setdefault(PROJECT_DIR_ENV, str(project))
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.settings")
+    bootstrap(argv=arguments)
     command = arguments[1] if len(arguments) > 1 else "help"
     if command in SERVER_COMMANDS:
         execute_from_command_line(arguments)

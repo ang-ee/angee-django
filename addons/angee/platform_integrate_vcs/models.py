@@ -12,7 +12,7 @@ from rebac import system_context
 
 from angee.addons import available_addons
 from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
-from angee.models import AngeeManager, AngeeModel
+from angee.base.models import AngeeManager, AngeeModel
 from angee.platform_integrate_vcs.catalog import parse_addon_meta
 
 

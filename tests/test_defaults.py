@@ -10,20 +10,11 @@ import pytest
 from angee.compose.autoconfig import AutoConfig
 from angee.compose.composer import Composer
 
-CORE_APP_NAMES = [
-    "django_yamlconf",
-    "angee.compose",
-    "angee",
-    "django.contrib.contenttypes",
-    "rebac",
-    "simple_history",
-    "django_celery_beat",
-    "angee.jobs",
-]
+CORE_APP_NAMES = ["django_yamlconf", "angee.compose", "angee", "angee.base"]
 
 
 def test_defaults_prefixes_the_ordered_core_app_set(tmp_path: Path) -> None:
-    """Core and its Django app dependencies are always on before project roots."""
+    """Only host composition and the foundation prefix precede project roots."""
 
     defaults = runpy.run_module(
         "angee.defaults",

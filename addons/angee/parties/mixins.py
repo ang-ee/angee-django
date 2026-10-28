@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 
-from angee.models import (
+from angee.base.models import (
     TimestampMixin,
 )
 from angee.provenance.statements import (

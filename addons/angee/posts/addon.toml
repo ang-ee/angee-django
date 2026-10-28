@@ -6,7 +6,15 @@ description = "Public posts, feeds, engagement metrics, following/timeline, and 
 keywords = ["posts", "feeds", "engagement", "timeline"]
 category = "Data"
 # Hashtags stay in message metadata; re-add angee.tags when vocabulary governance lands.
-depends_on = ["angee.messaging", "angee.integrate", "angee.parties", "angee.graphql"]
+depends_on = [
+  "angee.base",
+  "angee.messaging",
+  "angee.integrate",
+  "angee.parties",
+  "angee.graphql",
+  "angee.provenance",
+  "angee.web",
+]
 
 [[migrations]]
 name = "single_scope_quota"

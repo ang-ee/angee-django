@@ -10,7 +10,7 @@ from django.db import models
 from django.db.models.functions import Cast
 from rebac import SubjectRef, resolve_subjects
 
-from angee.models import record_history
+from angee.provenance.contrib.angee.history import record_history
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, timeline_subject
 
 

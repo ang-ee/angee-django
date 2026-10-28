@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, get_args
+import re
+from collections.abc import Mapping
+from typing import Any, cast, get_args
 
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
@@ -15,25 +17,11 @@ from strawberry.types.lazy_type import LazyType
 from strawberry_django.utils.typing import get_django_definition
 from strawberry_django_hasura import SnakeNameConverter
 
-from angee.data import metadata as data_contract
-from angee.data.field_classification import (
-    ENUM_FIELD_WIDGETS,
-    is_archive_field,
-    is_resource_field_widget,
-    is_trash_field,
-    money_currency_field,
-    resource_field_kind,
-    resource_field_widget,
-    status_display,
-)
-from angee.data.field_classification import (
-    RESOURCE_FIELD_KINDS as _RESOURCE_FIELD_KINDS,
-)
-from angee.data.field_classification import (
-    RESOURCE_FIELD_SCALARS as _RESOURCE_FIELD_SCALARS,
-)
-from angee.graphql.introspection import surface_field_names, surface_name
-from angee.impl import ImplClassField
+from angee.graphql.data import contracts as data_contract
+from angee.graphql.introspection import is_to_many_relation, surface_field_names, surface_name
+from angee.base.fields.state import StatusDisplay
+from angee.base.models.trash import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD, ArchiveMixin, TrashMixin
+from angee.base.fields import ImplClassField
 from graphql import (
     GraphQLEnumType,
     GraphQLList,
@@ -43,6 +31,163 @@ from graphql import (
     GraphQLSchema,
     get_named_type,
 )
+
+RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list", "object"})
+
+RESOURCE_FIELD_SCALARS = frozenset(
+    {"ID", "String", "Boolean", "Int", "Float", "Decimal", "DateTime", "Date", "UUID", "JSON"}
+)
+
+RESOURCE_FIELD_WIDGETS = frozenset({
+    "select", "many2one", "tagInput", "switch", "integer", "float", "money", "datetime", "date", "json", "visibility",
+    "tone", "color",
+})
+
+ENUM_FIELD_WIDGETS = frozenset({"select", "tone"})
+
+MONEY_CURRENCY_FIELD_METADATA_KEY = "angee_currency_field"
+
+STATUS_DISPLAY_METADATA_KEY = "angee_status_display"
+
+def is_resource_field_widget(value: str) -> bool:
+    """Accept built-ins or an addon-qualified registry key (namespace.addon.widget).
+
+    Namespace segments stay lowercase; the terminal widget name also accepts
+    camelCase, matching web registry names. The addon contributes that same key
+    to its web registry. Bare unknown names remain errors so built-in typos fail
+    at schema build.
+    """
+
+    return (
+        value in RESOURCE_FIELD_WIDGETS
+        or re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+\.[a-z][a-zA-Z0-9_]*", value) is not None
+    )
+
+
+def resource_field_kind(
+    field: models.Field[Any, Any] | ForeignObjectRel | None,
+    *,
+    has_relation_axis: bool = False,
+    is_list: bool = False,
+    is_enum: bool = False,
+    is_object: bool = False,
+) -> str:
+    """Return the coarse field kind used by data-resource metadata.
+
+    Django owns relation semantics even when GraphQL projects a to-one relation as
+    a scalar ID. ``relation_object`` separately tells consumers whether the final
+    executable field accepts a sub-selection.
+    """
+
+    if is_list or (field is not None and is_to_many_relation(field)):
+        return "list"
+    if is_object and field is None and not has_relation_axis:
+        return "object"
+    if is_object or has_relation_axis:
+        return "relation"
+    if field is not None and field.is_relation:
+        return "relation"
+    if is_enum or (field is not None and getattr(field, "choices", None)):
+        return "enum"
+    return "scalar"
+
+
+def money_currency_field(
+    field: models.Field[Any, Any] | ForeignObjectRel | None,
+    metadata: Mapping[str, object] | None = None,
+) -> str | None:
+    """Return the currency path a field declares for money metadata, if any."""
+
+    return _declared_projection_fact(field, metadata, MONEY_CURRENCY_FIELD_METADATA_KEY)
+
+
+def status_display(
+    field: models.Field[Any, Any] | ForeignObjectRel | None,
+    metadata: Mapping[str, object] | None = None,
+) -> StatusDisplay | None:
+    """Return the status shape a field declares for presentation metadata, if any."""
+
+    return cast(
+        StatusDisplay | None,
+        _declared_projection_fact(field, metadata, STATUS_DISPLAY_METADATA_KEY),
+    )
+
+
+def resource_field_widget(
+    field: models.Field[Any, Any] | ForeignObjectRel | None,
+    kind: str,
+    metadata: Mapping[str, object] | None = None,
+    *,
+    scalar: str | None = None,
+) -> str | None:
+    """Return the declared or default widget owned by field classification.
+
+    Explicit surface or model declarations win. Without one, a plain GraphQL
+    ``ID`` scalar renders no widget, while a to-one relation projected as an ID
+    keeps Django's ``many2one`` semantics.
+    """
+
+    declared = _declared_projection_fact(field, metadata, "angee_widget")
+    if declared is not None:
+        return declared
+    if scalar == "ID" and not (field is not None and field.is_relation):
+        return None
+    if kind == "enum":
+        return "select"
+    if kind == "relation":
+        return "many2one"
+    if kind == "list":
+        if field is None or field.is_relation:
+            return None
+        return "tagInput"
+    if field is None:
+        return None
+    if field.is_relation:
+        return "many2one"
+    if isinstance(field, models.BooleanField):
+        return "switch"
+    if isinstance(field, models.IntegerField):
+        return "integer"
+    if isinstance(field, (models.DecimalField, models.FloatField)):
+        return "float"
+    if isinstance(field, models.DateTimeField):
+        return "datetime"
+    if isinstance(field, models.DateField):
+        return "date"
+    if isinstance(field, models.JSONField):
+        return "json"
+    return None
+
+
+def _declared_projection_fact(
+    field: models.Field[Any, Any] | ForeignObjectRel | None,
+    metadata: Mapping[str, object] | None,
+    name: str,
+) -> str | None:
+    """Return one projection declaration, preferring surface metadata to its model field."""
+
+    if isinstance(metadata, Mapping):
+        value = metadata.get(name)
+        if value not in (None, ""):
+            return str(value)
+
+    if field is None:
+        return None
+    value = getattr(field, name, None)
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def is_archive_field(field: models.Field[Any, Any] | ForeignObjectRel | None) -> bool:
+    """Recognize the archive capability on its declared model owner."""
+    return isinstance(field, models.Field) and field.name == ARCHIVE_FLAG_FIELD and issubclass(field.model, ArchiveMixin)
+
+
+def is_trash_field(field: models.Field[Any, Any] | ForeignObjectRel | None) -> bool:
+    """Recognize the trash capability on its declared model owner."""
+    return isinstance(field, models.Field) and field.name == TRASH_FLAG_FIELD and issubclass(field.model, TrashMixin)
+
 
 #: Backend-owned display-field precedence, shared by record representation and
 #: the relation group-label fallback.
@@ -497,7 +642,7 @@ def _graphql_scalar(value: object, *, kind: str, field_name: str, node_name: str
             f"resource metadata for {node_name} cannot classify GraphQL scalar for field {field_name!r}."
         )
     scalar = value.name
-    if scalar not in _RESOURCE_FIELD_SCALARS:
+    if scalar not in RESOURCE_FIELD_SCALARS:
         raise ImproperlyConfigured(
             f"resource metadata for {node_name} cannot classify GraphQL scalar for field {field_name!r} ({scalar})."
         )
@@ -568,11 +713,11 @@ def require_unique_resource_fields(
 def _validate_resource_field(model_label: str, field: data_contract.DataResourceFieldMetadata) -> None:
     """Reject impossible explicit resource field metadata."""
 
-    if field.kind not in _RESOURCE_FIELD_KINDS:
+    if field.kind not in RESOURCE_FIELD_KINDS:
         raise ImproperlyConfigured(
             f"resource metadata for {model_label} field '{field.name}' declares unsupported kind '{field.kind}'."
         )
-    if field.scalar is not None and field.scalar not in _RESOURCE_FIELD_SCALARS:
+    if field.scalar is not None and field.scalar not in RESOURCE_FIELD_SCALARS:
         raise ImproperlyConfigured(
             f"resource metadata for {model_label} field '{field.name}' declares unsupported scalar '{field.scalar}'."
         )

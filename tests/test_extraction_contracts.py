@@ -24,7 +24,7 @@ from angee.extraction.profiles import (
     PlainTextExtractionProfile,
     UnconfiguredExtractionProfile,
 )
-from angee.impl import resolve_impl_class
+from angee.base.implementations import resolve_impl_class
 from angee.workflows_extraction.steps import PreparePagesStep, RecognizePageStep
 from tests.extraction_models import Extraction
 

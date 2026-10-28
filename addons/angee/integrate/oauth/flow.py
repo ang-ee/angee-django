@@ -60,6 +60,7 @@ def issue_flow(
     the effective redirect is what we issue, sign, and exchange.
     """
 
+    oauth_client.require_configured()
     effective_redirect_uri, mode = oauth_client.resolve_connect_redirect(redirect_uri)
     state_token, record = state.issue(
         oauth_client,

@@ -19,7 +19,7 @@ from rebac import PermissionDenied, actor_context, system_context, to_object_ref
 from rebac.backends import backend
 from rebac.models import SchemaRelation, active_relationship_model
 
-from angee.build import (
+from angee.base.build import (
     apply_schema_paths,
     extension_source_map,
     merged_schema_relpath,
@@ -30,7 +30,7 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.messaging.testing.models import Party, Person, Thread
 from angee.projects.testing.models import Queue
 from angee.spaces.testing.models import Group, Membership
-from angee.testing.permissions import installed_field_owners
+from angee.base.testing.permissions import installed_field_owners
 from angee.utils.files import write_atomic
 from tests import test_messaging_graphql
 from tests.conftest import (

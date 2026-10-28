@@ -3,25 +3,15 @@
 from __future__ import annotations
 
 import math
-import os
 from collections.abc import Awaitable, Callable, Mapping
-from contextlib import AsyncExitStack
+from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from functools import partial
 from io import BytesIO
 from typing import Any, cast
 
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.project import PROJECT_DIR_ENV, find_project_dir
-
-
-def _bootstrap() -> None:
-    """Point Django at Angee's composed settings module."""
-
-    project_dir = find_project_dir()
-    if project_dir is not None:
-        os.environ.setdefault(PROJECT_DIR_ENV, str(project_dir))
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.settings")
+from angee.project import bootstrap
 
 
 def _websocket_urlpatterns() -> list[object]:
@@ -55,6 +45,20 @@ def _http_mounts() -> list[tuple[str, Any]]:
             for prefix, app in addon_contribution(app_config, "asgi", "http_mounts", allow_callable=True)
         )
     return mounts
+
+
+def _lifespans() -> list[Callable[[], AbstractAsyncContextManager[Any]]]:
+    """Return explicit lifespan factories contributed by installed addons."""
+
+    from django.apps import apps
+
+    from angee.addons import addon_contribution
+
+    return [
+        factory
+        for app_config in apps.get_app_configs()
+        for factory in addon_contribution(app_config, "asgi", "lifespans", allow_callable=True)
+    ]
 
 
 Scope = dict[str, Any]
@@ -124,12 +128,12 @@ def _application() -> Any:
     Every database connection the process opens afterwards bounds its
     statements through :func:`_bound_web_statements`.
 
-    With no WebSocket or HTTP-mount contributions the bare Django app is returned
-    (the common, non-MCP case). Otherwise a :class:`~channels.routing.ProtocolTypeRouter`
+    With no route or lifespan contributions the bare Django app is returned.
+    Otherwise a :class:`~channels.routing.ProtocolTypeRouter`
     owns the scope-type switch: ``http`` to the mounted sub-apps or Django,
     ``websocket`` to the channels stack, and ``lifespan`` to :class:`_Lifespan`,
-    which runs each mount's own ASGI lifespan (the FastMCP session manager's task
-    group) at server startup. The serving ASGI server must send the lifespan
+    which enters each addon's explicitly declared lifespan at server startup.
+    The serving ASGI server must send the lifespan
     protocol — Angee serves with uvicorn (see ``docs/stack.md``).
 
     Every WebSocket uses Django session authentication and Origin validation:
@@ -153,14 +157,15 @@ def _application() -> Any:
     _run_boot_hooks()
     websocket_patterns = _websocket_urlpatterns()
     http_mounts = _http_mounts()
-    if not websocket_patterns and not http_mounts:
+    lifespans = _lifespans()
+    if not websocket_patterns and not http_mounts and not lifespans:
         return django_asgi_app
 
     from channels.routing import ProtocolTypeRouter
 
     mapping: dict[str, ASGIApp] = {
         "http": _http_app(django_asgi_app, http_mounts),
-        "lifespan": _Lifespan([app for _prefix, app in http_mounts]),
+        "lifespan": _Lifespan(lifespans),
     }
     if websocket_patterns:
         mapping["websocket"] = websocket_application(websocket_patterns)
@@ -233,7 +238,7 @@ class _LazyApplication:
 
     def _app(self) -> ASGIApp:
         if self._wrapped is None:
-            _bootstrap()
+            bootstrap()
             self._wrapped = cast(ASGIApp, _application())
         return self._wrapped
 
@@ -275,33 +280,16 @@ def _http_app(django_app: ASGIApp, http_mounts: list[tuple[str, ASGIApp]]) -> AS
     return http_app
 
 
-def _mount_lifespan(app: Any) -> Any:
-    """Return a mounted Starlette app's lifespan context manager, or ``None``.
-
-    A StreamableHTTP app (FastMCP) carries ``session_manager.run()`` as its
-    Starlette lifespan; entering it opens the manager's task group before any
-    request. ``None`` for a mount with no lifespan.
-    """
-
-    router = getattr(app, "router", None)
-    lifespan_context = getattr(router, "lifespan_context", None)
-    return lifespan_context(app) if lifespan_context is not None else None
-
-
 class _Lifespan:
-    """Run the mounted sub-apps' ASGI lifespans for the life of the process.
+    """Enter declared addon lifespans during the server's startup and shutdown.
 
-    A FastMCP StreamableHTTP app must have its session manager running before it
-    serves a request. This drives the ASGI lifespan protocol the serving server
-    (uvicorn) sends: it enters every mount's lifespan at ``startup`` and holds the
-    task groups open via a retained ``AsyncExitStack`` until ``shutdown``. A
-    startup failure is reported to the server, never swallowed.
-    Each uvicorn worker enters and exits its own mounted lifespan, so MCP
-    session managers remain process-local and all workers can serve the mount.
+    Each process enters fresh contexts in app order and unwinds them in reverse
+    order. Startup failures are reported to the server; cancellation also closes
+    every retained context.
     """
 
-    def __init__(self, mounts: list[Any]) -> None:
-        self._mounts = mounts
+    def __init__(self, factories: list[Callable[[], AbstractAsyncContextManager[Any]]]) -> None:
+        self._factories = factories
         self._exit_stack: AsyncExitStack | None = None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -311,10 +299,8 @@ class _Lifespan:
                 if message["type"] == "lifespan.startup":
                     try:
                         async with AsyncExitStack() as stack:
-                            for app in self._mounts:
-                                lifespan = _mount_lifespan(app)
-                                if lifespan is not None:
-                                    await stack.enter_async_context(lifespan)
+                            for factory in self._factories:
+                                await stack.enter_async_context(factory())
                             self._exit_stack = stack.pop_all()
                     except Exception as error:  # reported to the server, not swallowed
                         await send({"type": "lifespan.startup.failed", "message": str(error)})

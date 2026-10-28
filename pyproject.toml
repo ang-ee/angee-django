@@ -3,13 +3,13 @@ requires = [
   # hatch-angee supports older hatchling releases, but PEP 639 license-files
   # metadata requires hatchling 1.27 or newer.
   "hatchling>=1.27",
-  "hatch-angee @ git+https://github.com/ang-ee/hatch-angee.git@10c5257e21bc19fb1fcdd9ca77f4e3c01ebfebd5",
+  "hatch-angee>=0.2.5",
 ]
 build-backend = "hatch_angee.build"
 
 [project]
 name = "django-angee"
-version = "0.2.0"
+version = "0.3.0"
 description = "Thin Django composition primitives for Angee applications."
 readme = "README.md"
 authors = [{ name = "Alexis Yushin", email = "alexis@apexive.com" }]
@@ -36,24 +36,15 @@ requires-python = ">=3.14"
 # `dynamic = ["entry-points"]` and the build hooks are injected by the hatch-angee
 # build backend (build-backend above) — see [tool.hatch-angee] below.
 dependencies = [
-  "celery[redis]>=5.5",
-  "billiard>=4.2.1,<4.3",
-  "django-celery-beat>=2.9",
   "channels>=4.0",
-  "cryptography>=44",
-  "django-simple-history>=3.13",
-  "django-sqids>=0.1",
-  "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@31d1c5ca9cee7c117e73edbd0154ba02ce7d0790",
+  # Required before this owner cutover ships: publish and pin native sync --prune-stale.
+  "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@48ab2a222cac603e6b5cba4c3d8e93e5aa2ebef0",
   # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
   # override does not accept it yet; lift the cap when rebac supports 6.1.
   "django>=6.0,<6.1",
-  "hatch-angee @ git+https://github.com/ang-ee/hatch-angee.git@10c5257e21bc19fb1fcdd9ca77f4e3c01ebfebd5",
-  "django-choices-field @ git+https://github.com/ang-ee/django-choices-field.git@b02c1488660d0bf1f4483d2e73bc842b41b70632",
+  "hatch-angee>=0.2.5",
   "django-yamlconf>=1.5.0",
   "django-environ>=0.12",
-  "jsonschema[format-nongpl]>=4.26",
-  "pydantic>=2.13",
-  "referencing>=0.37",
   # ASGI server: serves the composed app and addon-contributed channels WebSocket
   # and HTTP mounts. uvicorn sends the ASGI lifespan that runs mount lifespans;
   # [standard] adds WebSocket and --reload support for dev.
@@ -107,13 +98,20 @@ addons = [
     "agent-client-protocol==1.0.0rc2",
     "anthropic>=0.109.2",
     "authlib>=1.8.0",
+    "billiard>=4.2.1,<4.3",
+    "celery[redis]>=5.5",
     "channels-redis>=4.2",
     "channels>=4.0",
+    "cryptography>=44",
     "deepdiff>=9.1.0",
     "django-anymail>=15.1",
     "django-axes>=8.0",
+    "django-celery-beat>=2.9",
+    "django-choices-field @ git+https://github.com/ang-ee/django-choices-field.git@b02c1488660d0bf1f4483d2e73bc842b41b70632",
     "django-countries>=9,<10",
     "django-import-export>=4.4",
+    "django-simple-history>=3.13",
+    "django-sqids>=0.1",
     "django-zed-rebac[strawberry-django]>=0.27.0",
     "fastmcp>=3.4.2,<4",
     "httpcore2>=2.10,<3",
@@ -121,6 +119,7 @@ addons = [
     "httpx>=0.28.1,<0.29",
     "imapclient>=3.1.0",
     "jsonpointer>=3.1",
+    "jsonschema[format-nongpl]>=4.26",
     "mail-parser-reply>=1.36",
     "markdown-it-py>=4.2",
     "mcp>=1.2",
@@ -132,15 +131,18 @@ addons = [
     "pydantic-ai-slim[anthropic]>=2.13",
     "pydantic-ai-slim[mcp]>=2.13",
     "pydantic-ai-slim[openai]>=2.13",
+    "pydantic>=2.13",
     "pyjwt[crypto]>=2.12",
     "pypdfium2>=4.30",
     "python-dateutil>=2.9",
     "python-magic>=0.4.27",
     "pyyaml>=6",
     "qrcode[pil]>=8.2",
+    "referencing>=0.37",
     "requests>=2.32",
     "ruamel.yaml>=0.18",
     "slack-sdk>=3.43.0",
+    "sqids>=0.4.1",
     "strawberry-django-aggregates @ git+https://github.com/ang-ee/strawberry-django-aggregates.git@0f374854d19b2709b6d77ae872090ab2a751f1dc",
     "strawberry-django-hasura @ git+https://github.com/ang-ee/strawberry-django-hasura.git@4e1c2da2bcbbc90cc586fef3db8d70f5cd6ccfc0",
     "strawberry-graphql @ git+https://github.com/ang-ee/strawberry.git@273bf0456d914d4df535222c4cbae73dff46a376",
@@ -236,7 +238,7 @@ exclude = [
 select = ["E", "F", "I"]
 
 [tool.mypy]
-plugins = ["angee.typing", "angee.provenance.typing"]
+plugins = ["angee.base.typing", "angee.provenance.typing"]
 python_version = "3.14"
 cache_dir = ".mypy_cache"
 explicit_package_bases = true

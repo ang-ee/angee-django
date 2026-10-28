@@ -9,7 +9,7 @@ from django.db import models
 from rebac.managers import RebacQuerySet
 from rebac.watch import statement_keys
 
-from angee.models.query import AngeeQuerySet, AngeeUnscopedQuerySet, by_key, row_lock_paths
+from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet, MergeableUnscopedQuerySet, by_key, row_lock_paths
 from angee.provenance.querysets import HistoryQuerySet
 
 
@@ -38,3 +38,9 @@ class AngeeHistoryUnscopedQuerySet[T: models.Model](HistoryQuerySet[T], AngeeUns
 
     def capture_batches(self, keys: Sequence[Any]) -> Iterator[Self]:
         yield from by_key(self, keys)
+
+
+class AngeeHistoryMergeableUnscopedQuerySet[T: models.Model](
+    AngeeHistoryUnscopedQuerySet[T], MergeableUnscopedQuerySet[T],
+):
+    """Compose native capture with an explicitly declared merge identity API."""

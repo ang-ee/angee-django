@@ -20,7 +20,7 @@ from rebac.errors import MissingActorError
 from rebac.testing import install_schema
 
 from angee.addons import addon_manifest
-from angee.models import AngeeModel
+from angee.base.models import AngeeModel
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import _grant_tuples, materialize_grant_groups
@@ -38,7 +38,7 @@ from angee.resources.widgets import (
     resolve_ledger_xref,
     resolve_xref,
 )
-from angee.tiers import ResourceTier
+from angee.resources.tiers import ResourceTier
 from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- share fake-addon lifetime
 from tests.tables import model_tables
 
@@ -2114,7 +2114,7 @@ def test_unchanged_grant_batches_use_one_native_key_read(
     from rebac import ObjectRef, RelationshipTuple, to_subject_ref, write_relationships
     from rebac.models import PermissionAuditEvent
 
-    from angee.identity import public_subject_ref
+    from angee.base.identity import public_subject_ref
 
     settings.REBAC_LOCAL_BACKEND_STORAGE = storage
     user = get_user_model().objects.create_user(username="grant-batch-reader")

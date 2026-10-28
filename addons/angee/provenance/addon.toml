@@ -3,7 +3,9 @@ name = "angee.provenance"
 description = "Changesets attributing canonical record history to its actor and origin"
 keywords = ["provenance", "history"]
 category = "Data"
-depends_on = ["angee.graphql", "angee.timeline"]
+depends_on = ["angee.base", "angee.graphql", "angee.timeline", "angee.web", "simple_history"]
+
+dependencies = ["django-simple-history>=3.13"]
 
 [[migrations]]
 name = "changeset_actor_ref"

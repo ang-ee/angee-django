@@ -19,7 +19,7 @@ from strawberry_django.optimizer import DjangoOptimizerExtension
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.models import AngeeDataModel
+from angee.base.models import AngeeDataModel
 from tests.conftest import create_platform_admin, create_user, execute_schema, make_addon, result_data
 from tests.linesdemo.models import Document, DocumentLine, Tag
 from tests.scopedemo.models import SharedDoc
