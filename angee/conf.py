@@ -12,11 +12,11 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import django_yamlconf
 import environ
 import sentry_sdk
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
-from sentry_sdk.integrations.logging import ignore_logger
 
 from angee.addons import addon_manifest
 from angee.compose import yamlconf
@@ -97,15 +97,12 @@ class ProjectContract:
         ``SENTRY_ENVIRONMENT`` and ``SENTRY_RELEASE`` itself.
 
         Sentry enables its native integrations for installed libraries. Request
-        bodies and frame locals stay in the process. Unexpected GraphQL resolver errors
-        reach Sentry only through the schema sanitizer's log record, which omits
-        exception values. Strawberry's own error logger is ignored so each failure
-        is reported once.
+        bodies and frame locals stay in the process. Capability-specific logging
+        policy belongs to each installed app's lifecycle.
         """
 
         if not self.env.str("SENTRY_DSN", default="") or sentry_sdk.is_initialized():
             return
-        ignore_logger("strawberry.execution")
         sentry_sdk.init(
             send_default_pii=False,
             include_local_variables=False,
@@ -134,11 +131,11 @@ class ProjectContract:
             name: deepcopy(value) if yamlconf.is_setting_name(name) and isinstance(value, dict) else value
             for name, value in vars(declarations).items()
         })
-        yamlconf.load_project(project_settings, root)
-        yamlconf.reject_unexpected_sources(project_settings, root, settings_module)
-        project_yaml_settings = yamlconf.project_yaml_settings(project_settings, root)
+        predefined_settings = self._load_project_overlays(project_settings, root)
+        self._reject_unexpected_sources(project_settings, root, settings_module)
+        project_yaml_settings = self._project_yaml_settings(project_settings, root)
         self._project_apps = getattr(project_settings, "INSTALLED_APPS", ())
-        self._apply_defaults(project_settings, root)
+        self._apply_defaults(project_settings, root, predefined_settings=predefined_settings)
         self.namespace[PROJECT_YAML_SETTINGS] = project_yaml_settings
         return root
 
@@ -157,6 +154,75 @@ class ProjectContract:
         env_file = root / ".env"
         if env_file.is_file():
             self.env.read_env(env_file)
+
+    def _load_project_overlays(self, project_settings: ModuleType, root: Path) -> frozenset[str]:
+        """Apply project YAML, explicit configuration and environment in native order.
+
+        The native loader searches ancestor settings files. This host bounds its
+        public pipeline to the selected project and explicit YAMLCONF_CONFFILE.
+        Bootstrap-only variable names come from that same native pipeline, so
+        library additions remain available for expansion without becoming Django
+        settings. BASE_DIR remains the host's project-root setting.
+        """
+
+        with yamlconf.fail_on_yamlconf_errors():
+            attributes = django_yamlconf.bootstrap_attributes(str(root))
+            predefined_settings: frozenset[str] = frozenset(attributes) - {"BASE_DIR"}
+            loader, loader_kwargs = django_yamlconf.get_loader("yaml")
+            if loader is None:
+                return predefined_settings
+            project_yaml = root / "settings.yaml"
+            if os.access(project_yaml, os.R_OK):
+                django_yamlconf.load_conffile(attributes, project_settings, loader, loader_kwargs, str(project_yaml))
+            if final_conf := os.environ.get("YAMLCONF_CONFFILE"):
+                django_yamlconf.load_conffile(attributes, project_settings, loader, loader_kwargs, final_conf)
+            django_yamlconf.load_envdefs(attributes, project_settings)
+            django_yamlconf.expand_attribute_refs(attributes)
+            django_yamlconf.inject_attr(attributes, project_settings)
+        return predefined_settings
+
+    def _project_yaml_settings(self, project_settings: ModuleType, root: Path) -> frozenset[str]:
+        """Project native effective-source metadata into the host's editable settings."""
+
+        project_yaml = (root / "settings.yaml").resolve()
+        names: set[str] = set()
+        for name in django_yamlconf.defined_attributes(project_settings):
+            info = django_yamlconf.get_attr_info(name, project_settings)
+            source = info.get("source") if info else None
+            if not isinstance(source, str):
+                continue
+            try:
+                source_path = resolve_path(source)
+            except (ImproperlyConfigured, OSError, ValueError):
+                continue
+            if source_path == project_yaml:
+                names.add(name)
+        return frozenset(names)
+
+    def _reject_unexpected_sources(self, project_settings: ModuleType, root: Path, settings_module: str) -> None:
+        """Reject any implicit ancestor or foreign project-settings source."""
+
+        allowed_sources = {
+            yamlconf.YAMLCONF_INTERNAL_SOURCE,
+            yamlconf.YAMLCONF_ENVIRONMENT_SOURCE,
+            settings_module,
+        }
+        project_yaml = (root / "settings.yaml").resolve()
+        if project_yaml.exists():
+            allowed_sources.add(str(project_yaml))
+        if final_conf := os.environ.get("YAMLCONF_CONFFILE"):
+            allowed_sources.add(str(resolve_path(final_conf)))
+
+        for name in django_yamlconf.get_cached_attributes(project_settings):
+            for source in yamlconf.setting_sources(project_settings, name):
+                if source in allowed_sources:
+                    continue
+                try:
+                    source_path = str(resolve_path(source))
+                except (ImproperlyConfigured, OSError, TypeError, ValueError):
+                    source_path = source
+                if source_path not in allowed_sources:
+                    raise ImproperlyConfigured(f"Unexpected django-yamlconf source {source!r}")
 
     def _reset_settings(self) -> None:
         """Remove previously composed Django settings from a reloaded module."""
@@ -211,13 +277,15 @@ class ProjectContract:
         self,
         project_settings: ModuleType,
         root: Path,
+        *,
+        predefined_settings: frozenset[str],
     ) -> None:
         """Evaluate Angee defaults with project settings as the seed."""
 
         seed = {
             name: value
             for name, value in vars(project_settings).items()
-            if yamlconf.is_setting_name(name) and name not in yamlconf.YAMLCONF_PREDEFINED_SETTINGS
+            if yamlconf.is_setting_name(name) and name not in predefined_settings
         }
         seed.setdefault("BASE_DIR", root)
         # The host accepts earlier project declarations; the compiler sees only
@@ -283,7 +351,7 @@ class ProjectContract:
                     run_name=f"{DEFAULTS_SETTINGS_MODULE}.__effective__",
                 ).items()
                 if (name == yamlconf.YAMLCONF_ATTRIBUTES or yamlconf.is_setting_name(name))
-                and name not in yamlconf.YAMLCONF_PREDEFINED_SETTINGS
+                and name not in predefined_settings
             }
         )
 

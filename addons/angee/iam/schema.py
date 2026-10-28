@@ -24,7 +24,15 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import QuerySet
 from django.http import HttpRequest
-from rebac import RebacQuerySet, current_actor, resolve_subjects, system_context, to_object_ref, to_subject_ref
+from rebac import (
+    RebacQuerySet,
+    current_actor,
+    resolve_subjects,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    user_subject_type,
+)
 from rebac import backend as rebac_backend
 from rebac.models import active_relationship_model
 from rebac.resources import model_for_resource_type
@@ -37,7 +45,8 @@ from strawberry.scalars import JSON
 from strawberry_django.auth.utils import get_current_user
 from strawberry_django.utils.requests import get_request
 
-from rebac import user_subject_type
+from angee.base.identity import instance_from_public_id, public_subject_ref
+from angee.base.models import AngeeModel
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permission_expression
@@ -54,7 +63,6 @@ from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT, UserAccountAction
 from angee.iam.models import Group as GroupModel
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import is_platform_admin, session_user
-
 from angee.iam.roles import (
     IAM_OVERVIEW_DEFAULT_PEEK_LIMIT as _IAM_OVERVIEW_DEFAULT_PEEK_LIMIT,
 )
@@ -96,8 +104,6 @@ from angee.iam.roles import (
     revoke_role as _revoke_role_owner,
 )
 from angee.iam.roles import subject_permitted as _subject_permitted_owner
-from angee.base.identity import instance_from_public_id, public_subject_ref
-from angee.base.models import AngeeModel
 
 User = cast(type[Any], get_user_model())
 Group = cast(type[Any], apps.get_model("iam", "Group"))

@@ -1,11 +1,21 @@
 """Workflow-owned bounded path, schema composition and compatibility algebra."""
 from __future__ import annotations
+
 import copy
 from collections.abc import Iterable, Iterator, Sequence
 from typing import Any
+
 from django.core.exceptions import ValidationError
-from angee.base.schemas.references import LocalSchemaReferences, schema_nodes, schemas_match, SCHEMA_ANNOTATIONS, schema_intersection
+
+from angee.base.schemas.references import (
+    SCHEMA_ANNOTATIONS,
+    LocalSchemaReferences,
+    schema_intersection,
+    schema_nodes,
+    schemas_match,
+)
 from angee.base.validators import check_schema
+
 
 def _prefix_references(schema: dict[str, Any], prefix: str) -> None:
     """Relocate proved root pointers at native schema locations in a copied schema."""

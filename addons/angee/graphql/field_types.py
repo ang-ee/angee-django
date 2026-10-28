@@ -26,8 +26,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from strawberry_django.fields.types import field_type_map
 
-from angee.base.fields.text import ColorField, DiagnosticTextField, ModelLabelField
 from angee.base.fields.ordering import FractionalRankField
+from angee.base.fields.text import ColorField, DiagnosticTextField, ModelLabelField
 
 
 def register_field_type(field_class: type[models.Field[Any, Any]], wire_type: type) -> None:

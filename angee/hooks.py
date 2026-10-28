@@ -3,11 +3,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from typing import Any
+
 from django.apps import AppConfig
 from django.conf import settings
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
+
 
 def declared_hooks() -> tuple[str, ...]:
     """Return hook setting names declared by installed addons."""

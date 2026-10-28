@@ -43,7 +43,9 @@ class CredentialOidc(models.Model):
         using = credential._state.db
         oauth_field = type(credential).oauth_client.field
         # Disconnect must honor current login policy rather than a cached related row.
-        oauth_client = oauth_field.related_model._base_manager.using(using).filter(pk=credential.oauth_client_id).first()
+        oauth_client = (
+            oauth_field.related_model._base_manager.using(using).filter(pk=credential.oauth_client_id).first()
+        )
         if oauth_client is None or not oauth_client.login_enabled:
             return
         user_field = type(credential).user.field

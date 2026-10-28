@@ -15,9 +15,9 @@ from rebac.field_visibility import check_field_access, gated_read_fields
 from rebac.resources import model_resource_type
 from rebac.schema.walker import field_gated_actions
 
-from angee.graphql.events import ChangeEvent, ChangePayload
 from angee.base.identity import instance_from_public_id
 from angee.base.permissions import effective_rebac_definition, require_rebac_queryset
+from angee.graphql.events import ChangeEvent, ChangePayload
 
 
 def actor_can_read(resource: ObjectRef) -> bool:

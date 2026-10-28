@@ -101,6 +101,8 @@ jobs:
           python-version: ${{ inputs.python-version }}
       - run: uv run --locked python -m ruff check . --no-cache
       - run: uv run --locked python -m mypy angee addons
+        env:
+          PYTHONPATH: .:addons
 
   # The suite runs as six contiguous shards of equal stored time
   # (.test_durations, pytest-split); a test missing from it still runs in one.
@@ -413,6 +415,11 @@ jobs:
           sys.path.insert(0, str(framework))
           from tests import typing_settings
 
+          os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (
+              str(framework),
+              *(str(path) for path in typing_settings.ANGEE_ADDON_DIRS),
+              os.environ.get("PYTHONPATH"),
+          )))
           os.environ["MYPYPATH"] = os.pathsep.join(filter(None, (
               *(str(path) for path in typing_settings.ANGEE_ADDON_DIRS),
               str(typing_settings.COMPOSE_RUNTIME_DIR.parent),
@@ -464,7 +471,7 @@ jobs:
               "-c", "/dev/null", "--rootdir", str(slot), "--confcutdir", str(slot),
               "--import-mode=importlib", "--nomigrations", "-o", "python_files=test*.py",
               # Register pytest-django before the shared django_db_setup override.
-              "-p", "django", "-p", "angee.testing.fixtures", "-p", "angee.provenance.testing.fixtures",
+              "-p", "django", "-p", "angee.base.testing.fixtures", "-p", "angee.provenance.testing.fixtures",
               "-p", "angee.parties.testing.fixtures",
               *(arg for plugin in plugins for arg in ("-p", plugin)),
               "-p", "no:randomly", "-n", "4", "--dist", "worksteal", "-q",

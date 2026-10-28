@@ -11,7 +11,6 @@ from collections.abc import Iterable, Mapping
 from decimal import Decimal
 from typing import Any
 
-
 # These are native encoder profiles for existing persisted byte contracts.
 # They intentionally differ from strict canonical_json; changing their options
 # would rename resource hashes, import receipts and source payload identities.

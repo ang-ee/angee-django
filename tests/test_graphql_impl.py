@@ -7,7 +7,6 @@ from angee.integrate.schema import ConsoleImplChoicesQuery
 from angee.integrate_github.backend import GitHubBackend
 from angee.messaging.testing.models import Channel  # noqa: F401 -- register the channel metadata owner
 from tests.conftest import (
-    VcsBridge,
     Vendor,
     addon_schema,
     create_platform_admin,

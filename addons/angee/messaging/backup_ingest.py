@@ -35,9 +35,8 @@ from django.apps import apps
 from django.db.models import Max
 from rebac import system_context
 
-from angee.serialization import STRINGIFIED_JSON, canonical_json_sha256
-
 from angee.messaging.backends import ParsedMessage, ParsedPart
+from angee.serialization import STRINGIFIED_JSON, canonical_json_sha256
 
 DEFAULT_MAX_BATCH_BYTES = 64_000_000
 """Flush a batch once its buffered media reaches this many bytes.

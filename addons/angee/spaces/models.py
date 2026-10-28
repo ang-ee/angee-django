@@ -20,8 +20,8 @@ from django.utils.text import slugify
 from rebac import PermissionDenied, current_actor
 
 from angee.base.fields.state import StateField
-from angee.messaging.models import AudienceMember, NotificationPolicy, ThreadAudienceMixin
 from angee.base.models import AngeeDataModel, AuditMixin, HierarchyMixin, OwnerMixin
+from angee.messaging.models import AudienceMember, NotificationPolicy, ThreadAudienceMixin
 from angee.parties.mixins import MembershipDecisionMixin
 from angee.spaces.managers import GroupManager, MembershipManager
 

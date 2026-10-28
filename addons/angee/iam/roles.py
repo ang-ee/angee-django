@@ -25,6 +25,7 @@ from rebac import (
     system_context,
     to_object_ref,
     to_subject_ref,
+    user_subject_type,
 )
 from rebac import backend as rebac_backend
 from rebac.memberships import grant as grant_membership
@@ -43,9 +44,8 @@ from rebac.schema import (
     relation_is_writable,
 )
 
-from rebac import user_subject_type
-from angee.iam.identity import group_subject_type, user_label
 from angee.base.identity import canonical_subject_ref, public_id_for, public_subject_ref
+from angee.iam.identity import group_subject_type, user_label
 
 IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6
 IAM_OVERVIEW_MAX_PEEK_LIMIT = 100
@@ -453,7 +453,9 @@ def validate_subject(
     expected_relation = "" if subject.subject_type == user_subject_type() else "member"
     supported = subject.subject_type in {user_subject_type(), group_subject_type()}
     if not supported or subject.optional_relation != expected_relation:
-        raise ValueError(f"Subject must be canonical '{user_subject_type()}:<id>' or '{group_subject_type()}:<id>#member'.")
+        raise ValueError(
+            f"Subject must be canonical '{user_subject_type()}:<id>' or '{group_subject_type()}:<id>#member'."
+        )
     if require_existing and subject not in resolve_subjects((subject,)):
         raise ValueError(f"Subject {value!r} was not found.")
     return subject

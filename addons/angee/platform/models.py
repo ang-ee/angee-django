@@ -29,10 +29,11 @@ from django.db import DatabaseError, models, transaction
 from hatch_angee import AddonManifest
 from rebac import system_context
 
-from angee.addons import addon_manifest, available_addons, resolve_app_config, resolve_manifest_roots
+from angee.addons import addon_manifest, resolve_manifest_roots
 from angee.base.fields.state import StateField
 from angee.base.models import AngeeManager, AngeeModel
 from angee.platform import composed
+from angee.platform.discovery import available_addons, resolve_app_config
 from angee.platform.installer import (
     AddonInstaller,
     InstallResult,

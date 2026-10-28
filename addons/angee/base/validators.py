@@ -9,13 +9,13 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.validators import RegexValidator
 from jsonschema import Draft202012Validator, FormatChecker, SchemaError, validators
 from jsonschema._utils import find_additional_properties
-from referencing import Registry
-from referencing.jsonschema import UnknownDialect
-from angee.base.schemas.references import LocalSchemaReferences, schema_nodes
-from angee.serialization import canonical_json
 from pydantic import BaseModel, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
+from referencing import Registry
+from referencing.jsonschema import UnknownDialect
 
+from angee.base.schemas.references import LocalSchemaReferences, schema_nodes
+from angee.serialization import canonical_json
 
 HEX_COLOR_VALIDATOR = RegexValidator(r"^#[0-9a-fA-F]{6}$", "Enter a colour as #rrggbb.")
 """The one colour form a colour column stores and the colour chooser writes."""

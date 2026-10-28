@@ -22,12 +22,12 @@ from rebac.actors import model_can_resolve_subject
 from rebac.models import active_relationship_model
 from rebac.resources import model_identities, model_resource_type
 
-from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.lineage import concrete_lineage
 from angee.base.models.append_only import AppendOnlyModel
 from angee.base.models.audit import AuditMixin
 from angee.base.models.identity import auto_now_stamps
 from angee.base.querysets import SystemQuerysetMixin
+from angee.base.refs import generic_pointer_model, generic_pointer_target
 
 
 class MergePolicy(StrEnum):

@@ -43,6 +43,11 @@ from rebac.actors import current_sudo_reason, is_sudo
 import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
 from angee.agents.testing.models import Agent
+from angee.base.models import (
+    AngeeModel,
+    AuditMixin,
+    SqidMixin,
+)
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
@@ -77,16 +82,11 @@ from angee.messaging.testing.models import (
     ThreadFollower,
     ThreadNotification,
 )
-from angee.base.models import (
-    AngeeModel,
-    AuditMixin,
-    SqidMixin,
-)
 from angee.projects.testing.models import Task as ProjectTask
 from angee.provenance.contrib.angee.history import HistoryMixin
-from angee.provenance.statements import StatementSourceMixin
 from angee.provenance.statements import (
     SourceKind,
+    StatementSourceMixin,
 )
 from angee.serialization import strip_null_bytes
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
@@ -176,7 +176,10 @@ def test_channel_source_kind_is_its_backends_declaration(channel: Any, monkeypat
 
     # An import-only protocol declares its channels' classification once, on the backend class.
     monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.IMPORT)
-    assert (channel.source_kind, StatementSourceMixin.source_kind_for(principal)) == (SourceKind.IMPORT, SourceKind.IMPORT)
+    assert (channel.source_kind, StatementSourceMixin.source_kind_for(principal)) == (
+        SourceKind.IMPORT,
+        SourceKind.IMPORT,
+    )
 
 
 def _parsed(

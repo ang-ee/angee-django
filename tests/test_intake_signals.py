@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from django.core.exceptions import ValidationError
 
-from angee.errors import RecordAccessSubjectRefused
+from angee.base.permissions import RecordAccessSubjectRefused
 from angee.intake import signals
 
 

@@ -29,6 +29,7 @@ from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.models import Resource
 from angee.resources.testing.models import ContentTypeRow
 from angee.resources.testing.models import Resource as ResourceLedger
+from angee.resources.tiers import ResourceTier
 from angee.resources.widgets import (
     ContentTypeForeignKeyWidget,
     ContentTypeManyToManyWidget,
@@ -38,7 +39,6 @@ from angee.resources.widgets import (
     resolve_ledger_xref,
     resolve_xref,
 )
-from angee.resources.tiers import ResourceTier
 from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- share fake-addon lifetime
 from tests.tables import model_tables
 

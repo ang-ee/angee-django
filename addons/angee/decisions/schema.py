@@ -16,8 +16,12 @@ from strawberry_django.auth.utils import get_current_user
 
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permission_expression, permissions_field
-from angee.graphql.data.hasura import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
-from angee.graphql.data.hasura import with_filter_aliases
+from angee.graphql.data.hasura import (
+    declared_hasura_resource_fields,
+    hasura_model_resource,
+    public_pk_decoder,
+    with_filter_aliases,
+)
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import (
@@ -27,7 +31,6 @@ from angee.graphql.relations import (
     with_record_reference_access,
 )
 from angee.graphql.subscriptions import changes
-
 from angee.iam.schema import UserType
 
 Decision = apps.get_model("decisions", "Decision")

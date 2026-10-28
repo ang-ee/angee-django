@@ -68,17 +68,16 @@ from rebac import (
     system_context,
     to_object_ref,
     to_subject_ref,
+    user_subject_type,
 )
 from rebac.backends import backend as rebac_backend
 from rebac.field_backing import resolve_field_backing
 from rebac.resources import model_resource_type
 from rebac.schema.introspection import permission_sources
 
-from rebac import user_subject_type
-from angee.base.permissions import actor_user_id
+from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.identity import canonical_subject_ref, public_subject_ref
-from angee.base.fields.implementation import ImplClassField
 from angee.base.models import (
     AngeeDataModel,
     ArchiveMixin,
@@ -97,9 +96,11 @@ from angee.base.models import (
     role_anchor,
     row_lock_paths,
 )
+from angee.base.permissions import actor_user_id
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.resources.mixins import ResourceLoadMixin
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized
@@ -121,7 +122,6 @@ from angee.storage.uploads import (
     truncate_filename,
 )
 from angee.tags.models import TaggedModel
-from angee.resources.mixins import ResourceLoadMixin
 
 logger = logging.getLogger(__name__)
 

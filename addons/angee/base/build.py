@@ -65,8 +65,8 @@ from rebac.schema import Definition, Permission, Schema, parse_zed, resolve_sche
 from rebac.schema import render_zed as render_schema
 
 from angee.addons import addon_manifest
-from angee.compose.declarations import BuildIntegration, DeclarationValue, ModelDeclaration
 from angee.base.permissions import declared_grants
+from angee.compose.declarations import BuildIntegration, DeclarationValue, ModelDeclaration
 from angee.utils.artifacts import GENERATED_SENTINEL
 
 if TYPE_CHECKING:

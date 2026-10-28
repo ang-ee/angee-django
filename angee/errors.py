@@ -93,12 +93,3 @@ class DomainError(Exception):
 
     def __init__(self) -> None:
         super().__init__(self.code)
-
-
-class RecordAccessSubjectRefused(DomainError, ValidationError):
-    """The record's invariant refuses a holder, without exposing subject details."""
-
-    code = "RECORD_ACCESS_SUBJECT_REFUSED"
-
-    def __init__(self) -> None:
-        ValidationError.__init__(self, self.code, code=self.code)

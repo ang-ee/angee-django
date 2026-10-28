@@ -11,8 +11,6 @@ from strawberry.types import get_object_definition
 from strawberry_django.utils.typing import get_django_definition
 
 
-
-
 def surface_name(surface: object) -> str:
     """Return a readable name for a Strawberry surface."""
 

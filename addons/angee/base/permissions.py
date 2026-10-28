@@ -14,9 +14,20 @@ from rebac import SubjectRef, current_actor, to_subject_ref
 from rebac import user_subject_type as _user_subject_type
 from rebac.backends import backend
 from rebac.managers import RebacQuerySet
-from rebac.resources import model_for_resource_type, model_resource_type
+from rebac.resources import model_resource_type
 from rebac.schema import Definition, Schema, resolve_schema_path
 from rebac.schema.parser import parse_zed
+
+from angee.errors import DomainError
+
+
+class RecordAccessSubjectRefused(DomainError, ValidationError):
+    """The record's invariant refuses a holder, without exposing subject details."""
+
+    code = "RECORD_ACCESS_SUBJECT_REFUSED"
+
+    def __init__(self) -> None:
+        ValidationError.__init__(self, self.code, code=self.code)
 
 
 def declared_grants(model: type[models.Model]) -> dict[str, str]:
@@ -125,7 +136,7 @@ def subject_reaches_user(subject: models.Model | SubjectRef, user_id: Any) -> bo
     or a userset such as ``auth/group:7#member`` whose relation the user holds on
     the referenced object. A record invariant that keeps one user out of its
     holders composes this before a grant, an assignment, or an admission and
-    raises :class:`angee.errors.RecordAccessSubjectRefused` on ``True``.
+    raises :class:`angee.base.permissions.RecordAccessSubjectRefused` on ``True``.
     ``user_id`` of ``None`` names nobody and is never reached.
     """
 

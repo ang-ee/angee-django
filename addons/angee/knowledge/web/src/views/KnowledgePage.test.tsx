@@ -111,9 +111,10 @@ test("a directly opened page owns the vault after a prior picker selection", asy
 });
 
 test("vault search keeps the initial vault and a clearable picker through pending and empty results", async () => {
-  const pending = Promise.withResolvers<void>();
+  let resolvePending!: () => void;
+  const pending = new Promise<void>((resolve) => { resolvePending = resolve; });
   let searching = false;
-  const searchRead = vi.fn(async () => { if (searching) await pending.promise; });
+  const searchRead = vi.fn(async () => { if (searching) await pending; });
   const f = fixture({ beforeVaultSearch: searchRead });
   await screen.findByText("Projects");
   fireEvent.click(await screen.findByRole("combobox", { name: "Vault: Reference" }));
@@ -126,7 +127,7 @@ test("vault search keeps the initial vault and a clearable picker through pendin
   expect(screen.getByRole("combobox", { name: "Vault: Reference" })).toBeTruthy();
   expect(screen.getByText("Projects")).toBeTruthy();
 
-  pending.resolve();
+  resolvePending();
   await waitFor(() => expect(screen.queryByText("Searching…")).toBeNull());
   expect(screen.getByPlaceholderText("Search vaults…")).toBe(input);
   expect(screen.getByRole("combobox", { name: "Vault: Reference" })).toBeTruthy();
@@ -135,8 +136,9 @@ test("vault search keeps the initial vault and a clearable picker through pendin
   expect(await screen.findByRole("option", { name: "Reference" })).toBeTruthy();
   expect(route.navigate).not.toHaveBeenCalled();
   const requests = f.custom.mock.calls.filter(([call]) => call.meta?.gqlQuery === KnowledgePages);
+  expect(requests.length).toBeGreaterThan(0);
   expect(requests.every(([call]) => Filter.from(pageQuery.fromWhere(call.meta?.gqlVariables?.where))
-    .facetValues("vault").includes("vlt_1"))).toBe(true);
+    .conjunctions().some(({ field, operator, value }) => field === "vault" && operator === "exact" && value === "vlt_1"))).toBe(true);
 });
 
 test("server search finds descendants while the unfiltered navigator requests only roots", async () => {

@@ -7,10 +7,10 @@ from pydantic import ValidationError as ContractError
 from rebac import RelationshipTuple, current_actor, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.actors import is_sudo
 
+from angee.base.models import StaleRevisionError
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.signals import decision_answered
 from angee.decisions.testing.models import Decision
-from angee.base.models import StaleRevisionError
 from tests.conftest import create_platform_admin, create_user, vault_for
 
 

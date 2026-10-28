@@ -44,7 +44,7 @@ nothing about Django or React, it just runs whatever Services you declare.
 ### Django / React Runtime
 
 The **Django / React Runtime** — `ang-ee/angee-django` — is the **framework** and
-the **base addons** that ship with it, and it is the first and default **Host**:
+the **framework addons** that ship with it, and it is the first and default **Host**:
 the application runtime that runs *inside* an operator-managed Service.
 
 The framework is a thin composition layer. You write **source models**
@@ -126,7 +126,7 @@ Concretely, today:
 - **Already landed here.** The operator (Stacks, Services, Jobs, Sources,
   Workspaces, secrets, ports, and gitops topology over CLI, REST, and GraphQL),
   the framework core (including composition from source models to `runtime/`),
-  and the base addons: GraphQL via strawberry-django, relationship-based
+  and the framework addons: GraphQL via strawberry-django, relationship-based
   authorization (REBAC), aggregates, tiered resources, changeset history in
   Activity with revert, and the React frontend (layouts, list/board/form views).
 - **Also landed.** Agents, integrations, knowledge, storage, communications,

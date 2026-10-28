@@ -18,13 +18,12 @@ from import_export.instance_loaders import BaseInstanceLoader
 from import_export.utils import get_related_model
 
 from angee.base.identity import instances_from_public_ids, public_id_of
-from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.models import (
-    AngeeModel,
     RecordRefMixin,
     StateTransitions,
     update_fields_with_auto_now,
 )
+from angee.base.models.implementations import ImplDefaultsMixin
 from angee.resources.entries import ResourceEntry, resolve_model
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.kinds import ResourceKindDeclarations

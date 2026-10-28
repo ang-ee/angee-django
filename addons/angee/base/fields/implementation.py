@@ -4,15 +4,23 @@ from __future__ import annotations
 from collections.abc import Sequence
 from functools import partialmethod
 from typing import Any, cast
+
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from django_choices_field import TextChoicesField
+
 from angee.base.fields.state import enum_member_for
 from angee.base.implementations import (
-    ImplChoice, _impl_choices_enum, declared_impl_registries, impl_choices, impl_choices_enum,
-    impl_registry, resolve_impl_class,
+    ImplChoice,
+    _impl_choices_enum,
+    declared_impl_registries,
+    impl_choices,
+    impl_choices_enum,
+    impl_registry,
+    resolve_impl_class,
 )
+
 
 class ImplClassField[T = object](TextChoicesField):
     """A column naming a non-model implementation class by a short key.
@@ -88,16 +96,18 @@ class ImplClassField[T = object](TextChoicesField):
         return errors
 
     @classmethod
-    def for_model(cls, model: type[models.Model], field_name: str) -> ImplClassField[object]:
+    def for_model(cls, model: type[models.Model], field_name: str) -> ImplClassField[T]:
         """Return the typed implementation field a model declares."""
         field = model._meta.get_field(field_name)
         if not isinstance(field, cls):
             raise FieldDoesNotExist(f"{model.__name__}.{field_name} is not an ImplClassField.")
         return field
 
-    def contribute_to_class(self, cls: type[models.Model], name: str, **kwargs: Any) -> None:
+    def contribute_to_class(
+        self, cls: type[models.Model], name: str, private_only: bool = False,
+    ) -> None:
         """Bind a native get_<field>_impl accessor while Django builds the model."""
-        super().contribute_to_class(cls, name, **kwargs)
+        super().contribute_to_class(cls, name, private_only=private_only)
         accessor = f"get_{self.name}_impl"
         if accessor in cls.__dict__:
             raise ImproperlyConfigured(f"{cls.__name__}.{accessor} collides with implementation field {name!r}.")

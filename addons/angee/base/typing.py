@@ -5,16 +5,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import partial
 
-from mypy.nodes import ARG_NAMED_OPT, GDEF, Argument, NoneExpr, PlaceholderNode, SymbolTableNode, TypeInfo, Var
+from mypy.nodes import ARG_NAMED_OPT, GDEF, Argument, NameExpr, PlaceholderNode, SymbolTableNode, TypeInfo, Var
 from mypy.plugin import AttributeContext, ClassDefContext, DynamicClassDefContext
 from mypy.plugins.common import add_method_to_class
-from mypy.types import CallableType, Instance, NoneType, TypeType, get_proper_type
 from mypy.typeops import make_simplified_union
+from mypy.types import CallableType, Instance, NoneType, TypeType, get_proper_type
 from mypy.types import Type as MypyType
 from mypy_django_plugin.lib import fullnames, helpers
 
-from angee.compose.typing import CompositionPlugin
 from angee.base.fields.implementation import ImplClassField
+from angee.compose.typing import CompositionPlugin
 
 
 class BasePlugin(CompositionPlugin):
@@ -48,7 +48,7 @@ class BasePlugin(CompositionPlugin):
             default_type = make_simplified_union([ctx.api.named_type("builtins.str"), NoneType()])
             add_method_to_class(
                 ctx.api, ctx.cls, name=f"get_{field.name}_impl",
-                args=[Argument(Var("default", default_type), default_type, NoneExpr(), ARG_NAMED_OPT)],
+                args=[Argument(Var("default", default_type), default_type, NameExpr("None"), ARG_NAMED_OPT)],
                 return_type=TypeType.make_normalized(Instance(symbol.node, [])),
             )
 

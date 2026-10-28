@@ -6,6 +6,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, cast
+
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.backends.base.base import BaseDatabaseWrapper

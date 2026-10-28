@@ -2,11 +2,11 @@
 
 import { createUiTestProviders } from "@angee/ui/testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { type GetListParams } from "@refinedev/core";
 import { testDataResource, testResourceQuery, testQueryField } from "@angee/metadata/testing";
-import { parseRecordNavigationScope, type ListViewNavigationScope } from "@angee/ui";
+import { ToastProvider, parseRecordNavigationScope, type ListViewNavigationScope } from "@angee/ui";
 import { createRouteHref } from "@angee/ui/runtime";
 import {
   ChatterTabsTestHost,
@@ -64,7 +64,6 @@ const sdkMocks = vi.hoisted(() => ({
   useAuthoredQuery: vi.fn(),
   useAuthoredQueryBatch: vi.fn(),
   invalidateAuthoredModels: vi.fn(),
-  treeRows: [] as Array<readonly Record<string, string>[]>,
   useBreadcrumbLeafLabel: vi.fn(), refetch: {
     backends: vi.fn(async () => undefined), drives: vi.fn(async () => undefined), file: vi.fn(async () => undefined), folders: vi.fn(async () => undefined), }, }));
 
@@ -137,50 +136,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
     ), useBreadcrumbLeafLabel: sdkMocks.useBreadcrumbLeafLabel, useConfirm: () => confirmAlways, };
 });
 
-vi.mock("../../../../../../packages/ui/src/views/tree/TreeView", () => ({
-TreeView: ({
-      rows, rowKey, label, selectedId, onSelect, onExpand, hasChildren, renderRow, }: {
-      rows: readonly Record<string, string>[];
-      rowKey: string;
-      label: string;
-      selectedId?: string;
-      onSelect?: (row: Record<string, string>) => void;
-      onExpand?: (nodeId: string) => void;
-      hasChildren?: string;
-      renderRow?: (row: Record<string, string>) => React.ReactNode;
-    }) => {
-      sdkMocks.treeRows.push(rows);
-      return (
-        <div
-          data-testid="tree"
-          data-row-ids={rows.map((row) => row[rowKey]).join(", ")}
-          data-selected={selectedId ?? ""}
-        >
-          {rows.map((row) => (
-            <span key={row[rowKey]}>
-              <button
-                type="button"
-                data-testid={`tree-row-${row[rowKey]}`}
-                onClick={() => onSelect?.(row)}
-              >
-                {row[label]}
-              </button>
-              {hasChildren && row[hasChildren] ? (
-                <button
-                  type="button"
-                  data-testid={`tree-expand-${row[rowKey]}`}
-                  onClick={() => onExpand?.(String(row[rowKey]))}
-                >
-                  expand
-                </button>
-              ) : null}
-              {renderRow?.(row)}
-            </span>
-          ))}
-        </div>
-      );
-    } }));
-
 vi.mock("../data/use-drive-picker", async () => {
   const { useMemo } = await import("react");
   return { useDrivePicker: (value: string | null) => useMemo(() => {
@@ -188,7 +143,7 @@ vi.mock("../data/use-drive-picker", async () => {
     const roots = value && !storageData.drives.some((drive) => drive.id === value)
       ? [...storageData.drives, { id: value, slug: value, name: value }] : storageData.drives;
     return { selectedId, roots, initial: { fetching: false },
-      picker: { options: roots.map((drive) => ({ value: drive.id, label: drive.name })), searchState: {} } };
+      picker: { options: roots.map((drive) => ({ value: drive.id, label: drive.name })), list: { fetching: false }, searchState: {} } };
   }, [value, storageData.drives]) };
 });
 
@@ -324,8 +279,9 @@ const folderResource = testDataResource("storage.Folder", {
   roots: { deletePreview: "delete_folders_preview" },
   query: testResourceQuery({ fields: {
     name: testQueryField("name", { sort: { field: "name" }, filter: { field: "name", scalar: "String", values: [], operators: ["contains"] } }),
-    drive: testQueryField("drive", { scalar: "ID" }), parent: testQueryField("parent", { scalar: "ID" }),
-    is_virtual: testQueryField("is_virtual", { scalar: "Boolean" }),
+    drive: testQueryField("drive", { scalar: "ID", filter: { field: "drive", scalar: "ID", values: [], operators: ["exact"] } }),
+    parent: testQueryField("parent", { scalar: "ID", filter: { field: "parent", scalar: "ID", values: [], operators: ["exact", "isNull"] } }),
+    is_virtual: testQueryField("is_virtual", { scalar: "Boolean", filter: { field: "is_virtual", scalar: "Boolean", values: [], operators: ["exact"] } }),
   } }),
 });
 const provider = {
@@ -354,11 +310,11 @@ function matchesNativeWhere(row: Record<string, unknown>, where: unknown): boole
 function pageTree() {
   return (
     <Provider resources={[fileResource, driveResource, folderResource]} dataProvider={provider} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 } } } } }}>
-      <ShellPageTestProviders>
+      <ToastProvider><ShellPageTestProviders>
         <StoragePage />
         <PrimaryPaneTestHost />
         <ChatterTabsTestHost />
-      </ShellPageTestProviders>
+      </ShellPageTestProviders></ToastProvider>
     </Provider>
   );
 }
@@ -382,7 +338,6 @@ beforeEach(() => {
   Object.assign(routerMocks.routeHref, { maybe: routeHref.maybe });
   sdkMocks.folderDrives.length = 0;
   sdkMocks.folderBatches.length = 0;
-  sdkMocks.treeRows.length = 0;
   sdkMocks.invalidateAuthoredModels.mockClear();
   sdkMocks.useBreadcrumbLeafLabel.mockClear();
   for (const refetch of Object.values(sdkMocks.refetch)) {
@@ -436,7 +391,7 @@ describe("StoragePage explorer wiring", () => {
 
     expect(rootPickerValue()).toBe("drive-b");
     expect(treeAttribute("data-row-ids")).toBe(
-      "__all__, __trash__, folder-b, file-b",
+      "__all__, file-b, __trash__, folder-b",
     );
     expect(treeAttribute("data-selected")).toBe("file-b");
     expect(screen.getByTestId("file-detail").getAttribute("data-file-id")).toBe(
@@ -492,7 +447,7 @@ describe("StoragePage explorer wiring", () => {
       is_trashed: { exact: false },
     });
 
-    fireEvent.click(screen.getByTestId("tree-row-folder-a"));
+    fireEvent.click(treeRow("folder-a"));
 
     expect(treeAttribute("data-selected")).toBe("folder-a");
     expect(fileListAttribute("data-row-ids")).toBe("file-a-folder");
@@ -527,7 +482,7 @@ describe("StoragePage explorer wiring", () => {
     });
     expect(sdkMocks.folderDrives.at(-1)).toBe("drive-b");
 
-    fireEvent.click(screen.getByTestId("tree-row-__trash__"));
+    fireEvent.click(treeRow("__trash__"));
 
     expect(fileListAttribute("data-group")).toBe("");
     expect(fileListAttribute("data-can-upload")).toBe("false");
@@ -572,7 +527,8 @@ describe("StoragePage explorer wiring", () => {
         error: state === "denied" ? new Error("Folder access denied") : null, refetch: sdkMocks.refetch.folders }
       : query(document, variables));
     const view = render(pageTree());
-    expect(treeAttribute("data-selected")).toBe("folder-b");
+    expect(routerState.getSearch().folder).toBe("folder-b");
+    expect(screen.queryByRole("treeitem", { selected: true })).toBeNull();
     expect(rootPickerValue()).toBe("drive-a");
     expect(fileListAttribute("data-can-upload")).toBe("false");
     expect(fileListAttribute("data-upload-drive")).toBe("");
@@ -600,7 +556,7 @@ describe("StoragePage explorer wiring", () => {
     });
 
     // Selecting All files drops the `folder` param while leaving `group` intact.
-    fireEvent.click(screen.getByTestId("tree-row-__all__"));
+    fireEvent.click(treeRow("__all__"));
 
     expect(routerMocks.navigate).toHaveBeenLastCalledWith({
       to: "/storage",
@@ -650,7 +606,7 @@ describe("StoragePage explorer wiring", () => {
     expect(treeAttribute("data-row-ids")).toBe("__all__, __trash__, folder-a");
 
     // Expanding folder-a fires its per-parent children query and appends the row.
-    fireEvent.click(screen.getByTestId("tree-expand-folder-a"));
+    fireEvent.click(treeRow("folder-a").querySelector("button")!);
 
     expect(treeAttribute("data-row-ids")).toBe(
       "__all__, __trash__, folder-a, folder-a-child",
@@ -668,15 +624,14 @@ describe("StoragePage explorer wiring", () => {
 
     render(pageTree());
 
-    const rowsBefore = sdkMocks.treeRows.at(-1);
-    expect(rowsBefore).toBeDefined();
+    const rowsBefore = screen.getAllByRole("treeitem");
 
     act(() => {
       routerState.setSearch({ group: "folder~folder~folder_id" });
     });
 
     // File-list grouping leaves the separately owned folder collection unchanged.
-    expect(sdkMocks.treeRows.at(-1)).toBe(rowsBefore);
+    expect(screen.getAllByRole("treeitem")).toEqual(rowsBefore);
   });
 
   test("starts simultaneous per-folder reads when two roots expand", () => {
@@ -690,11 +645,11 @@ describe("StoragePage explorer wiring", () => {
     };
     render(pageTree());
 
-    fireEvent.click(screen.getByTestId("tree-expand-folder-a"));
-    fireEvent.click(screen.getByTestId("tree-expand-folder-c"));
+    fireEvent.click(treeRow("folder-a").querySelector("button")!);
+    fireEvent.click(treeRow("folder-c").querySelector("button")!);
 
     expect(treeAttribute("data-row-ids")).toBe(
-      "__all__, __trash__, folder-a, folder-c, folder-a-child, folder-c-child",
+      "__all__, __trash__, folder-a, folder-a-child, folder-c, folder-c-child",
     );
     const activeBatch = (sdkMocks.folderBatches.at(-1) ?? []).filter((scope) => scope.key !== "root");
     expect(activeBatch).toHaveLength(2);
@@ -711,7 +666,7 @@ describe("StoragePage explorer wiring", () => {
   test("keys native folder pages by drive and resets the local branch frontier on switching", () => {
     render(pageTree());
 
-    fireEvent.click(screen.getByTestId("tree-expand-folder-a"));
+    fireEvent.click(treeRow("folder-a").querySelector("button")!);
     expect(treeAttribute("data-row-ids")).toBe(
       "__all__, __trash__, folder-a, folder-a-child",
     );
@@ -743,7 +698,7 @@ describe("StoragePage explorer wiring", () => {
     };
     render(pageTree());
 
-    fireEvent.click(screen.getByTestId("tree-expand-shared"));
+    fireEvent.click(treeRow("shared").querySelector("button")!);
     expect(treeAttribute("data-row-ids")).toBe(
       "__all__, __trash__, shared, child-a",
     );
@@ -751,7 +706,7 @@ describe("StoragePage explorer wiring", () => {
       target: { value: "drive-b" },
     });
     expect(treeAttribute("data-row-ids")).toBe("__all__, __trash__, shared");
-    fireEvent.click(screen.getByTestId("tree-expand-shared"));
+    fireEvent.click(treeRow("shared").querySelector("button")!);
     expect(treeAttribute("data-row-ids")).toBe(
       "__all__, __trash__, shared, child-b",
     );
@@ -773,7 +728,7 @@ describe("StoragePage explorer wiring", () => {
     ])));
     const view = render(pageTree());
     expect(treeAttribute("data-row-ids")).toBe("__all__, __trash__, folder-a");
-    fireEvent.click(screen.getByTestId("tree-expand-folder-a"));
+    fireEvent.click(treeRow("folder-a").querySelector("button")!);
     expect(treeAttribute("data-row-ids")).toBe("__all__, __trash__, folder-a");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalledOnce();
@@ -787,10 +742,26 @@ function rootPickerValue(): string {
   return (screen.getByLabelText("Drive") as HTMLSelectElement).value;
 }
 
+function treeRow(id: string): HTMLElement {
+  const label = id === "__all__" ? "All files" : id === "__trash__" ? "Trash"
+    : storageData.folders.find((row) => row.id === id && row.drive === rootPickerValue())?.name
+      ?? storageData.files.find((row) => row.id === id)?.filename;
+  if (!label) throw new Error(`Unknown fixture row ${id}`);
+  return screen.getByText(label).closest<HTMLElement>('[role="treeitem"]')!;
+}
+
 function treeAttribute(name: string): string | null {
-  const trees = screen.getAllByTestId("tree");
-  return name === "data-row-ids" ? [...new Set(trees.flatMap((tree) => (tree.getAttribute(name) ?? "").split(", ")).filter(Boolean))].join(", ")
-    : trees[0]!.getAttribute(name);
+  const candidates = [
+    { id: "__all__", label: "All files" }, { id: "__trash__", label: "Trash" },
+    ...storageData.folders.map((row) => ({ id: row.id, label: row.name })),
+    ...storageData.files.map((row) => ({ id: row.id, label: row.filename })),
+  ];
+  const identity = (row: HTMLElement) => candidates.find((candidate) => within(row).queryByText(candidate.label, { exact: true }))?.id;
+  if (name === "data-selected") {
+    const selected = screen.queryByRole("treeitem", { selected: true });
+    return selected ? identity(selected) ?? null : null;
+  }
+  return screen.getAllByRole("treeitem").map(identity).filter(Boolean).join(", ");
 }
 
 function fileListAttribute(name: string): string | null {

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, Protocol, cast, overload
+
 from django.core import checks
-from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.db.models.query_utils import DeferredAttribute
 from django.utils.functional import Promise
@@ -113,12 +113,12 @@ class StateField[C: models.TextChoices | None](TextChoicesField[C]):
         if self.transition_guard is not None:
             return
         for parent in cls.__mro__[1:]:
-            if not issubclass(parent, models.Model):
+            # The installed descriptor owns this forward field. Options.get_field
+            # may build reverse relations before pending model lookups finish.
+            descriptor = parent.__dict__.get(name)
+            if not isinstance(descriptor, StateAttribute):
                 continue
-            try:
-                inherited = parent._meta.get_field(name)
-            except FieldDoesNotExist:
-                continue
+            inherited = descriptor.field
             if isinstance(inherited, StateField) and inherited.transition_guard is not None:
                 self.transition_guard = inherited.transition_guard
                 break

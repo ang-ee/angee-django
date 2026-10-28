@@ -22,8 +22,8 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
-from strawberry_django.utils.requests import get_request
 from django.db.models import Prefetch
+from strawberry_django.utils.requests import get_request
 
 from angee.graphql.ids import optional_public_id
 from angee.iam.identity import user_display_label, user_label, user_label_queryset, user_public_id

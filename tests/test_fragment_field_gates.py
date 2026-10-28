@@ -21,9 +21,9 @@ from angee.base.build import (
     merged_schemas,
     render_zed,
 )
+from angee.base.testing.permissions import installed_field_owners
 from angee.compose.model_composition import ModelComposition
 from angee.compose.runtime import Runtime
-from angee.base.testing.permissions import installed_field_owners
 from tests.conftest import make_addon
 from tests.test_model_composition import modules as modules
 from tests.test_model_composition import source

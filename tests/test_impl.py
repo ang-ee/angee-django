@@ -14,7 +14,7 @@ from django.test import override_settings
 from django.test.utils import isolate_apps
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
-from angee.base.schemas.forms import config_form_spec
+from angee.base.fields.implementation import ImplClassField
 from angee.base.implementations import (
     ImplBase,
     ImplChoice,
@@ -24,8 +24,8 @@ from angee.base.implementations import (
     resolve_all_impl_classes,
     resolve_impl_class,
 )
-from angee.base.fields.implementation import ImplClassField
 from angee.base.models.implementations import ImplDefaultsMixin
+from angee.base.schemas.forms import config_form_spec
 from angee.hooks import resolve_hook, resolve_hooks
 from angee.integrate_github.backend import GitHubBackend
 from angee.integrate_vcs.backend import LocalVCSBackend
@@ -103,6 +103,7 @@ class _UnsupportedConfigImpl(_BaseImpl):
 def test_impl_owner_public_import_contract() -> None:
     """Implementation fields, registry contracts and row defaults expose explicit owners."""
 
+    from angee.base.fields.implementation import ImplClassField
     from angee.base.implementations import (
         ImplBase,
         ImplChoice,
@@ -110,7 +111,6 @@ def test_impl_owner_public_import_contract() -> None:
         resolve_all_impl_classes,
         resolve_impl_class,
     )
-    from angee.base.fields.implementation import ImplClassField
     from angee.base.models.implementations import ImplDefaultsMixin
 
     assert ImplBase.__name__ == "ImplBase"

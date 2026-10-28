@@ -27,29 +27,29 @@ from rebac.resources import model_for_subject_type, model_resource_type
 from simple_history.utils import get_history_manager_for_model
 from strawberry.scalars import JSON
 
+from angee.base.identity import public_id_for, public_id_of, public_subject_ref
+from angee.base.models import record_display_label
+from angee.base.permissions import require_rebac_queryset
+from angee.base.refs import generic_pointer_model
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
-from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
 from angee.graphql.data.metadata import (
     DataResourceContribution,
     DataResourcePolicy,
     attach_data_resource_contribution,
 )
-from angee.base.identity import public_id_for, public_id_of, public_subject_ref
-from angee.base.models import record_display_label
-from angee.base.permissions import require_rebac_queryset
+from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
 from angee.provenance.context import changeset_model
 from angee.provenance.contrib.angee.history import HistoryMixin, record_history
 from angee.provenance.evidence import FactAuthority
 from angee.provenance.models import Changeset as ChangesetContract
 from angee.provenance.querysets import model_history
-from angee.provenance.statements import StatementSourceMixin
 from angee.provenance.statements import (
     SourceKind,
     Statement,
     StatementsMixin,
+    StatementSourceMixin,
     prime_readable_statement_records,
 )
-from angee.base.refs import generic_pointer_model
 from angee.serialization import json_safe
 
 Changeset = changeset_model()

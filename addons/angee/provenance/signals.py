@@ -7,8 +7,8 @@ from typing import Any
 
 from django.db import models
 
-from angee.provenance.contrib.angee.context import merge_context
 from angee.provenance.context import changeset, current_changeset
+from angee.provenance.contrib.angee.context import merge_context
 
 
 def capture_merge(

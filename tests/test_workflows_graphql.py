@@ -684,7 +684,7 @@ def test_studio_native_field_reads_follow_monitor_on_every_path_and_batch(
 
     from angee.knowledge import schema as knowledge_schema
     from angee.workflows.testing.models import Trigger
-    from tests.conftest import Vault, make_addon
+    from tests.conftest import make_addon
 
     admin, editor, reader = callers
     monkeypatch.setattr(GraphQLSchemas, "_discovered", GraphQLSchemas([make_addon(schemas=knowledge_schema.schemas)]))

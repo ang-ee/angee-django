@@ -13,8 +13,8 @@ from __future__ import annotations
 from django.db.models.signals import post_migrate
 from rebac import system_context
 
-from angee.platform.models import AddonManager
 from angee.base.signals import migrated_model
+from angee.platform.models import AddonManager
 
 
 def connect() -> None:

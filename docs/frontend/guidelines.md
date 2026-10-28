@@ -209,10 +209,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   schema. Optional schema contributions keep their documents and UI registrations
   in the contributing addon's web package, so hosts without it never scan those
   operations; see [OIDC sign-in](../../addons/angee/iam_integrate_oidc/web/src/index.ts).
-  An opaque `JSON`-scalar value is parsed at its domain owner with a
-  valibot schema (`safeParse`), never asserted into an application shape; a
-  recursive shape a declarative schema cannot express may wrap its type guard
-  in `v.custom`, keeping the parse boundary in the schema.
+  An opaque `JSON`-scalar value is parsed at its domain owner with its declared
+  schema, never asserted into an application shape. Resource metadata uses
+  Valibot `safeParse`; FormSpec uses the standalone Ajv validator generated from
+  its shared [JSON Schema](../../addons/angee/base/schemas/form_spec.schema.json).
+  Reuse the existing contract and validator instead of maintaining another schema.
 - **Eligible ActionResult mutations are derived, not authored.** Codegen in
   `packages/app/bin/angee-web-codegen.mjs` derives mutations with at least one
   argument when every argument is required (non-null without a default), or

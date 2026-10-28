@@ -27,6 +27,7 @@ from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry_django.utils.requests import get_request
 
+from angee.base.identity import instance_from_public_id
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -36,7 +37,13 @@ from angee.graphql.actions import (
     resolve_action_target,
 )
 from angee.graphql.capabilities import held_permissions, permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, SortAlias, declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import (
+    AngeeHasuraWriteBackend,
+    SortAlias,
+    declared_hasura_resource_fields,
+    hasura_model_resource,
+    public_pk_decoder,
+)
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
@@ -51,7 +58,6 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import TrashedRefMixin
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import UserType
-from angee.base.identity import instance_from_public_id
 from angee.integrate.live import PairingProjection, PairingState
 from angee.integrate.schema import BridgeTypeMixin
 from angee.messaging import connect

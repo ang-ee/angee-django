@@ -42,7 +42,6 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from rebac import SubjectRef, actor_context, current_actor, system_context, to_subject_ref
 from rebac.mixins import RebacModelBase
 
-from angee.base.permissions import actor_user_id, instance_actor
 from angee.agents.backends import InferenceBackend
 from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
 from angee.agents.deployments import InferenceDeploymentIdentity
@@ -51,16 +50,9 @@ from angee.agents.resources import AgentResource
 from angee.agents.runners import TurnOutcome
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
-from angee.base.fields.text import DiagnosticTextField
-from angee.base.fields.state import StateField
-from angee.graphql.events import ChangeRelatedRecord
-from angee.iam.service_users import sync_service_user
 from angee.base.fields.implementation import ImplClassField
-from angee.base.models.implementations import ImplDefaultsMixin
-from angee.integrate.models import IntegrationCreateMode
-from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
-from angee.jobs.enqueue import enqueue_task
-from angee.jobs.locks import LockKey, record_lock_key
+from angee.base.fields.state import StateField
+from angee.base.fields.text import DiagnosticTextField
 from angee.base.models import (
     AngeeDataModel,
     AuditMixin,
@@ -70,6 +62,14 @@ from angee.base.models import (
     save_state,
     transition,
 )
+from angee.base.models.implementations import ImplDefaultsMixin
+from angee.base.permissions import actor_user_id, instance_actor
+from angee.graphql.events import ChangeRelatedRecord
+from angee.iam.service_users import sync_service_user
+from angee.integrate.models import IntegrationCreateMode
+from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
+from angee.jobs.enqueue import enqueue_task
+from angee.jobs.locks import LockKey, record_lock_key
 from angee.operator.daemon import OperatorInstanceKind, WorkspaceStatus
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager

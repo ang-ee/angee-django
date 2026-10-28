@@ -12,7 +12,7 @@ from django.db import connection, models
 from strawberry_django_aggregates import TimeGranularity, group_by_alias
 from strawberry_django_hasura.filtering import PORTABLE_LOOKUPS
 
-from angee.graphql.introspection import is_to_one_relation
+from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.contracts import (
     DataDefaultSortMetadata,
     DataQueryAxis,
@@ -31,9 +31,8 @@ from angee.graphql.data.contracts import (
     DataResourceQuery,
     DataResourceTypeNames,
 )
-from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.resource_fields import PREFERRED_DISPLAY_FIELDS, final_wire_field_names
-from angee.graphql.introspection import FieldPathError, require_field_for_path
+from angee.graphql.introspection import FieldPathError, is_to_one_relation, require_field_for_path
 from graphql import (
     GraphQLEnumType,
     GraphQLField,

@@ -23,13 +23,12 @@ from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.optimizer import OptimizerStore
 from strawberry_django.queryset import run_type_get_queryset
 
-from angee.graphql.introspection import is_to_one_relation
-from angee.graphql.ids import PublicID, optional_public_id, to_public_id
-from angee.graphql.introspection import FieldPathError, fields_for_path
-from angee.graphql.node import AngeeNode
 from angee.base.models import RecordRefMixin
 from angee.base.permissions import require_rebac_queryset
 from angee.base.refs import RecordRef
+from angee.graphql.ids import PublicID, optional_public_id, to_public_id
+from angee.graphql.introspection import FieldPathError, fields_for_path, is_to_one_relation
+from angee.graphql.node import AngeeNode
 
 
 @strawberry.type

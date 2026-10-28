@@ -18,8 +18,8 @@ from rebac import system_context
 from angee.base.fields.text import ModelLabelField
 from angee.base.identity import SqidPublicIdentity, public_id_of
 from angee.base.implementations import resolve_impl_class
-from angee.base.schemas.forms import relation_positions
 from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet, SqidMixin
+from angee.base.schemas.forms import relation_positions
 from angee.resources.entries import (
     GRANT_KIND,
     ROW_KIND,

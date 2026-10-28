@@ -21,17 +21,19 @@ product rail.
 shows root apps and their sub-apps at most two levels; each app's own menu items
 belong in the top bar.
 
-**Framework core** — Angee's composition language and loom: the data contract,
-composer, model toolkit, serving seams, and jobs seam. It is the `django-angee`
-wheel, not an addon.
+**Framework core** — generic Django composition, Angee host configuration and
+serving entrypoints, and shared framework primitives. Reusable model behavior
+and product capabilities belong to addons.
 
 **Framework addon** — a reusable product capability that is part of Angee itself
 and builds on the framework core. Framework addons live under `addons/`.
 
-**Base addon** — a synonym for framework addon, not another architectural level.
+**Foundation addon (`angee.base`)** — the reusable model foundation: models,
+mixins, fields, managers, querysets, identity, validation and permission
+integration. Its persisted Django app label is `base`.
 
 **Consumer addon** — an addon written by a product team for a specific project,
-built on top of the framework and base addons.
+built on top of the framework and its reusable addons.
 
 **Composer** — the framework machinery that resolves addon declarations and
 emits concrete model modules, permission extensions and other `runtime/`

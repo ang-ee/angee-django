@@ -119,7 +119,11 @@
           "additionalProperties": false
         }
       ],
-      "title": "Filter"
+      "title": "Filter",
+      "type": "object",
+      "discriminator": {
+        "propertyName": "operator"
+      }
     },
     "Relation": {
       "type": "object",
@@ -418,6 +422,12 @@
               "$ref": "#/$defs/Field"
             }
           ]
+        },
+        "prefixItems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Field"
+          }
         }
       },
       "additionalProperties": false,

@@ -64,12 +64,21 @@ from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
-from angee.serialization import STRINGIFIED_JSON, canonical_json_sha256
-
-from angee.base.permissions import actor_user_id
+from angee.base.identity import instances_from_public_ids
+from angee.base.models import (
+    AngeeManager,
+    AngeeModel,
+    AngeeQuerySet,
+    MergeableQuerySet,
+    OwnerQuerySet,
+    TrashQuerySet,
+    row_lock_paths,
+)
+from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
+from angee.base.permissions import actor_user_id, require_rebac_queryset
+from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.graphql.publishing import mute_changes
-from angee.base.identity import instances_from_public_ids
 from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
@@ -85,24 +94,12 @@ from angee.messaging.delivery import (
 from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
 from angee.messaging.source_copies import observe_email_identity
-from angee.base.models import (
-    AngeeManager,
-    AngeeModel,
-    AngeeQuerySet,
-    MergeableQuerySet,
-    OwnerQuerySet,
-    TrashQuerySet,
-    row_lock_paths,
-)
-from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.parties.managers import Signing
 from angee.parties.models import Handle
-from angee.base.permissions import require_rebac_queryset
 from angee.provenance.context import changeset, changeset_model, require_changeset
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
-from angee.base.refs import generic_pointer_model, generic_pointer_target
-from angee.serialization import strip_null_bytes
+from angee.serialization import STRINGIFIED_JSON, canonical_json_sha256, strip_null_bytes
 from angee.storage.uploads import attachment_extension, fallback_attachment_name, truncate_filename
 
 if TYPE_CHECKING:

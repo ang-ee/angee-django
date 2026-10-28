@@ -22,6 +22,10 @@ import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
 from angee.addons import addon_manifest
 from angee.base.build import PermissionIntegration, composed_grants
+from angee.base.models import (
+    AngeeModel,
+    role_anchor,
+)
 from angee.compose.appgraph import AppGraph
 from angee.compose.apps import ComposeConfig
 from angee.compose.declarations import model_declaration
@@ -30,10 +34,6 @@ from angee.compose.rendering import render_models
 from angee.compose.runtime import Runtime
 from angee.conf import ProjectContract
 from angee.management.commands.angee import Command
-from angee.base.models import (
-    AngeeModel,
-    role_anchor,
-)
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.utils.artifacts import GENERATED_SENTINEL
 from angee.web import WebRuntime

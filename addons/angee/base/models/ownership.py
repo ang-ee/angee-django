@@ -20,9 +20,9 @@ from rebac.managers import RebacQuerySet
 from rebac.resources import model_resource_type
 from rebac.schema import AllowedSubject, FieldBinding, PermArrow, PermRef
 
-from angee.base.permissions import actor_user_id, effective_rebac_definition, instance_actor
 from angee.base.models.audit import AuditMixin, retained_set_null
 from angee.base.models.base import AngeeModel
+from angee.base.permissions import actor_user_id, effective_rebac_definition, instance_actor
 from angee.base.querysets import SystemQuerysetMixin
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)

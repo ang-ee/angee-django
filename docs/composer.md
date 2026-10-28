@@ -45,7 +45,8 @@ below.
 | Concern | Owner |
 |---|---|
 | Project-root discovery and project settings/bootstrap environment | [`ProjectContract`](../angee/conf.py), called by [`angee.settings`](../angee/settings.py) |
-| Bounded django-yamlconf loading and provenance | [`angee.compose.yamlconf`](../angee/compose/yamlconf.py) |
+| Bounded project YAML loading and accepted source provenance | [`ProjectContract`](../angee/conf.py) |
+| Native YAML settings merge and source inspection | [`angee.compose.yamlconf`](../angee/compose/yamlconf.py) |
 | Overridable framework defaults and ordered always-on core apps | [`angee.defaults`](../angee/defaults.py) |
 | Reserved composed settings and final settings mutation | [`AutoConfig`](../angee/compose/autoconfig.py) owns reserved names; [`Composer`](../angee/compose/composer.py) assigns their values |
 | Django app discovery, identity aliases and root annotations | [`AppGraph`](../angee/compose/appgraph.py) |
@@ -137,7 +138,7 @@ second time.
 
 Catalogue discovery keeps hatch-angee's native manifests paired with their
 `importlib.metadata.EntryPoint` or local `Path` origins in
-[`available_addons()`](../angee/addons.py). Installed lookup uses `find_spec()`,
+[`available_addons()`](../addons/angee/platform/discovery.py). Installed lookup uses `find_spec()`,
 which can import parent packages; only filesystem `discover()` belongs in the
 import-free dependency bootstrap. Neither path populates Django's app registry.
 When an available local or installed addon needs identity, `resolve_app_config()`

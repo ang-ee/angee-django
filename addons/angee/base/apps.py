@@ -40,7 +40,6 @@ class BaseConfig(AppConfig):
             check_rebac_caveats,
             check_rebac_database,
         )
-
         from angee.base.implementations import check_impl_registries
 
         checks.register(check_rebac_database, checks.Tags.models)

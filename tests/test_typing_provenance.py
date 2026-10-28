@@ -142,7 +142,10 @@ def test_installed_provenance_settings_keep_their_declared_types(tmp_path: Path)
         "assert_type(settings.ANGEE_MANAGEMENT_CONTEXT, str)\n"
         "assert_type(settings.SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD, bool)\n",
     )
-    env = dict(os.environ, DJANGO_SETTINGS_MODULE="tests.typing_settings", PYTHONPATH=str(root))
+    env = dict(
+        os.environ, DJANGO_SETTINGS_MODULE="tests.typing_settings",
+        PYTHONPATH=os.pathsep.join((str(root), str(root / "addons"))),
+    )
     env.pop("ANGEE_PROJECT_DIR", None)
     command = [
         sys.executable, "-m", "mypy", "--config-file", str(root / "pyproject.toml"),

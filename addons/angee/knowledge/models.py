@@ -42,12 +42,9 @@ from rebac.mixins import RebacModelBase
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
-from angee.base.permissions import actor_user_id
-from angee.base.fields.state import StateField
 from angee.base.fields.implementation import ImplClassField
-from angee.knowledge.retrieval import RetrievalBackend
+from angee.base.fields.state import StateField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
-from angee.messaging.models import ThreadedModelMixin
 from angee.base.models import (
     AngeeDataModel,
     AuditMixin,
@@ -60,11 +57,14 @@ from angee.base.models import (
     TrashQuerySet,
     row_lock_paths,
 )
+from angee.base.permissions import actor_user_id
+from angee.base.refs import RecordRef
+from angee.knowledge.retrieval import RetrievalBackend
+from angee.messaging.models import ThreadedModelMixin
 from angee.provenance.context import changeset, changeset_model, require_changeset, write_group
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
-from angee.base.refs import RecordRef
 from angee.tags.models import TaggedModel
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")
@@ -362,7 +362,9 @@ class Vault(OwnerMixin, TrashMixin, HistoryMixin, AngeeDataModel):
         registry, and the boundary is a method, not ``_meta`` shape-probing.
         """
 
-        backend_class = cast("type[RetrievalBackend]", ImplClassField.for_model(type(self), "retrieval_class").resolve_class(key))
+        backend_class = cast(
+            "type[RetrievalBackend]", ImplClassField.for_model(type(self), "retrieval_class").resolve_class(key)
+        )
         return backend_class(self)
 
 

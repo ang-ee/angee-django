@@ -1,9 +1,10 @@
 """Serve the composed ASGI app with uvicorn under Django's autoreloader.
 
 Mirrors Daphne's ``runserver`` override: subclass Django's ``RunserverCommand``
-and override only :meth:`inner_run`, inheriting the base ``run()`` that wraps it
-in :func:`django.utils.autoreload.run_with_reloader` (the follow-imports
-autoreloader). Serving with uvicorn keeps the ASGI lifespan the MCP mount needs
+and keep its native follow-imports autoreloader. The host closes Uvicorn's
+lifecycle when the inherited ``run()`` exits, before Django's reload exit code
+leaves non-daemon ASGI work behind. Serving with uvicorn keeps the ASGI lifespan
+the MCP mount needs
 (see :mod:`angee.asgi`); uvicorn no-ops its own signal handlers off the main
 thread, so it composes with the reloader's worker thread exactly as Daphne's
 server does. It wins over ``django.core``'s base ``runserver`` because the
@@ -13,10 +14,8 @@ host settings place ``angee`` before competing commands in ``INSTALLED_APPS`` (D
 
 from __future__ import annotations
 
-import contextlib
-import os
-import sys
-from typing import Any, NoReturn
+from threading import Thread, current_thread
+from typing import Any
 
 import uvicorn
 from django.conf import settings
@@ -25,22 +24,34 @@ from django.utils import autoreload
 from django.utils.module_loading import import_string
 
 
-def _force_process_reload(filename: Any) -> NoReturn:
-    """Exit the autoreloader child even when runtime threads are still alive."""
-
-    autoreload.logger.info("%s changed, reloading.", filename)
-    for stream in (sys.stdout, sys.stderr):
-        with contextlib.suppress(Exception):
-            stream.flush()
-    os._exit(3)
-
-
 class Command(RunserverCommand):
-    """Run the composed ASGI app with uvicorn; the base ``run()`` owns reloading."""
+    """Let Django own reload decisions and Uvicorn own ASGI shutdown."""
 
     # Django's handle() resolves these before dispatching run()/inner_run().
     addr: str
     port: str
+
+    _server: uvicorn.Server | None = None
+    _server_thread: Thread | None = None
+
+    def run(self, **options: Any) -> None:
+        """Close the ASGI lifecycle only after Django decides to leave its run loop.
+
+        Handled file-change signals keep running natively. On an actual reload,
+        Django's SystemExit unwinds through here before interpreter shutdown;
+        Uvicorn can therefore close connections and release lifespan-owned
+        threads instead of leaving Python waiting for those threads to exit.
+        """
+
+        self._server = None
+        self._server_thread = None
+        try:
+            super().run(**options)
+        finally:
+            if self._server is not None:
+                self._server.should_exit = True
+                if self._server_thread is not None and self._server_thread is not current_thread():
+                    self._server_thread.join()
 
     def inner_run(self, *args: Any, **options: Any) -> None:
         """Serve ``ASGI_APPLICATION`` with uvicorn (no uvicorn-side reload).
@@ -53,21 +64,19 @@ class Command(RunserverCommand):
         """
 
         del args
-        # Django's default trigger uses sys.exit(3) in the reloader thread. That
-        # leaves a uvicorn/channels dev process wedged when a non-daemon runtime
-        # thread is active (for example an open GraphQL WebSocket subscription).
-        autoreload.trigger_reload = _force_process_reload
         autoreload.raise_last_exception()
         if not options.get("skip_checks"):
             self.stdout.write("Performing system checks...\n\n")
             self.check(display_num_errors=True)
         self.check_migrations()
         application = import_string(settings.ASGI_APPLICATION)
-        uvicorn.Server(
+        self._server = uvicorn.Server(
             uvicorn.Config(
                 application,
                 host=self.addr,
                 port=int(self.port),
                 reload=False,
             )
-        ).run()
+        )
+        self._server_thread = current_thread()
+        self._server.run()

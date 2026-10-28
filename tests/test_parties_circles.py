@@ -41,9 +41,9 @@ from angee.messaging.testing.models import (
 )
 from angee.parties.backends import ParsedAddress, ParsedContact
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
-from angee.provenance.statements import StatementSourceMixin
 from angee.provenance.statements import (
     SourceKind,
+    StatementSourceMixin,
 )
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import current_stream, make_integration

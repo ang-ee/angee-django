@@ -14,10 +14,11 @@ from rebac.resources import model_resource_type
 from strawberry.types import ExecutionResult
 from strawberry_django_hasura import WriteBackend
 
+from angee.base.permissions import require_rebac_queryset
+from angee.base.signals import bulk_updated, connect_for_models
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.publishing import publish_bulk_update
 from angee.graphql.views import result_processed
-from angee.base.permissions import require_rebac_queryset
 from angee.provenance.context import (
     changeset,
     changeset_model,
@@ -25,7 +26,6 @@ from angee.provenance.context import (
     mark_changeset_failed,
     require_changeset,
 )
-from angee.base.signals import bulk_updated, connect_for_models
 
 
 def _claimed_create(

@@ -145,7 +145,10 @@ export function useRelationSelectedOptions(
   return options;
 }
 
-/** Own lazy remote search plus selected-record retention for a relation picker. */
+/** Own lazy remote pages, search and selected-record retention for a relation picker.
+ * @kind null
+ * @reason Shared data hook owns picker query state without rendered anatomy.
+ */
 export function useRelationPickerOptions(
   relation: RelationFieldInfo | null,
   config: RelationPickerOptionsConfig = {},

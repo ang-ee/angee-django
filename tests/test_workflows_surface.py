@@ -15,8 +15,8 @@ from django.db.models.deletion import PROTECT
 from pydantic import BaseModel
 
 import angee.workflows as workflows
-from angee.decisions.contracts import DecisionFact, DecisionRecordReference, DecisionRequest
 from angee.base.models import DerivedFrom, RecordRefMixin
+from angee.decisions.contracts import DecisionFact, DecisionRecordReference, DecisionRequest
 from angee.provenance.evidence import EvidenceFact, EvidenceReference, FactAuthority, readable_records
 from angee.workflows.managers import PublishResult
 from angee.workflows.states import RunOrigin

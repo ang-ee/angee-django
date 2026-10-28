@@ -29,13 +29,17 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 from strawberry import auto
 
+from angee.base.models import AngeeDataModel
 from angee.graphql.capabilities import permissions_field
-from angee.graphql.data.hasura import declared_hasura_resource_fields, hasura_model_resource
-from angee.graphql.data.hasura import _declared_aliases, aggregate_queryset
+from angee.graphql.data.hasura import (
+    _declared_aliases,
+    aggregate_queryset,
+    declared_hasura_resource_fields,
+    hasura_model_resource,
+)
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
-from angee.base.models import AngeeDataModel
 from tests.conftest import (
     SchemaAddon,
     execute_schema,

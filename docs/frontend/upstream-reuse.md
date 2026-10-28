@@ -82,10 +82,12 @@ preserve cached fields, while explicit null/empty fields replace them. HTTP
 supplies the initial read and post-mutation refetch. Completions win in arrival
 order; no daemon revision field exists to establish stronger ordering.
 
-Generated metadata and the supported recursive form-spec subset are validated
-with Valibot schemas, and wire types are inferred from those schemas. Permitted
-extension keys and optional sections remain supported; this does not broaden the
-supported JSON Schema language.
+Generated resource metadata uses Valibot schemas and their inferred wire types.
+FormSpec has one [JSON Schema owner](../../addons/angee/base/schemas/form_spec.schema.json)
+shared with Python producers. The [native generator](../../packages/ui/scripts/generate-form-spec.mjs)
+emits its TypeScript types, annotation keys and standalone Ajv validator; the
+ordinary browser parser imports that generated validator. Permitted extension
+keys and optional sections remain explicit in the canonical schema.
 
 ## Message feed cursors
 

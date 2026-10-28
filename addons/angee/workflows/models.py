@@ -19,11 +19,8 @@ from django.utils.functional import cached_property
 from rebac import system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.base.fields.text import DiagnosticTextField, ModelLabelField
 from angee.base.fields.state import StateField
-from angee.graphql.events import ChangeRelatedRecord
-from angee.graphql.schema import GraphQLSchemas
-from angee.iam.service_users import sync_service_user
+from angee.base.fields.text import DiagnosticTextField, ModelLabelField
 from angee.base.identity import public_id_for
 from angee.base.models import (
     AngeeDataModel,
@@ -34,11 +31,14 @@ from angee.base.models import (
     RecordRefMixin,
     update_fields_with_auto_now,
 )
+from angee.graphql.events import ChangeRelatedRecord
+from angee.graphql.mixins import ImplementationChoicesMixin
+from angee.graphql.schema import GraphQLSchemas
+from angee.iam.service_users import sync_service_user
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
-from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, GraphEdge, GraphNode
 from angee.workflows.managers import (
     StepAttemptQuerySet,

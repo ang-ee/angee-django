@@ -13,14 +13,15 @@ from django.db.models import F, Prefetch, prefetch_related_objects
 from rebac import system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
-from strawberry_django.optimizer import optimize
 from strawberry_django.auth.utils import get_current_user
+from strawberry_django.optimizer import optimize
 from strawberry_django.utils.requests import get_request
 
-from angee.graphql.data.contracts import DataResourceSubtitleMetadata
 from angee.base.fields.identity import SqidField
+from angee.base.identity import instance_from_public_id
 from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.capabilities import permission_expression, permissions_field
+from angee.graphql.data.contracts import DataResourceSubtitleMetadata
 from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
@@ -41,7 +42,6 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
 from angee.iam.identity import user_display_label, user_label, user_public_id
 from angee.iam.permissions import session_user
-from angee.base.identity import instance_from_public_id
 from angee.knowledge.models import (
     AmbiguousMatchError,
     PageQuerySet,

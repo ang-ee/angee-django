@@ -22,9 +22,10 @@ function formSpecIssue(issue: ErrorObject | undefined): string {
   if (!issue) return "Invalid form spec.";
   const segments = issue.instancePath.split("/").slice(1).map((part) => part.replace(/~1/g, "/").replace(/~0/g, "~"));
   if (issue.keyword === "required") segments.push(String(issue.params.missingProperty));
+  if (issue.keyword === "discriminator") segments.push(String(issue.params.tag));
   const path = segments.filter((part) => part !== "properties").join(".") || "form spec";
-  const message = issue.keyword === "enum" && segments.at(-1) === "operator"
-    ? `unknown Refine CRUD operator "${String(issue.data)}".` : issue.message ?? "Invalid value.";
+  const message = (issue.keyword === "enum" || issue.keyword === "discriminator") && segments.at(-1) === "operator"
+    ? `unknown Refine CRUD operator "${String(issue.keyword === "discriminator" ? issue.params.tagValue : issue.data)}".` : issue.message ?? "Invalid value.";
   return `Invalid ${path}: ${message}`;
 }
 

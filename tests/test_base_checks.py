@@ -17,25 +17,26 @@ from rebac.models import RebacResource, Relationship, RelationshipRegistry
 
 from angee.base import checks as base_checks
 from angee.base.apps import BaseConfig
-from angee.base.implementations import check_impl_registries
-from angee.hooks import check_hooks
 from angee.base.checks import (
     check_ownership,
     check_rebac_database,
 )
-from angee.base.fields.state import StateField
 from angee.base.fields.implementation import ImplClassField
+from angee.base.fields.state import StateField
+from angee.base.implementations import check_impl_registries
 from angee.base.models import (
     AngeeManager,
     AngeeModel,
     AppendOnlyModel,
     AppendOnlyQuerySet,
     AuditMixin,
-    HierarchyMixin, HierarchyQuerySet,
+    HierarchyMixin,
+    HierarchyQuerySet,
     OwnerMixin,
     TrashMixin,
     TrashQuerySet,
 )
+from angee.hooks import check_hooks
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
 
@@ -250,7 +251,7 @@ def test_hierarchy_queryset_order_checks_every_declared_manager(ordering: str) -
         pass
 
     queryset = {"first": First, "last": Last, "override": Override, "inherited": Inherited, "plain": Guard}[ordering]
-    with isolate_apps("django.contrib.contenttypes") as registry:
+    with isolate_apps("django.contrib.contenttypes"):
 
         class Node(HierarchyMixin, models.Model):
             objects = models.Manager()

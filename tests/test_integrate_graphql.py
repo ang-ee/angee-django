@@ -30,8 +30,8 @@ from openai import DefaultHttpxClient, OpenAI
 from rebac import system_context
 
 from angee.base.fields import ImplClassField
-from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.base.identity import public_id_for
+from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate import queue as integrate_queue
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind

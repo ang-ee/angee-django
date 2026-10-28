@@ -20,12 +20,12 @@ from rebac import PermissionDenied, RelationshipTuple, actor_context, system_con
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
-from angee.graphql import records
 from angee.base.identity import public_id_of
-from angee.messaging.testing.models import Directory, Participant, Party, Reaction
-from angee.base.models.merge_references import EdgeReference, ForeignKeyReference, MergeContractMixin
 from angee.base.models import MergePolicy, RecordRefMixin, references
 from angee.base.models import merge as merge_module
+from angee.base.models.merge_references import EdgeReference, ForeignKeyReference, MergeContractMixin
+from angee.graphql import records
+from angee.messaging.testing.models import Directory, Participant, Party, Reaction
 from angee.projects.testing.models import Link, Project, Queue, Task
 from angee.provenance.context import changeset
 from angee.provenance.statements import (

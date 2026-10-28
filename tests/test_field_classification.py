@@ -7,12 +7,12 @@ from typing import cast
 import strawberry
 from django.db import models
 
+from angee.base.fields.state import StateField
+from angee.base.fields.text import ColorField
+from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
+from angee.graphql.data.metadata import _finalize_data_resource
 from angee.graphql.data.resource_fields import RESOURCE_FIELD_SCALARS, resource_field_widget
 from angee.graphql.introspection import is_to_one_relation
-from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
-from angee.base.fields.text import ColorField
-from angee.base.fields.state import StateField
-from angee.graphql.data.metadata import _finalize_data_resource
 
 
 def test_uuid_is_a_supported_resource_scalar() -> None:

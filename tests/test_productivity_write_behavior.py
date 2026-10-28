@@ -21,10 +21,6 @@ from strawberry import auto
 
 import tests.test_messaging  # noqa: F401 -- register related models before native database setup
 from angee.base.fields.state import StateField
-from angee.graphql.data.hasura import hasura_model_resource
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend
-from angee.graphql.node import AngeeNode
-from angee.graphql.schema import GraphQLSchemas
 from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
@@ -37,6 +33,9 @@ from angee.base.models import (
     TrashQuerySet,
 )
 from angee.base.models import Stage as OrderedStage
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
+from angee.graphql.node import AngeeNode
+from angee.graphql.schema import GraphQLSchemas
 from angee.projects.models import Task as AbstractTask
 from angee.projects.testing.models import Queue, Stage, Task
 from angee.work.models import TaskWork

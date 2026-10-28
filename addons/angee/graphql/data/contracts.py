@@ -11,11 +11,11 @@ import dataclasses
 from dataclasses import dataclass
 from typing import Annotated, Any
 
-from angee.base.fields.state import StatusDisplay
-
 from django.db import models
 from pydantic import Field, TypeAdapter, with_config
 from pydantic.alias_generators import to_camel
+
+from angee.base.fields.state import StatusDisplay
 
 
 @dataclass(frozen=True, slots=True)

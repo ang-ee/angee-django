@@ -51,13 +51,27 @@ from rebac.mixins import RebacModelBase
 from simple_history.signals import post_create_historical_record
 from strawberry_django.descriptors import model_property
 
-from angee.base.permissions import actor_user_id, instance_actor
-from angee.base.fields.text import DiagnosticTextField
 from angee.base.fields.encrypted import EncryptedField
-from angee.base.fields.state import StateField
-from angee.graphql.capabilities import held_permissions
 from angee.base.fields.implementation import ImplClassField
+from angee.base.fields.state import StateField
+from angee.base.fields.text import DiagnosticTextField
+from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
+from angee.base.models import (
+    AngeeDataModel,
+    AuditMixin,
+    MergePolicy,
+    OwnerMixin,
+    OwnerQuerySet,
+    RecordRefMixin,
+    StateTransitions,
+    references,
+    save_state,
+    transition,
+)
 from angee.base.models.implementations import ImplDefaultsMixin
+from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.refs import generic_pointer_target
+from angee.graphql.capabilities import held_permissions
 from angee.integrate.connect import enabled_oauth_client_from_hint, oauth_client_slug_from_hint
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES
 from angee.integrate.credentials import CredentialKind, CredentialKindHandler
@@ -97,21 +111,7 @@ from angee.integrate.streams import sync_bridge
 from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_sync_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.enqueue import enqueue_task
-from angee.resources.mixins import ResourceLoadMixin
 from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
-from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
-from angee.base.models import (
-    AngeeDataModel,
-    AuditMixin,
-    MergePolicy,
-    OwnerMixin,
-    OwnerQuerySet,
-    RecordRefMixin,
-    StateTransitions,
-    references,
-    save_state,
-    transition,
-)
 from angee.provenance.context import current_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
@@ -122,7 +122,7 @@ from angee.provenance.statements import (
     StatementLinkMixin,
     StatementSourceMixin,
 )
-from angee.base.refs import generic_pointer_target
+from angee.resources.mixins import ResourceLoadMixin
 from angee.serialization import canonical_json
 
 logger = logging.getLogger(__name__)

@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import cache
 from typing import Any, ClassVar, cast
+
 from django.apps import AppConfig
 from django.conf import settings
 from django.core import checks
@@ -13,8 +14,10 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django.utils.module_loading import import_string
 from pydantic import BaseModel
+
 from angee.base.schemas.forms import config_form_spec
 from angee.base.validators import validate_config_aliases, validate_value
+
 
 @dataclass(frozen=True, slots=True)
 class ImplChoice:
@@ -117,7 +120,9 @@ class ImplBase:
             icon=cls.icon,
             category=cls.category,
             defaults=cls.effective_defaults(config_schema=schema),
-            config_schema=config_form_spec(schema, owner=cls.__name__, json_fields=cls.config_form_spec_json_fields) if schema is not None else None,
+            config_schema=config_form_spec(schema, owner=cls.__name__, json_fields=cls.config_form_spec_json_fields)
+            if schema is not None
+            else None,
         )
 
     @classmethod
@@ -142,7 +147,11 @@ class ImplBase:
         """Translate Pydantic's supported JSON Schema subset into FormSpec."""
 
         schema = cls.config_json_schema()
-        return config_form_spec(schema, owner=cls.__name__, json_fields=cls.config_form_spec_json_fields) if schema is not None else None
+        return (
+            config_form_spec(schema, owner=cls.__name__, json_fields=cls.config_form_spec_json_fields)
+            if schema is not None
+            else None
+        )
 
 
 def impl_registry(registry_setting: str) -> dict[str, str]:

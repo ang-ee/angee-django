@@ -20,7 +20,6 @@ from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 from strawberry_django.utils.requests import get_request
 
-
 from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
 from angee.iam_integrate_oidc import identity
