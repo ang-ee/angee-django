@@ -87,6 +87,7 @@ export function useQueueFormDeclaration(props: Omit<FormProps, "resource" | "chi
   const categories = useEnumOptions(STAGE_MODEL, "category");
   const policy = useAuthoredQuery(WorkStageEditableCategoriesDocument, {}, { models: [STAGE_MODEL] });
   const editableCategories = policy.data?.work_stage_editable_categories;
+  const policyError = policy.error;
   const lineFields = React.useMemo<readonly EditableLineField[]>(() => [
     { name: "name", label: t("common.name") },
     {
@@ -117,7 +118,7 @@ export function useQueueFormDeclaration(props: Omit<FormProps, "resource" | "chi
   return (
     <Form
       {...props}
-      contextLine={policy.error ? <>{props.contextLine}<ErrorBanner description={policy.error.message}
+      contextLine={policyError ? (context) => <>{props.contextLine?.(context)}<ErrorBanner description={policyError.message}
         actions={<Button size="sm" onClick={() => { void policy.refetch(); }}>{uiT("app.retry")}</Button>} /></>
         : props.contextLine}
       resource={QUEUE_MODEL}

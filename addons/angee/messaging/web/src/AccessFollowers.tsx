@@ -16,7 +16,7 @@ export function AccessFollowers({ targetId, resource }: AccessRoleOwnerProps): n
   });
   const people = React.useMemo<readonly AccessPerson[]>(() =>
     (query.data?.record_thread?.followers ?? []).flatMap(({ user }) => user
-      ? [{ subject: user.assignment_subject, label: user.username, following: true }]
+      ? [{ subject: user.assignment_subject, label: user.username ?? user.assignment_subject, following: true }]
       : []), [query.data]);
   const onRetry = React.useCallback(() => { void query.refetch(); }, [query.refetch]);
   const state = React.useMemo(() => ({ people, fetching: query.isFetching, error: query.error, onRetry }),
