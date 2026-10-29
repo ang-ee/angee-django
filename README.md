@@ -60,7 +60,7 @@ are.*
    │                                                              │
    │    addons  (source models · GraphQL · REBAC · React views)   │
    │        │                                                     │
-   │        │  uv build · native Hatch composition                │
+   │        │  runtime-build · explicit composition               │
    │        ▼                                                     │
    │    runtime/   →   Django + GraphQL + React application       │
    └──────────────────────────────────────────────────────────────┘

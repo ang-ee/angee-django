@@ -1,13 +1,26 @@
 # Changelog
 
-Notable structural and behavioral changes to the Angee framework — the `angee/`
-core + composer and the framework addons under `addons/angee/`. The format loosely
-follows [Keep a Changelog](https://keepachangelog.com). Now that the package
-ships to PyPI, releases get version-keyed headings; earlier pre-release
-entries remain grouped by the dated effort that landed them, newest first. Day-to-day detail lives in git history — this file
+Notable structural and behavioral changes to the Angee framework and its addons.
+The format loosely follows [Keep a Changelog](https://keepachangelog.com).
+Releases get version-keyed headings; earlier pre-release entries remain grouped
+by the dated effort that landed them, newest first. Day-to-day detail lives in git history — this file
 keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
+
+## Unreleased — addon distribution metadata
+
+- Each addon declares native package metadata and requirements in its own
+  `pyproject.toml`, with one `angee.addons` entry point. Capability tables remain
+  package data. The repository root is a uv workspace and metadata-only collection.
+- Dependency installation, explicit operator `runtime-build`, and Python archive
+  builds are separate operations. Native migration history remains reviewed,
+  committed project source.
+- Framework and addon wheel publication targets the configured private Python
+  index because declared dependencies include pinned fork URLs.
+
+The older 0.3.0 and dated entries below preserve upgrade history and earlier
+architecture decisions; they are not the current packaging recipe.
 
 ## Unreleased — AP consolidation 2026-10-18 (breaking; ships in 0.3.0)
 
@@ -166,7 +179,8 @@ Upgrade steps: see "Unreleased — AP consolidation" below.
   `chatter.history`); the former ids stay as `?chatterTab=` aliases until 0.4.0.
 - The composer's drop guard refuses an autodetected `DeleteModel` whose table
   holds rows, except rows the retiring addon's resource files seeded once it
-  names the model under `retired_models` in its `addon.toml` `[resources]`.
+  names the model under `retired_models` in its `pyproject.toml`
+  `[tool.angee.resources]`.
 
 ## Unreleased — in-process agent sessions
 
@@ -754,15 +768,6 @@ index; summarized here because the working lift plans were retired.
 Forward-looking work consciously deferred; kept here so it survives the plans
 that proposed it.
 
-- **Repo split Phase B — two-dist uv workspace.** Before the actual repo split,
-  turn the monorepo into a uv workspace with two dists: root `django-angee`
-  (`packages = ["angee"]`, framework-only deps) and `addons/pyproject.toml`
-  `django-angee-addons` (`dependencies = ["django-angee", …]`). Partition
-  dependencies from real imports — `django-import-export` / `tablib` / `pyyaml` →
-  addons, `pyjwt[crypto]` → iam, whatever `angee` + `angee/compose` import →
-  framework — so the addons→framework dependency direction is enforced, not just
-  implied by directory. The repo split then becomes "move `addons/` to a new repo
-  + point its `django-angee` dependency at the published version."
 - **Generic-list title/status is a backend contract.** `@angee/base` has no owner
   for *which* row field is the "title" vs the "status" of a generic list row; a
   frontend heuristic would violate find-the-owner. The real owner is the GraphQL
