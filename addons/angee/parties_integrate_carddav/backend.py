@@ -344,6 +344,8 @@ class CardDavDirectoryBackend(DirectoryBackend):
     ) -> Any:
         """Send DAV through the pinned client and translate conditional failures."""
 
+        if not same_origin(self._base_url(), url):
+            raise CardDavError("CardDAV destinations must retain the configured server origin.")
         request_headers = {
             "Depth": depth,
             "Content-Type": "application/xml; charset=utf-8",

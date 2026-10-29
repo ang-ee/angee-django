@@ -521,6 +521,12 @@ class _FakeAnthropicClient:
 
     instances: list[Any] = []
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.closed = True
+
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
         self.models = _FakeAnthropicModels(self)
@@ -594,6 +600,12 @@ class _FakeOpenAIClient:
 
     instances: list[Any] = []
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.closed = True
+
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
         self.models = _FakeOpenAIModels(self)
@@ -621,6 +633,7 @@ def test_anthropic_backend_refresh_syncs_native_and_broker_models(
     assert provider.refresh_models() == 4
 
     client = _FakeAnthropicClient.instances[-1]
+    assert client.closed
     assert client.kwargs == {"api_key": "api-key"}
     assert client.models.calls == [{"limit": 1000}]
     with system_context(reason="test read"):
@@ -705,6 +718,7 @@ def test_openai_backend_refresh_syncs_native_and_broker_models(
     assert provider.refresh_models() == 4
 
     client = _FakeOpenAIClient.instances[-1]
+    assert client.closed
     assert client.kwargs == {"api_key": "api-key"}
     assert client.models.calls == [{}]
     with system_context(reason="test read"):

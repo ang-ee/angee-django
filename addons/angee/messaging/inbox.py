@@ -149,8 +149,7 @@ class MessageInbox:
         self.user_id = actor_user_id(self.actor)
         self.messages = (
             queryset.inbox()
-            .untrashed()
-            .filter(status__in=queryset.model.PUBLISHED_STATUSES)
+            .published()
             .exclude(thread__modality="public_thread")
             .for_feed(all_copies=True)
         )

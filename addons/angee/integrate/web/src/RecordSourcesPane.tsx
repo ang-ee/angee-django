@@ -75,3 +75,4 @@ export function RecordSourcesPane({ context }: { context: ChatterViewContext }):
     </li>; })}
   </PaneRows>;
 }
+

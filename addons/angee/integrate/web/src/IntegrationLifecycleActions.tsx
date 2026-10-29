@@ -35,22 +35,9 @@ export const INTEGRATION_LIFECYCLE_TOKENS = [
 export type IntegrationLifecycleToken =
   (typeof INTEGRATION_LIFECYCLE_TOKENS)[number];
 
-// These mirror the `source=` sets declared on the model's `@transition`s
-// (`Integration.pause`, `.connect`, `.disconnect`). The declaration is the owner
-// and this copy drifts silently if it changes; both collapse into one fact once
-// an action registry emits each transition's source set into the metadata
-// artifact — the seam `integrate/schema.py` anticipates for these same verbs.
-const isConnected = integrationLifecycleIs("connected");
-
-/**
- * Rows the shared Disconnect reaches — integrate's lifecycle vocabulary, exported
- * so a vendor specializing Disconnect gates on the same set instead of re-spelling
- * it (and drifting from `Integration.disconnect`'s declared `source=`).
- */
-export const isConnectedOrPaused = ({
-  record,
-}: ConditionalMutationButtonContext): boolean =>
-  ["connected", "paused"].includes(integrationLifecycle(record));
+/** Eligibility projected from the model's guarded Disconnect verb. */
+export const isConnectedOrPaused = ({ record }: ConditionalMutationButtonContext): boolean =>
+  record.can_disconnect === true;
 
 /** Read the shared credential projection on the parent and its capabilities. */
 export function integrationHasCredential(record: Row): boolean {
@@ -91,7 +78,7 @@ export function PauseIntegrationAction(): React.ReactElement {
     <ConditionalMutationButton
       field="pause_integration"
       label={t("lifecycle.pause")}
-      when={isConnected}
+      when={({ record }) => record.can_pause === true}
     />
   );
 }

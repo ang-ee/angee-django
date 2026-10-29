@@ -26,6 +26,7 @@ export interface ChannelRecordAction {
   /** Order among the record verbs; messaging's shared lifecycle verbs sit at 10–14. */
   sequence: number;
   content: ReactNode;
+  requiredFields?: readonly string[];
 }
 
 export interface ChannelPollBridgeAddonOptions {
@@ -94,7 +95,7 @@ export function defineChannelBridgeAddon({
         content: pairingAction("paused", "channel.pairing.resume", true),
       },
     }, {
-      [`${id}.disconnect`]: { variant: { of: INTEGRATION_DISCONNECT_ACTION_ID, impl: key }, sequence: 13, content: disconnectAction },
+      [`${id}.disconnect`]: { variant: { of: INTEGRATION_DISCONNECT_ACTION_ID, impl: key }, sequence: 13, requiredFields: ["can_disconnect"], content: disconnectAction },
     }),
   });
 }
@@ -115,7 +116,7 @@ export function defineChannelPollBridgeAddon({
   });
 }
 
-type ChannelActionChildren = Record<`${string}.${string}`, { content: ReactNode; sequence: number; impl?: string; variant?: { of: string; impl: string } }>;
+type ChannelActionChildren = Record<`${string}.${string}`, { content: ReactNode; sequence: number; requiredFields?: readonly string[]; impl?: string; variant?: { of: string; impl: string } }>;
 
 /**
  * One vendor's channel children: its connect verb on the Channels toolbar, its
@@ -130,7 +131,7 @@ function channelContainers(
   toolbar: ChannelActionChildren = {},
   menu: ChannelActionChildren = {},
 ): ContainersDeclaration {
-  const vendorVerbs = Object.fromEntries(recordActions.map(({ id: verb, sequence: order, content }) => [verb, { impl: key, sequence: order, content }]));
+  const vendorVerbs = Object.fromEntries(recordActions.map(({ id: verb, sequence: order, content, requiredFields }) => [verb, { impl: key, sequence: order, content, ...(requiredFields ? { requiredFields } : {}) }]));
   return {
     "messaging.channels#toolbar": { [`${id}.connect`]: { sequence, content: connectAction } },
     ...(Object.keys(toolbar).length ? { [`${CHANNEL_MODEL}#actions`]: toolbar } : {}),

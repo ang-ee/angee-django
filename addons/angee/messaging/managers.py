@@ -2462,6 +2462,11 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
             delivery_lease_until__lte=now,
         )
 
+    def published(self) -> Self:
+        """Retained messages published by a source or accepted outbound transport."""
+
+        return self.untrashed().filter(status__in=self.model.PUBLISHED_STATUSES)
+
     def counted_in_thread(self) -> Self:
         """Use the model's retained-row predicate for reads and recounts."""
 
@@ -2866,7 +2871,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 self._build_parts(
                     reply, ParsedPart(text=body), parent=None, position=0, created_by_id=created_by_id,
                 )
-                self._bump_thread(reply)
+                self.advance_thread(reply)
                 if queued:
                     reply.deliver()
             if idempotency_key is not None:
@@ -3789,8 +3794,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             values["last_message_at"] = Greatest(Coalesce(models.F("last_message_at"), sent_at), sent_at)
         return values
 
-    def _bump_thread(self, message: Any) -> None:
-        """Increment a counted insert without a thread save or ingest change event."""
+    def advance_thread(self, message: Any) -> None:
+        """Advance a newly inserted message once, using its retained-row and sent-time policy.
+
+        Producers call this inside the insertion transaction after composing the
+        envelope and parts. Settlement/re-threading uses the recount owner instead.
+        """
 
         if message.thread_id is None:
             return
@@ -4195,7 +4204,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         if after_landing is not None:
             after_landing(message)
         if (created or thread_changed) and not message.is_trashed and thread is not None:
-            self._bump_thread(message)
+            self.advance_thread(message)
         if (created or thread_changed or source_thread_changed) and not historical and not message.is_trashed:
             message_ingested.send(sender=self.model, instance=message)
         return message, handles

@@ -1,9 +1,7 @@
-import * as React from "react";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { AtSign, Building2, CircleDot, Contact, HeartHandshake, LayoutDashboard, UserCheck, Users } from "lucide-react";
 import { enPartiesMessages } from "./i18n";
-import { ConnectCardDavAction } from "./ConnectCardDavAction";
 import { directoryForm } from "./DirectoryForm";
 import { organizationForm } from "./OrganizationForm";
 import { personForm } from "./PersonForm";
@@ -102,9 +100,7 @@ const parties = defineBaseAddon({
     "parties.overview#items": {},
     "parties.person#fields": {},
     "parties.organization#fields": {},
-    "parties.directories#toolbar": {
-      "parties.connect-carddav": { sequence: 10, content: React.createElement(ConnectCardDavAction) },
-    },
+    "parties.directories#toolbar": {},
   },
 });
 export { senderAvatarUrl, senderDisplayName, type SenderIdentity } from "./identity";

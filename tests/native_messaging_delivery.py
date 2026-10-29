@@ -603,7 +603,7 @@ class DeliveryContracts(DeliveryFixtures):
         comment = self.comment()
         row = self.outbound(thread_id=comment.thread_id)
         with system_context(reason="one-statement insert counter"), CaptureQueriesContext(connection) as queries:
-            Message.objects._bump_thread(row)
+            Message.objects.advance_thread(row)
         statements = [query["sql"] for query in queries if Message._meta.db_table in query["sql"]]
         self.assertEqual(len(statements), 1, statements)
         self.assertIn("UPDATE", statements[0])

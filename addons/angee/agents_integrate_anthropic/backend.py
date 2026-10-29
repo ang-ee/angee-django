@@ -110,25 +110,26 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
         """List Anthropic models and their broker-prefixed aliases."""
 
         specs: list[InferenceModelSpec] = []
-        for model in self.client().models.list(limit=self._model_limit()):
-            model_id = str(getattr(model, "id", "") or "").strip()
-            if not model_id:
-                continue
-            display_name = str(getattr(model, "display_name", "") or model_id)
-            context_window = int(getattr(model, "max_input_tokens", 0) or 0)
-            max_tokens = int(getattr(model, "max_tokens", 0) or 0)
-            config = {"provider_model": model_id, "source": "anthropic"}
-            capabilities = self._json_object(getattr(model, "capabilities", None))
-            specs.extend(
-                self._model_specs(
-                    handle=model_id,
-                    display_name=display_name,
-                    context_window=context_window,
-                    max_output_tokens=max_tokens,
-                    capabilities=capabilities,
-                    config=config,
+        with self.client() as client:
+            for model in client.models.list(limit=self._model_limit()):
+                model_id = str(getattr(model, "id", "") or "").strip()
+                if not model_id:
+                    continue
+                display_name = str(getattr(model, "display_name", "") or model_id)
+                context_window = int(getattr(model, "max_input_tokens", 0) or 0)
+                max_tokens = int(getattr(model, "max_tokens", 0) or 0)
+                config = {"provider_model": model_id, "source": "anthropic"}
+                capabilities = self._json_object(getattr(model, "capabilities", None))
+                specs.extend(
+                    self._model_specs(
+                        handle=model_id,
+                        display_name=display_name,
+                        context_window=context_window,
+                        max_output_tokens=max_tokens,
+                        capabilities=capabilities,
+                        config=config,
+                    )
                 )
-            )
         return specs
 
     def _build_model(self, handle: str, client: Any) -> AnthropicModel:

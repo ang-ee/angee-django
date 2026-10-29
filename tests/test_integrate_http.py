@@ -618,3 +618,23 @@ def test_empty_dns_result_is_a_typed_resolution_failure(monkeypatch: pytest.Monk
         resolved_addresses("unresolved.example", 443)
     with pytest.raises(AddressResolutionError):
         HttpClient().get("https://unresolved.example/")
+
+
+@pytest.mark.parametrize("destination", ["https://cdn.example/file", "https://other.example:8443/file"])
+def test_bounded_download_uses_native_redirect_credentials(monkeypatch, destination):
+    calls = []
+    def respond(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx2.Response(302, headers={"Location": destination})
+        assert "authorization" not in request.headers
+        assert "cookie" not in request.headers
+        assert request.headers["host"] == httpx2.URL(destination).netloc.decode()
+        return httpx2.Response(200, content=b"ok")
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(respond)))
+    result = HttpClient().download_bounded(
+        URL, headers={"Authorization": "Bearer test-secret", "Cookie": "session=test-secret"},
+    )
+    assert result is not None and result.content == b"ok"
+    assert len(calls) == 2
+    assert calls[0].headers["authorization"] == "Bearer test-secret"
