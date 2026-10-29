@@ -2,12 +2,14 @@
 
 This repository holds the **Angee consumer addons** of {{ repository_title }}:
 `addons/{{ addon_namespace }}/<name>` is the `{{ addon_namespace }}.<name>` addon. It
-is a source slot the owning stack materializes, not a stack or a Django project:
-the stack owns `angee.yaml`, `settings.yaml`, `manage.py`, `pyproject.toml`, the
-Python and JS environments, composition, migrations, SDL and codegen. Never run
-`angee init`, `pnpm install` or `uv sync` here, and never `git checkout` or
-`git switch` inside this slot; the parent stack and workspace `AGENTS.md` own
-lifecycle and branches.
+is a source slot the owning stack materializes, not a stack or a Django project.
+This repository owns its root uv workspace and addon distribution metadata in
+`pyproject.toml`. The stack owns `angee.yaml`, application `settings.yaml` and
+`manage.py`, the running Python and JS environments, composition, migrations,
+SDL and codegen. Never run `angee init` or `pnpm install` here, or synchronize the
+live stack's environment from this slot. Never `git checkout` or `git switch`
+inside this slot; the parent stack and workspace `AGENTS.md` own lifecycle and
+branches.
 
 ## Consumer Scope
 
@@ -23,7 +25,7 @@ These rules are its consumer application, not a second set:
   `ImplClassField` implementations, and a `web/` fragment declared with
   `defineBaseAddon`.
 - **No framework edits.** A missing or insufficient framework primitive is fixed
-  at its owner in the framework checkout (`angee-framework`), never patched or
+  at its owner in the sibling framework checkout (`angee`), never patched or
   copied here; this repository holds no `angee.*` addon.
 - **No monkey-patching composed models.** Never probe a foreign object's shape or
   mutate another addon's composed model class, schema or registry at import time;
