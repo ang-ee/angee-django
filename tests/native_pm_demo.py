@@ -45,6 +45,13 @@ class PMDemoTests(TransactionTestCase):
                 set(self.Task.objects.filter(queue=queue).values_list("stage__category", flat=True)),
                 {"triage", "backlog", "unstarted", "started", "completed"},
             )
+            # Projects' own demos need no Work resource dependency: IAM's
+            # Work donor provisions personal stages before task defaults run.
+            for xref in ("map_plots", "weekly_tools", "opening_day", "opening_day_signs"):
+                task = Resource.objects.resolve(f"projects.{xref}", model=self.Task)
+                self.assertTrue(task.queue.is_personal)
+                self.assertEqual(task.queue.created_by_id, task.created_by_id)
+                self.assertEqual(task.stage_id, task.queue.default_stage_id)
             done = self.Task.objects.get(title="Confirm shared tool storage")
             self.assertEqual(done.status, "done")
             self.assertIsNotNone(done.done_at)
