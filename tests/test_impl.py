@@ -15,6 +15,7 @@ from django.test.utils import isolate_apps
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
 from angee.base.fields.implementation import ImplClassField, impl_choices_enum
+from angee.base.hooks import resolve_hook, resolve_hooks
 from angee.base.implementations import (
     ImplBase,
     ImplChoice,
@@ -25,7 +26,6 @@ from angee.base.implementations import (
 )
 from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.schemas.forms import config_form_spec
-from angee.hooks import resolve_hook, resolve_hooks
 from angee.integrate_github.backend import GitHubBackend
 from angee.integrate_vcs.backend import LocalVCSBackend
 from angee.storage.backends import LocalBackend, StorageBackend

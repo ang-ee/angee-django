@@ -14,6 +14,7 @@ from angee.base.apps import BaseConfig
 from angee.base.checks import check_ownership
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
+from angee.base.hooks import check_hook, check_hooks
 from angee.base.implementations import check_impl_registry
 from angee.base.managers import AngeeManager
 from angee.base.models.append_only import AppendOnlyModel, AppendOnlyQuerySet
@@ -22,7 +23,6 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.hooks import check_hook, check_hooks
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
 

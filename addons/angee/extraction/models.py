@@ -17,6 +17,7 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel, AngeeModel
 from angee.base.models.derived import DerivedFrom
 from angee.base.refs import RecordRef
+from angee.base.serialization import canonical_json
 from angee.extraction.contracts import (
     CorrectionRef,
     DocumentPart,
@@ -43,7 +44,6 @@ from angee.extraction.pointers import (
 )
 from angee.extraction.profiles import ExtractionProfile
 from angee.provenance.evidence import FactAuthority
-from angee.serialization import canonical_json
 
 
 class RetainedEvidence(AppendOnlyModel):

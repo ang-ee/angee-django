@@ -21,8 +21,8 @@ from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.timestamps import auto_now_stamps, update_fields_with_auto_now
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.querysets import CanonicalQuerySet, by_key
+from angee.base.serialization import strip_null_bytes
 from angee.base.signals import bulk_updated
-from angee.serialization import strip_null_bytes
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _ArchiveModelT = TypeVar("_ArchiveModelT", bound=models.Model)

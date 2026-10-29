@@ -47,6 +47,7 @@ from django.db.models import ProtectedError, Q, RestrictedError
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import is_sudo
 
+from angee.base.hooks import resolve_hooks
 from angee.base.managers import MergeableUnscopedManager
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instances_from_public_ids
@@ -54,7 +55,6 @@ from angee.base.models.merge_references import MergePolicy, named_in_relationshi
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import instance_actor
 from angee.base.signals import pre_merge
-from angee.hooks import resolve_hooks
 
 MERGE_REASON = "merge"
 """The system-context reason a merge's moves record."""

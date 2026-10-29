@@ -92,7 +92,7 @@ def test_shared_artifact_utilities_import_without_models_or_composer() -> None:
 
     script = "\n".join((
         "import sys",
-        "import angee.utils.artifacts, angee.utils.files, angee.utils.paths",
+        "import angee.utils.artifacts, angee.utils.files, angee.base.paths",
         "assert not any(name == 'angee.compose' or name.startswith('angee.compose.') for name in sys.modules)",
         "assert 'django.db.models' not in sys.modules",
         "assert 'angee.base.models' not in sys.modules",

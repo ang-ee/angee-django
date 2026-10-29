@@ -42,6 +42,7 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
 from angee.base.permissions import actor_user_id, candidate_relationships
 from angee.base.querysets import MergeableQuerySet
+from angee.base.serialization import strip_null_bytes
 from angee.base.validators import validate_value
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
@@ -57,7 +58,6 @@ from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryMergeableUnscopedQuerySet, AngeeHistoryQuerySet
 from angee.scheduling.fields import RecurrenceField
-from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
 
 
