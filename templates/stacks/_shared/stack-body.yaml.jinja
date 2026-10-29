@@ -13,7 +13,7 @@
 {# Wrapper-provided variables: stack_flavor, runtime_mode, postgres_user/_db/_address and redis_address/_db/_broker_db #}
 {# (the body composes database_url, redis_url, and celery_broker_url from them), operator_url, #}
 {# mcp_url, operator_bind, pgdata_mount, (process only) app_source; framework_source — plus the dev #}
-{# copier inputs postgres_mode and redis_mode (unset for local), addons_profile, work_state_source, and (both templates) sentry_dsn / sentry_web_dsn. #}
+{# copier inputs postgres_mode and redis_mode (unset for local), addons_profile, work_state_source, vcs, slot_mode, and (both templates) sentry_dsn / sentry_web_dsn. #}
 {# Process mode always renders development, even if a caller bypasses the Copier validator. #}
 {% set effective_serve_mode = "development" %}{% if runtime_mode == "docker" %}{% set effective_serve_mode = serve_mode %}{% endif %}{% set database_url = "postgres://"|add:postgres_user|add:":${secret.db-password}@"|add:postgres_address|add:"/"|add:postgres_db %}{% set redis_url = "redis://"|add:redis_address|add:"/"|add:redis_db %}{% set celery_broker_url = "redis://"|add:redis_address|add:"/"|add:redis_broker_db %}
 version: 1
@@ -133,7 +133,10 @@ persist:
 {% if postgres_mode == "external" %}{% else %}  # The Postgres data volume under ./data so one dir holds the instance's mutable state.
   pgdata: { subpath: ./data/pgdata, scope: stack }
 {% endif %}{% endif %}
-
+{% if stack_flavor == "framework" %}{% if vcs == "jj" %}
+# Every workspace slot that names no mode (the src workspace's `.work`) is a jj workspace.
+vcs: jj
+{% endif %}{% endif %}
 sources:
   app:
     kind: local
@@ -150,7 +153,7 @@ sources:
     kind: local
     path: {{ framework_source }}
   # The consolidated framework source. `angee dev` materializes its clone cache
-  # and cuts the `src` workspace's one framework worktree from it. The same
+  # and cuts the `src` workspace's one framework slot from it. The same
   # checkout owns core, addons, packages, examples, and templates. With
   # sources_home set, every git cache lives under that machine-wide directory,
   # named after its repository, and is shared by every stack on the machine;
@@ -196,16 +199,19 @@ sources:
 # or one fork never collide; shared work uses an explicit `feature/<topic>`
 # branch on the workspace instead. work_state_source binds the private work-state
 # slot at `.work/` without repeating the input (`--input work_state_source=` opts
-# out); a clean-machine stack leaves it empty and binds nothing.
+# out); a clean-machine stack leaves it empty and binds nothing. slot_mode jj
+# cuts the code slots of every new src workspace as jj workspaces.
 workspace_defaults:
   workspaces/src:
     inputs:
       branch_prefix: {{ project_name }}
 {% if work_state_source %}
       work_state_source: {{ work_state_source }}
+{% endif %}{% if slot_mode == "jj" %}
+      slot_mode: jj
 {% endif %}
-# The conventional all-source workspace: one consolidated framework worktree
-# under workspaces/src/angee plus optional external-addon worktrees. `angee dev`
+# The conventional all-source workspace: one consolidated framework slot under
+# workspaces/src/angee plus optional external-addon slots. `angee dev`
 # cuts it from the declared sources on bring-up; the host's pyproject, addon dirs,
 # and pnpm globs all point into those slots.
 workspaces:

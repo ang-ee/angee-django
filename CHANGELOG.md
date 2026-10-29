@@ -9,6 +9,28 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — jj workspace slots in the templates
+
+- The `src` workspace template takes `slot_mode` (`worktree`, the default, or
+  `jj`) as the mode of its three code slots, so a stack can cut them as jj
+  workspaces of the shared source caches. The work-state slot still names no
+  mode: the stack's `vcs` decides it, and `ws sync-base` and `ws push` skip it.
+- `stacks/dev` takes `vcs` (`git`, the default, or `jj`), rendered as the
+  manifest's `vcs`, and `slot_mode`, rendered into `workspace_defaults` for
+  `workspaces/src`. The defaults render neither key, so a stack that sets
+  neither renders as before. `stacks/local` declares no workspace and takes
+  neither. [Templates](templates/README.md#cut-workspace-slots-as-jj-workspaces)
+  has the requirements (angee 0.25.0) and the procedure for an existing stack,
+  whose `stack update --template` does not apply `vcs`.
+- The `src` workspace's `AGENTS.md` no longer says the operator does not manage
+  jj. It tells a slot the operator cut as a jj workspace by its `.jj`, sends
+  agents to `angee ws create` only when the stack's `workspace_defaults` sets
+  `slot_mode: jj`, and carries the agent contract for a jj slot: write through
+  jj only, never rewrite commits a pushed bookmark or the parent ref reaches by
+  hand, never pass `--ignore-immutable`, sync through `ws sync-base`, publish
+  through `ws source publish` or `ws push`, and files jj will not snapshot
+  block both. An existing workspace picks it up on `angee ws update`.
+
 ## Unreleased — AP consolidation 2026-10-18 (breaking; ships in 0.3.0)
 
 - `angee.base` is `angee`: `angee.models` (base model, ownership, statements,
