@@ -224,7 +224,7 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_table
         "id": tag_field.id,
         "name": "tags",
         "model": line_row.label,
-        "addon": line._meta.app_label,
+        "addon": config.name,
         "relation_target": tag_row.label,
     }
     assert {

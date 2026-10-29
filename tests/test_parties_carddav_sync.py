@@ -2428,6 +2428,9 @@ def test_request_preserves_url_gate_validation_error(
     url: str,
 ) -> None:
     monkeypatch.setattr(HttpClient, "transport_factory", PinnedTransport)
+    # An unsafe configured origin reaches the native URL gate. Foreign origins
+    # are separately refused before credential headers can leave the server.
+    replica.directory.config = {"server_url": url}
     with pytest.raises(ValidationError):
         replica.backend._request("PROPFIND", url, "<propfind/>")
 
