@@ -216,12 +216,9 @@ class OAuthClientProtocol:
 
         token_endpoint = self._endpoint("token_endpoint")
         self._token_response_claims = {}
-        extra = _param_values(self.oauth_client, "token_param_values")
-        if grant_type == "refresh_token":
-            # Anthropic permits a custom lifetime only on its inference-only
-            # authorization-code exchange. Claude Code does not repeat it when
-            # refreshing, and the token endpoint rejects it on other grants.
-            extra.pop("expires_in", None)
+        extra = self.oauth_client.provider.token_params(
+            grant_type, _param_values(self.oauth_client, "token_param_values"),
+        )
         if self._uses_json_token_request():
             return self._json_token_request(token_endpoint, grant_type, grant, extra)
         return self._authlib_token_request(token_endpoint, grant_type, grant, extra)

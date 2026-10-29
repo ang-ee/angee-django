@@ -82,6 +82,8 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
 
         slug = self.personal_slug(user)
         queue = self.sudo(reason="work.queue.personal.lookup").filter(slug=slug).first()
+        if queue is not None and not queue.is_personal:
+            raise ValidationError("The personal queue's canonical slug is occupied by an unrelated queue.")
         if queue is not None or not provision:
             return queue
         return self.provision_personal(user)
@@ -92,7 +94,7 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
         slug = self.personal_slug(user)
         key = self.personal_key(user)
         with system_context(reason="work.queue.personal.provision"), transaction.atomic():
-            queue = self.sudo(reason="work.queue.personal.provision.lookup").filter(slug=slug).first()
+            queue = self.personal_for(user)
             if queue is None:
                 label = str(user.get_full_name() or user.username)
                 queue = self.model(
@@ -111,7 +113,9 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
                     with transaction.atomic():
                         queue.save()
                 except IntegrityError:
-                    queue = self.sudo(reason="work.queue.personal.provision.concurrent_lookup").get(slug=slug)
+                    queue = self.personal_for(user)
+                    if queue is None:
+                        raise
             self._ensure_personal_membership(queue, user)
             return queue
 
@@ -407,6 +411,33 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
             ),
         )
 
+    @classmethod
+    def editable_categories(cls) -> tuple[StageCategory, ...]:
+        """Categories ordinary authors may assign to their own stages."""
+
+        return tuple(category for category in cls.StageCategory if category not in cls.SYSTEM_CATEGORIES)
+
+    @classmethod
+    def system_category_q(cls) -> models.Q:
+        """The system-owned stage population, reused by query projections."""
+
+        return models.Q(category__in=sorted(cls.SYSTEM_CATEGORIES))
+
+    @property
+    def is_system(self) -> bool:
+        """Whether provisioning owns the stage's identity and category."""
+
+        return self.category in self.SYSTEM_CATEGORIES
+
+    hasura_filter_expressions: ClassVar[Mapping[str, Any]] = {
+        "is_system": lambda rows: models.ExpressionWrapper(
+            rows.model.system_category_q(), output_field=models.BooleanField(),
+        ),
+        "accepts_manual_entry": lambda rows: models.ExpressionWrapper(
+            ~rows.model.system_category_q() & models.Q(rule_owned=False), output_field=models.BooleanField(),
+        ),
+    }
+
     @property
     def ordinary_entry_available(self) -> bool:
         """Whether this stage allows entry by ordinary work verbs."""
@@ -426,7 +457,7 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     def entry_reserved(self) -> bool:
         """Whether only the stage's owning verb or rule may enter it."""
 
-        return self.rule_owned or self.category in self.SYSTEM_CATEGORIES
+        return self.rule_owned or self.is_system
 
     @property
     def exit_reserved(self) -> bool:
@@ -524,7 +555,7 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     def locked_fields(self) -> tuple[str, ...]:
         """Lock a system stage's identity; its tone, order and rule flags stay editable."""
 
-        return ("name", "category") if self.category in self.SYSTEM_CATEGORIES else ()
+        return ("name", "category") if self.is_system else ()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Keep stage edits consistent with the queue, its mappings and the tasks it holds."""

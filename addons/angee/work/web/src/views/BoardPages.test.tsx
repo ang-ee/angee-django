@@ -132,8 +132,7 @@ function expectBoardStageScope(
     rankInputField: "task_order",
     filters: [
       { field: "queue", operator: "eq", value: "que_eng" },
-      { field: "category", operator: "ne", value: "triage" },
-      { field: "category", operator: "ne", value: "duplicate" },
+      { field: "is_system", operator: "eq", value: false },
     ],
     sorters: [{ field: "position", order: "asc" }],
   });

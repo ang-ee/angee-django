@@ -237,3 +237,47 @@ def test_current_default_cannot_become_entry_reserved(work_case, method, elevate
     assert error.value.message_dict == {field: ["The queue's default stage must allow ordinary entry."]}
     stage.refresh_from_db()
     assert (stage.rule_owned, stage.category) == (False, "unstarted")
+
+
+def test_stage_policy_projects_distinct_board_and_manual_entry_populations(work_case):
+    _actor, queue = work_case
+    with system_context(reason="test.work.stage_policy"):
+        automatic = Stage.objects.create(queue=queue, name="Automatic lane", category="started", rule_owned=True)
+        system = set(Stage.objects.filter(queue=queue).filter(Stage.system_category_q())
+                     .values_list("category", flat=True))
+        assert system == {"triage", "duplicate"}
+        assert set(Stage.editable_categories()).isdisjoint(system)
+        assert not automatic.is_system and automatic.entry_reserved
+        assert Stage.objects.get(queue=queue, category="triage").is_system
+
+
+def test_stage_policy_graphql_filters_preserve_rule_lanes_but_refuse_manual_entry(work_case):
+    from angee.work import schema as work_schema
+    from tests.conftest import addon_schema, execute_schema
+    actor, queue = work_case
+    with system_context(reason="test.work.stage_policy_schema"):
+        automatic = Stage.objects.create(queue=queue, name="Rule lane", category="started", rule_owned=True)
+    result = execute_schema(addon_schema(work_schema.schemas, "console"), """
+      query StagePolicy($queue: String!) {
+        work_stage_editable_categories
+        lanes: work_stages(where: {queue: {_eq: $queue}, is_system: {_eq: false}}) { id }
+        manual: work_stages(where: {queue: {_eq: $queue}, accepts_manual_entry: {_eq: true}}) { id }
+      }
+    """, {"queue": str(queue.sqid)}, user=actor)
+    assert result.errors is None
+    assert "TRIAGE" not in result.data["work_stage_editable_categories"]
+    assert str(automatic.sqid) in {row["id"] for row in result.data["lanes"]}
+    assert str(automatic.sqid) not in {row["id"] for row in result.data["manual"]}
+
+
+def test_personal_queue_lookup_and_provision_refuse_an_unrelated_slug_collision(work_case):
+    actor, _queue = work_case
+    with system_context(reason="test.work.personal_queue_collision"):
+        collision = Queue.objects.create(key="PCOLLISION", slug=Queue.objects.personal_slug(actor),
+                                         name="Unrelated shared queue", created_by_id=None, provision_stages=False)
+        assert not collision.is_personal
+        for provision in (False, True):
+            with pytest.raises(ValidationError, match="canonical slug is occupied"):
+                Queue.objects.personal_for(actor, provision=provision)
+        with pytest.raises(ValidationError, match="canonical slug is occupied"):
+            Queue.objects.provision_personal(actor)

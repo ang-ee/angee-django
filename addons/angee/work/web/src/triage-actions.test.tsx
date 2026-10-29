@@ -54,9 +54,7 @@ describe("triage action relation scopes", () => {
     expect(staticArgs(accept?.args)?.[0]).toMatchObject({
       filters: [
         { field: "queue", operator: "eq", value: "que_eng" },
-        { field: "category", operator: "ne", value: "triage" },
-        { field: "category", operator: "ne", value: "duplicate" },
-        { field: "rule_owned", operator: "eq", value: false },
+        { field: "accepts_manual_entry", operator: "eq", value: true },
       ],
     });
     expect(staticArgs(duplicate?.args)?.[0]).toMatchObject({

@@ -13,9 +13,15 @@ dependencies = [
 
 [resources]
 install = [
+  { path = "resources/install/010_integrate.oauthclient.yaml", adopt = ["slug", "environment"] },
   { path = "resources/install/030_agents.inferenceprovider.yaml", depends_on = "integrate:resources/master/010_integrate.vendor.yaml" },
 ]
 demo = [
   { path = "resources/demo/010_integrate.credential.yaml", depends_on = "iam:resources/demo/010_iam.user.yaml", adopt = ["user", "name"] },
   { path = "resources/demo/040_agents.inferencemodel.yaml", depends_on = "resources/install/030_agents.inferenceprovider.yaml", adopt = ["provider", "name"] },
 ]
+
+[[migrations]]
+name = "rehome_anthropic_oauth_resources"
+app_label = "resources"
+module = "runtime_migrations.rehome_anthropic_oauth_resources"

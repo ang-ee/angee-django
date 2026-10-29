@@ -101,6 +101,15 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     entry = ResourceEntry.from_declaration(config, "install", manifest["install"][0])
     rows = entry.read_groups()[0].dataset.dict
 
+    assert {row["_xref"] for row in rows} == {"oauth_gemini", "oauth_grok"}
+    anthropic = apps.get_app_config("agents_integrate_anthropic")
+    anthropic_manifest = resource_manifest_for(anthropic)
+    declaration = next(item for item in anthropic_manifest["install"]
+                       if item["path"] == "resources/install/010_integrate.oauthclient.yaml")
+    anthropic_rows = ResourceEntry.from_declaration(anthropic, "install", declaration).read_groups()[0].dataset.dict
+    assert {row["_xref"] for row in anthropic_rows} == {"oauth_anthropic_platform", "oauth_anthropic_personal"}
+    rows.extend(anthropic_rows)
+
     # Anthropic ships two distinct OAuth surfaces on one public client id (Developer
     # Platform vs. personal Claude.ai plans), modelled as two providers. xrefs are
     # namespaced ``oauth_*`` so they don't collide with the vendor catalogue.
@@ -114,6 +123,7 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert {row["slug"] for row in rows} == {"anthropic-platform", "anthropic-personal", "gemini", "grok"}
     rows_by_xref = {row["_xref"]: row for row in rows}
     platform = rows_by_xref["oauth_anthropic_platform"]
+    assert platform["provider_type"] == "anthropic"
     assert platform["slug"] == "anthropic-platform"
     assert platform["environment"] == "prod"
     assert platform["client_id"] == "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -130,6 +140,7 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert platform.get("issuer") is None
     assert platform.get("client_secret") is None
     personal = rows_by_xref["oauth_anthropic_personal"]
+    assert personal["provider_type"] == "anthropic"
     assert personal["slug"] == "anthropic-personal"
     assert personal["environment"] == "prod"
     assert personal["client_id"] == "9d1c250a-e61b-44d9-88ed-5944d1962f5e"

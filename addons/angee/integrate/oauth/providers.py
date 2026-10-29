@@ -20,6 +20,12 @@ class OAuthProviderType(ImplBase):
     icon = "auth"
 
     @classmethod
+    def token_params(cls, grant_type: str, configured: Mapping[str, Any]) -> dict[str, Any]:
+        """Return this provider's configured extra parameters for the selected grant."""
+
+        return dict(configured)
+
+    @classmethod
     def userinfo_params(cls, protocol: OAuthClientProtocol, access_token: str) -> Mapping[str, str]:
         """Provider-specific profile query parameters, computed from the current grant."""
 

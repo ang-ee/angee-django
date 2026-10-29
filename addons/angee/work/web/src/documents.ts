@@ -110,3 +110,7 @@ export const RestoreTaskDocument = graphql(`
     }
   }
 `);
+
+export const WorkStageEditableCategoriesDocument = graphql(`
+  query WorkStageEditableCategories { work_stage_editable_categories }
+`);

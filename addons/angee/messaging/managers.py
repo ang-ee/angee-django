@@ -3408,6 +3408,20 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             page = list(queryset.order_by(*descending)[:limit])
         return sorted(page, key=lambda message: message.chronological_key), count
 
+    def record_window_continues(
+        self, record: Any, messages: list[Any], *, newer: bool,
+        role: str = "chatter", search: str = "", message_types: tuple[str, ...] = (),
+    ) -> bool:
+        """Whether a record-gated window has matching rows beyond its chronological edge."""
+
+        if not messages:
+            return False
+        edge = messages[-1] if newer else messages[0]
+        scope = self.record_scope(record, role=role, search=search, message_types=message_types)
+        boundary = (_MESSAGE_ORDER.after(edge.chronological_key) if newer
+                    else _MESSAGE_ORDER.before(edge.chronological_key))
+        return bool(scope.filter(boundary).exists())
+
     def _record_message_anchor(self, queryset: Any, value: Any) -> tuple[Any, Any] | None:
         """Resolve a public message id to its ``(order_at, pk)`` cursor in the window."""
 

@@ -126,9 +126,10 @@ def test_install_fixture_seeds_anthropic_loopback_callback_path() -> None:
 
     import yaml
 
-    import angee.integrate
+    import angee.agents_integrate_anthropic
 
-    fixture = Path(angee.integrate.__file__).parent / "resources/install/010_integrate.oauthclient.yaml"
+    fixture = (Path(angee.agents_integrate_anthropic.__file__).parent
+               / "resources/install/010_integrate.oauthclient.yaml")
     entries = {entry["slug"]: entry for entry in yaml.safe_load(fixture.read_text())}
     for slug in ("anthropic-platform", "anthropic-personal"):
         assert entries[slug]["loopback_redirect_path"] == "/callback"

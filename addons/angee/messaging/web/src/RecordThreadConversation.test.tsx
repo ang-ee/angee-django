@@ -724,3 +724,22 @@ describe("RecordThreadStream", () => {
     ));
   });
 });
+
+
+test("record conversation pages by returned edge IDs and resets to latest", () => {
+  mocks.threadData = { record_thread: { ...threadPayload([message({ id: "msg_latest" })]).record_thread,
+    has_older_messages: true, has_newer_messages: false } };
+  const { rerender } = render(<RecordThreadConversation modelLabel="projects.Task" recordId="task_1" />);
+  fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+  expect(mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread")
+    .at(-1)?.[1]).toMatchObject({ before: "msg_latest", after: undefined, around: undefined });
+  mocks.threadData = { record_thread: { ...threadPayload([message({ id: "msg_old" })]).record_thread,
+    has_older_messages: false, has_newer_messages: true } };
+  rerender(<RecordThreadConversation modelLabel="projects.Task" recordId="task_1" />);
+  fireEvent.click(screen.getByRole("button", { name: "Load newer messages" }));
+  expect(mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread")
+    .at(-1)?.[1]).toMatchObject({ after: "msg_old", before: undefined });
+  fireEvent.click(screen.getByRole("button", { name: "Latest messages" }));
+  expect(mocks.useAuthoredQuery.mock.calls.filter(([document]) => operationName(document) === "MessagingRecordThread")
+    .at(-1)?.[1]).toMatchObject({ before: undefined, after: undefined, around: undefined });
+});
