@@ -5,8 +5,8 @@ from __future__ import annotations
 from functools import partial
 from typing import TYPE_CHECKING
 
+from django import conf
 from django.apps import AppConfig, apps
-from django.conf import settings
 from django.core import checks
 
 from angee.base.hooks import check_hooks
@@ -31,13 +31,13 @@ class BaseConfig(AppConfig):
         """Synchronize the selected database after its native migrations complete."""
 
         context.call('rebac', 'sync', database=context.database, prune_stale=True, yes=True,
-                     force_overwrite=settings.ANGEE_REBAC_FORCE_OVERWRITE, skip_checks=True)
+                     force_overwrite=conf.settings.ANGEE_REBAC_FORCE_OVERWRITE, skip_checks=True)
 
     def ready(self) -> None:
         """Validate runtime safety and persistence independently of API addons."""
 
         super().ready()
-        if getattr(settings, "COMPOSE_SNAPSHOT", None) is not None:
+        if getattr(conf.settings, "COMPOSE_SNAPSHOT", None) is not None:
             from django_compose.serving import artifact_path
 
             from angee.base.permissions import bind_rebac_schema, declared_schema_path, merged_schema_relpath
