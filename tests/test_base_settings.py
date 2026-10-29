@@ -17,7 +17,9 @@ def _probe(source: str, directory: Path) -> None:
     }
     result = subprocess.run(
         [sys.executable, '-c', source, str(directory)],
-        env={**environment, 'PYTHONPATH': str(ROOT / 'addons')},
+        env={**environment, 'PYTHONPATH': os.pathsep.join(filter(None, (
+            str(ROOT / 'addons'), os.environ.get('PYTHONPATH'),
+        )))},
         text=True, capture_output=True, timeout=30, check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -30,7 +32,9 @@ from types import ModuleType
 root = Path(sys.argv[1])
 # Only the boundary is substituted: native yamlconf/environ/Sentry owners run.
 # Compiler closure, snapshot and receipt behavior are tested in its own repo.
+from django_compose.conf import expand_attribute_refs
 native = ModuleType('django_compose.conf')
+native.expand_attribute_refs = expand_attribute_refs
 native.configure = lambda namespace: None
 sys.modules['django_compose.conf'] = native
 from angee.base.conf import configure
@@ -137,4 +141,36 @@ except RuntimeError as error:
 else:
     raise AssertionError('native validation was not called')
 assert seen[0]['INSTALLED_APPS']['source']=='**ENVIRONMENT**'
+''', tmp_path)
+
+
+def test_native_yamlconf_handoff_retains_transitive_environment_evidence(tmp_path: Path) -> None:
+    _probe(r'''
+import os,sys
+from pathlib import Path
+from unittest.mock import patch
+from django.core.exceptions import ImproperlyConfigured
+import django_compose.conf as native
+from angee.base.conf import configure
+root=Path(sys.argv[1])
+(root/'settings.yaml').write_text(
+    "INSTALLED_APPS: []\nCUSTOM_INPUT:\n  nested: ['{TASK_INPUT}']\n"
+    "COMPOSE_FINGERPRINT_SETTINGS: [CUSTOM_INPUT]\n"
+)
+os.environ['YAMLCONF_TASK_INPUT']='environment'
+namespace={
+    '__name__':'settings','__file__':str(root/'settings.py'),
+    'COMPOSE_OUTPUT_DIR':root/'runtime','COMPOSE_OUTPUT_MODULE':'runtime',
+}
+with patch.object(native,'configure',wraps=native.configure) as delegate:
+    try:
+        configure(namespace)
+    except ImproperlyConfigured as error:
+        assert 'CUSTOM_INPUT' in str(error) and 'TASK_INPUT' in str(error) and 'environment' in str(error),str(error)
+    else:
+        raise AssertionError('transitive structural environment input was accepted')
+    delegate.assert_called_once_with(namespace)
+record=namespace['_YAMLCONF_ATTRIBUTES']['CUSTOM_INPUT']
+assert record['value']=={'nested':['{TASK_INPUT}']},record
+assert record['evalue']=={'nested':['environment']},record
 ''', tmp_path)
