@@ -99,7 +99,9 @@ describe("Nexus menu aggregation", () => {
       route.resource ? [route.resource] : []))])];
     const schemas = { ...TEST_SCHEMAS, console: {
       ...TEST_SCHEMAS.console,
-      metadata: { angee: { resources: models.map((label) => testDataResource(label)) } },
+      metadata: { angee: { resources: models.map((label) => testDataResource(label, {
+        typeNames: { node: `${label.replaceAll(".", "_")}Type` },
+      })) } },
     } };
     const { explain } = createApp({ addons: liveAddons, schemas, layouts: {
       console: { requireAuth: false }, public: { requireAuth: false, schema: "public" },
