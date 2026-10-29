@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.package_metadata import write_addon_distribution
+from angee.base.testing.packages import write_addon_distribution
 
 _DEFAULTS = """\
 from typing import TypedDict

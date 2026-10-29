@@ -60,7 +60,7 @@ from angee.workflows.tasks import cancel as cancel_workflow
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.triggers import TriggerSource
 from angee.workflows_agents.steps import MAX_PENDING_REDISPATCHES, StartConversation, render_prompt
-from tests.package_metadata import write_addon_distribution
+from angee.base.testing.packages import write_addon_distribution
 
 Agent = apps.get_model("agents", "Agent")
 Workflow = apps.get_model("workflows", "Workflow")

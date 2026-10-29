@@ -8,7 +8,7 @@ from importlib import metadata
 from django.apps import AppConfig
 from django_compose.addons import installed_addons
 
-from tests.package_metadata import write_addon_distribution
+from angee.base.testing.packages import write_addon_distribution
 
 
 def test_fixture_distribution_preserves_native_identity_and_config(tmp_path, monkeypatch):

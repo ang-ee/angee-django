@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tests.composed_host import run_composed_tests
-from tests.package_metadata import write_addon_distribution
+from angee.base.testing.packages import write_addon_distribution
 
 
 def test_graphql_native_crud_does_not_load_optional_provenance(tmp_path: Path) -> None:

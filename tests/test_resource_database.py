@@ -13,7 +13,7 @@ def test_resource_import_uses_selected_database(tmp_path):
 import sys
 from pathlib import Path
 import yaml
-from tests.package_metadata import write_addon_distribution
+from angee.base.testing.packages import write_addon_distribution
 root = Path(sys.argv[1])
 package = root / 'fixture_resources'
 package.mkdir()

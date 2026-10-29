@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from angee.project import PROJECT_DIR_ENV, PROJECT_SETTINGS_ENV
-from tests.package_metadata import write_addon_distribution
+from angee.base.testing.packages import write_addon_distribution
 
 
 def _project(tmp_path: Path) -> None:

@@ -39,7 +39,7 @@ from angee.graphql.publishing import publication_ingestion_context
 from angee.graphql.schema import DEFAULT_SCHEMA_NAME, GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from tests.conftest import SchemaAddon
-from tests.package_metadata import write_addon_distribution
+from angee.base.testing.packages import write_addon_distribution
 from tests.tables import model_tables
 
 
