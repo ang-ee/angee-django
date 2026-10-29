@@ -126,22 +126,8 @@ INSTALLED_APPS:
   - example.theme
 {% endif %}
 
-ANGEE_ADDON_DIRS:
-  - "{BASE_DIR}/addons"
-{% if framework_workspace %}
-  - "{BASE_DIR}/workspaces/src/angee/addons"
-{% if addons_profile == "full" %}
-  - "{BASE_DIR}/workspaces/src/angee-messaging-bridges/addons"
-  - "{BASE_DIR}/workspaces/src/angee/examples/addons"
-{% endif %}
-{% if include_arp %}
-  - "{BASE_DIR}/workspaces/src/angee-arp/addons"
-{% endif %}
-{% endif %}
-{% if framework_source_path and not framework_workspace and framework != "baked" %}
-  - "{BASE_DIR}/{{ framework_source_path }}/addons"
-{% endif %}
-COMPOSE_RUNTIME_DIR: "{BASE_DIR}/runtime"
+COMPOSE_OUTPUT_DIR: "{BASE_DIR}/runtime"
+COMPOSE_OUTPUT_MODULE: runtime
 # This root IS the stack (ANGEE_ROOT=.), so data lives at the stack's persist
 # `./data` directly — host processes (the process-compose dev stack) and the
 # docker stack's `./data:/app/data` bind both land in the same directory.

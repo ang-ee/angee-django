@@ -19,6 +19,7 @@ from urllib.request import url2pathname
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string, module_has_submodule
+from django_compose.addons import installed_addons
 
 
 def addon_facts(app_name: str, capability: str) -> dict[str, Any]:
@@ -28,12 +29,11 @@ def addon_facts(app_name: str, capability: str) -> dict[str, Any]:
     Ordinary Django apps contribute no package facts. The compiler validates
     installed identities before enabled capabilities consume these facts.
     """
-    entries = tuple(metadata.entry_points(group="angee.addons", name=app_name))
-    if not entries:
+    installed = installed_addons("angee.addons")
+    provider = installed.providers.get(app_name)
+    if provider is None:
         return {}
-    if len(entries) != 1 or entries[0].dist is None:
-        raise ImproperlyConfigured(f"{app_name}: expected one installed addon provider")
-    facts: Any = package_document(entries[0].dist, app_name).get("tool", {})
+    facts: Any = package_document(installed.distributions[provider], app_name).get("tool", {})
     for name in capability.split("."):
         if not isinstance(facts, Mapping):
             raise ImproperlyConfigured(f"tool.{capability} must be a TOML table")
@@ -64,7 +64,7 @@ def package_document(dist: metadata.Distribution, app_name: str) -> dict[str, An
 def is_angee_addon(app_config: AppConfig) -> bool:
     """Return whether installed distribution metadata declares this addon."""
 
-    return any(entry.name == app_config.name for entry in metadata.entry_points(group="angee.addons"))
+    return app_config.name in installed_addons("angee.addons").providers
 
 
 def optional_addon_module(app_config: AppConfig, module_name: str) -> ModuleType | None:

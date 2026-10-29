@@ -1,6 +1,6 @@
 """The ``AddonInstaller`` seam — the one writer of ``settings.yaml``'s ``INSTALLED_APPS``.
 
-Installing an addon adds its root to ``settings.yaml`` ``INSTALLED_APPS``;
+Enabling an addon adds its root to ``settings.yaml`` ``INSTALLED_APPS``;
 disabling removes it. ``settings.yaml`` stays the boot source
 (no DB-driven settings-load): this module owns the *edit* of that one file, and the
 next compose reads it.
@@ -12,7 +12,8 @@ registry rather than a model column:
 
 - :class:`AddonInstaller` owns all YAML logic — the comment-preserving
   ``ruamel.yaml`` round-trip read → edit ``INSTALLED_APPS`` → write.
-- :class:`AddonInstallerBackend` is pure transport — it only moves the settings bytes.
+- :class:`AddonInstallerBackend` transports settings bytes and can queue a native
+  held dependency job; it never resolves or installs packages in a serving process.
   ``local`` (the dev backend, defined here) edits the local ``settings.yaml``. The
   production ``operator`` backend transports that edit over the operator daemon and
   is contributed by the ``platform_integrate_operator`` bridge
@@ -38,11 +39,11 @@ from django.conf import settings
 from django.core.checks import CheckMessage, Error
 from django.core.exceptions import ImproperlyConfigured
 from django.core.files import locks
+from django_compose.artifacts import atomic_write
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
 from angee.base.implementations import ImplBase, check_impl_registry, impl_registry, resolve_impl_class
-from angee.utils.files import write_atomic
 
 _INSTALLED_APPS_KEY = "INSTALLED_APPS"
 _SETTINGS_FILENAME = "settings.yaml"
@@ -51,7 +52,7 @@ _REGISTRY_SETTING = "ANGEE_ADDON_INSTALLER_BACKEND_CLASSES"
 
 
 class AddonInstallerBackend(ImplBase):
-    """Pure transport for the ``settings.yaml`` that lists ``INSTALLED_APPS``.
+    """Transport for authored settings and optional held dependency-job dispatch.
 
     The :class:`AddonInstaller` owns all YAML logic; a backend only moves the settings
     bytes. Subclasses register a short :attr:`key` selected by
@@ -59,6 +60,10 @@ class AddonInstallerBackend(ImplBase):
     """
 
     registry_setting = "ANGEE_ADDON_INSTALLER_BACKEND_CLASSES"
+
+    def queue_dependency_change(self, requirement: str, *, remove: bool = False) -> dict[str, Any]:
+        """Queue a held native dependency job through a lifecycle-capable backend."""
+        raise ImproperlyConfigured("Dependency changes require the operator installer backend.")
 
     def read_settings_text(self) -> str:
         """Return the current ``settings.yaml`` text (``FileNotFoundError`` if absent)."""
@@ -114,7 +119,7 @@ class LocalInstallerBackend(AddonInstallerBackend):
                     raise StaleAddonPreviewError("The addon preview is stale; review the changes again.") from error
                 if current != expected:
                     raise StaleAddonPreviewError("The addon preview is stale; review the changes again.")
-                write_atomic(path, text)
+                atomic_write(path, text.encode("utf-8"))
             finally:
                 locks.unlock(handle)
 
@@ -129,10 +134,10 @@ class LocalInstallerBackend(AddonInstallerBackend):
 
 @dataclass(frozen=True, slots=True)
 class InstallResult:
-    """The outcome of one install/disable edit, mapped by a resolver to a report.
+    """The outcome of one enable/disable edit, mapped by a resolver to a report.
 
     ``already`` is ``True`` when the edit was a no-op — the root was already present
-    on install, or already absent on disable. ``refused`` is a non-empty reason when
+    on enable, or already absent on disable. ``refused`` is a non-empty reason when
     the edit was *not applied* — a forced (depended-on) addon, an addon that is not
     materialised, or a deployment whose ``settings.yaml`` cannot be edited — and is
     then the only not-:attr:`ok` outcome.
@@ -159,18 +164,18 @@ class InstallResult:
     def summary(self) -> str:
         """Return the operator-facing one-line summary of this edit (the console message).
 
-        The outcome owns its own human description — the install/disable resolvers
+        The outcome owns its own human description — the enable/disable resolvers
         only relay it — so the wording stays in one place across surfaces. A refusal
         relays its caller-supplied ``reason`` (the policy/availability owner authors it).
         """
 
         if self.refused:
             return self.refused
-        installing = self.action == "install"
+        enabling = self.action == "enable"
         if self.already:
-            return f"{self.name} is already installed." if installing else f"{self.name} is not installed."
-        if installing:
-            return f"Installed {self.name}; the change is pending a restart."
+            return f"{self.name} is already enabled." if enabling else f"{self.name} is not enabled."
+        if enabling:
+            return f"Enabled {self.name}; the change is pending a restart."
         return f"Disabled {self.name}; the change is pending a restart."
 
 
@@ -187,7 +192,7 @@ class AddonInstaller:
 
     A backend supplies the bytes; this class does the one thing that
     must preserve operator comments and key order — the ``ruamel.yaml`` round-trip
-    edit of the ``INSTALLED_APPS`` sequence in place (append on install, ``remove``
+    edit of the ``INSTALLED_APPS`` sequence in place (append on enable, ``remove``
     on disable). Author order is preserved; the composer sorts the dependency
     closure deterministically at boot regardless.
     """

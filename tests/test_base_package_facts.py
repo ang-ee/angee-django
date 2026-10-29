@@ -38,8 +38,7 @@ currency = "EUR"
 [tool.angee.platform]
 category = "invoicing"
 ''', editable=editable)
-    points = distribution.entry_points
-    monkeypatch.setattr(metadata, 'entry_points', lambda **kwargs: points.select(**kwargs))
+    monkeypatch.setattr(metadata, 'distributions', lambda: iter((distribution,)))
     monkeypatch.setattr(importlib, 'import_module', lambda *args, **kwargs: pytest.fail('disabled addon imported'))
     assert addon_facts('acme.invoice', 'acme.billing') == {'currency': 'EUR'}
     assert addon_facts('acme.invoice', 'angee.platform') == {'category': 'invoicing'}
@@ -49,7 +48,7 @@ category = "invoicing"
 
 def test_malformed_capability_is_rejected_at_reader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     distribution = _distribution(tmp_path, '[tool.acme]\nbilling = "wrong"\n')
-    monkeypatch.setattr(metadata, 'entry_points', lambda **kwargs: distribution.entry_points.select(**kwargs))
+    monkeypatch.setattr(metadata, 'distributions', lambda: iter((distribution,)))
     with pytest.raises(ImproperlyConfigured, match='tool.acme.billing must be a TOML table'):
         addon_facts('acme.invoice', 'acme.billing')
 

@@ -1,18 +1,18 @@
 # Angee Project Host
 
-This root is an Angee project host: `manage.py`, `settings.yaml`,
+This root is an Angee project host: `manage.py`, `settings.py`, `settings.yaml`,
 `pyproject.toml`, the consumer addons under `addons/{{ addon_namespace }}/`, and
-the web package `{{ web_path }}/`. The composed `runtime/` directory is generated
-output: edit declarations, never emitted files.
+the web package `{{ web_path }}/`. Edit compiler declarations, never emitted
+files; preserve authored native migrations.
 
 ## Selected Addons
 
 `INSTALLED_APPS` in `settings.yaml` is the roster and the only place it is
-declared; `ANGEE_ADDON_DIRS` beside it lists where addons are discovered. This
-host selects:
+declared. Native Python requirements install addon distributions; workspace/path
+overrides select source checkouts. This host selects:
 
 - the `{% if addons_profile == "full" %}full{% else %}base{% endif %}` framework profile — {% if addons_profile == "full" %}every framework addon, the messaging bridges and the framework examples{% else %}the foundation and the selected framework capabilities{% endif %};
-{% if include_arp %}- the arpee slot's `arp.*` addons, discovered from `workspaces/src/angee-arp/addons` and enabled by name;
+{% if include_arp %}- the arpee slot's `arp.*` addons, installed from the native arpee workspace and enabled by name;
 {% endif %}- its own consumer addons, `{{ addon_namespace }}.<name>` under
   `addons/{{ addon_namespace }}/<name>/`, enabled by name as they are built.
 
