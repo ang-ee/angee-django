@@ -49,7 +49,7 @@ if sys.argv[1] == "no-iam":
     assert not hasattr(provenance, "UserSource")
     assert "angee.iam.models" not in sys.modules
 else:
-    from angee.compose.model_composition import ModelComposition
+    from django_compose.model_composition import ModelComposition
     from angee.iam.models import User
     donor = provenance.UserSource
     composition = ModelComposition.discover((apps.get_app_config("iam"), apps.get_app_config("provenance")))
