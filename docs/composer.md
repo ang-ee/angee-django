@@ -270,6 +270,19 @@ through Django's recorder, and removes only obsolete composed records in one
 transaction. Applied external migrations keep their composed dependencies, and
 an exception restores the original migration sources and recorder state.
 
+Inactive apps are outside the reset's scope. After their retirement migrations
+have actually removed every model and table, use
+`manage.py archive_retired_migrations <label> --archive-dir /path/to/new-archive`
+(first with `--dry-run`). The runtime owner verifies the complete history is
+applied on every configured database, no retained migration depends on it, and
+Django's historical model tables are absent. It requires resolvable model/field/index
+operations; opaque database operations, replacements and `run_before` edges
+require a separately reviewed retirement. It atomically moves the unchanged
+inactive package to `<archive-dir>/<label>` and keeps database migration records.
+The archive must be outside the runtime on the same filesystem. Coordinate any
+other hosts/databases sharing that tree before archival. Ordinary generated-tree
+cleanup continues to preserve all migration directories.
+
 If an already copied declaration needs a source correction, first use
 `manage.py reset_migration_history --database default` on its fully applied,
 model-clean stack. This guarded reset can load the immutable copied graph even

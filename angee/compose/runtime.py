@@ -14,6 +14,9 @@ from django.core.management import call_command
 from django.db import DEFAULT_DB_ALIAS, connections, transaction
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.executor import MigrationExecutor
+from django.db.migrations.graph import MigrationGraph
+from django.db.migrations.operations.fields import FieldOperation
+from django.db.migrations.operations.models import IndexOperation, ModelOperation
 from django.db.migrations.recorder import MigrationRecorder
 from django.db.migrations.state import ProjectState
 
@@ -126,7 +129,7 @@ class Runtime:
 
     @classmethod
     def clean_configured(cls) -> None:
-        """Clean generated packages without discovery, leaving migrations for explicit reset."""
+        """Clean generated packages without discovery, preserving migration history."""
 
         runtime_module = str(getattr(settings, "ANGEE_RUNTIME_MODULE", "runtime"))
         runtime = sys.modules.get(runtime_module)
@@ -277,6 +280,127 @@ class Runtime:
             forget_migration_modules()
             raise
         return labels, len(migration_files), recorded
+
+    def archive_retired_migrations(
+        self,
+        app_label: str,
+        *,
+        archive_dir: Path,
+        dry_run: bool = False,
+    ) -> tuple[str, ...]:
+        """Archive an inactive, fully retired package without changing database records.
+
+        Check every configured database sharing this runtime. Historical external
+        dependency names may predate a composed-history reset: use the retired
+        app's local graph only to project state onto the current graph, never to
+        execute migrations. Only model/field/index operations are supported; opaque
+        database operations need a separately reviewed retirement.
+
+        The archive must be a new directory outside the runtime, on the same
+        filesystem. An atomic rename preserves the complete package unchanged.
+        Callers must also coordinate databases using this tree from other hosts.
+        """
+
+        if not app_label.isidentifier() or app_label in self.labels or any(
+            config.label == app_label for config in apps.get_app_configs()
+        ):
+            raise RuntimeError(f"{app_label!r} is not an inactive runtime app label")
+        _generated_tree(self.runtime_dir, {}).reconcile(prune=False)
+        root = self.runtime_dir.resolve()
+        package = root / app_label
+        if not (package / "migrations").is_dir():
+            raise RuntimeError(f"No retained migrations at {package}")
+        if any(path.is_symlink() for path in (package, *package.rglob("*"))):
+            raise RuntimeError("Retired runtime packages must not contain symlinks")
+        if any(path.name not in {"migrations", "__init__.py", "__pycache__"} for path in package.iterdir()):
+            raise RuntimeError(f"{package} still contains non-migration sources; review its retirement first")
+        if archive_dir.is_symlink() or archive_dir.exists():
+            raise RuntimeError(f"Archive directory already exists: {archive_dir}")
+        archive_dir = archive_dir.resolve()
+        if archive_dir.is_relative_to(root) or not archive_dir.parent.is_dir():
+            raise RuntimeError("Archive directory must have an existing parent outside the runtime")
+        if archive_dir.parent.stat().st_dev != package.stat().st_dev:
+            raise RuntimeError("Archive directory must be on the runtime's filesystem for an atomic move")
+
+        retained = {}
+        for path in sorted(root.glob("*/migrations/*.py")):
+            if path.name.startswith(("_", "~")):
+                continue
+            label = path.parent.parent.name
+            module = importlib.import_module(f"{self.runtime_module}.{label}.migrations.{path.stem}")
+            if Path(module.__file__).resolve() != path.resolve():
+                raise RuntimeError(f"Migration import does not belong to this runtime: {path}")
+            retained[label, path.stem] = module.Migration(path.stem, label)
+        retired = {key: migration for key, migration in retained.items() if key[0] == app_label}
+        if not retired:
+            raise RuntimeError(f"No migration files found for {app_label}")
+        graph = MigrationGraph()
+        for key, migration in retired.items():
+            if migration.replaces or migration.run_before:
+                raise RuntimeError("Retirement requires history without replacements or run_before edges")
+            graph.add_node(key, migration)
+        for key, migration in retired.items():
+            for dependency in migration.dependencies:
+                if dependency[0] == app_label:
+                    graph.add_dependency(migration, key, dependency)
+        graph.ensure_not_cyclic()
+        leaves = graph.leaf_nodes()
+        if len(leaves) != 1:
+            raise RuntimeError(f"Retired history requires one leaf, found {leaves}")
+        ordered = graph.forwards_plan(leaves[0])
+        if set(ordered) != set(retired):
+            raise RuntimeError("Retired history contains disconnected migrations")
+
+        for alias in sorted(connections):
+            connection = connections[alias]
+            executor = MigrationExecutor(connection)
+            executor.loader.check_consistent_history(connection)
+            if executor.migration_plan(executor.loader.graph.leaf_nodes()):
+                raise RuntimeError(f"Apply pending migrations on {alias} before archiving retired history")
+            applied = {
+                key for key in MigrationRecorder(connection).applied_migrations() if key[0] == app_label
+            }
+            if applied != set(retired):
+                raise RuntimeError(
+                    f"{alias}: retained and applied {app_label} history differ; "
+                    f"unapplied: {sorted(set(retired) - applied)}; missing files: {sorted(applied - set(retired))}"
+                )
+            for key, migration in (retained | executor.loader.disk_migrations).items():
+                if key[0] != app_label and any(
+                    edge[0] == app_label
+                    for edge in (*migration.dependencies, *migration.run_before, *migration.replaces)
+                ):
+                    raise RuntimeError(f"{key} still references {app_label} history")
+
+            state = executor.loader.project_state()
+            tables: set[str] = set()
+            for key in ordered:
+                for operation in retired[key].operations:
+                    if not isinstance(operation, (ModelOperation, FieldOperation, IndexOperation)):
+                        raise RuntimeError(f"Cannot prove retirement through {key}: {operation!r}")
+                    operation.state_forwards(app_label, state)
+                    state.clear_delayed_apps_cache()
+                    tables.update(
+                        model._meta.db_table
+                        for model in state.apps.get_models(include_auto_created=True)
+                        if model._meta.app_label == app_label
+                    )
+            remaining = sorted(key for key in state.models if key[0] == app_label)
+            if remaining:
+                raise RuntimeError(f"{app_label} has not retired its models: {remaining}")
+            present = tables.intersection(connection.introspection.table_names(include_views=True))
+            if present:
+                raise RuntimeError(f"{alias}: retired tables still exist: {sorted(present)}")
+
+        if not dry_run:
+            archive_dir.mkdir(mode=0o700)
+            try:
+                package.rename(archive_dir / app_label)
+            except BaseException:
+                archive_dir.rmdir()
+                raise
+            importlib.invalidate_caches()
+        return tuple(key[1] for key in ordered)
 
     @property
     def addon_dependency_group(self) -> AddonDependencyGroup:
