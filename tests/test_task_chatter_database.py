@@ -49,6 +49,7 @@ Notification = apps.get_model('messaging', 'ThreadNotification')
 Queue = apps.get_model('work', 'Queue')
 Stage = apps.get_model('work', 'Stage')
 Sequence = apps.get_model('sequence', 'Sequence')
+SequenceCounter = apps.get_model('sequence', 'SequenceCounter')
 Party = apps.get_model('parties', 'Party')
 Handle = apps.get_model('parties', 'Handle')
 configs = tuple(apps.get_app_configs())
@@ -83,7 +84,7 @@ for alias in ('default', 'selected'):
                         record, title=f'default task {index}', assignee=user, activity_type='call')
                     record.message_system_post(body=f'default note {index}', message_type=None, subtype_key='note')
 watched = (ChatterDoc, Task, ActivityType, Attachment, Thread, Message, Follower, Notification,
-           Queue, Stage, Sequence, Party, Handle, Party.statements.model)
+           Queue, Stage, Sequence, SequenceCounter, Party, Handle, Party.statements.model)
 def default_snapshot():
     return {model._meta.label: list(model._base_manager.using('default').order_by('pk').values())
             for model in watched}
@@ -102,6 +103,7 @@ with database_context('default'), system_context(reason='tests.task.database.ope
         assert direct.queue.created_by_id == user.pk
         original = Task._base_manager.using('default').first()
         assert original is not None
+        original_queue_cache = original.queue
         original.stage_id = -1
         try:
             original.save(using='selected')
@@ -110,6 +112,7 @@ with database_context('default'), system_context(reason='tests.task.database.ope
         else:
             raise AssertionError('missing stage accepted')
         assert original._state.db == 'default'
+        assert original.queue is original_queue_cache
         original_queue = Queue._base_manager.using('default').first()
         original_queue.default_estimate = 0
         original_queue.estimate_allow_zero = False
@@ -125,7 +128,19 @@ with database_context('default'), system_context(reason='tests.task.database.ope
                 return 'default'
             def db_for_write(self, model, **hints):
                 return 'selected'
+        cached_default_queue = Queue._base_manager.using('default').get(pk=direct.queue_id)
+        cached_task = Task(title='Cached queue task', queue=cached_default_queue,
+                           assignee_id=user.pk, activity_type_id='call')
+        cached_task.save(using='selected')
+        assert cached_task._state.db == cached_task.queue._state.db == 'selected'
+        assert cached_default_queue._state.db == 'default'
+        assert cached_task.number == direct.number + 1
         with override_settings(DATABASE_ROUTERS=[WriteSelectedRouter()]):
+            uncached_task = Task(title='Write router task', queue_id=direct.queue_id,
+                                 assignee_id=user.pk, activity_type_id='call')
+            uncached_task.save()
+            assert uncached_task._state.db == uncached_task.queue._state.db == 'selected'
+            assert uncached_task.number == cached_task.number + 1
             queue = Queue._base_manager.using('selected').get(pk=direct.queue_id)
             queue.name = 'Selected write router'
             queue.save()
@@ -155,7 +170,7 @@ with database_context('default'), system_context(reason='tests.task.database.ope
         assert attachment._state.db == 'selected'
         assert attachment.record_ref.model_label == ChatterDoc._meta.label
         assert attachment.record_ref.public_id == record.sqid
-    assert Task._base_manager.using('selected').count() == 3
+    assert Task._base_manager.using('selected').count() == 5
     assert Message._base_manager.using('selected').filter(preview__contains='selected call done').exists()
     assert Message._base_manager.using('selected').filter(preview='selected note').count() == 1
     assert Notification._base_manager.using('selected').filter(message=message, user=reader).count() == 1

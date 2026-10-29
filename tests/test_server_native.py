@@ -88,3 +88,46 @@ with patch.object(server, '_registrars', return_value=(register_probe,)):
         nested = client.post('/mcp/mcp', headers=headers, json=request)
         assert nested.status_code == 404, (nested.status_code, nested.text)
 ''')
+
+
+def test_native_compose_owns_ready_web_and_graphql_artifacts():
+    _run(r'''
+import json
+import tempfile
+from pathlib import Path
+from angee.base.testing.packages import write_addon_distribution
+from tests.composed_host import boot
+with tempfile.TemporaryDirectory(prefix='native-ready-capabilities-') as temporary:
+    root = Path(temporary).resolve()
+    package = root / 'ready_probe'
+    package.mkdir()
+    (package / '__init__.py').write_text('')
+    (package / 'schema.py').write_text("""
+import strawberry
+@strawberry.type
+class Query:
+    @strawberry.field
+    def ready_probe(self) -> str:
+        return "ready"
+schemas = {"public": {"query": Query}}
+""")
+    web = package / 'web'
+    web.mkdir()
+    (web / 'package.json').write_text(json.dumps({'name': '@example/ready-probe'}))
+    write_addon_distribution(
+        package, 'ready_probe', depends_on=('angee.graphql', 'angee.web'), metadata_root=root)
+    runtime = root / 'runtime'
+    boot(Path.cwd(), runtime, [root], include_examples=False, root_apps=['ready_probe'])
+    from django.apps import apps
+    from django.conf import settings
+    from django_compose.serving import artifact_path, read_receipt
+    receipt = read_receipt(runtime)
+    assert receipt is not None and not receipt.IN_PROGRESS
+    assert {'web/manifest.json', 'web/tailwind.sources.css', 'schemas/public.graphql',
+            'schemas/public.metadata.json'} <= set(receipt.OWNED_FILES)
+    assert apps.is_installed('django_compose')
+    assert 'django_compose' not in settings.COMPOSE_SNAPSHOT.dependencies
+    manifest = json.loads(artifact_path('web/manifest.json').read_text())
+    assert any(package['app'] == 'ready_probe' for package in manifest['addonPackages'])
+    assert 'ready_probe' in artifact_path('schemas/public.graphql').read_text()
+''')

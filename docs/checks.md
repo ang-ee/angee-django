@@ -380,7 +380,7 @@ its own host, resolves native distribution requirements, composes/provisions it,
 collects the declared Python paths with `python_files=test*.py` on PostgreSQL.
 Four native pytest-xdist workers use `--dist worksteal` inside each shard, so long
 consumer intake modules can use every worker. Each worker loads the configured
-host through generated `runtime.settings`; pytest-django owns its separate test
+host through its authored `settings` module; pytest-django owns its separate test
 database. Pytest emits a thread dump after five minutes in one test protocol,
 including setup and teardown, without changing its outcome. Shared test plugins
 must defer model imports until Django's app registry is populated. Check tools

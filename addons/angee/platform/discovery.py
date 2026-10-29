@@ -162,6 +162,7 @@ def facts_from_distribution(
 
 def resolve_catalogue_roots(
     roots: Iterable[str], packages: Iterable[Mapping[str, Any]], *, aliases: Mapping[str, str] | None = None,
+    dependencies: Mapping[str, Iterable[str]] | None = None,
 ) -> tuple[Mapping[str, Any], ...]:
     """Order a metadata-only proposal; this never activates an app/config.
 
@@ -174,23 +175,25 @@ def resolve_catalogue_roots(
     by_name = {package["name"]: package for package in packages}
     if len(by_name) != len(packages):
         raise ImproperlyConfigured("Duplicate catalogue app identity in proposed selection")
+    graph = {name: tuple(package.get("depends_on", ())) for name, package in by_name.items()}
+    graph.update(dependencies or {})
     selected: dict[str, tuple[str, ...]] = {}
     pending = list(sorted(roots, reverse=True))
     while pending:
         raw = pending.pop()
         # Resolve only declared aliases, never import or infer a config path.
         name = aliases.get(raw, raw)
-        if name is None or name in selected or name not in by_name:
+        if name in selected or name not in graph:
             continue
-        dependencies = tuple(sorted({aliases.get(value, value) for value in by_name[name].get("depends_on", ())}))
-        selected[name] = dependencies
-        pending.extend(value for value in reversed(dependencies) if value not in selected)
+        edges = tuple(sorted({aliases.get(value, value) for value in graph[name]}))
+        selected[name] = edges
+        pending.extend(value for value in reversed(edges) if value not in selected)
     try:
         ordered = TopologicalSorter({
             name: tuple(dependency for dependency in dependencies if dependency in selected)
             for name, dependencies in sorted(selected.items())
         }).static_order()
-        return tuple(by_name[name] for name in ordered)
+        return tuple(by_name[name] for name in ordered if name in by_name)
     except CycleError as error:
         raise ImproperlyConfigured(f"Catalogue dependency cycle: {error.args[1]}") from error
 

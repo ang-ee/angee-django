@@ -89,6 +89,9 @@ on:
 permissions:
   contents: read
 
+# Python resolution requires the declared local django-compose source slot.
+# No approved remote/ref checkout hook exists here yet; its absence remains a
+# native resolution failure until the reviewed compiler source is available.
 jobs:
   python-quality:
     if: ${{ inputs.uv-enabled }}
@@ -242,10 +245,10 @@ jobs:
 
   # The composed-stack lane dogfoods the two-command install path: install the
   # released angee CLI, render the in-repo framework-dev stack template,
-  # compose it (native editable build + schema + web codegen — no database needed), then
+  # compose it (native compose + prebuilt schema check + web codegen — no database needed), then
   # typecheck/test addon fragments (the stack root's runtime/ is the @angee/gql
   # fixture), and run the optional bridge source tests.
-  # The consolidated checkout supplies core, packages, addons, examples, and
+  # The consolidated checkout supplies packages, addons, examples, tools, and
   # templates. Only the optional full-profile bridges remain external.
   # Consumer collections span independent PostgreSQL hosts; the first group
   # also checks lint, types and frontend fragments. The stack job keeps one verdict.
@@ -339,6 +342,7 @@ jobs:
           uv run --no-project --with pyyaml python - <<'PY'
           import json
           import os
+          import subprocess
           from pathlib import Path
           import yaml
 
@@ -348,9 +352,6 @@ jobs:
           path = Path("settings.yaml")
           settings = yaml.safe_load(path.read_text())
           settings["INSTALLED_APPS"] = roots
-          settings["ANGEE_ADDON_DIRS"].extend(
-              "{BASE_DIR}/workspaces/src/" + source["path"] + "/addons" for source in sources
-          )
           path.write_text(yaml.safe_dump(settings, sort_keys=False))
           path = Path("pnpm-workspace.yaml")
           workspace = yaml.safe_load(path.read_text())
@@ -358,6 +359,11 @@ jobs:
               "workspaces/src/" + source["path"] + "/addons/*/*/web" for source in sources
           )
           path.write_text(yaml.safe_dump(workspace, sort_keys=False))
+          # Native uv reads each collection's pyproject and workspace sources.
+          subprocess.run([
+              "uv", "add", "--editable",
+              *(str(Path("workspaces/src") / source["path"]) for source in sources),
+          ], check=True)
           PY
       - name: Enable Matrix to check every bridge web fragment
         if: ${{ inputs.addons-profile == 'full' }}
@@ -380,11 +386,11 @@ jobs:
           # Author disposable native history, then verify the native composition.
           uv run --no-sync python manage.py makemigrations --noinput
           uv run --no-sync python manage.py compose --check
-          uv run --no-sync python manage.py schema
+          uv run --no-sync python manage.py schema --check
       - name: Provision the composed stack
         working-directory: stack
         run: |
-          uv run --no-sync python manage.py angee provision
+          uv run --no-sync python manage.py provision
       - name: Export the framework's locked check tools
         if: ${{ inputs.consumer-path != '' || inputs.addons-profile == 'full' }}
         working-directory: stack/workspaces/src/angee
@@ -399,7 +405,6 @@ jobs:
         if: ${{ inputs.consumer-path != '' && matrix.group == 1 }}
         working-directory: stack
         env:
-          ANGEE_PROJECT_DIR: ${{ github.workspace }}/stack
           CONSUMER_PATH: ${{ inputs.consumer-path }}
         run: |
           uv run --with-requirements "$GITHUB_WORKSPACE/check-tools.txt" python - <<'PY'
@@ -408,26 +413,40 @@ jobs:
           import sys
           from pathlib import Path
 
-          slot = (Path("workspaces/src") / os.environ["CONSUMER_PATH"]).resolve()
-          framework = Path("workspaces/src/angee").resolve()
-          os.chdir(framework)
-          sys.path.insert(0, str(framework))
-          from tests import typing_settings
+          import tomlkit
+          import yaml
 
+          host = Path.cwd().resolve()
+          slot = host / "workspaces/src" / os.environ["CONSUMER_PATH"]
+          framework = host / "workspaces/src/angee"
+          typing_root = host / ".mypy_cache/consumer_typing"
+          typing_root.mkdir(parents=True, exist_ok=True)
+          # Authored isolated settings use the same native configuration owner.
+          (typing_root / "ci_consumer_typing.py").write_text((host / "settings.py").read_text())
+          authored = yaml.safe_load((host / "settings.yaml").read_text())
+          authored["COMPOSE_OUTPUT_DIR"] = str(typing_root / "ci_typing_runtime")
+          authored["COMPOSE_OUTPUT_MODULE"] = "ci_typing_runtime"
+          authored["DATABASES"] = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
+          (typing_root / "settings.yaml").write_text(yaml.safe_dump(authored, sort_keys=False))
+          # Locked django-stubs gives its configured module priority over the env.
+          # Reuse the full policy; change only that native project selection.
+          policy = tomlkit.parse((framework / "pyproject.toml").read_text())
+          policy["tool"]["django-stubs"]["django_settings_module"] = "ci_consumer_typing"
+          config = typing_root / "mypy.toml"
+          config.write_text(tomlkit.dumps(policy))
+          os.environ["ANGEE_PROJECT_DIR"] = str(typing_root)
+          os.environ.pop("DATABASE_URL", None)
+          os.environ.pop("YAMLCONF_CONFFILE", None)
           os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (
-              str(framework),
-              *(str(path) for path in typing_settings.ANGEE_ADDON_DIRS),
-              os.environ.get("PYTHONPATH"),
+              str(typing_root), str(framework), os.environ.get("PYTHONPATH"),
           )))
           os.environ["MYPYPATH"] = os.pathsep.join(filter(None, (
-              *(str(path) for path in typing_settings.ANGEE_ADDON_DIRS),
-              str(typing_settings.COMPOSE_RUNTIME_DIR.parent),
-              os.environ.get("MYPYPATH"),
+              str(typing_root), str(slot / "addons"), os.environ.get("MYPYPATH"),
           )))
           subprocess.run([
-              sys.executable, "-m", "mypy", "--config-file", str(framework / "pyproject.toml"),
+              sys.executable, "-m", "mypy", "--config-file", str(config),
               str(slot / "addons"),
-          ], check=True)
+          ], cwd=framework, check=True)
           PY
       - name: Size the PostgreSQL lock table for consumer test schemas
         if: ${{ inputs.consumer-path != '' }}
@@ -441,7 +460,7 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
           ANGEE_PROJECT_DIR: ${{ github.workspace }}/stack
-          DJANGO_SETTINGS_MODULE: runtime.settings
+          DJANGO_SETTINGS_MODULE: settings
           CONSUMER_PATH: ${{ inputs.consumer-path }}
           CONSUMER_TESTS: ${{ inputs.consumer-tests }}
           CONSUMER_PYTEST_PLUGINS: ${{ inputs.consumer-pytest-plugins }}
@@ -460,10 +479,14 @@ jobs:
           slot = (Path("workspaces/src") / os.environ["CONSUMER_PATH"]).resolve()
           paths = json.loads(os.environ["CONSUMER_TESTS"])
           assert paths, "Consumer checks require explicit test paths"
+          host = Path.cwd().resolve()
+          os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (
+              str(host), os.environ.get("PYTHONPATH"),
+          )))
           os.chdir(slot)
-          sys.path.insert(0, str(slot))
-          # The native settings owner configures addon import paths before pytest
-          # imports plugins contributed by those addons.
+          sys.path[:0] = [str(slot), str(host)]
+          # Populate the authored host before collecting consumer fixture plugins.
+          # Native installed distributions already own addon importability.
           django.setup()
           plugins = json.loads(os.environ["CONSUMER_PYTEST_PLUGINS"])
           raise SystemExit(pytest.main([

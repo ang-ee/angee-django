@@ -204,7 +204,11 @@ class AddonManager[T: Addon](AngeeManager[T]):
                 name, loaded=loaded_configs, declared=bool(declarations), aliases=aliases
             )
             roots_after = roots_before if refusal else tuple(root for root in roots_before if root not in declarations)
-        after = resolve_catalogue_roots(roots_after, manifests, aliases=aliases)
+        closure = getattr(settings, "COMPOSE_CLOSURE", None)
+        after = resolve_catalogue_roots(
+            roots_after, manifests, aliases=aliases,
+            dependencies={} if closure is None else closure.dependencies,
+        )
         after_by_name = {manifest["name"]: manifest for manifest in after}
         loaded_names = set(loaded_configs)
         target_names = set(after_by_name)
@@ -471,7 +475,8 @@ class AddonManager[T: Addon](AngeeManager[T]):
             return None
         loaded = composed.root_app_names()
         desired = addon_installer().desired_app_names()
-        return None if desired is None else desired != loaded
+        aliases = composed.root_app_aliases()
+        return None if desired is None else frozenset(aliases.get(root, root) for root in desired) != loaded
 
 
 def _preview_revision(

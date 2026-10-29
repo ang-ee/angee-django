@@ -1188,6 +1188,8 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         stage_written = self._state.adding or update_fields is None or bool({"stage", "stage_id"} & update_fields)
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         previous_database = self._state.db
+        queue_field = type(self).queue.field
+        previous_queue = queue_field.get_cached_value(self, default=None)
         self._state.db = using
         kwargs["using"] = using
         try:
@@ -1216,6 +1218,10 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
                 object.__setattr__(self, "_work_status_assigned", False)
         except BaseException:
             self._state.db = previous_database
+            if previous_queue is not None and previous_queue.pk == self.queue_id:
+                queue_field.set_cached_value(self, previous_queue)
+            elif queue_field.is_cached(self):
+                queue_field.delete_cached_value(self)
             raise
         self._work_snapshot_loaded_values(fields=update_fields)
 
@@ -1706,6 +1712,11 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
                     if queue is not None:
                         self.queue = queue
                         changed.add("queue")
+        if self.queue_id is not None:
+            # A save(using=...) owns the row-relative FK read even when a caller
+            # supplied a cached queue or a read router prefers another replica.
+            queue_model = type(self).queue.field.related_model
+            self.queue = queue_model._base_manager.using(self._state.db).get(pk=self.queue_id)
         if self.stage_id is None and self.queue_id is not None:
             stage = self.resolve_default_stage()
             if stage is not None:
@@ -1737,7 +1748,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         with system_context(reason="work.task.estimate_policy"):
             queue = self.queue
             assert queue is not None
-            queue.refresh_from_db(fields=fields)
+            queue.refresh_from_db(using=self._state.db, fields=fields)
         changed = set()
         if needs_default and queue.estimate_scale != Queue.EstimateScale.NONE:
             self.estimate = queue.default_estimate

@@ -388,3 +388,42 @@ def test_composed_membership_reuses_native_selected_closure(settings, monkeypatc
         lambda *args: (_ for _ in ()).throw(AssertionError("installed metadata rediscovered")),
     )
     assert [config.name for config in composed.addons()] == ["angee.base"]
+
+
+def test_passive_preview_retains_native_foreign_root_edges_and_canonical_pending(
+    tmp_path, settings, monkeypatch,
+) -> None:
+    """A selected ordinary AppConfig keeps its required addons when another root is enabled."""
+
+    package = tmp_path / 'preview_host'
+    package.mkdir()
+    (package / '__init__.py').write_text('')
+    (package / 'apps.py').write_text(
+        "from django.apps import AppConfig\n"
+        "class Config(AppConfig):\n"
+        "    name = 'preview_host'\n"
+        "    requires_apps = ('angee.resources',)\n",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    extra = make_addon(name='example.preview_extra', path=tmp_path / 'extra')
+    closure = enabled_apps(('preview_host.apps.Config',), group='angee.addons')
+    settings.COMPOSE_CLOSURE = closure
+    settings.COMPOSE_ROOTS = ('preview_host.apps.Config',)
+    settings.COMPOSE_SNAPSHOT = SimpleNamespace(entries=closure.app_entries, dependencies=closure.dependencies)
+    settings.BASE_DIR = tmp_path
+    settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({'INSTALLED_APPS'})
+    (tmp_path / 'settings.yaml').write_text('INSTALLED_APPS:\n  - preview_host.apps.Config\n')
+    monkeypatch.setattr(platform_models.composed, 'addons', lambda: [
+        config for config in closure.app_configs if config.name in closure.addons
+    ])
+    monkeypatch.setattr(
+        AppConfig, 'create',
+        classmethod(lambda *args: (_ for _ in ()).throw(AssertionError('passive app activation'))),
+    )
+    addon = apps.get_model('platform', 'Addon')
+    assert addon.objects.pending_changes() is False
+    preview = addon.objects.change_preview(extra.name, 'enable')
+    assert preview.can_apply
+    assert preview.addons_to_disable == ()
+    assert [impact.name for impact in preview.addons_to_enable] == [extra.name]
+    assert 'preview_host' not in available_addons()

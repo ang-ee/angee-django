@@ -57,9 +57,11 @@ def test_native_project_render_resolves_framework_source_inputs(tmp_path: Path, 
     assert (target / "CLAUDE.md").readlink() == Path("AGENTS.md")
     settings = yaml.safe_load((target / "settings.yaml").read_text())
     project = tomllib.loads((target / "pyproject.toml").read_text())
+    assert "ANGEE_ADDON_DIRS" not in settings
+    assert settings["COMPOSE_OUTPUT_MODULE"] == "runtime"
+    assert project["tool"]["uv"]["package"] is False
+    assert "angee[postgres]>=3,<4" in project["project"]["dependencies"]
     if framework == "baked":
-        assert settings["ANGEE_ADDON_DIRS"] == ["{BASE_DIR}/addons"]
         assert "sources" not in project["tool"]["uv"]
     else:
-        assert settings["ANGEE_ADDON_DIRS"] == ["{BASE_DIR}/addons", "{BASE_DIR}/sources/angee/addons"]
-        assert project["tool"]["uv"]["sources"]["django-angee"] == {"path": "sources/angee", "editable": True}
+        assert project["tool"]["uv"]["sources"]["angee"] == {"path": "sources/angee", "editable": True}
