@@ -47,6 +47,7 @@ DEV_STACK_GITIGNORE = DEV_TEMPLATE.with_name(".gitignore.jinja")
 DEV_PACKAGE_TEMPLATE = DEV_TEMPLATE.with_name("package.json.jinja")
 DEV_TEMPLATES_SYMLINK = DEV_TEMPLATE.with_name("templates")
 SHARED_BODY = ROOT / "templates" / "stacks" / "_shared" / "stack-body.yaml.jinja"
+SRC_WORKSPACE_COPIER = ROOT / "templates" / "workspaces" / "src" / "copier.yml"
 SHARED_AGENTS = ROOT / "templates" / "stacks" / "_shared" / "AGENTS.md.jinja"
 PNPM_LOCK = ROOT / "pnpm-lock.yaml"
 PROJECT_GITIGNORE = ROOT / "templates" / "projects" / "web" / "template" / ".gitignore.jinja"
@@ -426,6 +427,8 @@ def _render_dev_stack(
     work_state_repo: str = "",
     work_state_ref: str = "main",
     sources_home: str = "",
+    vcs: str = "git",
+    slot_mode: str = "worktree",
     celery_queues: str = "",
     enable_ollama: bool = False,
     ollama_port: str = "11434",
@@ -501,8 +504,10 @@ def _render_dev_stack(
         "db_pool_max_size": str(db_pool_max_size),
         "db_pool_timeout": str(db_pool_timeout),
         "sources_home": sources_home,
+        "slot_mode": slot_mode,
         "storybook_port": "6006",
         "ui_port": "5173",
+        "vcs": vcs,
         "web_path": "web",
         "work_state_source": work_state_source,
         "work_state_repo": work_state_repo,
@@ -517,6 +522,8 @@ def _render_dev_docker_stack(
     ingress_domain: str = "localhost",
     ingress_aliases: str = "",
     operator_home: str = "",
+    vcs: str = "git",
+    slot_mode: str = "worktree",
 ) -> dict[str, Any]:
     """Render the Docker-mode framework-dev stack with every dev input present."""
 
@@ -525,6 +532,8 @@ def _render_dev_docker_stack(
         ingress_domain=ingress_domain,
         ingress_aliases=ingress_aliases,
         operator_home=operator_home,
+        vcs=vcs,
+        slot_mode=slot_mode,
         _runtime_mode="docker",
     )
 
@@ -1485,6 +1494,93 @@ def test_dev_stack_shares_one_machine_wide_cache_per_repository() -> None:
     assert copier["sources_home"]["type"] == "str"
     assert copier["sources_home"]["default"] == ""
     assert "<project_name>/<workspace>" in copier["project_name"]["help"]
+
+
+@pytest.mark.parametrize("render", [_render_dev_stack, _render_dev_docker_stack])
+def test_dev_stack_renders_vcs_and_slot_mode_only_when_they_name_jj(render: Any) -> None:
+    """`vcs` and `slot_mode` default to what the stack rendered before they existed.
+
+    `git` and `worktree` render no key: the manifest's `vcs` defaults to git in the
+    operator, and the src template's own `slot_mode` default is worktree, so an
+    existing stack re-renders unchanged and an operator older than `vcs` still
+    loads it. `vcs: jj` makes every slot that names no mode (the src workspace's
+    `.work`) a jj workspace; `slot_mode: jj` reaches the src template's code slots
+    through workspace_defaults, so every src workspace, the declared one included,
+    takes it without a per-workspace input.
+    """
+
+    bare = {"workspaces/src": {"inputs": {"branch_prefix": "app"}}}
+    unset = render(vcs="", slot_mode="")
+    for default in (render(), render(vcs="git", slot_mode="worktree")):
+        assert default == unset
+        assert "vcs" not in default
+        assert default["workspace_defaults"] == bare
+        assert default["workspaces"]["src"] == {"template": "workspaces/src"}
+
+    vcs_only = render(vcs="jj")
+    assert vcs_only["vcs"] == "jj"
+    assert vcs_only["workspace_defaults"] == bare
+
+    slot_only = render(slot_mode="jj")
+    assert "vcs" not in slot_only
+    assert slot_only["workspace_defaults"] == {
+        "workspaces/src": {"inputs": {"branch_prefix": "app", "slot_mode": "jj"}}
+    }
+    assert slot_only["workspaces"]["src"] == {"template": "workspaces/src"}
+
+    both = render(vcs="jj", slot_mode="jj")
+    assert both["vcs"] == "jj"
+    assert both["workspace_defaults"] == slot_only["workspace_defaults"]
+    # Apart from the two keys, a jj stack is the git stack.
+    assert {key: value for key, value in both.items() if key not in {"vcs", "workspace_defaults"}} == {
+        key: value for key, value in unset.items() if key != "workspace_defaults"
+    }
+
+
+def test_dev_stack_slot_mode_sits_beside_the_work_state_binding() -> None:
+    """slot_mode joins workspace_defaults; the declared src workspace binds only work state."""
+
+    wired = _render_dev_stack(
+        work_state_source="work-angee",
+        work_state_repo="git@github.com:ang-ee/work-angee.git",
+        vcs="jj",
+        slot_mode="jj",
+    )
+    assert wired["vcs"] == "jj"
+    assert wired["workspace_defaults"] == {
+        "workspaces/src": {"inputs": {"branch_prefix": "app", "work_state_source": "work-angee", "slot_mode": "jj"}}
+    }
+    assert wired["workspaces"]["src"] == {"template": "workspaces/src", "inputs": {"work_state_source": "work-angee"}}
+    # The work-state source stays a plain git source: vcs makes its slot a jj
+    # workspace of the cache; the source record itself names no VCS.
+    assert wired["sources"]["work-angee"] == {
+        "kind": "git",
+        "repo": "git@github.com:ang-ee/work-angee.git",
+        "default_ref": "main",
+        "cache_path": "sources/work/work-angee",
+    }
+
+
+def test_vcs_and_slot_mode_are_dev_stack_questions_matching_the_src_template() -> None:
+    """Only the framework-dev stack asks; its slot_mode choices are the src template's."""
+
+    dev = yaml.safe_load(DEV_COPIER.read_text(encoding="utf-8"))
+    src = yaml.safe_load(SRC_WORKSPACE_COPIER.read_text(encoding="utf-8"))
+
+    assert {key: dev["vcs"][key] for key in ("type", "default", "choices")} == {
+        "type": "str",
+        "default": "git",
+        "choices": ["git", "jj"],
+    }
+    assert {key: dev["slot_mode"][key] for key in ("type", "default", "choices")} == src["slot_mode"]
+    assert src["_angee"]["inputs"]["slot_mode"]["default"] == dev["slot_mode"]["default"] == "worktree"
+
+    # The local instance declares no git source and no workspace, so neither
+    # input would govern anything it renders.
+    local = yaml.safe_load(LOCAL_COPIER.read_text(encoding="utf-8"))
+    assert "vcs" not in local
+    assert "slot_mode" not in local
+    assert "vcs" not in _render_local_stack()
 
 
 def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:

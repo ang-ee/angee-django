@@ -18,7 +18,7 @@ _message_after_copy: |
 
   1. Bring it up. `angee dev` materializes the declared source caches, cuts the
      `src` workspace (the consolidated framework plus optional external addon
-     worktrees), runs the dependency/provision/codegen lifecycle, and boots:
+     slots), runs the dependency/provision/codegen lifecycle, and boots:
        angee dev
   2. Point an external CLI shell at the tokenized local operator (run from this
      root; `angee secret reveal` reads the stack's secrets backend):
@@ -176,6 +176,21 @@ sources_home:
   type: str
   default: ""
   help: Absolute directory holding one shared git cache per repository (e.g. ~/Work/sources, spelled out); empty = per-stack caches under sources/.
+
+# jj workspace slots (templates/README.md). Each default renders nothing: the
+# operator's vcs default is git, and the src template's slot_mode default is
+# worktree. `stack update --template` does not apply vcs.
+vcs:
+  type: str
+  default: git
+  choices: [git, jj]
+  help: Version control of workspace slots that name no mode (the src workspace's .work); jj makes each a jj workspace of its source's store.
+
+slot_mode:
+  type: str
+  default: worktree
+  choices: [worktree, jj]
+  help: How src workspaces cut their code slots, through workspace_defaults — git worktrees of the source caches, or jj workspaces of them.
 
 framework_path:
   type: path

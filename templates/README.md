@@ -47,7 +47,7 @@ the chain instead of restarting against incomplete generated state.
   process-compose. It declares the consolidated framework plus optional external
   git `sources:` and the `src` workspace; `angee dev` materializes their clone
   caches, cuts the workspace, and runs Django/Celery/Vite/Storybook as local
-  processes against those worktrees. The rendered pyproject resolves
+  processes against those slots. The rendered pyproject resolves
   `django-angee` editable from the consolidated `angee` slot, so
   `uv run manage.py` works bare from the root. For developing the framework —
   or a consumer project against live framework source.
@@ -146,6 +146,46 @@ To turn it off, run the same update with an empty value. The update merges, so
 it keeps the variables it no longer renders: then remove `SENTRY_DSN`,
 `SENTRY_ENVIRONMENT`, `VITE_SENTRY_DSN`, and `VITE_SENTRY_ENVIRONMENT` from
 `angee.yaml` by hand.
+
+### Cut workspace slots as jj workspaces
+
+`stacks/dev` takes two inputs that make the operator cut workspace slots as
+Jujutsu (jj) workspaces of the shared source caches instead of git checkouts.
+Both default to git (`slot_mode: worktree`, `vcs: git`) and then render nothing,
+so a stack that sets neither renders as before.
+
+- `slot_mode: jj` renders `slot_mode: jj` into `workspace_defaults` for
+  `workspaces/src`. Every `src` workspace cut afterwards, the declared `src`
+  included, cuts its three code slots as jj workspaces instead of git
+  worktrees. A workspace keeps the mode it was cut with.
+- `vcs: jj` renders `vcs: jj`, which makes every slot that names no mode a jj
+  workspace of its source's store. In a `src` workspace that is the work-state
+  slot (`.work`): `slot_mode` never names it, and `ws sync-base` and `ws push`
+  skip it whatever its mode, leaving it to its own publish recipe.
+
+jj slots need angee 0.25.0 or later: 0.24.0 creates, reads and destroys them,
+but refuses to sync or push a workspace that has one, `.work` under `vcs: jj`
+included. They also need jj with `workspace add --colocate` and git 2.48 or
+later, which `angee doctor` checks. The
+[`src` workspace's `AGENTS.md`](workspaces/src/template/AGENTS.md) carries the
+contract agents follow in a jj slot.
+
+For a new stack, pass the inputs at render:
+
+```sh
+angee stack init <template> <root> --input slot_mode=jj --input vcs=jj
+```
+
+For an existing stack, `angee stack update --template --input slot_mode=jj`
+refreshes `workspace_defaults`. New workspaces take the mode; existing ones
+keep the slots they were cut with. The update does not apply `vcs`, which stays
+as the manifest has it, so set `vcs: jj` in `angee.yaml` by hand. As of angee
+0.25.0, do that only while no workspace has a `.work` slot: the operator reads
+every slot that names no mode by the current `vcs`, existing ones included, so
+it would read an existing `.work` clone as a jj workspace. To change it anyway,
+destroy those workspaces first and cut them again after the change. That
+includes the declared `src` workspace, whose slots the running stack runs from,
+so stop the stack first.
 
 ### The `local` root is a git-controlled project
 
