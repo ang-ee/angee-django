@@ -8,7 +8,6 @@ export interface ScopedTreeExplorerOption {
 export interface UseScopedTreeExplorerOptions<TRoot, TTreeRow extends { id: string }> {
   roots: readonly TRoot[];
   getRootId: (root: TRoot) => string;
-  getRootLabel: (root: TRoot) => string;
   getTreeRows: (rootId: string) => readonly TTreeRow[];
   selectedId?: string | null;
   /**
@@ -19,20 +18,24 @@ export interface UseScopedTreeExplorerOptions<TRoot, TTreeRow extends { id: stri
    */
   onSelectedIdChange?: (selectedId: string | null) => void;
   defaultSelectedId?: string | null;
+  /**
+   * The selected record's resolved root. A new nonempty value overrides an
+   * earlier picker choice. `null` means a record is unresolved: retain the root
+   * and defer initial default selection. Omit on list routes to seed from roots.
+   */
   selectedRootId?: string | null;
+  /** Controlled root selection, for a picker whose options are server-searched. */
+  rootId?: string;
+  /** Notifies explicit root changes; resolved record roots do not rewrite routes. */
+  onRootIdChange?: (rootId: string) => void;
   isSelectedIdValid?: (
     selectedId: string,
     rows: readonly TTreeRow[],
   ) => boolean;
 }
 
-export interface ScopedTreeExplorerController<
-  TRoot,
-  TTreeRow extends { id: string },
-> {
-  root: TRoot | undefined;
+export interface ScopedTreeExplorerController<TTreeRow extends { id: string }> {
   rootId: string;
-  rootOptions: readonly ScopedTreeExplorerOption[];
   setRootId: (rootId: string) => void;
   treeRows: readonly TTreeRow[];
   selectedId: string | undefined;
@@ -52,45 +55,37 @@ export function useScopedTreeExplorer<
 >({
   roots,
   getRootId,
-  getRootLabel,
   getTreeRows,
   selectedId,
   onSelectedIdChange,
   defaultSelectedId = null,
-  selectedRootId = null,
+  selectedRootId,
+  rootId: controlledRootId,
+  onRootIdChange,
   isSelectedIdValid,
-}: UseScopedTreeExplorerOptions<TRoot, TTreeRow>): ScopedTreeExplorerController<
-  TRoot,
-  TTreeRow
-> {
-  const [pinnedRootId, setPinnedRootId] = useState<string | null>(null);
+}: UseScopedTreeExplorerOptions<TRoot, TTreeRow>): ScopedTreeExplorerController<TTreeRow> {
+  const [selection, setSelection] = useState({
+    rootId: selectedRootId ?? null,
+    selectedRootId,
+  });
   const [localSelectedId, setLocalSelectedId] = useState<string | null>(
     defaultSelectedId,
   );
 
-  const rootOptions = useMemo(
-    () =>
-      roots.map((root) => ({
-        value: getRootId(root),
-        label: getRootLabel(root),
-      })),
-    [roots, getRootId, getRootLabel],
-  );
-  const rootIds = useMemo(
-    () => new Set(rootOptions.map((option) => option.value)),
-    [rootOptions],
-  );
-
-  const hintedRootId =
-    selectedRootId && rootIds.has(selectedRootId) ? selectedRootId : null;
-  const rootId =
-    pinnedRootId && rootIds.has(pinnedRootId)
-      ? pinnedRootId
-      : hintedRootId ?? rootOptions[0]?.value ?? "";
-  const root = useMemo(
-    () => roots.find((candidate) => getRootId(candidate) === rootId),
-    [roots, getRootId, rootId],
-  );
+  // Observe resolved record roots during render, before publishing descendants.
+  // A pending read and a changed option catalogue never erase a chosen scope.
+  const nextRootId = selectedRootId && selectedRootId !== selection.selectedRootId
+    ? selectedRootId
+    : selection.rootId ?? (selectedRootId === undefined && roots[0] ? getRootId(roots[0]) : null);
+  if (selection.selectedRootId !== selectedRootId || selection.rootId !== nextRootId) {
+    setSelection({ rootId: nextRootId, selectedRootId });
+  }
+  const rootId = controlledRootId ?? nextRootId ?? "";
+  const [selectionRootId, setSelectionRootId] = useState(rootId);
+  if (selectionRootId !== rootId) {
+    setSelectionRootId(rootId);
+    if (selectedId === undefined) setLocalSelectedId(defaultSelectedId);
+  }
   const treeRows = useMemo(
     () => (rootId ? getTreeRows(rootId) : []),
     [getTreeRows, rootId],
@@ -119,14 +114,16 @@ export function useScopedTreeExplorer<
 
   const handleSetRootId = useCallback(
     (nextRootId: string) => {
-      setPinnedRootId(nextRootId);
+      if (nextRootId === rootId) return;
+      if (controlledRootId === undefined) setSelection({ rootId: nextRootId, selectedRootId });
+      onRootIdChange?.(nextRootId);
       // Reset the selection through the same ownership split as the write seam
       // below: uncontrolled updates local state; controlled notifies its external
       // owner (local state is dead there — the store, not this hook, is the truth).
       if (ownsSelection) setLocalSelectedId(defaultSelectedId);
       else onSelectedIdChange?.(defaultSelectedId);
     },
-    [defaultSelectedId, onSelectedIdChange, ownsSelection],
+    [controlledRootId, defaultSelectedId, onRootIdChange, onSelectedIdChange, ownsSelection, rootId, selectedRootId],
   );
   // The single selection-write seam: a controlled owner (selectedId passed)
   // only gets notified — its store, not local state, is the source of truth;
@@ -141,9 +138,7 @@ export function useScopedTreeExplorer<
 
   return useMemo(
     () => ({
-      root,
       rootId,
-      rootOptions,
       setRootId: handleSetRootId,
       treeRows,
       selectedId: effectiveSelectedId,
@@ -151,9 +146,7 @@ export function useScopedTreeExplorer<
       setSelectedId: handleSetSelectedId,
     }),
     [
-      root,
       rootId,
-      rootOptions,
       handleSetRootId,
       treeRows,
       effectiveSelectedId,

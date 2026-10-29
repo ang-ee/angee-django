@@ -9,11 +9,6 @@ export type { ColorScheme, ColorSchemePreference } from "../theme/runtime.mjs";
 export const COLOR_SCHEME_STORAGE_KEY = "angee:color-scheme";
 /**
  * @kind null
- * @reason Codec and transport infrastructure: translates runtime data and addresses.
- */
-export const LEGACY_THEME_STORAGE_KEY = "angee:theme";
-/**
- * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export const COLOR_SCHEME_CHANGE_EVENT = "angee:color-scheme-change";
@@ -34,7 +29,7 @@ export function normaliseColorSchemePreference(value: string | null | undefined)
 export function storedColorSchemePreference(): ColorSchemePreference {
   const storage = browserStorage();
   if (!storage) return fallbackPreference ?? "system";
-  try { return normaliseColorSchemePreference(storage.getItem(COLOR_SCHEME_STORAGE_KEY)) ?? normaliseColorSchemePreference(storage.getItem(LEGACY_THEME_STORAGE_KEY)) ?? fallbackPreference ?? "system"; }
+  try { return normaliseColorSchemePreference(storage.getItem(COLOR_SCHEME_STORAGE_KEY)) ?? fallbackPreference ?? "system"; }
   catch { return fallbackPreference ?? "system"; }
 }
 /**
@@ -59,7 +54,6 @@ export function applyColorSchemePreference(value: ColorSchemePreference, target?
   if (typeof document !== "undefined") {
     const root = (target ?? document).documentElement;
     root.dataset.colorScheme = resolved;
-    root.dataset.theme = resolved;
     root.style.colorScheme = resolved;
   }
   return resolved;
@@ -89,7 +83,7 @@ function parseSnapshot(snapshot: ColorSchemeSnapshot): Omit<ColorSchemeState, "s
 function subscribe(listener: () => void): () => void {
   if (typeof window === "undefined") return () => undefined;
   const onChange = () => { applyColorSchemePreference(storedColorSchemePreference()); listener(); };
-  const onStorage = (event: StorageEvent) => { if (event.key === null || event.key === COLOR_SCHEME_STORAGE_KEY || event.key === LEGACY_THEME_STORAGE_KEY) onChange(); };
+  const onStorage = (event: StorageEvent) => { if (event.key === null || event.key === COLOR_SCHEME_STORAGE_KEY) onChange(); };
   const query = window.matchMedia?.("(prefers-color-scheme: dark)");
   window.addEventListener(`${COLOR_SCHEME_CHANGE_EVENT}:applied`, listener); window.addEventListener("storage", onStorage); query?.addEventListener("change", onChange);
   return () => { window.removeEventListener(`${COLOR_SCHEME_CHANGE_EVENT}:applied`, listener); window.removeEventListener("storage", onStorage); query?.removeEventListener("change", onChange); };

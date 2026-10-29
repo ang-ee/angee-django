@@ -11,7 +11,7 @@ from rebac import actor_context, generic_target, to_object_ref
 
 from angee.agents.context import record_view_context
 from angee.agents.models import ACTIVE_TURN_STATUSES, SessionStatus, TurnStatus
-from angee.identity import public_id_of
+from angee.base.models.identity import public_id_of
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
 from angee.workflows.steps import Fail, Settlement, Step

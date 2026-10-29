@@ -13,9 +13,10 @@ from django.db import models
 from django.test.utils import isolate_apps
 from mypy import api as mypy_api  # noqa: F401 -- initialize the compiled plugin import graph.
 from mypy.nodes import GDEF, Block, ClassDef, SymbolTable, SymbolTableNode, TypeInfo
-from rebac.mixins import RebacModelBase
+from rebac.managers import TrackedManager
+from rebac.mixins import INJECTED_BASE_MANAGER, RebacModelBase
 
-from angee.compose.typing import CompositionContext
+from angee.base.typing import BaseCompositionContext
 
 
 @pytest.mark.parametrize("name", ("_default_manager", "_base_manager"))
@@ -63,9 +64,10 @@ def test_required_parent_manager_preserves_explicit_native_selection(
                 base_manager_name = "alternate"
                 default_manager_name = "alternate"
 
-        assert Fallback._meta.base_manager.auto_created
+        assert isinstance(Fallback._meta.base_manager, TrackedManager)
+        assert Fallback._meta.base_manager.name == INJECTED_BASE_MANAGER
         assert Fallback._meta.default_manager.auto_created
-        context = object.__new__(CompositionContext)
+        context = object.__new__(BaseCompositionContext)
         context.required_parents = {Fallback: Parent, Explicit: Parent, ExplicitMeta: Parent}
         context.composed = {f"{Parent.__module__}.{Parent.__qualname__}": Parent}
 
@@ -95,16 +97,15 @@ def test_checked_parent_keeps_manager_methods_and_model_rows(tmp_path: Path) -> 
     app = tmp_path / "manager_contract"
     app.mkdir()
     (app / "__init__.py").write_text("")
-    (app / "models.py").write_text("""\
-from typing import ClassVar
+    (app / "models.py").write_text("""from typing import ClassVar
 from django.db import models
-from rebac.mixins import RebacModelBase
-from angee.models import AngeeModel
-from angee.models.manager import AngeeManager
-class ParentManager[T: models.Model](AngeeManager[T]):
+from rebac.mixins import INJECTED_BASE_MANAGER, RebacModelBase
+from angee.base.models.base import AngeeModel
+from angee.base.managers import AngeeUnscopedManager
+class ParentManager[T: models.Model](AngeeUnscopedManager[T]):
     def parent_method(self) -> str:
         return 'parent'
-class OtherManager[T: models.Model](AngeeManager[T]):
+class OtherManager[T: models.Model](AngeeUnscopedManager[T]):
     def other_method(self) -> int:
         return 1
 class Parent(AngeeModel):
@@ -135,15 +136,15 @@ class Explicit(Capability):
         "from pathlib import Path\n"
         "SECRET_KEY = 'manager-typing'\n"
         "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', "
-        "'angee', 'manager_contract', 'angee.compose']\n"
+        "'angee.base', 'manager_contract', 'angee.build.ProjectBuildConfig']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
-        f"ANGEE_RUNTIME_DIR = Path({str(tmp_path / 'manager_runtime')!r})\n"
-        "ANGEE_RUNTIME_MODULE = 'manager_runtime'\n"
+        f"COMPOSE_RUNTIME_DIR = Path({str(tmp_path / 'manager_runtime')!r})\n"
+        "COMPOSE_RUNTIME_MODULE = 'manager_runtime'\n"
     )
     config = tmp_path / "mypy.ini"
     config.write_text(
-        "[mypy]\nplugins = angee.compose.typing\n"
+        "[mypy]\nplugins = angee.base.typing\n"
         f"mypy_path = {tmp_path},{root},{root / 'addons'}\n"
         f"cache_dir = {tmp_path / 'cache'}\n"
         "ignore_missing_imports = True\n"
@@ -166,7 +167,9 @@ assert_type(Explicit.system_queryset().lock_if_supported().get(), Explicit)
 """
     source.write_text(valid)
     env = dict(os.environ, DJANGO_SETTINGS_MODULE="manager_settings")
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(tmp_path), str(root), env.get("PYTHONPATH"))))
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH")))
+    )
     command = [sys.executable, "-m", "mypy", "--config-file", str(config), str(source)]
     positive = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, check=False)
     assert positive.returncode == 0, positive.stdout + positive.stderr

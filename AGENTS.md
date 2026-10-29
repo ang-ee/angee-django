@@ -145,10 +145,12 @@ already been loaded. Read the relevant owner before acting.
 
 The first question for any change is *what level does it belong to?*
 
-- **Framework core** — the composition language, model/data toolkit, serving
-  seams, and jobs seam inherited by every project. The core is not an addon.
-- **Framework addon** — a reusable product capability that ships with Angee;
-  also called a base addon. API protocols are capabilities too.
+- **Framework core** — generic Django composition, the Angee host, serving
+  entrypoints and small shared primitives. Core owns no product models.
+- **Foundation addon (`angee.base`)** — reusable Django models, fields, managers,
+  querysets, identity, validation and permission integration. Its app label is `base`.
+- **Framework addon** — a reusable capability that ships with Angee. Provenance,
+  jobs, web and API protocols have their own optional addon owners.
 - **Consumer addon** — product logic for a specific project.
 
 Never solve at the consumer level what the framework should own, and never push
@@ -158,8 +160,8 @@ product specifics down into the framework. Every fact lives at its owning level.
 
 ```text
 .                    # consolidated framework source slot
-├── angee/           # django-angee core: base/, data/, compose/, jobs/, serving seams
-├── addons/          # standard angee.* folder addons with co-located web fragments
+├── angee/           # django-angee host, generic compose/, serving seams and shared primitives
+├── addons/          # angee.base foundation and capability addons; co-located web fragments
 ├── packages/        # schema-independent @angee/* packages and workshop/test tooling
 ├── examples/        # consumer addons and reference browser suite
 ├── templates/       # Copier project, stack, workspace, service, and addon sources
@@ -202,6 +204,33 @@ see [Where Knowledge Lives](#where-knowledge-lives).
 Use [Checks](docs/checks.md) for area-specific commands and prerequisites.
 Meaningful UI changes require browser verification as well as relevant tests.
 
+## Common Errors
+
+- **Testing instead of building.** Finish the agreed owner changes and caller
+  migrations before a consolidated final verification pass. During implementation,
+  use a focused check only to resolve a concrete uncertainty or failure. Carry
+  forward valid evidence for unchanged code; repeat a suite only when a new change,
+  failure, or unresolved concern justifies it. Passing checks never replace
+  unfinished implementation, and required final checks remain delivery gates.
+- **Repeating settled research.** Keep one current ownership and completion
+  ledger. Reuse delegated findings and recorded evidence; reopen an audit only
+  when new code or conflicting evidence changes its conclusion. Turn findings
+  into owned changes and deletions instead of another overlapping checklist.
+- **Serializing independent work.** When parallel agent work is requested, assign
+  distinct owners and run implementation, dependency work, and independent review
+  concurrently where their dependencies permit. Integrate completed lanes as they
+  become ready; do not spend the run waiting on one lane or protecting an
+  unrequested credit budget.
+- **Letting one blocker stop everything.** Identify the exact action blocked by
+  missing information or authorization, surface it promptly, and continue useful
+  independent work. Prepare the concrete result before seeking publication or
+  release approval. Mark the whole task blocked only when no authorized useful
+  work remains; do not silently leave an expected ongoing run idle.
+- **Confusing activity with completion.** Report delivered behavior, remaining
+  checklist items, and concrete blockers. Test counts, audit volume, elapsed work,
+  and a partial green run do not establish that the agreed target is built. Keep
+  implementation, verification, integration, and publication status explicit.
+
 ## Mechanical Overrides
 
 - Before structural refactors, remove dead code first.
@@ -231,10 +260,12 @@ watchers by hand. The angee operator is the stack's monitoring and management
 service: it is not part of the frontend or backend and keeps running while it
 restarts them, so use it for every restart.
 `angee --root "$angee_root" job run deps --chained-restart` restarts the whole
-application (the restart job is `provision` on instance stacks), and
+application (current instance templates start that chain at `runtime-build`), and
 `angee --root "$angee_root" restart <service>...` restarts single services. Apply
 dependency changes with the whole-application restart; never `uv sync` the stack's
-venv while the stack runs.
+venv while the stack runs. Existing stacks retain their rendered job names until
+their templates are updated; inspect the controlling `angee.yaml` before choosing
+the dependency-chain entrypoint.
 [Restart the running stack](docs/howto/getstarted.md#restart-the-running-stack)
 has the details and the operator API. One-shot management commands use the stack
 host's `manage.py`.

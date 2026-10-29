@@ -1,14 +1,9 @@
-"""GraphQL introspection surface for the Angee platform console.
+"""GraphQL introspection and resource-ledger surfaces for the platform console.
 
-One read-only console query reflects the runtime back to platform admins:
-``platformExplorer`` reads addon detail and reconciled resource counts from the
-persistent catalogue and walks the Django app registry for concrete models,
-fields, and relation edges. The ledger *listing* itself is owned by the
-``resources`` addon (``resources.resourceLedger``), which contributes its own
-section into the platform console. Reads here are gated on ``read`` over the
-table-less ``platform/explorer`` anchor (``permissions.zed``). The platform addon
-owns the persisted lifecycle catalogue and asks the app registry and resource
-ledger for the runtime facts projected alongside it.
+Platform owns admission to the table-less ``platform/explorer`` anchor and the
+console's read projections. Resources owns import-ledger persistence; platform
+composes its read-only listing alongside the persisted addon catalogue and live
+Django model, field and implementation projections.
 """
 
 from __future__ import annotations
@@ -19,19 +14,22 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.db.models import QuerySet
 from rebac import ObjectRef, system_context
 from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.graphql.access import actor_can_read
 from angee.graphql.actions import ActionResult
-from angee.graphql.data import hasura_model_resource, hasura_pydantic_resource
+from angee.graphql.data.hasura import hasura_model_resource
+from angee.graphql.data.pydantic_resource import hasura_pydantic_resource
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.platform import composed
 from angee.platform.models import Addon as AddonModel
 
 _EXPLORER = ObjectRef("platform/explorer", "default")
 _Addon = apps.get_model("platform", "Addon")
+_Resource = apps.get_model("resources", "Resource")
 strawberry.enum(cast(Any, _Addon.AddonKind))
 
 
@@ -174,7 +172,7 @@ class PlatformExplorerData:
 
     @strawberry.field
     def models(self) -> list[PlatformModel]:
-        """Return canonical model rows through the legacy nested binding."""
+        """Return canonical model rows for the explorer graph projection."""
 
         return cast(list[PlatformModel], self.model_rows())
 
@@ -231,12 +229,7 @@ class PlatformQuery:
 
 
 def platform_can_read() -> bool:
-    """Return whether the current actor may read the platform surface.
-
-    Shared with the ``resources`` addon, which gates its contributed ledger
-    listing on the same platform-admin read so the whole console resolves for one
-    role.
-    """
+    """Return whether the current actor may read the platform console."""
 
     return actor_can_read(_EXPLORER)
 
@@ -448,6 +441,58 @@ _IMPLEMENTATION_RESOURCE = hasura_pydantic_resource(
 )
 
 
+@strawberry_django.type(_Resource)
+class ResourceLedgerType:
+    """Read-only projection of one resource import-ledger row."""
+
+    source_addon: auto
+    source_path: auto
+    tier: auto
+    xref: auto
+    content_hash: auto
+    target_model: auto
+    target_id: auto
+    loaded_at: auto
+
+    @strawberry_django.field
+    def id(self) -> str:
+        """Return the ledger row's primary-key identity."""
+
+        return str(cast(Any, self).pk)
+
+
+def _ledger_queryset(info: strawberry.Info) -> QuerySet[Any]:
+    """Return the import ledger for platform readers, else the empty set.
+
+    Read-only and admin-scoped: a non-reader actor gets ``.none()`` rather than a
+    forbidden error, matching the rest of the admin-only platform console.
+    """
+
+    del info
+    if not platform_can_read():
+        return cast(QuerySet[Any], _Resource.objects.none())
+    return cast(QuerySet[Any], _Resource.objects.all())
+
+
+_LEDGER_RESOURCE = hasura_model_resource(
+    ResourceLedgerType,
+    model=_Resource,
+    name="resources",
+    filterable=["source_addon", "source_path", "tier", "target_model", "xref"],
+    sortable=["source_addon", "source_path", "tier", "target_model", "loaded_at"],
+    aggregatable=["id"],
+    groupable=["source_addon", "source_path", "tier"],
+    get_queryset=_ledger_queryset,
+    insert=False,
+    update=False,
+    delete=False,
+    id_decode=lambda value: value,
+    id_column="id",
+    model_label="resources.Resource",
+    public_id_field="id",
+)
+
+
 @strawberry.type
 class AddonInstallMutation:
     """Dispatch admin-authorized changes to the addon manager's reviewed plan.
@@ -470,13 +515,6 @@ class AddonInstallMutation:
         result = _Addon.objects.disable(addon, revision)
         return ActionResult(ok=result.ok, message=result.summary)
 
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def uninstall(self, addon: str, revision: str | None = None) -> ActionResult:
-        """Compatibility alias for the canonical disable mutation."""
-
-        result = _Addon.objects.uninstall(addon, revision)
-        return ActionResult(ok=result.ok, message=result.summary)
-
 
 schemas = {
     "console": {
@@ -486,6 +524,7 @@ schemas = {
             _MODEL_RESOURCE.query,
             _FIELD_RESOURCE.query,
             _IMPLEMENTATION_RESOURCE.query,
+            _LEDGER_RESOURCE.query,
         ],
         "mutation": [AddonInstallMutation],
         "types": [
@@ -496,6 +535,7 @@ schemas = {
             *_FIELD_RESOURCE.types,
             PlatformImplementationDetail,
             *_IMPLEMENTATION_RESOURCE.types,
+            *_LEDGER_RESOURCE.types,
         ],
     },
 }

@@ -6,7 +6,7 @@ from uuid import UUID
 
 from django.db import models
 
-from angee.data.metadata import (
+from angee.graphql.data.contracts import (
     DataLinesMetadata,
     DataMutationArgument,
     DataQueryField,
@@ -19,7 +19,6 @@ from angee.data.metadata import (
     DataResourceRoots,
     DataResourceSubtitleMetadata,
     DataResourceTypeNames,
-    serialize_data_resources,
 )
 
 
@@ -56,7 +55,7 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
         lines=DataLinesMetadata(field="items", model_label="catalog.line", fields=(title_field,)),
     )
 
-    [wire] = serialize_data_resources((final,), schema_name="console")
+    [wire] = [item.as_wire(schema_name="console") for item in (final,)]
     assert wire["schemaName"] == "console"
     assert wire["modelLabel"] == "catalog.item"
     assert wire["query"]["identity"]["field"] == "id"

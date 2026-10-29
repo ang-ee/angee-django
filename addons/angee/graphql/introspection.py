@@ -10,8 +10,6 @@ from django.db.models.fields.reverse_related import ForeignObjectRel
 from strawberry.types import get_object_definition
 from strawberry_django.utils.typing import get_django_definition
 
-from angee.data import field_classification as data_field_classification
-
 
 def surface_name(surface: object) -> str:
     """Return a readable name for a Strawberry surface."""
@@ -77,7 +75,7 @@ def fields_for_path(
             field = current_model._meta.get_field(part)
         except FieldDoesNotExist:
             raise FieldPathError(to_many=False) from None
-        if data_field_classification.is_to_many_relation(field):
+        if is_to_many_relation(field):
             raise FieldPathError(to_many=True)
         fields.append(field)
         remote_field = getattr(field, "remote_field", None)
@@ -86,3 +84,18 @@ def fields_for_path(
     if not fields:
         raise FieldPathError(to_many=False)
     return tuple(fields)
+
+
+def is_to_many_relation(field: models.Field[Any, Any] | ForeignObjectRel) -> bool:
+    """Return whether a Django field represents a to-many relation path."""
+
+    return bool(getattr(field, "many_to_many", False) or getattr(field, "one_to_many", False))
+
+
+def is_to_one_relation(field: models.Field[Any, Any] | ForeignObjectRel) -> bool:
+    """Return whether ``field`` is a forward to-one relation."""
+
+    return bool(
+        (getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False))
+        and getattr(field, "related_model", None) is not None
+    )

@@ -9,6 +9,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
+from itertools import batched
 from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
@@ -24,25 +25,21 @@ from pydantic import ValidationError as PydanticValidationError
 from rebac import actor_context, generic_target, system_context, to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError
 
-from angee.actors import actor_user_id
-from angee.evidence import EvidenceReference, readable_records
-from angee.fields import ModelLabelField
+from angee.base.fields.text import ModelLabelField
+from angee.base.managers import AngeeManager
+from angee.base.models.append_only import AppendOnlyQuerySet
+from angee.base.models.identity import public_id_of
+from angee.base.models.locks import StaleRevisionError, require_revision
+from angee.base.permissions import actor_user_id
+from angee.base.querysets import AngeeQuerySet, by_key, query_batch_size, row_lock_paths
+from angee.base.signals import bulk_updated
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.publishing import changes_muted, mute_changes, publish_change
-from angee.identity import public_id_of
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
-from angee.models import (
-    AngeeManager,
-    AngeeQuerySet,
-    AppendOnlyQuerySet,
-    StaleRevisionError,
-    require_revision,
-    row_lock_paths,
-)
-from angee.models.query import by_key
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.evidence import EvidenceReference, readable_records
 from angee.serialization import canonical_json_sha256, strip_null_bytes
-from angee.signals import bulk_updated
 from angee.workflows.definition import (
     MAP_BODY_SUFFIX,
     Body,
@@ -145,7 +142,7 @@ _CONFIGURATIONS: TypeAdapter[list[StepConfiguration]] = TypeAdapter(
 )
 
 
-class WorkflowManager[T: Workflow](AngeeManager[T]):
+class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
     """Own the editable document and the immutable publication sequence."""
 
     def _resolved_document(self, draft: Any, actor: Any) -> tuple[Any, list[Issue]]:
@@ -896,7 +893,7 @@ def unfinished_run_merge_guard(record: Any) -> str | None:
     return f"Workflow runs still working on {record} must finish or be canceled first."
 
 
-class StepWatchManager[T: StepWatch](AngeeManager[T]):
+class StepWatchManager[T: StepWatch](AngeeHistoryManager[T]):
     """Own transactional observation, durable change capture and wait admission."""
 
     def register(self, step_run: Any, records: tuple[Any, ...], *, actor: Any) -> None:
@@ -935,6 +932,32 @@ class StepWatchManager[T: StepWatch](AngeeManager[T]):
         if until is None:
             raise ValidationError("A wait requires a deadline or a watched record.")
         return cast(WaitingKind, WaitingKind.TIME)
+
+    def record_changes(self, records: tuple[Any, ...]) -> None:
+        """Bound the existence probe, then retain each watched target's capture."""
+        if len(records) > 1:
+            try:
+                groups: dict[int, set[Any]] = {}
+                for record in records:
+                    target = generic_target(record)
+                    groups.setdefault(target.content_type.pk, set()).add(target.object_id)
+                rows = self.get_queryset()
+                rows._for_write = True
+                with system_context(reason="workflows.watch_capture"):
+                    for content_type_id, keys in sorted(groups.items()):
+                        watches = rows.filter(content_type_id=content_type_id).values_list("pk", flat=True)
+                        if any(
+                            watches.filter(object_id__in=chunk).first() is not None
+                            for chunk in batched(sorted(keys), query_batch_size(watches))
+                        ):
+                            break
+                    else:
+                        return
+            except Exception:
+                logger.exception("Workflow watch capture failed.")
+                return
+        for record in records:
+            self.record_change(record)
 
     def record_change(self, record: Any) -> None:
         """Capture under the record lock, isolating failure from the source write."""

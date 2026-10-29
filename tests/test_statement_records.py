@@ -7,8 +7,10 @@ from django.apps import apps
 from django.db import models
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
-from angee.evidence import FactAuthority
-from angee.models import SourceKind
+from angee.provenance.evidence import FactAuthority
+from angee.provenance.statements import (
+    SourceKind,
+)
 from tests.conftest import create_platform_admin, create_user
 from tests.extcontrib.models import Claimed, ClaimedBilling, ClaimedSource, ClaimedStatementQuerySet
 from tests.statement_models import Ledger

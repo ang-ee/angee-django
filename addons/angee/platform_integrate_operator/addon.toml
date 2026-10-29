@@ -5,6 +5,6 @@ name = "angee.platform_integrate_operator"
 description = "Install and disable addons through the operator, with application restart status and actions"
 keywords = ["marketplace", "addons", "operator"]
 category = "Integration"
-depends_on = ["angee.platform", "angee.operator"]
+depends_on = ["angee.platform", "angee.operator", "angee.web"]
 
 [web]

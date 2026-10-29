@@ -396,3 +396,33 @@ test("a failed authored page retries the same native scope", async () => {
   expect(f.requests.at(-1)).toMatchObject({ page: 2, pageSize: 25 });
   expect(f.getList).not.toHaveBeenCalled();
 });
+
+test("a revealed orphan remains reachable after its parent page resolves and an empty branch becomes a leaf", async () => {
+  const revealed: ActivityRow = { id: "folder", title: "Deep-linked folder", parent: "unloaded-parent", expandable: true };
+  let resolveParent!: (result: { data: { page: CollectionPage<ActivityRow> } }) => void;
+  const parentPage = new Promise<{ data: { page: CollectionPage<ActivityRow> } }>((resolve) => { resolveParent = resolve; });
+  const requests: CollectionPageRequest[] = [];
+  const custom = vi.fn(({ meta }: { meta?: Record<string, unknown> }) => {
+    const { request } = meta?.gqlVariables as { request: CollectionPageRequest };
+    requests.push(request);
+    return request.parentId === "unloaded-parent" ? parentPage
+      : Promise.resolve({ data: { page: { rows: [], total: 0 } } });
+  });
+  render(<Provider resources={[testDataResource("catalog.Reference")]} refineResources={[]} providerNames={[]}
+    dataProvider={{ custom, getList: vi.fn() }}>
+    <OperationDocumentsProvider documents={{}}><ToastProvider><ResourceViewProvider scope="local" initialState={{ pageSize: 25 }}>
+      <CollectionTreeView resource="authored.Activity" source={source} rowKey="id" parent="parent" label="title" hasChildren="expandable"
+        columns={[{ field: "title" }]} textFilterField="title" customFilterFields={[]} filterOptions={[]}
+        selectedId="folder" revealRows={[revealed]} />
+    </ResourceViewProvider></ToastProvider></OperationDocumentsProvider>
+  </Provider>);
+  await screen.findByText("Deep-linked folder");
+  await act(async () => resolveParent({ data: { page: { rows: [revealed], total: 1 } } }));
+  const row = screen.getByText("Deep-linked folder").closest('[role="treeitem"]')!;
+  expect(row.getAttribute("aria-level")).toBe("1");
+  fireEvent.click(row.querySelector("button")!);
+  await waitFor(() => expect(requests.some((request) => request.parentId === "folder")).toBe(true));
+  await waitFor(() => expect(row.hasAttribute("aria-expanded")).toBe(false));
+  expect(screen.getByText("Deep-linked folder")).toBeTruthy();
+  expect(revealed.parent).toBe("unloaded-parent");
+});

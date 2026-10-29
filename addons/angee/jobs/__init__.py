@@ -1,0 +1,12 @@
+"""Framework job seam backed by Celery.
+
+This app owns Angee's deferred and periodic execution tier. Addons declare
+Celery tasks in conventional ``tasks.py`` modules and enqueue through the small
+Angee seam when they need framework-owned defaults.
+
+Kept import-light because Django imports the package during app population.
+Callers import the concrete seam from ``angee.jobs.enqueue``,
+``angee.jobs.locks`` or ``angee.jobs.timeouts``. Start the configured CLI with
+``python manage.py celery`` so Django loads declared addon roots before the
+command imports ``angee.jobs.celery``.
+"""

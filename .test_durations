@@ -5369,7 +5369,7 @@
     "tests/test_settings.py::test_autoconfig_applies_installed_entries_without_populating_apps[module]": 0.004017667379230261,
     "tests/test_settings.py::test_autoconfig_environment_precedence_is_shared_by_declared_and_derived_settings[False]": 0.0010825428180396557,
     "tests/test_settings.py::test_autoconfig_environment_precedence_is_shared_by_declared_and_derived_settings[True]": 0.0010745003819465637,
-    "tests/test_settings.py::test_autoconfig_installed_apps_cannot_change_composer_settings[ANGEE_RUNTIME_DIR]": 0.0032932497560977936,
+    "tests/test_settings.py::test_autoconfig_installed_apps_cannot_change_composer_settings[COMPOSE_RUNTIME_DIR]": 0.0032932497560977936,
     "tests/test_settings.py::test_autoconfig_installed_apps_cannot_change_composer_settings[ASGI_APPLICATION]": 0.003068250138312578,
     "tests/test_settings.py::test_autoconfig_installed_apps_cannot_change_composer_settings[INSTALLED_APPS]": 0.002944083884358406,
     "tests/test_settings.py::test_autoconfig_installed_apps_cannot_change_composer_settings[ROOT_URLCONF]": 0.002832209225744009,

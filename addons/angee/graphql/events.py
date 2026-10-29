@@ -14,8 +14,8 @@ from rebac import ObjectRef
 from rebac.resources import model_resource_id, model_resource_type
 from strawberry.scalars import JSON
 
-from angee.identity import public_id_of
-from angee.refs import RecordRef, record_view_refs
+from angee.base.models.identity import public_id_of
+from angee.base.refs import RecordRef, record_view_refs
 from angee.serialization import json_safe
 
 ReadableFields = Iterable[str] | Callable[[], Iterable[str]]

@@ -12,6 +12,7 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import actor_context, system_context
 
+from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import (
     ConflictKeep,
@@ -25,7 +26,6 @@ from angee.integrate.states import (
 from angee.integrate.testing.integration import Integration
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Channel
-from angee.models import AngeeQuerySet, AngeeUnscopedQuerySet
 from tests.conftest import current_stream, make_integration
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.stream_adapters import applied_history, failure_state
@@ -341,6 +341,25 @@ def test_retry_is_due_now_but_preserves_conflict_and_resolved_history_guards(rep
     resolved = failure.resolve()
     with pytest.raises(ValidationError, match="resolved failure"):
         resolved.retry()
+
+
+@pytest.mark.parametrize("changed", [{"source_hash": "changed"}, {"mapping_version": 2}])
+def test_new_evidence_replaces_same_link_problem_without_losing_history_or_conflicts(replica: Any, changed) -> None:
+    link = RecordLink.objects.observe(replica, "person:changed")
+    original = link.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid")
+    unrelated = link.record_failure(kind=SyncFailureKind.MISSING_DEPENDENCY, code="parent")
+    conflict = link.record_failure(kind=SyncFailureKind.CONFLICT, code="both_changed")
+    replacement = link.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid", **changed)
+    assert {row.pk for row in link.failures(open_only=True)} == {unrelated.pk, conflict.pk, replacement.pk}
+    assert next(row for row in link.failures() if row.pk == original.pk).status == SyncFailureStatus.RESOLVED
+    assert link.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid", **changed).pk == replacement.pk
+    newer_conflict = link.record_failure(kind=SyncFailureKind.CONFLICT, code="both_changed", **changed)
+    assert {row.pk for row in link.failures(open_only=True)} >= {conflict.pk, newer_conflict.pk}
+
+    first_event = replica.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid")
+    second_event = replica.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid", **changed)
+    stream_failures = {row.pk for row in replica.failures(open_only=True)}
+    assert {first_event.pk, second_event.pk} <= stream_failures
 
 
 def test_failure_rescan_is_bounded_before_materialization(replica: Any) -> None:

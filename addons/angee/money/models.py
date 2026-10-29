@@ -13,7 +13,7 @@ is unset, and the addon's system check (``apps.py``) surfaces the same at
 ``manage.py check`` time.
 
 Rounding vocabulary lives here too. :meth:`Currency.round` wraps
-:func:`angee.numeric.quantize` to the currency's exponent and resolves the
+:meth:`decimal.Decimal.quantize` with the currency's exponent and resolves the
 mode from :class:`angee.money.rounding.RoundingMode`, defaulting to ``half_up``
 unless a caller explicitly overrides it. :meth:`Currency.convert` crosses through
 the reference currency and returns the amount **unrounded** — the consumer rounds
@@ -34,19 +34,17 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import GenericTarget, generic_target
 
-from angee.models import (
-    AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
-    ArchiveMixin,
-    ArchiveQuerySet,
-    HistoryMixin,
-    role_anchor,
-)
-from angee.models.query import SystemQuerysetMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.merge_references import MergePolicy
+from angee.base.models.persistence import PersistenceMixin
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.roles import role_anchor
+from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
 from angee.money.rounding import RoundingMode, rounding_constant
-from angee.numeric import quantize
-from angee.refs import MergePolicy, RecordRefMixin
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.resources.mixins import ResourceLoadMixin
 
 REFERENCE_CURRENCY_SETTING = "ANGEE_MONEY_REFERENCE_CURRENCY"
 """The project setting naming the ISO-4217 code every :class:`CurrencyRate` is relative to."""
@@ -72,14 +70,14 @@ def reference_currency_code() -> str:
     return str(code)
 
 
-class CurrencyQuerySet[CurrencyT: Currency](ArchiveQuerySet[CurrencyT], AngeeQuerySet[CurrencyT]):
+class CurrencyQuerySet[CurrencyT: Currency](ArchiveQuerySet[CurrencyT], AngeeHistoryQuerySet[CurrencyT]):
     """Archive read scopes layered over the REBAC-scoped currency queryset."""
 
 
-CurrencyManager = AngeeManager.from_queryset(CurrencyQuerySet)
+CurrencyManager = AngeeHistoryManager.from_queryset(CurrencyQuerySet)
 
 
-class Currency(ArchiveMixin, AngeeDataModel):
+class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel):
     """One ISO-4217 currency: its code, display name, symbol, and minor-unit exponent.
 
     ``decimal_places`` is the currency's minor-unit exponent (2 for most, 0 for
@@ -120,7 +118,7 @@ class Currency(ArchiveMixin, AngeeDataModel):
         vocabulary applies.
         """
 
-        return quantize(amount, self.decimal_places, rounding_constant(mode))
+        return amount.quantize(Decimal(1).scaleb(-self.decimal_places), rounding=rounding_constant(mode))
 
     def convert(
         self,
@@ -173,7 +171,7 @@ class Currency(ArchiveMixin, AngeeDataModel):
         )
 
 
-class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeQuerySet[RateT]):
+class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeHistoryQuerySet[RateT]):
     """Protect contextual identity fields that also govern rate visibility."""
 
     _identity_fields = {
@@ -197,7 +195,7 @@ class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeQue
         return super().update(**kwargs)
 
 
-_CurrencyRateManagerBase = AngeeManager.from_queryset(CurrencyRateQuerySet)
+_CurrencyRateManagerBase = AngeeHistoryManager.from_queryset(CurrencyRateQuerySet)
 
 
 class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
@@ -287,7 +285,7 @@ class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
         except ValueError as error:
             raise ValidationError("A contextual currency rate requires one saved, typed context.") from error
         model = canonical.content_type.model_class()
-        if model is None or not issubclass(model, SystemQuerysetMixin):
+        if model is None or not issubclass(model, PersistenceMixin):
             raise ValidationError("The currency-rate context is not a canonical resource.")
         if not model.system_queryset().filter(pk=canonical.object_id).exists():
             raise ValidationError("The currency-rate context is unavailable.")
@@ -457,5 +455,5 @@ class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel):
 
 MoneyRole = role_anchor("money/role")
 """The ``money/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective money manager. See :func:`angee.models.role_anchor`.
+an effective money manager. See :func:`angee.base.models.roles.role_anchor`.
 """

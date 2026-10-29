@@ -1,0 +1,3 @@
+# Baked folder addons remain native sources outside the core wheel.
+ANGEE_ADDON_DIRS:append:
+  - /opt/angee-src/addons

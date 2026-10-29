@@ -4,21 +4,25 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
-from typing import Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db.models import F
+from django.db.models import F, Prefetch, prefetch_related_objects
 from rebac import system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
+from strawberry_django.auth.utils import get_current_user
+from strawberry_django.optimizer import optimize
+from strawberry_django.utils.requests import get_request
 
-from angee.data.metadata import DataResourceSubtitleMetadata
-from angee.fields import SqidField
+from angee.base.fields.identity import SqidField
+from angee.base.models.identity import instance_from_public_id
 from angee.graphql.actions import ActionResult, action_guard
-from angee.graphql.capabilities import permissions_field
-from angee.graphql.data import (
+from angee.graphql.capabilities import permission_expression, permissions_field
+from angee.graphql.data.contracts import DataResourceSubtitleMetadata
+from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
     declared_hasura_write_relation_fields,
@@ -37,10 +41,10 @@ from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
 from angee.iam.identity import user_display_label, user_label, user_public_id
-from angee.iam.permissions import request_from_info, session_user
-from angee.identity import instance_from_public_id
+from angee.iam.permissions import session_user
 from angee.knowledge.models import (
     AmbiguousMatchError,
+    PageQuerySet,
     RecordBindingManager,
     SectionNotFoundError,
     SectionOp,
@@ -49,6 +53,9 @@ from angee.knowledge.models import (
     UnsupportedPageKindError,
 )
 from angee.tags.schema import TaggedNode, tags_input_extensions
+
+if TYPE_CHECKING:
+    from angee.knowledge.models import Page as PageModel
 
 Vault = apps.get_model("knowledge", "Vault")
 Page = apps.get_model("knowledge", "Page")
@@ -88,7 +95,7 @@ class VaultType(TrashedRefMixin, AngeeNode):
         if hasattr(self, "_iam_owner_label_source"):
             user = cast(Any, self)._iam_owner_label_source
             return user_label(user) if user is not None else None
-        return user_display_label(cast(Any, self).owner_id, request=request_from_info(info))
+        return user_display_label(cast(Any, self).owner_id, request=get_request(info))
 
 
 @strawberry.type
@@ -104,6 +111,7 @@ class OutlineEntryType:
 class MarkdownPageType(AngeeNode):
     """GraphQL projection of a concrete markdown page."""
 
+    title: auto
     body: auto
     body_hash: auto
     word_count: auto
@@ -146,6 +154,35 @@ class BacklinkType:
     display_text: str
 
 
+@strawberry.type
+class WikilinkType:
+    """An indexed title and its currently readable, live target."""
+
+    title: str
+    page: strawberry.ID | None
+
+
+def _ancestors_prefetch(info: strawberry.Info) -> Prefetch:
+    """Optimize readable ancestors using the nested Page selection's native hints."""
+
+    # The native optimizer clones the supplied queryset but declares its return
+    # as QuerySet; retain Page's hierarchy API at that upstream type boundary.
+    rows = cast("PageQuerySet[PageModel]", optimize(PageType.get_queryset(Page.objects.untrashed(), info), info))
+    return rows.model.ancestors_prefetch(rows, to_attr="_knowledge_ancestors")
+
+
+def _wikilinks_prefetch(_info: strawberry.Info) -> Prefetch:
+    """Batch the source index and its independently readable live target pages."""
+
+    return Prefetch(
+        "outgoing_links",
+        queryset=Link.objects.only("source_page_id", "target_text", "target_page_id").prefetch_related(Prefetch(
+            "target_page", queryset=Page.objects.untrashed().only("id"),
+        )),
+        to_attr="_knowledge_wikilinks",
+    )
+
+
 @strawberry_django.type(Page)
 class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     """GraphQL projection of a page."""
@@ -159,6 +196,34 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
     permissions = permissions_field(("write", "delete"))
+
+    @strawberry_django.field(annotate={"_has_children": lambda info: Page.objects.has_children_expression()})
+    def has_children(self) -> bool:
+        """Expandability follows readable, untrashed children."""
+
+        return bool(cast(Any, self)._has_children)
+
+    @strawberry_django.field(only=["path"], prefetch_related=[_ancestors_prefetch])
+    def ancestors(self, info: strawberry.Info) -> list[PageType]:
+        """Readable ancestors in path order; hidden containers contribute no label."""
+
+        if not hasattr(self, "_knowledge_ancestors"):
+            prefetch_related_objects([cast("PageModel", self)], _ancestors_prefetch(info))
+        return cast("list[PageType]", cast(Any, self)._knowledge_ancestors)
+
+    @strawberry_django.field(only=["id"], prefetch_related=[_wikilinks_prefetch])
+    def wikilinks(self, info: strawberry.Info) -> list[WikilinkType]:
+        """Project the index owner's resolution under the current target read scope."""
+
+        if not hasattr(self, "_knowledge_wikilinks"):
+            prefetch_related_objects([cast("PageModel", self)], _wikilinks_prefetch(info))
+        return [
+            WikilinkType(
+                title=link.target_text,
+                page=require_public_id(Page, link.target_page.pk) if link.target_page is not None else None,
+            )
+            for link in cast(Any, self)._knowledge_wikilinks
+        ]
 
     @strawberry_django.field(only=["id", "markdown__kind"])
     def kind(self) -> str:
@@ -179,18 +244,16 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
 
         return require_public_id(Vault, cast(Any, self).vault_id)
 
-    @strawberry_django.field(only=["vault_id"])
+    @strawberry_django.field(only=["vault_id"], annotate={"_vault_label": F("vault__name")})
     def vault_label(self) -> str | None:
-        """Return the owning vault's display name — no vault object exposed.
+        """Project the containing name with the page, without granting vault access."""
 
-        Resolved under ``system_context`` so a page viewer who lacks vault
-        read still sees where the page lives; only the name string leaves
-        the resolver.
-        """
-
+        page = cast(Any, self)
+        if "_vault_label" in page.__dict__:
+            return cast(str | None, page._vault_label)
+        # Mutation resolvers return an instance rather than an annotated queryset.
         with system_context(reason="knowledge.graphql.vault_label"):
-            vault = Vault._default_manager.filter(pk=cast(Any, self).vault_id).only("name").first()
-        return None if vault is None else str(vault)
+            return str(page.vault)
 
     @strawberry_django.field(only=["parent_id"])
     def parent(self) -> strawberry.ID | None:
@@ -340,7 +403,7 @@ class VaultWriteBackend(AngeeHasuraWriteBackend):
     def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
         """Create a vault owned by the requesting user."""
 
-        user = getattr(info.context.request, "user", None)
+        user = get_current_user(info)
         fields = dict(data)
         # The factory stamps attribution; the shared backend already validated scope.
         fields.pop("created_by_id", None)
@@ -399,7 +462,14 @@ _PAGE_RESOURCE = hasura_model_resource(
     PageType,
     model=Page,
     name="pages",
-    filterable=["id", "vault", "title", "is_trashed", "updated_at"],
+    filterable=[
+        "id", "vault", "parent", "title", "is_trashed", "updated_at", "navigation_root", "removed_root", "writable",
+    ],
+    filter_expressions={
+        "navigation_root": lambda rows: cast(PageQuerySet[Any], rows).navigation_root_expression(),
+        "removed_root": lambda rows: cast(PageQuerySet[Any], rows).navigation_root_expression(removed=True),
+        "writable": partial(permission_expression, name="write"),
+    },
     sortable=["title", "created_at", "updated_at", "trashed_at"],
     aggregatable=["id"],
     groupable=["vault", "vault__name", "updated_at"],
@@ -453,13 +523,19 @@ class KnowledgeQuery:
     """Knowledge content queries that span the page/body join."""
 
     @strawberry.field
-    def search_pages(self, query: str, vault: PublicID | None = None, first: int = 20) -> list[PageType]:
+    def search_pages(
+        self, info: strawberry.Info, query: str, vault: PublicID | None = None, first: int = 20,
+    ) -> list[PageType]:
         """Search a selected readable vault, or bounded readable backend groups."""
         rows = Vault.objects.all()
         if vault is not None:
             target = require_instance_for_id(Vault, vault)
             rows = rows.filter(pk=target.pk)
-        return cast("list[PageType]", rows.search_pages(query, first=first))
+        ranked = rows.search_pages(query, first=first)
+        # Backends own ranking; the selected Page projection owns native hints.
+        selected = optimize(PageType.get_queryset(Page.objects.filter(pk__in=[page.pk for page in ranked]), info), info)
+        pages = {page.pk: page for page in selected}
+        return cast("list[PageType]", [pages[page.pk] for page in ranked if page.pk in pages])
 
     @strawberry.field(name="record_knowledge_bindings")
     def record_knowledge_bindings(
@@ -571,6 +647,21 @@ class KnowledgeMutation:
             ),
         )
 
+    @strawberry.mutation(name="create_record_note")
+    def create_record_note(
+        self, model_label: str, record_id: PublicID, vault: PublicID, body: str,
+        role: str = RecordBindingManager.DEFAULT_ROLE, idempotency_key: str | None = None,
+    ) -> RecordBindingType:
+        """Create the page, body and binding through one transactional owner."""
+
+        target = _record_for_binding(model_label, record_id, write=True)
+        if target is None:
+            raise ValueError("Record not found.")
+        return cast(RecordBindingType, RecordBinding.objects.create_note(
+            target=target, vault=require_instance_for_id(Vault, vault), body=body,
+            role=role, idempotency_key=idempotency_key,
+        ))
+
     @strawberry.mutation(name="unbind_knowledge_record")
     def unbind_knowledge_record(self, input: RecordBindingInput) -> bool:
         """Remove one Page/Vault-to-record role key if it exists."""
@@ -618,12 +709,13 @@ class KnowledgeMutation:
             str | None,
             strawberry.argument(name="expected_hash"),
         ] = None,
+        title: str | None = None,
     ) -> PageBodyPayload:
-        """Write a page's markdown body, last-write-wins with a stale guard."""
+        """Write a markdown body and optional title atomically with a stale guard."""
 
         target = require_instance_for_id(Page, page)
         return _markdown_write_payload(
-            lambda: MarkdownPage._default_manager.write_body(target, body, expected_hash=expected_hash)
+            lambda: MarkdownPage._default_manager.write_body(target, body, expected_hash=expected_hash, title=title)
         )
 
     @strawberry.mutation(name="patch_page_section")

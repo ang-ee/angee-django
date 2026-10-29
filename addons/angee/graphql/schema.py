@@ -32,8 +32,10 @@ from strawberry.types.union import StrawberryUnion
 from strawberry_django_hasura import hasura_config
 
 from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
-from angee.data.metadata import DataResourceMetadata, serialize_data_resources
-from angee.errors import DomainError, classify_error, validation_error
+from angee.base.exceptions import DomainError, classify_error, validation_error
+from angee.base.models.locks import StaleRevisionError
+from angee.base.permissions import require_rebac_queryset
+from angee.graphql.data.contracts import DataResourceMetadata
 from angee.graphql.data.metadata import (
     data_resource_contributions,
     finalize_data_resources,
@@ -46,9 +48,15 @@ from angee.graphql.introspection import (
     surface_name,
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
-from angee.models import StaleRevisionError
-from angee.permissions import require_rebac_queryset
-from graphql import GraphQLError, GraphQLObjectType, GraphQLSchema, assert_input_type, coerce_input_value
+from graphql import (
+    GraphQLError,
+    GraphQLObjectType,
+    GraphQLSchema,
+    Undefined,
+    assert_input_type,
+    coerce_input_value,
+    validate_input_value,
+)
 
 DEFAULT_SCHEMA_NAME = "public"
 """Default GraphQL schema name served by Angee hosts."""
@@ -203,6 +211,7 @@ class AngeeSchema(strawberry.Schema):
         validation = validation_error(error.original_error)
         if validation is None:
             return
+        error.message = classify_error(validation).message
         field_errors: dict[str, list[str]] = {}
         form_errors: list[str] = []
         if hasattr(validation, "error_dict"):
@@ -390,6 +399,10 @@ class GraphQLSchemas:
                     graphql_type = assert_input_type(self.graphql_schema(name).get_type(definition.name))
                     try:
                         coerced = coerce_input_value(value, graphql_type)
+                        if coerced is Undefined:
+                            errors: list[GraphQLError] = []
+                            validate_input_value(value, graphql_type, lambda error, _path: errors.append(error))
+                            raise ValidationError([error.message for error in errors])
                         where = convert_argument(
                             coerced,
                             definition.origin,
@@ -522,7 +535,7 @@ class GraphQLSchemas:
         schema.angee_resources = resources
         extensions = dict(schema._schema.extensions or {})
         angee_extensions = dict(cast(dict[str, object], extensions.get("angee") or {}))
-        angee_extensions["resources"] = serialize_data_resources(resources, schema_name=name)
+        angee_extensions["resources"] = [item.as_wire(schema_name=name) for item in resources]
         extensions["angee"] = angee_extensions
         schema._schema.extensions = extensions
 

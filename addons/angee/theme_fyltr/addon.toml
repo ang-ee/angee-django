@@ -3,4 +3,4 @@ name = "angee.theme_fyltr"
 description = "The fyltr.ai green and charcoal identity theme"
 keywords = ["theme", "appearance", "fyltr", "green"]
 category = "User interface"
-depends_on = []
+depends_on = ["angee.web"]

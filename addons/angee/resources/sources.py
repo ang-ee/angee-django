@@ -6,6 +6,7 @@ The resources addon owns local paths; integrate contributes networked URLs throu
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,7 +14,7 @@ from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured, SuspiciousFileOperation
 from django.utils._os import safe_join
 
-from angee.impl import ImplBase, impl_registry
+from angee.base.implementations import ImplBase, check_impl_registry, impl_registry
 
 if TYPE_CHECKING:
     from angee.resources.entries import ResourceEntry
@@ -66,3 +67,6 @@ class PathSource(ResourceSource):
         """Resolve an addon-relative file."""
 
         return Path(entry.addon.path) / entry.source_value
+
+
+check_source_registry = partial(check_impl_registry, ResourceSource)

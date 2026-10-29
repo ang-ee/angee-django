@@ -16,8 +16,9 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.fields import StateField
-from angee.models import AngeeDataModel, RowLockMixin
+from angee.base.fields.state import StateField
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.locks import RowLockMixin
 
 
 class InputStampMixin(models.Model):

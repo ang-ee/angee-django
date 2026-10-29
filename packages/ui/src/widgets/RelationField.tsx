@@ -3,6 +3,7 @@ import { useRef, useState, type ReactElement, type Ref } from "react";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { Button } from "../ui/button";
+import { Pager, type PagerProps } from "../ui/pager";
 import { Chip } from "../ui/chip";
 import { Combobox } from "../ui/combobox";
 import type { WidgetControlProps } from "./types";
@@ -24,6 +25,7 @@ export interface RelationSearchState {
   pending?: boolean;
   error?: string;
   retry?: () => void;
+  pagination?: Pick<PagerProps, "page" | "pageSize" | "total" | "onPageChange">;
 }
 
 export interface RelationFieldProps extends Pick<WidgetControlProps, "presentation"> {
@@ -123,7 +125,10 @@ export function RelationField({
         onSearchChange?.(next);
       }}
       onOpenChange={(next) => {
-        if (!next) setQuery("");
+        if (!next) {
+          setQuery("");
+          onSearchChange?.("");
+        }
         onOpenChange?.(next);
       }}
       onValueChange={(next, details) => {
@@ -174,6 +179,11 @@ export function RelationField({
             </>}
           </Combobox.Item>}
         </Combobox.List>
+        {searchState?.pagination && (searchState.pagination.page > 1 || (searchState.pagination.total ?? 0) > searchState.pagination.pageSize) ? (
+          <div className="border-t border-border-subtle p-2">
+            <Pager {...searchState.pagination} disabled={searchState.pending} labelElement="span" />
+          </div>
+        ) : null}
         {!showCreate && !searchState?.pending && !searchState?.error ? <Combobox.Empty>{t("relation.noMatches")}</Combobox.Empty> : null}
       </Combobox.Popup>
     </Combobox.Root>

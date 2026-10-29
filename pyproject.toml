@@ -1,15 +1,13 @@
 [build-system]
 requires = [
-  # hatch-angee supports older hatchling releases, but PEP 639 license-files
-  # metadata requires hatchling 1.27 or newer.
+  # PEP 639 license-files metadata requires hatchling 1.27 or newer.
   "hatchling>=1.27",
-  "hatch-angee>=0.2.4",
 ]
-build-backend = "hatch_angee.build"
+build-backend = "hatchling.build"
 
 [project]
 name = "django-angee"
-version = "0.2.0"
+version = "0.3.0"
 description = "Thin Django composition primitives for Angee applications."
 readme = "README.md"
 authors = [{ name = "Alexis Yushin", email = "alexis@apexive.com" }]
@@ -20,7 +18,7 @@ classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Environment :: Web Environment",
   "Framework :: Django",
-  "Framework :: Django :: 6.0",
+  "Framework :: Django :: 6.1",
   "Intended Audience :: Developers",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
@@ -33,27 +31,12 @@ classifiers = [
 license = "LGPL-3.0-or-later"
 license-files = ["LICENSE", "LICENSE.GPL"]
 requires-python = ">=3.14"
-# `dynamic = ["entry-points"]` and the build hooks are injected by the hatch-angee
-# build backend (build-backend above) — see [tool.hatch-angee] below.
 dependencies = [
-  "celery[redis]>=5.5",
-  "billiard>=4.2.1,<4.3",
-  "django-celery-beat>=2.9",
   "channels>=4.0",
-  "cryptography>=44",
-  "django-simple-history>=3.13",
-  "django-sqids>=0.1",
-  "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@bf5989e6247fdf9c2c240b961a71cddc174c4216",
-  # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
-  # override does not accept it yet; lift the cap when rebac supports 6.1.
-  "django>=6.0,<6.1",
-  "hatch-angee>=0.2.4",
-  "django-choices-field @ git+https://github.com/ang-ee/django-choices-field.git@b02c1488660d0bf1f4483d2e73bc842b41b70632",
+  "django>=6.1.2,<6.2",
+  "hatch-angee>=0.2.6",
   "django-yamlconf>=1.5.0",
   "django-environ>=0.12",
-  "jsonschema[format-nongpl]>=4.26",
-  "pydantic>=2.13",
-  "referencing>=0.37",
   # ASGI server: serves the composed app and addon-contributed channels WebSocket
   # and HTTP mounts. uvicorn sends the ASGI lifespan that runs mount lifespans;
   # [standard] adds WebSocket and --reload support for dev.
@@ -68,15 +51,20 @@ Documentation = "https://docs.angee.ai"
 Changelog = "https://github.com/ang-ee/angee-django/blob/main/CHANGELOG.md"
 Issues = "https://github.com/ang-ee/angee-django/issues"
 
+[project.entry-points.hatch]
+# Hosts opt into these native hooks; building the framework itself does not
+# compose an application or bundle its source-folder addons.
+angee = "angee.hatch"
+
 [project.optional-dependencies]
 # Wheel extras are reserved for core-owned deployment variants. Addon-owned
-# dependencies come from each composed addon's addon.toml and are projected by
-# `manage.py angee build` into the host's generated dependency group.
+# dependencies come from each composed addon's addon.toml. The host's native
+# Hatch metadata hook projects them into its runtime requirements.
 
 # Postgres driver only — installed by the runtime image's `--extra postgres` and by
 # the self-contained local stack. psycopg 3 is the driver Django 6's
 # django.db.backends.postgresql uses when DATABASE_URL points at Postgres (the
-# stack env supplies the URL; angee/compose/settings.py maps it, SQLite floor
+# stack env supplies the URL; angee/conf.py maps it, SQLite floor
 # otherwise).
 postgres = ["psycopg[binary,pool]>=3.2"]
 
@@ -86,12 +74,12 @@ dev = [
   # not a runtime dependency — Angee serves with uvicorn (see [project.dependencies]).
   "daphne>=4.0",
   # Test-only: E024 fixtures retain and validate CEL caveat declarations.
-  "django-zed-rebac[caveats]==0.27.3",
+  "django-zed-rebac[caveats]>=0.30.0",
   "faker>=30.0",
   # Source-addon tests import django.contrib.postgres field types even when the
   # test database is SQLite; the former base wrapper selected the core extra.
   "psycopg[binary,pool]>=3.2",
-  "django-stubs[compatible-mypy] @ git+https://github.com/ang-ee/django-stubs.git@c742042283a82c3248c68493c697f5f30e2fdc6a",
+  "django-stubs[compatible-mypy] @ git+https://github.com/ang-ee/django-stubs.git@423ed850e5f2d7ea9e67f3e0f9e8bee4be215988",
   "mypy @ git+https://github.com/ang-ee/mypy.git@ac3de6e4c34b04728e768e07d4842f4309ff6c45",
   "pytest>=8.0",
   "pytest-django>=4.8",
@@ -107,20 +95,30 @@ addons = [
     "agent-client-protocol==1.0.0rc2",
     "anthropic>=0.109.2",
     "authlib>=1.8.0",
+    "billiard>=4.2.1,<4.3",
+    "celery[redis]>=5.5",
     "channels-redis>=4.2",
     "channels>=4.0",
+    "cryptography>=44",
     "deepdiff>=9.1.0",
     "django-anymail>=15.1",
     "django-axes>=8.0",
+    "django-celery-beat @ git+https://github.com/celery/django-celery-beat.git@b5e3443d647baf910c0168f25b512dd388ba669e",
+    "django-choices-field @ git+https://github.com/ang-ee/django-choices-field.git@b02c1488660d0bf1f4483d2e73bc842b41b70632",
     "django-countries>=9,<10",
     "django-import-export>=4.4",
-    "django-zed-rebac[strawberry-django]>=0.27.0",
+    "django-simple-history>=3.13",
+    "django-sqids>=0.1",
+    "django-zed-rebac>=0.30.0",
+    "django-zed-rebac[strawberry-django]>=0.30.0",
     "fastmcp>=3.4.2,<4",
+    "graphql-core>=3.3.1,<3.4",
     "httpcore2>=2.10,<3",
     "httpx2>=2.10,<3",
     "httpx>=0.28.1,<0.29",
     "imapclient>=3.1.0",
     "jsonpointer>=3.1",
+    "jsonschema[format-nongpl]>=4.26",
     "mail-parser-reply>=1.36",
     "markdown-it-py>=4.2",
     "mcp>=1.2",
@@ -132,15 +130,19 @@ addons = [
     "pydantic-ai-slim[anthropic]>=2.13",
     "pydantic-ai-slim[mcp]>=2.13",
     "pydantic-ai-slim[openai]>=2.13",
+    "pydantic>=2.13",
     "pyjwt[crypto]>=2.12",
     "pypdfium2>=4.30",
     "python-dateutil>=2.9",
     "python-magic>=0.4.27",
     "pyyaml>=6",
     "qrcode[pil]>=8.2",
+    "referencing>=0.37",
     "requests>=2.32",
     "ruamel.yaml>=0.18",
+    "sentry-sdk>=2.71.0",
     "slack-sdk>=3.43.0",
+    "sqids>=0.4.1",
     "strawberry-django-aggregates @ git+https://github.com/ang-ee/strawberry-django-aggregates.git@0f374854d19b2709b6d77ae872090ab2a751f1dc",
     "strawberry-django-hasura @ git+https://github.com/ang-ee/strawberry-django-hasura.git@4e1c2da2bcbbc90cc586fef3db8d70f5cd6ccfc0",
     "strawberry-graphql @ git+https://github.com/ang-ee/strawberry.git@273bf0456d914d4df535222c4cbae73dff46a376",
@@ -158,17 +160,12 @@ default-groups = ["dev", "addons"]
 # --project). The rendered stack host pins its own stack-owned cache; every
 # other invocation uses uv's default per-user cache.
 
-[tool.hatch-angee]
-# This repository publishes the framework core only. Folder addons remain
-# in-repo source content and must never generate wheel seams or entry points.
-addon-discovery = []
-
 [tool.hatch.metadata]
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 # The distribution contains the framework core only. Folder addons are provided
-# by sibling source repositories and discovered from explicit addon directories.
+# as source folders under addons/ and discovered from explicit addon directories.
 packages = ["angee"]
 dev-mode-dirs = ["."]
 artifacts = [
@@ -178,18 +175,14 @@ artifacts = [
   "angee/**/*.yaml",
   "angee/**/*.zed",
 ]
-# The web/ sources are added by hatch-angee's addon-sources hook (the single source
-# of truth for them), so keep hatchling's default walk out of them — otherwise a
-# package the walk *does* pick up would be added twice. node_modules is never a
-# Python package, so this also drops the dependency tree the broad artifacts above
-# would otherwise force-include from web/*/node_modules.
+# Exclude dependency trees from the core wheel. Addon web fragments and shared
+# React packages remain source content outside this distribution.
 exclude = [
   "**/node_modules",
 ]
 
-# Build machinery is hatch-angee, via its build backend (no per-repo hook code or
-# tables). The framework's shared React packages live in the angee-react repo
-# and are consumed through the stack's pnpm workspace, not this wheel.
+# Shared React packages live under packages/ and are consumed through the
+# stack's pnpm workspace, not this core wheel.
 
 [tool.hatch.build.targets.sdist]
 only-include = [
@@ -239,7 +232,7 @@ exclude = [
 select = ["E", "F", "I"]
 
 [tool.mypy]
-plugins = ["angee.compose.typing"]
+plugins = ["angee.base.typing", "angee.provenance.typing"]
 python_version = "3.14"
 cache_dir = ".mypy_cache"
 explicit_package_bases = true

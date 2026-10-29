@@ -51,11 +51,21 @@ from rebac.mixins import RebacModelBase
 from simple_history.signals import post_create_historical_record
 from strawberry_django.descriptors import model_property
 
-from angee.actors import actor_user_id, instance_actor
-from angee.changesets import current_changeset
-from angee.fields import DiagnosticTextField, EncryptedField, StateField
+from angee.base.fields.encrypted import EncryptedField
+from angee.base.fields.implementation import ImplClassField
+from angee.base.fields.state import StateField
+from angee.base.fields.text import DiagnosticTextField
+from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.implementations import ImplDefaultsMixin
+from angee.base.models.merge_references import MergePolicy, references
+from angee.base.models.ownership import OwnerMixin, OwnerQuerySet
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.transitions import StateTransitions, save_state, transition
+from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.refs import generic_pointer_target
 from angee.graphql.capabilities import held_permissions
-from angee.impl import ImplClassField, ImplDefaultsMixin
 from angee.integrate.connect import enabled_oauth_client_from_hint, oauth_client_slug_from_hint
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES
 from angee.integrate.credentials import CredentialKind, CredentialKindHandler
@@ -74,7 +84,7 @@ from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.net import validate_public_url
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.discovery import discovery_document as oidc_metadata_document
-from angee.integrate.oauth.errors import OAuthFlowError
+from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
 from angee.integrate.oauth.providers import OAuthProviderType
 from angee.integrate.oauth.registrations import oauth_client_is_ready
 from angee.integrate.signals import discovery_finished
@@ -96,30 +106,17 @@ from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_s
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
-from angee.lineage import concrete_child, concrete_child_accessor, concrete_child_models
-from angee.models import (
-    AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
-    AngeeUnscopedManager,
-    AuditMixin,
-    HistoryMixin,
-    OwnerMixin,
-    OwnerQuerySet,
+from angee.provenance.context import current_changeset
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.provenance.statements import (
     SourceKind,
     Statement,
     StatementLinkMixin,
     StatementSourceMixin,
-    StateTransitions,
-    references,
-    save_state,
-    transition,
 )
-from angee.refs import (
-    MergePolicy,
-    RecordRefMixin,
-    generic_pointer_target,
-)
+from angee.resources.mixins import ResourceLoadMixin
 from angee.serialization import canonical_json
 
 logger = logging.getLogger(__name__)
@@ -153,7 +150,7 @@ class CredentialStatus(models.TextChoices):
     REVOKED = "revoked", "Revoked"
 
 
-class OAuthClientQuerySet[OAuthClientT: OAuthClient](AngeeQuerySet[OAuthClientT]):
+class OAuthClientQuerySet[OAuthClientT: OAuthClient](AngeeHistoryQuerySet[OAuthClientT]):
     """REBAC-scoped reads for OAuth client registration."""
 
     def preferred(self, *, environment: str = "prod") -> Self:
@@ -190,7 +187,7 @@ class OAuthClientQuerySet[OAuthClientT: OAuthClient](AngeeQuerySet[OAuthClientT]
         return client if client is not None and client.configuration_state == "ready" else None
 
 
-_OAuthClientManagerBase = AngeeManager.from_queryset(OAuthClientQuerySet)
+_OAuthClientManagerBase = AngeeHistoryManager.from_queryset(OAuthClientQuerySet)
 
 
 class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAuthClientT]):
@@ -405,6 +402,16 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
             return "needs_endpoints"
         return "ready"
 
+    def require_configured(self) -> None:
+        """Refuse protocol startup through the registration's one readiness rule."""
+
+        state = self.configuration_state
+        if state != "ready":
+            raise OAuthFlowError(
+                CLIENT_NOT_CONFIGURED, 400,
+                f"OAuth client is not fully configured ({state}).",
+            )
+
     def refine_grant(self, protocol: OAuthClientProtocol, tokens: dict[str, Any]) -> dict[str, Any]:
         """Let the selected provider refine the grant before credential persistence."""
 
@@ -593,7 +600,7 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
 
 
 class ExternalAccountQuerySet[ExternalAccountT: ExternalAccount](
-    OwnerQuerySet[ExternalAccountT], AngeeQuerySet[ExternalAccountT]
+    OwnerQuerySet[ExternalAccountT], AngeeHistoryQuerySet[ExternalAccountT]
 ):
     """REBAC-scoped reads and verb-authorized ownership release for external accounts."""
 
@@ -603,7 +610,7 @@ class ExternalAccountQuerySet[ExternalAccountT: ExternalAccount](
         return self.rebac_select_related("oauth_client", "credential")
 
 
-_ExternalAccountManagerBase = AngeeManager.from_queryset(ExternalAccountQuerySet)
+_ExternalAccountManagerBase = AngeeHistoryManager.from_queryset(ExternalAccountQuerySet)
 
 
 class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccountManagerBase[ExternalAccountT]):
@@ -779,7 +786,7 @@ class ExternalAccount(OwnerMixin, AngeeDataModel):
         return email
 
 
-class CredentialQuerySet[CredentialT: Credential](AngeeQuerySet[CredentialT]):
+class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[CredentialT]):
     """REBAC-scoped reads for credential health and connected accounts."""
 
     def connection_health(self) -> Self:
@@ -824,7 +831,7 @@ class CredentialQuerySet[CredentialT: Credential](AngeeQuerySet[CredentialT]):
         )
 
 
-_CredentialManagerBase = AngeeManager.from_queryset(CredentialQuerySet)
+_CredentialManagerBase = AngeeHistoryManager.from_queryset(CredentialQuerySet)
 
 
 class CredentialManager[CredentialT: Credential](_CredentialManagerBase[CredentialT]):
@@ -847,6 +854,31 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
 
     _REASON = "integrate.connections.credential"
 
+    def disconnect_account(self, user: Any, external_account_sqid: str) -> bool:
+        """Release this user's account and delete its credential in one admitted transaction.
+
+        prepare_disconnect owns vetoes, derived releases and after-commit remote
+        revocation; native owner release and selected credential deletion retain
+        their own persistence contracts. An absent user/account link is false.
+        """
+
+        candidates = self.select_related("oauth_client", "external_account").select_for_update(of=("self",))
+        using = candidates.db
+        with system_context(reason="integrate.credential.disconnect"), transaction.atomic(using=using):
+            credential = (
+                candidates
+                .filter(user=user, external_account__sqid=external_account_sqid)
+                .first()
+            )
+            if credential is None:
+                return False
+            account = credential.external_account
+            assert account is not None
+            self.prepare_disconnect(credential)
+            type(account).objects.db_manager(using).filter(pk=account.pk).release(user)
+            deleted, _details = self.filter(pk=credential.pk).with_action("delete").delete()
+        return deleted > 0
+
     def prepare_disconnect(self, credential: Any) -> None:
         """Validate a disconnect and schedule remote revocation after commit."""
 
@@ -865,7 +897,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
             target = integration.concrete_capability()
             target.set_lifecycle(IntegrationLifecycle.DISCONNECTED)
             target.attach_credential(None)
-        transaction.on_commit(copy(credential).revoke_remote, robust=True)
+        transaction.on_commit(copy(credential).revoke_remote, using=credential._state.db, robust=True)
 
     def delete_unattached_derived(self, credential_pk: int | None) -> None:
         """Dispose of discovery-created material after its last attachment releases it."""
@@ -1414,7 +1446,7 @@ def _validated_manager_values(
     return result
 
 
-class VendorManager[VendorT: Vendor](AngeeManager[VendorT]):
+class VendorManager[VendorT: Vendor](AngeeHistoryManager[VendorT]):
     """Manager for the resource-seeded third-party catalogue."""
 
     def seeded(self, slug: str) -> Any:
@@ -1429,7 +1461,7 @@ class VendorManager[VendorT: Vendor](AngeeManager[VendorT]):
             ) from error
 
 
-class Vendor(AuditMixin, AngeeDataModel):
+class Vendor(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """Admin-managed third-party catalogue (GitHub, Google, Slack, …).
 
     The single source of truth for "what is this third party" — branding and
@@ -1507,7 +1539,7 @@ class IntegrationRuntimeStatus(models.TextChoices):
             raise ValueError(f"Unsupported integration runtime status: {raw}") from error
 
 
-class IntegrationQuerySet[IntegrationT: Integration](AngeeQuerySet[IntegrationT]):
+class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[IntegrationT]):
     """Chainable collection scopes for integration and bridge rows."""
 
     def of_concrete_type(self) -> Self:
@@ -1598,11 +1630,39 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeQuerySet[IntegrationT]
         return self.prefetch_related(*prefetches)
 
 
-_IntegrationManagerBase = AngeeManager.from_queryset(IntegrationQuerySet)
+_IntegrationManagerBase = AngeeHistoryManager.from_queryset(IntegrationQuerySet)
 
 
 class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[IntegrationT]):
     """Keep a stable import identity for integration and bridge collection scopes."""
+
+    def attach_completed_connect(
+        self, integration_sqid: str, user: Any, credential: Any, *, exposed_model_labels: set[str],
+    ) -> None:
+        """Attach completed OAuth state only to its one owned, exposed concrete capability."""
+
+        if not integration_sqid:
+            return
+        with system_context(reason="integrate.integration.connect.complete"):
+            integration = self.filter(sqid=integration_sqid).first()
+        if integration is None or integration.owner_id != user.pk:
+            raise OAuthFlowError(INVALID_STATE, 400)
+        if credential.user_id != user.pk:
+            raise PermissionDenied("Credential does not belong to the current user.")
+        integrity, _authorized = integration.concrete_children(actor=user, exposed_model_labels=exposed_model_labels)
+        if len(integrity) != 1 or integrity[0]._meta.label not in exposed_model_labels:
+            raise OAuthFlowError(INVALID_STATE, 400)
+        child = integrity[0]
+        try:
+            # Keep the caller's ambient native write-query scope; OAuth state
+            # ownership must not replace the request actor's read admission.
+            target = type(child).objects.for_write().filter(pk=child.pk).first()
+            if target is None or target.owner_id != user.pk:
+                raise OAuthFlowError(INVALID_STATE, 400)
+        except (PermissionDenied, ValueError) as error:
+            raise OAuthFlowError(INVALID_STATE, 400) from error
+        if credential.pk != target.credential_id or target.lifecycle == IntegrationLifecycle.DISCONNECTED:
+            target.attach_credential(credential)
 
     def create_capability(self, **fields: Any) -> IntegrationT:
         """Prepare model-owned defaults and connection identity before native validation."""
@@ -2136,7 +2196,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     )
 
     objects = IntegrationManager()
-    unscoped_objects = AngeeUnscopedManager()
+    unscoped_objects = AngeeHistoryUnscopedManager()
 
     class Meta:
         """Django model options for integrations."""
@@ -2738,7 +2798,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
     config = models.JSONField(default=dict, blank=True)
     """Bridge-scoped settings interpreted by the selected backend."""
-    cursor = models.JSONField(default=dict, blank=True)
     poll_interval = models.PositiveIntegerField(default=300)
     subscription_state = models.JSONField(default=dict, blank=True)
     next_subscription_refresh_at = models.DateTimeField(null=True, blank=True)
@@ -2746,7 +2805,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     last_sync_completed_at = models.DateTimeField(null=True, blank=True)
     last_sync_items = models.PositiveIntegerField(default=0)
     sync_stage = StateField(choices_enum=SyncStage, max_length=32, default=SyncStage.IDLE, db_index=True)
-    """Messaging channels keep their existing varchar(32) column on upgrade."""
     sync_error = DiagnosticTextField(blank=True, default="")
     sync_run_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     """Opaque execution-owner run identity, retained after terminal settlement."""
@@ -2767,6 +2825,20 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         """Delegate a retained remote identity URL to the selected connector."""
 
         return self.capability_impl.source_url(link)
+
+    def source_label(self, link: Any) -> str:
+        """Delegate the remote label to the selected connector."""
+
+        return self.capability_impl.source_label(link)
+
+    @property
+    def open_failure_count(self) -> int:
+        """Unresolved failures of current epochs, independent of the last run's completion."""
+
+        streams = getattr(self, "open_sync_streams", None)
+        if streams is None:
+            streams = self.sync_streams.filter(state=StreamState.OPEN)
+        return sum(len(stream.sync_failures(open_only=True)) for stream in streams)
 
     @classmethod
     def live_implementation_field(cls) -> ImplClassField | None:
@@ -2789,7 +2861,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         field = type(self).live_implementation_field()
         if field is None:
             raise TypeError(f"{self._meta.label} is a periodic-only bridge.")
-        impl_class = cast(type[IntegrationImpl], self.resolve_impl(field.name))
+        impl_class = cast(type[IntegrationImpl], field.resolve_for(self))
         return impl_class(self)
 
     @property
@@ -3251,7 +3323,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                 self.report_status(status=IntegrationRuntimeStatus.OK)
             self.save(
                 update_fields=[
-                    "cursor",
                     "last_sync_summary",
                     "last_sync_completed_at",
                     "last_sync_items",
@@ -3441,7 +3512,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         return now + timedelta(seconds=int(self.poll_interval))
 
 
-class WebhookSubscriptionManager[WebhookSubscriptionT: WebhookSubscription](AngeeManager[WebhookSubscriptionT]):
+class WebhookSubscriptionManager[WebhookSubscriptionT: WebhookSubscription](AngeeHistoryManager[WebhookSubscriptionT]):
     """Manager for webhook subscriptions."""
 
     def enqueue_event(
@@ -3674,7 +3745,7 @@ class WebhookSubscription(OwnerMixin, AngeeDataModel):
         self.refresh_from_db(fields=("consecutive_failures",))
 
 
-class SyncStreamManager[SyncStreamT: SyncStream](AngeeManager[SyncStreamT]):
+class SyncStreamManager[SyncStreamT: SyncStream](AngeeHistoryManager[SyncStreamT]):
     """Serialize stream discovery and epoch changes on the integration row."""
 
     def lock_current(self, stream: Any, *, fenced_to: Any = None) -> Any:
@@ -3917,7 +3988,7 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel):
     absence_threshold = models.PositiveIntegerField(default=2)
     tombstone_retention = models.DurationField(null=True, blank=True)
     objects = SyncStreamManager()
-    unscoped_objects = AngeeUnscopedManager()
+    unscoped_objects = AngeeHistoryUnscopedManager()
 
     def __str__(self) -> str:
         """Label this stream by its adapter key and optional partition."""
@@ -3999,7 +4070,7 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel):
         )
 
 
-class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeQuerySet[RecordLinkT]):
+class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLinkT]):
     """Load comparison evidence for a bounded collection of replica identities."""
 
     def with_sync_evidence(self) -> Self:
@@ -4008,8 +4079,8 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeQuerySet[RecordLinkT]):
             "source_payload", "mapped_payload", "applied_base__source_payload"
         )
 
-    def with_open_failures(self) -> Self:
-        """Select open-state owners in stable order without their payloads."""
+    def with_open_failures(self, *, include_source: bool = False) -> Self:
+        """Select open-state owners; include retained sources only for their readable labels."""
         return (
             self.filter(Q(status=LinkStatus.FAILED) | Q(outbox_state__isnull=False))
             .order_by("pk")
@@ -4022,6 +4093,7 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeQuerySet[RecordLinkT]):
                 "outbox_state",
                 "outbox_retry_at",
                 "outbox_last_error",
+                *(("source_payload",) if include_source else ()),
             )
         )
 
@@ -4056,7 +4128,7 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeQuerySet[RecordLinkT]):
         return tuple(row for aggregate, row in candidates if aggregate not in conflicts)[:limit]
 
 
-_RecordLinkManagerBase = AngeeManager.from_queryset(RecordLinkQuerySet)
+_RecordLinkManagerBase = AngeeHistoryManager.from_queryset(RecordLinkQuerySet)
 
 
 class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLinkT]):
@@ -4376,7 +4448,7 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
     metadata = models.JSONField(default=dict, blank=True)
     tombstoned_at = models.DateTimeField(null=True, blank=True)
     objects = RecordLinkManager()
-    unscoped_objects = AngeeUnscopedManager()
+    unscoped_objects = AngeeHistoryUnscopedManager()
 
     def __str__(self) -> str:
         """Label this remote identity by its external key."""
@@ -4386,6 +4458,18 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
     @property
     def failure_stream(self) -> SyncStream:
         return self.stream
+
+    @property
+    def source_url(self) -> str | None:
+        """Provider URL projected through the connection's implementation."""
+
+        return cast(Bridge, self.stream.integration.concrete_capability()).source_url(self)
+
+    @property
+    def source_label(self) -> str:
+        """Provider-owned human label for this retained identity."""
+
+        return cast(Bridge, self.stream.integration.concrete_capability()).source_label(self)
 
     def _lock_sync_state(self) -> Self:
         """Follow a link's current epoch before fencing a retained failure mutation."""
@@ -4478,11 +4562,25 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
         details: Mapping[str, Any] | None = None,
         outbox: bool = False,
     ) -> SyncFailure:
-        """Retain an inbound slot or the latest refused conditional write."""
+        """Retain current failure evidence; older versions of the same problem close.
+
+        A link owns one remote identity, so a newer source or mapping supersedes
+        the same inbound problem. Conflicts still require an explicit decision;
+        stream-level failures may describe distinct events and keep their slots.
+        """
         if not outbox:
-            return super().record_failure(
-                kind=kind, code=code, source_hash=source_hash, mapping_version=mapping_version, details=details
-            )
+            with transaction.atomic():
+                locked = self._lock_sync_state()
+                for prior in locked.failures(open_only=True):
+                    if (
+                        prior.slot is not None and kind != SyncFailureKind.CONFLICT
+                        and (prior.kind, prior.code) == (kind, code)
+                        and (prior.source_hash, prior.mapping_version) != (source_hash, mapping_version)
+                    ):
+                        locked.resolve_failure(prior.slot)
+                return super().record_failure(
+                    kind=kind, code=code, source_hash=source_hash, mapping_version=mapping_version, details=details
+                )
         with transaction.atomic():
             locked = self._lock_sync_state()
             data = deepcopy(locked.outbox_last_error)

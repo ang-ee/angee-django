@@ -202,9 +202,9 @@ function pathTree(
       const index = arrayIndex(raw);
       if (index !== undefined) for (const branch of arrayBranches) {
         const prefix = branch.prefixItems;
-        const legacy = branch.items;
+        const items = branch.items;
         add(index, Array.isArray(prefix) && index < prefix.length ? prefix[index]
-          : Array.isArray(legacy) ? legacy[index] ?? branch.additionalItems ?? true : legacy ?? true);
+          : Array.isArray(items) ? items[index] ?? branch.additionalItems ?? true : items ?? true);
       }
       if (opened) controls.push({ path, raw, kind: "index",
         valid: index !== undefined && Boolean(children.get(index)?.some((candidate) => candidate !== false)),

@@ -19,6 +19,8 @@ from django.core.cache import DEFAULT_CACHE_ALIAS, caches
 from django.core.exceptions import RequestDataTooBig
 from django.http import HttpRequest
 
+from angee.cache import increment_window
+
 AnonymousIngressTokenHook = Callable[[HttpRequest, Mapping[str, Any]], bool | None]
 
 
@@ -70,7 +72,7 @@ class AnonymousIngressUnavailable(AnonymousIngressRejected):
 
 @dataclass(frozen=True)
 class AnonymousIngressRateLimit:
-    """One fixed-window rate-limit bucket shared by an endpoint scope."""
+    """One clock-aligned rate-limit window shared by an endpoint scope."""
 
     scope: str
     burst: int
@@ -194,18 +196,7 @@ def _spend_rate_limit(request: HttpRequest, limit: AnonymousIngressRateLimit) ->
     key = f"angee:anonymous-ingress:{digest}"
     cache = caches[limit.cache_alias]
     try:
-        if cache.add(key, 1, timeout=limit.window_seconds):
-            count = 1
-        else:
-            try:
-                count = int(cache.incr(key))
-            except ValueError:
-                # The key may expire between ``add`` and ``incr``. Start the new
-                # fixed window without granting two tokens to the same request.
-                if cache.add(key, 1, timeout=limit.window_seconds):
-                    count = 1
-                else:
-                    count = int(cache.incr(key))
+        count = increment_window(cache, key, timeout=limit.window_seconds)
     except Exception as error:
         raise AnonymousIngressUnavailable("Anonymous ingress rate limiting is unavailable.") from error
     if count > limit.burst:

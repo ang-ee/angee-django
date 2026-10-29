@@ -9,8 +9,8 @@ from django.test import TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 
-from angee.errors import RecordAccessSubjectRefused
-from angee.identity import public_id_of
+from angee.base.exceptions import RecordAccessSubjectRefused
+from angee.base.models.identity import public_id_of
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessCase, grant_rows
 
@@ -307,7 +307,9 @@ class CaptureCampaign(TransactionTestCase):
             self.assertEqual(need.access_verdict, None)
         # The claimed address is unverified: its link waits for review and decides nothing.
         handle = apps.get_model("parties", "Handle")._base_manager.get(platform="email", value=email)
-        link = apps.get_model("parties", "Party").statements.get(handle=handle, subject_id=needs[0].party_id)
+        link = apps.get_model("parties", "Party").statements.with_actor(self.actor).get(
+            handle=handle, subject_id=needs[0].party_id,
+        )
         self.assertEqual((link.confidence, link.is_confirmed, handle.party_id), (0.4, False, None))
         self.assertEqual(
             link.evidence,

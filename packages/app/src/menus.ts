@@ -1,4 +1,4 @@
-import type { BaseMenuItem, ChromeMenuExtra, ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
+import type { ChromeMenuExtra, ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
 import type { HiddenMenuItem, MenuItem, RemovedMenuItem, RuntimeBrand } from "@angee/ui/runtime";
 import { isQueryFilter, type QueryFilter } from "@angee/metadata";
 
@@ -56,23 +56,8 @@ export interface MenuEntry extends Omit<MenuItem, "id" | "children">, Omit<Chrom
 
 export type MenuDeclarations = Readonly<Record<string, MenuEntry>>;
 
-/** One item of the legacy declaration list; like a dict entry, it may borrow a page. */
-export interface MenuDeclarationItem extends BaseMenuItem, Pick<MenuEntry, "mount" | "path" | "recordMatch" | "defaultFilter"> {
-  children?: readonly MenuDeclarationItem[];
-}
-
-/** Whether an addon authored its menus as the legacy declaration list rather than the dict.
- * @kind null
- * @reason Codec and transport infrastructure: translates runtime data and addresses.
- */
-export function isMenuDeclarationList(
-  menus: readonly MenuDeclarationItem[] | MenuDeclarations | undefined,
-): menus is readonly MenuDeclarationItem[] {
-  return Array.isArray(menus);
-}
-
 export interface MenuLayer extends Layer {
-  menus?: readonly MenuDeclarationItem[] | MenuDeclarations;
+  menus?: MenuDeclarations;
   /** The layer's routes, which its dependents may mount. */
   routes?: readonly { name: string }[];
 }
@@ -114,8 +99,6 @@ export interface CompiledMenus {
   hidden: readonly HiddenMenuItem[];
   /** The layer that set each node field, declarations included. */
   provenance: Readonly<Record<string, Readonly<Record<string, string>>>>;
-  /** Non-fatal findings, such as menu ids declared outside the addon's namespace. */
-  diagnostics: readonly string[];
 }
 
 /** What an app root says about itself when it is selected: its landing, identity and display defaults. */
@@ -131,8 +114,8 @@ type EntryKey = (typeof DECLARATION_FIELDS)[number] | (typeof OPERATION_FIELDS)[
 const _complete: Exclude<keyof MenuEntry, EntryKey> extends never ? true : never = true;
 void _complete;
 const ENTRY_KEYS: ReadonlySet<string> = new Set<string>([...DECLARATION_FIELDS, ...OPERATION_FIELDS]);
-/** Fields a node carries; `badge` arrives only through the legacy list. */
-type Field = (typeof DECLARATION_FIELDS)[number] | "badge" | "hide" | "remove" | "flatten";
+/** Fields carried by a declared or altered node. */
+type Field = (typeof DECLARATION_FIELDS)[number] | "hide" | "remove" | "flatten";
 /** Resolution-only fields, never emitted on a compiled item; a mount becomes a `route` to its alias. */
 const RESOLUTION_FIELDS: readonly Field[] = ["parent", "sequence", "before", "after", "hide", "remove", "mount", "path", "recordMatch", "defaultFilter"];
 
@@ -162,7 +145,6 @@ export function compileMenus(
 ): CompiledMenus {
   const nodes = new Map<string, Node>();
   const alterations: { layer: string; id: string; entry: MenuEntry }[] = [];
-  const diagnostics: string[] = [];
 
   const declare = (layer: string, id: string, fields: Node["fields"]): void => {
     if (nodes.has(id)) throw new Error(`Addon "${layer}" redefines menu item id "${id}" already contributed by another addon.`);
@@ -170,11 +152,7 @@ export function compileMenus(
     nodes.set(id, { id, owner: layer, declaredRoot: fields.parent == null, index: nodes.size, fields, setBy, only: [] });
   };
   for (const layer of layers) {
-    if (isMenuDeclarationList(layer.menus)) {
-      if (layer.id === DEPLOYMENT_LAYER_ID) throw new Error("ANGEE_UI.menus must be a mapping of menu ids to alterations.");
-      for (const item of layer.menus) declareLegacy(declare, diagnostics, layer.id, item, undefined);
-      continue;
-    }
+    if (Array.isArray(layer.menus)) throw new Error(`Addon "${layer.id}" menus must be a mapping of menu ids to entries.`);
     for (const [id, entry] of Object.entries(layer.menus ?? {})) {
       validateEntry(layer.id, id, entry);
       const owns = layer.id !== DEPLOYMENT_LAYER_ID && (id === layer.id || id.startsWith(`${layer.id}.`));
@@ -216,7 +194,7 @@ export function compileMenus(
       if (included.flatten) set(layer, included.id, "flatten", true);
     }
   }
-  const compiled = resolve(nodes, ancestors, diagnostics);
+  const compiled = resolve(nodes, ancestors);
   // An addon borrows only pages of the addons it depends on, like any alteration.
   const owners = routeOwners(layers);
   for (const mount of compiled.mounts) {
@@ -281,29 +259,6 @@ export function assertBrand(where: string, brand: unknown): asserts brand is Run
   }
 }
 
-function declareLegacy(
-  declare: (layer: string, id: string, fields: Node["fields"]) => void,
-  diagnostics: string[],
-  layer: string,
-  item: MenuDeclarationItem,
-  parent: string | undefined,
-): void {
-  if ("app" in item) throw new Error(`Menu item "${item.id}" authors app; app identity is compiler-emitted.`);
-  const id = item.id ?? item.route;
-  if (!id) throw new Error(`Addon "${layer}" declares a menu item without id or route; menu id defaults require one of them.`);
-  const { id: _id, children, parentId, ...rest } = item;
-  if (rest.brand !== undefined) assertBrand(`Menu item "${id}" of "${layer}"`, rest.brand);
-  if (rest.railExpanded !== undefined && typeof rest.railExpanded !== "boolean") {
-    throw new Error(`Menu item "${id}" of "${layer}": railExpanded must be true or false.`);
-  }
-  const owner = parent ?? parentId;
-  if (id !== layer && !id.startsWith(`${layer}.`)) {
-    diagnostics.push(`Addon "${layer}" declares menu item "${id}" outside its namespace ("${layer}" or "${layer}.…").`);
-  }
-  declare(layer, id, { ...rest, ...(owner ? { parent: owner } : {}) });
-  for (const child of children ?? []) declareLegacy(declare, diagnostics, layer, child, id);
-}
-
 function pick(entry: MenuEntry): Node["fields"] {
   const fields: Node["fields"] = {};
   for (const field of DECLARATION_FIELDS) if (entry[field] !== undefined) fields[field] = entry[field];
@@ -313,7 +268,6 @@ function pick(entry: MenuEntry): Node["fields"] {
 function resolve(
   nodes: Map<string, Node>,
   ancestors: ReadonlyMap<string, ReadonlySet<string>>,
-  diagnostics: readonly string[],
 ): CompiledMenus {
   const parentOf = (node: Node): string | undefined => {
     const parent = node.fields.parent as string | null | undefined;
@@ -478,7 +432,6 @@ function resolve(
     mounts,
     hidden: [...hidden.values()],
     provenance: Object.fromEntries([...nodes.values()].map((node) => [node.id, { ...node.setBy }])) as CompiledMenus["provenance"],
-    diagnostics,
   };
 }
 

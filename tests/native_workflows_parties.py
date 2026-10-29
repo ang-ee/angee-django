@@ -9,7 +9,7 @@ from django.test import TransactionTestCase
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.roles import grant as grant_role
 
-from angee.identity import public_id_of
+from angee.base.models.identity import public_id_of
 from angee.jobs.enqueue import celery_app
 from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
 
@@ -110,7 +110,7 @@ class PartyWorkflowTests(TransactionTestCase):
             (address.street, address.label, address.created_by_id), ("17 Sample Lane", "Primary", self.admin.pk)
         )
         self.assertTrue(
-            Party.statements.filter(
+            Party.statements.with_actor(self.reviewer).filter(
                 subject=party,
                 handle=handle,
                 rank=Party.statements.model.StatementRank.PREFERRED,

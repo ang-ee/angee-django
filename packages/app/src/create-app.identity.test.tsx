@@ -58,7 +58,9 @@ function identityApp({ search = "", root = {}, shell, icons = { "notebook-mark":
         i18n: { notes: { title: "My notes" } },
         icons,
         themes: [theme("notebook.paper"), theme("notebook.ink")],
-        menus: [{ id: "identity", label: "Identity", icon: "notebook-mark", route: "notes.home", ...root }],
+        menus: {
+          "identity": { label: "Identity", icon: "notebook-mark", route: "notes.home", ...root },
+        },
       },
       ...(shell ? [{ id: "deployment", dependsOn: ["notes", "identity"], shell }] : []),
     ],
@@ -133,10 +135,11 @@ describe("the selected app's identity", () => {
           { name: "notes.home", path: "/notes", layout: "public", component: IdentityProbe },
           { name: "notes.archive", path: "/notes/archive", layout: "public", component: IdentityProbe },
         ],
-        menus: [{ id: "notes", home: "notes.archive", children: [
-          { id: "notes.home", route: "notes.home" },
-          { id: "notes.archive", route: "notes.archive" },
-        ] }],
+        menus: {
+          "notes": { home: "notes.archive" },
+          "notes.home": { route: "notes.home", parent: "notes" },
+          "notes.archive": { route: "notes.archive", parent: "notes" },
+        },
       }],
       location: { search: "?app=notes" },
     });
@@ -153,7 +156,9 @@ describe("the selected app's identity", () => {
 
   test("checks every declared home, brand mark and theme, selected or not", () => {
     const routes = inputs.addons[0]!.routes;
-    expect(() => createApp({ ...inputs, addons: [{ id: "notes", routes, menus: [{ id: "notes", route: "notes.home", home: "notes.missing" }] }] }))
+    expect(() => createApp({ ...inputs, addons: [{ id: "notes", routes, menus: {
+      "notes": { route: "notes.home", home: "notes.missing" },
+    } }] }))
       .toThrow('Menu root "notes" home "notes.missing" names no route.');
     expect(() => identityApp({ root: { brand: { name: "Notebook", mark: "missing" } } }))
       .toThrow('Menu root "identity" brand mark "missing" is not a registered icon.');
@@ -181,12 +186,15 @@ describe("the selected app's identity", () => {
     const addons = [{
       id: "navigation",
       routes: [
-        { name: "notes", path: "/notes", layout: "console" },
-        { name: "archive", path: "/archive", layout: "console" },
+        { name: "navigation.notes", path: "/notes", layout: "console" },
+        { name: "navigation.archive", path: "/archive", layout: "console" },
       ],
-      menus: [{ id: "notes", route: "notes" }, { id: "archive", route: "archive" }],
+      menus: {
+        "navigation.notes": { route: "navigation.notes" },
+        "navigation.archive": { route: "navigation.archive" },
+      },
     }];
-    for (const [app, rail] of [[undefined, ["notes", "archive"]], ["notes", ["notes"]]] as const) {
+    for (const [app, rail] of [[undefined, ["navigation.notes", "navigation.archive"]], ["navigation.notes", ["navigation.notes"]]] as const) {
       const captured = await captureChrome({ path: "/notes", addons, ...(app ? { app } : {}) });
       try {
         expect(MenuTree.from(captured.props().menus).railMenuItems().map((item) => item.id)).toEqual(rail);

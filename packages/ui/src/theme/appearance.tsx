@@ -24,7 +24,6 @@ import {
 import type { ThemeContribution } from "./index";
 import {
   COLOR_SCHEME_CHANGE_EVENT,
-  LEGACY_THEME_STORAGE_KEY,
   normaliseColorSchemePreference,
 } from "../lib/color-scheme";
 import {
@@ -96,11 +95,6 @@ const DEFAULT_HOST: Required<Pick<HostAppearanceDefaults, "themeId" | "colorSche
 };
 const AppearanceContext = createContext<AppearanceState | null>(null);
 
-interface PendingLegacyColorScheme {
-  actorId: string | null;
-  preference: ColorSchemePreference;
-}
-
 export interface AppearancePreferenceRead {
   value: AppearancePreferences;
   notice: AppearanceState["notice"];
@@ -121,13 +115,11 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
     const entries = new Map<string, ThemeContribution>();
     for (const theme of runtime.themes) {
       entries.set(theme.definition.id, theme);
-      for (const legacyId of theme.definition.legacyIds ?? []) entries.set(legacyId, theme);
     }
     return entries;
   }, [runtime.themes]);
   const saved = readAppearancePreferences(userPreferences.preferences);
-  const savedTheme = saved.value.themeId ? catalogue.get(saved.value.themeId) : undefined;
-  const preferences = savedTheme ? { ...saved.value, themeId: savedTheme.definition.id } : saved.value;
+  const preferences = saved.value;
   const [draft, setDraftState] = useState<AppearancePreferences | null>(null);
   // Commands share the latest draft even when React batches several edits.
   const draftRef = useRef(draft);
@@ -139,7 +131,6 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
   const dirty = draft !== null && stableKey(draft) !== stableKey(preferences);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const [pendingLegacy, setPendingLegacy] = useState<PendingLegacyColorScheme | null>(readPendingLegacyColorScheme);
   const system = useSystemColorScheme();
   const hostThemeId = host.themeId ?? null;
   const hostTheme = hostThemeId ? catalogue.get(hostThemeId) ?? null : null;
@@ -172,9 +163,8 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
       themeId: savedAppearance.effectiveThemeId,
       colorSchemePreference: savedAppearance.colorSchemePreference,
       tokenLayers: savedAppearance.tokenLayers,
-      ...(pendingLegacy ? { pendingLegacy } : {}),
     });
-  }, [auth.user?.id, savedAppearance, host.fingerprint, pendingLegacy, resolvingIdentity]);
+  }, [auth.user?.id, savedAppearance, host.fingerprint, resolvingIdentity]);
 
   const update = useCallback(async (
     apply: (current: AppearancePreferences) => AppearancePreferences | undefined,
@@ -279,28 +269,6 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
     window.addEventListener(COLOR_SCHEME_CHANGE_EVENT, onCommand);
     return () => window.removeEventListener(COLOR_SCHEME_CHANGE_EVENT, onCommand);
   }, [setColorScheme]);
-
-  useEffect(() => {
-    if (draft || !pendingLegacy || resolvingIdentity || auth.status !== "authenticated" || !auth.user?.id || !userPreferences.available) return;
-    const actorId = auth.user.id;
-    if (pendingLegacy.actorId === null) {
-      setPendingLegacy({ ...pendingLegacy, actorId });
-      return;
-    }
-    if (pendingLegacy.actorId !== actorId) return;
-    if (!saved.writable || saved.value.colorScheme !== undefined) {
-      clearLegacyColorScheme();
-      setPendingLegacy(null);
-      return;
-    }
-    let active = true;
-    void setColorScheme(pendingLegacy.preference).then(() => {
-      if (!active) return;
-      clearLegacyColorScheme();
-      setPendingLegacy(null);
-    }).catch(() => undefined);
-    return () => { active = false; };
-  }, [auth.status, auth.user?.id, draft, pendingLegacy, resolvingIdentity, saved.value.colorScheme, saved.writable, setColorScheme, userPreferences.available]);
 
   const value = useMemo<AppearanceState>(() => ({
     preferences,
@@ -444,32 +412,6 @@ function writeAppearanceCache(value: unknown): void {
       && window.localStorage.getItem(APPEARANCE_CACHE_KEY) !== encoded
     ) window.localStorage.setItem(APPEARANCE_CACHE_KEY, encoded);
   } catch { /* storage is disposable */ }
-}
-
-function readPendingLegacyColorScheme(): PendingLegacyColorScheme | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const current = window.localStorage.getItem(APPEARANCE_CACHE_KEY);
-    if (current !== null) {
-      if (current.length > APPEARANCE_CACHE_LIMIT) return null;
-      const parsed = JSON.parse(current) as { pendingLegacy?: unknown };
-      const pending = parsed?.pendingLegacy;
-      if (!pending || typeof pending !== "object" || Array.isArray(pending)) return null;
-      const source = pending as Record<string, unknown>;
-      const preference = normaliseColorSchemePreference(typeof source.preference === "string" ? source.preference : null);
-      const actorId = source.actorId === null || typeof source.actorId === "string" ? source.actorId : undefined;
-      return preference && actorId !== undefined ? { preference, actorId } : null;
-    }
-    const preference = normaliseColorSchemePreference(window.localStorage.getItem(LEGACY_THEME_STORAGE_KEY));
-    return preference ? { preference, actorId: null } : null;
-  } catch {
-    return null;
-  }
-}
-
-function clearLegacyColorScheme(): void {
-  if (typeof window === "undefined") return;
-  try { window.localStorage.removeItem(LEGACY_THEME_STORAGE_KEY); } catch { /* storage is disposable */ }
 }
 
 function readOptionsEnvelope(value: unknown): ThemeOptionsEnvelope | undefined {

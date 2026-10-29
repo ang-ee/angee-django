@@ -6,7 +6,7 @@ from django.apps import apps
 from django.core.exceptions import PermissionDenied
 from rebac import actor_context, system_context
 
-from angee.identity import public_id_of
+from angee.base.models.identity import public_id_of
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.loader import AngeeResource, ResourceResolution
 from angee.resources.testing.models import Resource
@@ -79,8 +79,9 @@ def test_load_xref_authorizes_before_moving_existing_ownership(tmp_path, monkeyp
             assert updated.pk == target.pk
             assert updated.owner_id == caller.pk
             assert updated.with_actor(caller).has_access("write")
-            assert Resource.objects.count() == len(before_ledger) + (existing_target == "adopted")
-            assert Resource.objects.get(xref="target").target_id == public_id_of(target)
+            with system_context(reason="test.resources.ledger_observation"):
+                assert Resource.objects.count() == len(before_ledger) + (existing_target == "adopted")
+                assert Resource.objects.get(xref="target").target_id == public_id_of(target)
     finally:
         apps.clear_cache()
 

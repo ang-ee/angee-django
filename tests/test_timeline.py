@@ -7,17 +7,18 @@ from datetime import UTC, datetime
 import pytest
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connection
+from django.db import connection, models
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context
 
-from angee.changesets import changeset as open_changeset
+from angee.base.models.identity import public_id_of
+from angee.base.pagination import KeysetOrder, keyset_signer
 from angee.graphql.publishing import mute_changes
-from angee.identity import public_id_of
 from angee.messaging.timeline import CommentKind
+from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
-from angee.timeline.kinds import Cursor, timeline_kinds
+from angee.timeline.kinds import timeline_kinds
 from angee.timeline.reading import Timeline
 from tests.conftest import addon_schema, create_platform_admin, execute_schema, result_data, vault_for
 
@@ -50,12 +51,21 @@ def read_timeline(record, actor, **variables):
 
 def test_cursor_round_trips_and_orders_the_page_totally() -> None:
     at = datetime(2026, 10, 19, 9, 41, tzinfo=UTC)
-    cursor = Cursor.decode(Cursor(at=at, kind="provenance.change", pk=7).encode())
-    assert cursor == Cursor(at=at, kind="provenance.change", pk=7)
-    predicate = str(cursor.predicate())
+    order = KeysetOrder("_timeline_at", tie_breakers=("_timeline_kind",))
+    signer = keyset_signer(["record", "all-kinds"], salt="angee.timeline")
+    token = order.sign_position((at, "provenance.change", 7), signer)
+    cursor = order.unsign(token, signer, models.BigIntegerField())
+    assert cursor == (at, "provenance.change", 7)
+    predicate = str(order.before(cursor))
     assert predicate.count("at__lt") == 1 and predicate.count("kind__gt") == 1 and predicate.count("pk__lt") == 1
     with pytest.raises(ValueError):
-        Cursor.decode("nonsense")
+        order.unsign("nonsense", signer, models.BigIntegerField())
+    with pytest.raises(ValueError):
+        order.unsign(token + "tampered", signer, models.BigIntegerField())
+    with pytest.raises(ValueError):
+        order.unsign(
+            token, keyset_signer(["other-record", "all-kinds"], salt="angee.timeline"), models.BigIntegerField()
+        )
 
 
 @override_settings(ANGEE_TIMELINE_KINDS=KINDS)

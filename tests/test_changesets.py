@@ -21,14 +21,30 @@ from graphql import GraphQLError
 from rebac import actor_context, system_context, to_subject_ref
 from strawberry.types import ExecutionResult
 
-from angee.changesets import ChangesetRequired, changeset, changeset_model_label, current_changeset, require_changeset
-from angee.compose import manage
+from angee import management as manage
 from angee.graphql.views import AngeeGraphQLView
-from angee.middleware import ChangesetMiddleware, ChangesetScopeMiddleware
+from angee.jobs.celery import app as celery_app
+from angee.provenance.context import (
+    ChangesetRequired,
+    changeset,
+    changeset_model_label,
+    current_changeset,
+    require_changeset,
+)
+from angee.provenance.contrib.angee.context import SERVER_COMMANDS
+from angee.provenance.middleware import ChangesetMiddleware, ChangesetScopeMiddleware
+from angee.provenance.tasks import Task
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow
 
 pytestmark = [pytest.mark.entrypoint_boundaries, pytest.mark.django_db(transaction=True)]
+
+
+@pytest.fixture(autouse=True)
+def management_changeset_context(settings):
+    """Select the optional provenance policy for these attribution contracts."""
+
+    settings.ANGEE_MANAGEMENT_CONTEXT = "angee.provenance.contrib.angee.context.management_context"
 
 
 def write(title: str = "captured") -> Any:
@@ -56,7 +72,7 @@ def test_require_changeset_refuses_missing_storage_and_returns_the_open_owner(se
         require_changeset()
 
 
-@pytest.mark.parametrize("command", sorted(manage.SERVER_COMMANDS))
+@pytest.mark.parametrize("command", sorted(SERVER_COMMANDS))
 def test_servers_run_without_a_process_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path: Any, command: str) -> None:
     seen: list[Any] = []
     monkeypatch.setenv("ANGEE_PROJECT_DIR", str(tmp_path))
@@ -101,7 +117,7 @@ def test_a_thread_a_command_starts_writes_under_the_command_boundary(
 
 def test_a_write_without_a_boundary_names_the_manage_py_remedy(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["/srv/app/manage.py", "seed_lorem_notes"])
-    with pytest.raises(ChangesetRequired, match=r"manage\.py must call angee\.compose\.manage\.main\(\)"):
+    with pytest.raises(ChangesetRequired, match=r"manage\.py must call angee\.management\.main\(\)"):
         write()
     monkeypatch.setattr(sys, "argv", ["celery", "worker"])
     with pytest.raises(ChangesetRequired) as error:
@@ -216,6 +232,35 @@ def test_each_actor_under_one_boundary_records_its_own_changeset() -> None:
     assert {(context.change_reason, context.state, context.outcome) for context in changesets()} == {
         ("loop", "closed", "success"), ("storage.trash_folder", "closed", "success"),
     }
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_celery_task_owns_attribution_and_correlation_on_success_and_failure(fail: bool) -> None:
+    """Celery's configured task base owns one boundary around the actual eager run."""
+
+    assert issubclass(celery_app.Task, Task)
+    name = f"tests.attributed_task.{fail}"
+
+    @celery_app.task(name=name, lazy=False, shared=False)
+    def attributed() -> str:
+        write("task write")
+        if fail:
+            raise RuntimeError("task failed")
+        return "done"
+
+    try:
+        if fail:
+            with pytest.raises(RuntimeError, match="task failed"):
+                attributed.apply(task_id="task-correlation", throw=True)
+        else:
+            assert attributed.apply(task_id="task-correlation", throw=True).result == "done"
+    finally:
+        celery_app.tasks.pop(name, None)
+    (context,) = changesets()
+    assert context.change_reason == f"task.{name}"
+    assert context.correlation_id == "task-correlation"
+    assert (context.state, context.outcome) == ("closed", "failure" if fail else "success")
+    assert current_changeset() is None
 
 
 @pytest.mark.parametrize("errors", [False, True])

@@ -13,7 +13,7 @@ import { AppRuntimeProvider, ConsoleLayout, ModalsHost, ToastProvider, baseIcons
 import { afterEach, expect, test, vi } from "vitest";
 
 import storage from "../index";
-import { StorageBackends, StorageDrives, StorageFileById, StorageFolderRoots } from "../data/documents";
+import { StorageFileById, StorageFoldersPage, StorageFolderById } from "../data/documents";
 import { StoragePage } from "./StoragePage";
 
 const fileResource = testDataResource("storage.File", {
@@ -32,7 +32,16 @@ const fileResource = testDataResource("storage.File", {
     updatable: name === "title", requiredOnCreate: false,
   })),
 });
-const resources = [fileResource, testDataResource("storage.Drive"), testDataResource("storage.Folder", { roots: { deletePreview: "delete_folders_preview" } })];
+const driveResource = testDataResource("storage.Drive", { recordRepresentation: "name" });
+const folderResource = testDataResource("storage.Folder", {
+  roots: { deletePreview: "delete_folders_preview" },
+  query: testResourceQuery({ fields: {
+    name: testQueryField("name", { sort: { field: "name" }, filter: { field: "name", scalar: "String", values: [], operators: ["contains"] } }),
+    drive: testQueryField("drive", { scalar: "ID" }), parent: testQueryField("parent", { scalar: "ID" }),
+    is_virtual: testQueryField("is_virtual", { scalar: "Boolean" }),
+  } }),
+});
+const resources = [fileResource, driveResource, folderResource];
 const scope = { filter: { drive: { exact: "drive-a" }, is_trashed: { exact: false } }, order: { updated_at: "DESC" as const }, page: 1, pageSize: 50 };
 const drive = { id: "drive-a", slug: "assets", name: "Assets" };
 function file(id: string, title: string) {
@@ -58,17 +67,18 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   }));
   const previews = new Map<string, ReturnType<typeof deferred<{ data: Row }>>>();
   const forms = new Map<string, ReturnType<typeof deferred<{ data: Row | null }>>>();
-  const records = [file("file-a", "Alpha"), file("file-b", "Beta")];
-  const getOne = vi.fn(({ id }: { id?: string | number }) => {
+  const otherDrive = { id: "drive-b", slug: "archive", name: "Archive" };
+  const records = [file("file-a", "Alpha"), file("file-b", "Beta"), { ...file("file-c", "Gamma"), drive: otherDrive.id }];
+  const getOne = vi.fn(({ id, resource }: { id?: string | number; resource: string }) => {
+    if (resource === "drives") return Promise.resolve({ data: id === otherDrive.id ? otherDrive : drive });
     const request = deferred<{ data: Row | null }>();
     forms.set(String(id), request);
     return request.promise;
   });
   const update = vi.fn();
   const custom = vi.fn(({ meta }: { meta?: Record<string, unknown> }) => {
-    if (meta?.gqlQuery === StorageDrives) return Promise.resolve({ data: { drives: [drive] } });
-    if (meta?.gqlQuery === StorageBackends) return Promise.resolve({ data: { backends: [] } });
-    if (meta?.gqlQuery === StorageFolderRoots) return Promise.resolve({ data: { folders: [] } });
+    if (meta?.gqlQuery === StorageFoldersPage) return Promise.resolve({ data: { folders: [], folders_aggregate: { aggregate: { count: 0 } } } });
+    if (meta?.gqlQuery === StorageFolderById) return Promise.resolve({ data: { folders_by_pk: null } });
     if (meta?.gqlQuery === StorageFileById) {
       const request = deferred<{ data: Row }>();
       previews.set(String((meta.gqlVariables as { id: string }).id), request);
@@ -77,7 +87,7 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
     throw new Error("Unexpected authored request");
   });
   const provider = { getOne, custom, update,
-    deleteOne: vi.fn(), getList: vi.fn(async () => ({ data: records, total: records.length })),
+    deleteOne: vi.fn(), getList: vi.fn(async ({ resource }) => resource === "drives" ? ({ data: [drive], total: 1 }) : ({ data: records, total: records.length })),
   } satisfies RefineTestDataProvider;
   const root = createRootRoute({ component: () => <ConsoleLayout><Outlet /></ConsoleLayout> });
   const files = createRoute({ getParentRoute: () => root, path: "/storage", component: StoragePage });
@@ -105,7 +115,7 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   await screen.findByDisplayValue("Alpha");
   const header = screen.getAllByRole("heading", { level: 1, name: "Alpha" })[0]!;
   const frame = header.closest("header")?.parentElement ?? header.parentElement!.parentElement!;
-  const tree = screen.getByRole("tree");
+  const tree = screen.getAllByRole("tree")[0];
   const pager = screen.getByRole("navigation", { name: "Record navigation" });
   // The lifecycle verbs reach the control band once the desktop shell has mounted its host.
   await waitFor(() => expect(view.container.querySelector(".area-control")?.contains(screen.getByRole("button", { name: "Trash" }))).toBe(true));
@@ -116,14 +126,14 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   await waitFor(() => expect(forms.has("file-b") && previews.has("file-b")).toBe(true));
   expect(router.state.location.pathname).toBe("/storage/file-b");
   expect(screen.queryByDisplayValue("Alpha")).toBeNull();
-  expect(screen.getByRole("tree")).toBe(tree);
+  expect(screen.getAllByRole("tree")[0]).toBe(tree);
   expect(screen.getByRole("navigation", { name: "Record navigation" })).toBe(pager);
   expect(screen.getByRole("heading", { level: 1, name: "Loading file" })).toBe(header);
   expect(frame.isConnected).toBe(true);
   expect(screen.getByRole("button", { name: "Trash" })).toBe(trash);
   expect(trash.disabled).toBe(true);
   expect(control?.contains(trash)).toBe(true);
-  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
 
   // A form response can arrive before its independent preview response.
   await act(async () => forms.get("file-b")!.resolve({ data: records[1]! }));
@@ -135,7 +145,31 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   expect(control?.contains(trash)).toBe(true);
   expect(update).not.toHaveBeenCalled();
   // The metadata form lives in the page body, so each record owns one form read.
-  expect(getOne.mock.calls.map(([request]) => String(request.id))).toEqual(["file-a", "file-b"]);
+  expect(getOne.mock.calls.filter(([request]) => request.resource !== "drives").map(([request]) => String(request.id))).toEqual(["file-a", "file-b"]);
+
+  const folderSearch = screen.getByRole("combobox", { name: "Filter records" });
+  const selectedDrive = screen.getByRole("combobox", { name: "Drive: Assets" });
+  await act(async () => router.navigate({ to: "/storage/file-c", search: (current: Record<string, unknown>) => current }));
+  await waitFor(() => expect(forms.has("file-c") && previews.has("file-c")).toBe(true));
+  expect(screen.getByRole("combobox", { name: "Drive: Assets" })).toBe(selectedDrive);
+  expect(screen.getByRole("combobox", { name: "Filter records" })).toBe(folderSearch);
+  expect(screen.queryByDisplayValue("Beta")).toBeNull();
+  await act(async () => {
+    forms.get("file-c")!.resolve({ data: records[2]! });
+    previews.get("file-c")!.resolve({ data: { files_by_pk: records[2] } });
+  });
+  await screen.findByDisplayValue("Gamma");
+  await screen.findByRole("combobox", { name: "Drive: Archive" });
+  expect(screen.getByRole("combobox", { name: "Filter records" })).not.toBe(folderSearch);
+  expect(screen.getAllByRole("tree")[0]).toBe(tree);
+  await act(async () => router.navigate({ to: "/storage/file-b", search: (current: Record<string, unknown>) => current }));
+  await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Loading file" })).toBe(header));
+  await act(async () => {
+    forms.get("file-b")!.resolve({ data: records[1]! });
+    previews.get("file-b")!.resolve({ data: { files_by_pk: records[1] } });
+  });
+  await screen.findByDisplayValue("Beta");
+  await screen.findByRole("combobox", { name: "Drive: Assets" });
 
   for (const missing of [false, true]) {
     const id = missing ? "file-missing" : "file-denied";
@@ -154,11 +188,11 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
     });
     await waitFor(() => expect(header.textContent).toBe(missing ? "File not found" : "Could not load this preview."));
     if (!missing) expect(await screen.findByText("Preview access denied")).toBeTruthy();
-    expect(screen.getByRole("tree")).toBe(tree);
+    expect(screen.getAllByRole("tree")[0]).toBe(tree);
     expect(screen.getByRole("navigation", { name: "Record navigation" })).toBe(pager);
     expect(trash.disabled).toBe(true);
     expect(control?.contains(trash)).toBe(true);
-    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
     fireEvent.click(trash);
     expect(update).not.toHaveBeenCalled();
     expect(provider.deleteOne).not.toHaveBeenCalled();
@@ -190,9 +224,8 @@ test("All files starts with server folder grouping and a clean URL; changing the
   const record = { ...file("file-a", "Alpha"), folder: "folder-a" };
   const groupRequests = vi.fn();
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
-    if (meta?.gqlQuery === StorageDrives) return { data: { drives: [drive] } };
-    if (meta?.gqlQuery === StorageBackends) return { data: { backends: [] } };
-    if (meta?.gqlQuery === StorageFolderRoots) return { data: { folders: [] } };
+    if (meta?.gqlQuery === StorageFoldersPage) return { data: { folders: [], folders_aggregate: { aggregate: { count: 0 } } } };
+    if (meta?.gqlQuery === StorageFolderById) return { data: { folders_by_pk: null } };
     groupRequests(meta?.gqlVariables);
     return { data: { files_groups: [{ key: { folder: "folder-a" }, aggregate: { count: 1 } }], totalCount: 1 } };
   });
@@ -203,7 +236,8 @@ test("All files starts with server folder grouping and a clean URL; changing the
     parseSearch: parseFlatSearch, stringifySearch: stringifyFlatSearch,
   });
   render(<Provider resources={[groupedResource, ...resources.slice(1)]} dataProvider={{ custom,
-    getList: vi.fn(async () => ({ data: [record], total: 1 })),
+    getOne: vi.fn(async () => ({ data: drive })),
+    getList: vi.fn(async ({ resource }) => resource === "drives" ? ({ data: [drive], total: 1 }) : ({ data: [record], total: 1 })),
   }}><OperationDocumentsProvider documents={{ console: { groups: {
     "storage.File": "query Groups { files_groups { key } totalCount }",
   } } }}><AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets,

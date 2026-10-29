@@ -16,10 +16,10 @@ from strawberry import auto
 from strawberry.types import get_object_definition
 from strawberry_django.optimizer import DjangoOptimizerExtension
 
+from angee.base.models.base import AngeeDataModel
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.models import AngeeDataModel
 from tests.conftest import create_platform_admin, create_user, execute_schema, make_addon, result_data
 from tests.linesdemo.models import Document, DocumentLine, Tag
 from tests.scopedemo.models import SharedDoc
@@ -73,12 +73,14 @@ def test_input_donors_reach_native_create_and_update_envelopes() -> None:
     @strawberry.input(name=get_object_definition(resource.set_input_type, strict=True).name, extend=True)
     class UpdateExtras:
         details: list[WriteContractDetailInput] | None = strawberry.UNSET
+        detail: WriteContractDetailInput | None = strawberry.UNSET
         note: str | None = strawberry.UNSET
 
-    schema = GraphQLSchemas([make_addon(schemas={"public": {
+    schemas = GraphQLSchemas([make_addon(schemas={"public": {
         "query": [resource.query], "mutation": [resource.mutation],
         "types": [WriteContractDocType, *resource.types], "input_extensions": (InsertExtras, UpdateExtras),
-    }})]).build("public")
+    }})])
+    schema = schemas.build("public")
     # This backend captures inputs without persisting a row. Native response
     # projection is exercised by persisted-backend tests, not this envelope test.
     with DjangoOptimizerExtension.disabled():
@@ -87,14 +89,20 @@ def test_input_donors_reach_native_create_and_update_envelopes() -> None:
             title: "Inserted", details: [{value: "First"}, {value: "Second", note: null}]
           }) { title }
           update_write_contract_docs_by_pk(pk_columns: {id: "public-key"}, _set: {
-            title: "Updated", note: null
+            title: "Updated", note: null, detail: {value: "Pinned"}
           }) { title }
         }"""))
 
     assert backend.calls == [
         ("create", None, {"title": "Inserted", "details": [{"value": "First"}, {"value": "Second", "note": None}]}),
-        ("update", "public-key", {"title": "Updated", "note": None}),
+        ("update", "public-key", {"title": "Updated", "note": None, "detail": {"value": "Pinned"}}),
     ]
+
+    metadata = next(item for item in schemas.resources("public") if item.model is SharedDoc)
+    detail = next(field for field in metadata.fields if field.name == "detail")
+    assert (detail.kind, detail.scalar, detail.readable, detail.creatable, detail.updatable) == (
+        "object", None, False, False, True,
+    )
 
 
 @strawberry_django.type(Tag)
@@ -329,3 +337,56 @@ def test_input_extension_fields_are_writable_in_resource_metadata() -> None:
     assert metadata.lines is not None
     line_stamp = next(field for field in metadata.lines.fields if field.name == "stamp")
     assert (line_stamp.creatable, line_stamp.updatable) == (True, True)
+
+
+def test_optional_claim_adapter_preserves_custom_untracked_backend_replay(composed_tables: None) -> None:
+    """Idempotency wraps a native custom backend even when its model has no history."""
+
+    class PersistingBackend(CaptureBackend):
+        def create(self, info: strawberry.Info, data: dict[str, Any]) -> SharedDoc:
+            self.calls.append(("create", None, data))
+            return SharedDoc.objects.create(title=data["title"], is_shared=True)
+
+    backend = PersistingBackend()
+    resource = hasura_model_resource(
+        WriteContractDocType, model=SharedDoc, name="claimed_custom_docs",
+        filterable=["id", "title"], sortable=["title"], aggregatable=["id"],
+        insertable=["title"], update=False, delete=False, write_backend=backend,
+    )
+    schema = GraphQLSchemas([make_addon(schemas={"public": {
+        "query": [resource.query], "mutation": [resource.mutation],
+        "types": [WriteContractDocType, *resource.types],
+    }})]).build("public")
+    author = create_user("custom-claim-author")
+    query = """mutation($title:String!) {
+      insert_claimed_custom_docs_one(object:{title:$title}, idempotency_key:"custom-request") {id title}
+    }"""
+    first = result_data(execute_schema(schema, query, {"title": "Original"}, user=author))
+    assert result_data(execute_schema(schema, query, {"title": "Original"}, user=author)) == first
+    conflict = execute_schema(schema, query, {"title": "Changed"}, user=author)
+    assert conflict.errors is not None
+    assert conflict.errors[0].extensions == {"code": "CREATION_KEY_CONFLICT"}
+    assert backend.calls == [("create", None, {"title": "Original"})]
+    with system_context(reason="test.claim.revoke_read"):
+        SharedDoc.objects.filter(title="Original").update(is_shared=False)
+    denied = execute_schema(schema, query, {"title": "Original"}, user=author)
+    assert denied.errors is not None
+    assert denied.errors[0].extensions == {"code": "PERMISSION_DENIED"}
+    assert len(backend.calls) == 1
+
+
+def test_claimed_create_rolls_back_failed_input_extensions_before_retry(composed_tables: None) -> None:
+    """A failed insert consumes neither its key nor its row or input-extension effects."""
+
+    author = create_platform_admin("retryable-claim-author")
+    query = """mutation($stamp:String!) {
+      insert_stamped_documents_one(object:{title:"Retryable", stamp:$stamp}, idempotency_key:"retryable") {id title}
+    }"""
+    refused = execute_schema(_STAMPED_SCHEMA, query, {"stamp": "reject"}, user=author)
+    assert refused.errors is not None
+    assert _titles() == []
+    assert _stamps() == []
+    first = result_data(execute_schema(_STAMPED_SCHEMA, query, {"stamp": "accepted"}, user=author))
+    assert result_data(execute_schema(_STAMPED_SCHEMA, query, {"stamp": "accepted"}, user=author)) == first
+    assert _titles() == ["Retryable"]
+    assert len(_stamps()) == 1

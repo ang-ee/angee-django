@@ -4,8 +4,12 @@ from django.db import models
 from django.db.migrations.state import ModelState
 from django.test.utils import isolate_apps
 
-from angee.models import AngeeDataModel, ArchiveMixin, HistoryMixin, MergeableMixin
-from angee.models.merge_references import ForeignKeyReference, MergeContractMixin, MergePolicy
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.merge import MergeableMixin
+from angee.base.models.merge_references import ForeignKeyReference, MergeContractMixin, MergePolicy
+from angee.base.models.trash import ArchiveMixin
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 
 
 def test_merge_base_preserves_existing_composed_field_state_and_mro() -> None:
@@ -25,6 +29,8 @@ def test_merge_base_preserves_existing_composed_field_state_and_mro() -> None:
                 app_label = "merge_contract"
 
         class Composed(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel):
+
+            _angee_base = AngeeHistoryMergeableUnscopedManager()
             class Meta:
                 abstract = True
                 app_label = "merge_contract"

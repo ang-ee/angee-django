@@ -1,0 +1,83 @@
+"""Default Django settings for Angee-composed hosts."""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from django.core.exceptions import ImproperlyConfigured
+
+from angee.utils.paths import resolve_path
+
+
+def _sequence(value: Any) -> tuple[Any, ...]:
+    """Return ``value`` as a tuple, treating strings as one item."""
+
+    if value is None:
+        return ()
+    if isinstance(value, str | os.PathLike):
+        return (value,)
+    return tuple(value)
+
+
+_BASE_DIR = globals().get("BASE_DIR")
+if _BASE_DIR is None:
+    raise ImproperlyConfigured("angee.defaults must be evaluated by the project settings loader")
+
+BASE_DIR = resolve_path(_BASE_DIR)
+DEBUG = bool(globals().get("DEBUG", False))
+ALLOWED_HOSTS = globals().get("ALLOWED_HOSTS", ["*"] if DEBUG else [])
+# Behind a TLS ingress the browser's Origin is the public https host while the
+# proxied request reaches Django as plain http, so the CSRF origin check needs
+# the public origin declared. The stack sets ANGEE_PUBLIC_ORIGIN whenever an
+# ingress domain fronts the app.
+CSRF_TRUSTED_ORIGINS = list(_sequence(globals().get("CSRF_TRUSTED_ORIGINS", ())))
+_public_origin = os.environ.get("ANGEE_PUBLIC_ORIGIN")
+if _public_origin and _public_origin not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append(_public_origin)
+USE_TZ = globals().get("USE_TZ", True)
+DEFAULT_AUTO_FIELD = globals().get("DEFAULT_AUTO_FIELD", "django.db.models.BigAutoField")
+
+_configured_installed_apps = globals().get("INSTALLED_APPS", ())
+if isinstance(_configured_installed_apps, str):
+    _configured_installed_apps = (_configured_installed_apps,)
+# Core apps are plain Django apps. Their stable topological boot order precedes
+# every project-declared addon root.
+_CORE_INSTALLED_APPS_PREFIX = (
+    "django_yamlconf",
+    "angee.base",
+)
+INSTALLED_APPS = [
+    *_CORE_INSTALLED_APPS_PREFIX,
+    *(entry for entry in _configured_installed_apps if entry not in (*_CORE_INSTALLED_APPS_PREFIX, "angee")),
+    "angee",
+]
+
+COMPOSE_ENV_PREFIXES = globals().get("COMPOSE_ENV_PREFIXES", ("ANGEE_",))
+COMPOSE_APP_DECLARATIONS = globals().get("COMPOSE_APP_DECLARATIONS", "angee.build.ManifestDeclarations")
+
+COMPOSE_RUNTIME_MODULE = globals().get("COMPOSE_RUNTIME_MODULE", "runtime")
+ANGEE_DATA_DIR = resolve_path(globals().get("ANGEE_DATA_DIR", BASE_DIR / ".angee" / "data"))
+ANGEE_ADDON_DIRS = tuple(
+    resolve_path(path) for path in _sequence(globals().get("ANGEE_ADDON_DIRS", (BASE_DIR / "addons",)))
+)
+
+STATIC_URL = globals().get("STATIC_URL", "/static/")
+STATIC_ROOT = resolve_path(globals().get("STATIC_ROOT", ANGEE_DATA_DIR / "static"))
+MEDIA_URL = globals().get("MEDIA_URL", "/media/")
+MEDIA_ROOT = resolve_path(globals().get("MEDIA_ROOT", ANGEE_DATA_DIR / "media"))
+
+DATABASES = globals().get(
+    "DATABASES",
+    {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": ANGEE_DATA_DIR / "db.sqlite3",
+            "OPTIONS": {
+                "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+                "transaction_mode": "IMMEDIATE",
+                "timeout": 20,
+            },
+        }
+    },
+)

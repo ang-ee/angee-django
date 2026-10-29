@@ -104,7 +104,7 @@ SKILL_BLOBS = {
 def test_agent_runtime_registry_matches_implementation_keys() -> None:
     """Every selectable runtime declares the same stable key as its registry entry."""
 
-    assert AbstractAgent.impl_field("runtime_class").check() == []
+    assert AbstractAgent._meta.get_field("runtime_class").check() == []
 
 
 # --- parse_skill_meta (pure) --------------------------------------------------

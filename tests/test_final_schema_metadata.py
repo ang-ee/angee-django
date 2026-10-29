@@ -1,8 +1,8 @@
 import strawberry
 from graphql import build_schema
 
-from angee.data.metadata import DataMutationArgument, DataResourceRoots, DataResourceTypeNames
 from angee.graphql.actions import ActionResult
+from angee.graphql.data.contracts import DataMutationArgument, DataResourceRoots, DataResourceTypeNames
 from angee.graphql.data.final_schema import final_schema_references
 from angee.graphql.data.metadata import _finalize_data_resource
 from angee.graphql.data.resource_fields import final_input_policy_fields

@@ -5,7 +5,15 @@ name = "angee.integrate"
 description = "The integration substrate — OAuth connections, credentials, and the bridge/capability runtime"
 keywords = ["integrations", "oauth", "connections"]
 category = "Integration"
-depends_on = ["angee.iam", "angee.resources", "angee.jobs", "angee.graphql", "angee.provenance"]
+depends_on = [
+  "angee.base",
+  "angee.iam",
+  "angee.resources",
+  "angee.jobs",
+  "angee.graphql",
+  "angee.provenance",
+  "angee.web",
+]
 dependencies = [
   # Authlib's OAuth2Client is an httpx2 client from 1.8.0; earlier releases build it
   # on httpx, which cannot drive integrate's httpx2 PinnedTransport.
@@ -18,11 +26,6 @@ dependencies = [
   "httpx2>=2.10,<3",
   "qrcode[pil]>=8.2",
 ]
-
-[[migrations]]
-name = "external_account_owner"
-app_label = "integrate"
-module = "runtime_migrations.external_account_owner"
 
 [resources]
 master = [

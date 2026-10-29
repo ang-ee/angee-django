@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from angee.impl import ImplBase
+from angee.base.implementations import ImplBase, check_impl_registry
 
 if TYPE_CHECKING:
     from angee.resources.entries import ResourceEntry, ResourceGroup
@@ -45,3 +46,6 @@ class ResourceEntryKind(ImplBase):
 
 type ResourceKindDeclarations = Mapping[str, tuple[Any, ...]]
 """Parsed custom declarations keyed by their composed resource kind."""
+
+
+check_entry_kind_registry = partial(check_impl_registry, ResourceEntryKind)

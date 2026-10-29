@@ -80,7 +80,7 @@ test("bundles and applies appearance synchronously before the app module loads",
       runInNewContext(bootstrap![1]!, { document: window.document, localStorage: window.localStorage });
       expect(window.document.documentElement.dataset.colorScheme).toBe("light");
       expect(window.document.documentElement.style.colorScheme).toBe("light");
-      expect(window.document.documentElement.dataset.theme).toBe("light");
+      expect(window.document.documentElement.hasAttribute("data-theme")).toBe(false);
     } finally {
       await server.close();
     }

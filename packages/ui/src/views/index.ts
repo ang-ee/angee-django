@@ -404,6 +404,7 @@ export {
 } from "./relation/relation-facet";
 export {
   useRelationOptions,
+  useRelationPickerOptions,
   useRelationSelectedOption,
   relationOptionsFromRows,
   relationSelectedOption,

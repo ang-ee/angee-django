@@ -5,7 +5,6 @@ from typing import TypedDict
 _Settings = TypedDict(
     "_Settings",
     {
-        "ANGEE_IMPL_REGISTRIES:append": list[str],
         "ANGEE_MERGE_GUARDS:append": list[str],
         "ANGEE_TIMELINE_KINDS:append": list[str],
         "ANGEE_RESOURCE_ENTRY_KIND_CLASSES:append": dict[str, str],
@@ -19,9 +18,6 @@ _Settings = TypedDict(
 )
 
 SETTINGS: _Settings = {
-    "ANGEE_IMPL_REGISTRIES:append": [
-        "angee.workflows.steps.Step", "angee.workflows.triggers.TriggerSource",
-    ],
     "ANGEE_MERGE_GUARDS:append": ["angee.workflows.managers.unfinished_run_merge_guard"],
     "ANGEE_TIMELINE_KINDS:append": ["angee.workflows.timeline.timeline_kinds"],
     "ANGEE_RESOURCE_ENTRY_KIND_CLASSES:append": {
@@ -46,4 +42,3 @@ SETTINGS: _Settings = {
     "ANGEE_WORKFLOW_MAX_DISPATCHES": 20,
     "ANGEE_WORKFLOW_RETENTION_DAYS": 90,
 }
-"""Django settings contributed when the workflows addon is installed."""

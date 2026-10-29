@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import importlib
 import json
-import logging
 import os
 import subprocess
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 
 import pytest
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management.base import CommandError
+from django.core.management.commands.makemigrations import Command as NativeMakeMigrationsCommand
 from django.db import connection, connections, migrations, models
 from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.backends.dummy.base import DatabaseWrapper as DummyDatabaseWrapper
@@ -24,14 +26,24 @@ from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.state import ModelState, ProjectState
 from django.db.models.functions import Lower
+from django.test import override_settings
 from django.utils import timezone
 
 from angee.addons import addon_manifest
+from angee.base.fields.identity import SqidField
+from angee.compose.management.commands.makemigrations import Command as ComposedMakeMigrationsCommand
 from angee.compose.migrations import DropGuardAutodetector, RuntimeMigrations
-from angee.fields import SqidField
+from angee.compose.runtime import Runtime
 from angee.resources.entries import resource_manifest_for, retired_models_for
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
 from tests.conftest import make_addon, write_addon_manifest
+
+
+@pytest.fixture(autouse=True)
+def manifest_migration_declarations(settings):
+    """These addon transition fixtures select the host's manifest adapter."""
+
+    settings.COMPOSE_APP_DECLARATIONS = "angee.build.ManifestDeclarations"
 
 
 def _write_module(path: Path, text: str = "") -> None:
@@ -146,10 +158,44 @@ class Migration(migrations.Migration):
     )
     materializer = RuntimeMigrations(
         (addon,),
-        runtime_dir=runtime_dir,
         labels=("resources",),
     )
     return materializer, addon, source_path, runtime_dir, source_root
+
+
+def test_retiring_the_last_model_preserves_the_declared_migration_app(runtime_migration_probe, settings) -> None:
+    """A declared transition owns an empty app without a graphless scheduler."""
+
+    _, addon, _, runtime_dir, source_root = runtime_migration_probe
+    _write_module(source_root / "runtime_migrations" / "retire_last.py", """\
+from django.db import migrations
+
+
+def applies(state):
+    return ("demo", "retired") in state.models
+
+
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = [migrations.DeleteModel(name="Retired")]
+""")
+    write_addon_manifest(addon, migrations=({
+        "name": "retire_last", "app_label": addon.label, "module": "runtime_migrations.retire_last",
+    },))
+    settings.MIGRATION_MODULES = {**settings.MIGRATION_MODULES, addon.label: f"{addon.name}.migrations"}
+    runtime = Runtime.discover((addon,), runtime_dir=runtime_dir, integrations=())
+    assert runtime.labels == (addon.label,)
+    sources = runtime.render_sources()
+    native_history = f"RUNTIME_MIGRATION_MODULES = {{{addon.label!r}: '{addon.name}.migrations'}}"
+    assert native_history in sources[Path("__init__.py")]
+    assert "Retired" not in sources[Path(addon.label, "models.py")]
+    state = ProjectState()
+    state.add_model(ModelState(addon.label, "Retired", [("id", models.AutoField(primary_key=True))]))
+    source = importlib.import_module(f"{addon.name}.runtime_migrations.retire_last")
+    assert source.applies(state) is True
+    retired = source.Migration("retire_last", addon.label).mutate_state(state)
+    assert (addon.label, "retired") not in retired.models
+    assert source.applies(retired) is False
 
 
 def test_reset_migration_history_replaces_only_composed_history(tmp_path: Path) -> None:
@@ -269,27 +315,33 @@ class Migration(migrations.Migration):
     ]
 
 
-def test_materialize_copies_complete_source_and_attaches_current_leaf(runtime_migration_probe) -> None:
+def test_materialize_copies_complete_source_and_freezes_current_leaf(runtime_migration_probe) -> None:
     materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
+    initial = runtime_dir / "resources" / "migrations" / "0001_legacy.py"
+    initial_bytes = initial.read_bytes()
 
     written = materializer.materialize(apps=apps)
 
-    output = runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py"
+    output = runtime_dir / "resources" / "migrations" / "rename_legacy.py"
     assert written == (output,)
     text = output.read_text(encoding="utf-8")
     assert text.startswith(source_path.read_text(encoding="utf-8"))
     assert "def forwards(apps, schema_editor):" in text
-    assert 'Migration.dependencies.append(("resources", "0001_legacy"))' in text
+    assert "Migration.dependencies = [('resources', '0001_legacy')]" in text
+    assert "Migration.run_before = []" in text
     assert 'Migration.angee_origin = "example.demo:rename_legacy"' in text
+    assert initial.read_bytes() == initial_bytes
 
     loader = MigrationLoader(None, ignore_no_migrations=True)
-    assert loader.graph.leaf_nodes("resources") == [("resources", "0002_rename_legacy")]
+    assert loader.graph.leaf_nodes("resources") == [("resources", "rename_legacy")]
     state = loader.project_state()
     assert "new_name" in state.models["resources", "legacy"].fields
     assert "old_name" not in state.models["resources", "legacy"].fields
 
 
-def test_applies_false_writes_nothing(runtime_migration_probe, caplog) -> None:
+def test_false_pending_guard_refuses_without_writing(runtime_migration_probe) -> None:
+    """A final-looking schema cannot prove that an addon data transition ran."""
+
     materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
     source_path.write_text(
         source_path.read_text(encoding="utf-8").replace(
@@ -298,59 +350,50 @@ def test_applies_false_writes_nothing(runtime_migration_probe, caplog) -> None:
         encoding="utf-8",
     )
     importlib.invalidate_caches()
-
+    migration_dir = runtime_dir / "resources" / "migrations"
+    before = {path.name: path.read_bytes() for path in migration_dir.glob("*.py")}
     current_apps = MigrationLoader(None, ignore_no_migrations=True).project_state().apps
-    with caplog.at_level(logging.WARNING, logger="angee.compose.migrations"):
-        assert materializer.materialize(apps=current_apps) == ()
-    assert not (runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py").exists()
-    assert caplog.record_tuples == [
-        (
-            "angee.compose.migrations",
-            logging.WARNING,
-            "example.demo:rename_legacy (app label resources): runtime migration never became applicable; skipped",
-        ),
-    ]
+
+    with pytest.raises(RuntimeError, match="false schema guard cannot prove a data transition completed"):
+        materializer.materialize(apps=current_apps)
+
+    assert {path.name: path.read_bytes() for path in migration_dir.glob("*.py")} == before
 
 
 @pytest.mark.parametrize("consumer_cutover", [False, True])
-def test_adopted_table_drop_requires_consumer_cutover(
-    runtime_migration_probe, monkeypatch, settings, caplog, consumer_cutover: bool
+def test_adopted_table_has_an_explicit_native_cutover_chain(
+    runtime_migration_probe, monkeypatch, settings, consumer_cutover: bool
 ) -> None:
-    """Adoption may stage, while physical-owner cleanup waits for consumer cutover."""
+    """Adopt, retarget consumers, then retire the old model; missing nodes never stage."""
 
     _, addon, _, runtime_dir, source_root = runtime_migration_probe
     _write_module(runtime_dir / "integrate_vcs" / "__init__.py")
     _write_module(runtime_dir / "integrate_vcs" / "migrations" / "__init__.py")
     monkeypatch.setitem(settings.MIGRATION_MODULES, "integrate_vcs", f"{runtime_dir.name}.integrate_vcs.migrations")
-    _write_module(
-        runtime_dir / "resources" / "migrations" / "0002_consumer.py",
-        """from django.db import migrations, models
+    _write_module(runtime_dir / "resources" / "migrations" / "0002_consumer.py", """\
+from django.db import migrations, models
 class Migration(migrations.Migration):
     dependencies = [("resources", "0001_legacy")]
     operations = [migrations.CreateModel(name="Consumer", fields=[
         ("id", models.AutoField(primary_key=True)),
         ("legacy", models.ForeignKey("resources.Legacy", on_delete=models.CASCADE)),
     ])]
-""",
-    )
-    _write_module(
-        source_root / "adopt_legacy.py",
-        """from django.db import migrations, models
+""")
+    _write_module(source_root / "adopt_legacy.py", """\
+from django.db import migrations, models
 def applies(state):
     return ("integrate_vcs", "legacy") not in state.models
 class Migration(migrations.Migration):
-    dependencies = [("resources", "__latest__")]
+    dependencies = [("resources", "0002_consumer")]
     operations = [migrations.SeparateDatabaseAndState(state_operations=[
         migrations.CreateModel(name="Legacy", fields=[
             ("id", models.AutoField(primary_key=True)),
             ("old_name", models.CharField(max_length=100)),
         ], options={"db_table": "resources_legacy"}),
     ])]
-""",
-    )
-    _write_module(
-        source_root / "delete_legacy.py",
-        """from django.db import migrations
+""")
+    _write_module(source_root / "delete_legacy.py", """\
+from django.db import migrations
 def applies(state):
     return (
         ("resources", "legacy") in state.models
@@ -358,35 +401,32 @@ def applies(state):
         and state.models["resources", "consumer"].fields["legacy"].remote_field.model.lower() == "integrate_vcs.legacy"
     )
 class Migration(migrations.Migration):
-    dependencies = [("integrate_vcs", "__latest__")]
+    dependencies = [("resources", "consumer_cutover")]
     operations = [migrations.SeparateDatabaseAndState(state_operations=[migrations.DeleteModel(name="Legacy")])]
-""",
-    )
+""")
     declarations = [
         dict(name="delete_legacy", app_label="resources", module="delete_legacy"),
         dict(name="adopt_legacy", app_label="integrate_vcs", module="adopt_legacy"),
     ]
     if consumer_cutover:
-        _write_module(
-            source_root / "consumer_cutover.py",
-            """from django.db import migrations, models
+        _write_module(source_root / "consumer_cutover.py", """\
+from django.db import migrations, models
 def applies(state):
     return (
         ("integrate_vcs", "legacy") in state.models
         and state.models["resources", "consumer"].fields["legacy"].remote_field.model.lower() == "resources.legacy"
     )
 class Migration(migrations.Migration):
-    dependencies = [("integrate_vcs", "__latest__")]
+    dependencies = [("integrate_vcs", "adopt_legacy")]
     operations = [migrations.SeparateDatabaseAndState(state_operations=[migrations.AlterField(
         model_name="consumer", name="legacy",
         field=models.ForeignKey("integrate_vcs.Legacy", on_delete=models.CASCADE),
     )])]
-""",
-        )
+""")
         declarations.append(dict(name="consumer_cutover", app_label="resources", module="consumer_cutover"))
     write_addon_manifest(addon, migrations=tuple(declarations))
     importlib.invalidate_caches()
-    materializer = RuntimeMigrations((addon,), runtime_dir=runtime_dir, labels=("resources", "integrate_vcs"))
+    materializer = RuntimeMigrations((addon,), labels=("resources", "integrate_vcs"))
 
     current = MigrationLoader(None, ignore_no_migrations=True).project_state()
     adopted = current.models["resources", "legacy"].clone()
@@ -394,33 +434,33 @@ class Migration(migrations.Migration):
     adopted.options["db_table"] = "resources_legacy"
     current.add_model(adopted)
     current.alter_field(
-        "resources",
-        "consumer",
-        "legacy",
+        "resources", "consumer", "legacy",
         models.ForeignKey("integrate_vcs.Legacy", on_delete=models.CASCADE),
         preserve_default=True,
     )
     current.remove_model("resources", "legacy")
+    before = {
+        path.relative_to(runtime_dir): path.read_bytes()
+        for path in runtime_dir.glob("*/migrations/*.py")
+    }
 
     if consumer_cutover:
         written = materializer.materialize(apps=current.apps)
         assert [path.name for path in written] == [
-            "0001_adopt_legacy.py",
-            "0003_consumer_cutover.py",
-            "0004_delete_legacy.py",
+            "adopt_legacy.py", "consumer_cutover.py", "delete_legacy.py",
         ]
+        loader = MigrationLoader(None, ignore_no_migrations=True)
+        assert ("integrate_vcs", "adopt_legacy") in loader.disk_migrations["resources", "consumer_cutover"].dependencies
+        assert ("resources", "consumer_cutover") in loader.disk_migrations["resources", "delete_legacy"].dependencies
         assert materializer.materialize(apps=current.apps) == ()
         materializer.check()
-        assert not caplog.records
     else:
-        with pytest.raises(RuntimeError) as error:
+        with pytest.raises(RuntimeError, match="migration graph is invalid.*consumer_cutover"):
             materializer.materialize(apps=current.apps)
-        assert "resources.legacy: DeleteModel" in str(error.value)
-        assert "table 'resources_legacy', still owned by integrate_vcs.legacy" in str(error.value)
-        assert "Never-applicable runtime migration declarations: example.demo:delete_legacy" in str(error.value)
-        assert "cutover migration" in str(error.value)
-        assert (runtime_dir / "integrate_vcs" / "migrations" / "0001_adopt_legacy.py").exists()
-        assert not (runtime_dir / "resources" / "migrations" / "0003_delete_legacy.py").exists()
+        assert {
+            path.relative_to(runtime_dir): path.read_bytes()
+            for path in runtime_dir.glob("*/migrations/*.py")
+        } == before
 
 
 def _donor_states() -> tuple[ProjectState, ProjectState, MigrationGraph]:
@@ -499,7 +539,7 @@ def test_autodetected_column_drop_requires_every_row_empty(field, value, storage
     assert message.startswith(
         f"unsafe autodetected column drop: probe.task.{field}: {storage} holds data in 1 row(s) on database 'default'. "
     )
-    assert "[[migrations]]" in message
+    assert "cutover migration" in message
 
 
 @pytest.mark.parametrize("rows", [0, 1])
@@ -531,7 +571,7 @@ def test_autodetected_table_drop_requires_an_empty_table(rows: int) -> None:
         "unsafe autodetected table drop: probe.retired: table probe_retired holds data in 1 row(s) on database "
         "'default'. "
     )
-    assert "[[migrations]]" in message
+    assert "cutover migration" in message
 
 
 def seed_ledger(model_label: str, public_id: str, *, addon: str = "probe", xref: str = "seeded") -> None:
@@ -542,9 +582,12 @@ def seed_ledger(model_label: str, public_id: str, *, addon: str = "probe", xref:
     """
 
     ledger = apps.get_model("resources", "Resource")
-    if ledger._meta.db_table not in connection.introspection.table_names():
-        with connection.schema_editor() as editor:
-            editor.create_model(ledger)
+    audit = apps.get_model("rebac", "PermissionAuditEvent")
+    existing = connection.introspection.table_names()
+    with connection.schema_editor() as editor:
+        for model in (ledger, audit):
+            if model._meta.db_table not in existing:
+                editor.create_model(model)
     values = {
         "source_addon": addon, "source_path": f"resources/master/010_{xref}.yaml", "tier": "master",
         "xref": xref, "content_hash": "sha256:" + "0" * 64, "target_model": model_label,
@@ -597,6 +640,12 @@ def test_autodetected_table_drop_lets_rows_its_retiring_addon_seeded_go(monkeypa
     monkeypatch.setitem(addon_manifest(owner).resources, "retired_models", ["probe.Retired"])
     (migration,) = DropGuardAutodetector(history, current).changes(graph=graph)["probe"]
     assert [type(operation).__name__ for operation in migration.operations] == ["DeleteModel"]
+
+    # The compiler by itself grants no resource exemption. Removing the owner
+    # leaves even this vouched-for row protected by the ordinary populated guard.
+    with override_settings(COMPOSE_INTEGRATIONS=[]):
+        with pytest.raises(CommandError, match=refused):
+            DropGuardAutodetector(history, current).changes(graph=graph)
 
     # Another addon's seeded row, a ledger id that is not the row's canonical public
     # id, and an unledgered row each still count as data.
@@ -670,12 +719,12 @@ class Migration(migrations.Migration):
     current = history.clone()
     current.remove_field("resources", "legacy", "old_name")
 
-    materializer = RuntimeMigrations((addon,), runtime_dir=runtime_dir, labels=("resources",))
+    materializer = RuntimeMigrations((addon,), labels=("resources",))
     written = materializer.materialize(apps=current.apps)
     loader = MigrationLoader(None, ignore_no_migrations=True)
     guard = DropGuardAutodetector(loader.project_state(), current)
     if declared:
-        assert [path.name for path in written] == ["0002_retire_old_name.py"]
+        assert [path.name for path in written] == ["retire_old_name.py"]
         assert guard.changes(graph=loader.graph) == {}
     else:
         assert written == ()
@@ -685,173 +734,156 @@ class Migration(migrations.Migration):
             guard.changes(graph=loader.graph)
 
 
-def test_applicable_declarations_are_planned_sequentially(runtime_migration_probe) -> None:
+@pytest.mark.parametrize("dependent_first", [False, True])
+def test_native_dependencies_order_same_app_transitions(runtime_migration_probe, dependent_first: bool) -> None:
+    """Manifest order never substitutes for the declared native dependency."""
+
     materializer, addon, _, runtime_dir, source_root = runtime_migration_probe
-    _write_module(
-        source_root / "runtime_migrations" / "add_marker.py",
-        """\
+    _write_module(source_root / "runtime_migrations" / "add_marker.py", """\
 from django.db import migrations, models
-
-
 def applies(project_state):
     model = project_state.models.get(("resources", "legacy"))
     return model is not None and "new_name" in model.fields and "marker" not in model.fields
-
-
 class Migration(migrations.Migration):
-    dependencies = []
-    operations = [
-        migrations.AddField(
-            model_name="legacy",
-            name="marker",
-            field=models.BooleanField(default=False),
-        ),
-    ]
-""",
-    )
-    write_addon_manifest(
-        addon,
-        migrations=(
-            dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
-            dict(name="add_marker", app_label="resources", module="runtime_migrations.add_marker"),
-        ),
-    )
+    dependencies = [("resources", "rename_legacy")]
+    operations = [migrations.AddField(model_name="legacy", name="marker", field=models.BooleanField(default=False))]
+""")
+    parent = dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy")
+    child = dict(name="add_marker", app_label="resources", module="runtime_migrations.add_marker")
+    write_addon_manifest(addon, migrations=(child, parent) if dependent_first else (parent, child))
     importlib.invalidate_caches()
 
     written = materializer.materialize(apps=apps)
 
-    assert [path.name for path in written] == ["0002_rename_legacy.py", "0003_add_marker.py"]
-    second = (runtime_dir / "resources" / "migrations" / "0003_add_marker.py").read_text(encoding="utf-8")
-    assert 'Migration.dependencies.append(("resources", "0002_rename_legacy"))' in second
+    assert [path.name for path in written] == ["rename_legacy.py", "add_marker.py"]
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    assert ("resources", "rename_legacy") in loader.disk_migrations["resources", "add_marker"].dependencies
+    assert "marker" in loader.project_state().models["resources", "legacy"].fields
 
 
-def test_deferred_declaration_is_retried_in_same_materialization(runtime_migration_probe) -> None:
-    """A guard enabled by a later declaration does not require another build."""
-
-    materializer, addon, _, runtime_dir, source_root = runtime_migration_probe
-    _write_module(
-        source_root / "runtime_migrations" / "add_marker.py",
-        """\
-from django.db import migrations, models
-
-
-def applies(project_state):
-    model = project_state.models.get(("resources", "legacy"))
-    return model is not None and "new_name" in model.fields and "marker" not in model.fields
-
-
-class Migration(migrations.Migration):
-    dependencies = []
-    operations = [
-        migrations.AddField(
-            model_name="legacy",
-            name="marker",
-            field=models.BooleanField(default=False),
-        ),
-    ]
-""",
-    )
-    write_addon_manifest(
-        addon,
-        migrations=(
-            dict(name="add_marker", app_label="resources", module="runtime_migrations.add_marker"),
-            dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
-        ),
-    )
-    importlib.invalidate_caches()
-
-    written = materializer.materialize(apps=apps)
-
-    assert [path.name for path in written] == ["0002_rename_legacy.py", "0003_add_marker.py"]
-    assert materializer.materialize(apps=apps) == ()
-    state = MigrationLoader(None, ignore_no_migrations=True).project_state()
-    assert "marker" in state.models["resources", "legacy"].fields
-
-
-@pytest.mark.parametrize("dependent_first", [True, False])
-def test_deferred_cross_app_declaration_depends_on_present_planned_leaf(
-    runtime_migration_probe, monkeypatch, settings, dependent_first: bool
-) -> None:
-    """A later-round declaration receives a concrete native cross-app dependency."""
+def test_missing_native_ordering_refuses_before_guards_or_writes(runtime_migration_probe) -> None:
+    """Two pending leaves need an explicit edge, not guard retries or inferred rounds."""
 
     materializer, addon, _, runtime_dir, source_root = runtime_migration_probe
-    compose_migrations = runtime_dir / "compose" / "migrations"
-    _write_module(runtime_dir / "compose" / "__init__.py")
-    _write_module(compose_migrations / "__init__.py")
-    _write_module(
-        source_root / "runtime_migrations" / "after_flag.py",
-        """from django.db import migrations
+    _write_module(source_root / "runtime_migrations" / "add_marker.py", """\
+from django.db import migrations
 def applies(project_state):
-    return ("compose", "flag") in project_state.models
+    raise AssertionError("a conflicting graph must fail before any guard")
 class Migration(migrations.Migration):
     dependencies = []
     operations = []
-""",
-    )
-    _write_module(
-        source_root / "runtime_migrations" / "add_flag.py",
-        """from django.db import migrations, models
+""")
+    write_addon_manifest(addon, migrations=(
+        dict(name="add_marker", app_label="resources", module="runtime_migrations.add_marker"),
+        dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
+    ))
+    importlib.invalidate_caches()
+    migration_dir = runtime_dir / "resources" / "migrations"
+    before = {path.name: path.read_bytes() for path in migration_dir.glob("*.py")}
+
+    with pytest.raises(RuntimeError, match="multiple migration leaves"):
+        materializer.materialize(apps=apps)
+
+    assert {path.name: path.read_bytes() for path in migration_dir.glob("*.py")} == before
+
+
+@pytest.mark.parametrize("dependent_first", [True, False])
+def test_native_cross_app_prerequisite_state_precedes_guard(
+    runtime_migration_probe, monkeypatch, settings, dependent_first: bool
+) -> None:
+    """Pending cross-app nodes participate in the graph before applicability runs."""
+
+    _, addon, _, runtime_dir, source_root = runtime_migration_probe
+    compose_migrations = runtime_dir / "compose" / "migrations"
+    _write_module(runtime_dir / "compose" / "__init__.py")
+    _write_module(compose_migrations / "__init__.py")
+    _write_module(source_root / "runtime_migrations" / "after_flag.py", """\
+from django.db import migrations
+def applies(project_state):
+    return ("compose", "flag") in project_state.models
+class Migration(migrations.Migration):
+    dependencies = [("compose", "add_flag")]
+    operations = [migrations.RunPython(migrations.RunPython.noop, migrations.RunPython.noop)]
+""")
+    _write_module(source_root / "runtime_migrations" / "add_flag.py", """\
+from django.db import migrations, models
 def applies(project_state):
     return ("compose", "flag") not in project_state.models
 class Migration(migrations.Migration):
     dependencies = []
     operations = [migrations.CreateModel(name="Flag", fields=[("id", models.AutoField(primary_key=True))])]
-""",
-    )
+""")
     dependent = dict(name="after_flag", app_label="resources", module="runtime_migrations.after_flag")
-    enabling = dict(name="add_flag", app_label="compose", module="runtime_migrations.add_flag")
-    write_addon_manifest(addon, migrations=(dependent, enabling) if dependent_first else (enabling, dependent))
+    prerequisite = dict(name="add_flag", app_label="compose", module="runtime_migrations.add_flag")
+    write_addon_manifest(addon, migrations=(dependent, prerequisite) if dependent_first else (prerequisite, dependent))
     monkeypatch.setitem(settings.MIGRATION_MODULES, "compose", f"{runtime_dir.name}.compose.migrations")
     importlib.invalidate_caches()
-    materializer = RuntimeMigrations((addon,), runtime_dir=runtime_dir, labels=("resources", "compose"))
+    materializer = RuntimeMigrations((addon,), labels=("resources", "compose"))
 
     written = materializer.materialize(apps=apps)
 
-    assert [path.name for path in written] == ["0001_add_flag.py", "0002_after_flag.py"]
-    deferred = (runtime_dir / "resources" / "migrations" / "0002_after_flag.py").read_text()
-    assert 'Migration.dependencies.append(("compose", "0001_add_flag"))' in deferred
+    assert [path.name for path in written] == ["add_flag.py", "after_flag.py"]
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    assert ("compose", "add_flag") in loader.disk_migrations["resources", "after_flag"].dependencies
     assert materializer.materialize(apps=apps) == ()
 
 
-def test_latest_dependency_resolves_to_other_runtime_leaf(runtime_migration_probe, monkeypatch, settings) -> None:
+@pytest.mark.parametrize("symbolic, resolved", [("__first__", "0001_start"), ("__latest__", "0004_current")])
+def test_symbolic_dependency_is_frozen_to_its_native_node(
+    runtime_migration_probe, monkeypatch, settings, symbolic: str, resolved: str,
+) -> None:
     materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
     compose_migrations = runtime_dir / "compose" / "migrations"
     _write_module(runtime_dir / "compose" / "__init__.py")
     _write_module(compose_migrations / "__init__.py")
-    _write_module(
-        compose_migrations / "0004_current.py",
-        """\
+    for name, dependencies in (("0001_start", []), ("0004_current", [("compose", "0001_start")])):
+        _write_module(compose_migrations / f"{name}.py", f"""\
 from django.db import migrations
-
-
 class Migration(migrations.Migration):
-    dependencies = []
+    dependencies = {dependencies!r}
     operations = []
-""",
-    )
+""")
     source_path.write_text(
         source_path.read_text(encoding="utf-8").replace(
-            "dependencies = []", 'dependencies = [("compose", "__latest__")]', 1
-        ),
-        encoding="utf-8",
+            "dependencies = []", f'dependencies = [("compose", "{symbolic}")]', 1,
+        ), encoding="utf-8",
     )
     monkeypatch.setitem(settings.MIGRATION_MODULES, "compose", f"{runtime_dir.name}.compose.migrations")
     importlib.invalidate_caches()
 
-    materializer.materialize(apps=apps)
+    (output,) = materializer.materialize(apps=apps)
 
-    text = (runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py").read_text(encoding="utf-8")
-    assert '("compose", "0004_current") if dependency == ("compose", "__latest__")' in text
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    assert loader.disk_migrations["resources", "rename_legacy"].dependencies == [
+        ("compose", resolved), ("resources", "0001_legacy"),
+    ]
+    frozen = output.read_bytes()
+    _write_module(compose_migrations / "0005_later.py", """\
+from django.db import migrations
+class Migration(migrations.Migration):
+    dependencies = [("compose", "0004_current")]
+    operations = []
+""")
+    importlib.invalidate_caches()
+    assert materializer.materialize(apps=apps) == ()
+    assert output.read_bytes() == frozen
+    assert MigrationLoader(None, ignore_no_migrations=True).disk_migrations[
+        "resources", "rename_legacy"
+    ].dependencies == [("compose", resolved), ("resources", "0001_legacy")]
 
 
 def test_materialization_is_idempotent(runtime_migration_probe) -> None:
-    materializer, _, _, _, _ = runtime_migration_probe
+    materializer, addon, _, _, _ = runtime_migration_probe
 
     first = materializer.materialize(apps=apps)
+    source = importlib.import_module(f"{addon.name}.runtime_migrations.rename_legacy")
+    assert source.applies(MigrationLoader(None, ignore_no_migrations=True).project_state()) is False
+    frozen = first[0].read_bytes()
     second = materializer.materialize(apps=apps)
 
     assert len(first) == 1
     assert second == ()
+    assert first[0].read_bytes() == frozen
 
 
 def test_check_reports_pending_without_writing(runtime_migration_probe) -> None:
@@ -863,7 +895,7 @@ def test_check_reports_pending_without_writing(runtime_migration_probe) -> None:
     ):
         materializer.check()
 
-    assert not (runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py").exists()
+    assert not (runtime_dir / "resources" / "migrations" / "rename_legacy.py").exists()
 
 
 def test_changed_materialized_source_fails_instead_of_rewriting(runtime_migration_probe) -> None:
@@ -889,7 +921,7 @@ def test_changed_materialized_body_fails_instead_of_becoming_history(runtime_mig
     with pytest.raises(RuntimeError, match="materialized body digest changed"):
         materializer.materialize(apps=apps)
 
-    assert output == runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py"
+    assert output == runtime_dir / "resources" / "migrations" / "rename_legacy.py"
 
 
 @pytest.mark.parametrize(
@@ -898,6 +930,10 @@ def test_changed_materialized_body_fails_instead_of_becoming_history(runtime_mig
         (
             dict(name="Bad-Name", app_label="resources", module="runtime_migrations.rename_legacy"),
             "migration name must be a lower-case Python identifier",
+        ),
+        (
+            dict(name="_hidden", app_label="resources", module="runtime_migrations.rename_legacy"),
+            "without a leading underscore",
         ),
         (
             dict(name="rename_legacy", app_label="unknown", module="runtime_migrations.rename_legacy"),
@@ -961,7 +997,7 @@ def test_rejects_unresolved_latest_dependency(runtime_migration_probe) -> None:
     )
     importlib.invalidate_caches()
 
-    with pytest.raises(RuntimeError, match="__latest__ dependency app 'missing' has no migration leaf"):
+    with pytest.raises(RuntimeError, match=r"invalid dependency \('missing', '__latest__'\)"):
         materializer.materialize(apps=apps)
 
 
@@ -984,7 +1020,7 @@ class Migration(migrations.Migration):
 
     with pytest.raises(
         RuntimeError,
-        match="example.demo:rename_legacy: runtime migration target 'resources' has multiple leaves",
+        match="multiple migration leaves.*resources",
     ):
         materializer.materialize(apps=apps)
 
@@ -1044,7 +1080,7 @@ class Migration(migrations.Migration):
     with pytest.raises(RuntimeError, match="example.demo:broken: source module must define applies"):
         materializer.materialize(apps=apps)
 
-    assert not (runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py").exists()
+    assert not (runtime_dir / "resources" / "migrations" / "rename_legacy.py").exists()
 
 
 def test_rejects_source_in_djangos_conventional_migrations_package(runtime_migration_probe) -> None:
@@ -1090,7 +1126,7 @@ def applies(project_state):
 
 
 class Migration(migrations.Migration):
-    dependencies = []
+    dependencies = [("resources", "rename_legacy")]
     operations = [
         migrations.AddField(
             model_name="legacy",
@@ -1112,7 +1148,7 @@ class Migration(migrations.Migration):
     with pytest.raises(RuntimeError, match="source migration must end with a newline"):
         materializer.materialize(apps=apps)
 
-    assert not (runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py").exists()
+    assert not (runtime_dir / "resources" / "migrations" / "rename_legacy.py").exists()
 
 
 def test_materialized_origin_uses_app_config_name(runtime_migration_probe) -> None:
@@ -1137,7 +1173,7 @@ def test_rejects_malformed_dependency_with_origin(runtime_migration_probe) -> No
 
     with pytest.raises(
         RuntimeError,
-        match="example.demo:rename_legacy: invalid Django migration dependency 3",
+        match="example.demo:rename_legacy: invalid Django dependency 3",
     ):
         materializer.materialize(apps=apps)
 
@@ -1158,8 +1194,8 @@ def test_migration_owner_validates_native_manifest_fields(runtime_migration_prob
 
 @pytest.mark.parametrize("node", ["ab", ("resources", "0001_legacy", "extra"), ("resources",)])
 def test_run_before_rejects_non_pair_nodes(node) -> None:
-    with pytest.raises(RuntimeError, match="invalid Django run_before node"):
-        RuntimeMigrations._resolve_run_before(None, [node], current_app="resources", origin="example:probe")
+    with pytest.raises(RuntimeError, match="example:probe: invalid Django run_before"):
+        RuntimeMigrations._dependency_node(node, origin="example:probe", kind="run_before")
 
 
 def test_validated_plan_render_uses_the_hashed_source_snapshot(runtime_migration_probe) -> None:
@@ -1170,3 +1206,554 @@ def test_validated_plan_render_uses_the_hashed_source_snapshot(runtime_migration
     rendered = materializer._render(plan)
     assert rendered.startswith(expected)
     assert not rendered.startswith("changed after planning")
+
+
+def test_missing_pending_dependency_fails_before_guards_and_writes(runtime_migration_probe) -> None:
+    """An absent native node cannot be inferred from a guard or an earlier staged file."""
+
+    materializer, addon, _, runtime_dir, source_root = runtime_migration_probe
+    _write_module(source_root / "runtime_migrations" / "after_missing.py", """\
+from django.db import migrations
+
+def applies(state):
+    raise AssertionError("native graph validation must precede guard evaluation")
+
+class Migration(migrations.Migration):
+    dependencies = [("resources", "missing_cutover")]
+    operations = []
+""")
+    write_addon_manifest(addon, migrations=(
+        dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
+        dict(name="after_missing", app_label="resources", module="runtime_migrations.after_missing"),
+    ))
+    importlib.invalidate_caches()
+    directory = runtime_dir / "resources" / "migrations"
+    before = {path.name: path.read_bytes() for path in directory.glob("*.py")}
+
+    with pytest.raises(RuntimeError, match="migration graph is invalid.*missing_cutover"):
+        materializer.materialize(apps=apps)
+
+    assert {path.name: path.read_bytes() for path in directory.glob("*.py")} == before
+
+
+@pytest.mark.parametrize("dependent_first", [False, True])
+def test_data_only_migrations_keep_their_explicit_cross_app_order(
+    runtime_migration_probe, monkeypatch, settings, dependent_first: bool,
+) -> None:
+    """RunPython order is declared even when neither operation changes ProjectState."""
+
+    _, addon, _, runtime_dir, source_root = runtime_migration_probe
+    _write_module(runtime_dir / "compose" / "__init__.py")
+    _write_module(runtime_dir / "compose" / "migrations" / "__init__.py")
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "compose", f"{runtime_dir.name}.compose.migrations")
+    for name, dependencies in (
+        ("first_data", []), ("second_data", [("compose", "first_data")]),
+    ):
+        _write_module(source_root / "runtime_migrations" / f"{name}.py", f"""\
+from django.db import migrations
+
+def applies(state):
+    return True
+
+class Migration(migrations.Migration):
+    dependencies = {dependencies!r}
+    operations = [migrations.RunPython(migrations.RunPython.noop, migrations.RunPython.noop)]
+""")
+    parent = dict(name="first_data", app_label="compose", module="runtime_migrations.first_data")
+    child = dict(name="second_data", app_label="resources", module="runtime_migrations.second_data")
+    write_addon_manifest(addon, migrations=(child, parent) if dependent_first else (parent, child))
+    importlib.invalidate_caches()
+    materializer = RuntimeMigrations((addon,), labels=("resources", "compose"))
+
+    written = materializer.materialize(apps=apps)
+
+    assert [path.name for path in written] == ["first_data.py", "second_data.py"]
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    assert ("compose", "first_data") in loader.disk_migrations["resources", "second_data"].dependencies
+    order = loader.graph.forwards_plan(("resources", "second_data"))
+    assert order.index(("compose", "first_data")) < order.index(("resources", "second_data"))
+
+
+def test_run_before_latest_is_frozen_without_rebinding(runtime_migration_probe, monkeypatch, settings) -> None:
+    materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
+    directory = runtime_dir / "compose" / "migrations"
+    _write_module(runtime_dir / "compose" / "__init__.py")
+    _write_module(directory / "__init__.py")
+    _write_module(directory / "0001_target.py", """\
+from django.db import migrations
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = []
+""")
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "compose", f"{runtime_dir.name}.compose.migrations")
+    source_path.write_text(
+        source_path.read_text().replace(
+            "    dependencies = []",
+            '    dependencies = []\n    run_before = [("compose", "__latest__")]',
+            1,
+        ), encoding="utf-8",
+    )
+    importlib.invalidate_caches()
+
+    (output,) = materializer.materialize(apps=apps)
+
+    frozen = output.read_bytes()
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    assert loader.disk_migrations["resources", "rename_legacy"].run_before == [("compose", "0001_target")]
+    assert ("resources", "rename_legacy") in loader.graph.forwards_plan(("compose", "0001_target"))
+    _write_module(directory / "0002_later.py", """\
+from django.db import migrations
+class Migration(migrations.Migration):
+    dependencies = [("compose", "0001_target")]
+    operations = []
+""")
+    importlib.invalidate_caches()
+    assert materializer.materialize(apps=apps) == ()
+    assert output.read_bytes() == frozen
+    assert MigrationLoader(None, ignore_no_migrations=True).disk_migrations[
+        "resources", "rename_legacy"
+    ].run_before == [("compose", "0001_target")]
+
+
+def test_materialization_uses_custom_native_migration_package(runtime_migration_probe, monkeypatch, settings) -> None:
+    materializer, _, _, runtime_dir, _ = runtime_migration_probe
+    original = runtime_dir / "resources" / "migrations" / "0001_legacy.py"
+    original_bytes = original.read_bytes()
+    package = f"custom_{runtime_dir.name}"
+    directory = runtime_dir.parent / package / "migrations"
+    _write_module(directory.parent / "__init__.py")
+    _write_module(directory / "__init__.py")
+    _write_module(directory / original.name, original_bytes.decode("utf-8"))
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "resources", f"{package}.migrations")
+    importlib.invalidate_caches()
+
+    written = materializer.materialize(apps=apps)
+
+    assert written == (directory / "rename_legacy.py",)
+    assert original.read_bytes() == original_bytes
+    assert not (original.parent / "rename_legacy.py").exists()
+    assert MigrationLoader(None, ignore_no_migrations=True).graph.leaf_nodes("resources") == [
+        ("resources", "rename_legacy"),
+    ]
+
+
+@pytest.mark.parametrize("applicable", [True, False])
+def test_first_authored_history_creates_only_a_validated_native_package(
+    runtime_migration_probe, monkeypatch, settings, applicable,
+) -> None:
+    materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
+    package = f"{runtime_dir.name}.resources.first_history"
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "resources", package)
+    _write_module(source_path, f"""\
+from django.db import migrations, models
+
+
+def applies(project_state):
+    return {applicable!r}
+
+
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = [migrations.CreateModel(
+        name="First", fields=[("id", models.AutoField(primary_key=True))],
+    )]
+""")
+    directory = runtime_dir / "resources/first_history"
+
+    if not applicable:
+        with pytest.raises(RuntimeError, match="false schema guard"):
+            materializer.materialize(apps=apps)
+        assert not directory.exists()
+        return
+
+    with pytest.raises(ImproperlyConfigured, match="Create the importable migration package"):
+        materializer.check()
+    assert not directory.exists()
+
+    written = materializer.materialize(apps=apps)
+
+    assert written == (directory / "rename_legacy.py",)
+    assert (directory / "__init__.py").read_bytes() == b""
+    assert ("resources", "first") in MigrationLoader(None, ignore_no_migrations=True).project_state().models
+    materializer.check()
+
+
+def test_authored_history_refuses_missing_custom_parent_without_writes(
+    runtime_migration_probe, monkeypatch, settings,
+) -> None:
+    materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
+    package = f"{runtime_dir.name}.absent.history"
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "resources", package)
+    _write_module(source_path, """\
+from django.db import migrations
+
+
+def applies(project_state):
+    return True
+
+
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = []
+""")
+
+    with pytest.raises(ImproperlyConfigured, match="Initialize the importable parent package"):
+        materializer.materialize(apps=apps)
+
+    assert not (runtime_dir / "absent").exists()
+
+
+def test_existing_numbered_materialized_history_remains_byte_identical(runtime_migration_probe) -> None:
+    """A new naming convention never renames or rewrites an existing native node."""
+
+    materializer, _, _, runtime_dir, _ = runtime_migration_probe
+    (plan,) = materializer.plan()
+    directory = runtime_dir / "resources" / "migrations"
+    numbered = directory / "0002_rename_legacy.py"
+    _write_module(numbered, materializer._render(plan))
+    frozen = {path.name: path.read_bytes() for path in directory.glob("*.py")}
+    importlib.invalidate_caches()
+
+    assert materializer.materialize(apps=apps) == ()
+    materializer.check()
+
+    assert {path.name: path.read_bytes() for path in directory.glob("*.py")} == frozen
+    assert not (directory / "rename_legacy.py").exists()
+    assert MigrationLoader(None, ignore_no_migrations=True).graph.leaf_nodes("resources") == [
+        ("resources", "0002_rename_legacy"),
+    ]
+
+
+def test_autodetected_drop_of_an_adopted_physical_table_is_refused(runtime_migration_probe) -> None:
+    """Missing declaration graph and physical table ownership are separate guards."""
+
+    materializer, addon, _, runtime_dir, _ = runtime_migration_probe
+    write_addon_manifest(addon, migrations=())
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    current = loader.project_state()
+    adopted = current.models["resources", "legacy"].clone()
+    adopted.app_label = "integrate_vcs"
+    adopted.options["db_table"] = "resources_legacy"
+    current.remove_model("resources", "legacy")
+    current.real_apps.discard("integrate_vcs")
+    current.add_model(adopted)
+    directory = runtime_dir / "resources" / "migrations"
+    before = {path.name: path.read_bytes() for path in directory.glob("*.py")}
+
+    with pytest.raises(
+        RuntimeError,
+        match="DeleteModel would drop table 'resources_legacy', still owned by integrate_vcs.legacy",
+    ):
+        materializer.plan(apps=current.apps)
+
+    assert {path.name: path.read_bytes() for path in directory.glob("*.py")} == before
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("isolated_runtime_database")
+@pytest.mark.parametrize("partially_applied", [False, True])
+def test_complete_native_squash_preserves_fresh_and_partial_backfill_paths(
+    runtime_migration_probe, partially_applied: bool,
+) -> None:
+    """Django chooses the baseline for fresh installs and the original pending backfill otherwise."""
+
+    from django.db.migrations.executor import MigrationExecutor
+
+    materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
+    source_path.write_text(
+        source_path.read_text().replace(
+            '    apps.get_model("resources", "Legacy")',
+            '    apps.get_model("resources", "Legacy").objects.using(schema_editor.connection.alias)'
+            '.update(new_name="backfilled")',
+            1,
+        ), encoding="utf-8",
+    )
+    importlib.invalidate_caches()
+    (original_transition,) = materializer.materialize(apps=apps)
+    directory = runtime_dir / "resources" / "migrations"
+    originals = {path.name: path.read_bytes() for path in directory.glob("*.py")}
+    if partially_applied:
+        executor = MigrationExecutor(connection)
+        executor.migrate([("resources", "0001_legacy")])
+        legacy = executor.loader.project_state([("resources", "0001_legacy")]).apps.get_model("resources", "Legacy")
+        legacy._base_manager.create(old_name="kept")
+    _write_module(directory / "0002_squashed.py", """\
+from django.db import migrations, models
+
+def forwards(apps, schema_editor):
+    apps.get_model("resources", "Legacy").objects.using(schema_editor.connection.alias).update(new_name="backfilled")
+
+class Migration(migrations.Migration):
+    replaces = [("resources", "0001_legacy"), ("resources", "rename_legacy")]
+    dependencies = []
+    operations = [
+        migrations.CreateModel(name="Legacy", fields=[
+            ("id", models.AutoField(primary_key=True)),
+            ("new_name", models.CharField(max_length=100)),
+        ]),
+        migrations.RunPython(forwards, migrations.RunPython.noop),
+    ]
+""")
+    importlib.invalidate_caches()
+
+    executor = MigrationExecutor(connection)
+    targets = executor.loader.graph.leaf_nodes("resources")
+    assert [migration.name for migration, _backward in executor.migration_plan(targets)] == [
+        "rename_legacy" if partially_applied else "0002_squashed",
+    ]
+    executor.migrate(targets)
+    final = executor.loader.project_state(targets)
+    legacy = final.apps.get_model("resources", "Legacy")
+    if partially_applied:
+        assert list(legacy._base_manager.values_list("new_name", flat=True)) == ["backfilled"]
+    else:
+        assert legacy._base_manager.count() == 0
+    assert materializer.materialize(apps=final.apps) == ()
+    assert original_transition.exists()
+    assert {name: (directory / name).read_bytes() for name in originals} == originals
+
+
+def test_replacement_cannot_hide_a_missing_original_transition(runtime_migration_probe) -> None:
+    """A replaces label is not evidence that the original data chain is available."""
+
+    materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
+    source_path.write_text(
+        source_path.read_text().replace(
+            'return model is not None and "old_name" in model.fields', "return False",
+        ), encoding="utf-8",
+    )
+    directory = runtime_dir / "resources" / "migrations"
+    _write_module(directory / "0002_squashed.py", """\
+from django.db import migrations, models
+class Migration(migrations.Migration):
+    replaces = [("resources", "0001_legacy"), ("resources", "rename_legacy")]
+    dependencies = []
+    operations = [migrations.CreateModel(name="Legacy", fields=[
+        ("id", models.AutoField(primary_key=True)),
+        ("new_name", models.CharField(max_length=100)),
+    ])]
+""")
+    importlib.invalidate_caches()
+    before = {path.name: path.read_bytes() for path in directory.glob("*.py")}
+
+    with pytest.raises(RuntimeError, match="original") as refusal:
+        materializer.materialize(apps=apps)
+
+    assert "rename_legacy" in str(refusal.value)
+    assert {path.name: path.read_bytes() for path in directory.glob("*.py")} == before
+
+
+@pytest.fixture
+def native_authoring_command(runtime_migration_probe, monkeypatch, settings):
+    command_module = importlib.import_module("angee.compose.management.commands.makemigrations")
+    materializer, _, _, runtime_dir, _ = runtime_migration_probe
+    artifact = ModuleType("native_authoring_fixture")
+    artifact.RUNTIME_APPS = tuple(sorted(materializer.labels))
+    monkeypatch.setitem(sys.modules, artifact.__name__, artifact)
+    settings.COMPOSE_RUNTIME_MODULE = artifact.__name__
+
+    def migrations_for(_addons, *, labels):
+        assert frozenset(labels) == materializer.labels
+        return materializer
+
+    monkeypatch.setattr(command_module, "RuntimeMigrations", migrations_for)
+    return ComposedMakeMigrationsCommand(), materializer, runtime_dir
+
+
+def _authoring_options(command, *arguments: str) -> tuple[list[str], dict[str, Any]]:
+    options = vars(command.create_parser("manage.py", "makemigrations").parse_args(arguments))
+    return options.pop("args"), options
+
+
+def test_native_authoring_binds_before_django_loads_autodetection_graph(native_authoring_command, monkeypatch):
+    command, _, runtime_dir = native_authoring_command
+    called = []
+
+    def native_handle(self, *labels, **options):
+        state = MigrationLoader(None, ignore_no_migrations=True).project_state()
+        assert "new_name" in state.models["resources", "legacy"].fields
+        assert "old_name" not in state.models["resources", "legacy"].fields
+        called.append(labels)
+
+    monkeypatch.setattr(NativeMakeMigrationsCommand, "handle", native_handle)
+    labels, options = _authoring_options(command, "resources", "--noinput")
+    command.handle(*labels, **options)
+
+    assert called == [("resources",)]
+    assert (runtime_dir / "resources/migrations/rename_legacy.py").exists()
+
+
+@pytest.mark.parametrize("flag", ["--check", "--dry-run"])
+def test_native_readonly_authoring_refuses_pending_sources_without_writes(
+    native_authoring_command, monkeypatch, flag,
+):
+    command, _, runtime_dir = native_authoring_command
+    before = {path: path.read_bytes() for path in runtime_dir.rglob("*.py")}
+
+    def native_handle(*args, **kwargs):
+        pytest.fail("pending authored transitions reached native autodetection")
+
+    monkeypatch.setattr(NativeMakeMigrationsCommand, "handle", native_handle)
+    labels, options = _authoring_options(command, "resources", flag)
+    with pytest.raises(CommandError, match="pending addon runtime migration"):
+        command.handle(*labels, **options)
+
+    assert {path: path.read_bytes() for path in runtime_dir.rglob("*.py")} == before
+
+
+def test_native_merge_bypasses_authored_binding(native_authoring_command, monkeypatch):
+    command, materializer, runtime_dir = native_authoring_command
+    called = []
+
+    def refuse_binding(**kwargs):
+        pytest.fail("merge attempted to bind onto a graph it must repair first")
+
+    monkeypatch.setattr(materializer, "materialize", refuse_binding)
+    monkeypatch.setattr(NativeMakeMigrationsCommand, "handle", lambda self, *args, **kwargs: called.append(args))
+    labels, options = _authoring_options(command, "resources", "--merge", "--noinput")
+    command.handle(*labels, **options)
+
+    assert called == [("resources",)]
+    assert not (runtime_dir / "resources/migrations/rename_legacy.py").exists()
+
+
+def test_native_writer_preflights_every_destination_before_writing(runtime_migration_probe):
+    _, _, _, runtime_dir, _ = runtime_migration_probe
+    directory = runtime_dir / "resources/migrations"
+    before = {path: path.read_bytes() for path in directory.glob("*.py")}
+    command = ComposedMakeMigrationsCommand()
+    command.include_header = False
+    command.dry_run = False
+    safe = migrations.Migration("0002_safe", "resources")
+    collision = migrations.Migration("0001_legacy", "resources")
+
+    with pytest.raises(CommandError, match="Refusing to overwrite existing migration"):
+        command.write_migration_files({"resources": [safe, collision]})
+
+    assert {path: path.read_bytes() for path in directory.glob("*.py")} == before
+    assert not (directory / "0002_safe.py").exists()
+
+
+def test_native_readonly_writer_does_not_create_a_missing_custom_package(runtime_migration_probe, settings):
+    _, _, _, runtime_dir, _ = runtime_migration_probe
+    package = f"{runtime_dir.name}.resources.uncreated_history"
+    settings.MIGRATION_MODULES = {**settings.MIGRATION_MODULES, "resources": package}
+    command = ComposedMakeMigrationsCommand()
+    command.include_header = False
+    command.dry_run = True
+
+    with pytest.raises(CommandError, match="read-only run cannot create"):
+        command.write_migration_files({"resources": [migrations.Migration("0001_initial", "resources")]})
+
+    assert not (runtime_dir / "resources/uncreated_history").exists()
+
+
+def test_native_update_refuses_an_immutable_materialized_source(runtime_migration_probe):
+    materializer, _, _, runtime_dir, _ = runtime_migration_probe
+    (path,) = materializer.materialize(apps=apps)
+    before = path.read_bytes()
+    bound = MigrationLoader(None, ignore_no_migrations=True).disk_migrations["resources", "rename_legacy"]
+    command = ComposedMakeMigrationsCommand()
+    command.include_header = False
+    command.dry_run = False
+
+    with pytest.raises(CommandError, match="Cannot update immutable addon migration"):
+        command.write_migration_files({"resources": [bound]}, {"resources": str(path)})
+
+    assert path.read_bytes() == before
+    assert (runtime_dir / "resources/migrations/0001_legacy.py").exists()
+
+
+def test_native_writer_permits_an_ordinary_native_update(runtime_migration_probe):
+    _, _, _, runtime_dir, _ = runtime_migration_probe
+    directory = runtime_dir / "resources/migrations"
+    previous = directory / "0001_legacy.py"
+    original = MigrationLoader(None, ignore_no_migrations=True).disk_migrations["resources", "0001_legacy"]
+    updated = migrations.Migration("0002_rewritten", "resources")
+    updated.operations = original.operations
+    command = ComposedMakeMigrationsCommand()
+    command.include_header = False
+    command.dry_run = False
+    command.verbosity = 0
+    command.scriptable = False
+    command.written_files = []
+
+    command.write_migration_files({"resources": [updated]}, {"resources": str(previous)})
+
+    assert (directory / "0002_rewritten.py").exists()
+    assert not previous.exists()
+
+
+def test_scoped_plan_keeps_native_prerequisite_closure(runtime_migration_probe, monkeypatch, settings):
+    _, addon, source_path, runtime_dir, source_root = runtime_migration_probe
+    _write_module(runtime_dir / "integrate_vcs/__init__.py")
+    _write_module(runtime_dir / "integrate_vcs/migrations/__init__.py")
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "integrate_vcs", f"{runtime_dir.name}.integrate_vcs.migrations")
+    _write_module(source_root / "prepare.py", '''from django.db import migrations, models
+
+def applies(state):
+    return ("integrate_vcs", "ready") not in state.models
+
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = [migrations.CreateModel(name="Ready", fields=[("id", models.AutoField(primary_key=True))])]
+''')
+    source_path.write_text(
+        source_path.read_text().replace(
+            '    dependencies = []', '    dependencies = [("integrate_vcs", "prepare")]', 1,
+        ),
+        encoding="utf-8",
+    )
+    write_addon_manifest(addon, migrations=(
+        dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
+        dict(name="prepare", app_label="integrate_vcs", module="prepare"),
+    ))
+    materializer = RuntimeMigrations((addon,), labels=("resources", "integrate_vcs"))
+
+    assert [plan.name for plan in materializer.plan(app_labels=("resources",))] == ["prepare", "rename_legacy"]
+    assert not (runtime_dir / "integrate_vcs/migrations/prepare.py").exists()
+
+
+def test_scoped_plan_excludes_unrelated_pending_state_and_leaf_conflicts(
+    runtime_migration_probe, monkeypatch, settings,
+):
+    _, addon, _, runtime_dir, source_root = runtime_migration_probe
+    other = runtime_dir / "integrate_vcs/migrations"
+    _write_module(other.parent / "__init__.py")
+    _write_module(other / "__init__.py")
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "integrate_vcs", f"{runtime_dir.name}.integrate_vcs.migrations")
+    for name in ("0001_left", "0001_right"):
+        _write_module(other / f"{name}.py", '''from django.db import migrations
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = []
+''')
+    _write_module(source_root / "unrelated.py", '''from django.db import migrations, models
+
+def applies(state):
+    raise AssertionError("unselected guard must not run")
+
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = [migrations.CreateModel(name="Unrelated", fields=[("id", models.AutoField(primary_key=True))])]
+''')
+    write_addon_manifest(addon, migrations=(
+        dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
+        dict(name="unrelated", app_label="integrate_vcs", module="unrelated"),
+    ))
+    materializer = RuntimeMigrations((addon,), labels=("resources", "integrate_vcs"))
+    inspected = []
+
+    def inspect_drop_state(loader, from_state, to_state, *, app_labels):
+        assert ("integrate_vcs", "unrelated") not in from_state.models
+        assert "new_name" in from_state.models["resources", "legacy"].fields
+        inspected.append(app_labels)
+
+    monkeypatch.setattr(materializer, "_check_autodetected_drops", inspect_drop_state)
+    plans = materializer.plan(apps=apps, app_labels=("resources",))
+
+    assert [plan.name for plan in plans] == ["rename_legacy"]
+    assert inspected == [{"resources"}]
+    assert not (other / "unrelated.py").exists()
+    with pytest.raises(RuntimeError, match="multiple migration leaves"):
+        materializer.plan()

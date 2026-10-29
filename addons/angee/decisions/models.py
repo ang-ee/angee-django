@@ -8,10 +8,12 @@ from django.db import models
 from django.utils.text import capfirst
 from rebac import system_context
 
+from angee.base.models.append_only import AppendOnlyModel
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.derived import DerivedFrom
+from angee.base.models.locks import OptimisticLockMixin
 from angee.decisions.managers import DecisionManager, DecisionRecordManager
 from angee.graphql.events import ChangeRelatedRecord
-from angee.models import AngeeDataModel, AppendOnlyModel, OptimisticLockMixin
-from angee.models.derived import DerivedFrom
 
 
 class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):

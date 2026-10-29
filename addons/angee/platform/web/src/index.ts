@@ -1,34 +1,21 @@
-import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute } from "@angee/app";
-import { type BaseMenuItem } from "@angee/ui";
+import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute, type MenuDeclarations } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 
 import { enPlatformMessages } from "./i18n";
 
 // The platform app is a route-less Settings category (`group: "platform"`). The
-// addon owns the schema explorer group; Resources contributes its import ledger
-// under `parentId: "platform"` while other base addons own sibling categories.
-const platformMenu: readonly BaseMenuItem[] = [
-  {
-    id: "platform",
-    label: "Platform",
-    icon: "terminal",
-    group: "platform",
-    children: [
-      {
-        id: "platform.explore",
-        label: "Platform",
-        icon: "terminal",
-        children: [
-          { id: "platform.graph", label: "Graph", route: "platform.graph", icon: "share" },
-          { id: "platform.models", label: "Models", route: "platform.models", icon: "grid" },
-          { id: "platform.fields", label: "Fields", route: "platform.fields", icon: "columns" },
-          { id: "platform.implementations", label: "Implementations", route: "platform.implementations", icon: "terminal" },
-          { id: "platform.addons", label: "Addons", route: "platform.addons", icon: "grid" },
-        ],
-      },
-    ],
-  },
-];
+// addon owns the schema explorer and import-ledger console; other base addons
+// contribute sibling categories.
+const platformMenu: MenuDeclarations = {
+  "platform": { label: "Platform", icon: "terminal", group: "platform" },
+  "platform.explore": { label: "Platform", icon: "terminal", parent: "platform" },
+  "platform.graph": { label: "Graph", route: "platform.graph", icon: "share", parent: "platform.explore" },
+  "platform.models": { label: "Models", route: "platform.models", icon: "grid", parent: "platform.explore" },
+  "platform.fields": { label: "Fields", route: "platform.fields", icon: "columns", parent: "platform.explore" },
+  "platform.implementations": { label: "Implementations", route: "platform.implementations", icon: "terminal", parent: "platform.explore" },
+  "platform.addons": { label: "Addons", route: "platform.addons", icon: "grid", parent: "platform.explore" },
+  "platform.resources": { label: "Resources", icon: "archive", route: "resources.ledger", parent: "platform" },
+};
 
 const platformRoutes: readonly BaseAddonRoute[] = [
   { name: "platform.graph", path: "/platform", component: lazyRouteComponent(() => import("./views/GraphPage"), "GraphPage") },
@@ -47,6 +34,7 @@ const platformRoutes: readonly BaseAddonRoute[] = [
     detailMenu: "platform.addons",
     detailComponent: lazyRouteComponent(() => import("./views/AddonDetail"), "AddonDetail"),
   }),
+  { name: "resources.ledger", path: "/platform/resources", resource: "resources.Resource", component: lazyRouteComponent(() => import("./views/ResourcesPage"), "ResourcesPage") },
 ];
 
 const platform = defineBaseAddon({

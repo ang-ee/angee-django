@@ -11,6 +11,8 @@ from hatch_angee import AddonManifest
 
 from angee.addons import addon_manifest, resolve_manifest_roots
 from angee.compose.appgraph import AppGraph
+from angee.compose.declarations import AppDeclarationSource
+from angee.conf import ManifestDeclarations
 from tests.conftest import make_addon
 
 
@@ -19,13 +21,13 @@ def test_folder_addon_dependency_resolves_manifest_free_core_app() -> None:
 
     consumer = make_addon(name="example.consumer", depends_on=("angee",))
 
-    resolved = AppGraph().resolve((consumer,))
+    resolved = AppGraph(ManifestDeclarations()).resolve((consumer,))
     base, resolved_consumer = resolved
 
     assert base.name == "angee"
     assert addon_manifest(base) is None
     assert not hasattr(base, "angee_depends_on")
-    assert base.angee_forced is True
+    assert base.compose_required is True
     assert resolved_consumer is consumer
 
 
@@ -46,7 +48,7 @@ def test_app_dependency_order_preserves_root_and_dependency_precedence(tmp_path:
     }
     roots = (configs["alpha"], configs["independent"])
     if discovery == "app_configs":
-        resolved = AppGraph().resolve(roots)
+        resolved = AppGraph(ManifestDeclarations()).resolve(roots)
     else:
         discovered = list(configs.values())
         if discovery == "reversed_manifests":
@@ -83,7 +85,7 @@ def test_app_dependency_cycles_are_rejected_for_both_discovery_paths(
         if manifest_only:
             resolve_manifest_roots((alpha.name,), (addon_manifest(beta), addon_manifest(alpha)))
         else:
-            AppGraph().resolve((alpha,))
+            AppGraph(ManifestDeclarations()).resolve((alpha,))
     cycle = "example.alpha -> example.alpha" if self_cycle else "example.alpha -> example.beta -> example.alpha"
     assert str(caught.value) == f"Cycle in app dependencies: {cycle}"
 
@@ -116,7 +118,7 @@ def test_dependency_aliases_resolve_to_the_same_app_order(tmp_path: Path, manife
             aliases={dependency.label: dependency.name},
         )
     else:
-        resolved = AppGraph().resolve((consumer, dependency))
+        resolved = AppGraph(ManifestDeclarations()).resolve((consumer, dependency))
 
     assert [app.name for app in resolved] == [dependency.name, consumer.name]
 
@@ -154,9 +156,9 @@ def test_appgraph_retains_discovered_app_config_dependency_alias(tmp_path: Path,
 
     monkeypatch.setattr(AppConfig, "create", create)
 
-    assert AppGraph().resolve((consumer,)) == (dependency, consumer)
+    assert AppGraph(ManifestDeclarations()).resolve((consumer,)) == (dependency, consumer)
     assert created == [declaration]
-    assert dependency.angee_forced is True
+    assert dependency.compose_required is True
 
 
 def test_appgraph_unknown_dependency_still_fails_during_discovery(tmp_path: Path) -> None:
@@ -167,4 +169,12 @@ def test_appgraph_unknown_dependency_still_fails_during_discovery(tmp_path: Path
     )
 
     with pytest.raises(ImproperlyConfigured, match="depends on unknown app 'missing_app_for_graph_test'"):
-        AppGraph().resolve((consumer,))
+        AppGraph(ManifestDeclarations()).resolve((consumer,))
+
+
+def test_plain_composer_has_no_implicit_manifest_policy(tmp_path: Path) -> None:
+    """A host must supply manifest semantics through the explicit adapter."""
+
+    consumer = make_addon(name="example.consumer", path=tmp_path, depends_on=("missing.app",))
+    (tmp_path / "addon.toml").write_text("not valid toml = [")
+    assert AppGraph(AppDeclarationSource()).resolve((consumer,)) == (consumer,)

@@ -15,7 +15,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from angee.identity import public_id_of
+from angee.base.models.identity import public_id_of
 
 if TYPE_CHECKING:
     from angee.integrate.mixins import SyncStateMixin
@@ -189,6 +189,25 @@ class SyncFailure(BaseModel):
     @property
     def link_pk(self) -> Any:
         return self.link.pk if self.link is not None else None
+
+    @property
+    def message(self) -> str:
+        """The adapter's human explanation, with its stable code as a fallback."""
+
+        message = self.details.get("message")
+        return message if isinstance(message, str) and message else self.code
+
+    @property
+    def source_label(self) -> str:
+        """Identify the failed remote record, or the whole stream for stream failures."""
+
+        return self.link.source_label if self.link is not None else str(self.stream)
+
+    @property
+    def source_url(self) -> str | None:
+        """Open the provider's own record when this failure belongs to a link."""
+
+        return self.link.source_url if self.link is not None else None
 
     def resolve(self) -> SyncFailure:
         return self._owner.resolve_failure(self._slot)

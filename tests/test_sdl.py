@@ -69,16 +69,19 @@ def test_emit_prunes_removed_schema_buckets(tmp_path: Path) -> None:
     sdl.check()
 
 
-def test_emit_if_stale_writes_only_on_drift(tmp_path: Path) -> None:
-    """``emit_if_stale`` writes when absent/drifted and no-ops when current."""
+def test_explicit_emit_preserves_current_file(tmp_path: Path) -> None:
+    """Explicit rendering leaves unchanged schema files untouched."""
 
     sdl = _sdl(tmp_path, {"public": "type Query { a: Int }\n"})
-    assert sdl.emit_if_stale() is True
-    assert sdl.emit_if_stale() is False
+    sdl.emit()
+    schema = tmp_path / "schemas" / "public.graphql"
+    modified = schema.stat().st_mtime_ns
+    sdl.emit()
+    assert schema.stat().st_mtime_ns == modified
 
 
-def test_emit_if_stale_prunes_removed_schema_buckets(tmp_path: Path) -> None:
-    """The boot hook prunes only owned suffixes after a schema bucket is removed."""
+def test_explicit_emit_prunes_removed_schema_buckets(tmp_path: Path) -> None:
+    """Explicit output reconciliation prunes only owned schema suffixes."""
 
     schema_dir = tmp_path / "schemas"
     _sdl(tmp_path, {"public": "type Query { a: Int }\n", "console": "type Query { b: Int }\n"}).emit()
@@ -92,7 +95,7 @@ def test_emit_if_stale_prunes_removed_schema_buckets(tmp_path: Path) -> None:
         schema_dir=schema_dir,
     )
 
-    assert sdl.emit_if_stale() is True
+    sdl.emit()
     assert not (schema_dir / "console.graphql").exists()
     assert not (schema_dir / "console.metadata.json").exists()
     assert unrelated.read_text(encoding="utf-8") == "keep\n"
@@ -100,27 +103,11 @@ def test_emit_if_stale_prunes_removed_schema_buckets(tmp_path: Path) -> None:
     sdl.check()
 
 
-def test_graphql_asgi_boot_emits_sdl_only_for_dev_serve(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The GraphQL addon owns the dev-SDL hook behind the runserver gate."""
+def test_graphql_asgi_does_not_contribute_artifact_writes() -> None:
+    """Schema output belongs to explicit provisioning, including DEBUG hosts."""
 
-    calls: list[str] = []
-
-    class _StubSdl:
-        @classmethod
-        def from_discovery(cls) -> _StubSdl:
-            return cls()
-
-        def emit_if_stale(self) -> None:
-            calls.append("emit")
-
-    monkeypatch.setattr(graphql_asgi, "GraphQLSdl", _StubSdl)
-    monkeypatch.delenv("ANGEE_DEV_SDL", raising=False)
-    graphql_asgi.boot_hooks[0]()
-    assert calls == []
-
-    monkeypatch.setenv("ANGEE_DEV_SDL", "1")
-    graphql_asgi.boot_hooks[0]()
-    assert calls == ["emit"]
+    assert not hasattr(graphql_asgi, "boot_hooks")
+    assert not hasattr(graphql_asgi, "GraphQLSdl")
 
 
 def test_check_raises_on_drift_and_passes_when_current(tmp_path: Path) -> None:

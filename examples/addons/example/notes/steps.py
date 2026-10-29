@@ -9,7 +9,7 @@ from django.apps import apps
 from pydantic import BaseModel
 
 from angee.decisions.contracts import DecisionContext, DecisionFact, DecisionProposal, DecisionRequest
-from angee.evidence import FactAuthority
+from angee.provenance.evidence import FactAuthority
 from angee.workflows.awaits import AwaitRunInput
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.maps import MapItem

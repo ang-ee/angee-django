@@ -1,431 +1,217 @@
 // @vitest-environment happy-dom
-
-import { cleanup, fireEvent, render, screen, within, } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { createRouteHref } from "@angee/ui/runtime";
-import { ModelMetadataProvider, ResourceQuery, schemaFieldMetadataFromDataResources, type QueryFilter } from "@angee/metadata";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
+import { Filter, ResourceQuery, type QueryFilter } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import {
-  ChatterTabsTestHost,
-  PrimaryPaneTestHost,
-  ShellPageTestProviders,
-} from "@angee/app/testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
+import { PrimaryPaneTestHost, ShellPageTestProviders } from "@angee/app/testing";
+import { createUiTestProviders } from "@angee/ui/testing";
+import { createRouteHref, ModalsHost, ToastProvider } from "@angee/ui";
 
-const routerMocks = vi.hoisted(() => ({
-  navigate: vi.fn(),
-  params: {} as Record<string, string>,
-  routeHref: vi.fn(),
+const route = vi.hoisted(() => ({ id: null as string | null, navigate: vi.fn(), search: {}, preview: { viewAs: null as string | null, pending: false } }));
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()), useNavigate: () => route.navigate,
 }));
-
-const hoistedInvalidate = vi.hoisted(() => vi.fn());
-
-const sdkMocks = vi.hoisted(() => ({
-  useAuthoredQuery: vi.fn(), refetch: {
-    detail: vi.fn(async () => undefined), pages: vi.fn(async () => undefined), vaults: vi.fn(async () => undefined), }, }));
-
-// The page now publishes a memoized navigator into the shell's primary pane via
-// an effect, so its hooks must hand back stable references (matching production, // where `usePageActions` memoizes). A fresh object per render would republish
-// every render and spin the publish effect. Hoist one stable actions object.
-const pageActionMocks = vi.hoisted(() => ({
-  busy: false, createPage: vi.fn(async () => "created-page"), trashPage: vi.fn(async () => true),
-  restorePage: vi.fn(async () => true), movePage: vi.fn(), }));
-
-vi.mock("@tanstack/react-router", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
-  useNavigate: () => routerMocks.navigate,
-  useParams: () => routerMocks.params,
+vi.mock("@angee/ui", async (original) => ({
+  ...(await original<typeof import("@angee/ui")>()), useRouteRecordId: () => route.id,
+  useRouteSearch: () => route.search, useRuntimeViewAs: () => route.preview,
 }));
-
-vi.mock("@angee/refine", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@angee/refine")>()),
-  useAuthoredQuery: sdkMocks.useAuthoredQuery,
-  useInvalidateAuthoredModels: () => hoistedInvalidate,
-}));
-
-// The shared rendered hooks resolve from `@angee/ui`, so the module mock folds
-// `useNamespaceT` and the render overrides into one Vitest-hoisted factory atop
-// the real module.
-vi.mock("@angee/ui", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui")>();
-  // Production `useNamespaceT` returns a `useCallback`-stable translator; mirror
-  // that here (cache by the `messages` object) so a memoized published node keeps
-  // a stable identity instead of republishing every render.
-  const translators = new WeakMap<
-    Record<string, string>, (key: string, vars?: Record<string, string>) => string
-  >();
-  const makeT = (messages: Record<string, string>) => {
-    let t = translators.get(messages);
-    if (!t) {
-      t = (key: string, vars?: Record<string, string>) => {
-        let message = messages[key] ?? key;
-        for (const [name, value] of Object.entries(vars ?? {})) {
-          message = message.replace(`{${name}}`, value);
-        }
-        return message;
-      };
-      translators.set(messages, t);
-    }
-    return t;
-  };
-  return {
-    ...actual,
-    useRouteHref: () => routerMocks.routeHref,
-    useRouteRecordId: () => routerMocks.params.id,
-    useNamespaceT: (_namespace: string, messages: Record<string, string>) =>
-      makeT(messages), EmptyState: ({ title }: { title: string }) => (
-      <section data-testid="empty-state">{title}</section>
-    ), LoadingPanel: ({ message }: { message: string }) => (
-      <section data-testid="loading">{message}</section>
-    ), TreeView: ({
-      rows, rowKey, label, selectedId, onSelect, insertion, }: {
-      rows: readonly Record<string, string>[];
-      rowKey: string;
-      label: string;
-      selectedId?: string;
-      onSelect?: (row: Record<string, string>) => void;
-      insertion?: { parentId: string | null; node: React.ReactNode } | null;
-    }) => (
-      <div
-        data-testid="tree"
-        data-row-ids={rows.map((row) => row[rowKey]).join(", ")}
-        data-selected={selectedId ?? ""}
-      >
-        {insertion?.node}
-        {rows.map((row) => (
-          <button
-            key={row[rowKey]}
-            type="button"
-            data-testid={`tree-row-${row[rowKey]}`}
-            onClick={() => onSelect?.(row)}
-          >
-            {row[label]}
-          </button>
-        ))}
-      </div>
-    ), WikilinkProvider: ({ children }: { children: React.ReactNode }) => (
-      <>{children}</>
-    ), useConfirm: () => async () => true, };
-});
-
-vi.mock("../data/use-page-actions", () => ({
-  usePageActions: () => pageActionMocks, }));
-
-vi.mock("../data/use-page-editor", () => ({
-  usePageEditor: (_id: string, initial: { title: string; body: string }) => ({
-    title: initial.title, body: initial.body, status: "idle",
-    setTitle: () => undefined, commitTitle: () => undefined, setBody: () => undefined,
-  }),
-}));
-
-vi.mock("./PageBody", () => ({
-  PageBody: () => <section data-testid="page-body" />,
-  PageBodyEditor: () => <section data-testid="page-editor" />,
-  SaveBadge: () => null,
-}));
-
-// The explorer pane composes RelationPicker through its own module import, so
-// the picker double mocks the subpath module (same resolved id), not the barrel.
-vi.mock("@angee/ui/views/RelationPicker", () => ({
-  RelationPicker: ({
-    value, options, onChange, onCreated, "aria-label": ariaLabel, }: {
-    value?: string | null;
-    options: readonly { value: string; label: string }[];
-    onChange?: (value: string) => void;
-    onCreated?: (value: string) => void;
-    "aria-label"?: string;
-  }) => (
-    <div>
-      <select
-        aria-label={ariaLabel}
-        data-testid="root-picker"
-        value={value ?? ""}
-        onChange={(event) => onChange?.(event.currentTarget.value)}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-      <button
-        type="button"
-        data-testid="create-root"
-        onClick={() => {
-          onChange?.("vault-created");
-          onCreated?.("vault-created");
-        }}
-      >
-        Create root
-      </button>
-    </div>
-  ),
-}));
-
-import {
-  KnowledgePage as KnowledgePageQuery,
-  KnowledgePages,
-  KnowledgeVaults,
-} from "../data/documents";
-import knowledge from "../index";
+// The independent native form is exercised in KnowledgePageView.test.tsx.
+vi.mock("../KnowledgePageView", () => ({ KnowledgePageView: ({ pageId }: { pageId: string }) => <output data-testid="detail">{pageId}</output> }));
 import { KnowledgePage } from "./KnowledgePage";
+import { KnowledgeCreatePage, KnowledgePage as PageDocument, KnowledgePages, KnowledgeVault, KnowledgeVaults, type KnowledgePageDetail } from "../data/documents";
 
-const metadata = schemaFieldMetadataFromDataResources([testDataResource("knowledge.Page", {
-  query: ResourceQuery.forRows({ fields: { id: { scalar: "ID" }, vault: { scalar: "ID" } } }).contract,
-})]);
+const pageQuery = ResourceQuery.forRows({ fields: {
+  id: { scalar: "ID" }, title: { scalar: "String" }, vault: { scalar: "ID" }, parent: { scalar: "ID" },
+  is_trashed: { scalar: "Boolean" }, navigation_root: { scalar: "Boolean" }, removed_root: { scalar: "Boolean" },
+} });
+const vaultQuery = ResourceQuery.forRows({ fields: { id: { scalar: "ID" }, name: { scalar: "String" }, is_trashed: { scalar: "Boolean" } } });
+const { Provider, clearClients } = createUiTestProviders({ resources: [
+  testDataResource("knowledge.Page", { query: pageQuery.contract }),
+  testDataResource("knowledge.Vault", { query: vaultQuery.contract }),
+], queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } } });
+const href = createRouteHref([{ name: "knowledge.home", path: "/knowledge" }, { name: "knowledge.page", path: "/knowledge/$id" }, { name: "knowledge.settings", path: "/knowledge/settings" }]);
+const folder: KnowledgePageDetail = {
+  id: "pg_parent", title: "Projects", kind: "folder", icon: "", vault: "vlt_1", vault_label: "Reference",
+  permissions: ["write", "delete"], parent: null, is_trashed: false, has_children: true, ancestors: [], wikilinks: [], backlinks: [],
+  markdown: null, updated_at: "2026-10-20", created_by_label: "Author",
+};
+beforeEach(() => { route.id = null; route.navigate.mockReset(); route.preview = { viewAs: null, pending: false }; });
+afterEach(() => { cleanup(); clearClients(); });
 
-function renderPage(filter?: QueryFilter) {
-  return render(
-    <ShellPageTestProviders runtime={{
-      defaultResourceFilter: filter ? { resource: "knowledge.Page", filter } : undefined,
-    }}>
-      <KnowledgePage />
-      <PrimaryPaneTestHost />
-      <ChatterTabsTestHost tabTestId={(id) => `chatter-tab-${id}`} />
-    </ShellPageTestProviders>,
-    { wrapper: ({ children }) => <ModelMetadataProvider metadata={metadata}>{children}</ModelMetadataProvider> },
-  );
+function fixture(options: {
+  detail?: KnowledgePageDetail; noVaults?: boolean; writable?: boolean; scope?: QueryFilter;
+  beforeVaultSearch?: () => Promise<void>;
+  beforePageRead?: (id: string) => Promise<void>;
+} = {}) {
+  const vaults = options.noVaults ? [] : [{ id: "vlt_1", name: "Reference", permissions: options.writable === false ? [] : ["write"], is_trashed: false }];
+  const rows = [{ ...folder, navigation_root: true }, { ...folder, id: "pg_child", title: "Child", kind: "note", parent: folder.id, has_children: false, navigation_root: false }];
+  const create = vi.fn(async () => ({ create_page: { id: "pg_created" } }));
+  const custom = vi.fn<NonNullable<RefineTestDataProvider["custom"]>>(async ({ meta }) => {
+    const variables = meta?.gqlVariables ?? {};
+    if (meta?.gqlMutation === KnowledgeCreatePage) return { data: await create() };
+    if (meta?.gqlQuery === PageDocument) {
+      await options.beforePageRead?.(String(variables.id));
+      return { data: { pages_by_pk: options.detail ?? rows.find((row) => row.id === variables.id) ?? null } };
+    }
+    if (meta?.gqlQuery === KnowledgeVault) return { data: { vaults_by_pk: vaults.find((vault) => vault.id === variables.id) ?? null } };
+    if (meta?.gqlQuery === KnowledgeVaults) {
+      await options.beforeVaultSearch?.();
+      return { data: { vaults: vaults.filter((vault) => vaultQuery.matches(vault, vaultQuery.fromWhere(variables.where))) } };
+    }
+    if (meta?.gqlQuery === KnowledgePages) {
+      const filtered = rows.filter((row) => pageQuery.matches(row, pageQuery.fromWhere(variables.where)));
+      return { data: { pages: filtered, pages_aggregate: { aggregate: { count: filtered.length } } } };
+    }
+    throw new Error("Unexpected query");
+  });
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/knowledge"] }) });
+  const view = render(<KnowledgePage />, { wrapper: ({ children }: { children: ReactNode }) => <Provider dataProvider={{ custom, getList: async () => ({ data: [], total: 0 }) }}>
+    <RouterContextProvider router={router}><ToastProvider><ModalsHost><ShellPageTestProviders runtime={{ routeHref: href,
+      defaultResourceFilter: options.scope ? { resource: "knowledge.Page", filter: options.scope } : undefined,
+    }}>{children}<PrimaryPaneTestHost /></ShellPageTestProviders></ModalsHost></ToastProvider></RouterContextProvider>
+  </Provider> });
+  return { create, custom, rerender: () => view.rerender(<KnowledgePage />) };
 }
 
-let knowledgeData = makeKnowledgeData();
-
-beforeEach(() => {
-  hoistedInvalidate.mockClear();
-  knowledgeData = makeKnowledgeData();
-  routerMocks.params = {};
-  routerMocks.navigate.mockClear();
-  routerMocks.routeHref.mockReset();
-  const routeHref = createRouteHref(knowledge.routes ?? []);
-  routerMocks.routeHref.mockImplementation(routeHref);
-  Object.assign(routerMocks.routeHref, { maybe: routeHref.maybe });
-  for (const refetch of Object.values(sdkMocks.refetch)) {
-    refetch.mockClear();
-  }
-  sdkMocks.useAuthoredQuery.mockImplementation((document) => {
-    if (document === KnowledgeVaults) {
-      return queryResult("vaults", {
-        vaults: knowledgeData.vaults,
-      });
-    }
-    if (document === KnowledgePages) {
-      return queryResult("pages", { pages: knowledgeData.pages });
-    }
-    if (document === KnowledgePageQuery) {
-      const pageId = routerMocks.params.id ?? "";
-      return queryResult("detail", {
-        pages_by_pk: knowledgeData.details[pageId] ?? null,
-      });
-    }
-    throw new Error("Unexpected knowledge query document");
-  });
+test("the existing New menu creates a subpage under the open page and keeps a failed draft", async () => {
+  route.id = folder.id;
+  const f = fixture({ detail: folder });
+  await screen.findByText("Projects");
+  fireEvent.click(await screen.findByRole("button", { name: "New" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Subpage" }));
+  const input = await screen.findByRole("textbox", { name: "New page title" });
+  fireEvent.change(input, { target: { value: "My child" } });
+  f.create.mockRejectedValueOnce(new Error("Offline"));
+  fireEvent.submit(screen.getByRole("form", { name: "New page title" }));
+  await screen.findByText("Offline");
+  expect(screen.getByDisplayValue("My child")).toBeTruthy();
+  expect(route.navigate).not.toHaveBeenCalled();
+  fireEvent.submit(screen.getByRole("form", { name: "New page title" }));
+  await waitFor(() => expect(route.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: "/knowledge/pg_created" })));
+  expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({ meta: expect.objectContaining({ gqlMutation: KnowledgeCreatePage,
+    gqlVariables: { vault: "vlt_1", parent: folder.id, kind: "note", title: "My child" } }) }));
+  expect(screen.queryByText("New page here")).toBeNull();
 });
 
-afterEach(() => {
-  cleanup();
+test("a direct page still opens without access to any vault", async () => {
+  route.id = "pg_child";
+  fixture({ noVaults: true, detail: { ...folder, id: route.id } });
+  expect((await screen.findByTestId("detail")).textContent).toBe("pg_child");
+  expect(screen.queryByRole("button", { name: "New" })).toBeNull();
 });
 
-describe("KnowledgePage explorer wiring", () => {
-  test("a mounted scope is compiled into the read and only represented vaults remain", () => {
-    knowledgeData.pages = [page("page-a", "Page A", "note", "vault-a")];
-    renderPage({ vault: { exact: "vault-a" } });
-    const call = sdkMocks.useAuthoredQuery.mock.calls.findLast(([document]) => document === KnowledgePages)!;
-    expect(call[1]).toMatchObject({ where: { vault: { _eq: "vault-a" } } });
-    expect(call[2]).toMatchObject({ enabled: true });
-    expect(within(screen.getByTestId("root-picker")).getAllByRole("option").map((option) => option.textContent))
-      .toEqual(["Vault A"]);
-    expect(treeAttribute("data-row-ids")).toBe("page-a");
-  });
-
-  test("an invalid mounted filter blocks its read instead of loading an unscoped collection", () => {
-    renderPage({ missing_scope: { exact: "not-a-field" } });
-    const call = sdkMocks.useAuthoredQuery.mock.calls.findLast(([document]) => document === KnowledgePages)!;
-    expect(call[2]).toMatchObject({ enabled: false });
-    expect(screen.queryByTestId("root-picker")).toBeNull();
-    expect(screen.getByRole("alert")).toBeTruthy();
-  });
-
-  test("uses the open page vault for a direct link", () => {
-    routerMocks.params = { id: "page-b" };
-
-    renderPage();
-
-    expect(rootPickerValue()).toBe("vault-b");
-    expect(treeAttribute("data-row-ids")).toBe("page-b");
-    expect(treeAttribute("data-selected")).toBe("page-b");
-    expect(screen.getByRole("heading", { name: "Page B" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    expect(screen.getByTestId("page-editor")).toBeTruthy();
-    // Backlinks and bindings are Related groups on the page's record, not page-published tabs.
-    expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe("");
-  });
-
-  test("shows the not-found state when the detail read returns null", () => {
-    routerMocks.params = { id: "missing-page" };
-
-    renderPage();
-
-    expect(screen.getByTestId("empty-state").textContent).toBe("Page not found");
-    expect(screen.queryByTestId("page-editor")).toBeNull();
-  });
-
-  test("publishes the navigator into the primary pane", async () => {
-    renderPage();
-
-    // The vault switcher + tree live in the shell's primary pane host.
-    const primary = within(screen.getByTestId("shell-primary"));
-    expect(primary.getByTestId("tree")).toBeTruthy();
-    expect(primary.getByLabelText("Vault")).toBeTruthy();
-    expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe("");
-    // "New" is one labeled menu in the pane toolbar; a page is typed as a row in the tree.
-    fireEvent.click(primary.getByRole("button", { name: "New" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Page" }));
-    expect(primary.getByRole("textbox", { name: "New page title" })).toBeTruthy();
-  });
-
-  test("trashed pages leave the tree and wait in the vault's Removed list", () => {
-    knowledgeData.pages = [
-      ...knowledgeData.pages,
-      { ...page("page-gone", "Gone", "folder", "vault-a"), is_trashed: true, trash_reason: "Superseded",
-        trashed_by_label: "Alex", permissions: ["write", "delete"] },
-      { ...page("page-gone-child", "Gone child", "note", "vault-a"), parent: "page-gone", is_trashed: true,
-        permissions: ["write", "delete"] },
-    ] as typeof knowledgeData.pages;
-    pageActionMocks.restorePage.mockClear();
-
-    renderPage();
-
-    const primary = within(screen.getByTestId("shell-primary"));
-    expect(treeAttribute("data-row-ids")).toBe("page-a");
-    fireEvent.click(primary.getByRole("button", { name: "Removed (1)" }));
-    expect(primary.getByText("Gone")).toBeTruthy();
-    expect(primary.queryByText("Gone child")).toBeNull();
-    fireEvent.click(primary.getByRole("button", { name: "Restore" }));
-    expect(pageActionMocks.restorePage).toHaveBeenCalledWith("page-gone");
-  });
-
-  test("selecting a page navigates to its detail route", () => {
-    renderPage();
-
-    fireEvent.click(screen.getByTestId("tree-row-page-a"));
-
-    expect(routerMocks.navigate).toHaveBeenLastCalledWith({
-      to: "/knowledge/page-a",
-    });
-    expect(routerMocks.routeHref).toHaveBeenCalledWith("knowledge.page", {
-      id: "page-a",
-    });
-  });
-
-  test("selects an inline-created vault after the refetched options include it", () => {
-    const view = renderPage();
-
-    fireEvent.click(screen.getByTestId("create-root"));
-
-    expect(hoistedInvalidate).toHaveBeenCalledExactlyOnceWith(["knowledge.Vault"]);
-    expect(routerMocks.navigate).toHaveBeenLastCalledWith({ to: "/knowledge" });
-    expect(routerMocks.routeHref).toHaveBeenCalledWith("knowledge.home");
-    expect(rootPickerValue()).toBe("vault-a");
-
-    knowledgeData = {
-      ...knowledgeData,
-      vaults: [
-        ...knowledgeData.vaults,
-        {
-          id: "vault-created",
-          name: "Created Vault",
-          description: "",
-          icon: null,
-          accent: null,
-        },
-      ],
-      pages: [
-        ...knowledgeData.pages,
-        page("created-page", "Created Page", "note", "vault-created"),
-      ],
-    };
-    view.rerender(
-      <ShellPageTestProviders>
-        <KnowledgePage />
-        <PrimaryPaneTestHost />
-        <ChatterTabsTestHost tabTestId={(id) => `chatter-tab-${id}`} />
-      </ShellPageTestProviders>,
-    );
-
-    expect(rootPickerValue()).toBe("vault-created");
-    expect(treeAttribute("data-row-ids")).toBe("created-page");
-  });
+test("a directly opened page owns the vault after a prior picker selection", async () => {
+  const f = fixture({ detail: { ...folder, vault: "vlt_2" } });
+  fireEvent.click(await screen.findByRole("combobox", { name: "Vault: Reference" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Reference" }));
+  route.id = folder.id;
+  f.rerender();
+  await waitFor(() => expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({
+    meta: expect.objectContaining({ gqlQuery: KnowledgeVault, gqlVariables: { id: "vlt_2" } }),
+  })));
 });
 
-function rootPickerValue(): string {
-  return (screen.getByLabelText("Vault") as HTMLSelectElement).value;
-}
+test.each([null, "pg_parent"])("opening a page preserves the vault, navigator and search while it loads (from %s)", async (initialPage) => {
+  route.id = initialPage;
+  let resolvePage!: () => void;
+  const pending = new Promise<void>((resolve) => { resolvePage = resolve; });
+  const pageRead = vi.fn(async (id: string) => { if (id === "pg_child") await pending; });
+  const f = fixture({ beforePageRead: pageRead });
+  const picker = await screen.findByRole("combobox", { name: "Vault: Reference" });
+  await screen.findByText("Projects");
+  const input = screen.getByRole("combobox", { name: "Filter records" });
+  fireEvent.input(input, { target: { value: "Child" }, inputType: "insertText" });
+  fireEvent.click(await screen.findByRole("option", { name: "Search Page title for: Child" }));
+  fireEvent.click(await screen.findByText("Child"));
+  await waitFor(() => expect(route.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: "/knowledge/pg_child" })));
+  const tree = screen.getByRole("tree");
 
-function treeAttribute(name: string): string | null {
-  return screen.getByTestId("tree").getAttribute(name);
-}
+  route.id = "pg_child";
+  f.rerender();
+  await waitFor(() => expect(pageRead).toHaveBeenCalledWith("pg_child"));
+  expect(screen.getByRole("combobox", { name: "Vault: Reference" })).toBe(picker);
+  expect(screen.getByRole("combobox", { name: "Filter records" })).toBe(input);
+  expect(screen.getByRole("tree")).toBe(tree);
+  expect(screen.getByText("Child")).toBeTruthy();
+  expect(screen.queryByText("Projects")).toBeNull();
 
-function queryResult(
-  name: keyof typeof sdkMocks.refetch,
-  data: Record<string, unknown>,
-) {
-  return {
-    data,
-    fetching: false,
-    isPending: false,
-    error: null,
-    refetch: sdkMocks.refetch[name],
-  };
-}
+  resolvePage();
+  await waitFor(() => expect(screen.getByRole("treeitem", { selected: true }).textContent).toContain("Child"));
+  expect(screen.getByRole("combobox", { name: "Vault: Reference" })).toBe(picker);
+  expect(screen.getByRole("combobox", { name: "Filter records" })).toBe(input);
+  expect(screen.getByRole("tree")).toBe(tree);
+  expect(screen.queryByText("Projects")).toBeNull();
+});
 
-function makeKnowledgeData() {
-  return {
-    vaults: [
-      {
-        id: "vault-a",
-        name: "Vault A",
-        description: "",
-        icon: null,
-        accent: null,
-      },
-      {
-        id: "vault-b",
-        name: "Vault B",
-        description: "",
-        icon: null,
-        accent: null,
-      },
-    ],
-    pages: [
-      page("page-a", "Page A", "note", "vault-a"),
-      page("page-b", "Page B", "note", "vault-b"),
-    ],
-    details: {
-      "page-b": detail("page-b", "Page B", "vault-b"),
-    } as Record<string, ReturnType<typeof detail>>,
-  };
-}
+test("vault search keeps the initial vault and a clearable picker through pending and empty results", async () => {
+  let resolvePending!: () => void;
+  const pending = new Promise<void>((resolve) => { resolvePending = resolve; });
+  let searching = false;
+  const searchRead = vi.fn(async () => { if (searching) await pending; });
+  const f = fixture({ beforeVaultSearch: searchRead });
+  await screen.findByText("Projects");
+  fireEvent.click(await screen.findByRole("combobox", { name: "Vault: Reference" }));
+  const input = await screen.findByPlaceholderText("Search vaults…");
+  searching = true;
+  searchRead.mockClear();
+  fireEvent.change(input, { target: { value: "Missing" } });
+  await waitFor(() => expect(searchRead).toHaveBeenCalledOnce());
+  expect(screen.getByPlaceholderText("Search vaults…")).toBe(input);
+  expect(screen.getByRole("combobox", { name: "Vault: Reference" })).toBeTruthy();
+  expect(screen.getByText("Projects")).toBeTruthy();
 
-function page(id: string, title: string, kind: string, vault: string) {
-  return {
-    id,
-    title,
-    kind,
-    icon: null,
-    vault,
-    parent: null,
-    updated_at: "2025-01-01T00:00:00Z",
-    created_by_label: "Alex",
-  };
-}
+  resolvePending();
+  await waitFor(() => expect(screen.queryByText("Searching…")).toBeNull());
+  expect(screen.getByPlaceholderText("Search vaults…")).toBe(input);
+  expect(screen.getByRole("combobox", { name: "Vault: Reference" })).toBeTruthy();
+  expect(screen.getByText("Projects")).toBeTruthy();
+  fireEvent.change(input, { target: { value: "" } });
+  expect(await screen.findByRole("option", { name: "Reference" })).toBeTruthy();
+  expect(route.navigate).not.toHaveBeenCalled();
+  const requests = f.custom.mock.calls.filter(([call]) => call.meta?.gqlQuery === KnowledgePages);
+  expect(requests.length).toBeGreaterThan(0);
+  expect(requests.every(([call]) => Filter.from(pageQuery.fromWhere(call.meta?.gqlVariables?.where))
+    .conjunctions().some(({ field, operator, value }) => field === "vault" && operator === "exact" && value === "vlt_1"))).toBe(true);
+});
 
-function detail(id: string, title: string, vault: string) {
-  return {
-    ...page(id, title, "note", vault),
-    permissions: ["write"],
-    markdown: {
-      body: "Hello",
-      body_hash: "hash",
-      word_count: 1,
-    },
-    backlinks: [],
-  };
-}
+test("server search finds descendants while the unfiltered navigator requests only roots", async () => {
+  const f = fixture();
+  await screen.findByText("Projects");
+  expect(screen.queryByText("Child")).toBeNull();
+  const input = screen.getByRole("combobox", { name: "Filter records" });
+  fireEvent.input(input, { target: { value: "Child" }, inputType: "insertText" });
+  fireEvent.click(await screen.findByRole("option", { name: "Search Page title for: Child" }));
+  expect(await screen.findByText("Child")).toBeTruthy();
+  const requests = f.custom.mock.calls.filter(([call]) => call.meta?.gqlQuery === KnowledgePages).map(([call]) => call.meta?.gqlVariables);
+  expect(requests[0]).toMatchObject({ limit: 50, offset: 0 });
+  expect(Filter.from(pageQuery.fromWhere(requests[0]?.where)).conjunctions()).toEqual(expect.arrayContaining([
+    { field: "navigation_root", operator: "exact", value: true }, { field: "is_trashed", operator: "exact", value: false },
+    { field: "vault", operator: "exact", value: "vlt_1" },
+  ]));
+  const filters = Filter.from(pageQuery.fromWhere(requests.at(-1)?.where)).conjunctions();
+  expect(filters).toEqual(expect.arrayContaining([{ field: "title", operator: "iLike", value: "%Child%" }]));
+  expect(filters.some(({ field }) => field === "navigation_root")).toBe(false);
+});
+
+test.each([false, true])("write and view-as restrictions disable the native New menu (%s)", async (preview) => {
+  if (preview) route.preview = { viewAs: "reader", pending: false };
+  fixture({ writable: preview });
+  expect((await screen.findByRole("button", { name: "New" })).hasAttribute("disabled")).toBe(true);
+});
+
+test("an invalid mounted filter fails closed through the collection owner", async () => {
+  const f = fixture({ scope: { unknown: { exact: "x" } } });
+  expect((await screen.findByRole("alert")).textContent).toContain("unknown");
+  expect(f.custom.mock.calls.some(([call]) => call.meta?.gqlQuery === KnowledgePages)).toBe(false);
+});
+
+test("the navigator publishes native tree and vault controls in the primary pane", async () => {
+  fixture();
+  const pane = within(screen.getByTestId("shell-primary"));
+  await pane.findByText("Projects");
+  expect(pane.getByRole("tree")).toBeTruthy();
+  expect(pane.getByRole("combobox", { name: "Vault: Reference" })).toBeTruthy();
+});

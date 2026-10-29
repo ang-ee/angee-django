@@ -15,16 +15,19 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
     settings.write_text(
         "from pathlib import Path\n"
         "SECRET_KEY = 'native-history-typing'\n"
-        "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', 'angee', "
-        "'tests.typing_history.apps.TypingHistoryConfig', 'angee.compose', 'tests.typing_host.TypingHostConfig']\n"
+        "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', 'angee.base', "
+        "'tests.typing_history.apps.TypingHistoryConfig', 'tests.typing_host.TypingHostConfig', "
+        "'angee.build.ProjectBuildConfig']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
-        f"ANGEE_RUNTIME_DIR = Path({str(runtime)!r})\n"
-        "ANGEE_RUNTIME_MODULE = 'history_runtime'\n"
+        f"COMPOSE_RUNTIME_DIR = Path({str(runtime)!r})\n"
+        "COMPOSE_RUNTIME_MODULE = 'history_runtime'\n"
         "ANGEE_CHANGESET_MODEL = 'typing_history.Changeset'\n"
     )
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(tmp_path), str(root), env.get("PYTHONPATH"))))
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (
+        str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH"),
+    )))
     env["DJANGO_SETTINGS_MODULE"] = "history_settings"
     native = subprocess.run(
         [sys.executable, "-c", "\n".join([
@@ -42,7 +45,7 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
             "assert config.before_projection == ProjectState.from_apps(apps)",
             "assert project_history_models() is False",
             "assert models == dict((model.__name__, model) for model in config.get_models())",
-            "source = (settings.ANGEE_RUNTIME_DIR / 'typing_history/models.py').read_text()",
+            "source = (settings.COMPOSE_RUNTIME_DIR / 'typing_history/models.py').read_text()",
             "projection = ast.parse(source[source.index('from typing import TYPE_CHECKING'):])",
             "assert len(projection.body) == 2",
             "assert isinstance(projection.body[0], ast.ImportFrom) and projection.body[0].module == 'typing'",
@@ -50,17 +53,19 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
             "assert isinstance(projection.body[1].test, ast.Name) and projection.body[1].test.id == 'TYPE_CHECKING'",
             "assert {node.name for node in projection.body[1].body if isinstance(node, ast.ClassDef)} "
             "== {'HistoricalSubject', 'HistoricalSubjectStatement', 'SubjectStatement'}",
-            "foreign = settings.ANGEE_RUNTIME_DIR.parent / 'foreign'",
+            "foreign = settings.COMPOSE_RUNTIME_DIR.parent / 'foreign'",
             "foreign.mkdir()",
-            "(foreign / 'unrelated.txt').write_text('preserve')",
+            "(foreign / 'typing_history').mkdir()",
+            "foreign_model = foreign / 'typing_history/models.py'",
+            "foreign_model.write_text('preserve')",
             "try:",
-            "    with override_settings(ANGEE_RUNTIME_DIR=foreign):",
+            "    with override_settings(COMPOSE_RUNTIME_DIR=foreign):",
             "        project_history_models()",
             "except RuntimeError as error:",
-            "    assert 'not an Angee runtime directory' in str(error)",
+            "    assert 'lacks the required generated-output marker' in str(error)",
             "else:",
             "    raise AssertionError('Projection accepted a foreign output tree')",
-            "assert list(foreign.iterdir()) == [foreign / 'unrelated.txt']",
+            "assert foreign_model.read_text() == 'preserve'",
         ])],
         cwd=root, env=env, capture_output=True, text=True, check=False,
     )
@@ -76,7 +81,7 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
     valid = tmp_path / "valid.py"
     valid.write_text(
         "from typing import assert_type\n"
-        "from angee.models.statements import Statement\n"
+        "from angee.provenance.statements import Statement\n"
         "from history_runtime.typing_history.models import "
         "Subject, SubjectStatement, HistoricalSubject, HistoricalSubjectStatement\n"
         "assert_type(SubjectStatement.objects.get().title, str | None)\n"

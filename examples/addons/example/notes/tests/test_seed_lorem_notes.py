@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from angee.management.dependencies import AddonDependencyGroup
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TransactionTestCase
 from rebac import system_context
-
-from angee.compose.dependencies import AddonDependencyGroup
 
 Note = apps.get_model("notes", "Note")
 User = get_user_model()

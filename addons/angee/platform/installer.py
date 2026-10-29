@@ -23,7 +23,7 @@ The backend is chosen by ``settings.ANGEE_ADDON_INSTALLER_BACKEND`` against the
 addon's ``autoconfig`` supplies the default (``local``) and the ``local`` entry;
 the ``platform_integrate_operator`` bridge contributes the ``operator`` entry, and a
 deployment flips the key to ``operator``. A platform check validates the selected
-key; the base app checks the registry declarations.
+key and every registry declaration.
 """
 
 from __future__ import annotations
@@ -41,8 +41,8 @@ from django.core.files import locks
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from angee.fs import write_atomic
-from angee.impl import ImplBase, impl_registry, resolve_impl_class
+from angee.base.implementations import ImplBase, check_impl_registry, impl_registry, resolve_impl_class
+from angee.utils.files import write_atomic
 
 _INSTALLED_APPS_KEY = "INSTALLED_APPS"
 _SETTINGS_FILENAME = "settings.yaml"
@@ -234,14 +234,6 @@ class AddonInstaller:
             return None
         return InstalledAppsSnapshot(text=text, names=self._parse_app_names(text))
 
-    def installed_app_names(self) -> tuple[str, ...]:
-        """Return readable desired roots; retained as the ordered public convenience API."""
-
-        if _INSTALLED_APPS_KEY not in getattr(settings, "ANGEE_PROJECT_YAML_SETTINGS", ()):
-            return ()
-        snapshot = self.installed_apps_snapshot()
-        return snapshot.names if snapshot else ()
-
     def _parse_app_names(self, text: str) -> tuple[str, ...]:
         """Parse validated roots from already-read settings text."""
 
@@ -252,50 +244,6 @@ class AddonInstaller:
         if not isinstance(data, Mapping) or _INSTALLED_APPS_KEY not in data:
             raise ImproperlyConfigured(f"{_SETTINGS_FILENAME} has no {_INSTALLED_APPS_KEY}.")
         return _validated_app_names(data[_INSTALLED_APPS_KEY])
-
-    def install(self, name: str, *, expected_text: str | None = None) -> InstallResult:
-        """Add ``name`` to ``INSTALLED_APPS`` idempotently.
-
-        Degrades to a clear refusal when the backend cannot reach an editable
-        ``settings.yaml`` (no file, or the configured transport is unavailable) so the
-        edge reports it rather than surfacing a raw transport error.
-        """
-
-        if _INSTALLED_APPS_KEY not in getattr(settings, "ANGEE_PROJECT_YAML_SETTINGS", ()):
-            return InstallResult.refusal(name, "install", _settings_override_refusal())
-        try:
-            data, apps = self._load_apps(expected_text=expected_text)
-        except (OSError, NotImplementedError) as error:
-            return InstallResult.refusal(name, "install", _transport_unavailable(error))
-        already = name in apps
-        if not already:
-            apps.append(name)
-            self._write(data)
-        return InstallResult(name=name, action="install", already=already)
-
-    def disable(self, name: str, *, expected_text: str | None = None) -> InstallResult:
-        """Remove ``name`` from ``INSTALLED_APPS`` (no-op when absent).
-
-        Degrades to a clear refusal when the backend cannot reach an editable
-        ``settings.yaml`` (see :meth:`install`).
-        """
-
-        if _INSTALLED_APPS_KEY not in getattr(settings, "ANGEE_PROJECT_YAML_SETTINGS", ()):
-            return InstallResult.refusal(name, "disable", _settings_override_refusal())
-        try:
-            data, apps = self._load_apps(expected_text=expected_text)
-        except (OSError, NotImplementedError) as error:
-            return InstallResult.refusal(name, "disable", _transport_unavailable(error))
-        already_absent = name not in apps
-        if not already_absent:
-            apps.remove(name)
-            self._write(data)
-        return InstallResult(name=name, action="disable", already=already_absent)
-
-    def uninstall(self, name: str, *, expected_text: str | None = None) -> InstallResult:
-        """Compatibility alias for :meth:`disable`."""
-
-        return self.disable(name, expected_text=expected_text)
 
     def apply_app_names(self, names: tuple[str, ...], *, expected_text: str) -> None:
         """Apply reviewed roots to the exact settings document they previewed."""
@@ -315,11 +263,11 @@ class AddonInstaller:
             apps.insert(index, name)
         self._write(data)
 
-    def _load_apps(self, *, expected_text: str | None = None) -> tuple[Any, MutableSequence[Any]]:
+    def _load_apps(self, *, expected_text: str) -> tuple[Any, MutableSequence[Any]]:
         """Return the round-trip document and its mutable ``INSTALLED_APPS`` sequence."""
 
         text = self.backend.read_settings_text()
-        if expected_text is not None and text != expected_text:
+        if text != expected_text:
             raise StaleAddonPreviewError("The addon preview is stale; review the changes again.")
         try:
             data = self._yaml.load(text)
@@ -349,31 +297,12 @@ def _validated_app_names(value: Any) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _transport_unavailable(error: Exception) -> str:
-    """Return a clear refusal message for a backend that cannot edit ``settings.yaml``."""
-
-    if isinstance(error, NotImplementedError):
-        return str(error) or "The operator file tools that edit settings.yaml are not available yet."
-    # A backend that knows *why* it can't reach settings.yaml (e.g. the operator
-    # backend's "operator … unavailable: …") supplies its own reason; the fixed
-    # message is only the fallback for a bare FileNotFoundError.
-    return str(error) or (
-        "This deployment has no editable settings.yaml; addons are installed by the operator in production."
-    )
-
-
-def _settings_override_refusal() -> str:
-    """Explain why editing project YAML cannot change effective roots."""
-
-    return "INSTALLED_APPS is not controlled by the project settings.yaml in this deployment."
-
-
 def addon_installer() -> AddonInstaller:
     """Return the configured :class:`AddonInstaller`.
 
     Resolves ``settings.ANGEE_ADDON_INSTALLER_BACKEND`` against the
     ``settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES`` registry through the shared
-    :func:`~angee.impl.resolve_impl_class` owner — the row-less form of
+    :func:`~angee.base.implementations.resolve_impl_class` owner — the row-less form of
     ``ImplClassField.resolve_class`` (trusted settings path, never row text, with the
     ``AddonInstallerBackend`` subclass check).
     """
@@ -387,12 +316,14 @@ def check_installer_backend_selection(app_configs: Any, **kwargs: Any) -> list[C
     """Require a non-empty catalogue containing the selected installer backend."""
 
     del app_configs, kwargs
+    errors = check_impl_registry(AddonInstallerBackend)
     try:
         registry = impl_registry(AddonInstallerBackend.registry_setting)
     except ImproperlyConfigured:
-        return []  # The base registry check reports malformed mappings.
+        return errors
     if not registry:
         return [
+            *errors,
             Error(
                 f"settings.{_REGISTRY_SETTING} must be a non-empty mapping of key to dotted path.",
                 id="angee.platform.E001",
@@ -401,9 +332,10 @@ def check_installer_backend_selection(app_configs: Any, **kwargs: Any) -> list[C
     selected = getattr(settings, _BACKEND_SETTING, "local")
     if selected not in registry:
         return [
+            *errors,
             Error(
                 f"settings.{_BACKEND_SETTING} = {selected!r} is not a key in settings.{_REGISTRY_SETTING}.",
                 id="angee.platform.E004",
             )
         ]
-    return []
+    return errors

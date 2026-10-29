@@ -21,7 +21,6 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from deepdiff import DeepDiff
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import DataError, close_old_connections, connection, connections, transaction
 from django.db.models import Q
@@ -30,7 +29,6 @@ from pydantic import ConfigDict, JsonValue, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
-from angee.changesets import changeset, current_changeset
 from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.states import (
@@ -45,6 +43,8 @@ from angee.integrate.states import (
     SyncFailureKind,
 )
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
+from angee.jobs.timeouts import task_time_budget
+from angee.provenance.context import changeset, current_changeset
 from angee.serialization import canonical_json, canonical_json_sha256
 
 logger = logging.getLogger(__name__)
@@ -1120,7 +1120,7 @@ def open_stream(
     definition: StreamDefinition | None = None,
     deadline: float | None = None,
 ) -> Any:
-    """Open a partition against its current declaration, seeding legacy progress only on its first epoch.
+    """Open a partition against its current declaration and retained stream progress.
 
     Opening reconciles: the stream takes what its declaration says now (direction,
     snapshot, authority) through ``SyncStream.objects.current``, so a changed
@@ -1143,25 +1143,7 @@ def open_stream(
         elif (definition.key, definition.partition) != (key, partition):
             raise AdapterContractError("The supplied stream declaration must match the requested partition.")
         definition = replace(definition, cursor=_validated_cursor(definition.cursor))
-        stream = manager.current(bridge, definition)
-        if stream.generation == 1 and not stream.cursor and bridge.cursor:
-            with transaction.atomic():
-                locked_bridge = bridge.lock_capability()
-                stream = manager.lock_current(stream)
-                if not stream.cursor and stream.last_advanced_at is None:
-                    seeded_config, legacy_cursor = adapter.seed_config(locked_bridge.cursor)
-                    config = {**seeded_config, **locked_bridge.config}
-                    legacy_cursor = _validated_cursor(legacy_cursor)
-                    if config != locked_bridge.config or legacy_cursor != locked_bridge.cursor:
-                        locked_bridge.config = config
-                        locked_bridge.cursor = legacy_cursor
-                        locked_bridge.save(update_fields=["config", "cursor", "updated_at"])
-                    cursor = adapter.seed_cursor(stream, locked_bridge.cursor)
-                    # A no-op seed is still a completed cutover attempt.
-                    manager.advance(stream, _validated_cursor({} if cursor is None else cursor))
-                bridge.config = adapter.bridge.config = locked_bridge.config
-                bridge.cursor = adapter.bridge.cursor = locked_bridge.cursor
-        return stream
+        return manager.current(bridge, definition)
 
 
 def _report(bridge: Any, message: str, **details: Any) -> None:
@@ -1248,8 +1230,8 @@ def sync_bridge(bridge: Any) -> int:
     """Drive declared partitions within the existing bridge task's time budget."""
 
     config = bridge.config
-    soft_limit = float(settings.CELERY_TASK_SOFT_TIME_LIMIT)
-    deadline = monotonic() + max(0.0, float(config.get("sync_time_budget", max(60.0, soft_limit - 60.0))))
+    worker_budget = task_time_budget().total_seconds()
+    deadline = monotonic() + max(0.0, min(worker_budget, float(config.get("sync_time_budget", worker_budget))))
     adapter = bridge.capability_impl
     try:
         with system_context(reason="integrate.bridge.streams"):
@@ -1275,7 +1257,7 @@ def sync_bridge(bridge: Any) -> int:
                     max_workers=min(parallelism, len(definitions)), thread_name_prefix="bridge-sync"
                 ) as pool:
                     # Each worker records its own changeset row under the cycle's boundary
-                    # and actor (angee.changesets), so the copied context is safe to share.
+                    # and actor (angee.provenance.context), so the copied context is safe to share.
                     futures = {
                         pool.submit(copy_context().run, _drain_partition, bridge, definition, deadline): definition
                         for definition in definitions

@@ -353,6 +353,7 @@ export function ListViewContent<TRow extends Row = Row>({
           renderCard={resolvedRenderCard}
           dragEnabled={surface.boardDragEnabled}
           rankField={surface.boardRankField}
+          rankInputField={surface.boardRankInputField}
           optimisticPlacementByRowId={surface.boardOptimisticPlacementByRowId}
           onCardMove={surface.onBoardCardMove}
           onCreateInLane={onCreateInLane}

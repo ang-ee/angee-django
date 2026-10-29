@@ -24,7 +24,9 @@ const notes = defineBaseAddon({
       parent: "notes.home",
     },
   ],
-  menus: [{ id: "notes", label: "Notes", route: "notes.home", icon: "notes" }],
+  menus: {
+    "notes": { label: "Notes", route: "notes.home", icon: "notes" },
+  },
   i18n: { notes: enNotesMessages },
   // Notes contributes only its star; IAM contributes Share globally.
   containers: {

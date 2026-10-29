@@ -5,7 +5,7 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.models import AngeeDataModel
+from angee.base.models.base import AngeeDataModel
 from angee.workflows import models as sources
 from angee.workflows.subjects import RunSubject
 

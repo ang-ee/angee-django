@@ -4,6 +4,7 @@ description = "Bounded projects, milestones, and the platform's one human-action
 keywords = ["projects", "milestones", "tasks", "planning"]
 category = "Productivity"
 depends_on = [
+  "angee.base",
   "django.contrib.contenttypes",
   "angee.iam",
   "angee.integrate",
@@ -15,12 +16,8 @@ depends_on = [
   "angee.storage",
   "angee.tags",
   "angee.timeline",
+  "angee.web",
 ]
-
-[[migrations]]
-name = "retire_creation_keys"
-app_label = "projects"
-module = "runtime_migrations.retire_creation_keys"
 
 [resources]
 master = [{ path = "resources/master/010_projects.activitytype.yaml", adopt = "key" }]

@@ -132,6 +132,37 @@ def test_timeline_open_decision_records_are_readable(schema, review, include_run
     }]
 
 
+@pytest.mark.parametrize("include_runs", [False, True])
+def test_timeline_selection_owner_matches_graphql_and_keeps_empty_records(schema, review, include_runs):
+    """Domain grouping preserves deduplication, record order and optional run reads."""
+
+    from angee.workflows.timeline import TimelineSelection
+
+    actor, _, _, question = review
+    run, step = start_review(review)
+    record = question.review_subject
+    unrelated = vault_for(actor, name="No workflow runs")
+    with actor_context(actor):
+        selection = TimelineSelection([record, record, unrelated], actor, run_limit=1)
+        entries = list(selection.entries(list(selection.runs) if include_runs else []))
+        count = selection.open_decision_count
+    assert [target.object_id for target, _, _ in entries] == [record.pk, unrelated.pk]
+    assert [[row.pk for row in runs] for _, runs, _ in entries] == ([[run.pk], []] if include_runs else [[], []])
+    assert [[row.pk for row in decisions] for _, _, decisions in entries] == [[questions(step)[0].pk], []]
+    assert count == 1
+    result = result_data(execute_schema(schema, """query($records:[TimelineRecordInput!]!, $include:Boolean!) {
+      record_timeline(records:$records, include_runs:$include, run_limit:1) {
+        open_decision_count has_runs records { record_id runs { id } decisions { id } }
+      }
+    }""", {"records": [{"model": item._meta.label, "id": item.sqid} for item in [record, record, unrelated]],
+            "include": include_runs}, user=actor))["record_timeline"]
+    assert result == {"open_decision_count": 1, "has_runs": True, "records": [
+        {"record_id": record.sqid, "runs": [{"id": run.sqid}] if include_runs else [],
+         "decisions": [{"id": questions(step)[0].sqid}]},
+        {"record_id": unrelated.sqid, "runs": [], "decisions": []},
+    ]}
+
+
 def test_about_uses_separate_indexed_identity_queries(review):
     actor, _, _, question = review
     run, _ = start_review(review)

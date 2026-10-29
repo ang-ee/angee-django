@@ -27,7 +27,7 @@ const ANGEE_WATCH_IGNORED: readonly string[] = ["**/.jj/**"];
 // `runtime/gql/` path), so the proxy map and plugin choices live once, here, and
 // never drift across the example and the downstream template. Shipping this in
 // `@angee/app` (not a repo-root file) is what lets a project reach it by package
-// name from either a source checkout or published package.
+// name from either a source checkout or a published JavaScript package.
 //
 // This module is loaded by Node as a Vite config and therefore imports ONLY the
 // Node-side build plugins and node builtins — never `react`/`react-dom` or any
@@ -425,7 +425,6 @@ interface ThemeCatalogueFile {
   fingerprint: string;
   themes: Array<{
     id: string;
-    legacyIds?: readonly string[];
     optionsVersion?: number | null;
     headlessEntry?: string;
     defaultTokens?: Record<"shared" | "light" | "dark", Record<string, string>>;
@@ -448,7 +447,7 @@ async function appearanceBuildPayload(
   const requestedThemeId = raw?.themeId ?? null;
   const selectedTheme = requestedThemeId === null
     ? undefined
-    : sourceCatalogue.themes.find((theme) => theme.id === requestedThemeId || theme.legacyIds?.includes(requestedThemeId));
+    : sourceCatalogue.themes.find((theme) => theme.id === requestedThemeId);
   if (requestedThemeId !== null && !selectedTheme) {
     throw new Error(`Host appearance theme ${JSON.stringify(requestedThemeId)} is not installed.`);
   }
@@ -491,7 +490,7 @@ async function appearanceBuildPayload(
   const catalogue: AppearanceBootstrapPayload["catalogue"] = {
     schema: sourceCatalogue.schema,
     fingerprint: sourceCatalogue.fingerprint,
-    themes: sourceCatalogue.themes.map(({ id, legacyIds, defaultTokens }) => ({ id, legacyIds, defaultTokens })),
+    themes: sourceCatalogue.themes.map(({ id, defaultTokens }) => ({ id, defaultTokens })),
   };
   return {
     fingerprint,

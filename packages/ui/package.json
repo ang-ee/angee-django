@@ -777,7 +777,8 @@
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R src/styles dist/styles && cp src/theme/runtime.mjs dist/theme/runtime.mjs && cp src/theme/runtime.d.ts dist/theme/runtime.d.ts && cp src/views/calendar/calendar-surface.css dist/views/calendar/calendar-surface.css"
+    "build": "pnpm generate:form-spec && rm -rf dist && tsc -p tsconfig.build.json && cp -R src/styles dist/styles && cp src/theme/runtime.mjs dist/theme/runtime.mjs && cp src/theme/runtime.d.ts dist/theme/runtime.d.ts && cp src/views/calendar/calendar-surface.css dist/views/calendar/calendar-surface.css && cp src/views/form/form-spec.validator.generated.js src/views/form/form-spec.validator.generated.d.ts dist/views/form/",
+    "generate:form-spec": "node scripts/generate-form-spec.mjs"
   },
   "dependencies": {
     "@angee/logo-react": "^0.2.1",
@@ -839,6 +840,8 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "json-schema-to-typescript": "^16.0.0",
+    "esbuild": "^0.28.1"
   }
 }

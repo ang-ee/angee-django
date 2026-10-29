@@ -5,15 +5,10 @@ name = "angee.knowledge"
 description = "A markdown-first knowledge base — vaults of pages with versioned markdown bodies"
 keywords = ["knowledge", "rag", "embeddings"]
 category = "Data"
-depends_on = ["angee.iam", "angee.messaging", "angee.tags", "angee.provenance"]
+depends_on = ["angee.base", "angee.iam", "angee.messaging", "angee.tags", "angee.provenance", "angee.web"]
 dependencies = [
   "markdown-it-py>=4.2",
 ]
-
-[[migrations]]
-name = "retire_creation_keys"
-app_label = "knowledge"
-module = "runtime_migrations.retire_creation_keys"
 
 [resources]
 demo = [

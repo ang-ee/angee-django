@@ -93,6 +93,18 @@ def test_source_threads_project_their_record_through_the_reference_gate(sourced:
     }]
 
 
+def test_source_edge_accepts_a_long_display_label(sourced: dict[str, Any]) -> None:
+    """A derived display label cannot make an otherwise valid attachment fail."""
+
+    limit = ThreadAttachment._meta.get_field("label").max_length
+    with actor_context(sourced["owner"]):
+        edge = ThreadAttachment.objects.bind_source_thread(
+            sourced["task"], sourced["thread"], label="\x00" + "L" * (limit + 20),
+        )
+        edge.refresh_from_db()
+    assert edge.label == "L" * limit
+
+
 def test_source_edge_refuses_undeclared_and_untyped_records(sourced: dict[str, Any]) -> None:
     owner, thread = sourced["owner"], sourced["thread"]
     vault = vault_for(owner, name="Not attachable")

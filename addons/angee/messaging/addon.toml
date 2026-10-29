@@ -6,18 +6,27 @@ description = "Threads, messages, and channel bridges that ingest and deliver ma
 keywords = ["messaging", "channels", "chat"]
 category = "Data"
 # django.contrib.postgres backs the Fragment full-text SearchVectorField/GinIndex.
-depends_on = ["angee.timeline", "angee.provenance", "angee.iam", "angee.parties", "angee.integrate", "angee.resources", "angee.storage", "angee.tags", "django.contrib.contenttypes", "django.contrib.postgres"]
+depends_on = [
+  "angee.base",
+  "angee.timeline",
+  "angee.provenance",
+  "angee.iam",
+  "angee.parties",
+  "angee.integrate",
+  "angee.resources",
+  "angee.storage",
+  "angee.tags",
+  "django.contrib.contenttypes",
+  "django.contrib.postgres",
+  "angee.jobs",
+  "angee.web",
+]
 dependencies = [
   "django-anymail>=15.1",
   # Classify Anymail's chained HTTP-ESP transport failures (email delivery).
   "requests>=2.32",
   "urllib3>=2.2",
 ]
-
-[[migrations]]
-name = "retire_creation_keys"
-app_label = "messaging"
-module = "runtime_migrations.retire_creation_keys"
 
 [resources]
 install = [

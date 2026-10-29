@@ -1,4 +1,12 @@
 [addon]
 name = "angee.decisions"
 description = "Questions on records with alternatives and audited verdicts"
-depends_on = ["angee.iam", "angee.graphql", "angee.timeline", "django.contrib.contenttypes"]
+depends_on = [
+  "angee.base",
+  "angee.iam",
+  "angee.graphql",
+  "angee.timeline",
+  "django.contrib.contenttypes",
+  "angee.provenance",
+  "angee.web",
+]

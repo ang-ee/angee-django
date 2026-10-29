@@ -25,16 +25,15 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
-from angee.compose.permissions import apply_schema_paths, extension_source_map
-from angee.fs import write_atomic
+from angee.base.build import extension_source_map
+from angee.base.testing.permissions import emit_permissions, installed_field_owners
 from angee.graphql.capabilities import permissions_field
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.messaging.testing.models import Channel, Message, Person, Thread, ThreadAttachment
 from angee.projects.testing.models import Project, ProjectBinding, Task
 from angee.spaces.testing.models import Group, Membership
-from angee.testing.permissions import installed_field_owners
 from tests.conftest import (
     Backend,
     Drive,
@@ -174,9 +173,7 @@ def project_access_schema(tmp_path: Path, transactional_db: None) -> Any:
     originals = {config: getattr(config, "rebac_schema", None) for config in configs}
     sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
     runtime = tmp_path / "project-access-runtime"
-    for relative, source in sources.items():
-        write_atomic(runtime / relative, source)
-    apply_schema_paths(configs, runtime, sources=sources)
+    emit_permissions(configs, runtime, sources=sources)
     call_command("rebac", "sync", verbosity=0)
     try:
         yield
@@ -345,10 +342,13 @@ def test_binding_edits_and_deletes_require_authority(project_access_schema: Any)
         second = Folder.objects.create(drive=drive, name="Second", owner=owner)
     with actor_context(owner):
         binding = ProjectBinding.objects.bind(project=project, target=first)
-    with actor_context(outsider), pytest.raises(PermissionDenied):
-        ProjectBinding.objects.unbind(project=project, target=first)
-    with actor_context(outsider), pytest.raises(PermissionDenied):
-        ProjectBinding.objects.filter(pk=binding.pk).delete()
+    with actor_context(outsider):
+        assert ProjectBinding.objects.unbind(project=project, target=first) == 0
+        assert ProjectBinding.objects.filter(pk=binding.pk).delete() == (0, {})
+    with system_context(reason="test project binding scoped deletion"):
+        stored = ProjectBinding.objects.get(pk=binding.pk)
+        assert stored.project_id == project.pk
+        assert stored.target == first
     with actor_context(outsider), pytest.raises(PermissionDenied):
         binding.with_actor(outsider).delete()
     with actor_context(outsider), pytest.raises(PermissionDenied):

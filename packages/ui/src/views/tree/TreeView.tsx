@@ -42,6 +42,8 @@ export interface TreeViewProps<
   /** Field holding a boolean that shows a spinner while the row's children load. */
   loading?: keyof TRow & string;
   selectedId?: string;
+  /** Reveal loaded ancestors without replacing the user's expansion state. */
+  revealIds?: readonly string[];
   onSelect?: (row: TRow) => void;
   /** Fired with a node id when it expands and its children are not loaded yet. */
   onExpand?: (nodeId: string) => void;
@@ -83,6 +85,7 @@ export function TreeView<TRow extends Record<string, unknown>>({
   hasChildren,
   loading,
   selectedId,
+  revealIds,
   onSelect,
   onExpand,
   renderRow,
@@ -131,6 +134,7 @@ export function TreeView<TRow extends Record<string, unknown>>({
     <Tree
       nodes={nodesWithInsertion}
       selectedId={selectedId}
+      revealIds={insertion ? [...(revealIds ?? []), TREE_INSERTION_ID] : revealIds}
       onExpand={onExpand}
       className={className}
       dropTargetId={dropTargetId}
@@ -196,10 +200,10 @@ export function TreeView<TRow extends Record<string, unknown>>({
 
 /** Place the insertion row first under its parent (or first at the root), expanding the parent. */
 function withInsertion(nodes: TreeNode[], parentId: string | null, node: ReactNode): TreeNode[] {
-  // The row is a form, not a node: its keys and clicks stay with the field, so Enter
-  // submits the title instead of selecting the row and arrows edit instead of moving.
+  // The row is a form, not a node: clicks stay with its field. Tree owns the
+  // keyboard boundary for every embedded control, including this one.
   const label = (
-    <div className="contents" onKeyDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+    <div className="contents" onClick={(event) => event.stopPropagation()}>
       {node}
     </div>
   );

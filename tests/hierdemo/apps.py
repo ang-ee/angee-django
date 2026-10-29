@@ -1,7 +1,7 @@
 """AppConfig for the hierarchy-mixin demo (test-only installed app).
 
 Registered in ``tests.settings`` so pytest-django creates the demo tables that
-exercise :class:`~angee.models.HierarchyMixin` — materialized-path subtree
+exercise :class:`~angee.base.models.hierarchy.HierarchyMixin` — materialized-path subtree
 queries, reparent cascade, cycle and scope-boundary rejection, and the
 prefix-serving pattern-ops index. The app carries no ``addon.toml``; it is a
 plain Django app, not an Angee addon, so the composer and schema discovery ignore

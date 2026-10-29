@@ -15,7 +15,7 @@ from strawberry.scalars import JSON
 from angee.decisions.schema import DecisionType
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.inputs import InputReference
 from angee.graphql.node import AngeeNode

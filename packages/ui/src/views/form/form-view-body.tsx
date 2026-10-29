@@ -50,7 +50,7 @@ import type { FormViewSurface } from "./form-view-surface";
 import { directDottedPathMessages } from "./validation-errors";
 import { SectionHeading } from "./SectionHeading";
 import { AbsoluteTime } from "../../fragments/AbsoluteTime";
-import { RecordHeader } from "../../fragments/RecordHeader";
+import { RecordHeader, type RecordHeaderProps } from "../../fragments/RecordHeader";
 import { RecordFieldMarkControl } from "./record-field-marks";
 
 const EDITABLE_FIELD_CONTROL_CLASS = cn(
@@ -114,6 +114,7 @@ export const FORM_VIEW_COLUMN_CLASS =
 export function FormViewRecordHeader({
   surface,
   compact = false,
+  density = compact ? "compact" : "comfortable",
   awaiting = false,
   title,
   eyebrow,
@@ -122,6 +123,7 @@ export function FormViewRecordHeader({
 }: {
   surface: FormViewSurface;
   compact?: boolean;
+  density?: RecordHeaderProps["density"];
   /** The saved record has not arrived yet: render the header's shape. */
   awaiting?: boolean;
   title?: React.ReactNode;
@@ -190,7 +192,6 @@ export function FormViewRecordHeader({
     observer.observe(container);
     return () => observer.disconnect();
   }, [awaiting, compact, currentStatusField]);
-  const density = compact ? "compact" : "comfortable";
   if (awaiting) {
     return (
       <RecordHeader density={density} className="border-b-0 px-0" title={
@@ -231,7 +232,7 @@ export function FormViewRecordHeader({
     } />}
     {statusMark}
   </div> : null;
-  const editorClass = cn(textRoleVariants({ role: "display" }), "min-h-7 w-full min-w-0 overflow-hidden rounded-none border-0 bg-transparent px-0 py-0 shadow-none hover:border-transparent focus:border-transparent focus:bg-transparent focus-visible:border-transparent placeholder:text-fg-subtle");
+  const editorClass = "min-h-7 w-full min-w-0 overflow-hidden rounded-none border-0 bg-transparent px-0 py-0 shadow-none hover:border-transparent focus:border-transparent focus:bg-transparent focus-visible:border-transparent placeholder:text-fg-subtle";
   // The title: a given node, the restricted label, the read-only value, a relation picker, or the editor.
   let titleNode: React.ReactNode;
   let editable = false;
@@ -277,6 +278,7 @@ export function FormViewRecordHeader({
               placeholder={currentTitleField.placeholder ?? t("form.untitled")}
               aria-label={fieldAriaLabel(currentTitleField)}
               className={editorClass}
+              style={{ font: "inherit" }}
               onChange={(event) => {
                 startFieldInteraction(currentTitleField.name);
                 clearServerFieldError(currentTitleField.name);
@@ -431,7 +433,8 @@ export function FormViewSheet({
       {currentBodyField ? (
         <section className="grid gap-2">
           {currentBodyField.label ? (
-            <div className="flex items-center gap-2"><SectionHeading as="h2" label={currentBodyField.label} />
+            <div className="flex items-center gap-2"><SectionHeading as="h2" label={currentBodyField.label}
+              className={currentBodyField.body === "document" && !bodyRestricted ? "sr-only" : undefined} />
               <RecordFieldMarkControl field={currentBodyField.name} label={currentBodyField.label}
                 restricted={bodyRestricted} /></div>
           ) : null}
@@ -863,6 +866,7 @@ function BodyFieldControl({
         onCommit={onCommit}
         controlProps={{
           id: controlId,
+          presentation: field.body === "document" ? "document" : undefined,
           "aria-describedby": [descriptionId, errorId].filter(Boolean).join(" ") || undefined,
           "aria-invalid": messages.length > 0 || undefined,
           "aria-required": field.required && !readOnly || undefined,

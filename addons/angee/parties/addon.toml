@@ -5,22 +5,22 @@ name = "angee.parties"
 description = "Contacts — people and organizations, their circles, relationships, addresses, and directory sync"
 keywords = ["parties", "contacts", "crm"]
 category = "Data"
-depends_on = ["angee.provenance", "angee.graphql", "angee.iam", "angee.integrate", "angee.storage", "angee.tags"]
+depends_on = [
+  "angee.base",
+  "angee.provenance",
+  "angee.graphql",
+  "angee.iam",
+  "angee.integrate",
+  "angee.storage",
+  "angee.tags",
+  "angee.jobs",
+  "angee.web",
+]
 dependencies = [
   "django-countries>=9,<10",
   "phonenumbers>=9.0",
   "pycountry>=26,<27",
 ]
-
-[[migrations]]
-name = "handle_controller"
-app_label = "parties"
-module = "runtime_migrations.handle_controller"
-
-[[migrations]]
-name = "owner_column"
-app_label = "parties"
-module = "runtime_migrations.owner_column"
 
 [resources]
 install = [

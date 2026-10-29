@@ -335,9 +335,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
     rootFor: (route) => projection.rootFor(route),
     unavailable,
     icons: composed.icons,
-    themes: new Set(composed.themes.flatMap((theme) => {
+    themes: new Set(composed.themes.map((theme) => {
       const definition = "definition" in theme ? theme.definition : theme;
-      return [definition.id, ...(definition.legacyIds ?? [])];
+      return definition.id;
     })),
   });
   // The selected app's theme is the default until the person picks their own; the build's
@@ -703,8 +703,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const explain = explainComposition(selection, composed.menuComposition, unavailable, home, composed.containers, requirements);
   if (developmentMode()) {
     for (const diagnostic of selection.diagnostics) console.warn(`[angee] ${diagnostic}`);
-    const menuFindings = composed.menuComposition.diagnostics.length;
-    if (menuFindings) console.warn(`[angee] ${menuFindings} menu finding(s); see createApp(...).explain.menus.diagnostics.`);
+
   }
   return {
     router,

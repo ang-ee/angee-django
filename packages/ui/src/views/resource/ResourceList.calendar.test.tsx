@@ -196,13 +196,13 @@ describe("ResourceList calendar quick-create", () => {
     });
   });
 
-  test("lane create merges its lane but omits rank from list-owned defaults", () => {
+  test.each([false, true])("lane create preserves numeric ranks unless server intent is declared: %s", (intent) => {
     const onSelect = vi.fn();
     const baseProps = {
       resource: "pm.Task",
       columns: [],
       formFields: [{ name: "title" }],
-      laneSource: { field: "stage", rankField: "sort_order" },
+      laneSource: { field: "stage", rankField: "sort_order", ...(intent ? { rankInputField: "task_order" } : {}) },
       createDefaults: { workspace: "workspace-1" },
       onSelect,
     } as const;
@@ -217,6 +217,7 @@ describe("ResourceList calendar quick-create", () => {
     expect(captured.formDefaults).toEqual({
       workspace: "workspace-1",
       stage: "stage-progress",
+      ...(intent ? {} : { sort_order: 3072 }),
     });
   });
 });

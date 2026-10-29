@@ -1,73 +1,34 @@
-"""Request and connection attribution after REBAC actor resolution.
-
-Streaming response iteration runs after the request boundary closes; streaming
-writers must open their own changeset around iteration.
-"""
+"""Host ASGI middleware composed around native Django and Channels owners."""
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from typing import cast
+from io import BytesIO
 
-from asgiref.sync import iscoroutinefunction
-from django.core.exceptions import MiddlewareNotUsed
-from django.http import HttpRequest, HttpResponse
-from django.utils.decorators import sync_and_async_middleware
-
-from angee.asgi import ASGIApp, Receive, Scope, Send
-from angee.changesets import changeset, changeset_model_label
-
-FAILED_STATUS = 400
-"""The first response status that closes a request's changeset as failed."""
+from asgiref.typing import ASGI3Application, ASGIReceiveCallable, ASGISendCallable, Scope
 
 
-@sync_and_async_middleware
-def ChangesetMiddleware(
-    get_response: Callable[[HttpRequest], HttpResponse | Awaitable[HttpResponse]],
-) -> Callable[[HttpRequest], HttpResponse | Awaitable[HttpResponse]]:
-    """Own a fresh boundary for each request on the stack's own sync or async path.
+class WebsocketOriginValidator:
+    """Validate browser websocket origins using native request and Channels policy."""
 
-    A GraphQL response reports handled errors with status 200; the GraphQL view
-    marks those on the boundary itself.
-    """
+    def __init__(self, application: ASGI3Application) -> None:
+        self.application = application
 
-    if not changeset_model_label():
-        raise MiddlewareNotUsed("No changeset storage is configured.")
-    if iscoroutinefunction(get_response):
-        async_response = cast(Callable[[HttpRequest], Awaitable[HttpResponse]], get_response)
+    async def __call__(self, scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
+        from channels.security.websocket import OriginValidator
+        from django.conf import settings
+        from django.core.exceptions import DisallowedHost
+        from django.core.handlers.asgi import ASGIRequest
 
-        async def async_middleware(request: HttpRequest) -> HttpResponse:
-            async with changeset(fresh=True) as mark_failed:
-                response = await async_response(request)
-                if response.status_code >= FAILED_STATUS:
-                    mark_failed()
-                return response
-
-        return async_middleware
-    sync_response = cast(Callable[[HttpRequest], HttpResponse], get_response)
-
-    def middleware(request: HttpRequest) -> HttpResponse:
-        with changeset(fresh=True) as mark_failed:
-            response = sync_response(request)
-            if response.status_code >= FAILED_STATUS:
-                mark_failed()
-            return response
-
-    return middleware
-
-
-class ChangesetScopeMiddleware:
-    """Own a fresh boundary for the life of one ASGI connection scope.
-
-    Channels consumers (GraphQL subscriptions, the agent ACP transport) run every
-    handler and ``database_sync_to_async`` call inside the connection's context,
-    so their captured writes attribute to one changeset per connection, closed as
-    failed when the consumer raises. Composed by :func:`angee.asgi.websocket_application`.
-    """
-
-    def __init__(self, inner: ASGIApp) -> None:
-        self.inner = inner
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        async with changeset(fresh=True):
-            await self.inner(scope, receive, send)
+        request = ASGIRequest(
+            {**scope, "method": "GET", "scheme": "https" if scope.get("scheme") in ("https", "wss") else "http"},
+            BytesIO(),
+        )
+        trusted = [origin.replace("://*.", "://.") for origin in settings.CSRF_TRUSTED_ORIGINS if origin != "*"]
+        try:
+            trusted.append(f"{request.scheme}://{request.get_host()}")
+        except DisallowedHost:
+            await OriginValidator(self.application, [])(scope, receive, send)
+            return
+        if settings.DEBUG:
+            trusted.extend(("localhost", "127.0.0.1", "[::1]"))
+        await OriginValidator(self.application, trusted)(scope, receive, send)

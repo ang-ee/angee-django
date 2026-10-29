@@ -1,1 +1,1 @@
-"""Build-time composer for Angee addon contracts."""
+"""Build-time composition of native Django app and model declarations."""

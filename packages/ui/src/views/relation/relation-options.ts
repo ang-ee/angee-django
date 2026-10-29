@@ -21,6 +21,7 @@ import { useDebounce } from "use-debounce";
 import {
   refineFieldsFromPaths,
   listQueryMeta,
+  stableSerialize,
   type ListQueryFieldArgument,
   } from "@angee/refine";
 import { listBatchTarget } from "../resource/resource-operations";
@@ -81,7 +82,7 @@ export interface RelationOptionsResult {
 }
 
 export interface RelationPickerOptionsConfig
-  extends Omit<RelationOptionsConfig, "enabled" | "searchText"> {
+  extends Omit<RelationOptionsConfig, "enabled" | "searchText" | "page"> {
   value?: string | null;
   /** Folded selected row supplied by a parent record read, when available. */
   selectedOption?: RelationOption;
@@ -115,7 +116,7 @@ export function useRelationSelectedOption(
     meta: { fields },
     queryOptions: { enabled: Boolean(relation && resource && value) },
   });
-  return relationSelectedOption(read.result, labelField);
+  return React.useMemo(() => relationSelectedOption(read.result, labelField), [read.result, labelField]);
 }
 
 /**
@@ -144,7 +145,10 @@ export function useRelationSelectedOptions(
   return options;
 }
 
-/** Own lazy remote search plus selected-record retention for a relation picker. */
+/** Own lazy remote pages, search and selected-record retention for a relation picker.
+ * @kind null
+ * @reason Shared data hook owns picker query state without rendered anatomy.
+ */
 export function useRelationPickerOptions(
   relation: RelationFieldInfo | null,
   config: RelationPickerOptionsConfig = {},
@@ -153,18 +157,30 @@ export function useRelationPickerOptions(
   const [opened, setOpened] = React.useState(false);
   const [search, setSearch] = React.useState("");
   const [searchText] = useDebounce(search, 250);
+  const queryKey = stableSerialize([relation, optionsConfig, searchText]);
+  const [pagination, setPagination] = React.useState({ key: queryKey, page: 1 });
+  const page = pagination.key === queryKey ? pagination.page : 1;
+  const pageSize = optionsConfig.pageSize ?? RELATION_OPTION_LIMIT;
+  const setPage = React.useCallback((next: number) => {
+    setPagination({ key: queryKey, page: next });
+  }, [queryKey]);
   const suppliedSelected = supplied?.value === value ? supplied : undefined;
   const resolved = useRelationSelectedOption(
     relation,
     suppliedSelected ? undefined : value,
   );
-  const selected = suppliedSelected ?? (resolved?.value === value ? resolved : undefined)
-    ?? (value ? { value, label: value } : undefined);
+  const selected = React.useMemo(() => suppliedSelected ?? (resolved?.value === value ? resolved : undefined)
+    ?? (value ? { value, label: value } : undefined), [resolved, suppliedSelected, value]);
   const result = useRelationOptions(relation, {
-    ...optionsConfig,
+    ...optionsConfig, page,
     enabled: opened,
     searchText,
   });
+  React.useEffect(() => {
+    if (result.list.fetching || result.list.error || result.list.total === undefined) return;
+    const last = Math.max(1, Math.ceil(result.list.total / pageSize));
+    if (page > last) setPage(last);
+  }, [page, pageSize, result.list.error, result.list.fetching, result.list.total, setPage]);
   const options = React.useMemo(
     () =>
       selected &&
@@ -183,8 +199,9 @@ export function useRelationPickerOptions(
       pending: result.list.fetching || search !== searchText,
       error: result.list.error,
       retry: result.list.refetch,
+      pagination: { page, pageSize, total: result.list.total, onPageChange: setPage },
     }),
-    [result.list, search, searchText],
+    [page, pageSize, result.list, search, searchText, setPage],
   );
   return React.useMemo(
     () => ({

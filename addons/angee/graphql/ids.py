@@ -10,11 +10,8 @@ from django.db import models
 from strawberry.types import get_object_definition
 from strawberry_django.utils.typing import get_django_definition
 
-from angee.identity import (
-    instance_from_public_id,
-    public_data_id_field,
-    public_id_for,
-)
+from angee.base.identity import public_data_id_field
+from angee.base.models.identity import instance_from_public_id, public_id_for
 
 PublicID = strawberry.ID
 """GraphQL ID scalar carrying an Angee public id, usually a model sqid."""

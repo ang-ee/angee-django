@@ -44,9 +44,8 @@ class _CredentialStub:
 
 
 class _BridgeStub:
-    def __init__(self, *, config: dict[str, Any] | None = None, cursor: dict[str, Any] | None = None) -> None:
+    def __init__(self, *, config: dict[str, Any] | None = None) -> None:
         self.config = config or {}
-        self.cursor: dict[str, Any] = cursor if cursor is not None else {}
         self.credential = _CredentialStub()
         self._state = SimpleNamespace(adding=False, db="default")
         self.subscription_state = {"team_id": "T1", "own_id": "U0"}
@@ -203,7 +202,6 @@ def test_slack_serial_drain_discovers_and_caches_workspace_lists_once(monkeypatc
         "C1": {"conversation": {"last_ts": "104.000001"}, "threads": {"100.000001": "102.000001"}},
         "D1": {"conversation": {"last_ts": "200.000001"}},
     }
-    assert backend.bridge.cursor == {}
 
     names = [name for name, _kwargs in FakeWebClient.calls]
     assert names.count("users.conversations") == 2
@@ -831,42 +829,19 @@ def test_extract_reloads_credential_and_reused_client_between_pages(composed_tab
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("existing_stream", [False, True])
-def test_legacy_slack_position_seeds_only_an_empty_stream(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, existing_stream: bool
+@pytest.mark.parametrize("last_ts,expected", [("1784700000.000001", 1), ("1784700002.000001", 0)])
+def test_retained_slack_position_continues_without_reimport(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, last_ts: str, expected: int,
 ) -> None:
-    """The first stream continues the retained conversation watermark without re-import."""
+    """The conversation's native stream retains its watermark across syncs."""
 
     monkeypatch.setattr(SlackChannelBackend, "client_class", IncrementalWebClient)
-    channel = _slack_channel("slack-legacy")
-    seeds: list[str] = []
-    seed_cursor = SlackChannelBackend.seed_cursor
-
-    def track_seed(self: Any, stream: Any, legacy_cursor: Any) -> Any:
-        seeds.append(stream.partition)
-        return seed_cursor(self, stream, legacy_cursor)
-
-    monkeypatch.setattr(SlackChannelBackend, "seed_cursor", track_seed)
-    with system_context(reason="test slack legacy stream position"):
-        channel.cursor = {"conversations": {"C1": {"last_ts": "1784700000.000001"}}, "threads": {}}
-        channel.save(update_fields=["cursor"])
-        if existing_stream:
-            current_stream(
-                channel,
-                "messages",
-                "C1",
-                cursor={
-                    "conversation": {"last_ts": "1784700002.000001"},
-                    "threads": {},
-                },
-            )
-        assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == (0 if existing_stream else 1)
-        assert seeds == ([] if existing_stream else ["C1"])
-        channel.cursor = {"conversations": {"C1": {"last_ts": "1784600000.000001"}}, "threads": {}}
-        channel.save(update_fields=["cursor"])
+    channel = _slack_channel("slack-retained")
+    with system_context(reason="test slack retained stream position"):
+        current_stream(channel, "messages", "C1", cursor={"conversation": {"last_ts": last_ts}, "threads": {}})
+        assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == expected
         assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == 0
-        assert seeds == ([] if existing_stream else ["C1"])
-    assert Message._base_manager.count() == (0 if existing_stream else 1)
+    assert Message._base_manager.count() == expected
 
 
 @pytest.mark.django_db(transaction=True)

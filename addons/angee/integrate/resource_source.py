@@ -11,8 +11,6 @@ never reaches up into this addon.
 from __future__ import annotations
 
 import hashlib
-import os
-import tempfile
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -22,11 +20,12 @@ from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
-from angee.errors import exception_text
+from angee.base.exceptions import exception_text
 from angee.integrate.errors import RequestNotSentError
 from angee.integrate.http import HttpClient
 from angee.resources import sources
 from angee.resources.exceptions import ResourceLoadError
+from angee.utils.files import write_atomic
 
 if TYPE_CHECKING:
     from angee.resources.entries import ResourceEntry
@@ -54,7 +53,6 @@ class UrlSource(sources.ResourceSource):
         cache_path = _cache_path(url)
         if cache_path.exists():
             return cache_path
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             response = HttpClient().get(url, follow_redirects=True)
         except ValidationError as error:
@@ -63,17 +61,7 @@ class UrlSource(sources.ResourceSource):
             raise ResourceLoadError(f"{url!r}: fetch failed: {error}") from error
         if not response.is_success:
             raise ResourceLoadError(f"{url!r}: fetch failed: HTTP {response.status_code}")
-        temporary_path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                dir=cache_path.parent, prefix=f".{cache_path.name}.", delete=False
-            ) as output:
-                temporary_path = Path(output.name)
-                output.write(response.content)
-            os.replace(temporary_path, cache_path)
-        finally:
-            if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
+        write_atomic(cache_path, response.content)
         return cache_path
 
 

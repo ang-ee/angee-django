@@ -70,7 +70,7 @@ export const IntegrationSyncStream = graphql(`
       key
       partition
       failures @include(if: $includeFailures) {
-        id stream_id link_id slot kind code status is_open attempts retry_at created_at
+        id stream_id link_id slot kind code message source_label source_url status is_open attempts retry_at created_at
       }
     }
   }
@@ -86,6 +86,7 @@ export const RecordSourcesDocument = graphql(`
     ) {
       id
       external_key
+      source_label
       status
       source_url
       last_verified_generation
@@ -95,7 +96,7 @@ export const RecordSourcesDocument = graphql(`
         id
         key
         partition
-        integration { id display_name }
+        integration { id display_name concrete_target { resource id state } }
       }
     }
   }

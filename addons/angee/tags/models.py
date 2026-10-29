@@ -27,7 +27,7 @@ declared relations in step. The tags addon never names another addon's model.
 Compose :class:`TaggedModel` on the topmost REBAC-typed MTI ancestor the
 canonical edge keys on, never on a child, so the delete collector filters at the
 same content type the write used (the placement invariant in
-:mod:`angee.refs`).
+:mod:`angee.base.refs`).
 """
 
 from __future__ import annotations
@@ -44,37 +44,37 @@ from rebac import GenericTarget, generic_target
 from rebac.field_backing import canonical_model
 from rebac.resources import model_for_resource_type, model_resource_type
 
-from angee.fields import ColorField
-from angee.identity import instance_from_public_id
-from angee.models import (
-    AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
-    ArchiveMixin,
-    ArchiveQuerySet,
-    AuditMixin,
-    HistoryMixin,
-    InputExtensionsMixin,
-    MergeableMixin,
-    MergeableQuerySet,
-    role_anchor,
-)
-from angee.refs import MergePolicy, RecordRefMixin
+from angee.base.fields.text import ColorField
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.identity import instance_from_public_id
+from angee.base.models.inputs import InputExtensionsMixin
+from angee.base.models.merge import MergeableMixin
+from angee.base.models.merge_references import MergePolicy
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.roles import role_anchor
+from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
+from angee.base.querysets import MergeableQuerySet
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 
 
 class TagQuerySet[TagT: Tag](
     MergeableQuerySet[TagT],
     ArchiveQuerySet[TagT],
-    AngeeQuerySet[TagT],
+    AngeeHistoryQuerySet[TagT],
 ):
     """Archive read scopes layered over the REBAC-scoped tag queryset."""
 
 
-TagManager = AngeeManager.from_queryset(TagQuerySet)
+TagManager = AngeeHistoryManager.from_queryset(TagQuerySet)
 
 
 class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel):
     """One label in a vocabulary shared by every non-anonymous actor."""
+
+    _angee_base = AngeeHistoryMergeableUnscopedManager()
 
     runtime = True
     sqid_prefix = "tag_"
@@ -99,7 +99,7 @@ class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel):
         return self.name
 
 
-class TagAssignmentQuerySet[AssignmentT: TagAssignment](AngeeQuerySet[AssignmentT]):
+class TagAssignmentQuerySet[AssignmentT: TagAssignment](AngeeHistoryQuerySet[AssignmentT]):
     """Chainable read scopes for the polymorphic tag edge."""
 
     def for_record(self, record: models.Model) -> Self:
@@ -114,7 +114,7 @@ class TagAssignmentQuerySet[AssignmentT: TagAssignment](AngeeQuerySet[Assignment
         return self.order_by(*(f"tag__{name}" for name in (tag_model._meta.ordering or ())))
 
 
-_TagAssignmentManagerBase = AngeeManager.from_queryset(TagAssignmentQuerySet)
+_TagAssignmentManagerBase = AngeeHistoryManager.from_queryset(TagAssignmentQuerySet)
 
 
 class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase[AssignmentT]):
@@ -340,5 +340,5 @@ class TaggedModel(InputExtensionsMixin):
 
 TagRole = role_anchor("tags/role", name="TagRole")
 """The ``tags/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective tags manager. See :func:`angee.models.role_anchor`.
+an effective tags manager. See :func:`angee.base.models.roles.role_anchor`.
 """

@@ -3,4 +3,4 @@ name = "angee.workflows_messaging"
 description = "Message admission sources and channel-scoped workflow triggers"
 keywords = ["workflows", "messaging", "triggers"]
 category = "Workflows"
-depends_on = ["angee.workflows", "angee.messaging"]
+depends_on = ["angee.workflows", "angee.messaging", "angee.web"]

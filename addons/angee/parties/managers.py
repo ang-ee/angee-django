@@ -38,23 +38,22 @@ from rebac import (
 )
 from rebac.actors import to_subject_ref
 
-from angee.actors import actor_user_id
-from angee.evidence import EvidenceReference
-from angee.identity import instances_from_public_ids
-from angee.impl import resolve_hooks
-from angee.models import (
-    AngeeManager,
-    AngeeQuerySet,
-    ArchiveQuerySet,
-    HierarchyQuerySet,
-    MergeableQuerySet,
+from angee.base.models.hierarchy import HierarchyQuerySet
+from angee.base.models.identity import instances_from_public_ids
+from angee.base.models.trash import ArchiveQuerySet
+from angee.base.permissions import actor_user_id
+from angee.base.querysets import MergeableQuerySet, by_key
+from angee.hooks import resolve_hooks
+from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
+from angee.parties.domains import GENERIC_EMAIL_DOMAINS
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.provenance.evidence import EvidenceReference
+from angee.provenance.statements import (
     SourceKind,
     StatementQuerySet,
     StatementSubjectQuerySet,
-    by_key,
 )
-from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
-from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.serialization import canonical_json
 from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
 
@@ -139,7 +138,7 @@ class IdentityBasis:
         ).hexdigest()
 
 
-class CircleQuerySet[CircleT: Circle](HierarchyQuerySet[CircleT], AngeeQuerySet[CircleT]):
+class CircleQuerySet[CircleT: Circle](HierarchyQuerySet[CircleT], AngeeHistoryQuerySet[CircleT]):
     """Circle read scopes: the hierarchy subtree vocabulary over the Angee base."""
 
     def memberships(self, *, confirmed_only: bool = False) -> Any:
@@ -197,7 +196,7 @@ class CircleQuerySet[CircleT: Circle](HierarchyQuerySet[CircleT], AngeeQuerySet[
         )
 
 
-_CircleManagerBase = AngeeManager.from_queryset(CircleQuerySet)
+_CircleManagerBase = AngeeHistoryManager.from_queryset(CircleQuerySet)
 
 
 class CircleManager[CircleT: Circle](_CircleManagerBase[CircleT]):
@@ -208,7 +207,7 @@ class _HandleSenderName(TypedDict):
     _sender_name: str
 
 
-class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeQuerySet[HandleT]):
+class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQuerySet[HandleT]):
     """Handle read scopes over the Angee base."""
 
     def confirmed(self, platform: str, value: str) -> Self:
@@ -286,7 +285,7 @@ class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeQuerySet[
         return handles
 
 
-_HandleManagerBase = AngeeManager.from_queryset(HandleQuerySet)
+_HandleManagerBase = AngeeHistoryManager.from_queryset(HandleQuerySet)
 
 
 class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
@@ -818,6 +817,9 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         actor, unscoped = self.effective_actor(strict=True)
         visible = self.canonical().scoped_for_aggregate().values("pk")
         statements = self.model.same_as.model.statements.applied()
+        statements = (
+            statements.sudo(reason="parties.same_as_pairs") if unscoped else statements.with_actor(actor)
+        )
         pairs = (
             self.model.same_as.model._base_manager.filter(
                 left_id__in=Subquery(visible),
@@ -865,7 +867,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         return result
 
 
-_PartyManagerBase = AngeeManager.from_queryset(PartyQuerySet)
+_PartyManagerBase = AngeeHistoryManager.from_queryset(PartyQuerySet)
 
 
 class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
@@ -1587,7 +1589,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         address_owner = apps.get_model("parties", "Address").objects
         link_owner = apps.get_model("parties", "Party").objects
         addresses = address_owner.system_context(reason=reason).canonical().filter(party=party)
-        links = link_owner.handle_statements().filter(subject=party)
+        links = link_owner.handle_statements().system_context(reason=reason).filter(subject=party)
         if lock:
             _handles, locked_parties = link_owner.lock_identity_rows(
                 party_ids=(party.pk,),

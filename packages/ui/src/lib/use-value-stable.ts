@@ -14,11 +14,15 @@ import * as React from "react";
  */
 export function useValueStable<T>(value: T): T {
   const key = stableKey(value);
-  const ref = React.useRef<{ key: string; value: T }>({ key, value });
-  if (ref.current.key !== key) {
-    ref.current = { key, value };
+  const [snapshot, setSnapshot] = React.useState(() => ({ key, value }));
+  if (snapshot.key !== key) {
+    // Render-time state adjustments belong to this render. An abandoned
+    // concurrent render must not replace the last committed stable value.
+    const next = { key, value };
+    setSnapshot(next);
+    return next.value;
   }
-  return ref.current.value;
+  return snapshot.value;
 }
 
 function stableKey(value: unknown): string {

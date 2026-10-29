@@ -4,11 +4,13 @@ import {
   AppRuntimeProvider,
   EmptyState,
   PrimaryPaneProvider,
+  PaneToolbar,
   ScopedExplorerPane,
   TreeView,
   baseIcons,
   defaultWidgets,
   usePrimaryPaneContent,
+  useScopedTreeExplorer,
 } from "@angee/ui";
 
 interface Root {
@@ -59,6 +61,8 @@ function PrimaryPaneHost(): React.ReactElement {
 }
 
 function ScopedExplorerDemo(): React.ReactElement {
+  const controller = useScopedTreeExplorer({ roots, getRootId: (root) => root.id,
+    getTreeRows: (rootId) => rowsByRoot[rootId] ?? [] });
   return (
     <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets }}>
       <PrimaryPaneProvider>
@@ -69,20 +73,23 @@ function ScopedExplorerDemo(): React.ReactElement {
               roots={roots}
               getRootId={(root) => root.id}
               getRootLabel={(root) => root.name}
-              getTreeRows={(rootId) => rowsByRoot[rootId] ?? []}
+              controller={controller}
               navigatorLabel="Library"
               rootPicker={{ "aria-label": "Library root" }}
-              renderTree={(controller) => (
-                <TreeView<TreeRow>
-                  rows={controller.treeRows}
-                  parent="parent"
-                  rowKey="id"
-                  label="title"
-                  icon="icon"
-                  selectedId={controller.selectedId}
-                  onSelect={(row) => controller.setSelectedId(row.id)}
-                  className="min-h-0 flex-1 overflow-auto"
-                />
+              renderTree={(controller, selector) => (
+                <>
+                  <PaneToolbar selector={selector} />
+                  <TreeView<TreeRow>
+                    rows={controller.treeRows}
+                    parent="parent"
+                    rowKey="id"
+                    label="title"
+                    icon="icon"
+                    selectedId={controller.selectedId}
+                    onSelect={(row) => controller.setSelectedId(row.id)}
+                    className="min-h-0 flex-1 overflow-auto"
+                  />
+                </>
               )}
               emptyContent={
                 <EmptyState

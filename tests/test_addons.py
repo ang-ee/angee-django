@@ -22,11 +22,13 @@ from hatch_angee import AddonManifest
 from rebac import system_context
 
 import angee.addons as addon_module
+import angee.platform.discovery as discovery_module
 import tests.test_platform_install  # noqa: F401 -- register the fixture model graph before database setup
-from angee.addons import addon_manifest, available_addons, resolve_app_config, resolve_manifest_roots
+from angee.addons import addon_manifest, resolve_manifest_roots
 from angee.compose.appgraph import AppGraph
-from angee.compose.dependencies import AddonDependencyGroup
+from angee.conf import ManifestDeclarations
 from angee.platform import models as platform_models
+from angee.platform.discovery import available_addons, resolve_app_config
 from angee.resources.models import Resource as AbstractResource
 from tests.conftest import make_addon
 
@@ -78,14 +80,13 @@ def test_manifest_binding_reuses_native_parse_and_refreshes_a_new_graph(tmp_path
         return manifest
 
     monkeypatch.setattr(addon_module, "parse_manifest", parse)
-    assert AppGraph().resolve((config,)) == (config,)
+    assert AppGraph(ManifestDeclarations()).resolve((config,)) == (config,)
     manifest = addon_manifest(config)
     assert isinstance(manifest, AddonManifest)
-    assert AddonDependencyGroup.from_app_configs((config,), project_dir=None).manifests == (manifest,)
     assert len(parsed) == 1
     assert manifest is parsed[0]
     (tmp_path / "addon.toml").write_text('[addon]\nname = "example.demo"\ndescription = "updated"\n')
-    AppGraph().resolve((config,))
+    AppGraph(ManifestDeclarations()).resolve((config,))
     assert addon_manifest(config).description == "updated"
     assert len(parsed) == 2
     assert addon_manifest(config) is parsed[1]
@@ -114,7 +115,7 @@ def test_new_graph_observes_previously_missing_manifest(tmp_path) -> None:
     marker.unlink()
     assert addon_manifest(config) is None
     marker.write_text('[addon]\nname = "example.demo"\n')
-    AppGraph().resolve((config,))
+    AppGraph(ManifestDeclarations()).resolve((config,))
     assert addon_manifest(config).name == "example.demo"
 
 
@@ -131,9 +132,9 @@ def test_available_addons_excludes_core_and_enumerates_folder_addons(settings) -
     """The catalog contains capability addons, not the framework core apps."""
 
     available = available_addons(settings.ANGEE_ADDON_DIRS)
-    for name in ("angee", "angee.compose", "angee.jobs"):
+    for name in ("angee", "angee.compose"):
         assert name not in available
-    for name in ("angee.graphql", "angee.iam", "angee.storage"):
+    for name in ("angee.base", "angee.jobs", "angee.web", "angee.graphql", "angee.iam", "angee.storage"):
         assert name in available, f"{name!r} not discovered from ANGEE_ADDON_DIRS"
         manifest, origin = available[name]
         assert manifest.name == name
@@ -148,7 +149,7 @@ def test_available_addons_includes_local_addon_dirs_without_imports(tmp_path, mo
     (addon / "addon.toml").write_text('[addon]\nname = "example.demo"\n')
     (addon / "__init__.py").write_text('raise AssertionError("discovery imported the app")\n')
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.setattr(addon_module.metadata, "entry_points", lambda **kwargs: [])
+    monkeypatch.setattr(discovery_module.metadata, "entry_points", lambda **kwargs: [])
 
     available = available_addons([tmp_path])
 
@@ -168,7 +169,7 @@ def test_available_addons_reads_local_manifest_through_upstream_discovery(tmp_pa
         seen.append(tuple(roots))
         return [(addon, manifest), (tmp_path / "shadowed", AddonManifest(name=manifest.name))]
 
-    monkeypatch.setattr("angee.addons.discover", discover)
+    monkeypatch.setattr("angee.platform.discovery.discover", discover)
     available = available_addons([tmp_path])
     assert seen == [(tmp_path,)]
     assert available[manifest.name][0] is manifest
@@ -192,12 +193,16 @@ def test_installed_discovery_keeps_native_origins_and_precedence(tmp_path, monke
     spec = ModuleSpec("editable_demo", loader=None, is_package=True)
     spec.submodule_search_locations = [str(package)]
     monkeypatch.setattr(
-        addon_module.metadata, "entry_points", lambda **kwargs: [entry_point, competing] if duplicate else [entry_point]
+        discovery_module.metadata,
+        "entry_points",
+        lambda **kwargs: [entry_point, competing] if duplicate else [entry_point],
     )
-    monkeypatch.setattr(addon_module.importlib.util, "find_spec", lambda name: spec)
-    monkeypatch.setattr(addon_module, "parse_manifest", lambda marker: manifest)
+    monkeypatch.setattr(discovery_module.importlib.util, "find_spec", lambda name: spec)
+    monkeypatch.setattr(discovery_module, "parse_manifest", lambda marker: manifest)
     monkeypatch.setattr(
-        addon_module, "discover", lambda roots: [(package, AddonManifest(name=entry_point.name, description="local"))]
+        discovery_module,
+        "discover",
+        lambda roots: [(package, AddonManifest(name=entry_point.name, description="local"))],
     )
 
     if duplicate:
@@ -241,7 +246,7 @@ def test_app_identity_reuses_the_populated_config(monkeypatch) -> None:
     def unexpected_create(value):
         raise AssertionError(f"recreated populated app {value}")
 
-    monkeypatch.setattr(addon_module.AppConfig, "create", unexpected_create)
+    monkeypatch.setattr(discovery_module.AppConfig, "create", unexpected_create)
 
     assert resolve_app_config(config.name) is config
     with pytest.raises(ImproperlyConfigured, match="disagrees with AppConfig.name"):
@@ -332,8 +337,8 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
         loaded = make_addon(name="fakeaddon.loaded", path=tmp_path / "loaded", depends_on=("django.contrib.auth",))
         loaded.apps = apps
         loaded.models = {"documentline": line}
-        loaded.angee_addon_root = True
-        loaded.angee_forced = False
+        loaded.compose_root = True
+        loaded.compose_required = False
         installed_manifest = addon_module.parse_manifest(disabled_app / "addon.toml")
         local_manifest = AddonManifest(name="example.unavailable", depends_on=("fakeaddon.base",))
         available = {
@@ -619,7 +624,7 @@ def test_loaded_root_pending_and_forced_admission_follow_the_composed_graph(
         addon = apps.get_model("platform", "Addon")
         root = make_addon(name="example.root", path=tmp_path / "root", depends_on=("example.dep",))
         dependency = make_addon(name="example.dep", path=tmp_path / "dep")
-        configs = AppGraph().resolve((root, dependency), declared_roots=(root,))
+        configs = AppGraph(ManifestDeclarations()).resolve((root, dependency), declared_roots=(root,))
         for config in configs:
             config.apps = apps
             config.models = {}
@@ -655,6 +660,6 @@ def test_failed_refresh_cannot_leave_a_previous_manifest_available(tmp_path) -> 
     assert addon_manifest(config).name == "example.demo"
     (tmp_path / "addon.toml").write_text("invalid toml", encoding="utf-8")
     with pytest.raises(ImproperlyConfigured):
-        AppGraph().resolve((config,))
+        AppGraph(ManifestDeclarations()).resolve((config,))
     with pytest.raises(ImproperlyConfigured):
         addon_manifest(config)

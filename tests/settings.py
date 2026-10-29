@@ -8,14 +8,13 @@ from pathlib import Path
 import environ
 from django.apps import AppConfig
 
-from angee.compose.autoconfig import AutoConfig
+from angee.utils.autoconfig import AutoConfig
 
 
-class BareComposeConfig(AppConfig):
-    """Register the core composer without emitting a generated runtime."""
+class BareAngeeConfig(AppConfig):
+    """Register source-only tests without importing a prebuilt application."""
 
-    name = "angee.compose"
-    label = "compose"
+    name = "angee"
 
 
 class BareGraphQLConfig(AppConfig):
@@ -33,8 +32,9 @@ INSTALLED_APPS = [
     "axes",
     "rebac",
     "simple_history",
-    "tests.settings.BareComposeConfig",
-    "angee",
+    "tests.settings.BareAngeeConfig",
+    "angee.base",
+    "angee.web",
     "angee.provenance",
     "tests.settings.BareGraphQLConfig",
     "angee.timeline",
@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     "angee.workflows_extraction",
     "angee.workflows_integrate",
     "angee.knowledge",
+    "angee.knowledge_integrate_notion",
     "angee.mcp",
     "angee.storage",
     "angee.storage_integrate",
@@ -131,7 +132,7 @@ else:
     }
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
-ANGEE_RUNTIME_MODULE = "tests.runtime"
+COMPOSE_RUNTIME_MODULE = "tests.runtime"
 ANGEE_ADDON_DIRS = (Path(__file__).resolve().parent.parent / "addons",)
 # Bare tests run Django's per-process LocMem cache. Production OAuth redirects
 # must use a shared cache; tests opt in explicitly so the state guard remains loud.
@@ -140,7 +141,6 @@ ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
 
 AutoConfig.apply_installed(globals(), environment=False)
 CELERY_BROKER_URL = "memory://"
-globals()["ANGEE_IMPL_REGISTRIES"].append("tests.integrate_fixtures.ConnectionAdapter")
 ANGEE_TEST_CONNECTION_CLASSES = {
     "connection": "tests.integrate_fixtures.ConnectionAdapter",
     "live": "tests.integrate_fixtures.LiveConnectionAdapter",

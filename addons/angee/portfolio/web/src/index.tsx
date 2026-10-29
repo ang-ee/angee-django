@@ -1,14 +1,6 @@
-import {
-  defineBaseAddon,
-  resourcePageRoutes,
-  type BaseAddonRoute,
-} from "@angee/app";
+import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute, type MenuDeclarations } from "@angee/app";
 import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
-import {
-  Glyph,
-  Tab,
-  type BaseMenuItem,
-} from "@angee/ui";
+import { Glyph, Tab } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
   Activity,
@@ -64,33 +56,12 @@ const portfolioRoutes: readonly BaseAddonRoute[] = [
   ),
 ];
 
-const portfolioMenu: readonly BaseMenuItem[] = [
-  {
-    id: "portfolio",
-    label: "Portfolio",
-    icon: "portfolio",
-    children: [
-      {
-        id: "portfolio.roadmap",
-        label: "Roadmap",
-        icon: "portfolio-roadmap",
-        route: "portfolio.roadmap",
-      },
-      {
-        id: "portfolio.products",
-        label: "Products",
-        icon: "portfolio-product",
-        route: "portfolio.products",
-      },
-      {
-        id: "portfolio.initiatives",
-        label: "Initiatives",
-        icon: "portfolio-initiative",
-        route: "portfolio.initiatives",
-      },
-    ],
-  },
-];
+const portfolioMenu: MenuDeclarations = {
+  "portfolio": { label: "Portfolio", icon: "portfolio" },
+  "portfolio.roadmap": { label: "Roadmap", icon: "portfolio-roadmap", route: "portfolio.roadmap", parent: "portfolio" },
+  "portfolio.products": { label: "Products", icon: "portfolio-product", route: "portfolio.products", parent: "portfolio" },
+  "portfolio.initiatives": { label: "Initiatives", icon: "portfolio-initiative", route: "portfolio.initiatives", parent: "portfolio" },
+};
 
 const portfolio = defineBaseAddon({
   id: "portfolio",

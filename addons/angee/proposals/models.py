@@ -8,8 +8,6 @@ Deliberate shares remain independent of these derived permissions.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -34,6 +32,7 @@ from rebac import (
     generic_target,
     system_context,
     to_object_ref,
+    user_subject_type,
 )
 from rebac.actors import to_subject_ref
 from rebac.backends import backend
@@ -43,30 +42,26 @@ from rebac.relationships import delete_relationships
 from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter, SubjectRef
 
-from angee.actors import actor_user_id, instance_actor, subject_reaches_user
-from angee.changesets import changeset, changeset_model, creation_fingerprint, require_changeset
-from angee.errors import DomainError, RecordAccessSubjectRefused
-from angee.fields import FractionalRankField, StateField
+from angee.base.exceptions import DomainError, RecordAccessSubjectRefused
+from angee.base.expressions import JSONArraySubquery
+from angee.base.fields.ordering import FractionalRankField
+from angee.base.fields.state import StateField
+from angee.base.managers import AngeeManager
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel, AngeeModel
+from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
+from angee.base.models.ownership import OwnerQuerySet
+from angee.base.models.roles import role_anchor
+from angee.base.models.transitions import StateTransitions, save_state, transition
+from angee.base.permissions import actor_user_id, instance_actor, subject_reaches_user
+from angee.base.querysets import AngeeQuerySet
+from angee.base.validators import validate_value
 from angee.iam.identity import user_label_expression, user_label_queryset
 from angee.messaging.models import ThreadedModelMixin
-from angee.models import (
-    AngeeDataModel,
-    AngeeManager,
-    AngeeModel,
-    AngeeQuerySet,
-    AuditMixin,
-    ImmutableFieldsMixin,
-    OptimisticLockMixin,
-    OwnerQuerySet,
-    StateTransitions,
-    role_anchor,
-    save_state,
-    transition,
-)
-from angee.models.expressions import JSONArraySubquery
 from angee.money.fields import MoneyField
 from angee.proposals.inputs import RoundTemplate
-from angee.validation import validate_value
+from angee.provenance.context import changeset, changeset_model, require_changeset
+from angee.serialization import STRINGIFIED_JSON, canonical_json_sha256
 
 if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
@@ -753,7 +748,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                         and share.subject_id in groups
                         and share.optional_subject_relation == "member"
                     )
-                    wildcard = share.subject_type == "auth/user" and share.subject_id == "*"
+                    wildcard = share.subject_type == user_subject_type() and share.subject_id == "*"
                     if not (direct or group or wildcard):
                         continue
                     detail = dict(
@@ -842,28 +837,27 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             raise ValidationError({"recipient": "Only managers may choose a recipient."})
         if manager and recipient is None:
             raise ValidationError({"recipient": "Choose a user or responders."})
-        fingerprint = creation_fingerprint(
-            {
+        claim_values = {
                 "title": title,
                 "body": body,
                 "audience": audience,
                 "recipient": recipient,
             }
-        )
         claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
         with claim_boundary, transaction.atomic(), system_context(reason="proposals.round.ask"):
             locked = type(self).objects.lock_if_supported().get(pk=self.pk)
             task_model = apps.get_model("projects", "Task")
             if idempotency_key is not None:
-                replay = changeset_model().objects.claim(
+                previous = changeset_model().objects.claim_created(
                     f"proposals.clarification:{locked.pk}:{asker_id}",
                     idempotency_key,
-                    fingerprint=fingerprint,
+                    values=claim_values,
+                    model=task_model,
+                    unavailable=ValidationError(
+                        {"idempotency_key": "The claimed question is unavailable."},
+                    ),
                 )
-                if replay is not None:
-                    previous = replay.created_row
-                    if not isinstance(previous, task_model):
-                        raise ValidationError({"idempotency_key": "The claimed question is unavailable."})
+                if previous is not None:
                     return previous
             if not manager and timezone.now() > locked.last_call_at:
                 raise ValidationError("The last call for questions has passed.")
@@ -1630,18 +1624,12 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
     def _payload_hash(self, message: Message) -> str:
         """Hash the portable source payload interpreted by this parser version."""
 
-        canonical = json.dumps(
-            {
-                "parser_version": self.CAPTURE_PARSER_VERSION,
-                "preview": str(message.preview or ""),
-                "metadata": message.metadata if isinstance(message.metadata, Mapping) else {},
-            },
-            sort_keys=True,
-            ensure_ascii=False,
-            default=str,
-            separators=(",", ":"),
-        )
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        payload = {
+            "parser_version": self.CAPTURE_PARSER_VERSION,
+            "preview": str(message.preview or ""),
+            "metadata": message.metadata if isinstance(message.metadata, Mapping) else {},
+        }
+        return canonical_json_sha256(chunks=(STRINGIFIED_JSON.encode(payload),))
 
 
 class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
@@ -1856,7 +1844,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                 raise ValidationError({"round": "This round is not accepting proposal shells."})
             self.round = locked_round
             if self.responder_id is not None:
-                subject = SubjectRef.of("auth/user", str(self.responder_id))
+                subject = SubjectRef.of(user_subject_type(), str(self.responder_id))
                 if (
                     backend()
                     .check_access(subject=subject, action="manage", resource=to_object_ref(locked_round))

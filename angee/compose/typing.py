@@ -1,7 +1,7 @@
 """Mypy adapters for declarations whose concrete owner is the composer.
 
 Field, manager and settings checking stays with django-stubs. This adapter
-describes source composition and ``role_anchor`` classes.
+describes source composition and installed settings declarations.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from mypy.join import join_types
 from mypy.maptype import map_instance_to_supertype
 from mypy.mro import calculate_mro
 from mypy.nodes import (
-    GDEF,
     MDEF,
     Decorator,
     FuncDef,
@@ -31,11 +30,11 @@ from mypy.nodes import (
     Var,
 )
 from mypy.options import Options
-from mypy.plugin import AttributeContext, ClassDefContext, DynamicClassDefContext, FunctionContext
+from mypy.plugin import AttributeContext, ClassDefContext, DynamicClassDefContext
 from mypy.semanal_shared import PRIORITY_FALLBACKS, has_placeholder
 from mypy.server.trigger import make_trigger
-from mypy.typeops import expand_type, expand_type_by_instance, make_simplified_union
-from mypy.types import AnyType, CallableType, Instance, NoneType, Overloaded, TypedDictType, TypeType, get_proper_type
+from mypy.typeops import expand_type, expand_type_by_instance
+from mypy.types import AnyType, CallableType, Instance, Overloaded, TypedDictType, TypeType, get_proper_type
 from mypy.types import Type as MypyType
 from mypy.typevars import fill_typevars
 from mypy_django_plugin.django.context import DjangoContext
@@ -43,7 +42,7 @@ from mypy_django_plugin.lib import fullnames, helpers
 from mypy_django_plugin.main import NewSemanalDjangoPlugin
 from mypy_django_plugin.transformers.managers import create_new_manager_class_from_from_queryset_method
 
-from angee.compose.yamlconf import setting_name, setting_sources
+from angee.utils.yamlconf import setting_name, setting_sources
 
 if TYPE_CHECKING:
     from mypy.checker import TypeChecker
@@ -117,6 +116,11 @@ class CompositionContext(DjangoContext):
     def get_model_class_by_fullname(self, fullname: str) -> type[models.Model] | None:
         return self.composed.get(fullname) or super().get_model_class_by_fullname(fullname)
 
+    def is_fallback_manager(self, manager: models.Manager[models.Model]) -> bool:
+        """Identify Django's implicit manager; host adapters extend native markers."""
+
+        return manager.auto_created
+
     def get_model_manager(
         self, api: TypeChecker | SemanticAnalyzer, model_cls: type[models.Model],
         name: Literal["_default_manager", "_base_manager"],
@@ -124,7 +128,7 @@ class CompositionContext(DjangoContext):
         """Inherit checked parent managers only where Django marks a fallback."""
         manager = super().get_model_manager(api, model_cls, name)
         parent = self.required_parents.get(model_cls)
-        if parent is None or manager is None or not manager.auto_created:
+        if parent is None or manager is None or not self.is_fallback_manager(manager):
             return manager
         info = self.lookup_model_typeinfo(api, model_cls)
         if info is None:
@@ -140,17 +144,19 @@ class CompositionContext(DjangoContext):
         if selected is None:
             return manager
         override = model_cls._meta.managers_map.get(selected.name)
-        return override if override is not None and not override.auto_created else selected
+        return override if override is not None and not self.is_fallback_manager(override) else selected
 
 
 class CompositionPlugin(NewSemanalDjangoPlugin):
-    """Extend the native Django plugin with Angee's build-time declarations."""
+    """Extend the native Django plugin with build-time composition declarations."""
 
     django_context: CompositionContext
+    context_class: type[CompositionContext] = CompositionContext
+    default_settings_module: str | None = None
 
     def __init__(self, options: Options) -> None:
         super().__init__(options)
-        self.django_context = CompositionContext(self.plugin_config.django_settings_module)
+        self.django_context = self.context_class(self.plugin_config.django_settings_module)
 
     def get_additional_deps(self, file: MypyFile) -> list[tuple[int, str, int]]:
         dependencies = super().get_additional_deps(file)
@@ -171,8 +177,8 @@ class CompositionPlugin(NewSemanalDjangoPlugin):
                 for app in self.django_context.apps_registry.get_app_configs()
                 if f"{app.name}.autoconfig" in sys.modules
             )
-            if self.django_context.composed:
-                dependencies.append(self._new_dependency("angee.compose.defaults"))
+            if self.default_settings_module is not None and self.django_context.composed:
+                dependencies.append(self._new_dependency(self.default_settings_module))
         return dependencies
 
     def get_attribute_hook(self, fullname: str) -> Callable[[AttributeContext], MypyType] | None:
@@ -193,7 +199,8 @@ class CompositionPlugin(NewSemanalDjangoPlugin):
             return native(ctx)
         sources = setting_sources(self.django_context.settings, name)
         if not sources:
-            defaults = modules.get("angee.compose.defaults") if self.django_context.composed else None
+            defaults = (modules.get(self.default_settings_module)
+                        if self.default_settings_module is not None and self.django_context.composed else None)
             symbol = defaults.names.get(name) if defaults is not None else None
             if symbol is not None and symbol.type is not None and not isinstance(
                 get_proper_type(symbol.type), AnyType,
@@ -415,65 +422,7 @@ class CompositionPlugin(NewSemanalDjangoPlugin):
             target.names[name] = SymbolTableNode(MDEF, variable, plugin_generated=True)
             projected[name] = origin_name
 
-    def get_class_attribute_hook(self, fullname: str) -> Callable[[AttributeContext], MypyType] | None:
-        class_name, _, method_name = fullname.rpartition(".")
-        if method_name == "system_queryset":
-            info = self._get_typeinfo_or_none(class_name)
-            symbol = info.get(method_name) if info is not None else None
-            if symbol is not None and symbol.node is not None and symbol.node.fullname == (
-                "angee.models.query.SystemQuerysetMixin.system_queryset"
-            ):
-                return self._system_queryset
-        return super().get_class_attribute_hook(fullname)
-
-    def _system_queryset(self, ctx: AttributeContext) -> MypyType:
-        # This owner clones the configured default queryset without changing its
-        # class. Native member analysis retains that class and model binding.
-        signature = get_proper_type(ctx.default_attr_type)
-        if not isinstance(signature, CallableType):
-            return ctx.default_attr_type
-        api = helpers.get_typechecker_api(ctx)
-        manager = helpers.analyze_member_access(
-            "_default_manager", ctx.type, ctx.context, is_lvalue=False,
-            is_super=False, is_operator=False, original_type=ctx.type, chk=api,
-        )
-        method = get_proper_type(helpers.analyze_member_access(
-            "get_queryset", manager, ctx.context, is_lvalue=False,
-            is_super=False, is_operator=False, original_type=manager, chk=api,
-        ))
-        if isinstance(method, CallableType):
-            result = get_proper_type(method.ret_type)
-            if isinstance(result, Instance) and result.type.has_base(fullnames.QUERYSET_CLASS_FULLNAME):
-                return signature.copy_modified(ret_type=method.ret_type)
-        return ctx.default_attr_type
-
-    def get_function_hook(self, fullname: str) -> Callable[[FunctionContext], MypyType] | None:
-        if fullname in {
-            "angee.changesets.changeset_model",
-            "angee.changesets.current_changeset",
-            "angee.changesets.require_changeset",
-        }:
-            return partial(self._configured_changeset, fullname=fullname)
-        return super().get_function_hook(fullname)
-
-    def _configured_changeset(self, ctx: FunctionContext, *, fullname: str) -> MypyType:
-        label = getattr(self.django_context.settings, "ANGEE_CHANGESET_MODEL", "")
-        if not label:
-            return ctx.default_return_type
-        model = self.django_context.apps_registry.get_model(label)
-        info = self.django_context.lookup_model_typeinfo(helpers.get_typechecker_api(ctx), model)
-        if info is None:
-            return ctx.default_return_type
-        instance = Instance(info, [])
-        if fullname == "angee.changesets.changeset_model":
-            return TypeType(instance)
-        if fullname == "angee.changesets.current_changeset":
-            return make_simplified_union([instance, NoneType()])
-        return instance
-
     def get_dynamic_class_hook(self, fullname: str) -> Callable[[DynamicClassDefContext], None] | None:
-        if fullname == "angee.models.base.role_anchor":
-            return self._role_anchor
         native = super().get_dynamic_class_hook(fullname)
         if native is not None:
             return native
@@ -490,27 +439,6 @@ class CompositionPlugin(NewSemanalDjangoPlugin):
             # before it creates a class; resolved unrelated methods stay native.
             return create_new_manager_class_from_from_queryset_method
         return None
-
-    def _role_anchor(self, ctx: DynamicClassDefContext) -> None:
-        api = helpers.get_semanal_api(ctx)
-        existing = api.lookup_current_scope(ctx.name)
-        if existing is not None and isinstance(existing.node, TypeInfo):
-            return
-        symbol = self.lookup_fully_qualified("angee.models.base.AngeeModel")
-        if symbol is None or not isinstance(symbol.node, TypeInfo) or not symbol.node.mro:
-            if not ctx.api.final_iteration:
-                if existing is None or not isinstance(existing.node, PlaceholderNode):
-                    placeholder = PlaceholderNode(
-                        api.qualified_name(ctx.name), ctx.call, ctx.call.line, becomes_typeinfo=True,
-                    )
-                    ctx.api.add_symbol_table_node(ctx.name, SymbolTableNode(GDEF, placeholder))
-                ctx.api.defer()
-            else:
-                ctx.api.fail("role_anchor requires the AngeeModel typing contract", ctx.call)
-            return
-        info = ctx.api.basic_new_typeinfo(ctx.name, Instance(symbol.node, []), ctx.call.line)
-        info.metaclass_type = symbol.node.metaclass_type
-        ctx.api.add_symbol_table_node(ctx.name, SymbolTableNode(GDEF, info))
 
 
 def plugin(version: str) -> type[CompositionPlugin]:

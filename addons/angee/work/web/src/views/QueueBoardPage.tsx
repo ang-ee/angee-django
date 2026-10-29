@@ -44,6 +44,7 @@ export function QueueBoardPage(): React.ReactElement {
           laneSource={{
             field: "stage",
             rankField: "sort_order",
+            rankInputField: "task_order",
             filters: queueStageFilters(queueId),
             sorters: [{ field: "position", order: "asc" }],
           }}

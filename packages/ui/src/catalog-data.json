@@ -201,15 +201,6 @@
   },
   {
     "package": "@angee/app",
-    "name": "isMenuDeclarationList",
-    "source": "packages/app/src/menus.ts",
-    "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/app",
     "name": "isUnauthorizedError",
     "source": "packages/app/src/providers/auth.tsx",
     "kind": null,
@@ -2465,9 +2456,9 @@
   {
     "package": "@angee/ui",
     "name": "FORM_SPEC_ANNOTATIONS",
-    "source": "packages/ui/src/views/form/form-spec-schema.ts",
+    "source": "packages/ui/src/views/form/form-spec.annotations.generated.ts",
     "kind": null,
-    "reason": "Schema infrastructure: validates serialized runtime contracts.",
+    "reason": "Generated codec vocabulary consumed by the optional schema validator.",
     "status": "stable",
     "storyId": null
   },
@@ -2818,15 +2809,6 @@
     "name": "LARGE_VIEWPORT_QUERY",
     "source": "packages/ui/src/lib/use-media-query.ts",
     "kind": "token",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "LEGACY_THEME_STORAGE_KEY",
-    "source": "packages/ui/src/lib/color-scheme.ts",
-    "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
     "status": "stable",
     "storyId": null
   },
@@ -6719,24 +6701,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "migrateThemeCustomization",
-    "source": "packages/ui/src/theme/runtime.d.ts",
-    "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "migrateThemeCustomizationFromV1",
-    "source": "packages/ui/src/theme/runtime.d.ts",
-    "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "mimeKind",
     "source": "packages/ui/src/preview/mime-label.ts",
     "kind": null,
@@ -6956,7 +6920,7 @@
     "name": "parseFormSpec",
     "source": "packages/ui/src/views/form/form-spec-schema.ts",
     "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
+    "reason": "Codec infrastructure: validates the generated wire contract.",
     "status": "stable",
     "storyId": null
   },
@@ -6965,7 +6929,7 @@
     "name": "parseFormSpecPayload",
     "source": "packages/ui/src/views/form/form-spec-schema.ts",
     "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
+    "reason": "Codec infrastructure: reads a JSON object envelope.",
     "status": "stable",
     "storyId": null
   },
@@ -8570,6 +8534,15 @@
     "source": "packages/ui/src/views/relation/relation-options.ts",
     "kind": "contribution",
     "owner": "@angee/ui:RelationFieldWidget",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useRelationPickerOptions",
+    "source": "packages/ui/src/views/relation/relation-options.ts",
+    "kind": null,
+    "reason": "Shared data hook owns picker query state without rendered anatomy.",
     "status": "stable",
     "storyId": null
   },

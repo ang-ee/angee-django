@@ -2,6 +2,7 @@
 {# variables, then include the one shared manifest body. The include path resolves #}
 {# from the template root that holds copier.yml, as Copier resolves includes. #}
 {% set stack_flavor = "framework" %}
+{% set container_project_dir = "/app" %}
 {% set ingress_domain_value = ingress_domain %}
 {# The OPERATOR owns path-input translation (copierx.ResolvePathInputs): every render #}
 {# flow rewrites a relative `type: path` input to be ANGEE_ROOT-relative before this #}

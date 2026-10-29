@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import sys
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -10,56 +11,55 @@ from pathlib import Path
 from django.apps import AppConfig, apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.core.management import call_command
-from django.db import DEFAULT_DB_ALIAS, connections, transaction
-from django.db.migrations.autodetector import MigrationAutodetector
-from django.db.migrations.executor import MigrationExecutor
-from django.db.migrations.recorder import MigrationRecorder
-from django.db.migrations.state import ProjectState
+from django.db.migrations.loader import MigrationLoader
 
-from angee.compose.dependencies import AddonDependencyGroup, AddonDependencyGroupResult
+from angee.compose.declarations import BuildIntegration, model_declaration
 from angee.compose.migrations import RuntimeMigrations
 from angee.compose.model_composition import ModelComposition
-from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.compose.rendering import render_models
-from angee.compose.web import WebRuntime
-from angee.fs import GENERATED_SENTINEL, GeneratedTree, write_atomic
-from angee.project import find_project_dir
+from angee.utils.artifacts import GeneratedTree
 
-_COMPOSER_WEB_SOURCES = {
-    Path("web/manifest.json"),
-    Path("web/tailwind.sources.css"),
-}
+GENERATED_SENTINEL = "# ANGEE GENERATED RUNTIME - DO NOT EDIT"
+"""Marker required before the configured generated runtime may be changed."""
+
+logger = logging.getLogger(__name__)
 
 
 def _runtime_directory() -> Path:
     """Read the single runtime-directory setting without discovering models."""
 
-    runtime_dir = getattr(settings, "ANGEE_RUNTIME_DIR", None)
+    runtime_dir = getattr(settings, "COMPOSE_RUNTIME_DIR", None)
     if not runtime_dir:
         raise ImproperlyConfigured(
-            "angee.compose requires ANGEE_RUNTIME_DIR; angee.compose.settings "
-            "sets it. A host installing the composer must configure the runtime directory."
+            "angee.compose requires COMPOSE_RUNTIME_DIR; "
+            "the host must configure the generated runtime directory."
         )
     return Path(runtime_dir)
 
 
-def _generated_tree(runtime_dir: Path, sources: Mapping[Path, str]) -> GeneratedTree:
-    """Guard the whole runtime tree; sources never limit explicit cleanup."""
+def _generated_tree(
+    runtime_dir: Path, sources: Mapping[Path, str], *, clean: bool = False,
+) -> GeneratedTree:
+    """Scope normal reconciliation and explicit cleanup without owning history."""
 
     source_roots = {path.parts[0] for path in sources}
+    external_roots = frozenset(getattr(settings, "COMPOSE_EXTERNAL_ARTIFACT_ROOTS", ()))
+    owned_paths = frozenset(Path(path) for path in getattr(settings, "COMPOSE_OWNED_ARTIFACT_PATHS", ()))
 
     def owns(path: Path) -> bool:
         root = path.parts[0]
+        if "migrations" in path.parts:
+            return False
+        if clean:
+            return True
         return (
-            root not in {"gql", "schemas"}
-            and (root != "web" or path in _COMPOSER_WEB_SOURCES)
+            (root not in external_roots or path in sources or path in owned_paths)
             # Current packages accumulate bytecode on import; retired ones must
             # still be pruned when only their bytecode remains.
             and ("__pycache__" not in path.parts or root not in source_roots | {"__pycache__"})
         )
 
-    configured = getattr(settings, "ANGEE_RUNTIME_DIR", None)
+    configured = getattr(settings, "COMPOSE_RUNTIME_DIR", None)
     return GeneratedTree(
         runtime_dir,
         sources,
@@ -70,12 +70,11 @@ def _generated_tree(runtime_dir: Path, sources: Mapping[Path, str]) -> Generated
 
 
 class Runtime:
-    """Coordinate model, web, permission, dependency and migration owners.
+    """Coordinate native composition and installed build integrations.
 
     ``discover`` imports and validates source declarations explicitly. Each write
-    or drift operation renders one source map. Boot repairs sources without
-    pruning; explicit build uses the guarded generated-tree policy. Neither construction
-    nor discovery changes Django settings or writes files.
+    or drift operation renders one source map. Explicit build uses guarded
+    reconciliation. Neither construction nor discovery changes settings or files.
     """
 
     def __init__(
@@ -85,13 +84,17 @@ class Runtime:
         *,
         runtime_dir: Path,
         runtime_module: str = "runtime",
-        project_dir: Path | None = None,
+        integrations: tuple[BuildIntegration, ...] | None = None,
     ) -> None:
         self.addons = addons
         self.composition = composition
         self.runtime_dir = runtime_dir
         self.runtime_module = runtime_module
-        self.project_dir = project_dir
+        self.integrations = BuildIntegration.configured() if integrations is None else integrations
+        self.model_declarations = {
+            source: model_declaration(composition, source, self.integrations)
+            for source in composition.ordered_models
+        }
 
     @classmethod
     def discover(
@@ -100,7 +103,7 @@ class Runtime:
         *,
         runtime_dir: Path,
         runtime_module: str = "runtime",
-        project_dir: Path | None = None,
+        integrations: tuple[BuildIntegration, ...] | None = None,
     ) -> Runtime:
         """Discover source models after Django has populated AppConfig instances."""
 
@@ -110,7 +113,7 @@ class Runtime:
             ModelComposition.discover(configs),
             runtime_dir=runtime_dir,
             runtime_module=runtime_module,
-            project_dir=project_dir,
+            integrations=integrations,
         )
 
     @classmethod
@@ -120,17 +123,29 @@ class Runtime:
         return cls.discover(
             apps.get_app_configs(),
             runtime_dir=_runtime_directory(),
-            runtime_module=str(getattr(settings, "ANGEE_RUNTIME_MODULE", "runtime")),
-            project_dir=find_project_dir(),
+            runtime_module=str(getattr(settings, "COMPOSE_RUNTIME_MODULE", "runtime")),
         )
 
     @classmethod
     def clean_configured(cls) -> None:
         """Clean generated packages without discovery, leaving migrations for explicit reset."""
 
-        runtime_module = str(getattr(settings, "ANGEE_RUNTIME_MODULE", "runtime"))
+        runtime_module = str(getattr(settings, "COMPOSE_RUNTIME_MODULE", "runtime"))
         runtime = sys.modules.get(runtime_module)
-        _generated_tree(_runtime_directory(), {}).clean(current_roots=getattr(runtime, "RUNTIME_APPS", ()))
+        runtime_dir = _runtime_directory()
+        retained = _generated_tree(runtime_dir, {}, clean=True).clean()
+        current_roots = set(getattr(runtime, "RUNTIME_APPS", ()))
+        retired = sorted({
+            Path(*path.parts[:path.parts.index("migrations") + 1])
+            for path in retained
+            if "migrations" in path.parts and path.parts[0] not in current_roots
+        })
+        if retired:
+            logger.warning(
+                "Preserved migration directories during cleanup: %s. "
+                "Review their database history before an explicitly authorized removal.",
+                ", ".join(str(runtime_dir / path) for path in retired),
+            )
 
     @property
     def labels(self) -> tuple[str, ...]:
@@ -138,164 +153,91 @@ class Runtime:
 
         return self.composition.labels
 
-    def render_sources(self) -> dict[Path, str]:
-        """Render one coherent model/web/permission source map before any write."""
+    def integration_modules(self) -> tuple[str, ...]:
+        """Collect explicit emitted imports without a serving-time build callback."""
 
+        modules = tuple(name for integration in self.integrations for name in integration.runtime_imports(self))
+        if len(set(modules)) != len(modules):
+            raise ImproperlyConfigured("Build integrations declare duplicate runtime imports")
+        return modules
+
+    def render_sources(self) -> dict[Path, str]:
+        """Render concrete models and installed integrations into one source map."""
+
+        model_modules = tuple(dict.fromkeys(
+            f"{self.runtime_module}.{source._meta.app_label}.models"
+            for source in self.composition.ordered_models
+        ))
+        migration_modules = {label: MigrationLoader.migrations_module(label)[0] for label in self.labels}
+        app_identities = tuple((config.name, config.label) for config in self.addons)
         sources: dict[Path, str] = {
             Path("__init__.py"): (
                 f'"""Generated Angee runtime package."""\n'
                 f"{GENERATED_SENTINEL}\n\n"
                 f"RUNTIME_APPS = {list(self.labels)!r}\n"
+                f"RUNTIME_APP_IDENTITIES = {app_identities!r}\n"
+                f"RUNTIME_MODEL_MODULES = {model_modules!r}\n"
+                f"RUNTIME_INTEGRATION_MODULES = {self.integration_modules()!r}\n"
+                f"RUNTIME_MIGRATION_MODULES = {migration_modules!r}\n"
             ),
         }
         for label in self.labels:
             root = Path(label)
             sources[root / "__init__.py"] = ""
-            sources[root / "migrations" / "__init__.py"] = ""
             sources[root / "models.py"] = render_models(
-                self.composition, label, runtime_module=self.runtime_module,
+                self.composition, label, runtime_module=self.runtime_module, declarations=self.model_declarations,
             )
-        web = WebRuntime(self.addons, runtime_dir=self.runtime_dir, ui=getattr(settings, "ANGEE_UI", None))
-        sources.update(web.render_sources())
-        sources.update(extension_source_map(self.addons, field_owners=self.composition.field_gate_owners()))
+            initializer = root / "migrations" / "__init__.py"
+            if migration_modules[label] == f"{self.runtime_module}.{label}.migrations" and not (
+                self.runtime_dir / initializer
+            ).exists():
+                # Django's unlabelled makemigrations discovers only migration
+                # packages. Existing native history remains an untouched input.
+                sources[initializer] = ""
+        for integration in self.integrations:
+            contributed = integration.render_sources(self)
+            self._validate_artifacts(contributed)
+            for path, source in sorted(contributed.items()):
+                if path in sources or any(parent in sources for parent in path.parents) or any(
+                    path in existing.parents for existing in sources
+                ):
+                    raise ImproperlyConfigured(f"Competing build artifacts at {path}")
+                sources[path] = source
+        for module in self.integration_modules():
+            prefix = f"{self.runtime_module}."
+            if not module.startswith(prefix):
+                raise ImproperlyConfigured(f"Generated import is outside runtime: {module!r}")
+            relative = Path(*module.removeprefix(prefix).split(".")).with_suffix(".py")
+            if relative not in sources:
+                raise ImproperlyConfigured(f"Generated import has no emitted source: {module!r}")
+        self._validate_artifacts(sources)
         return sources
 
-    def _emit(self, tree: GeneratedTree) -> None:
-        tree.reset()
-        tree.reconcile(prune=False)
-        apply_schema_paths(self.addons, self.runtime_dir, sources=tree.artifacts)
+    def _validate_artifacts(self, sources: Mapping[Path, str]) -> None:
+        """Translate the shared artifact owner's failure into a settings error."""
+
+        try:
+            GeneratedTree.validate_artifacts(self.runtime_dir, sources)
+        except ValueError as error:
+            raise ImproperlyConfigured(str(error)) from error
 
     def runtime_migrations(self) -> RuntimeMigrations:
         """Return the native addon migration materializer."""
 
         return RuntimeMigrations(
             self.addons,
-            runtime_dir=self.runtime_dir,
             labels=self.labels,
         )
 
-    def reset_migration_history(
-        self,
-        *,
-        database: str = DEFAULT_DB_ALIAS,
-    ) -> tuple[tuple[str, ...], int, int]:
-        """Replace fully applied, model-clean composed history, restoring files on failure."""
-
-        labels = tuple(sorted(self.labels))
-        if not labels:
-            return labels, 0, 0
-        connection = connections[database]
-        executor = MigrationExecutor(connection)
-        executor.loader.check_consistent_history(connection)
-        targets = tuple(node for label in labels for node in executor.loader.graph.leaf_nodes(label))
-        if executor.migration_plan(targets):
-            raise RuntimeError(
-                "migration history reset requires a fully applied migration graph. "
-                f"Run `manage.py migrate --database {database}` first."
-            )
-        changes = MigrationAutodetector(
-            executor.loader.project_state(),
-            ProjectState.from_apps(apps),
-        ).changes(
-            graph=executor.loader.graph,
-            trim_to_apps=set(labels),
-            convert_apps=set(labels),
-        )
-        if changes:
-            rendered = " ".join(labels)
-            raise RuntimeError(
-                "migration history reset requires the recorded graph to match the live composed models. "
-                f"Run `manage.py makemigrations {rendered}` and "
-                f"`manage.py migrate --database {database}` first."
-            )
-
-        _generated_tree(self.runtime_dir, {}).reconcile(prune=False)
-        migration_files = tuple(sorted(
-            path
-            for label in labels
-            for path in (self.runtime_dir / label / "migrations").glob("*.py")
-            if path.name != "__init__.py"
-        ))
-        original_sources = {path: path.read_bytes().decode("utf-8") for path in migration_files}
-
-        migration_prefixes = tuple(f"{self.runtime_module}.{label}.migrations" for label in labels)
-
-        def forget_migration_modules() -> None:
-            for module_name in tuple(sys.modules):
-                if any(
-                    module_name == prefix or module_name.startswith(f"{prefix}.")
-                    for prefix in migration_prefixes
-                ):
-                    sys.modules.pop(module_name)
-            for label in labels:
-                for bytecode in (self.runtime_dir / label / "migrations" / "__pycache__").glob("*.pyc"):
-                    bytecode.unlink()
-            importlib.invalidate_caches()
-
-        try:
-            for path in migration_files:
-                path.unlink()
-            forget_migration_modules()
-            call_command(
-                "makemigrations",
-                *labels,
-                interactive=False,
-                include_header=False,
-                verbosity=0,
-            )
-            forget_migration_modules()
-
-            fresh_executor = MigrationExecutor(connection)
-            graph = fresh_executor.loader.graph
-            fresh_nodes = dict.fromkeys(
-                node
-                for label in labels
-                for target in graph.leaf_nodes(label)
-                for node in graph.forwards_plan(target)
-                if node[0] in labels
-            )
-            recorder = MigrationRecorder(connection)
-            with transaction.atomic(using=database):
-                applied = recorder.applied_migrations()
-                # Preserve shared keys: an applied external migration may depend
-                # on one of these initials throughout the history replacement.
-                for app_label, migration_name in fresh_nodes:
-                    if (app_label, migration_name) not in applied:
-                        recorder.record_applied(app_label, migration_name)
-                for app_label, migration_name in sorted(applied.keys() - fresh_nodes.keys()):
-                    if app_label in labels:
-                        recorder.record_unapplied(app_label, migration_name)
-                fresh_executor.loader.check_consistent_history(connection)
-                recorded = recorder.migration_qs.filter(app__in=labels).count()
-        except BaseException:
-            for label in labels:
-                for path in (self.runtime_dir / label / "migrations").glob("*.py"):
-                    if path.name != "__init__.py" and path not in original_sources:
-                        path.unlink()
-            for path, source in original_sources.items():
-                write_atomic(path, source)
-            forget_migration_modules()
-            raise
-        return labels, len(migration_files), recorded
-
-    @property
-    def addon_dependency_group(self) -> AddonDependencyGroup:
-        """Return the dependency projector for this composed host."""
-
-        return AddonDependencyGroup.from_app_configs(self.addons, project_dir=self.project_dir)
-
-    def build(self) -> AddonDependencyGroupResult:
-        """Repair sources, project dependencies and materialize addon migrations."""
+    def emit_sources(self) -> bool:
+        """Emit explicit build output without executing native migration operations."""
 
         tree = _generated_tree(self.runtime_dir, self.render_sources())
-        if tree.drift():
-            self._emit(tree)
-        dependency_result = self.addon_dependency_group.write()
-        self.runtime_migrations().materialize(apps=apps)
-        return dependency_result
+        changed = tree.reconcile(prune=True)
+        return changed
 
     def import_generated_models(self) -> None:
-        """Import concrete modules in model-parent order and validate final metadata."""
+        """Import concrete modules in parent order; Django runs native class validation."""
 
         importlib.invalidate_caches()
         imported: set[str] = set()
@@ -304,40 +246,14 @@ class Runtime:
             if label not in imported:
                 importlib.import_module(f"{self.runtime_module}.{label}.models")
                 imported.add(label)
-        self.composition.validate_concrete(
-            apps.get_model(source._meta.label_lower, require_ready=False)
-            for source in self.composition.ordered_models
-        )
-
-    def emit_if_stale(self) -> bool:
-        """Repair boot sources without pruning, then bind effective permission paths."""
-
-        sources = self.render_sources()
-        changed = _generated_tree(self.runtime_dir, sources).reconcile(prune=False)
-        apply_schema_paths(self.addons, self.runtime_dir, sources=sources)
-        return changed
-
-    def configure_migration_modules(self) -> None:
-        """Bind current generated migrations during population.
-
-        Explicit None disables Django migrations and therefore conflicts with an
-        emitted app's composer-owned migration module, just like another path.
-        """
-
-        migration_modules = dict(getattr(settings, "MIGRATION_MODULES", {}))
-        for label in self.labels:
-            module = f"{self.runtime_module}.{label}.migrations"
-            if label in migration_modules and migration_modules[label] != module:
-                raise ImproperlyConfigured(f"Project settings define Runtime-owned MIGRATION_MODULES[{label!r}]")
-            migration_modules[label] = module
-        settings.MIGRATION_MODULES = migration_modules
+        for module in self.integration_modules():
+            importlib.import_module(module)
 
     def check(self) -> None:
-        """Raise for source, dependency-group or migration drift."""
+        """Raise for generated-source or declared-migration drift."""
 
         drift = _generated_tree(self.runtime_dir, self.render_sources()).drift()
         if drift:
             rendered = ", ".join(str(path) for path in drift)
             raise RuntimeError(f"generated runtime is stale: {rendered}")
-        self.addon_dependency_group.check()
         self.runtime_migrations().check()

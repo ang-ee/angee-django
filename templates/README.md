@@ -33,7 +33,7 @@ template root (the directory holding `copier.yml`), so the stacks include
 `templates/` (angee 0.21.1 or later). Write every include that way, nested ones
 inside `_shared/` too (`../_shared/x.jinja`, never a bare `x.jinja`): a bare name
 resolves against the including file only by accident of today's renderer. Both chain `projects/web` to scaffold the host.
-Their manifests expose preparation as explicit jobs: framework dependency install,
+Their manifests expose preparation as explicit jobs: framework dependency install, native runtime installation/build,
 provision, operator schema refresh, and codegen; local instances replace framework
 codegen with a completed static frontend build. Python jobs and services share one
 runtime/environment include, while each container synchronizes its own virtualenv.
@@ -160,17 +160,18 @@ Commit what you author; ignore what a tool regenerates:
   AGENTS.md · CLAUDE.md    # stack-root ownership rules for coding agents
   addons/<ns>/             # your addons
   web/                     # your frontend
-  runtime/                 # composer output — the pinned, deployed artifact
+  runtime/<label>/migrations/ # reviewed native Django history beside models
   .copier-answers.yml · .gitignore
   ── gitignored ──
-  data/ · .env · run/ · sources/ · docker-compose.yaml · process-compose.yaml
+  other runtime output · dist/ · data/ · .env · run/ · sources/ · docker-compose.yaml · process-compose.yaml
 ```
 
-`runtime/` is **committed**: a local instance is a real deployment, so the built
-concrete apps + SDL are the artifact you deploy and review. (The framework-dev
-stack regenerates it disposably, so it is ignored there.) Everything a tool regenerates —
-resolved secrets, the operator's compiled compose files, materialized sources, the
-Postgres volume — stays out of git. The database is a stack service and the app
+`runtime/<label>/migrations/` is **committed**; other runtime output is ignored. The native Hatch hook builds disposable runtime
+sources during `uv sync` and packages the project-specific runtime with reviewed
+history during `uv build`. Author model changes after the editable build with
+native `makemigrations`, then review and commit history before packaging.
+Generated runtime, resolved secrets, compiled compose files and materialized
+sources stay out of git. The database is a stack service and the app
 reads `DATABASE_URL`, so no SQLite file lives in the tree. Add the framework's
 in-repo example later by including `sources/angee/examples/addons` in
 discovery and enabling it in `INSTALLED_APPS`.
@@ -183,19 +184,17 @@ discovery and enabling it in `INSTALLED_APPS`.
 > `framework=baked` runs the code-baked `ghcr.io/ang-ee/django-angee` runtime image
 > instead. It runs on `pgvector/pgvector:pg17`, drives first start through a
 > provision job running
-> `manage.py angee provision --bootstrap-admin` (which bootstraps a generated `admin`
-> user), and serves the built SPA through Caddy. The one-command render uses the
-> operator's template-chain resolver (`ang-ee/angee-operator#39`); once that lands in a
-> released operator, `angee stack init` renders host + overlay in one step. The web
-> image rebuild depends on the published `hatch-angee` release that ships addon
-> `web/schema/` directories. Until those releases are available, use the two-copier-step
-> render below.
+> `manage.py angee provision --after-if-installed bootstrap_admin` (which creates
+> the generated `admin` user when IAM is installed), and serves the built SPA through
+> Caddy. The operator's template-chain resolver renders the project host and stack
+> overlay in one command.
 
 ## Run a local stack
 
-Once the operator's chain resolver ships, one command renders host + stack. The
-default `framework=source` links the framework editable from a local checkout at
-container start, and `stack init` validates that source exists — so clone it first:
+One command renders host + stack. The default `framework=source` links the
+framework editable from a local checkout at container start. Initialization
+renders the configuration; clone the framework before provisioning or starting
+the stack:
 
 ```sh
 mkdir -p ~/.angee/sources
@@ -254,15 +253,5 @@ angee down --root ~/.angee
 mkdir -p ~/.angee/data
 mv ~/.angee/pgdata ~/.angee/data/pgdata
 angee stack update --root ~/.angee --template
-angee dev --root ~/.angee
-```
-
-Until then, render the two templates in sequence (the stack overlays the host),
-then bring it up. First start emits the local runtime, migrations, and GraphQL
-schemas before starting Django and the selected frontend ingress:
-
-```sh
-copier copy .../templates/projects/web ~/.angee
-copier copy --overwrite .../templates/stacks/local ~/.angee
 angee dev --root ~/.angee
 ```

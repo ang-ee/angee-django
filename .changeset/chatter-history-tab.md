@@ -2,12 +2,14 @@
 "@angee/ui": major
 ---
 
-Record chatter has one Activity stream. The framework's `record#activity` container
-merges comments, conversations, history changes with their statement sources, workflow
-runs, notes, decisions and source events into the `activity` aside tab and retires the
-Comments, Runs, Conversations and History tabs; `ChatterTabId` is an open string, the
-`?chatterTab=` aliases `chatter.activity`, `messaging.activity`, `chatter.history` and
-`messaging.history` are gone, and aside `only`, `except` and `hide` rules name `activity`.
+Record chronology is the `timeline.rail` tab under `record#aside`. Addons
+contribute kinds through `timeline#kinds`; each kind opens its owner's drill-in
+or record page. Messaging contributes the `messaging.discussion` tab and
+`messaging.conversation` drill-in; provenance contributes the
+`provenance.history` drill-in. Aside `only`, `except` and `hide` rules use these
+contribution IDs. `ChatterTabId` is an open string, and the `?chatterTab=` aliases
+`chatter.activity`, `messaging.activity`, `chatter.history` and
+`messaging.history` are gone.
 Also breaking: `PageBody` renders a `div` by default (the console layout owns the one
 `main` landmark; pass `as="main"` on a standalone page), `decisionAttentionColumn` is
 `attentionColumn`, `RecordFieldMarkButton`, `recordCommentsTab`, `recordCarriesThreads`,

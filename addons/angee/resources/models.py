@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from django.db import models
 
-from angee.fields import ModelLabelField, StateField
-from angee.identity import instance_from_public_id
-from angee.models import AngeeModel
+from angee.base.fields.state import StateField
+from angee.base.fields.text import ModelLabelField
+from angee.base.models.base import AngeeModel
+from angee.base.models.identity import instance_from_public_id
 from angee.resources.entries import resolve_model
 from angee.resources.managers import ResourceManager
-from angee.tiers import ResourceTier
+from angee.resources.tiers import ResourceTier
 
 
 class Resource(AngeeModel):

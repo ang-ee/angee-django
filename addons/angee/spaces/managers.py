@@ -10,8 +10,10 @@ from rebac import PermissionDenied, SubjectRef, check_new, current_actor, to_sub
 from rebac.errors import MissingActorError
 from rebac.resources import model_resource_type
 
-from angee.fields import enum_member_for
-from angee.models import AngeeManager, AngeeQuerySet, HierarchyQuerySet
+from angee.base.fields.state import enum_member_for
+from angee.base.managers import AngeeManager
+from angee.base.models.hierarchy import HierarchyQuerySet
+from angee.base.querysets import AngeeQuerySet
 
 if TYPE_CHECKING:
     from angee.spaces.models import Group, Membership

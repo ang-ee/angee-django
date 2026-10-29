@@ -10,18 +10,16 @@ from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from rebac import ObjectRef
 
-from angee.fields import StateField
+from angee.base.fields.state import StateField
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.ownership import OwnerMixin
 from angee.messaging.models import ThreadedModelMixin
-from angee.models import (
-    AngeeDataModel,
-    AuditMixin,
-    HistoryMixin,
-    OwnerMixin,
-)
+from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 
 
-class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel, HistoryMixin):
+class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
     """A short note used to exercise backend composition.
 
     Metadata and body changes are recorded through native ``history``.

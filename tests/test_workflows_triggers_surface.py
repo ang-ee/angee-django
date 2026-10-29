@@ -5,6 +5,7 @@ import yaml
 from django.apps import apps
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
+from graphql import GraphQLEnumType, GraphQLEnumValue
 from rebac import (
     RelationshipTuple,
     delete_relationship,
@@ -14,6 +15,8 @@ from rebac import (
     write_relationships,
 )
 
+from angee.graphql.data.resource_fields import _field_enum_values
+from angee.graphql.impl import impl_choices as graphql_impl_choices
 from angee.integrate.schema import ConsoleImplChoicesQuery
 from angee.integrate.testing.integration import Integration
 from angee.resources.testing.models import Resource
@@ -35,6 +38,34 @@ class FixedVaultSource(TriggerSource):
     key = "record_changed"
     label = "Vault event"
     model_label = "knowledge.vault"
+
+
+class WatchOnlyVaultSource(FixedVaultSource):
+    """Observation-only sources must not be offered for admission selection."""
+
+    key = "watch_only_vault"
+    watch_only = True
+
+
+@pytest.mark.parametrize("enum_transport", [True, False])
+def test_trigger_picker_policy_filters_graphql_choices_and_resource_options(settings, monkeypatch, enum_transport):
+    settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES = {
+        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES,
+        "watch_only_vault": f"{__name__}.WatchOnlyVaultSource",
+    }
+    field = Trigger._meta.get_field("source")
+    monkeypatch.setattr(field, "choices", [("record_changed", "Record changed"), ("watch_only_vault", "Watch")])
+    value = GraphQLEnumType("TriggerSourceProbe", {
+        "RECORD_CHANGED": GraphQLEnumValue("record_changed"),
+        "WATCH_ONLY_VAULT": GraphQLEnumValue("watch_only_vault"),
+    }) if enum_transport else None
+
+    choices = graphql_impl_choices("workflows.Trigger", "source")
+    options = _field_enum_values(field, value)
+
+    assert "record_changed" in {choice.key for choice in choices}
+    assert "watch_only_vault" not in {choice.key for choice in choices}
+    assert [option.value for option in options] == ["RECORD_CHANGED" if enum_transport else "record_changed"]
 
 
 @pytest.fixture

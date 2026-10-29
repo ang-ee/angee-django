@@ -1,9 +1,7 @@
-"""Identity helpers: user-reference display without exposing the user object.
+"""IAM subject identity and public user labels.
 
-The OIDC login/link resolution that used to live here moved to the
-``iam_integrate_oidc`` addon (it composes the ``integrate`` connection substrate
-with this user). What remains is the pure user-reference display other addons use
-to label a grant/principal without pulling a guarded user row into their scope.
+Group namespaces come from the installed model declaration. User labels and
+public IDs use Django's auth model contract without exposing guarded user rows.
 """
 
 from __future__ import annotations
@@ -11,14 +9,25 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models import CharField, Q, QuerySet, Value
 from django.db.models.functions import Coalesce, Concat, NullIf, Trim
 from django.http import HttpRequest
 from rebac import system_context
+from rebac.resources import model_resource_type
 
-from angee.identity import instance_from_public_id, public_id_for
+from angee.base.models.identity import instance_from_public_id, public_id_for
+
+
+def group_subject_type() -> str:
+    """Read the group subject namespace from its owning installed Django model."""
+
+    resource_type = model_resource_type(apps.get_model("iam", "Group"))
+    if resource_type is None:
+        raise ImproperlyConfigured("IAM Group must declare its REBAC resource identity.")
+    return resource_type
 
 
 def user_label(user: Any) -> str:
@@ -60,10 +69,10 @@ def _label_memo(request: HttpRequest | None) -> dict[Any, str | None] | None:
     Hung on the Django request — the per-request seam IAM already uses for
     request-scoped state — so a list of rows sharing an author resolves the
     label (and queries the user) once instead of per row. Absent outside a
-    request, where resolution falls back to the uncached path.
+    Django HTTP request, where resolution falls back to the uncached path.
     """
 
-    if request is None:
+    if not isinstance(request, HttpRequest):
         return None
     memo: dict[Any, str | None] | None = getattr(request, "_iam_user_label_memo", None)
     if memo is None:

@@ -45,7 +45,7 @@ from angee.agents.testing.drivers import runner as runner  # noqa: F401 - shared
 from angee.agents.testing.drivers import update_chunk as _chunk
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceModel
 from angee.agents_runtime_pydantic import runner as pydantic_runner
-from angee.errors import RecordAccessSubjectRefused
+from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
 from tests.conftest import create_platform_admin
 from tests.test_agents import _provider

@@ -44,7 +44,7 @@ nothing about Django or React, it just runs whatever Services you declare.
 ### Django / React Runtime
 
 The **Django / React Runtime** — `ang-ee/angee-django` — is the **framework** and
-the **base addons** that ship with it, and it is the first and default **Host**:
+the **framework addons** that ship with it, and it is the first and default **Host**:
 the application runtime that runs *inside* an operator-managed Service.
 
 The framework is a thin composition layer. You write **source models**
@@ -126,7 +126,7 @@ Concretely, today:
 - **Already landed here.** The operator (Stacks, Services, Jobs, Sources,
   Workspaces, secrets, ports, and gitops topology over CLI, REST, and GraphQL),
   the framework core (including composition from source models to `runtime/`),
-  and the base addons: GraphQL via strawberry-django, relationship-based
+  and the framework addons: GraphQL via strawberry-django, relationship-based
   authorization (REBAC), aggregates, tiered resources, changeset history in
   Activity with revert, and the React frontend (layouts, list/board/form views).
 - **Also landed.** Agents, integrations, knowledge, storage, communications,
@@ -341,11 +341,12 @@ Django and Celery processes. If `ollama_port` is changed or leased to a workspac
 set the Ollama inference provider row's `base_url` to
 `http://localhost:<ollama_port>/v1`.
 
-To run one-shot management commands against the stack host (build the runtime,
-migrate, sync permissions, load data, check GraphQL SDL), drive its `manage.py`
-through `uv` from the controlling stack root. [Checks](../checks.md#composition-and-schema)
+Native `uv sync` builds the editable host before startup; `uv build` packages its
+sealed runtime and reviewed history. One-shot management commands then consume
+that prebuilt host: run `uv run --no-sync python manage.py` from the controlling
+stack root to migrate, sync permissions, load data or check GraphQL SDL. [Checks](../checks.md#composition-and-schema)
 owns the prerequisites and ordering. A rendered `manage.py` only calls
-`angee.compose.manage.main()`, which attributes a one-shot command's writes to one
+`angee.management.main()`, which attributes a one-shot command's writes to one
 changeset; a `manage.py` from before that entrypoint fails its first captured write
 with the remedy — re-render it from the project template. To work on a change in
 isolation, add a Jujutsu (jj) workspace of the framework's source store under
@@ -371,9 +372,11 @@ can no longer see or restart. Run these from the controlling stack root
 (`ANGEE_ROOT`):
 
 ```sh
-# The whole application. Use the stack's restart job: deps on dev stacks,
-# provision on instance stacks.
+# The whole application: deps on framework-dev stacks.
 angee --root "$ANGEE_ROOT" job run deps --chained-restart
+
+# Instance stacks start their dependency chain at the runtime build.
+angee --root "$ANGEE_ROOT" job run runtime-build --chained-restart
 
 # One or more services by name; also `start` and `stop`
 angee --root "$ANGEE_ROOT" restart django celery-worker
@@ -384,8 +387,10 @@ angee --root "$ANGEE_ROOT" restart django celery-worker
   `angee.yaml`. The job runs, then its downstream jobs, then every service that
   waits on them restarts. On a dev stack that sequence is:
   - `deps` runs `pnpm install`;
-  - `provision` runs the bootstrap, `uv sync` and
-    `angee provision --demo --force-rebac` (migrations and permission sync);
+  - `runtime-build` uses native `uv sync` and the Hatch runtime hook (editable in
+    development, `--no-editable` in production);
+  - `provision` consumes the built runtime in one process: read-only history drift
+    validation, migrations, permission sync, checks and declared addon commands;
   - `operator-schema` and `codegen` run;
   - Django, the frontend, Storybook and the Celery workers restart.
 
@@ -394,7 +399,9 @@ angee --root "$ANGEE_ROOT" restart django celery-worker
 - **Dependency changes.** Apply them with the whole-application restart. Never
   run `uv sync` or `uv lock` on the stack's venv while the stack is running:
   long-lived workers that later import a changed module mix old and new code and
-  fail. `provision` syncs before the workers restart.
+  fail. The declared `runtime-build` job installs before provision and the workers
+  restart. Ordinary `uv run --no-sync` management and serving commands cannot
+  trigger an implicit rebuild.
 - **One service.** For a stack running under process-compose, this is
   `process-compose process restart <name>`.
 - **Operator API.** Every operator command is also an API call. The stack's
@@ -423,15 +430,16 @@ cooperate:
   Publication and production promotion remain separate authorized operations.
   This loop is described in full under
   [What "Self-Building" Looks Like](https://docs.angee.ai/guide/concepts#what-self-building-looks-like).
-- **The framework gives agents a build step.** Inside the Host, an agent changes
-  source models and addons, then runs `manage.py angee build` to compose them
-  into the deterministic `runtime/` tree, followed by `makemigrations` /
-  `migrate` / `rebac sync` / `resources load` / `schema --check`. Bringing the
-  whole runtime up from a fresh checkout is the single `manage.py angee provision`
-  command, which owns that build→migrate→sync→load→schema chain end to end (the
-  dev and local stacks invoke it instead of restating the steps). Because
-  each capability is an addon and each fact has one owner, an agent's job is to
-  find the owning level and change it there — never to re-derive or monkey-patch.
+- **The framework gives agents a native package build.** Inside the host, an agent
+  changes source models and addons, runs `uv sync` for the editable runtime, and
+  authors native migrations with `uv run --no-sync python manage.py makemigrations`.
+  Native `runtime/<label>/migrations/` packages are reviewed and committed. `uv build` validates
+  and packages that project-specific runtime and history. The operator's declared
+  DAG installs the runtime before running `angee provision`, then starts services.
+  Provision uses the prebuilt registry for read-only drift validation, migrate,
+  policy sync and declared addon commands; it never compiles or rewrites history.
+  Each capability and fact has one owner, so an agent changes that owner rather
+  than re-deriving or monkey-patching it.
 
 In short, agents self-build because the operator makes the *lifecycle*
 scriptable and the framework makes the *application* a deterministic build from

@@ -18,6 +18,7 @@ from enum import StrEnum
 from graphlib import CycleError, TopologicalSorter
 from itertools import islice
 from typing import Any, ClassVar, cast
+from urllib.parse import quote, unquote
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -25,6 +26,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models.signals import post_save
+from django.utils import timezone
 from markdown_it import MarkdownIt
 from rebac import (
     PermissionDenied,
@@ -37,50 +39,39 @@ from rebac import (
 )
 from rebac.errors import MissingActorError
 from rebac.mixins import RebacModelBase
+from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
-from angee.actors import actor_user_id
-from angee.changesets import (
-    changeset,
-    changeset_model,
-    creation_fingerprint,
-    require_changeset,
-    write_group,
-)
-from angee.fields import StateField
-from angee.impl import ImplClassField
+from angee.base.fields.implementation import ImplClassField
+from angee.base.fields.state import StateField
+from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
+from angee.base.models.merge_references import MergePolicy
+from angee.base.models.ownership import OwnerMixin
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.trash import TrashMixin, TrashQuerySet
+from angee.base.permissions import actor_user_id
+from angee.base.querysets import row_lock_paths
+from angee.base.refs import RecordRef
+from angee.base.signals import send_created_batch
 from angee.knowledge.retrieval import RetrievalBackend
-from angee.lineage import concrete_child, concrete_child_accessor, concrete_child_models
 from angee.messaging.models import ThreadedModelMixin
-from angee.models import (
-    AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
-    AuditMixin,
-    HierarchyMixin,
-    HierarchyQuerySet,
-    HistoryMixin,
-    OwnerMixin,
-    TrashMixin,
-    TrashQuerySet,
-    row_lock_paths,
-)
-from angee.refs import (
-    MergePolicy,
-    RecordRef,
-    RecordRefMixin,
-)
+from angee.provenance.context import changeset, changeset_model, require_changeset, write_group
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.tags.models import TaggedModel
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")
+_WIKILINK_PREFIX = "wikilink:"
 logger = logging.getLogger(__name__)
 
 MAX_SEARCH_PAGE_SIZE = 100
 MAX_SEARCH_VAULTS = 100
 
-# CommonMark tokenizer reused for every outline parse; we only consume block
-# tokens' source line spans (``.map``) and the heading inline ``.content``, so a
-# single shared instance is safe and cheap (see ``MarkdownPage.parse_outline``).
+# CommonMark owns code, link syntax and outline tokens for the derived indexes.
 _MD = MarkdownIt("commonmark")
 
 # Slug shaping for heading anchors: drop punctuation, collapse whitespace/
@@ -106,22 +97,35 @@ class OutlineEntry:
 
 
 def parse_wikilinks(body: str) -> dict[str, str]:
-    """Return ``{target_title: display_text}`` for each ``[[wikilink]]`` in ``body``.
+    """Index native wikilinks and Markdown links to ``wikilink:encoded-title``.
 
-    The target is the text before ``|`` with any ``#fragment`` stripped; the
-    display text is the part after ``|``. First occurrence of a target wins.
+    Markdown owns code and link syntax. Wiki brackets strip a heading fragment;
+    encoded link destinations preserve literal title punctuation. First wins.
     """
 
     found: dict[str, str] = {}
-    for raw in _WIKILINK_RE.findall(body):
-        target, _, display = raw.partition("|")
-        target = target.split("#", 1)[0].strip()
-        if target and target not in found:
-            found[target] = display.strip()
+    for block in _MD.parse(body):
+        children = block.children or []
+        for index, token in enumerate(children):
+            if token.type == "text":
+                for raw in _WIKILINK_RE.findall(token.content):
+                    target, _, display = raw.partition("|")
+                    target = target.split("#", 1)[0].strip()
+                    if target:
+                        found.setdefault(target, display.strip())
+            elif token.type == "link_open" and (href := str(token.attrGet("href") or "")).startswith(_WIKILINK_PREFIX):
+                target = unquote(href[len(_WIKILINK_PREFIX):])
+                label = []
+                for child in children[index + 1:]:
+                    if child.type == "link_close":
+                        break
+                    label.append(child.content)
+                if target:
+                    found.setdefault(target, "".join(label))
     return found
 
 
-class VaultQuerySet[VaultT: Vault](TrashQuerySet[VaultT], AngeeQuerySet[VaultT]):
+class VaultQuerySet[VaultT: Vault](TrashQuerySet[VaultT], AngeeHistoryQuerySet[VaultT]):
     """Actor-scoped vault reads and search helpers."""
 
     def search_pages(self, query: str, *, first: int = 20) -> list[Any]:
@@ -147,7 +151,7 @@ class VaultQuerySet[VaultT: Vault](TrashQuerySet[VaultT], AngeeQuerySet[VaultT])
         return pages
 
 
-_VaultManagerBase = AngeeManager.from_queryset(VaultQuerySet)
+_VaultManagerBase = AngeeHistoryManager.from_queryset(VaultQuerySet)
 
 
 class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
@@ -160,11 +164,11 @@ class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
         else is refused so the row the gate authorized is the row written.
         """
 
-        actor, _ = self.effective_actor(strict=True)
+        actor = current_actor()
         resource_type = model_resource_type(self.model)
         if actor is None:
             raise MissingActorError(f"Creating {resource_type or self.model._meta.label_lower} requires an actor.")
-        if actor is None or resource_type is None or not check_new(
+        if resource_type is None or not check_new(
             subject=actor,
             action="create",
             resource_type=resource_type,
@@ -193,7 +197,7 @@ class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
         edits, loss of access, or deletion do not change a completed clone.
         """
 
-        actor, _ = self.effective_actor(strict=True)
+        actor = current_actor()
         resource_type = model_resource_type(self.model)
         if actor is None or resource_type is None or not check_new(
             subject=actor,
@@ -204,7 +208,7 @@ class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
         user_id = actor_user_id(actor)
         if user_id is None:
             raise PermissionDenied("Cloning a vault requires a user actor.")
-        fingerprint = creation_fingerprint([template.pk, name, owned])
+        claim_values = [template.pk, name, owned]
 
         def insert() -> VaultT:
             source = self.with_actor(actor).get(pk=template.pk)
@@ -252,15 +256,16 @@ class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
         claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
         with claim_boundary, transaction.atomic():
             if idempotency_key is not None:
-                replay = changeset_model().objects.claim(
+                vault = changeset_model().objects.claim_created(
                     f"knowledge.vault.clone:{user_id}",
                     idempotency_key,
-                    fingerprint=fingerprint,
+                    values=claim_values,
+                    model=self.model,
+                    unavailable=ValidationError(
+                        {"idempotency_key": "The claimed clone result is unavailable."},
+                    ),
                 )
-                if replay is not None:
-                    vault = replay.created_row
-                    if not isinstance(vault, self.model):
-                        raise ValidationError({"idempotency_key": "The claimed clone result is unavailable."})
+                if vault is not None:
                     return vault.with_actor(actor)
             vault = insert()
             if idempotency_key is not None:
@@ -293,7 +298,7 @@ class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
         return vault.with_actor(actor)
 
 
-class Vault(OwnerMixin, TrashMixin, AngeeDataModel, HistoryMixin):
+class Vault(OwnerMixin, TrashMixin, HistoryMixin, AngeeDataModel):
     """Top-level page container; the permission and namespace boundary.
 
     Trashing a vault withholds its pages while retaining their independent trash
@@ -350,19 +355,35 @@ class Vault(OwnerMixin, TrashMixin, AngeeDataModel, HistoryMixin):
         The single public resolution seam over the vault-owned ``retrieval_class``
         registry: callers (this model's ``retrieval`` property, a semantic plugin
         forcing its own ``key``) ask the vault rather than re-deriving the field's
-        internals — so ``ImplClassField`` stays the only thing that decodes the
-        registry, and the boundary is a method, not ``_meta`` shape-probing.
+        internals. The native declared field owns value normalization and the
+        trusted registry resolver owns class loading.
         """
 
-        backend_class = cast("type[RetrievalBackend]", type(self).resolve_impl_class("retrieval_class", key))
+        backend_class = cast(
+            ImplClassField[RetrievalBackend], type(self)._meta.get_field("retrieval_class"),
+        ).resolve_class(key)
         return backend_class(self)
 
 
-class PageQuerySet[PageT: Page](HierarchyQuerySet[PageT], TrashQuerySet[PageT], AngeeQuerySet[PageT]):
+class PageQuerySet[PageT: Page](HierarchyQuerySet[PageT], TrashQuerySet[PageT], AngeeHistoryQuerySet[PageT]):
     """Actor-scoped page reads; ``untrashed()`` is every page's default surface."""
 
+    def navigation_root_expression(self, *, removed: bool = False) -> models.Expression:
+        """A visible tree root has no readable parent in the same trash state."""
 
-_PageManagerBase = AngeeManager.from_queryset(PageQuerySet)
+        actor = relation_actor(self)
+        parents = self.none() if actor is None else self.with_actor(actor).filter(is_trashed=removed).scoped()
+        return ~models.Exists(parents.filter(pk=models.OuterRef("parent_id")))
+
+    def has_children_expression(self) -> models.Exists:
+        """Whether the actor can expand this page to an untrashed child."""
+
+        actor = relation_actor(self)
+        children = self.none() if actor is None else self.with_actor(actor).untrashed().scoped()
+        return models.Exists(children.filter(parent_id=models.OuterRef("pk")))
+
+
+_PageManagerBase = AngeeHistoryManager.from_queryset(PageQuerySet)
 
 
 class PageManager[PageT: Page](_PageManagerBase[PageT]):
@@ -402,9 +423,11 @@ class PageManager[PageT: Page](_PageManagerBase[PageT]):
                 raise ValueError(f"Unsupported page kind: {kind!r}")
             page_model = self.model._meta.apps.get_model("knowledge", "MarkdownPage")
             fields["kind"] = kind
-        page = page_model(vault=vault, **fields)
+        # The create preflight above authorizes this instance. Carry that verdict
+        # through native constraint validation as well as persistence.
+        page = page_model(vault=vault, **fields).sudo(reason="knowledge.page.create")
         page.full_clean()
-        page.sudo(reason="knowledge.page.create").save()
+        page.save()
         return self.model._base_manager.get(pk=page.pk).with_actor(actor)
 
     def _copy_tree_in(
@@ -445,15 +468,16 @@ class PageManager[PageT: Page](_PageManagerBase[PageT]):
         elevated = self.sudo(reason="knowledge.page.clone")
         with write_group():
             elevated.create_forest(list(copies.values()))
+            apps.get_model("knowledge", "Link").objects.refresh_targets(copies.values())
             for page in copies.values():
                 page.with_actor(actor)
-                post_save.send(
-                    sender=self.model, instance=page, created=True, raw=False, using=self.db, update_fields=None,
-                )
+            send_created_batch(
+                sender=self.model, instances=copies.values(), using=self.db, knowledge_backlinks_rebuilt=True,
+            )
         return copies
 
 
-class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMixin, AngeeDataModel, HistoryMixin):
+class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMixin, HistoryMixin, AngeeDataModel):
     """Universal addressable content node inside a vault.
 
     A page owns title and hierarchy. A concrete child owns each content shape;
@@ -503,6 +527,7 @@ class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMix
                 fields=("vault", "title"),
                 condition=models.Q(is_trashed=False),
                 name="uniq_knowledge_page_vault_title",
+                violation_error_message="A page with this title already exists in this vault.",
             ),
         )
 
@@ -510,6 +535,12 @@ class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMix
         """Return the page title for Django displays."""
 
         return self.title
+
+    @property
+    def wikilink_url(self) -> str:
+        """Portable Markdown destination for this page within its own vault."""
+
+        return f"{_WIKILINK_PREFIX}{quote(self.title, safe='')}"
 
     @property
     def kind(self) -> str:
@@ -565,7 +596,7 @@ class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMix
 
 
 
-class RecordBindingManager[BindingT: RecordBinding](AngeeManager[BindingT]):
+class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT]):
     """Own polymorphic knowledge-to-record binding writes and reverse reads.
 
     Bindings are stored at :func:`rebac.generic_target` and written under the
@@ -575,6 +606,42 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeManager[BindingT]):
 
     DEFAULT_ROLE = "related"
     KNOWLEDGE_MODELS = frozenset({"knowledge.page", "knowledge.vault"})
+
+    def create_note(
+        self, *, target: models.Model, vault: Vault, body: str,
+        role: str = DEFAULT_ROLE, idempotency_key: str | None = None,
+    ) -> BindingT:
+        """Atomically create and bind a markdown note, replaying the actor's receipt."""
+
+        actor = current_actor()
+        user_id = actor_user_id(actor)
+        if user_id is None:
+            raise PermissionDenied("Creating a note requires a user actor.")
+        body = body.strip()
+        if not body:
+            raise ValidationError("Write a note before posting.")
+        role = self._role(role)
+        reference = generic_target(self._saved(target, "target"))
+        claim_values = [reference.content_type.pk, reference.object_id, vault.pk, role, body]
+        boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
+        with boundary, transaction.atomic():
+            if idempotency_key is not None:
+                binding = changeset_model().objects.claim_created(
+                    f"knowledge.record_note:{user_id}",
+                    idempotency_key,
+                    values=claim_values,
+                    model=self.model,
+                    unavailable=ValidationError("The claimed note is unavailable."),
+                )
+                if binding is not None:
+                    return binding.with_actor(actor)
+            page_model = self.model._meta.apps.get_model("knowledge", "Page")
+            title = f"{body.splitlines()[0][:100]} · {timezone.now().isoformat()}"
+            page = page_model.objects.create_in(vault, title=title, body=body)
+            binding = self.upsert(target=target, page=page, role=role)
+            if idempotency_key is not None:
+                require_changeset().record_created(binding)
+            return binding
 
     def create(self, **kwargs: Any) -> BindingT:
         """Create through the idempotent role-keyed upsert contract."""
@@ -860,14 +927,14 @@ class MarkdownPageManager[MarkdownT: MarkdownPage](PageManager[MarkdownT]):
                     body.save_base(raw=True, force_insert=True, using=self.db)
                     copies.append(body.with_actor(actor))
             apps.get_model("knowledge", "Link").objects.rebuild_many(copies)
-            for body in copies:
-                post_save.send(
-                    sender=self.model, instance=body, created=True,
-                    raw=False, using=self.db, update_fields=None, knowledge_backlinks_rebuilt=True,
-                )
+            send_created_batch(
+                sender=self.model, instances=copies, using=self.db, knowledge_backlinks_rebuilt=True,
+            )
 
-    def write_body(self, page: Any, body: str, *, expected_hash: str | None = None) -> MarkdownT:
-        """Update ``page``'s markdown body, last-write-wins.
+    def write_body(
+        self, page: Any, body: str, *, expected_hash: str | None = None, title: str | None = None,
+    ) -> MarkdownT:
+        """Update the markdown body and optional page title in one transaction.
 
         ``expected_hash`` is an optimistic-concurrency token: when supplied
         and the stored ``body_hash`` differs, the write is rejected with
@@ -877,11 +944,18 @@ class MarkdownPageManager[MarkdownT: MarkdownPage](PageManager[MarkdownT]):
         if page.kind == Page.PageKind.FOLDER:
             raise UnsupportedPageKindError(f"Pages of kind {page.kind!r} carry no markdown body.")
         with transaction.atomic():
-            markdown = self.select_for_update().get(pk=page.pk)
+            actor = current_actor()
+            rows = self.with_actor(actor) if actor is not None else self.all()
+            markdown = rows.select_for_update().get(pk=page.pk)
             if expected_hash is not None and expected_hash != markdown.body_hash:
                 raise StaleBodyError("Body hash is stale; reload the page and retry.")
             markdown.body = body
-            markdown.save(update_fields=("body",))
+            fields = {"body"}
+            if title is not None:
+                markdown.title = title
+                markdown.full_clean()
+                fields.add("title")
+            markdown.save(update_fields=fields)
             return markdown
 
     # -- structure-aware edits --------------------------------------------
@@ -1228,7 +1302,7 @@ class MarkdownPage(HistoryMixin, models.Model, metaclass=RebacModelBase):
 # ---------------------------------------------------------------------------
 
 
-class LinkManager[LinkT: Link](AngeeManager[LinkT]):
+class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
     """Owns the wikilink edge set derived from page bodies."""
 
     def rebuild_for(self, markdown: Any) -> None:
@@ -1237,8 +1311,8 @@ class LinkManager[LinkT: Link](AngeeManager[LinkT]):
         The indexer is the author: it resolves ``[[title]]`` targets against
         the page's own vault and DELETE+INSERTs the edge set under
         ``system_context``. There is no per-link gate — backlink reads
-        inherit the source page's permissions through the schema. A target
-        created after the link still resolves on the source page's next save.
+        inherit the source page's permissions through the schema. Target
+        lifecycle changes also refresh the affected incoming links.
         """
 
         self.rebuild_many((markdown,))
@@ -1255,7 +1329,7 @@ class LinkManager[LinkT: Link](AngeeManager[LinkT]):
         with system_context(reason="knowledge.backlinks"), transaction.atomic():
             resolved = {
                 (vault_id, title): pk
-                for vault_id, title, pk in page_model._base_manager.filter(vault_id__in=vault_ids)
+                for vault_id, title, pk in page_model._base_manager.filter(vault_id__in=vault_ids, is_trashed=False)
                 .values_list("vault_id", "title", "pk")
             }
             links.filter(source_page_id__in=[body.pk for body in batch]).delete()
@@ -1273,6 +1347,19 @@ class LinkManager[LinkT: Link](AngeeManager[LinkT]):
                         is_resolved=target_id is not None,
                     ))
             links.bulk_create(rows)
+
+    def refresh_targets(self, pages: Iterable[Page]) -> None:
+        """Re-resolve incoming titles after target creation, rename or trash changes."""
+
+        batch = list(pages)
+        if not batch:
+            return
+        markdown = self.model._meta.apps.get_model("knowledge", "MarkdownPage")
+        affected = models.Q(outgoing_links__target_page_id__in=[page.pk for page in batch])
+        for page in batch:
+            affected |= models.Q(vault_id=page.vault_id, outgoing_links__target_text=page.title)
+        with system_context(reason="knowledge.backlinks.targets"):
+            self.rebuild_many(markdown._base_manager.filter(affected).distinct())
 
 
 class Link(AngeeDataModel):

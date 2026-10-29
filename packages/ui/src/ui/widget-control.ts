@@ -87,6 +87,7 @@ export const widgetControlSurfaceVariants = tv({
     },
     presentation: {
       form: "",
+      document: "rounded-none border-0 bg-transparent shadow-none",
       cell: "border-transparent bg-transparent shadow-none [&_[data-widget-affordance]]:opacity-0 group-hover/record:[&_[data-widget-affordance]]:opacity-100 group-focus-within/record:[&_[data-widget-affordance]]:opacity-100 focus-within:[&_[data-widget-affordance]]:opacity-100 data-[popup-open]:[&_[data-widget-affordance]]:opacity-100",
     },
     focus: {

@@ -18,7 +18,6 @@ from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import to_subject_ref
 
-from angee.actors import source_kind_for
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.backends import ManualChannelBackend
@@ -40,9 +39,12 @@ from angee.messaging.testing.models import (
     RelationshipKind,
     Thread,
 )
-from angee.models import SourceKind
 from angee.parties.backends import ParsedAddress, ParsedContact
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
+from angee.provenance.statements import (
+    SourceKind,
+    StatementSourceMixin,
+)
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import current_stream, make_integration
 from tests.test_messaging import _grant
@@ -109,7 +111,8 @@ def test_manual_contact_reuses_a_retained_alias_survivor(composed_tables: None) 
             party, platform="email", value=alias.value, actor=owner,
         )
     assert stance.handle_id == survivor.pk
-    assert not Party.statements.filter(handle=alias).exists()
+    with system_context(reason="test manual contact redirect retained statements"):
+        assert not Party.statements.filter(handle=alias).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -527,7 +530,7 @@ def test_a_moved_import_statement_stays_beside_the_directorys_and_the_directory_
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
         takeout = make_integration("move-mixed-takeout", model=Channel, backend_class="manual").integration_ptr
         directory = make_integration("move-mixed-directory", model=Directory)
-        assert source_kind_for(to_subject_ref(takeout)) == SourceKind.IMPORT
+        assert StatementSourceMixin.source_kind_for(to_subject_ref(takeout)) == SourceKind.IMPORT
         imported, carded = (
             statements._base_manager.create(
                 subject=party,
@@ -665,8 +668,8 @@ def test_folding_a_handle_redirects_ingestion_to_the_survivor(composed_tables: N
         assert Handle.objects.canonical().filter(pk=alias.pk).exists() is False
 
         phone.refresh_from_db()
+        assert Party.statements.filter(handle=phone).count() == 1
     assert phone.party_id == party.pk
-    assert Party.statements.filter(handle=phone).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -927,9 +930,9 @@ def test_suggest_for_resolved_handle_returns_without_competing_links(composed_ta
 
         resolved.refresh_from_db()
         result = Party.objects.suggest_for(resolved)
+        assert list(Party.statements.filter(handle=resolved).values_list("subject_id", flat=True)) == [alice.pk]
 
     assert result is None
-    assert list(Party.statements.filter(handle=resolved).values_list("subject_id", flat=True)) == [alice.pk]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -956,6 +959,7 @@ def test_suggest_for_keeps_dismissed_link_dismissed(composed_tables: None) -> No
         dismissed = dismissed.with_actor(owner).dismiss()
 
         repeated = Party.objects.suggest_for(unknown)
+        assert Party.statements.filter(subject=alice, handle=unknown).count() == 2
 
     dismissed.refresh_from_db()
     unknown.refresh_from_db()
@@ -964,7 +968,6 @@ def test_suggest_for_keeps_dismissed_link_dismissed(composed_tables: None) -> No
     assert dismissed.is_dismissed
     assert not dismissed.is_confirmed
     assert unknown.party_id is None
-    assert Party.statements.filter(subject=alice, handle=unknown).count() == 2
 
 
 @pytest.mark.django_db(transaction=True)

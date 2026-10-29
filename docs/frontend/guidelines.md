@@ -130,8 +130,8 @@ shared UI copy through an addon bundle.
 The [public catalog](../../packages/ui/src/catalog.ts) assigns one UX kind to
 each shipped component and its owner-specific hooks. The
 [Library overview](../../packages/storybook/src/stories/Library.stories.tsx) (story id `library-overview--default`)
-renders the owners. [`createApp().explain()`](../../packages/app/src/explain.ts)
-exposes menu and container provenance from the composed runtime.
+renders the owners. The running application's `createApp(...).explain` exposes
+menu and container provenance through the [runtime explanation owner](../../packages/app/src/explain.ts).
 
 | Kind | Meaning |
 |---|---|
@@ -209,10 +209,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   schema. Optional schema contributions keep their documents and UI registrations
   in the contributing addon's web package, so hosts without it never scan those
   operations; see [OIDC sign-in](../../addons/angee/iam_integrate_oidc/web/src/index.ts).
-  An opaque `JSON`-scalar value is parsed at its domain owner with a
-  valibot schema (`safeParse`), never asserted into an application shape; a
-  recursive shape a declarative schema cannot express may wrap its type guard
-  in `v.custom`, keeping the parse boundary in the schema.
+  An opaque `JSON`-scalar value is parsed at its domain owner with its declared
+  schema, never asserted into an application shape. Resource metadata uses
+  Valibot `safeParse`; FormSpec uses the standalone Ajv validator generated from
+  its shared [JSON Schema](../../addons/angee/base/schemas/form_spec.schema.json).
+  Reuse the existing contract and validator instead of maintaining another schema.
 - **Eligible ActionResult mutations are derived, not authored.** Codegen in
   `packages/app/bin/angee-web-codegen.mjs` derives mutations with at least one
   argument when every argument is required (non-null without a default), or
@@ -372,7 +373,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   multiword terminal widget name, matching the web widget registry. Backend field
   metadata and the owning addon's `widgets` contribution use the identical key,
   for example `angee.integrate.integrationSyncCursor`. The validator in
-  [`angee.data.field_classification`](../../angee/data/field_classification.py)
+  [`angee.graphql.data.resource_fields`](../../addons/angee/graphql/data/resource_fields.py)
   also accepts existing underscore names; unknown bare names remain errors.
 - **A resource registry key is the emitted canonical `modelLabel`** (for example
   `"integrate.OAuthClient"`). Addon composition may accept a unique bare or
@@ -407,7 +408,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   because there the canvas is the subject and the inspector its editor). The
   drawers are tools: session-scoped and record-independent (agents, logs). A
   candidate that fails its region's test belongs elsewhere. Related records
-  navigate the middle and the explorer keeps the place; the aside drills in for
+  navigate the middle and the explorer keeps the place (see
+  [Explorer navigation continuity](#explorer-navigation-continuity)); the aside drills in for
   a bounded question about one object in the record's context (this run, this
   changeset, this decision, this conversation) and links to the object's page
   for the open-ended work. Aside publishers compose by owner for their mounted lifetime:
@@ -613,12 +615,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `use<Addon>T()` in an addon (created with `createNamespaceT(ns, fallback)`),
   with namespace-relative English keys in the namespace bundle. A prop whose default is a
   label defaults to `undefined` and resolves `?? t("key")` in the body — never call
-  `t()` in a default parameter. No hardcoded copy in a component. Four boundaries
+  `t()` in a default parameter. No hardcoded copy in a component. Three boundaries
   stay plain English: an addon's declarative manifest menu/route `label:` and
   chatter/drawer contribution labels (chrome data, not in-component copy — none
-  are routed), a form registered via `forms:` (a statically parsed element,
-  never rendered as a component, so a hook cannot reach its `<Field label>`),
-  and a dashboard widget row-column `label` (authored resource data).
+  are routed) and a dashboard widget row-column `label` (authored resource data).
+  A form registered via `forms:` is a component (`RegisteredFormView` renders it),
+  so `use<Addon>T()` reaches its `<Field label>`.
 - Every icon is a registered glyph rendered via `<Glyph name="…">` (or the
   `renderGlyph(icon)` slot adapter). A component never imports `lucide-react`
   directly: base glyphs live in `chrome/icon-registry.ts`; an addon contributes its
@@ -943,25 +945,22 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   field-by-field permission query or render a misleading empty value.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
-  "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the
+  "integrate.OAuthClient" }` (declared route claims are checked during composition) — and the
   relation widget resolves its registered record route. Read-only fields render
   `RecordReference` links; editable pickers show a "follow" arrow. Refine owns the route
   trail, while the routed record surface replaces the generic action leaf with
   the model's `recordRepresentation`. A resource with no routed page simply shows
   the retained label without a link.
-- Register a resource's create form once via `defineAddon`'s
-  `forms: { "integrate.OAuthClient": <…Field/Group children…> }`; the standard renderer uses it
-  wherever that resource is created, including the relation-picker inline create. Use
-  it when the create input diverges from the read projection (write-only secrets,
-  scalar-id pickers, a kind discriminator). With a registered form,
-  `RelationPicker`'s `create` needs only `{ resource }` (the override supersedes any
-  passed `fields` on create); pass inline `fields` only for a data-dependent form
-  whose options are fetched at runtime and so cannot be a static registration.
-  `RelationPicker` also offers inline **edit** (a pencil beside the picker opens the
-  *selected* record in a form dialog) — wired by `RelationFieldWidget` from the
-  related model's fields, so a relation is created, edited, and followed without
-  leaving the parent form. The create-form override stays create-only: an edit
-  dialog renders the passed `fields` (the registered form is not reused for edit).
+- Register a resource's complete form once with
+  [`registerForm`](../../packages/ui/src/views/form/registered-form.ts), and
+  contribute that registration through `defineAddon`'s `forms` dictionary.
+  Its component composes `Form`, `Field` and `Group` and receives
+  `RegisteredFormProps`; it owns any create/edit distinction through the record
+  `id`. Collection routes and relation-picker create/edit dialogs use that same
+  form, so a caller declares the resource instead of repeating its fields.
+  Inline `fields` remain for a caller-specific form; they are not a second
+  per-model registration. Relation pickers also follow the selected record's
+  registered route, so creation, editing and navigation compose the same owners.
 - **An MTI parent's inline create chooses a kind.** A picker on a model whose
   metadata lists `concreteKinds` creates through one dialog with a kind switcher,
   and selects the new row under the parent. The switcher decides only what is
@@ -1031,7 +1030,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   the resource's declared `subjectField`; never construct a subject from a
   public display id. The shared package owns presentation, and IAM owns the
   generated GraphQL document adapter.
-- Never poll for data freshness. Live updates ride GraphQL subscriptions through
+- Live model updates ride GraphQL subscriptions through
   refine's live provider and react-query invalidation, not a `setInterval`
   refetch loop. Opt a model into live cross-actor refresh by declaring
   `changes(Model, field="<model>Changed")` in its `schema.py`; local writes
@@ -1043,10 +1042,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   resolver actually reads. Refine's own resource hooks still invalidate per
   push. Stream foreign-system state (e.g. the operator
   daemon's `onWorkspaceStatusChange`) over its own subscriptions.
-  A timed `setInterval` is only ever for non-data UI motion (a carousel) or
-  rotating a short-lived credential before it expires — never to re-read a
-  resolver hoping it changed. If a foreign system publishes no change
-  subscription, add one there rather than polling it from the client.
+  A dashboard widget may explicitly declare interval refresh through its
+  [refresh contract](../../packages/ui/src/dashboard/headless.ts). Its data
+  adapter forwards that interval to native Query `refetchInterval`; Query owns
+  scheduling and observer cleanup. This declaration does not authorize a
+  private polling loop in a page or addon. Use `setInterval` only for non-data
+  UI motion or rotating a short-lived credential. Foreign systems should
+  publish their own change subscriptions.
 - Authored mutation result envelopes are decoded at the hook boundary. Pass
   `errorFrom` to `useAuthoredMutation` for `{error, error_code}` payloads; the
   hook throws before invalidating, so pages do not repeat result-error checks or
@@ -1055,9 +1057,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   the hook's `reset`; resetting a pending mutation detaches its observer without
   cancelling the write, so a dismissing dialog must preserve that pending state.
 - Client-side gates are UX only. The server is the authorization boundary.
-- **Presence reflects permissions; it never gates.** A menu entry (app roots
-  and legacy list items too; dependents and the deployment may set it like any
-  declaration field) or a container child may name `requires:
+- **Presence reflects permissions; it never gates.** A menu entry (dependents and the deployment may set it like any declaration
+  field) or a container child may name `requires:
   "<app_label.ModelName>#<permission>"`. The identity read asks
   `current_user.permitted` about every composed ref; an entry the session
   lacks leaves the rail, menus and palette with its subtree, a child leaves its
@@ -2005,13 +2006,53 @@ Hard-won traps — the wise learn from others' mistakes
   children render straight into the panel, which owns scroll and padding while the
   pane owns width, border and background; `RailPanel` owns the inspector card. Lay
   out a bounded graph — the selection or a capped neighbourhood — never a whole
-  schema: Dagre holds the main thread for minutes at around two thousand nodes.
+  schema. Bound relationships as well as nodes: layout and canvas initialization
+  both occupy the main thread. The [platform graph](../../addons/angee/platform/web/src/lib/explorer.ts)
+  pages incident relationships while keeping every model and relationship reachable.
 - **A connect action is one ceremony.** Pass the button as `MutationDialog.trigger`
   so the dialog owns open state, reset and native focus pairing. Addons retain
   vendor pairing and source selection.
 - **`ActionResult` selections are a fragment**, or derived via `useActionMutation`;
   never hand-write `…Result`/`…Variables` interfaces and cast to
   `TypedDocumentNode`.
+
+## Explorer navigation continuity
+
+A record navigation changes the selected record without replacing its collection.
+Pending, missing or failed detail data does not itself select an empty root. Keep
+the current root, search, expansion and scroll position while another record in
+that root loads. A deliberate root change, or a resolved record belonging to a
+different root, may reset collection state for that new scope.
+
+Explorer pages compose
+[`useScopedTreeExplorer`](../../packages/ui/src/views/tree/useScopedTreeExplorer.ts)
+for retained root and tree selection, then pass its controller and hydrated query
+rows to [`ScopedExplorerPane`](../../packages/ui/src/views/tree/ScopedExplorerPane.tsx).
+The pane owns picker display. Routes own record identity; queries own loaded
+records; collection owners retain search and expansion. Resolved record roots
+update the shared selection owner; unresolved detail leaves its retained scope
+intact. A controlled `rootId` remains authoritative, including an explicit empty
+value. Do not mirror retained selection in addon state or add a parallel selection
+helper, row cache or navigator implementation.
+
+Keys that reset collection state must follow actual collection identity, never
+a temporary gap in detail data. Preserve navigator state separately from record
+data: showing the previous editable record under the next record's URL is not a
+valid way to keep the navigator mounted.
+
+Verify the transition as well as its settled result:
+
+- Use the native router, query and shell test providers. Hold the next record's
+  response pending; check that the navigator controls remain the same DOM nodes
+  and that search and expanded branches survive both pending and resolved reads.
+- Cover entry from the collection and from a directly opened record, navigation
+  within and across roots, explicit picker changes, and browser Back/Forward.
+  Check that a resolved record's root wins over an earlier picker choice.
+- Exercise empty, pending and failed picker searches independently of detail
+  reads. Check that delayed responses cannot restore an obsolete selection, and
+  that unavailable detail data does not expose the previous record's write actions.
+- In the live browser, navigate to an uncached record and observe the pending
+  interval. A screenshot taken only after loading cannot establish continuity.
 
 ## Checks
 

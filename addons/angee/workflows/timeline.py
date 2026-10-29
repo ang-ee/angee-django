@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Sequence
+from functools import cached_property
 from typing import Any
 
 from django.apps import apps
 from django.db import models
+from rebac import GenericTarget, generic_target, system_context
 
+from angee.graphql.relations import with_record_reference_access
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
 
@@ -103,6 +106,64 @@ class RunKind(TimelineKind):
                 detail = f"{detail} · {run.timeline_waits[0].node_label}"
             result[run.pk] = Presentation(run.version.workflow.name, detail, actor_label(run.run_as))
         return result
+
+
+class TimelineSelection:
+    """Read and group a record selection's runs, open decisions and attention."""
+
+    def __init__(self, records: Sequence[models.Model], actor: Any, *, run_limit: int = 20) -> None:
+        self.records = records
+        self.actor = actor
+        self.run_limit = max(1, min(run_limit, 100))
+        self.targets = tuple(dict.fromkeys(generic_target(record) for record in records))
+
+    @cached_property
+    def runs(self) -> models.QuerySet:
+        """The shared run-owner selection, ready for a schema-specific optimizer."""
+
+        runs = apps.get_model("workflows", "WorkflowRun").objects.with_actor(self.actor)
+        events = apps.get_model("workflows", "TriggerEvent").objects.with_actor(self.actor)
+        return runs.about(self.records, limit=self.run_limit).order_by("-created_at", "-pk").select_related(
+            "parent_step",
+        ).prefetch_related("records", models.Prefetch(
+            "trigger_event", queryset=with_record_reference_access(events),
+        ))
+
+    @cached_property
+    def open_decision_count(self) -> int:
+        """Preserve record-level attention independently of question readability."""
+
+        decisions = apps.get_model("decisions", "Decision")
+        with system_context(reason="workflows.timeline.selection_attention"):
+            return int(decisions.objects.open_for(*self.records).count())
+
+    def entries(self, runs: Sequence[Any]) -> Iterator[tuple[GenericTarget, list[Any], list[Any]]]:
+        """Group selected runs with their ancestors and readable open decisions."""
+
+        decisions = apps.get_model("decisions", "Decision").objects.with_actor(self.actor)
+        links = apps.get_model("decisions", "DecisionRecord").objects.with_actor(self.actor)
+        questions = list(decisions.open_for(*self.records).prefetch_related(models.Prefetch(
+            "records", queryset=with_record_reference_access(links),
+        )))
+        by_run = {run.pk: run for run in runs}
+        for target in self.targets:
+            identity = (target.content_type.pk, target.object_id)
+            selected = {run.pk for run in runs if (
+                (run.subject_content_type_id, run.subject_object_id) == identity
+                or any((link.content_type_id, link.object_id) == identity for link in run.records.all()))}
+            for run_id in tuple(selected):
+                run = by_run[run_id]
+                while run.parent_step_id and run.parent_step.run_id in by_run:
+                    run = by_run[run.parent_step.run_id]
+                    if run.pk in selected:
+                        break
+                    selected.add(run.pk)
+            yield (
+                target,
+                list(reversed([run for run in runs if run.pk in selected][:self.run_limit])),
+                [decision for decision in questions if any(
+                    (link.content_type_id, link.object_id) == identity for link in decision.records.all())],
+            )
 
 
 def timeline_kinds() -> tuple[TimelineKind, ...]:

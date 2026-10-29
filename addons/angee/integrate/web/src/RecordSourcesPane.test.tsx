@@ -34,6 +34,7 @@ beforeEach(() => {
       id: "rlk_1",
       external_key: "account.move:42",
       status: "CURRENT",
+      source_label: "Vendor bill 42",
       source_url: "https://source.test/42",
       last_verified_generation: 7,
       last_seen_at: "2026-10-18T14:30:00Z",
@@ -42,7 +43,7 @@ beforeEach(() => {
         id: "stm_1",
         key: "bills",
         partition: "company-1",
-        integration: { id: "int_1", display_name: "Accounting source" },
+        integration: { id: "int_1", display_name: "Accounting source", concrete_target: { resource: null, id: null, state: "unavailable" } },
       },
     }] },
     error: null,
@@ -65,11 +66,11 @@ test("the Sources group counts and lists each source as a row linking to its out
     records: [{ model: "accounting.Bill", id: "bil_1" }],
   });
   expect(screen.getByText("Sources").closest("li")?.textContent).toBe("Sources· 1");
-  const row = screen.getByRole("link", { name: /Accounting source/ });
+  const row = screen.getByRole("link", { name: /Vendor bill 42/ });
   expect(row.getAttribute("href")).toBe("https://source.test/42");
   expect(row.getAttribute("target")).toBe("_blank");
   expect(row.getAttribute("rel")).toBe("noopener");
-  expect(row.textContent).toContain("bills · company-1");
-  expect(row.textContent).toContain("CURRENT");
-  expect(row.textContent).toContain("account.move:42");
+  expect(row.textContent).toContain("Accounting source");
+  expect(row.textContent).toContain("Current");
+  expect(row.textContent).not.toContain("account.move:42");
 });

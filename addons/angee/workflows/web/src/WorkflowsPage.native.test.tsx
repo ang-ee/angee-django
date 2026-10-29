@@ -32,7 +32,7 @@ test("versions and recent runs are filtered by the open workflow using native li
   fireEvent.click(await screen.findByRole("tab", { name: "Versions" }));
   await screen.findByText("usr_operator");
   fireEvent.click(screen.getByRole("tab", { name: "Recent runs" }));
-  await screen.findByText("Failed");
+  await screen.findAllByText("Failed");
   for (const name of ["workflowversion", "workflowrun"]) {
     const request = onRequest.mock.calls.find(([entry]) => entry.query.includes(`${name}(`))?.[0];
     expect(request?.variables.where).toEqual({ _and: [

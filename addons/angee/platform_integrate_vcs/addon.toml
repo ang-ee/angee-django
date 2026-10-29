@@ -5,4 +5,4 @@ name = "angee.platform_integrate_vcs"
 description = "The marketplace catalog tier — addons discovered from VCS sources, known by repo@sha"
 keywords = ["marketplace", "addons", "vcs"]
 category = "Integration"
-depends_on = ["angee.platform", "angee.integrate_vcs"]
+depends_on = ["angee.base", "angee.platform", "angee.integrate_vcs", "angee.web"]

@@ -3,4 +3,4 @@ name = "angee.theme_angee"
 description = "The angee.ai gold and graphite identity theme"
 keywords = ["theme", "appearance", "angee", "gold"]
 category = "User interface"
-depends_on = []
+depends_on = ["angee.web"]

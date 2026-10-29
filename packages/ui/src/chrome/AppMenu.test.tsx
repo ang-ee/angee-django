@@ -86,7 +86,7 @@ describe("AppMenu", () => {
     const resize = mockOverflow(400);
     const composition: RuntimeComposition = {
       selection: { app: null, rail: null, brand: null, sources: {}, diagnostics: [] }, home: "/desk",
-      menus: { provenance: {}, hidden: [], unavailable: {}, diagnostics: [], removed: [
+      menus: { provenance: {}, hidden: [], unavailable: {}, removed: [
         { id: "old-a", label: "Old A", parent: "desk", by: "suite" },
         { id: "old-b", label: "Old B", parent: "desk", by: "suite" },
       ] },

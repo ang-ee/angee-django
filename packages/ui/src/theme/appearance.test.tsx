@@ -30,7 +30,6 @@ const paper: ThemeContribution = {
   definition: defineTheme({
     contractVersion: 1,
     id: "example.paper",
-    legacyIds: ["example.old-paper"],
     labelKey: "paper.label",
     descriptionKey: "paper.description",
     revision: 1,
@@ -122,7 +121,8 @@ test("an open draft re-applies theme, scheme and options without persisting", as
   expect(result.current.preferences).toEqual(saved);
   expect(result.current.currentPreferences).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
   expect(result.current.dirty).toBe(true);
-  expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark", theme: "dark" });
+  expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
+  expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
   expect(document.documentElement.style.colorScheme).toBe("dark");
   expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#556677");
 
@@ -251,6 +251,7 @@ test("reset directly deletes saved preferences, closes the draft and applies the
   expect(result.current.currentPreferences).toEqual({ version: 1 });
   expect(result.current.dirty).toBe(false);
   expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
+  expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
   expect(document.documentElement.style.getPropertyValue("--surface-rail")).toBe("");
   await act(async () => result.current.setColorScheme("light"));
   expect(patchPreferences).toHaveBeenCalledTimes(2);
@@ -362,16 +363,19 @@ test("removing optional overrides becomes clean again and keeps following host d
   expect(result.current.dirty).toBe(false);
   expect(result.current.currentPreferences).toEqual({ version: 1 });
   expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
+  expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
   expect(patchPreferences).not.toHaveBeenCalled();
 });
 
-test("legacy theme aliases remain clean and save through the canonical preference path", async () => {
-  const { result, stored } = renderAppearance({ preferences: { appearance: { ...saved, themeId: "example.old-paper" } } });
-  act(() => result.current.openDraft());
-  expect(result.current.dirty).toBe(false);
-  expect(result.current.preferences.themeId).toBe(paper.definition.id);
-  await act(async () => result.current.save());
-  expect(stored().appearance).toEqual(saved);
+test("the cutoff leaves historical browser choices untouched and applies saved preferences", () => {
+  const previousCache = JSON.stringify({ pendingLegacy: { actorId: null, preference: "dark" } });
+  window.localStorage.setItem("angee:theme", "dark");
+  window.localStorage.setItem("angee:appearance", previousCache);
+  const { result, patchPreferences } = renderAppearance();
+  expect(result.current.preferences).toEqual(saved);
+  expect(window.localStorage.getItem("angee:theme")).toBe("dark");
+  expect(window.localStorage.getItem("angee:appearance")).toBe(previousCache);
+  expect(patchPreferences).not.toHaveBeenCalled();
 });
 
 test("scheme commands use the same setter and stay in an open draft", async () => {

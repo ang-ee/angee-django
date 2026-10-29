@@ -121,12 +121,10 @@ ports:
 persist:
 {% if runtime_mode == "process" %}
   app-data: { subpath: ./data, scope: stack }
-  # Host coding agent's Playwright MCP user-data-dir (docs/stack.md).
-  chrome-profile: { subpath: ./data/chrome, scope: stack }
 {% if postgres_mode == "external" %}{% else %}  pgdata: { subpath: ./data/pgdata, scope: stack }
 {% endif %}{% if enable_ollama %}  ollama: { subpath: ./data/ollama, scope: stack }{% endif %}{% endif %}
 {% if runtime_mode == "docker" %}
-  # App media/static (ANGEE_DATA_DIR -> /app/data via the django bind mount).
+  # App media/static follows ANGEE_DATA_DIR through the project data mount.
   app-data: { subpath: ./data, scope: stack }{% if stack_flavor == "framework" %}
   # Playwright MCP's persistent Chromium user-data directory.
   playwright-profile: { subpath: ./data/playwright, scope: stack }{% endif %}
@@ -221,7 +219,7 @@ workspaces:
   # framework == source: run the deps-only base image and link the framework editable
   # from this checkout at container start. The checkout must exist at the stack root —
   # clone it there:  git clone https://github.com/ang-ee/angee-django sources/angee
-  # It is NOT mounted separately; it lives inside the app mount at /app/sources/angee.
+  # It is NOT mounted separately; it lives inside the app mount at {{ container_project_dir }}/sources/angee.
   framework:
     kind: local
     path: sources/angee
@@ -229,15 +227,12 @@ workspaces:
 {% endif %}
 
 {# The template chooses the entry job; the operator follows only declared edges. #}
-{% set restart_job = "deps" %}{% if stack_flavor == "instance" %}{% set restart_job = "provision" %}{% endif %}
-{% set python_sync = "" %}{% set python_bootstrap = "" %}
-{% if runtime_mode == "docker" %}{% if stack_flavor == "framework" %}{% set python_sync = "uv sync --inexact && " %}{% set python_bootstrap = "uv sync --inexact && python -m angee.compose.bootstrap && uv sync --inexact && " %}{% else %}{% if framework == "source" %}{% set python_sync = "uv sync --frozen --inexact --extra postgres --project sources/angee && uv sync --inexact && " %}{% set python_bootstrap = "uv sync --frozen --inexact --extra postgres --project sources/angee && python -m angee.compose.bootstrap && uv sync --inexact && " %}{% endif %}{% endif %}{% endif %}
+{% set restart_job = "deps" %}{% if stack_flavor == "instance" %}{% set restart_job = "runtime-build" %}{% endif %}
+{% set python_sync = "uv sync --frozen --inexact --no-build && " %}{% if effective_serve_mode == "production" %}{% set python_sync = "uv sync --frozen --inexact --no-build --no-editable && " %}{% endif %}
 
-# Jobs finish successfully before their dependents start. Re-running the entry
-# job with chained_restart applies this same graph to the running application.
-# `manage.py angee provision` owns runtime preparation and the fresh
-# post-build process boundary. Development loads demo data; production serving
-# runs with DEBUG off, where the resource loader refuses demo data, so it loads none.
+# Hatch builds the project runtime during native installation. Provision consumes
+# that artifact without compiling models or writing native migration history.
+# The operator follows only these declared edges and stops on a failed job.
 jobs:
 {% if stack_flavor == "framework" %}
   # Install at the host's JS workspace owner, including its addon packages.
@@ -253,27 +248,34 @@ jobs:
     command: ["sh", "-c", "corepack enable pnpm && exec pnpm install"]
 {% endif %}{% endif %}
 
-  # Bootstrap the addon dependency group before Django imports, then let the
-  # provision command own its lifecycle and database wait in a fresh interpreter.
+  # Editable installation builds local artifacts; production installs the same
+  # hook's sealed wheel. Both use the host's native pyproject and lockfile.
+  runtime-build:
+{% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
+{% if runtime_mode == "process" %}    command: ["uv", "sync"]
+{% else %}    command: ["uv", "sync"{% if effective_serve_mode == "production" %}, "--no-editable"{% endif %}]
+{% endif %}{% if stack_flavor == "framework" %}    depends_on: [deps]
+{% endif %}
+
   provision:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
 {% if stack_flavor == "instance" %}      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"
-{% endif %}{% if runtime_mode == "process" %}    command: ["sh", "-c", "uv run python -m angee.compose.bootstrap && uv sync && exec uv run python manage.py angee provision --demo --force-rebac"]
-    depends_on: [deps, operator]
+{% endif %}{% if runtime_mode == "process" %}    command: ["sh", "-c", "exec uv run --no-sync python manage.py angee provision --force-rebac --after-if-installed 'resources load --include-demo' --after-if-installed schema"]
+    depends_on: [runtime-build, operator]
 {% else %}    command:
       - sh
       - "-c"
       - >-
-        {{ python_bootstrap }}exec python manage.py angee provision {% if stack_flavor == "framework" %}{% if effective_serve_mode == "production" %}--force-rebac{% else %}--demo --force-rebac{% endif %}{% else %}--bootstrap-admin{% endif %}
-    depends_on: [{% if postgres_mode == "external" %}{% else %}postgres, {% endif %}operator{% if stack_flavor == "framework" %}, deps{% endif %}]
+        {{ python_sync }}exec python manage.py angee provision {% if stack_flavor == "framework" %}--force-rebac --after-if-installed 'resources load{% if effective_serve_mode != "production" %} --include-demo{% endif %}'{% else %}--after-if-installed 'resources load'{% endif %} --after-if-installed schema{% if stack_flavor != "framework" %} --after-if-installed bootstrap_admin{% endif %}
+    depends_on: [{% if postgres_mode == "external" %}{% else %}postgres, {% endif %}operator, runtime-build]
 {% endif %}
 
   # Codegen consumes both the provisioned Django SDL and this live daemon SDL.
   operator-schema:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
-{% if runtime_mode == "process" %}    command: ["uv", "run", "python", "manage.py", "operator_schema"]
+{% if runtime_mode == "process" %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "operator_schema"]
 {% else %}    command: ["sh", "-c", "{{ python_sync }}exec python manage.py operator_schema"]
 {% endif %}    depends_on: [operator, provision]
 
@@ -302,25 +304,24 @@ jobs:
     depends_on: [codegen]
 {% endif %}
 {% else %}
-  # The web image owns its package overlay, install, codegen, and static build.
+  # Native pnpm members select mounted source or the image's baked sources.
+  # Python and web share one project path beside the baked source tree.
   frontend-build:
     runtime: container
     image: {{ web_image }}
     mounts:
-      - source://app:/opt/angee-web/project
-    workdir: /opt/angee-web/project/{{ web_path }}
+      - source://app:{{ container_project_dir }}
+    workdir: {{ container_project_dir }}/{{ web_path }}
     command:
       - sh
       - "-c"
       - >-
-        cd /opt/angee-web
-        && pnpm config set packages '["packages/*","project/{{ web_path }}"]' --json --location project
-        && node -e 'const fs=require("node:fs"); const path=require("node:path"); const root="/opt/angee-web"; const packageDirs=[]; const addImmediate=(base)=>{ if (!fs.existsSync(base)) return; for (const dir of fs.readdirSync(base)) { const source=path.join(base,dir); if (fs.existsSync(path.join(source,"package.json"))) packageDirs.push(source); } }; const addAddonWeb=(base)=>{ if (!fs.existsSync(base)) return; for (const dir of fs.readdirSync(base)) { const source=path.join(base,dir,"web"); if (fs.existsSync(path.join(source,"package.json"))) packageDirs.push(source); } }; addImmediate(path.join(root,"project/sources/angee/packages")); addAddonWeb(path.join(root,"project/sources/angee/addons/angee")); addAddonWeb(path.join(root,"project/sources/angee-messaging-bridges/addons/angee")); for (const source of packageDirs) { const manifest=JSON.parse(fs.readFileSync(path.join(source,"package.json"),"utf8")); if (typeof manifest.name !== "string" || !manifest.name.startsWith("@angee/")) continue; const target=path.join(root,"packages",manifest.name.slice("@angee/".length)); const srcDir=path.join(source,"src"); const dstDir=path.join(target,"src"); if (!fs.existsSync(srcDir) || !fs.existsSync(target)) continue; fs.rmSync(dstDir,{recursive:true,force:true}); fs.cpSync(srcDir,dstDir,{recursive:true,force:true}); }'
+        cd /opt/angee-src
+{% if framework == "source" %}        && pnpm config set packages '["../angee-project/sources/angee/packages/*","../angee-project/sources/angee/addons/angee/*/web","../angee-project/sources/angee-messaging-bridges/addons/angee/*/web","../angee-project/addons/*/*/web","../angee-project/{{ web_path }}"]' --json --location project
+        && pnpm config set globalPnpmfile {{ container_project_dir }}/sources/angee/packages/scripts/pnpm-policy.cjs --location project{% else %}        && pnpm config set packages '["packages/*","addons/angee/*/web","../angee-project/addons/*/*/web","../angee-project/{{ web_path }}"]' --json --location project{% endif %}
         && pnpm install
-        && node -e 'const fs=require("node:fs"); const path=require("node:path"); const root="/opt/angee-web"; const packages=path.join(root,"packages"); const scope=path.join(root,"project/{{ web_path }}/node_modules/@angee"); fs.mkdirSync(scope,{recursive:true}); for (const dir of fs.readdirSync(packages)) { const target=path.join(packages,dir); const packageJson=path.join(target,"package.json"); if (!fs.existsSync(packageJson)) continue; const manifest=JSON.parse(fs.readFileSync(packageJson,"utf8")); if (typeof manifest.name !== "string" || !manifest.name.startsWith("@angee/")) continue; const link=path.join(scope,manifest.name.slice("@angee/".length)); if (fs.existsSync(link)) continue; try { fs.unlinkSync(link); } catch (error) { if (error.code !== "ENOENT") throw error; } fs.symlinkSync(path.relative(scope,target),link,"dir"); }'
-        && cd project/{{ web_path }}
-        && pnpm codegen
-        && pnpm build{% if sentry_web_dsn %}
+        && pnpm --config.verify-deps-before-run=false --filter ./../angee-project/{{ web_path }} --fail-if-no-match run codegen
+        && pnpm --config.verify-deps-before-run=false --filter ./../angee-project/{{ web_path }} --fail-if-no-match run build{% if sentry_web_dsn %}
     env:
       VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
       VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
@@ -401,7 +402,7 @@ services:
   # Each container syncs its own venv; the provision job already prepared the host.
   django:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="true" %}
-{% if runtime_mode == "process" %}    command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
+{% if runtime_mode == "process" %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
     ready:
       tcp: { port: {{ django_port }} }
 {% else %}    # Trust the connected Compose network, not a frontend IP that can change
@@ -436,13 +437,13 @@ services:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
     # Let Celery finish a warm shutdown, then bound native supervisor updates.
     stop_grace_period: 30s
-{% if runtime_mode == "process" %}    command: ["uv", "run", "celery", "-A", "angee.jobs.celery:app", "worker", {% if role == "worker" %}"--beat"{% else %}"-Q", "{{ celery_queues }}", "--pool", "threads", "--concurrency", "{{ celery_queues|split:","|length * 8 }}"{% endif %}, "--loglevel=INFO"]
+{% if runtime_mode == "process" %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "celery", "worker", {% if role == "worker" %}"--beat"{% else %}"-Q", "{{ celery_queues }}", "--pool", "threads", "--concurrency", "{{ celery_queues|split:","|length * 8 }}"{% endif %}, "--loglevel=INFO"]
     after: [provision]
 {% else %}    command:
       - sh
       - "-c"
       - >-
-        {{ python_sync }}exec celery -A angee.jobs.celery:app worker {% if role == "worker" %}--beat{% else %}-Q {{ celery_queues }} --pool threads --concurrency {{ celery_queues|split:","|length * 8 }}{% endif %} --loglevel=INFO
+        {{ python_sync }}exec python manage.py celery worker {% if role == "worker" %}--beat{% else %}-Q {{ celery_queues }} --pool threads --concurrency {{ celery_queues|split:","|length * 8 }}{% endif %} --loglevel=INFO
     after: [provision{% if redis_mode == "external" %}{% else %}, redis{% endif %}]
 {% endif %}
 {% endif %}{% endfor %}

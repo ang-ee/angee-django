@@ -37,7 +37,7 @@ def test_declared_settings_types_preserve_native_errors_and_warm_dependencies(tm
         "SETTINGS: _Defaults = {'ANGEE_VALUES:append': ['extra']}\n"
     )
     (tmp_path / "fixture_settings.py").write_text(
-        "from angee.compose.autoconfig import AutoConfig\n"
+        "from angee.utils.autoconfig import AutoConfig\n"
         "SECRET_KEY = 'settings-types'\n"
         "INSTALLED_APPS = ['django.contrib.contenttypes', 'settings_one', 'settings_two']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
@@ -113,7 +113,7 @@ def _typing_host_probe(root: Path, project: Path | None) -> subprocess.Completed
             "print(json.dumps({",
             "'apps': [getattr(app, 'name', app) for app in host.INSTALLED_APPS],",
             "'addon_dirs': [str(path) for path in host.ANGEE_ADDON_DIRS],",
-            "'runtime': str(host.ANGEE_RUNTIME_DIR),",
+            "'runtime': str(host.COMPOSE_RUNTIME_DIR),",
             "'database': host.DATABASES['default'], 'secret': host.SECRET_KEY,",
             "}))",
         ]),
@@ -127,7 +127,7 @@ def test_typing_host_keeps_default_framework_composition() -> None:
     host = json.loads(result.stdout)
     assert "angee.money" in host["apps"]
     assert "angee.workflows" in host["apps"]
-    assert "tests.typing_host.TypingHostConfig" in host["apps"]
+    assert "tests.typing_host" in host["apps"]
     assert host["addon_dirs"] == [str(root / "addons")]
     assert host["runtime"] == str(root / ".mypy_cache/typing_runtime")
     assert host["database"] == {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
@@ -154,7 +154,7 @@ def test_typing_host_uses_declared_project_paths_without_live_database_or_runtim
         "INSTALLED_APPS = ['typing_consumer']\n"
         f"ANGEE_ADDON_DIRS = [Path({str(addon_dir)!r}), Path({str(root / 'addons')!r})]\n"
         "SECRET_KEY = 'project-secret-must-not-survive'\n"
-        "ANGEE_RUNTIME_DIR = BASE_DIR / 'live_runtime'\n"
+        "COMPOSE_RUNTIME_DIR = BASE_DIR / 'live_runtime'\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.postgresql', 'NAME': 'do-not-connect'}}\n"
     )
     result = _typing_host_probe(root, project)
@@ -163,7 +163,7 @@ def test_typing_host_uses_declared_project_paths_without_live_database_or_runtim
     assert "angee.money" in host["apps"]
     assert "typing_consumer" in host["apps"]
     assert "angee.workflows" not in host["apps"]
-    assert "tests.typing_host.TypingHostConfig" in host["apps"]
+    assert "tests.typing_host" in host["apps"]
     assert host["addon_dirs"] == [str(addon_dir), str(root / "addons")]
     assert host["runtime"] == str(project / ".mypy_cache/typing_runtime")
     assert host["database"] == {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
@@ -192,7 +192,7 @@ def test_immutable_migration_imports_retain_typed_caller_errors(tmp_path: Path) 
         "from historical_fixture.runtime_migrations.retained import forward\n"
         "valid: int = forward(1)\ninvalid: str = forward(1)\n"
     )
-    env = dict(os.environ, PYTHONPATH=str(root), MYPYPATH=str(tmp_path))
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(root), str(root / "addons"))), MYPYPATH=str(tmp_path))
     env.pop("ANGEE_PROJECT_DIR", None)
     result = subprocess.run([
         sys.executable, "-m", "mypy", "--config-file", str(root / "pyproject.toml"),

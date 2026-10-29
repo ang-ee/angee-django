@@ -34,7 +34,7 @@ from rebac import MissingActorError, current_actor, system_context
 from angee.agents.autoconfig import SETTINGS as AGENTS_SETTINGS
 from angee.agents.protocol import ACP_PATH
 from angee.agents.runners import SessionRunner
-from angee.impl import ImplBase
+from angee.base.implementations import ImplBase
 from angee.integrate.credentials import CredentialKind
 from angee.operator.daemon import OperatorDaemon
 

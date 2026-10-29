@@ -4,8 +4,8 @@ import pytest
 from django.core.exceptions import ValidationError
 from rebac import actor_context
 
-from angee.models import TRASH_REASON_MAX_LENGTH
-from angee.signals import bulk_updated
+from angee.base.models.trash import TRASH_REASON_MAX_LENGTH
+from angee.base.signals import bulk_updated
 from tests.conftest import create_user
 from tests.core_persistence import TrashRow
 
@@ -96,7 +96,7 @@ def test_bulk_trash_and_restore_publish_only_changed_rows_in_bounded_batches(mon
         assert "is_trashed" in update_fields
         batches.append([(row.pk, row.is_trashed) for row in instances])
 
-    monkeypatch.setattr("angee.models.query.query_batch_size", lambda *args, **kwargs: 2)
+    monkeypatch.setattr("angee.base.querysets.query_batch_size", lambda *args, **kwargs: 2)
     bulk_updated.connect(observed, sender=TrashRow)
     try:
         assert TrashRow.objects.all().trash() == 4

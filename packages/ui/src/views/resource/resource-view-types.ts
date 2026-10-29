@@ -74,6 +74,9 @@ export interface BoardLaneSource {
    * A ResourceList create form declares it (usually `createOnly`) to submit the
    * lane quick-create seed through FormView's existing default-values contract. */
   rankField?: string;
+  /** Write-input extension that accepts loaded preceding/following public IDs.
+   * The server allocates the canonical rank in its full ordering context. */
+  rankInputField?: string;
   /** Boolean field on the related lane resource that declares its default fold. */
   foldField?: string;
 }
@@ -108,6 +111,15 @@ export interface GanttViewSpec extends GanttRowLayout {
     content: (row: Row) => GanttLaneDetails;
   };
 }
+
+/** Loaded neighbors around a requested insertion, in visual order. */
+export interface BoardOrderIntent {
+  preceding: readonly string[];
+  following: readonly string[];
+}
+
+/** Exact numeric rank, or neighbor intent for a server-owned ordering scope. */
+export type BoardOrder = number | BoardOrderIntent;
 
 /** One card's optimistic board placement while its server write settles. */
 export interface BoardCardPlacement {

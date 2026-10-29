@@ -5,19 +5,21 @@ import { DEPLOYMENT_LAYER_ID } from "./layers";
 
 const projects: MenuLayer = {
   id: "projects",
-  menus: [{ id: "projects", label: "Projects", children: [
-    { id: "projects.my-work", route: "projects.my-work" },
-    { id: "projects.board", route: "projects.board" },
-    { id: "projects.tasks", route: "projects.tasks" },
-  ] }],
+  menus: {
+    "projects": { label: "Projects" },
+    "projects.my-work": { route: "projects.my-work", parent: "projects" },
+    "projects.board": { route: "projects.board", parent: "projects" },
+    "projects.tasks": { route: "projects.tasks", parent: "projects" },
+  },
 };
 const work: MenuLayer = {
   id: "work",
   dependsOn: ["projects"],
-  menus: [{ id: "work", label: "Work", children: [
-    { id: "work.triage-hub", route: "work.triage-hub" },
-    { id: "work.cycles-hub", route: "work.cycles-hub" },
-  ] }],
+  menus: {
+    "work": { label: "Work" },
+    "work.triage-hub": { route: "work.triage-hub", parent: "work" },
+    "work.cycles-hub": { route: "work.cycles-hub", parent: "work" },
+  },
 };
 const pm: MenuLayer = {
   id: "pm",
@@ -40,14 +42,16 @@ const strip = (items: Tree): Tree => items.filter((item) => !item.hidden)
   .map((item) => ({ ...item, ...(item.children ? { children: strip(item.children) } : {}) }));
 
 describe("compileMenus", () => {
-  test("Nexus includes emit app identity in both trees; legacy parentId children do not", () => {
+  test("Nexus includes emit app identity in both trees; explicit parent children do not", () => {
     const result = compileMenus([
       { id: "messaging", menus: { messaging: { route: "messaging.messages" } } },
       { id: "parties", menus: { parties: { route: "parties.people" } } },
       { id: "nexus", dependsOn: ["messaging", "parties"], menus: {
         nexus: { route: "nexus.inbox", include: ["messaging", "parties"] },
       } },
-      { id: "legacy", menus: [{ id: "legacy.page", parentId: "nexus", route: "legacy.page" }] },
+      { id: "legacy", menus: {
+        "legacy.page": { route: "legacy.page", parent: "nexus" },
+      } },
     ]);
     for (const items of [result.navigation, result.logical]) {
       expect(items[0]?.children?.map((item) => [item.id, item.app])).toEqual([
@@ -69,11 +73,11 @@ describe("compileMenus", () => {
     expect(() => compileMenus([{ id: "look", menus: { look: { personal: true } } }])).toThrow(/is personal, which only a Settings root/);
     expect(() => compileMenus([{ id: "look", menus: { look: {}, "look.theme": { parent: "look", group: "platform", personal: true } } }]))
       .toThrow(/is personal, which only a Settings root/);
-    expect(() => compileMenus([{ id: "desk", menus: [{ id: "desk", app: true }] } as unknown as MenuLayer]))
-      .toThrow(/app identity is compiler-emitted/);
+    expect(() => compileMenus([{ id: "desk", menus: [] } as unknown as MenuLayer]))
+      .toThrow(/menus must be a mapping/);
   });
 
-  test("legacy arrays compile to the same tree", () => {
+  test("declared parents compile into the navigation tree", () => {
     const { logical, navigation, removed } = compileMenus([projects, work]);
     expect(ids(logical)).toEqual([
       { projects: ["projects.my-work", "projects.board", "projects.tasks"] },
@@ -162,8 +166,6 @@ describe("compileMenus", () => {
   });
 
   test("redeclaration, unknown parents, parent cycles and conflicting positions fail", () => {
-    expect(() => compileMenus([projects, { id: "projects2", menus: [{ id: "projects.tasks" }] }]))
-      .toThrow(/redefines menu item id "projects.tasks"/);
     expect(() => compileMenus([{ id: "a", menus: { a: { parent: "nowhere" } } }])).toThrow(/unknown parent "nowhere"/);
     expect(() => compileMenus([{ id: "a", menus: { a: { parent: "a.b" }, "a.b": { parent: "a" } } }])).toThrow(/parent cycle/);
     expect(() => compileMenus([{ id: "a", menus: { a: {}, "a.x": { parent: "a", before: "a.y" }, "a.y": { parent: "a", before: "a.x" } } }]))
@@ -186,17 +188,15 @@ describe("compileMenus", () => {
     expect(ids(compileMenus([one, two]).logical)).toEqual(ids(compileMenus([two, one]).logical));
   });
 
-  test("records who removed and hid each node, and legacy ids outside their namespace", () => {
+  test("records who removed and hid each node", () => {
     const product: MenuLayer = { id: "product", dependsOn: ["pm", "projects", "work"], menus: {
       work: { remove: true }, "projects.tasks": { hide: true }, pm: { only: ["projects", "pm.inbox"] },
     } };
-    const stray: MenuLayer = { id: "stray", menus: [{ id: "elsewhere.page", route: "elsewhere.page" }] };
-    const compiled = compileMenus([projects, work, pm, product, stray]);
+    const compiled = compileMenus([projects, work, pm, product]);
     expect(compiled.removed).toContainEqual({ id: "work.cycles-hub", route: "work.cycles-hub", by: "product", parent: "pm" });
     expect(compiled.removed).toContainEqual({ id: "projects.board", route: "projects.board", by: "pm", parent: "pm" });
     expect(compiled.hidden).toEqual([{ id: "projects.tasks", by: "product", reason: "hide" }]);
     expect(compiled.provenance["projects.my-work"]).toEqual({ route: "projects", parent: "projects", sequence: "pm" });
-    expect(compiled.diagnostics).toEqual(['Addon "stray" declares menu item "elsewhere.page" outside its namespace ("stray" or "stray.…").']);
   });
 
   test("before/after holds in the rail, accepts several nodes on one anchor and chains in any order", () => {
@@ -253,15 +253,20 @@ describe("compileMenus", () => {
     // Two unrelated layers setting one still collide.
     const other: MenuLayer = { id: "other", dependsOn: ["desk"], menus: { desk: { home: "desk.other" } } };
     expect(() => compileMenus([desk, product, other])).toThrow(/Unrelated addons "product" and "other" both set menu "desk" home/);
-    // The legacy list declares them too.
-    expect(compileMenus([{ id: "notes", menus: [{ id: "notes", home: "notes.all", brand: { name: "Notebook", mark: "book" },
-      children: [{ id: "notes.all", route: "notes.all" }] }] }]).logical[0]).toMatchObject({ home: "notes.all", brand: { name: "Notebook", mark: "book" } });
+    // A root declares the same identity facts.
+    expect(compileMenus([{ id: "notes", menus: {
+      "notes": { home: "notes.all", brand: { name: "Notebook", mark: "book" } },
+      "notes.all": { route: "notes.all", parent: "notes" },
+    } }]).logical[0]).toMatchObject({ home: "notes.all", brand: { name: "Notebook", mark: "book" } });
   });
 
   test("only a root carries home, brand and theme; an included app drops its own", () => {
     expect(() => compileMenus([{ id: "desk", menus: { desk: {}, "desk.inbox": { parent: "desk", home: "desk.inbox" } } }]))
       .toThrow(/"desk.inbox" sets home, which only a root \(no parent\) may/);
-    expect(() => compileMenus([{ id: "desk", menus: [{ id: "desk", children: [{ id: "desk.inbox", theme: "desk.light" }] }] }]))
+    expect(() => compileMenus([{ id: "desk", menus: {
+      "desk": {},
+      "desk.inbox": { theme: "desk.light", parent: "desk" },
+    } }]))
       .toThrow(/"desk.inbox" sets theme, which only a root/);
     const included = compileMenus([
       { id: "work", menus: {
@@ -287,12 +292,16 @@ describe("compileMenus", () => {
       expect(() => compileMenus([{ id: "desk", menus: { desk: { brand } } } as unknown as MenuLayer]))
         .toThrow(/brand must be \{ name, mark \} with a non-empty name and mark/);
     }
-    expect(() => compileMenus([{ id: "desk", menus: [{ id: "desk", brand: { name: "", mark: "desk" } }] }])).toThrow(/brand must be/);
+    expect(() => compileMenus([{ id: "desk", menus: {
+      "desk": { brand: { name: "", mark: "desk" } },
+    } }])).toThrow(/brand must be/);
     expect(() => compileMenus([{ id: "desk", menus: { desk: { home: 7 } } } as unknown as MenuLayer])).toThrow(/home must be a string/);
     expect(() => compileMenus([{ id: "desk", menus: { desk: { theme: false } } } as unknown as MenuLayer])).toThrow(/theme must be a string/);
     expect(() => compileMenus([{ id: "desk", menus: { desk: { railExpanded: "false" } } } as unknown as MenuLayer]))
       .toThrow(/railExpanded must be true or false/);
-    expect(() => compileMenus([{ id: "desk", menus: [{ id: "desk", railExpanded: "false" }] }] as unknown as MenuLayer[]))
+    expect(() => compileMenus([{ id: "desk", menus: {
+      "desk": { railExpanded: "false" },
+    } }] as unknown as MenuLayer[]))
       .toThrow(/railExpanded must be true or false/);
   });
 
@@ -326,10 +335,11 @@ describe("compileMenus", () => {
     const removed = compileMenus([iam, desk, product]);
     expect(removed.removed).toContainEqual({ id: "desk.people", route: "desk.people", by: "product", parent: "desk", label: "People" });
     expect(removed.mounts.map((mount) => mount.id)).toEqual(["desk.people", "desk.admin.users"]);
-    // The legacy declaration list mounts the same way.
-    const listed: MenuLayer = { id: "desk", dependsOn: ["iam"], menus: [
-      { id: "desk", children: [{ id: "desk.people", mount: "iam.users", path: "people", label: "People" }] },
-    ] };
+    // Explicit declarations mount the same way.
+    const listed: MenuLayer = { id: "desk", dependsOn: ["iam"], menus: {
+      "desk": {},
+      "desk.people": { mount: "iam.users", path: "people", label: "People", parent: "desk" },
+    } };
     expect(compileMenus([iam, listed]).mounts).toEqual([{ id: "desk.people", route: "iam.users", path: "/desk/people", by: "desk" }]);
   });
 
@@ -385,8 +395,11 @@ describe("compileMenus", () => {
         ["people.manage", "iam.User#create"], ["people.directory", undefined],
       ]);
     }
-    const legacy = compileMenus([{ id: "audit", menus: [{ id: "audit", requires: "iam.User#delete", children: [{ id: "audit.log", route: "audit.log" }] }] }]);
-    expect(legacy.logical[0]?.requires).toBe("iam.User#delete");
+    const audit = compileMenus([{ id: "audit", menus: {
+      "audit": { requires: "iam.User#delete" },
+      "audit.log": { route: "audit.log", parent: "audit" },
+    } }]);
+    expect(audit.logical[0]?.requires).toBe("iam.User#delete");
     const product: MenuLayer = { id: "product", dependsOn: ["people"], menus: { "people.directory": { requires: "iam.User#read" } } };
     const deployment: MenuLayer = { id: DEPLOYMENT_LAYER_ID, dependsOn: ["people", "product"], menus: { people: { requires: "iam.Group#read" } } };
     const altered = compileMenus([people, product, deployment]);

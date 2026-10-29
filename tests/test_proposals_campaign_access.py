@@ -11,16 +11,18 @@ from django.core.exceptions import ValidationError
 from rebac import ObjectRef, PermissionDenied, SubjectRef, actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.errors import RecordAccessSubjectRefused
+from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Milestone, Project, Task
 from tests.conftest import Drive, File, FileAttachment
 from tests.proposals_campaign import ProposalCampaign, as_actor, grant
+from tests.proposals_campaign import campaign as campaign
+from tests.proposals_campaign import campaign_schema as campaign_schema
+from tests.proposals_campaign import campaign_store as campaign_store
 from tests.proposals_models import Answer, Proposal, Round, Topic
-
-pytest_plugins = ("tests.proposals_campaign",)
+from tests.test_project_access import project_access_schema as project_access_schema
 
 
 def assert_read(row: Any, actor: Any, expected: bool) -> None:

@@ -11,12 +11,12 @@ from django.db import models
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 
-from angee.changesets import changeset
-from angee.identity import public_id_of
-from angee.models import model_history
+from angee.base.models.identity import public_id_of
+from angee.provenance.context import changeset
+from angee.provenance.querysets import model_history
 from angee.provenance.schema import RecordHistory
-from angee.testing.permissions import install_permission_schema
 from tests.conftest import create_user
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
@@ -49,7 +49,7 @@ definition projects/milestone {
 @pytest.fixture
 def line_policy(composed_tables: None) -> Iterator[None]:
     del composed_tables
-    install_permission_schema(parse_zed(LINE_SCHEMA))
+    install_schema(parse_zed(LINE_SCHEMA))
     try:
         yield
     finally:
@@ -205,10 +205,10 @@ def test_missing_snapshot_policy_or_relationship_target_denies_read(line_policy:
     assert history is not None
     assert history.snapshot_allows(snapshot, "read", actor=owner)
 
-    install_permission_schema(parse_zed("definition auth/user {}"))
+    install_schema(parse_zed("definition auth/user {}"))
     assert not history.snapshot_allows(snapshot, "read", actor=owner)
     # A target's globally readable policy cannot prove its row still exists.
-    install_permission_schema(parse_zed(LINE_SCHEMA.replace(
+    install_schema(parse_zed(LINE_SCHEMA.replace(
         "permission read = owner + reader + editor", "permission read = authenticated",
     )))
     with actor_context(owner), changeset(fresh=True):
@@ -221,7 +221,7 @@ def test_uncaptured_denial_relation_does_not_become_an_empty_permission_fact(lin
     project, milestone = _plan(owner)
     identity = public_id_of(milestone)
     _remove(owner, milestone)
-    install_permission_schema(parse_zed(LINE_SCHEMA.replace(
+    install_schema(parse_zed(LINE_SCHEMA.replace(
         "    permission read__description = project->write",
         "    relation withheld: auth/user\n    permission read__description = project->write - withheld",
     )))
@@ -277,7 +277,7 @@ def test_an_excluded_snapshot_column_cannot_grant_through_its_constructor_defaul
     history = model_history(model)
     assert history is not None
     try:
-        install_permission_schema(parse_zed("""
+        install_schema(parse_zed("""
             definition auth/user {}
             definition parties/party {
                 relation empty: parties/party // rebac:const={"target_id":"empty","filters":{"handle_count":0}}

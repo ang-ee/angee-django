@@ -1,0 +1,10 @@
+[addon]
+name = "angee.knowledge_integrate_notion"
+description = "Notion API connections for knowledge vaults"
+keywords = ["knowledge", "notion", "integration"]
+category = "Integration"
+depends_on = ["angee.base", "angee.knowledge", "angee.integrate", "angee.web"]
+dependencies = ["markdown-it-py>=4.2"]
+
+[resources]
+master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]

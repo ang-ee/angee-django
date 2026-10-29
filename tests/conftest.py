@@ -17,6 +17,7 @@ import tomlkit
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.db import models
 from django.test import RequestFactory
 from rebac import ObjectRef, actor_context, system_context, to_object_ref
 from rebac.roles import grant as grant_role
@@ -48,6 +49,7 @@ from angee.knowledge.models import MarkdownPage as AbstractMarkdownPage
 from angee.knowledge.models import Page as AbstractPage
 from angee.knowledge.models import RecordBinding as AbstractRecordBinding
 from angee.knowledge.models import Vault as AbstractVault
+from angee.knowledge_integrate_notion.models import NotionConnection as AbstractNotionConnection
 from angee.messaging.testing import models as messaging_models  # noqa: F401 -- register messaging test models
 from angee.messaging.testing.models import Channel
 from angee.platform.models import Addon as AbstractAddon
@@ -85,11 +87,19 @@ from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 os.environ.pop("SENTRY_DSN", None)
 
 
+def standalone_relation(source: type[models.Model], name: str) -> models.Field:
+    """Keep a test model's copied FK without claiming its source's reverse accessor."""
+
+    field = source._meta.get_field(name)
+    _, _, args, kwargs = field.deconstruct()
+    return type(field)(*args, **(kwargs | {"related_name": "+"}))
+
+
 @pytest.fixture
 def composed_tables(composed_tables: None) -> None:
     """The source host's composed tables also carry the declared statement principals.
 
-    Extends the ``angee.testing`` plugin fixture of the same name: after its REBAC
+    Extends the ``angee.base.testing`` plugin fixture of the same name: after its REBAC
     sync, the install-tier principals and grants that admission reads are loaded
     (``angee.provenance.testing.load_statement_sources``), exactly as the composed
     host does.
@@ -238,6 +248,15 @@ class MarkdownPage(AbstractMarkdownPage, Page):
         app_label = "knowledge"
         db_table = "test_knowledge_markdown_page"
         rebac_resource_type = "knowledge/markdown_page"
+
+
+class NotionConnection(AbstractNotionConnection, Integration):
+    """Native Notion integration child for source-addon contract tests."""
+
+    class Meta(AbstractNotionConnection.Meta):
+        abstract = False
+        app_label = "knowledge_integrate_notion"
+        db_table = "test_knowledge_notion_connection"
 
 
 class VcsBridge(AbstractVcsBridge, Integration):

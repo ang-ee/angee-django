@@ -7,44 +7,37 @@ from pathlib import Path
 
 import pytest
 
-from angee.compose.autoconfig import AutoConfig
 from angee.compose.composer import Composer
+from angee.utils.autoconfig import AutoConfig
 
-CORE_APP_NAMES = [
-    "django_yamlconf",
-    "angee.compose",
-    "django.contrib.contenttypes",
-    "rebac",
-    "simple_history",
-    "angee",
-    "django_celery_beat",
-    "angee.jobs",
-]
+CORE_APP_NAMES = ["django_yamlconf", "angee.base", "angee"]
 
 
 def test_defaults_prefixes_the_ordered_core_app_set(tmp_path: Path) -> None:
-    """Core and its Django app dependencies are always on before project roots."""
+    """Only host composition and the foundation prefix precede project roots."""
 
     defaults = runpy.run_module(
-        "angee.compose.defaults",
+        "angee.defaults",
         init_globals={"BASE_DIR": tmp_path, "INSTALLED_APPS": ("example.product",)},
         run_name="__test_core_defaults__",
     )
 
-    assert defaults["INSTALLED_APPS"] == [*CORE_APP_NAMES, "example.product"]
+    assert defaults["INSTALLED_APPS"] == ["django_yamlconf", "angee.base", "example.product", "angee"]
 
 
-def test_core_fixture_composes_to_the_historical_app_order(tmp_path: Path) -> None:
-    """The former core-addon closure and the static prefix resolve identically."""
+def test_core_fixture_orders_composer_after_native_source_apps(tmp_path: Path) -> None:
+    """The final native import hook runs after all declared source apps."""
 
     settings = {
         "INSTALLED_APPS": (*CORE_APP_NAMES,),
-        "ANGEE_RUNTIME_DIR": tmp_path / "runtime",
+        "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
 
     Composer(settings).compose_settings()
 
-    assert [config.name for config in settings["INSTALLED_APPS"]] == CORE_APP_NAMES
+    assert [config.name for config in settings["INSTALLED_APPS"]] == [
+        "django_yamlconf", "angee.base", "angee",
+    ]
 
 
 @pytest.mark.parametrize("composed", (False, True), ids=("bare", "composed"))
@@ -76,12 +69,12 @@ def test_rebac_depth_uses_explicit_settings_before_backend_defaults(
     monkeypatch.delenv("REBAC_DEPTH_LIMIT", raising=False)
     if environment_depth is not None:
         monkeypatch.setenv("REBAC_DEPTH_LIMIT", environment_depth)
-    namespace = {"BASE_DIR": tmp_path, "ANGEE_RUNTIME_DIR": tmp_path / "runtime"}
+    namespace = {"BASE_DIR": tmp_path, "COMPOSE_RUNTIME_DIR": tmp_path / "runtime"}
     if engine is not None:
         namespace["DATABASES"] = {"default": {"ENGINE": f"django.db.backends.{engine}", "NAME": "test"}}
     if depth is not None:
         namespace["REBAC_DEPTH_LIMIT"] = depth
-    defaults = runpy.run_module("angee.compose.defaults", init_globals=namespace, run_name="__test_rebac_defaults__")
+    defaults = runpy.run_module("angee.defaults", init_globals=namespace, run_name="__test_rebac_defaults__")
     namespace = {name: value for name, value in defaults.items() if name.isupper() and not name.startswith("_")}
     if composed:
         Composer(namespace).compose_settings()

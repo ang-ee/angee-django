@@ -1,157 +1,38 @@
-import * as v from "valibot";
-import type { CrudFilter } from "@refinedev/core";
+import type { ErrorObject } from "ajv";
+import checkedFormSpec from "./form-spec.validator.generated.js";
+import type { FormSpecWire } from "./form-spec.generated";
 
-import { JsonValueSchema } from "../../widgets/json-value";
+export type { FormSpecWire } from "./form-spec.generated";
+export { FORM_SPEC_ANNOTATIONS } from "./form-spec.annotations.generated";
+export type FormSpecFieldType = Exclude<Extract<FormSpecWire["type"], string>, "null">;
 
-const NonEmptyString = v.pipe(v.string(), v.minLength(1));
-const FieldTypeSchema = v.picklist(["string", "integer", "number", "boolean", "object", "array", "any"]);
-const JsonFieldScalarTypeSchema = v.union([FieldTypeSchema, v.literal("null")]);
-const JsonFieldTypeSchema = v.union([
-  JsonFieldScalarTypeSchema,
-  v.array(v.picklist(["string", "integer", "number", "boolean", "object", "array", "null"])),
-]);
-const FieldLayoutSchema = v.picklist(["context", "input"]);
-export type FormSpecFieldType = v.InferOutput<typeof FieldTypeSchema>;
-
-const FilterSchema: v.GenericSchema<unknown, CrudFilter> = v.lazy(() => v.variant("operator", [
-  v.object({
-    operator: v.picklist(["and", "or"]),
-    key: v.optional(v.string()),
-    value: v.array(FilterSchema),
-  }),
-  v.object({
-    operator: v.picklist([
-      "eq", "ne", "eqs", "nes", "lt", "gt", "lte", "gte", "in", "nin", "ina", "nina",
-      "contains", "ncontains", "containss", "ncontainss", "between", "nbetween", "null", "nnull",
-      "startswith", "nstartswith", "startswiths", "nstartswiths", "endswith", "nendswith", "endswiths", "nendswiths",
-    ]),
-    field: NonEmptyString,
-    value: v.union([JsonValueSchema, v.undefined()]),
-  }),
-], (issue) => `unknown Refine CRUD operator "${String(issue.input)}".`));
-const RelationSchema = v.object({
-  resource: NonEmptyString,
-  permission: v.optional(v.pipe(
-    NonEmptyString,
-    v.regex(/^[a-z][a-z0-9_]*$/, "relation permission must be a policy identifier"),
-  )),
-  labelField: v.optional(NonEmptyString),
-  filters: v.optional(v.array(FilterSchema)),
-  create: v.optional(v.object({
-    resource: NonEmptyString,
-    defaultValues: v.optional(v.record(v.string(), JsonValueSchema)),
-    actionLabel: v.optional(NonEmptyString),
-    title: v.optional(NonEmptyString),
-  })),
-});
-const FieldKeywordSchema = v.object({
-  type: v.optional(JsonFieldTypeSchema),
-  required: v.optional(v.array(v.string())),
-  title: v.optional(v.string()),
-  description: v.optional(NonEmptyString),
-  readOnly: v.optional(v.boolean()),
-  nullable: v.optional(v.boolean()),
-  minimum: v.optional(v.pipe(v.number(), v.finite())),
-  maximum: v.optional(v.pipe(v.number(), v.finite())),
-  minLength: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
-  maxLength: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
-  minItems: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
-  maxItems: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
-  default: v.optional(JsonValueSchema),
-  const: v.optional(JsonValueSchema),
-  format: v.optional(NonEmptyString),
-  pattern: v.optional(v.string()),
-  enum: v.optional(v.array(JsonValueSchema)),
-  discriminator: v.optional(v.object({ propertyName: NonEmptyString })),
-});
-const FieldAnnotationSchema = v.object({
-  propertyOrder: v.optional(v.array(NonEmptyString)),
-  widget: v.optional(NonEmptyString),
-  label: v.optional(NonEmptyString),
-  addLabel: v.optional(NonEmptyString),
-  removeLabel: v.optional(NonEmptyString),
-  placeholder: v.optional(NonEmptyString),
-  hidden: v.optional(v.boolean()),
-  layout: v.optional(FieldLayoutSchema),
-  omittable: v.optional(v.boolean()),
-  presenceRequired: v.optional(v.boolean()),
-  defaultValue: v.optional(JsonValueSchema),
-  // Option annotations are an extension seam. The generic form owner consumes
-  // only value/label/disabled and preserves domain annotations for its caller.
-  options: v.optional(v.array(v.looseObject({
-    // JSON Pointer uses the empty string for the root document. It is a valid
-    // authored choice value even though human-facing option labels stay
-    // non-empty.
-    value: JsonValueSchema,
-    label: NonEmptyString,
-    disabled: v.optional(v.boolean()),
-  }))),
-  relation: v.optional(RelationSchema),
-});
-const FieldBaseSchema = v.object({
-  ...FieldKeywordSchema.entries,
-  ...FieldAnnotationSchema.entries,
-});
-/** Only recursive edges need an annotation; scalar facts are inferred. */
-export type FormSpecWire = v.InferOutput<typeof FieldBaseSchema> & {
-  properties?: Record<string, FormSpecWire>;
-  items?: FormSpecWire;
-  oneOf?: FormSpecWire[];
-  anyOf?: FormSpecWire[];
-  allOf?: FormSpecWire[];
-  if?: FormSpecWire;
-  then?: FormSpecWire;
-  else?: FormSpecWire;
-  not?: FormSpecWire;
-  $defs?: Record<string, FormSpecWire>;
-  definitions?: Record<string, FormSpecWire>;
-  $ref?: string;
-  additionalProperties?: boolean | FormSpecWire;
-};
-const FieldSchema: v.GenericSchema<unknown, FormSpecWire> = v.lazy(() => v.object({
-  ...FieldBaseSchema.entries,
-  properties: v.optional(v.record(v.string(), FieldSchema)),
-  items: v.optional(FieldSchema),
-  oneOf: v.optional(v.array(FieldSchema)),
-  anyOf: v.optional(v.array(FieldSchema)),
-  allOf: v.optional(v.array(FieldSchema)),
-  if: v.optional(FieldSchema),
-  then: v.optional(FieldSchema),
-  else: v.optional(FieldSchema),
-  not: v.optional(FieldSchema),
-  $defs: v.optional(v.record(v.string(), FieldSchema)),
-  definitions: v.optional(v.record(v.string(), FieldSchema)),
-  $ref: v.optional(v.string()),
-  additionalProperties: v.optional(v.union([v.boolean(), FieldSchema])),
-}));
-const FormSchema = v.pipe(FieldSchema, v.check(
-  (schema) => schema.type === undefined || schema.type === "object",
-  'root type must be "object".',
-));
-
-/** Validate the supported emitted form vocabulary before resolving widgets.
+/** Validate the canonical emitted vocabulary before resolving widgets.
  * @kind null
- * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ * @reason Codec infrastructure: validates the generated wire contract.
  */
 export function parseFormSpec(value: unknown): FormSpecWire {
-  const result = v.safeParse(FormSchema, value);
-  if (result.success) return result.output;
-  const issue = result.issues[0];
-  const path = v.getDotPath(issue)?.replace(/(^|\.)properties\./g, "$1") ?? "form spec";
-  throw new Error(`Invalid ${path}: ${issue.message}`);
+  if (checkedFormSpec(value)) return value;
+  const errors = checkedFormSpec.errors ?? [];
+  // Native branches report at their own locations; show the most specific issue.
+  const issue = [...errors].sort((left, right) => right.instancePath.length - left.instancePath.length)[0];
+  throw new Error(formSpecIssue(issue));
 }
 
-/** Invalid/non-object payloads carry no seeds; only declared fields consume them.
+function formSpecIssue(issue: ErrorObject | undefined): string {
+  if (!issue) return "Invalid form spec.";
+  const segments = issue.instancePath.split("/").slice(1).map((part) => part.replace(/~1/g, "/").replace(/~0/g, "~"));
+  if (issue.keyword === "required") segments.push(String(issue.params.missingProperty));
+  if (issue.keyword === "discriminator") segments.push(String(issue.params.tag));
+  const path = segments.filter((part) => part !== "properties").join(".") || "form spec";
+  const message = (issue.keyword === "enum" || issue.keyword === "discriminator") && segments.at(-1) === "operator"
+    ? `unknown Refine CRUD operator "${String(issue.keyword === "discriminator" ? issue.params.tagValue : issue.data)}".` : issue.message ?? "Invalid value.";
+  return `Invalid ${path}: ${message}`;
+}
+
+/** Non-object payloads carry no seeds; declared fields own interpretation.
  * @kind null
- * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ * @reason Codec infrastructure: reads a JSON object envelope.
  */
 export function parseFormSpecPayload(payload: unknown): Record<string, unknown> {
-  const result = v.safeParse(v.record(v.string(), v.unknown()), payload);
-  return result.success ? result.output : {};
+  return payload !== null && typeof payload === "object" && !Array.isArray(payload) ? Object.fromEntries(Object.entries(payload)) : {};
 }
-
-/** Every non-standard field entry is an annotation for full JSON Schema validators.
- * @kind null
- * @reason Schema infrastructure: validates serialized runtime contracts.
- */
-export const FORM_SPEC_ANNOTATIONS: readonly string[] = Object.keys(FieldAnnotationSchema.entries);

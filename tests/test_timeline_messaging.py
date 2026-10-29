@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from rebac import actor_context, system_context
 
-from angee.identity import public_id_of
+from angee.base.models.identity import public_id_of
 from angee.messaging.testing.models import Message, ThreadAttachment
 from angee.messaging.timeline import CommentKind
 from angee.projects.testing.models import Task

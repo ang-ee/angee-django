@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import importlib
 from typing import Any
 
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import DEFAULT_DB_ALIAS, connections
 
-from angee.compose.runtime import Runtime
+from angee.compose.migrations import reset_migration_history
 
 
 class Command(BaseCommand):
-    """Dispatch a guarded composed-history reset to its runtime owner."""
+    """Dispatch a guarded composed-history reset using the prebuilt native labels."""
 
     help = "Replace fully applied composed-app migration history with fresh initial migrations."
 
@@ -25,7 +27,13 @@ class Command(BaseCommand):
 
         del args
         try:
-            labels, removed, recorded = Runtime.from_django().reset_migration_history(
+            artifact = importlib.import_module(getattr(settings, "COMPOSE_RUNTIME_MODULE", "runtime"))
+            runtime_labels = artifact.RUNTIME_APPS
+        except (ImportError, AttributeError) as error:
+            raise CommandError("Migration reset requires prebuilt app labels; build the project first.") from error
+        try:
+            labels, removed, recorded = reset_migration_history(
+                runtime_labels,
                 database=options["database"],
             )
         except RuntimeError as error:
