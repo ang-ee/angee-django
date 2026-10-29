@@ -61,14 +61,16 @@ class Command(MakeMigrationsCommand):
         except (ImportError, AttributeError) as error:
             raise CommandError("Migration authoring requires prebuilt models; build the project first.") from error
         # Transitions require their target models in native prerequisite state.
-        # Bootstrap only an entirely unauthored composed graph, never a missing
-        # branch in existing history or a different native authoring intent.
+        # Bootstrap selected apps without history, never a missing branch in an
+        # existing app history or a different native authoring intent.
         if labels and not any(options.get(flag) for flag in (
             "check_changes", "dry_run", "merge", "empty", "update",
         )):
             loader = MigrationLoader(None, ignore_no_migrations=True)
-            if not any(label in labels for label, _name in loader.disk_migrations):
-                super().handle(*app_labels, **options)
+            selected_labels = set(labels).intersection(app_labels) if app_labels else set(labels)
+            initial_labels = selected_labels - {label for label, _name in loader.disk_migrations}
+            if initial_labels:
+                super().handle(*sorted(initial_labels), **options)
                 importlib.invalidate_caches()
         authored = RuntimeMigrations(apps.get_app_configs(), labels=labels)
         selected = app_labels or None

@@ -1867,7 +1867,8 @@ def test_host_migration_authoring_preserves_native_command_color_options(monkeyp
     assert ("\x1b[" in output.getvalue()) is (color_flag == "--force-color")
 
 
-def test_fresh_host_authors_native_initials_before_guarded_transitions(tmp_path: Path) -> None:
+@pytest.mark.parametrize("selected_apps", [False, True])
+def test_fresh_host_authors_native_initials_before_guarded_transitions(tmp_path: Path, selected_apps: bool) -> None:
     """One public command writes schema prerequisites and retains the guarded data transition."""
     root = Path(__file__).resolve().parents[1]
     package = tmp_path / "bootstrap_app"
@@ -1898,10 +1899,17 @@ class Migration(migrations.Migration):
     dependencies = []
     operations = [migrations.RunPython(forwards, migrations.RunPython.noop)]
 """)
+    if selected_apps:
+        for source in sorted(package.rglob("*")):
+            if source.is_file():
+                _write_module(
+                    tmp_path / "other_app" / source.relative_to(package),
+                    source.read_text().replace("bootstrap_app", "other_app"),
+                )
     _write_module(tmp_path / "bootstrap_settings.py", f"""import os
 SECRET_KEY = "fresh-authoring"
-INSTALLED_APPS = ["bootstrap_app", "angee.build.ProjectBuildConfig" if os.environ.get("COMPOSE_BUILD")
-    else "angee.apps.AngeeConfig"]
+INSTALLED_APPS = {["bootstrap_app", "other_app"] if selected_apps else ["bootstrap_app"]!r} + [
+    "angee.build.ProjectBuildConfig" if os.environ.get("COMPOSE_BUILD") else "angee.apps.AngeeConfig"]
 COMPOSE_APP_DECLARATIONS = "angee.build.ManifestDeclarations"
 COMPOSE_RUNTIME_MODULE = "runtime"
 COMPOSE_RUNTIME_DIR = {str(tmp_path / "runtime")!r}
@@ -1925,6 +1933,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
     result = subprocess.run(
         [sys.executable, "-c", r"""
 from pathlib import Path
+import sys
 import django
 django.setup()
 from django.apps import apps
@@ -1947,11 +1956,21 @@ for flag in ("--check", "--dry-run", "--merge", "--empty", "--update"):
     else:
         assert flag == "--dry-run", f"{flag} silently accepted an uninitialized graph"
     assert list(directory.glob("*.py")) == [directory / "__init__.py"]
-call_command("makemigrations", interactive=False, verbosity=0)
+if sys.argv[1] == "selected":
+    call_command("makemigrations", "bootstrap_app", interactive=False, verbosity=0)
+    first_sources = {path: path.read_bytes() for path in directory.glob("*.py")}
+    second_directory = Path("runtime/other_app/migrations")
+    assert list(second_directory.glob("*.py")) == [second_directory / "__init__.py"]
+    call_command("makemigrations", "other_app", interactive=False, verbosity=0)
+    assert {path: path.read_bytes() for path in directory.glob("*.py")} == first_sources
+else:
+    call_command("makemigrations", interactive=False, verbosity=0)
 loader = MigrationLoader(None, ignore_no_migrations=True)
 transition = loader.disk_migrations["bootstrap_app", "record_bootstrap"]
 assert transition.dependencies == [("bootstrap_app", "0001_initial")]
 assert transition.angee_origin == "bootstrap_app:record_bootstrap"
+if sys.argv[1] == "selected":
+    assert loader.disk_migrations["other_app", "record_bootstrap"].dependencies == [("other_app", "0001_initial")]
 assert MigrationRecorder(connection).applied_migrations() == {}
 frozen = {path: path.read_bytes() for path in directory.glob("*.py")}
 call_command("makemigrations", interactive=False, verbosity=0)
@@ -1960,7 +1979,10 @@ assert {path: path.read_bytes() for path in directory.glob("*.py")} == frozen
 call_command("migrate", interactive=False, verbosity=0)
 rows = apps.get_model("bootstrap_app", "Entry")._base_manager
 assert list(rows.values_list("value", flat=True)) == ["transition ran"]
-"""],
+if sys.argv[1] == "selected":
+    rows = apps.get_model("other_app", "Entry")._base_manager
+    assert list(rows.values_list("value", flat=True)) == ["transition ran"]
+""", "selected" if selected_apps else "all"],
         cwd=tmp_path, env=environment,
         capture_output=True, text=True, timeout=60, check=False,
     )
