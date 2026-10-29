@@ -35,7 +35,6 @@ export const enDashboardsMessages: Record<string, string> = {
   "common.homeSet": "Set as home",
   "common.homeUnset": "Home unset",
   "common.duplicated": "Dashboard duplicated",
-  "common.trashed": "Moved to trash",
   "common.actionFailed": "The dashboard action could not be completed.",
   "details.saved": "Details saved",
   "details.description": "Description",
