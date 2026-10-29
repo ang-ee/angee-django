@@ -56,6 +56,8 @@ export interface ContainerKinds {
   columns: ReactNode;
   tools: ReactNode;
   content: ReactNode;
+  /** Opt-in record previews, contributed by each model owner. */
+  preview: ReactNode;
   origin: ReactNode;
   /** The login page's sign-in methods (`auth.login#method`). */
   method: ReactNode;
