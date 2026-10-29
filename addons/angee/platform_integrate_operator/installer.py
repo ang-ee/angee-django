@@ -10,6 +10,8 @@ silently clobbering it.
 
 from __future__ import annotations
 
+from typing import Any
+
 from angee.operator.daemon import OperatorDaemon
 from angee.platform.installer import AddonInstallerBackend
 
@@ -34,6 +36,13 @@ class OperatorInstallerBackend(AddonInstallerBackend):
 
         self._daemon = OperatorDaemon.from_settings()
         self._etag = ""
+
+    def queue_dependency_change(self, requirement: str, *, remove: bool = False) -> dict[str, Any]:
+        """Delegate package mutation and recovery to one native held job operation."""
+        return self._daemon.run_job(
+            "py-sync", inputs={"action": "remove" if remove else "add", "requirement": requirement},
+            chained_restart=True,
+        )
 
     def read_settings_text(self) -> str:
         """Return ``app/settings.yaml`` via the operator, seeding the concurrency etag.

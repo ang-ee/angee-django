@@ -17,9 +17,9 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from graphql import build_client_schema, get_introspection_query, print_schema
 
+from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import RequestNotSentError
 from angee.integrate.http import HttpClient
-from angee.serialization import canonical_json_sha256
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +274,16 @@ class OperatorDaemon:
     # The daemon owns lifecycle; these let Django drive a render on a user's behalf
     # (the secret value stays server-side, never reaching the browser). Each raises
     # on an unconfigured/unreachable daemon so the caller surfaces a clean failure.
+
+    def run_job(self, name: str, *, inputs: dict[str, str], chained_restart: bool = False) -> dict[str, Any]:
+        """Start a native job operation and return the daemon's durable record."""
+        result = self._request(
+            "POST", f"{self._base()}/jobs/{quote(name, safe='')}/run",
+            {"inputs": inputs, "chained_restart": chained_restart},
+        )
+        if not isinstance(result, dict):
+            raise OperatorDaemonError("operator returned no job operation record")
+        return result
 
     def set_secret(self, name: str, value: str) -> None:
         """Set a secret value in the operator store (``POST /secrets/{name}``)."""
