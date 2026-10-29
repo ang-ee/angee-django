@@ -1,5 +1,4 @@
-"""Native Django behavior of emitted models, including the composition boundaries."""
-
+"""Angee history and resource contracts over native emitted models."""
 from __future__ import annotations
 
 import sys
@@ -13,16 +12,17 @@ from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.operations import CreateModel
 from django.db.migrations.state import ModelState, ProjectState
 from django.test.utils import isolate_apps
+from django_compose.model_composition import ModelComposition
+from django_compose.models import Composable
+from django_compose.rendering import render_models
 
 from angee.base.models.identity import SqidMixin
-from angee.compose.model_composition import ModelComposition
-from angee.compose.rendering import render_models
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
 from tests.tables import model_tables
 
 
-class HistorySource(HistoryMixin, models.Model):
+class HistorySource(HistoryMixin, Composable):
     """Plain Django tracking declares its capture manager at the model owner."""
 
     objects = AngeeHistoryUnscopedManager()
@@ -31,6 +31,7 @@ class HistorySource(HistoryMixin, models.Model):
         abstract = True
         app_label = "tests"
         base_manager_name = "objects"
+
 
 
 @pytest.fixture
@@ -70,7 +71,11 @@ def modules(monkeypatch: pytest.MonkeyPatch, tmp_path):
     return create, emit
 
 
-def source(module, name, label, *, bases=(models.Model,), meta=None, **body):
+
+def source(module, name, label, *, bases=(Composable,), meta=None, concrete=None, extends=None, inherits=None, **body):
+    keywords = {"extends": extends, "inherits": inherits}
+    if concrete is not None:
+        keywords["concrete"] = concrete
     model = type(
         name,
         bases,
@@ -79,259 +84,11 @@ def source(module, name, label, *, bases=(models.Model,), meta=None, **body):
             "Meta": type("Meta", (), {"abstract": True, "app_label": label, **(meta or {})}),
             **body,
         },
+        **keywords,
     )
     setattr(module, name, model)
     return model
 
-
-@isolate_apps()
-def test_native_donor_and_child_mro_fields_managers_and_meta(modules):
-    create, emit = modules
-    config, module = create("native_mro")
-
-    class ParentManager(models.Manager):
-        pass
-
-    class ChildQuerySet(models.QuerySet):
-        def active(self):
-            return self.filter(child="active")
-
-    Parent = source(
-        module,
-        "Parent",
-        config.label,
-        runtime=True,
-        title=models.CharField(max_length=32),
-        objects=ParentManager(),
-        description=lambda self: "parent",
-        meta={"ordering": ("title",)},
-    )
-    Child = source(
-        module,
-        "Child",
-        config.label,
-        runtime=True,
-        extends=f"{config.label}.Parent",
-        child=models.CharField(max_length=32),
-        objects=ChildQuerySet.as_manager(),
-        description=lambda self: "child",
-        meta={"ordering": ("title",)},
-    )
-    Donor = source(
-        module,
-        "Donor",
-        config.label,
-        extends=f"{config.label}.Child",
-        extra=models.IntegerField(default=0),
-        description=lambda self: "donor",
-        meta={
-            "constraints": [models.CheckConstraint(condition=models.Q(extra__gte=0), name="native_extra_nonnegative")]
-        },
-    )
-    composition = ModelComposition.discover((config,))
-    concrete = emit(composition)[config.label]
-    assert concrete.Child.__bases__ == (Donor, Child, concrete.Parent)
-    assert concrete.Child().description() == "donor"
-    assert concrete.Child._meta.parents == {concrete.Parent: concrete.Child._meta.get_field("parent_ptr")}
-    assert {field.name for field in concrete.Child._meta.local_fields} == {"parent_ptr", "child", "extra"}
-    assert concrete.Child._meta.get_field("title").model is concrete.Parent
-    assert type(concrete.Parent._default_manager) is ParentManager
-    assert concrete.Parent._base_manager._queryset_class is models.QuerySet
-    assert "_angee_base" not in concrete.Parent._meta.managers_map
-    assert isinstance(concrete.Child._default_manager.all(), ChildQuerySet)
-    assert concrete.Child._meta.ordering == ("title",)
-    assert [constraint.name for constraint in concrete.Child._meta.constraints] == ["native_extra_nonnegative"]
-    state = ModelState.from_model(concrete.Child)
-    assert state.bases == (f"{config.label}.parent", models.Model)
-    assert set(state.fields) == {"parent_ptr", "child", "extra"}
-    assert composition.models_by_label[f"{config.label}.parent"] is Parent
-
-
-@isolate_apps()
-def test_rendered_model_exports_donor_field_provenance(modules):
-    """Runtime metadata retains the composer-owned addon origin of copied fields."""
-
-    create, emit = modules
-    owner_config, owner_module = create("native_owner")
-    donor_config, donor_module = create("native_donor")
-    Root = source(
-        owner_module,
-        "Root",
-        owner_config.label,
-        runtime=True,
-        title=models.CharField(max_length=32),
-    )
-    source(
-        donor_module,
-        "RootExtension",
-        donor_config.label,
-        extends=f"{owner_config.label}.Root",
-        external_id=models.CharField(max_length=32, verbose_name="External ID"),
-    )
-
-    composition = ModelComposition.discover((owner_config, donor_config))
-    concrete = emit(composition)[owner_config.label].Root
-
-    assert composition.contributed_field_origins(Root) == (("external_id", donor_config.name),)
-    (field,) = composition.contributed_fields(Root)
-    assert field is donor_module.RootExtension._meta.get_field("external_id")
-    assert concrete.compose_contributed_field_origins == (("external_id", donor_config.name),)
-
-
-@isolate_apps()
-def test_direct_composition_requires_extension_donor_owners(modules):
-    """Direct callers cannot emit donor provenance without canonical addon identity."""
-
-    create, _emit = modules
-    config, module = create("native_direct_owner")
-    Root = source(module, "Root", config.label, runtime=True)
-    Donor = source(module, "Donor", config.label, extends=f"{config.label}.Root")
-
-    with pytest.raises(ImproperlyConfigured, match="Addon ownership is required"):
-        ModelComposition({config.label: (Root,)}, {Root._meta.label_lower: (Donor,)})
-
-
-@isolate_apps()
-def test_plain_abstract_declarations_are_selected_without_inherited_markers(modules):
-    create, _emit = modules
-    config, module = create("native_select")
-    Root = source(module, "Root", config.label, runtime=True, value=models.IntegerField())
-    Helper = source(module, "Helper", config.label, bases=(Root,))
-    Donor = source(module, "Donor", config.label, extends=f"{config.label}.Root")
-    source(module, "DonorHelper", config.label, bases=(Donor,))
-    module.Alias = Donor
-    composition = ModelComposition.discover((config,))
-    assert composition.ordered_models == (Root,)
-    assert composition.donors(Root) == (Donor,)
-    assert Helper not in composition.ordered_models
-
-
-@isolate_apps()
-def test_donor_class_keeps_its_own_body_and_cooperative_super(modules):
-    create, emit = modules
-    config, module = create("native_body")
-    exec(
-        """
-from django.db import models
-class Common(models.Model):
-    def describe(self):
-        return ["common"]
-    class Meta:
-        abstract = True
-        app_label = "native_body"
-class Root(Common):
-    runtime = True
-    class Meta:
-        abstract = True
-        app_label = "native_body"
-class Donor(Common):
-    extends = "native_body.Root"
-    @property
-    def marker(self):
-        return "donor"
-    def describe(self):
-        return ["donor", *super().describe()]
-    class Meta:
-        abstract = True
-        app_label = "native_body"
-""",
-        vars(module),
-    )
-    composition = ModelComposition.discover((config,))
-    Root = emit(composition)[config.label].Root
-    assert Root.__bases__ == (module.Donor, module.Root)
-    assert Root().describe() == ["donor", "common"]
-    assert Root().marker == "donor"
-
-
-@isolate_apps()
-def test_composition_rejects_additive_field_collisions_and_shared_parent_fields(modules):
-    create, _emit = modules
-    config, module = create("native_fields")
-    Root = source(module, "Root", config.label, runtime=True, value=models.IntegerField())
-    source(module, "Donor", config.label, extends=f"{config.label}.Root", value=models.IntegerField())
-    with pytest.raises(ImproperlyConfigured, match="composes field 'value'"):
-        ModelComposition.discover((config,))
-    del module.Donor
-    source(module, "Child", config.label, bases=(Root,), runtime=True, extends=f"{config.label}.Root")
-    with pytest.raises(ImproperlyConfigured, match="redeclares parent field 'value'"):
-        ModelComposition.discover((config,))
-
-
-@isolate_apps()
-def test_shared_abstract_fields_are_one_declaration(modules):
-    create, emit = modules
-    config, module = create("native_shared")
-    Common = source(module, "Common", config.label, value=models.IntegerField())
-    source(module, "Root", config.label, bases=(Common,), runtime=True)
-    source(module, "Donor", config.label, bases=(Common,), extends=f"{config.label}.Root")
-    concrete = emit(ModelComposition.discover((config,)))[config.label].Root
-    assert [field.name for field in concrete._meta.local_fields] == ["id", "value"]
-
-
-@isolate_apps()
-def test_shared_donor_field_keeps_one_native_declaration_without_exclusive_owner(modules):
-    create, emit = modules
-    config, module = create("native_shared_donors")
-    Common = source(module, "Common", config.label, value=models.IntegerField())
-    Root = source(module, "Root", config.label, runtime=True)
-    First = source(module, "First", config.label, bases=(Common,), extends=f"{config.label}.Root")
-    source(module, "Second", config.label, bases=(Common,), extends=f"{config.label}.Root")
-    composition = ModelComposition.discover((config,))
-    (field,) = composition.contributed_fields(Root)
-    assert field is First._meta.get_field("value")
-    assert field.model is First
-    assert composition.contributed_field_origins(Root) == ()
-    concrete = emit(composition)[config.label].Root
-    assert [field.name for field in concrete._meta.local_fields] == ["id", "value"]
-
-
-@isolate_apps()
-def test_cross_app_parent_cycle_fails_before_rendering(modules):
-    create, _emit = modules
-    left, left_module = create("native_left")
-    right, right_module = create("native_right")
-    source(left_module, "Left", left.label, runtime=True, extends=f"{right.label}.Right")
-    source(right_module, "Right", right.label, runtime=True, extends=f"{left.label}.Left")
-    with pytest.raises(ImproperlyConfigured, match="Cyclic materialized model parents"):
-        ModelComposition.discover((left, right))
-
-
-@isolate_apps()
-def test_final_composed_transition_metadata_is_validated(modules):
-    create, emit = modules
-    config, module = create("native_transitions")
-    exec(
-        """
-from django.db import models
-from angee.base.fields import StateField
-from angee.base.models.base import AngeeModel
-from angee.base.models.transitions import StateTransitions, transition, save_state
-class Status(models.TextChoices):
-    DRAFT = "draft", "Draft"
-    DONE = "done", "Done"
-class Root(AngeeModel):
-    runtime = True
-    status = StateField(choices_enum=Status, default=Status.DRAFT)
-    transitions = StateTransitions(status, {Status.DRAFT: [Status.DONE]})
-    @transition(status, source=Status.DRAFT, target=Status.DONE, on_success=save_state)
-    def finish(self):
-        pass
-    class Meta:
-        abstract = True
-        app_label = "native_transitions"
-class Child(models.Model):
-    runtime = True
-    extends = "native_transitions.Root"
-    class Meta:
-        abstract = True
-        app_label = "native_transitions"
-""",
-        vars(module),
-    )
-    composition = ModelComposition.discover((config,))
-    result = emit(composition)[config.label]
-    assert result.Child.finish is result.Root.finish
 
 
 @isolate_apps()
@@ -342,7 +99,8 @@ def test_cooperative_resource_hooks_visit_shared_ancestry_once(modules):
     exec(
         """
 from angee.resources.mixins import ResourceLoadMixin
-class Shared(ResourceLoadMixin):
+from django_compose.models import Composable
+class Shared(ResourceLoadMixin, Composable):
     @classmethod
     def after_resource_load(cls, instances, **options):
         events.append(("shared", cls, tuple(instances), options))
@@ -350,13 +108,11 @@ class Shared(ResourceLoadMixin):
     class Meta:
         abstract = True
         app_label = "native_hooks"
-class Root(Shared):
-    runtime = True
+class Root(Shared, concrete=True):
     class Meta:
         abstract = True
         app_label = "native_hooks"
-class ZFirst(Shared):
-    extends = "native_hooks.Root"
+class ZFirst(Shared, extends="native_hooks.Root"):
     @classmethod
     def after_resource_load(cls, instances, **options):
         events.append(("first", cls, tuple(instances), options))
@@ -364,8 +120,7 @@ class ZFirst(Shared):
     class Meta:
         abstract = True
         app_label = "native_hooks"
-class ASecond(Shared):
-    extends = "native_hooks.Root"
+class ASecond(Shared, extends="native_hooks.Root"):
     @classmethod
     def after_resource_load(cls, instances, **options):
         events.append(("second", cls, tuple(instances), options))
@@ -373,9 +128,7 @@ class ASecond(Shared):
     class Meta:
         abstract = True
         app_label = "native_hooks"
-class Child(ResourceLoadMixin):
-    runtime = True
-    extends = "native_hooks.Root"
+class Child(ResourceLoadMixin, Composable, inherits="native_hooks.Root"):
     @classmethod
     def after_resource_load(cls, instances, **options):
         events.append(("child", cls, tuple(instances), options))
@@ -395,12 +148,13 @@ class Child(ResourceLoadMixin):
     assert "after_resource_load" not in render_models(composition, config.label)
 
 
+
 @isolate_apps()
 def test_native_history_change_reason_fields_belong_to_each_historical_model(modules):
     create, emit = modules
     config, module = create("native_history_reasons")
     for name in ("First", "Second"):
-        source(module, name, config.label, bases=(HistorySource,), runtime=True)
+        source(module, name, config.label, bases=(HistorySource,), concrete=True)
 
     generated = emit(ModelComposition.discover((config,)))[config.label]
     histories = (generated.First.history.model, generated.Second.history.model)
@@ -411,6 +165,7 @@ def test_native_history_change_reason_fields_belong_to_each_historical_model(mod
         assert reason.model is history
         assert isinstance(reason, models.TextField)
         assert reason.null is True
+
 
 
 @isolate_apps()
@@ -427,7 +182,7 @@ def test_native_history_excludes_generated_fields_from_final_model(modules):
         config.label,
         bases=(HistorySource,),
         meta={"base_manager_name": "objects"},
-        runtime=True,
+        concrete=True,
         value=models.IntegerField(),
         doubled=models.GeneratedField(
             expression=models.F("value") * 2,
@@ -464,6 +219,7 @@ def test_native_history_excludes_generated_fields_from_final_model(modules):
     assert {field.name for field in history.tracked_fields} == {"id", "value"}
 
 
+
 @pytest.mark.django_db(transaction=True)
 def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modules):
     create, emit = modules
@@ -474,15 +230,14 @@ def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modul
         config.label,
         bases=(SqidMixin, HistorySource),
         meta={"base_manager_name": "objects"},
-        runtime=True,
+        concrete=True,
         title=models.CharField(max_length=32),
     )
     source(
         module,
         "Child",
         config.label,
-        runtime=True,
-        extends=f"{config.label}.Tracked",
+        inherits=f"{config.label}.Tracked",
         objects=AngeeHistoryUnscopedManager(),
         meta={"base_manager_name": "objects"},
         extra=models.IntegerField(default=0),
@@ -506,6 +261,7 @@ def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modul
         assert history.objects.count() == 3
 
 
+
 @isolate_apps()
 def test_native_history_mti_reference_has_a_migration_dependency(modules):
     create, emit = modules
@@ -515,7 +271,7 @@ def test_native_history_mti_reference_has_a_migration_dependency(modules):
         "Tracked",
         config.label,
         bases=(HistorySource,),
-        runtime=True,
+        concrete=True,
         title=models.CharField(max_length=32),
     )
     source(
@@ -523,8 +279,7 @@ def test_native_history_mti_reference_has_a_migration_dependency(modules):
         "Child",
         config.label,
         bases=(HistorySource,),
-        runtime=True,
-        extends=f"{config.label}.Tracked",
+        inherits=f"{config.label}.Tracked",
         extra=models.IntegerField(default=0),
     )
     generated = emit(ModelComposition.discover((config,)))[config.label]
@@ -572,146 +327,18 @@ def test_native_history_mti_reference_has_a_migration_dependency(modules):
     rendered.apps.get_model(config.label, "HistoricalChild")
 
 
-@isolate_apps()
-def test_acyclic_models_with_cyclic_generated_modules_fail_before_rendering(modules):
-    create, _emit = modules
-    left, left_module = create("native_module_left")
-    right, right_module = create("native_module_right")
-    source(left_module, "A1", left.label, runtime=True)
-    source(right_module, "B1", right.label, runtime=True)
-    source(left_module, "A2", left.label, runtime=True, extends=f"{right.label}.B1")
-    source(right_module, "B2", right.label, runtime=True, extends=f"{left.label}.A1")
-    source(left_module, "A3", left.label, runtime=True, extends=f"{right.label}.B2")
-    source(right_module, "B3", right.label, runtime=True, extends=f"{left.label}.A2")
-    with pytest.raises(ImproperlyConfigured, match="Cyclic generated model modules"):
-        ModelComposition.discover((left, right))
-
-
-@isolate_apps()
-def test_final_composition_rejects_a_donor_transition_outside_the_owner_graph(modules):
-    create, emit = modules
-    config, module = create("native_bad_transition")
-    exec(
-        """
-from django.db import models
-from angee.base.fields import StateField
-from angee.base.models.base import AngeeModel
-from angee.base.models.transitions import StateTransitions, transition
-class Status(models.TextChoices):
-    DRAFT = "draft", "Draft"
-    DONE = "done", "Done"
-    PAUSED = "paused", "Paused"
-class Root(AngeeModel):
-    runtime = True
-    status = StateField(choices_enum=Status, default=Status.DRAFT)
-    transitions = StateTransitions(status, {Status.DRAFT: [Status.DONE]})
-    class Meta:
-        abstract = True
-        app_label = "native_bad_transition"
-class Donor(models.Model):
-    extends = "native_bad_transition.Root"
-    @transition(Root._meta.get_field("status"), source=Status.DRAFT, target=Status.PAUSED)
-    def pause(self):
-        pass
-    class Meta:
-        abstract = True
-        app_label = "native_bad_transition"
-""",
-        vars(module),
-    )
-    composition = ModelComposition.discover((config,))
-    with pytest.raises(ImproperlyConfigured, match="paused"):
-        emit(composition)
-
-
-@isolate_apps()
-def test_concrete_extension_donor_is_rejected_without_changing_plain_django_models(modules):
-    create, _emit = modules
-    config, module = create("native_concrete")
-    source(module, "Ordinary", config.label, meta={"abstract": False})
-    assert ModelComposition.discover((config,)).ordered_models == ()
-    source(module, "Donor", config.label, meta={"abstract": False}, extends=f"{config.label}.Ordinary")
-    with pytest.raises(ImproperlyConfigured, match="must be abstract"):
-        ModelComposition.discover((config,))
-
-
-@pytest.mark.parametrize("indirect", [False, True])
-@isolate_apps()
-def test_required_parent_validates_native_parent_chain_without_changing_fields(modules, indirect):
-    create, emit = modules
-    config, module = create("native_required_parent")
-    Parent = source(module, "Parent", config.label, runtime=True, title=models.CharField(max_length=32))
-    Middle = source(module, "Middle", config.label, runtime=True, extends=f"{config.label}.Parent")
-    Capability = source(module, "Capability", config.label, requires_parent=f"{config.label}.Parent")
-    Child = source(
-        module, "Child", config.label, bases=(Capability,), runtime=True,
-        extends=f"{config.label}.{'Middle' if indirect else 'Parent'}", count=models.IntegerField(),
-    )
-    composition = ModelComposition.discover((config,))
-    assert composition.required_parents == {Capability: Parent}
-    concrete = emit(composition)[config.label]
-    assert not issubclass(Capability, Parent)
-    assert Child.__bases__ == (Capability,)
-    assert issubclass(concrete.Child, concrete.Parent)
-    assert {field.name for field in concrete.Child._meta.local_fields} == {
-        "middle_ptr" if indirect else "parent_ptr", "count",
-    }
-    assert concrete.Child._meta.get_field("title").model is concrete.Parent
-    assert composition.parent(Child) is (Middle if indirect else Parent)
-
-
-@pytest.mark.parametrize(
-    ("required", "parent", "message"),
-    [
-        ("Parent", None, "requires parent"),
-        ("Parent", "Other", "requires parent"),
-        ("Missing", "Parent", "references unknown model"),
-        (123, "Parent", "requires_parent must be a string"),
-        ("invalid", "Parent", "requires_parent must be an 'app_label.ModelName' reference"),
-    ],
-)
-@isolate_apps()
-def test_required_parent_rejects_invalid_materialized_contract(modules, required, parent, message):
-    create, _emit = modules
-    config, module = create("native_bad_requirement")
-    source(module, "Parent", config.label, runtime=True)
-    source(module, "Other", config.label, runtime=True)
-    reference = f"{config.label}.{required}" if required in ("Parent", "Missing") else required
-    Capability = source(module, "Capability", config.label, requires_parent=reference)
-    source(
-        module, "Child", config.label, bases=(Capability,), runtime=True,
-        **({"extends": f"{config.label}.{parent}"} if parent is not None else {}),
-    )
-    with pytest.raises(ImproperlyConfigured, match=message):
-        ModelComposition.discover((config,))
-
-
-@isolate_apps()
-def test_required_parent_applies_to_donors_and_leaves_undeclared_mixins_unchanged(modules):
-    create, _emit = modules
-    config, module = create("native_donor_requirement")
-    Parent = source(module, "Parent", config.label, runtime=True)
-    Child = source(module, "Child", config.label, runtime=True, extends=f"{config.label}.Parent")
-    Plain = source(module, "Plain", config.label)
-    source(module, "PlainChild", config.label, bases=(Plain,), runtime=True)
-    Capability = source(module, "Capability", config.label, requires_parent=f"{config.label}.Parent")
-    source(module, "Extension", config.label, bases=(Capability,), extends=f"{config.label}.Child")
-    composition = ModelComposition.discover((config,))
-    assert composition.required_parents == {Capability: Parent}
-    assert composition.parent(Child) is Parent
-    assert not issubclass(Capability, Parent)
-
 
 @isolate_apps()
 def test_native_history_refuses_an_explicit_uncaptured_base_manager(modules):
     create, emit = modules
     config, module = create("native_uncaptured_history")
     source(
-        module, "Uncaptured", config.label, bases=(HistoryMixin, models.Model), runtime=True,
+        module, "Uncaptured", config.label, bases=(HistoryMixin, Composable), concrete=True,
         objects=models.Manager(), meta={"base_manager_name": "objects"},
     )
     with pytest.raises(ImproperlyConfigured, match="history-capable base manager"):
         emit(ModelComposition.discover((config,)))
+
 
 
 @isolate_apps()
@@ -719,7 +346,7 @@ def test_native_history_refuses_an_uncaptured_default_manager_with_a_captured_ba
     create, emit = modules
     config, module = create("native_uncaptured_default_history")
     source(
-        module, "UncapturedDefault", config.label, bases=(HistoryMixin, models.Model), runtime=True,
+        module, "UncapturedDefault", config.label, bases=(HistoryMixin, Composable), concrete=True,
         objects=models.Manager(), _angee_base=AngeeHistoryUnscopedManager(),
         meta={"base_manager_name": "_angee_base", "default_manager_name": "objects"},
     )
