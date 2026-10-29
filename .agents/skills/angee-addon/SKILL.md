@@ -38,7 +38,7 @@ wires declarations only; the reference example throughout is `examples/addons/ex
 - `defineBaseAddon`, `resourcePageRoutes` (`packages/app/src/define-base-addon.ts:162,66`), `createNamespaceT`
   (`packages/ui/src/i18n/index.ts:45`), `expectValidBaseAddon` (`packages/app/src/testing.tsx:101`),
   `defineAngeeWebVitestConfig` (`packages/app/config/vitest.ts:90`) own fragment composition.
-- Start a fragment from `templates/addons/web` (Copier), not from an older addon ([frontend pitfalls](../../../docs/frontend/guidelines.md#pitfalls)).
+- Start an addon from `templates/addons/web` (Copier: manifest, model, gate, schema, demo row, test model, test and, with `include_web`, the fragment under `web/`), not from an older addon ([web build pitfalls](../angee-framework/references/web-pitfalls.md)).
 
 ## Steps
 
@@ -127,8 +127,8 @@ wires declarations only; the reference example throughout is `examples/addons/ex
    **Owner rule:** [source-addon test models](../../../docs/checks.md#source-addon-test-models) own
    adoption; never register a second concrete model for a resource type.
 
-6. **Register the web fragment** (only when the addon renders). Render `templates/addons/web` with `addon_id=<label>`,
-   then adapt. `web/package.json`: name `@angee/<label>` (framework) or `@<ns>/<label>-web` (notes:
+6. **Register the web fragment** (only when the addon renders). `templates/addons/web` rendered with `addon_id=<label>`
+   and `include_web=true` emits it under `web/`; then adapt. `web/package.json`: name `@angee/<label>` (framework) or `@<ns>/<label>-web` (notes:
    `@angee-example/notes-web`), private, `exports: { ".": "./src/index.tsx" }`, `@angee/app` and `@angee/ui` as `workspace:*`.
 
    ```tsx
@@ -211,6 +211,6 @@ addons/angee/money/apps.py:17-30; addons/angee/tags/{addon.toml,testing/models.p
 packages/app/src/{define-base-addon.ts:20,66,124,162,testing.tsx:101,architecture-guardrails.test.ts:231,774}; packages/app/config/vitest.ts:90;
 packages/ui/src/i18n/index.ts:45; packages/app/bin/angee-web-codegen.mjs:60-110; tests/settings.py:29,71,144; tests/conftest.py:645; tests/test_addons.py:95;
 pyproject.toml:205-208; templates/addons/web/template/**; templates/stacks/dev/template/pnpm-workspace.yaml.jinja.
-Doc gaps: no addon.toml key reference in docs/; no Python addon template (templates/addons has only web/); no pnpm-workspace registration guide.
+Doc gaps: no addon.toml key reference in docs/; no pnpm-workspace registration guide.
 Mismatches: tags/apps.py and notes/apps.py do not exist (auto-created configs); notes/web ships no index.test.ts or vitest.config.ts (the template renders both).
 -->

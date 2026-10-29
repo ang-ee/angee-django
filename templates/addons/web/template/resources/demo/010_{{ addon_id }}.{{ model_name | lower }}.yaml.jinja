@@ -1,0 +1,13 @@
+# Demo {{ model_name | lower }} rows (demo tier). The owner xref resolves through the
+# iam demo users this file depends on in addon.toml; idempotency is the resource
+# ledger's (source_addon, xref) identity.
+_meta:
+  model: {{ addon_id }}.{{ model_name }}
+rows:
+  - xref: welcome
+    fields:
+      title: Welcome to {{ addon_title | lower }}
+      body: This {{ model_name | lower }} is loaded from a demo resource file.
+      owner: iam.user_alice
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

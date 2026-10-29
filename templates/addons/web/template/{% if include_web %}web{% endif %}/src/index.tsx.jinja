@@ -7,17 +7,19 @@ import {
 
 const addon = defineBaseAddon({
   id: "{{ addon_id }}",
+  // The route claims the canonical `<label>.<Model>` resource label: durable
+  // manifests never store a bare model name.
   routes: resourcePageRoutes(
-    "{{ addon_id }}.{{ resource_name | lower }}",
+    "{{ addon_id }}.{{ model_name | lower }}",
     "{{ route_path }}",
-    lazyRouteComponent(() => import("./views/{{ resource_name }}Page"), "{{ resource_name }}Page"),
-    "{{ resource_name }}",
+    lazyRouteComponent(() => import("./views/{{ model_name }}Page"), "{{ model_name }}Page"),
+    "{{ addon_id }}.{{ model_name }}",
   ),
   menus: {
     "{{ addon_id }}": {
       label: "{{ addon_title }}",
       icon: "file",
-      route: "{{ addon_id }}.{{ resource_name | lower }}",
+      route: "{{ addon_id }}.{{ model_name | lower }}",
     },
   },
   i18n: {

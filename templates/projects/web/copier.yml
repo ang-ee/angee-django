@@ -5,11 +5,14 @@ _templates_suffix: .jinja
 # template may chain this project at its own root, but keeps the stack's answers in
 # `.copier-answers.stack.yml`; either way the root is the project.
 _answers_file: .copier-answers.yml
+# The rendered CLAUDE.md is a symlink to AGENTS.md, as in the stack templates.
+_preserve_symlinks: true
 
 _angee:
   schema: 1
   kind: project
   name: web
+  include_root: ".."  # the root AGENTS.md body lives in ../_shared so a stack root can include it too
   description: >-
     Full host scaffold for a downstream Angee project: manage.py, pyproject.toml
     (uv owns framework resolution, so `uv run manage.py` works bare from the

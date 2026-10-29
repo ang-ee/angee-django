@@ -45,6 +45,10 @@ DEV_PACKAGE_TEMPLATE = DEV_TEMPLATE.with_name("package.json.jinja")
 DEV_TEMPLATES_SYMLINK = DEV_TEMPLATE.with_name("templates")
 SHARED_BODY = ROOT / "templates" / "stacks" / "_shared" / "stack-body.yaml.jinja"
 SHARED_AGENTS = ROOT / "templates" / "stacks" / "_shared" / "AGENTS.md.jinja"
+PROJECT_COPIER = ROOT / "templates" / "projects" / "web" / "copier.yml"
+PROJECT_AGENTS_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template" / "AGENTS.md.jinja"
+PROJECT_CLAUDE_TEMPLATE = PROJECT_AGENTS_TEMPLATE.with_name("CLAUDE.md")
+PROJECT_SHARED_AGENTS = ROOT / "templates" / "projects" / "_shared" / "AGENTS.md.jinja"
 PNPM_LOCK = ROOT / "pnpm-lock.yaml"
 PROJECT_GITIGNORE = ROOT / "templates" / "projects" / "web" / "template" / ".gitignore.jinja"
 PROJECT_PYPROJECT_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template" / "pyproject.toml.jinja"
@@ -669,6 +673,13 @@ def test_both_stacks_render_shared_root_agent_instructions() -> None:
     ):
         assert contract in instructions
 
+    # The stack overlay overwrites the project's root AGENTS.md, so the stack contract
+    # ends by including the project host body the project template renders on its own.
+    assert SHARED_AGENTS.read_text(encoding="utf-8").rstrip().endswith(
+        '{% include "../../projects/_shared/AGENTS.md.jinja" %}'
+    )
+    assert _inline_includes(DEV_AGENTS_TEMPLATE).count("# Angee Project Host") == 1
+
     for agents_template, restart_job in ((DEV_AGENTS_TEMPLATE, "deps"), (LOCAL_AGENTS_TEMPLATE, "runtime-build")):
         include = f'{{% include "../_shared/AGENTS.md.jinja" with restart_job="{restart_job}" %}}'
         assert agents_template.read_text(encoding="utf-8").strip() == include
@@ -680,6 +691,36 @@ def test_both_stacks_render_shared_root_agent_instructions() -> None:
     for copier_path in (DEV_COPIER, LOCAL_COPIER):
         copier = yaml.safe_load(copier_path.read_text(encoding="utf-8"))
         assert copier["_preserve_symlinks"] is True
+
+
+def test_project_template_renders_root_agent_instructions() -> None:
+    """A project root teaches agents its roster owner, seams, lifecycle owner and skills."""
+
+    body = PROJECT_SHARED_AGENTS.read_text(encoding="utf-8")
+    assert len(body.splitlines()) <= 50
+    assert "{% include" not in body  # included from two template roots: no nested include
+    instructions = " ".join(body.split())
+    for contract in (
+        "# Angee Project Host",
+        "`INSTALLED_APPS` in `settings.yaml` is the roster and the only place it is declared",
+        "`{{ addon_namespace }}.<name>` under `addons/{{ addon_namespace }}/<name>/`",
+        "the arpee slot's `arp.*` addons",
+        "`addon.toml` (identity, `depends_on`, resource tiers)",
+        "`web/` fragment declared with `defineBaseAddon`",
+        "The stack owning this root provisions and restarts it",
+        "stop and ask the user how the stack should be set up",
+        "`angee-project`",
+        "`angee-runtime`",
+    ):
+        assert contract in instructions
+
+    assert PROJECT_AGENTS_TEMPLATE.read_text(encoding="utf-8").strip() == '{% include "../_shared/AGENTS.md.jinja" %}'
+    assert _inline_includes(PROJECT_AGENTS_TEMPLATE).strip() == body.strip()
+    assert PROJECT_CLAUDE_TEMPLATE.is_symlink()
+    assert PROJECT_CLAUDE_TEMPLATE.readlink() == Path("AGENTS.md")
+    copier = yaml.safe_load(PROJECT_COPIER.read_text(encoding="utf-8"))
+    assert copier["_preserve_symlinks"] is True
+    assert PROJECT_SHARED_AGENTS.is_relative_to((PROJECT_COPIER.parent / copier["_angee"]["include_root"]).resolve())
 
 
 # --- local (docker) contracts --------------------------------------------------

@@ -1,0 +1,24 @@
+// Authorization schema for the {{ addon_id }} addon.
+// @rebac_package: {{ addon_id }}
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+definition {{ addon_id }}/{{ model_name | lower }} {
+    // The owner column (OwnerMixin) backs this relation: no stored tuple.
+    relation owner: auth/user // rebac:field=owner
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+
+    // Universal-admin reach without a per-row grant: a const-backed relation
+    // points every row at the platform admin role.
+    relation admin: angee/role // rebac:const=admin
+
+    // Any signed-in principal may create through normal app surfaces.
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission share  = owner + editor + admin->member
+    permission delete = owner + admin->member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
+}

@@ -1,0 +1,18 @@
+"""Concrete {{ addon_title | lower }} composition for the bare-Django test host.
+
+This package is the bare-host registration contract of ``{{ addon_name }}``; it
+exists only because the bare host runs no composer. Register it once in the
+framework repository that hosts the suite:
+
+- list ``"{{ addon_name }}"`` in ``tests/settings.py`` ``INSTALLED_APPS``;
+- import ``{{ addon_name }}.testing.models`` once from ``tests/conftest.py``
+  (``# noqa: F401``), after the modules that register its foreign-key targets
+  and before database setup;
+- move the rendered ``test_{{ addon_id }}.py`` from the addon root to the
+  repository's ``tests/test_{{ addon_id }}.py``: pytest ``testpaths`` collects
+  the repository ``tests``, never an addon folder.
+
+Serving code never depends on this test support, and the composed runtime
+emits its own concrete models: never register a second concrete model for a
+resource type.
+"""

@@ -49,6 +49,12 @@ def test_native_project_render_resolves_framework_source_inputs(tmp_path: Path, 
         arguments.extend(["--template", str(template)])
     result = subprocess.run(arguments, cwd=tmp_path, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
+    instructions = (target / "AGENTS.md").read_text()
+    assert "# Angee Project Host" in instructions
+    assert "`INSTALLED_APPS` in `settings.yaml` is the roster" in instructions
+    # A chained stack overlays its own root AGENTS.md, which carries the project body.
+    assert ("# Angee Stack Root" in instructions) is (framework is not None)
+    assert (target / "CLAUDE.md").readlink() == Path("AGENTS.md")
     settings = yaml.safe_load((target / "settings.yaml").read_text())
     project = tomllib.loads((target / "pyproject.toml").read_text())
     if framework == "baked":

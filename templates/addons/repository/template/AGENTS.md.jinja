@@ -1,0 +1,88 @@
+# AGENTS.md
+
+This repository holds the **Angee consumer addons** of {{ repository_title }}:
+`addons/{{ addon_namespace }}/<name>` is the `{{ addon_namespace }}.<name>` addon. It
+is a source slot the owning stack materializes, not a stack or a Django project:
+the stack owns `angee.yaml`, `settings.yaml`, `manage.py`, `pyproject.toml`, the
+Python and JS environments, composition, migrations, SDL and codegen. Never run
+`angee init`, `pnpm install` or `uv sync` here, and never `git checkout` or
+`git switch` inside this slot; the parent stack and workspace `AGENTS.md` own
+lifecycle and branches.
+
+## Consumer Scope
+
+The framework's `AGENTS.md` (the `angee` slot beside this one, or the
+`django-angee` checkout the stack resolves) owns the constitution and the
+Architecture Gate. These rules are its consumer application, not a second set:
+
+- **Declared seams only.** An addon composes the framework through `addon.toml`
+  (`depends_on`, resource tiers), models on `angee.base` bases, `permissions.zed`
+  and `permissions.extends.zed`, `schema.py` buckets with type and input
+  extensions, `resources/<tier>/` rows, `autoconfig.py` fragments,
+  `ImplClassField` implementations, and a `web/` fragment declared with
+  `defineBaseAddon`.
+- **No framework edits.** A missing or insufficient framework primitive is fixed
+  at its owner in the framework checkout (`angee-framework`), never patched or
+  copied here; this repository holds no `angee.*` addon.
+- **No monkey-patching composed models.** Never probe a foreign object's shape or
+  mutate another addon's composed model class, schema or registry at import time;
+  extend through `extends`, extension types, containers and declared hooks.
+- **Product vocabulary stays in the addon.** Product names, states, roles and copy
+  belong to the owning `{{ addon_namespace }}.*` addon's manifest, models,
+  `permissions.zed`, resources and i18n namespace (`== label`); the framework and
+  its base addons never learn them.
+- Generated `runtime/`, `@angee/gql/*` and SDL live at the consuming stack; they
+  are never edited or committed here.
+
+## Builder Role
+
+An agent working here is the product builder: it turns one product requirement
+into one addon's declarations — model, permissions, schema, resources, forms,
+pages and the tests beside each — by composing framework owners and upstream
+libraries rather than re-implementing them, keeping every fact at its owning
+level, and reporting the exact framework gap (owner and required fix) whenever a
+seam is missing instead of working around it in the addon.
+
+## Skill Route
+
+Skills are files read by explicit path from the framework checkout (`../angee/`,
+the slot beside this one in a workspace): each framework skill is
+`../angee/.agents/skills/<skill>/SKILL.md`, and a capability addon's own guide
+is `../angee/addons/angee/<addon>/skills/<guide>/SKILL.md` (for example
+`jobs-tasks` at `../angee/addons/angee/jobs/skills/jobs-tasks/SKILL.md`). No
+harness discovers these on its own: read each step's file before that step.
+
+1. [`angee-design`](../angee/.agents/skills/angee-design/SKILL.md) — the
+   Architecture Gate: facts, owners, level, owner map.
+2. [`angee-addon`](../angee/.agents/skills/angee-addon/SKILL.md) — folder,
+   `addon.toml`, app label, fragment; render a new addon from the framework's
+   `templates/addons/web` Copier template into `addons/{{ addon_namespace }}/<name>/`
+   with `addon_name={{ addon_namespace }}.<name>` and the default
+   `test_host=composed` (consumer tests read the composed model through
+   `apps.get_model`; `testing/models.py` is a framework-addon artifact).
+3. [`angee-models`](../angee/.agents/skills/angee-models/SKILL.md) +
+   [`angee-permissions`](../angee/.agents/skills/angee-permissions/SKILL.md) —
+   the model and its REBAC gate.
+4. [`angee-graphql`](../angee/.agents/skills/angee-graphql/SKILL.md) +
+   [`angee-resources`](../angee/.agents/skills/angee-resources/SKILL.md) —
+   schema exposure and seed or demo rows.
+5. [`angee-forms`](../angee/.agents/skills/angee-forms/SKILL.md) +
+   [`angee-pages`](../angee/.agents/skills/angee-pages/SKILL.md) — forms,
+   widgets and console pages.
+   [`angee-tests`](../angee/.agents/skills/angee-tests/SKILL.md) authors the
+   tests beside each artifact of steps 2 to 5.
+6. [`angee-project`](../angee/.agents/skills/angee-project/SKILL.md) — enable
+   the addon in the stack's `settings.yaml` and host web package.
+7. [`angee-runtime`](../angee/.agents/skills/angee-runtime/SKILL.md) — build,
+   migrate, provision and restart through the operator.
+8. Acceptance — browser verification plus the checks below;
+   [`slice`](../angee/.agents/skills/slice/SKILL.md) when the user asks for the
+   reviewed loop.
+
+## Checks
+
+Commands, execution roots and CI coverage are owned by the framework's
+[`docs/checks.md`](../angee/docs/checks.md). Python checks run from the stack
+root against this slot's `addons/`; web checks run from the stack workspace that
+holds the JS install; a lane without a host, database or JS install runs only
+the focused Python checks and reports the rest as not run.

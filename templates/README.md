@@ -10,7 +10,7 @@ copy of each one.
 | dir | kind | renders |
 |-----|------|---------|
 | `projects/` | `project` | a downstream host repo — `manage.py`, `settings.yaml`, the consumer-addon namespace, the web package; owns the project root |
-| `addons/` | `addon` | a source addon package, including the frontend manifest, i18n, tests, and package wiring |
+| `addons/` | `addon` | `web`: one complete source addon into `addons/<ns>/<label>/` — `addon.toml`, the abstract model and its ownership gate, `schema.py`, a demo resource row, a per-actor test under the addon's `tests/` (composed host, the default), and (optionally) the web fragment; `test_host=bare` instead renders the concrete bare-host test model and a `test_<label>.py` to move into the framework repository's `tests/`; `repository`: the root of a consumer addon repository — `AGENTS.md`, `CLAUDE.md`, the `addons/<ns>/` namespace. The operator lists but does not render addon templates; render them with Copier |
 | `stacks/` | `stack` | a runnable `angee.yaml` the operator brings up on docker-compose / process-compose |
 | `workspaces/` | `workspace` | a set of sources + agentic config, materialized as files |
 | `services/` | `service` | one long-running service added to a stack |
@@ -64,7 +64,10 @@ Before initializing either layout, check for an existing current or ancestor
 `angee.yaml`. If one exists, it owns the checkout; never initialize a stack
 under a source checkout. Both templates render the same root `AGENTS.md`
 contract so code agents retain that ownership rule while working below
-`sources/` or `workspaces/`.
+`sources/` or `workspaces/`. That stack contract ends by including the project
+host body (`projects/_shared/AGENTS.md.jinja`) that `projects/web` renders on
+its own at a standalone project root: the stack overlay overwrites the project's
+`AGENTS.md` at the shared root, so the stack file carries both sections.
 
 ### Connect framework-dev stacks to shared PostgreSQL and Redis servers
 
