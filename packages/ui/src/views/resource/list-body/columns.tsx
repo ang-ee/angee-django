@@ -166,6 +166,7 @@ function resolvedCellContent<TRow extends Row>(
           options: column.options,
           tone: column.tone,
           ...(column.currencyField ? { currencyField: column.currencyField } : {}),
+          ...(column.fractionDigitsField ? { fractionDigitsField: column.fractionDigitsField } : {}),
           ...(column.statusDisplay ? { statusDisplay: column.statusDisplay } : {}),
         }}
         readOnly

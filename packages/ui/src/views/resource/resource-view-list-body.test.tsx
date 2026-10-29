@@ -15,6 +15,7 @@ import { AppRuntimeProvider, createRouteHref } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { WidgetRenderProps } from "../../widgets";
 import { columnsWithMetadataDefaults } from "./model-metadata-defaults";
+import { Column, parsePageColumns } from "../page";
 
 import {
   buildColumns,
@@ -180,6 +181,24 @@ test("renders metadata enum labels in the normal list-cell path", () => {
   const metadata = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
   render(<ListCellContent column={{ field: "status" }} row={{ status: "PENDING" }} metadata={metadata} />);
   expect(screen.getByText("Needs approval")).toBeTruthy();
+});
+
+test("passes declared company precision through column parsing to the cell widget", () => {
+  const renderMoney = vi.fn(({ field }: WidgetRenderProps) => <span>{field?.fractionDigitsField}</span>);
+  const [column] = parsePageColumns(<Column field="amount" widget="test.money" fractionDigitsField="company.display_places" />);
+  const row = { amount: "123.456", company: { display_places: 3 } };
+  render(
+    <AppRuntimeProvider runtime={{ widgets: {
+      "test.money": { read: renderMoney, cell: renderMoney },
+    } }}>
+      <ListCellContent column={column!} row={row} />
+    </AppRuntimeProvider>,
+  );
+
+  expect(screen.getByText("company.display_places")).toBeTruthy();
+  expect(renderMoney.mock.calls[0]?.[0]).toMatchObject({
+    value: "123.456", row, field: { name: "amount", fractionDigitsField: "company.display_places" },
+  });
 });
 
 test("passes a column's status display to its cell widget", () => {

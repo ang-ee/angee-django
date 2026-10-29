@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { QueryField, RelationRepresentationSelection } from "@angee/metadata";
 import type { Tone } from "../../lib/tones";
-import type { StatusDisplay, WidgetOption } from "../../widgets/types";
+import type { FieldPresentation, StatusDisplay, WidgetOption } from "../../widgets/types";
 
 import { PAGE_ELEMENT_SLOT } from "./types";
 
@@ -14,7 +14,7 @@ export type ColumnAggregate =
   | "max"
   | (string & {});
 
-export interface ColumnProps<TRow extends object = Record<string, unknown>> {
+export interface ColumnProps<TRow extends object = Record<string, unknown>> extends Pick<FieldPresentation, "fractionDigitsField"> {
   field: string;
   /** Native table identity when multiple presentations select the same field. */
   id?: string;
@@ -50,7 +50,7 @@ export interface ColumnProps<TRow extends object = Record<string, unknown>> {
 
 export interface ColumnDescriptor<
   TRow extends object = Record<string, unknown>,
-> {
+> extends Pick<FieldPresentation, "fractionDigitsField"> {
   field: string;
   /** Native table identity retained when metadata projects a relation's display path. */
   id?: string;

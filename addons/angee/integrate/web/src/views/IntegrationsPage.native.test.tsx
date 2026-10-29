@@ -45,7 +45,10 @@ vi.mock("./IntegrationsPage", async (importOriginal) => ({
 }));
 
 import integrate from "../index";
+import provenance from "@angee/provenance";
+import timeline from "../../../../timeline/web/src";
 import { concreteIntegrationHref } from "./IntegrationsPage";
+import { RECORD_LINK_MODEL } from "../RecordSourcesPane";
 
 const mounts: { root: Root; host: HTMLElement }[] = [];
 beforeEach(() => {
@@ -71,11 +74,11 @@ function Links() {
 function mountApp(childRouted = true) {
   const resources = [
     "integrate.Integration", "integrate.Vendor", "integrate.WebhookSubscription", "integrate.OAuthClient",
-    "integrate.ExternalAccount", "integrate.Credential", "example.RecordBridge", "notes.Note",
+    "integrate.ExternalAccount", "integrate.Credential", RECORD_LINK_MODEL, "example.RecordBridge", "notes.Note",
   ].map((model) => testDataResource(model));
   history.replaceState(null, "", "/start");
   const app = createApp({
-    addons: [integrate, {
+    addons: [timeline, provenance, integrate, {
       id: "example",
       routes: [
         { name: "example.start", path: "/start", component: Links },

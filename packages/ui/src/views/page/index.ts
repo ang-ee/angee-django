@@ -220,6 +220,7 @@ function columnDescriptor<TRow extends object = Record<string, unknown>>(
     ...(props.tone !== undefined ? { tone: props.tone } : {}),
     ...(props.subline !== undefined ? { subline: props.subline } : {}),
     ...(props.currencyField !== undefined ? { currencyField: props.currencyField } : {}),
+    ...(props.fractionDigitsField !== undefined ? { fractionDigitsField: props.fractionDigitsField } : {}),
     ...(props.statusDisplay !== undefined ? { statusDisplay: props.statusDisplay } : {}),
   }));
 }

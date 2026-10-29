@@ -50,6 +50,8 @@ vi.mock("@angee/ui", async (importOriginal) => {
 });
 
 import integrate from "./index";
+import provenance from "@angee/provenance";
+import timeline from "../../../timeline/web/src";
 import { IntegrationSyncStream } from "./documents";
 import { INTEGRATION_MODEL } from "./IntegrationLifecycleActions";
 import {
@@ -81,7 +83,7 @@ const resources = [...[INTEGRATION_MODEL, "messaging.Channel", CHILD_MODEL].map(
 
 const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://integration-streams" });
 const STREAMS_ADDRESS = `${INTEGRATION_MODEL}#sections`;
-const composedContainers = composeAddons([integrate], { canonicalModelLabel: (model) => model }).containers;
+const composedContainers = composeAddons([timeline, provenance, integrate], { canonicalModelLabel: (model) => model }).containers;
 // Only integrate's Streams section: its lifecycle verbs are not this suite's subject.
 const containers = { ...composedContainers, children: { [STREAMS_ADDRESS]: composedContainers.children[STREAMS_ADDRESS] ?? [] } };
 const CursorSummary = integrationSyncCursorWidget.read;
