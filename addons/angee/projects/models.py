@@ -7,6 +7,7 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
 from enum import StrEnum
 from typing import Any, ClassVar, Self, cast
 
+from angee.base.serialization import strip_null_bytes
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
@@ -15,6 +16,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connections, models, router, transaction
 from django.db.models import F, Q
 from django.utils import timezone
+from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
     current_actor,
@@ -57,7 +59,6 @@ from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryMergeableUnscopedQuerySet, AngeeHistoryQuerySet
 from angee.scheduling.fields import RecurrenceField
-from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
 
 
@@ -507,10 +508,10 @@ class Project(
     ThreadedModelMixin,
     HistoryMixin,
     AngeeDataModel,
+    concrete=True,
 ):
     """A bounded endeavor whose access is owned by direct ReBAC grants."""
 
-    runtime = True
     sqid_prefix = "prj_"
     history_relations = ("milestones",)
     rebac_grantable = {"reader": "share", "editor": "share"}
@@ -848,10 +849,9 @@ class _MilestoneManager[MilestoneT: Milestone](_MilestoneManagerBase[MilestoneT]
     """Preserve the native milestone scheduling queryset on manager reads."""
 
 
-class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
+class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
     """A named marker reached within one project."""
 
-    runtime = True
     sqid_prefix = "mls_"
     immutable_fields = ("reached_at", "reached_by_id")
 
@@ -960,13 +960,12 @@ class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMi
             raise ValidationError("A reached milestone cannot be deleted.")
 
 
-class ActivityType(AuditMixin, AngeeDataModel):
+class ActivityType(AuditMixin, AngeeDataModel, concrete=True):
     """Resource-declared kinds of record task; tasks keep the stable key."""
 
     DEFAULT_KEY: ClassVar[str] = "todo"
     """The plain to-do projects seeds: a record task's kind when none is named."""
 
-    runtime = True
     sqid_prefix = "act_"
     key = models.SlugField(max_length=64, unique=True)
     name = models.CharField(max_length=160)
@@ -1002,12 +1001,12 @@ class Task(
     ThreadedModelMixin,
     HistoryMixin,
     AngeeDataModel,
+    concrete=True,
 ):
     """The platform's one table for a discrete human action."""
 
     _angee_base = TaskBaseManager()
 
-    runtime = True
     sqid_prefix = "tsk_"
     MERGED_PERMISSION = "write"
     retains_merged = True
@@ -1695,10 +1694,9 @@ class Task(
                     raise ValidationError({"milestone": "Milestone must belong to the task's project."})
 
 
-class TaskRelation(HistoryMixin, AuditMixin, AngeeDataModel):
+class TaskRelation(HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
     """One canonical directed relation between two tasks."""
 
-    runtime = True
     sqid_prefix = "trl_"
 
     class TaskRelationKind(models.TextChoices):
@@ -1785,10 +1783,9 @@ class TaskRelation(HistoryMixin, AuditMixin, AngeeDataModel):
         return f"{self.task_id} {self.kind} {self.related_task_id}"
 
 
-class Participant(HistoryMixin, AuditMixin, AngeeDataModel):
+class Participant(HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
     """A party's involvement in a project, never an access grant."""
 
-    runtime = True
     sqid_prefix = "ppt_"
 
     class ParticipantKind(models.TextChoices):
@@ -1829,7 +1826,7 @@ class Participant(HistoryMixin, AuditMixin, AngeeDataModel):
         return f"{self.party_id} in {self.project_id}"
 
 
-class ProjectBinding(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
+class ProjectBinding(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
     """One explicit projects-owned statement that a resource belongs to a project.
 
     The resource is stored at :func:`rebac.generic_target`. ``permissions.zed``
@@ -1843,7 +1840,6 @@ class ProjectBinding(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     history_revert_permission = "delete"
     merge_policy = MergePolicy.MOVE
     merge_identity = (("project", "content_type", "object_id"),)
-    runtime = True
     sqid_prefix = "pbd_"
 
     project = models.ForeignKey(
@@ -1897,12 +1893,11 @@ class ProjectBinding(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
         return f"{self.project_id} -> {self.content_type_id}:{self.object_id}"
 
 
-class Link(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
+class Link(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
     """A URL-keyed external reference attached to a project or task."""
 
     merge_policy = MergePolicy.MOVE
     merge_identity = (("content_type", "object_id", "url"),)
-    runtime = True
     sqid_prefix = "plk_"
 
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
@@ -1955,46 +1950,41 @@ class ProjectBindingsMixin(models.Model):
         abstract = True
 
 
-class FolderProjects(ProjectBindingsMixin):
+class FolderProjects(Composable, ProjectBindingsMixin, extends="storage.Folder"):
     """Compose project binding collection onto storage folders."""
 
-    extends: ClassVar[str | None] = "storage.Folder"
 
     class Meta:
         abstract = True
 
 
-class DriveProjects(ProjectBindingsMixin):
+class DriveProjects(Composable, ProjectBindingsMixin, extends="storage.Drive"):
     """Projects-owned reverse collection for storage-drive bindings."""
 
-    extends: ClassVar[str | None] = "storage.Drive"
 
     class Meta:
         abstract = True
 
 
-class IntegrationProjects(ProjectBindingsMixin):
+class IntegrationProjects(Composable, ProjectBindingsMixin, extends="integrate.Integration"):
     """Projects-owned reverse collection for canonical messaging-channel bindings."""
 
-    extends: ClassVar[str | None] = "integrate.Integration"
 
     class Meta:
         abstract = True
 
 
-class ThreadProjects(ProjectBindingsMixin):
+class ThreadProjects(Composable, ProjectBindingsMixin, extends="messaging.Thread"):
     """Projects-owned reverse collection for messaging-thread bindings."""
 
-    extends: ClassVar[str | None] = "messaging.Thread"
 
     class Meta:
         abstract = True
 
 
-class VaultProjects(ProjectBindingsMixin):
+class VaultProjects(Composable, ProjectBindingsMixin, extends="knowledge.Vault"):
     """Projects-owned reverse collection for knowledge-vault bindings."""
 
-    extends: ClassVar[str | None] = "knowledge.Vault"
 
     class Meta:
         abstract = True

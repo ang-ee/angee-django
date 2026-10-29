@@ -11,4 +11,6 @@ dependencies = ["angee-web>=3,<4"]
 "angee.addons" = {"example.theme" = "example.theme"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "Example"

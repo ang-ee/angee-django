@@ -5,13 +5,12 @@ name = "angee-proposals"
 version = "3.0.0"
 description = "Project-backed solicitation rounds with sealed proposals, comparison, and review."
 keywords = ["proposals", "solicitation", "competition", "comparison", "review"]
-dependencies = ["angee-base>=3,<4", "angee-graphql>=3,<4", "angee-iam>=3,<4", "angee-messaging>=3,<4", "angee-money>=3,<4", "angee-parties>=3,<4", "angee-projects>=3,<4", "angee-spaces>=3,<4", "angee-storage>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "django-angee>=3,<4"]
+dependencies = ["angee-base>=3,<4", "angee-graphql>=3,<4", "angee-iam>=3,<4", "angee-messaging>=3,<4", "angee-money>=3,<4", "angee-parties>=3,<4", "angee-projects>=3,<4", "angee-spaces>=3,<4", "angee-storage>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "django-compose>=0.1.0.dev0,<0.2"]
 
 [project.entry-points]
 "angee.addons" = {"angee.proposals" = "angee.proposals"}
 
 [tool.angee]
-category = "Productivity"
 
 [[tool.angee.resources.demo]]
 path = "demo/005_iam.user.yaml"
@@ -45,3 +44,6 @@ depends_on = ["demo/030_proposals.topic.yaml", "demo/040_proposals.proposal.yaml
 path = "demo/060_proposals.review.yaml"
 depends_on = "demo/040_proposals.proposal.yaml"
 adopt = ["proposal", "reviewer"]
+
+[tool.angee.platform]
+category = "Productivity"

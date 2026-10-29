@@ -31,7 +31,7 @@ class RepoVisibility(models.TextChoices):
     INTERNAL = "internal", "Internal"
 
 
-class VcsBridge(Bridge):
+class VcsBridge(Bridge, inherits="integrate.Integration"):
     """The VCS sync child model over ``Integration``.
 
     A :class:`Bridge`: the scheduler refreshes its repositories' sources over the
@@ -43,8 +43,6 @@ class VcsBridge(Bridge):
     consuming :meth:`Source.materialize_spec`.
     """
 
-    runtime = True
-    extends: ClassVar[str | None] = "integrate.Integration"
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.FORM
 
     backend_class = ImplClassField(
@@ -221,14 +219,13 @@ class RepositoryManager(AngeeManager):
         )
 
 
-class Repository(AuditMixin, AngeeDataModel):
+class Repository(AuditMixin, AngeeDataModel, concrete=True):
     """Inventory of one git remote, reached through its ``VcsBridge``.
 
     A plain noun: Django records the remote; the operator clones it. ``org`` groups
     the account's repositories in the browse list.
     """
 
-    runtime = True
 
     sqid_prefix = "repo_"
     vcs_bridge = models.ForeignKey(
@@ -271,7 +268,7 @@ class Repository(AuditMixin, AngeeDataModel):
         return self.name
 
 
-class Source(AuditMixin, AngeeDataModel):
+class Source(AuditMixin, AngeeDataModel, concrete=True):
     """A pointer into a ``Repository`` at a ``ref`` and ``path``, with a ``kind``.
 
     One noun for every source kind. ``kind`` binds the source to an output model
@@ -280,7 +277,6 @@ class Source(AuditMixin, AngeeDataModel):
     :meth:`materialize_spec`.
     """
 
-    runtime = True
 
     sqid_prefix = "src_"
     repository = models.ForeignKey("integrate_vcs.Repository", on_delete=models.CASCADE, related_name="sources")
@@ -390,14 +386,13 @@ class TemplateManager(AngeeManager, registry.VcsOutputManager):
         )
 
 
-class Template(registry.VcsOutput, AuditMixin, AngeeDataModel):
+class Template(registry.VcsOutput, AuditMixin, AngeeDataModel, concrete=True):
     """One Copier template discovered under a ``Source`` (``source_kind="template"``).
 
     The operator renders these; the kind here is the *template* kind from the
     manifest's ``_angee.kind`` (stack/workspace/service).
     """
 
-    runtime = True
     source_kind = "template"
     """Binds the ``template`` source kind to this output model (see ``registry``)."""
 

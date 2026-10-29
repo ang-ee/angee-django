@@ -22,11 +22,6 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from django.apps import AppConfig, apps
-from django.conf import settings
-from django.db import DatabaseError, models, transaction
-from rebac import system_context
-
 from angee.addons import (
     addon_entry_points,
     facts_from_distribution,
@@ -34,6 +29,12 @@ from angee.addons import (
     requirement_addons,
     resolve_package_roots,
 )
+from angee.base.serialization import canonical_json_sha256
+from django.apps import AppConfig, apps
+from django.conf import settings
+from django.db import DatabaseError, models, transaction
+from rebac import system_context
+
 from angee.base.fields.state import StateField
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
@@ -45,7 +46,6 @@ from angee.platform.installer import (
     StaleAddonPreviewError,
     addon_installer,
 )
-from angee.serialization import canonical_json_sha256
 
 
 def get_addon_display_label(name: str, label: str) -> str:
@@ -483,14 +483,13 @@ def _preview_revision(
     return canonical_json_sha256(decision)
 
 
-class Addon(AngeeModel):
+class Addon(AngeeModel, concrete=True):
     """The composed-runtime addon registry — local reflection, system-synced.
 
     Identity is ``name`` (e.g. ``angee.iam``) — the stable key the console
     cross-links on — not a sqid.
     """
 
-    runtime = True
 
     objects = AddonManager()
 
@@ -585,10 +584,9 @@ class Addon(AngeeModel):
         }
 
 
-class PlatformExplorer(AngeeModel):
+class PlatformExplorer(AngeeModel, concrete=True):
     """Table-less REBAC type anchor for the platform introspection surface."""
 
-    runtime = True
 
     class Meta:
         abstract = True

@@ -32,6 +32,7 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import connections, models, transaction
 from django.utils import timezone
+from django_compose.models import Composable
 from rebac import PermissionDenied, system_context
 from rebac.mixins import RebacModelBase
 
@@ -63,7 +64,7 @@ def validate_reply_hold(hours: float | None) -> None:
             raise ValidationError("Reply hold is too large.") from error
 
 
-class Feed(models.Model, metaclass=RebacModelBase):
+class Feed(Composable, metaclass=RebacModelBase, inherits="messaging.Channel"):
     """A connected public-content source that polls an external platform for posts.
 
     A ``messaging.Channel`` child (identity, bridge state and message access from
@@ -76,8 +77,6 @@ class Feed(models.Model, metaclass=RebacModelBase):
     and posts as (its OAuth token lives on the handle / the integration credential).
     """
 
-    runtime = True
-    extends: ClassVar[str | None] = "messaging.Channel"
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.FORM
     live_impl_field = None
 
@@ -156,7 +155,7 @@ class Feed(models.Model, metaclass=RebacModelBase):
         return timezone.now() + timedelta(hours=hours)
 
 
-class FeedFollow(AuditMixin, AngeeDataModel):
+class FeedFollow(AuditMixin, AngeeDataModel, concrete=True):
     """A follow of a :class:`Feed` by a ``parties.Handle`` — the timeline subscription.
 
     The following edge behind a public timeline: a handle subscribes to a feed's
@@ -165,7 +164,6 @@ class FeedFollow(AuditMixin, AngeeDataModel):
     derived join ``FeedFollow → Feed → Thread → Message`` (a downstream query owner).
     """
 
-    runtime = True
     sqid_prefix = "ffl_"
 
     feed = models.ForeignKey(
@@ -225,7 +223,7 @@ class FeedFollow(AuditMixin, AngeeDataModel):
         return f"{self.handle_id} → {self.feed_id}"
 
 
-class PostMetrics(AuditMixin, AngeeDataModel):
+class PostMetrics(AuditMixin, AngeeDataModel, concrete=True):
     """Rolled-up public engagement counts for one message (the platform snapshot).
 
     Flat one-to-one, not MTI — the counter set overlaps heavily across platforms;
@@ -233,7 +231,6 @@ class PostMetrics(AuditMixin, AngeeDataModel):
     platform snapshot (no ``F()`` delta), so the feed sync is the single writer.
     """
 
-    runtime = True
     sqid_prefix = "pmx_"
 
     message = models.OneToOneField(
@@ -264,7 +261,7 @@ class PostMetrics(AuditMixin, AngeeDataModel):
         return f"metrics:{self.message_id}"
 
 
-class Quota(AuditMixin, AngeeDataModel):
+class Quota(AuditMixin, AngeeDataModel, concrete=True):
     """A provider-scoped API-unit ledger for one billing period.
 
     Feed backends spend platform API units (search, list, insert) against a per-period
@@ -273,7 +270,6 @@ class Quota(AuditMixin, AngeeDataModel):
     the backend must ask before it spends.
     """
 
-    runtime = True
     sqid_prefix = "qta_"
 
     integration = models.ForeignKey(
@@ -324,7 +320,7 @@ class Quota(AuditMixin, AngeeDataModel):
 # the one table with no collision.
 
 
-class ThreadPublic(models.Model):
+class ThreadPublic(Composable, extends="messaging.Thread"):
     """Public-post payload posts contributes onto ``messaging.Thread`` (same row).
 
     ``subject_url`` links a public thread to its post's canonical URL. It has no
@@ -332,7 +328,6 @@ class ThreadPublic(models.Model):
     ``visibility`` discriminators stay owned by messaging.
     """
 
-    extends: ClassVar[str | None] = "messaging.Thread"
 
     subject_url = models.URLField(max_length=1024, blank=True, default="")
 
@@ -346,7 +341,7 @@ class CommentAnswered(ValidationError):
     """The comment already has an answer; a new reply is unnecessary."""
 
 
-class MessagePublic(models.Model):
+class MessagePublic(Composable, extends="messaging.Message"):
     """Public-post fields posts contributes onto ``messaging.Message`` (same row).
 
     ``is_original_post`` marks the root post of a public thread (a post with no parent).
@@ -354,7 +349,6 @@ class MessagePublic(models.Model):
     onto the single ``messaging.Message`` table.
     """
 
-    extends: ClassVar[str | None] = "messaging.Message"
 
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("is_original_post",)
 

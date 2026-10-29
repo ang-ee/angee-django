@@ -11,8 +11,10 @@ dependencies = ["angee-base>=3,<4", "angee-workflows>=3,<4", "angee-decisions>=3
 "angee.addons" = {"angee.workflows_parties" = "angee.workflows_parties"}
 
 [tool.angee]
-category = "Workflows"
 
 [tool.angee.resources]
 install = ["install/100_workflows.workflow.yaml"]
 demo = ["demo/010_parties.party.yaml", {path = "demo/020_parties.handle.yaml", depends_on = "demo/010_parties.party.yaml"}]
+
+[tool.angee.platform]
+category = "Workflows"

@@ -77,7 +77,7 @@ class CurrencyQuerySet[CurrencyT: Currency](ArchiveQuerySet[CurrencyT], AngeeHis
 CurrencyManager = AngeeHistoryManager.from_queryset(CurrencyQuerySet)
 
 
-class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel):
+class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     """One ISO-4217 currency: its code, display name, symbol, and minor-unit exponent.
 
     ``decimal_places`` is the currency's minor-unit exponent (2 for most, 0 for
@@ -85,7 +85,6 @@ class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel):
     money-owned default mode unless a caller passes an explicit override.
     """
 
-    runtime = True
     catalogue = True
     catalogue_tier = "master"
     sqid_prefix = "cur_"
@@ -313,7 +312,7 @@ class CurrencyRateManager[RateT: CurrencyRate](_CurrencyRateManagerBase[RateT]):
         )
 
 
-class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel):
+class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     """One dated global or exact-context exchange rate per reference unit.
 
     A global row has no context or explicit reference and remains relative to
@@ -324,7 +323,6 @@ class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel):
     """
 
     merge_policy = MergePolicy.MOVE
-    runtime = True
     sqid_prefix = "crt_"
 
     currency = models.ForeignKey(

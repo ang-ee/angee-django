@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.core.exceptions import ValidationError
 from django.db import models
+from django_compose.models import Composable
 from rebac import system_context
 
 from angee.iam_integrate_oidc.errors import ONLY_SIGN_IN_METHOD
@@ -17,10 +18,9 @@ if TYPE_CHECKING:
     from angee.integrate.models import Credential
 
 
-class CredentialOidc(models.Model):
+class CredentialOidc(Composable, extends="integrate.Credential"):
     """Prevent explicit disconnect from removing the user's last sign-in method."""
 
-    extends: ClassVar[str | None] = "integrate.Credential"
 
     class Meta:
         """Abstract behavior contributed to the native credential model."""
@@ -80,7 +80,7 @@ class CredentialOidc(models.Model):
             raise ValidationError("This is your only sign-in method.", code=ONLY_SIGN_IN_METHOD)
 
 
-class OAuthClientOidc(models.Model):
+class OAuthClientOidc(Composable, extends="integrate.OAuthClient"):
     """OpenID Connect login extension for ``integrate.OAuthClient``.
 
     The composer folds these fields into the single OAuth client table when the
@@ -88,7 +88,6 @@ class OAuthClientOidc(models.Model):
     ``login_enabled`` is the discriminator for public login/link flows.
     """
 
-    extends: ClassVar[str | None] = "integrate.OAuthClient"
     hasura_insertable_fields: ClassVar[tuple[str, ...]] = (
         "issuer",
         "jwks_uri",

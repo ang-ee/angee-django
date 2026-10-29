@@ -5,10 +5,12 @@ name = "angee-resources"
 version = "3.0.0"
 description = "Tiered data import/export — load demo and seed data from declarative resource files"
 keywords = ["resources", "import", "data"]
-dependencies = ["angee-base>=3,<4", "django-import-export>=4.4", "pyyaml>=6", "tablib>=3", "django-angee>=3,<4"]
+dependencies = ["angee-base>=3,<4", "django-import-export>=4.4", "pyyaml>=6", "tablib>=3"]
 
 [project.entry-points]
 "angee.addons" = {"angee.resources" = "angee.resources"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "Foundation"

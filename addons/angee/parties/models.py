@@ -30,6 +30,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from django_compose.models import Composable
 from phonenumbers import (
     NumberParseException,
     PhoneNumberFormat,
@@ -78,7 +79,9 @@ from angee.resources.mixins import ResourceLoadMixin
 from angee.tags.models import TaggedModel
 
 
-class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel):
+class Party(
+    MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel, concrete=True
+):
     """A person or organisation the project tracks.
 
     The parent owns the common contact identity — the public id, ownership, the
@@ -92,7 +95,6 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
-    runtime = True
     rebac_grantable = {"reader": "write"}
 
     sqid_prefix = "pty_"
@@ -410,11 +412,9 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
             self.same_as.for_pair(self, row).with_actor(instance_actor(self)).confirm(aspect="same_as", values={})
 
 
-class Person(models.Model, metaclass=RebacModelBase):
+class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
     """A human party — carries name parts and an optional platform-user link."""
 
-    runtime = True
-    extends: ClassVar[str | None] = "parties.Party"
 
     statements = StatementRecords(
         link="integrate.RecordLink",
@@ -461,11 +461,9 @@ class Person(models.Model, metaclass=RebacModelBase):
         rebac_resource_type = "parties/person"
 
 
-class Organization(models.Model, metaclass=RebacModelBase):
+class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
     """An organisation party — carries its legal name and primary domain."""
 
-    runtime = True
-    extends: ClassVar[str | None] = "parties.Party"
 
     statements = StatementRecords(
         link="integrate.RecordLink",
@@ -491,7 +489,7 @@ class Organization(models.Model, metaclass=RebacModelBase):
         rebac_resource_type = "parties/organization"
 
 
-class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel):
+class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel, concrete=True):
     """A reachable address or handle of a party on one platform.
 
     Keyed on ``(platform, value)`` and, when present, ``(platform, external_id)``
@@ -504,7 +502,6 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
-    runtime = True
     rebac_grantable = {"reader": "write"}
     retains_merged = True
 
@@ -894,7 +891,7 @@ class AddressManager[AddressT: Address](StatementSubjectManager[AddressT]):
             return "matched", current.with_actor(actor)
 
 
-class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataModel):
+class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
     """A physical or postal address of a party (the vCard ``ADR`` property).
 
     There is intentionally no ``(party, label)`` uniqueness — a party may carry
@@ -902,7 +899,6 @@ class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataM
     address content, not the label.
     """
 
-    runtime = True
 
     sqid_prefix = "adr_"
     statements = StatementRecords(
@@ -976,7 +972,7 @@ class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataM
         return ", ".join(part for part in (self.street, self.city, self.country) if part)
 
 
-class Folder(OwnerMixin, AngeeDataModel):
+class Folder(OwnerMixin, AngeeDataModel, concrete=True):
     """A group of parties — the local mirror of a synced address book.
 
     The contacts counterpart of storage's ``Drive``/``Folder`` and knowledge's
@@ -989,7 +985,6 @@ class Folder(OwnerMixin, AngeeDataModel):
     tree (``parent``) are deferred until a create path lands to exercise them.
     """
 
-    runtime = True
 
     sqid_prefix = "fol_"
     name = models.CharField(max_length=200)
@@ -1024,7 +1019,7 @@ class Folder(OwnerMixin, AngeeDataModel):
         return self.name
 
 
-class Circle(HierarchyMixin, OwnerMixin, AngeeDataModel):
+class Circle(HierarchyMixin, OwnerMixin, AngeeDataModel, concrete=True):
     """A private, overlapping grouping of parties — how the owner organises people.
 
     Circles are the curated counterpart of :class:`Folder` (which mirrors a synced
@@ -1042,7 +1037,6 @@ class Circle(HierarchyMixin, OwnerMixin, AngeeDataModel):
     sharing; REBAC stays the one authorization owner.
     """
 
-    runtime = True
     sqid_prefix = "cir_"
     hierarchy_scope_fields = ("owner",)
 
@@ -1071,7 +1065,7 @@ class Circle(HierarchyMixin, OwnerMixin, AngeeDataModel):
         return self.name
 
 
-class CircleMember(MembershipDecisionMixin, AuditMixin, AngeeDataModel):
+class CircleMember(MembershipDecisionMixin, AuditMixin, AngeeDataModel, concrete=True):
     """A party's reviewable membership of one circle.
 
     Membership is a plain decision row so a suggester (community detection, an
@@ -1081,7 +1075,6 @@ class CircleMember(MembershipDecisionMixin, AuditMixin, AngeeDataModel):
     the row rather than duplicating it.
     """
 
-    runtime = True
     sqid_prefix = "cme_"
 
     circle = models.ForeignKey(
@@ -1114,7 +1107,7 @@ class CircleMember(MembershipDecisionMixin, AuditMixin, AngeeDataModel):
         return f"{self.party_id}∈{self.circle_id}"
 
 
-class RelationshipKind(ResourceLoadMixin, AuditMixin, AngeeDataModel):
+class RelationshipKind(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
     """The relationship vocabulary — types as catalogue data, never schema.
 
     One row expresses both directions of an asymmetric type through
@@ -1124,7 +1117,6 @@ class RelationshipKind(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     rows), and users may add their own kinds alongside.
     """
 
-    runtime = True
     catalogue = True
     catalogue_tier = "master"
     sqid_prefix = "rkd_"
@@ -1279,7 +1271,7 @@ class RelationshipKind(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             errors[field] = f"{self.name} requires {required} on this end."
 
 
-class Relationship(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataModel):
+class Relationship(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
     """A typed edge from one party's viewpoint: the *other* is ``kind`` of ``party``.
 
     ``kind.name`` names what the counterparty is to the anchor ("Mother",
@@ -1294,7 +1286,6 @@ class Relationship(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, Angee
     ``ended_at``. ``title`` carries the vCard ``TITLE`` ("CTO", "Godmother of").
     """
 
-    runtime = True
     objects = StatementSubjectManager()
     sqid_prefix = "rel_"
     statements = StatementRecords(
@@ -1400,7 +1391,7 @@ class Relationship(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, Angee
         super().save(*args, **kwargs)
 
 
-class Directory(Bridge):
+class Directory(Bridge, inherits="integrate.Integration"):
     """A connected contacts source that syncs parties from an external directory.
 
     An ``integrate.Integration`` child (so it draws its credential / owner / status
@@ -1411,8 +1402,6 @@ class Directory(Bridge):
     streams; the parties managers own the contact projection and ingest path.
     """
 
-    runtime = True
-    extends: ClassVar[str | None] = "integrate.Integration"
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
 
     @property

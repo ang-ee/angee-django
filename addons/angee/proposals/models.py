@@ -15,6 +15,7 @@ from datetime import date
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, Self, TypedDict, cast
 
+from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -24,6 +25,7 @@ from django.db.models.functions import JSONObject, Lower
 from django.db.models.lookups import Exact
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
     actor_context,
@@ -61,7 +63,6 @@ from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
 from angee.proposals.inputs import RoundTemplate
 from angee.provenance.context import changeset, changeset_model, require_changeset
-from angee.serialization import STRINGIFIED_JSON, canonical_json_sha256
 
 if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
@@ -384,7 +385,7 @@ class _RosterProjection(TypedDict):
     _roster_track_status: str | None
 
 
-class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel):
+class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel, concrete=True):
     """A bounded solicitation on one project or task; its chatter is shared."""
 
     _roster_entries: list[WithAnnotations[Proposal, _RosterProjection]]
@@ -401,7 +402,6 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
 
         return models.Q()
 
-    runtime = True
     sqid_prefix = "rnd_"
     thread_team_field: ClassVar[str | None] = "team"
     rebac_grantable = {
@@ -1439,10 +1439,9 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             raise ValidationError("Closed round left a submitted proposal undecided.")
 
 
-class Topic(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
+class Topic(ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
     """One stable, ordered comparison subject within a Round."""
 
-    runtime = True
     sqid_prefix = "top_"
     immutable_fields = ("round_id", "key")
 
@@ -1718,10 +1717,9 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
         return canonical_json_sha256(chunks=(STRINGIFIED_JSON.encode(payload),))
 
 
-class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
+class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
     """One responder's structured response; its private work lives on ``track``."""
 
-    runtime = True
     sqid_prefix = "prp_"
     rebac_grantable = {"reader": "share"}
     immutable_fields = (
@@ -2324,10 +2322,9 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
             raise ValidationError("A submitted proposal cannot carry a decision receipt.")
 
 
-class ProjectProposalAccess(models.Model):
+class ProjectProposalAccess(Composable, extends="projects.Project"):
     """Grant proposal visibility from one Project without owning its policy."""
 
-    extends: ClassVar[str | None] = "projects.Project"
     rebac_grantable = {"proposal_viewer": "share"}
 
     def apply_setup(self, *, round: Mapping[str, Any] | None = None, **options: Any) -> None:
@@ -2427,10 +2424,9 @@ class ProjectProposalAccess(models.Model):
         abstract = True
 
 
-class TaskProposalAccess(ImmutableFieldsMixin):
+class TaskProposalAccess(Composable, ImmutableFieldsMixin, extends="projects.Task"):
     """Contribute question facts and track-item sharing to the task owner."""
 
-    extends: ClassVar[str | None] = "projects.Task"
     rebac_grantable = {"proposal_viewer": "share"}
 
     @classmethod
@@ -2775,11 +2771,9 @@ class TaskProposalAccess(ImmutableFieldsMixin):
             )
 
 
-class DriveProposalAccess(models.Model):
+class DriveProposalAccess(Composable, extends="storage.Drive"):
     """Apply the build-content holder invariant through project bindings."""
 
-    extends: ClassVar[str | None] = "storage.Drive"
-    runtime = False
 
     class Meta:
         abstract = True
@@ -2810,11 +2804,9 @@ class DriveProposalAccess(models.Model):
                 round.validate_build_subject(subject)
 
 
-class FileProposalAccess(models.Model):
+class FileProposalAccess(Composable, extends="storage.File"):
     """Keep file grants within the same holder ceiling as their track drive."""
 
-    extends: ClassVar[str | None] = "storage.File"
-    runtime = False
 
     class Meta:
         abstract = True
@@ -2841,10 +2833,9 @@ ProposalsRole = role_anchor("proposals/role")
 """Table-less REBAC anchor for global proposal-viewer membership."""
 
 
-class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
+class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
     """One Proposal response aligned to one Topic in the same Round."""
 
-    runtime = True
     sqid_prefix = "ans_"
     immutable_fields = ("proposal_id", "topic_id", "visibility", "shared_with_responders")
     rebac_grantable = {"reader": "manage"}
@@ -2986,10 +2977,9 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
         return f"{self.proposal_id}:{self.topic_id}"
 
 
-class Review(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
+class Review(ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
     """One evaluator's private assessment of a Proposal."""
 
-    runtime = True
     sqid_prefix = "rvw_"
     immutable_fields = ("proposal_id", "reviewer_id")
 

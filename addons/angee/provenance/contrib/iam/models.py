@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from typing import ClassVar, cast
+from typing import cast
 
-from django.db import models
+from django_compose.models import Composable
 
 from angee.provenance.statements import SourceKind, StatementSourceMixin
 
 
-class UserSource(StatementSourceMixin, models.Model):
+class UserSource(StatementSourceMixin, Composable, extends="iam.User"):
     """Classify IAM's active people without making IAM depend on provenance."""
 
-    extends: ClassVar[str | None] = "iam.User"
     is_active: bool
     is_person: bool
 

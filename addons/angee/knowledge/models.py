@@ -27,6 +27,7 @@ from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models.signals import post_save
 from django.utils import timezone
+from django_compose.models import Composable
 from markdown_it import MarkdownIt
 from rebac import (
     PermissionDenied,
@@ -307,7 +308,7 @@ class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
         return vault.with_actor(actor)
 
 
-class Vault(OwnerMixin, TrashMixin, HistoryMixin, AngeeDataModel):
+class Vault(OwnerMixin, TrashMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """Top-level page container; the permission and namespace boundary.
 
     Trashing a vault withholds its pages while retaining their independent trash
@@ -317,7 +318,6 @@ class Vault(OwnerMixin, TrashMixin, HistoryMixin, AngeeDataModel):
     its direct ``viewer`` shares; editor and role reach stay administrative.
     """
 
-    runtime = True
     rebac_grantable = {"viewer": "share"}
 
     sqid_prefix = "vlt_"
@@ -486,7 +486,9 @@ class PageManager[PageT: Page](_PageManagerBase[PageT]):
         return copies
 
 
-class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMixin, HistoryMixin, AngeeDataModel):
+class Page(
+    TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMixin, HistoryMixin, AngeeDataModel, concrete=True
+):
     """Universal addressable content node inside a vault.
 
     A page owns title and hierarchy. A concrete child owns each content shape;
@@ -496,7 +498,6 @@ class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMix
     readers who cannot delete them and leave their titles free meanwhile.
     """
 
-    runtime = True
     rebac_grantable = {"viewer": "write"}
 
     sqid_prefix = "pg_"
@@ -807,7 +808,7 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
         return {owner_field: knowledge, **canonical.lookups(self.model, "target"), "role": self._role(role)}
 
 
-class RecordBinding(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel):
+class RecordBinding(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """Role-keyed edge from a knowledge Page/Vault to any REBAC record.
 
     The target is canonicalized to its topmost REBAC-typed MTI ancestor. The
@@ -821,7 +822,6 @@ class RecordBinding(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel):
     merge_policy = MergePolicy.MOVE
     on_target_delete = models.CASCADE
     merge_identity = (("page", "content_type", "object_id", "role"), ("vault", "content_type", "object_id", "role"))
-    runtime = True
     sqid_prefix = "krb_"
 
     page = models.ForeignKey(
@@ -1044,7 +1044,7 @@ class SectionOp(StrEnum):
     PREPEND = "prepend"
 
 
-class MarkdownPage(HistoryMixin, models.Model, metaclass=RebacModelBase):
+class MarkdownPage(HistoryMixin, Composable, metaclass=RebacModelBase, inherits="knowledge.Page"):
     """Concrete page with a versioned markdown body.
 
     ``body`` is the canonical content store; ``body_hash`` and
@@ -1052,8 +1052,6 @@ class MarkdownPage(HistoryMixin, models.Model, metaclass=RebacModelBase):
     so snapshots include the body alongside inherited page metadata.
     """
 
-    runtime = True
-    extends: ClassVar[str | None] = "knowledge.Page"
 
     excerpt_chars: ClassVar[int] = 180
     """Number of body characters surfaced by :attr:`excerpt`."""
@@ -1371,14 +1369,13 @@ class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
             self.rebuild_many(markdown._base_manager.filter(affected).distinct())
 
 
-class Link(AngeeDataModel):
+class Link(AngeeDataModel, concrete=True):
     """Wikilink edge from one page to another, derived from the source body.
 
     Indexer-authored (see :class:`LinkManager`) — no user-facing mutation,
     no audit author. REBAC read/write inherit through ``source_page``.
     """
 
-    runtime = True
 
     sqid_prefix = "lnk_"
     source_page = models.ForeignKey(

@@ -102,7 +102,7 @@ class SequenceManager[SequenceT: Sequence](AngeeManager[SequenceT]):
         return model
 
 
-class Sequence(AngeeDataModel):
+class Sequence(AngeeDataModel, concrete=True):
     """A named counter with a formatting template and reset period.
 
     The ``key`` is the stable lookup handle consumers draw against; scope (a
@@ -112,7 +112,6 @@ class Sequence(AngeeDataModel):
     ``"INV/{year}/{number:05d}"``).
     """
 
-    runtime = True
     sqid_prefix = "seq_"
 
     key = models.CharField(max_length=200, unique=True)
@@ -199,7 +198,7 @@ class SequenceCounterManager[CounterT: SequenceCounter](AngeeManager[CounterT]):
         return self.filter(sequence=sequence, period=period).values_list("value", flat=True).first() or 0
 
 
-class SequenceCounter(AngeeModel):
+class SequenceCounter(AngeeModel, concrete=True):
     """Current value for one sequence within one reset period.
 
     Internal to the sequence addon — no sqid, no GraphQL surface, no REBAC
@@ -207,7 +206,6 @@ class SequenceCounter(AngeeModel):
     and the ``ON CONFLICT`` arbiter of the first-draw race.
     """
 
-    runtime = True
 
     sequence = models.ForeignKey(
         "sequence.Sequence",

@@ -11,4 +11,6 @@ dependencies = ["angee-web>=3,<4"]
 "angee.addons" = {"angee.theme_ledger" = "angee.theme_ledger"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "User interface"

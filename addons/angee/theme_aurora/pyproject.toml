@@ -11,4 +11,6 @@ dependencies = ["angee-web>=3,<4"]
 "angee.addons" = {"angee.theme_aurora" = "angee.theme_aurora"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "User interface"

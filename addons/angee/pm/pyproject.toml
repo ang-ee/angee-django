@@ -11,7 +11,6 @@ dependencies = ["angee-intake>=3,<4", "angee-portfolio>=3,<4", "angee-projects>=
 "angee.addons" = {"angee.pm" = "angee.pm"}
 
 [tool.angee]
-category = "Productivity"
 
 [[tool.angee.resources.demo]]
 path = "demo/010_iam.user.yaml"
@@ -26,3 +25,6 @@ adopt = "user"
 path = "demo/030_spaces.membership.yaml"
 depends_on = ["demo/020_parties.person.yaml", "work:demo/010_work.queue.yaml"]
 adopt = ["group", "party"]
+
+[tool.angee.platform]
+category = "Productivity"

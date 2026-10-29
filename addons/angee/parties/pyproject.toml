@@ -5,13 +5,12 @@ name = "angee-parties"
 version = "3.0.0"
 description = "Contacts — people and organizations, their circles, relationships, addresses, and directory sync"
 keywords = ["parties", "contacts", "crm"]
-dependencies = ["angee-base>=3,<4", "angee-provenance>=3,<4", "angee-graphql>=3,<4", "angee-iam>=3,<4", "angee-integrate>=3,<4", "angee-storage>=3,<4", "angee-tags>=3,<4", "angee-jobs>=3,<4", "angee-web>=3,<4", "django-countries>=9,<10", "phonenumbers>=9.0", "pycountry>=26,<27", "django-angee>=3,<4"]
+dependencies = ["angee-base>=3,<4", "angee-provenance>=3,<4", "angee-graphql>=3,<4", "angee-iam>=3,<4", "angee-integrate>=3,<4", "angee-storage>=3,<4", "angee-tags>=3,<4", "angee-jobs>=3,<4", "angee-web>=3,<4", "django-countries>=9,<10", "phonenumbers>=9.0", "pycountry>=26,<27", "django-compose>=0.1.0.dev0,<0.2"]
 
 [project.entry-points]
 "angee.addons" = {"angee.parties" = "angee.parties"}
 
 [tool.angee]
-category = "Data"
 
 [[tool.angee.resources.install]]
 path = "install/010_provenance.rule.yaml"
@@ -25,3 +24,6 @@ depends_on = ["install/010_provenance.rule.yaml"]
 [[tool.angee.resources.master]]
 path = "master/010_parties.relationshipkind.yaml"
 adopt = "slug"
+
+[tool.angee.platform]
+category = "Data"

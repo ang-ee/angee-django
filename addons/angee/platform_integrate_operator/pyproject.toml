@@ -11,4 +11,6 @@ dependencies = ["angee-platform>=3,<4", "angee-operator>=3,<4", "angee-web>=3,<4
 "angee.addons" = {"angee.platform_integrate_operator" = "angee.platform_integrate_operator"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "Integration"

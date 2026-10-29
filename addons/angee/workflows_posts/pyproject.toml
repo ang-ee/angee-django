@@ -11,4 +11,6 @@ dependencies = ["angee-base>=3,<4", "angee-posts>=3,<4", "angee-agents>=3,<4", "
 "angee.addons" = {"angee.workflows_posts" = "angee.workflows_posts"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "Workflows"

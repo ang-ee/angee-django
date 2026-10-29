@@ -24,6 +24,7 @@ from django.db.models import F, Q
 from django.db.models.expressions import Combinable
 from django.utils import timezone
 from django_choices_field import IntegerChoicesField
+from django_compose.models import Composable
 from rebac import PermissionDenied, current_actor, system_context
 from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
@@ -157,11 +158,9 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
             membership.save(update_fields=(*desired, "updated_at"))
 
 
-class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
+class Queue(Composable, ImmutableFieldsMixin, metaclass=RebacModelBase, inherits="spaces.Group"):
     """An ongoing operational context, materialized as a ``spaces.Group`` child."""
 
-    runtime = True
-    extends: ClassVar[str | None] = "spaces.Group"
     immutable_fields = ("provision_stages",)
 
     class EstimateScale(models.TextChoices):
@@ -352,7 +351,7 @@ class StageQuerySet[StageT: Stage](RowLockQuerySet[StageT], AngeeQuerySet[StageT
 StageManager = AngeeManager.from_queryset(StageQuerySet)
 
 
-class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
+class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=True):
     """One ordered, user-named pipeline stage owned by a queue.
 
     Triage and duplicate stages are system rows: provisioning and resource loads
@@ -363,7 +362,6 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     row_lock_cascade_parent = "queue"
     objects = StageManager()
 
-    runtime = True
     sqid_prefix = "wst_"
     container_field_name = "queue"
     category_field_name = "category"
@@ -662,10 +660,9 @@ class CycleManager[CycleT: Cycle](AngeeManager[CycleT]):
             )
 
 
-class Cycle(AuditMixin, AngeeDataModel):
+class Cycle(AuditMixin, AngeeDataModel, concrete=True):
     """One generated, queue-scoped planning window with immutable close evidence."""
 
-    runtime = True
     sqid_prefix = "cyc_"
 
     queue = models.ForeignKey(
@@ -816,10 +813,9 @@ fires a nested partial refresh whose reload re-enters ``__init__`` with the
 """
 
 
-class ProjectWork(models.Model):
+class ProjectWork(Composable, extends="projects.Project"):
     """Bind a project's access to the roster of an optional team."""
 
-    extends: ClassVar[str | None] = "projects.Project"
 
     hasura_readable_fields: ClassVar[tuple[str, ...]] = ("team",)
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
@@ -907,10 +903,9 @@ class ProjectWork(models.Model):
                 task.save(update_fields=("stage", "updated_at"))
 
 
-class MilestoneWork(models.Model):
+class MilestoneWork(Composable, extends="projects.Milestone"):
     """Map a project's current phase to its source task's rule-owned stage."""
 
-    extends: ClassVar[str | None] = "projects.Milestone"
 
     hasura_readable_fields: ClassVar[tuple[str, ...]] = ("active_stage",)
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
@@ -968,10 +963,9 @@ class MilestoneWork(models.Model):
         stage_model._base_manager.get(pk=self.active_stage_id).validate_rule_stage(queue_id)
 
 
-class TaskWork(StagedModelMixin[Stage]):
+class TaskWork(Composable, StagedModelMixin[Stage], extends="projects.Task"):
     """Same-row work contribution folded into ``projects.Task``."""
 
-    extends: ClassVar[str | None] = "projects.Task"
     stage_container_field_name = "queue"
     thread_team_field: ClassVar[str | None] = "queue"
 
@@ -1823,10 +1817,9 @@ class TaskWork(StagedModelMixin[Stage]):
             return getattr(super(), name)(*args, **kwargs)
 
 
-class UserWork(ResourceLoadMixin):
+class UserWork(Composable, ResourceLoadMixin, extends="iam.User"):
     """Provision personal queues after IAM user resources load."""
 
-    extends: ClassVar[str | None] = "iam.User"
 
     class Meta:
         """Abstract same-row provisioning donor for IAM users."""

@@ -19,13 +19,12 @@ from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 
 
-class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
+class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """A short note used to exercise backend composition.
 
     Metadata and body changes are recorded through native ``history``.
     """
 
-    runtime = True
 
     @classmethod
     def record_changed_grant_targets(cls, trigger: Any) -> tuple[TriggerGrantTarget, ...]:

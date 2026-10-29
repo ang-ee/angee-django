@@ -11,4 +11,6 @@ dependencies = ["angee-iam>=3,<4", "angee-web>=3,<4"]
 "angee.addons" = {"angee.appearance" = "angee.appearance"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "User interface"

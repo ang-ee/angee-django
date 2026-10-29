@@ -7,6 +7,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Any, ClassVar, Self, TypeVar, cast
 
+from angee.base.serialization import strip_null_bytes
 from django.conf import settings
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -22,7 +23,6 @@ from angee.base.models.timestamps import auto_now_stamps, update_fields_with_aut
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.querysets import CanonicalQuerySet, by_key
 from angee.base.signals import bulk_updated
-from angee.serialization import strip_null_bytes
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _ArchiveModelT = TypeVar("_ArchiveModelT", bound=models.Model)

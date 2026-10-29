@@ -75,10 +75,9 @@ class UomExpressions:
         )
 
 
-class UomCategory(ResourceLoadMixin, AngeeDataModel):
+class UomCategory(ResourceLoadMixin, AngeeDataModel, concrete=True):
     """A family of units that measure the same quantity (weight, volume, time)."""
 
-    runtime = True
     catalogue = True
     catalogue_tier = "master"
     sqid_prefix = "uoc_"
@@ -110,7 +109,7 @@ class UomQuerySet(
 UomManager = AngeeManager.from_queryset(UomQuerySet)
 
 
-class Uom(ResourceLoadMixin, ArchiveMixin, AngeeDataModel):
+class Uom(ResourceLoadMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     """One unit within a category, mapped affinely onto the reference unit.
 
     ``value_in_reference = qty * ratio + offset``: ``ratio`` is the number of
@@ -123,7 +122,6 @@ class Uom(ResourceLoadMixin, ArchiveMixin, AngeeDataModel):
     step conversions *into* this unit are quantized to; other increments are refused.
     """
 
-    runtime = True
     catalogue = True
     catalogue_tier = "master"
     sqid_prefix = "uom_"

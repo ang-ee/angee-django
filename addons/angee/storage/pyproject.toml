@@ -11,7 +11,6 @@ dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-resources>=3,<4", 
 "angee.addons" = {"angee.storage" = "angee.storage"}
 
 [tool.angee]
-category = "Data"
 
 [[tool.angee.resources.master]]
 path = "master/010_storage.mimetype.yaml"
@@ -24,3 +23,6 @@ adopt = "slug"
 [[tool.angee.resources.install]]
 path = "install/020_storage.drive.yaml"
 adopt = "slug"
+
+[tool.angee.platform]
+category = "Data"

@@ -5,10 +5,12 @@ name = "angee-workflows-messaging"
 version = "3.0.0"
 description = "Message admission sources and channel-scoped workflow triggers"
 keywords = ["workflows", "messaging", "triggers"]
-dependencies = ["angee-workflows>=3,<4", "angee-messaging>=3,<4", "angee-web>=3,<4"]
+dependencies = ["angee-workflows>=3,<4", "angee-messaging>=3,<4", "angee-web>=3,<4", "django-compose>=0.1.0.dev0,<0.2"]
 
 [project.entry-points]
 "angee.addons" = {"angee.workflows_messaging" = "angee.workflows_messaging"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "Workflows"

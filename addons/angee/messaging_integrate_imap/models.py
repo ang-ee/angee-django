@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import transaction
+from django_compose.models import Composable
 from rebac import actor_context, system_context
 
 from angee.integrate.locks import bridge_advisory_lock
@@ -19,10 +20,9 @@ from angee.messaging_integrate_imap.backend import (
 )
 
 
-class ImapChannelSampling(models.Model):
+class ImapChannelSampling(Composable, extends="messaging.Channel"):
     """Compose bounded imports without a second channel, cursor or intake ledger."""
 
-    extends: ClassVar[str | None] = "messaging.Channel"
 
     class Meta:
         abstract = True

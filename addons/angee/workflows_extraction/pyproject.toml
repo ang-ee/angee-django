@@ -11,7 +11,9 @@ dependencies = ["angee-base>=3,<4", "angee-workflows>=3,<4", "angee-extraction>=
 "angee.addons" = {"angee.workflows_extraction" = "angee.workflows_extraction"}
 
 [tool.angee]
-category = "Workflows"
 
 [tool.angee.resources]
 install = ["install/100_workflows.workflow.yaml"]
+
+[tool.angee.platform]
+category = "Workflows"
