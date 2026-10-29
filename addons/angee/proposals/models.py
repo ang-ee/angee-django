@@ -57,6 +57,7 @@ from angee.base.models.roles import role_anchor
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor, subject_reaches_user
 from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet
+from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256
 from angee.base.validators import validate_value
 from angee.iam.identity import user_label_expression, user_label_queryset
 from angee.messaging.models import ThreadedModelMixin

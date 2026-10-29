@@ -27,5 +27,5 @@ def capture_merge(
 def capture_resource_load(sender: type[models.Model], *, contexts: ExitStack, **kwargs: Any) -> None:
     """Capture one resource batch with seed attribution inside its transaction."""
 
-    contexts.enter_context(changeset(fresh=True, activity="seed"))
+    contexts.enter_context(changeset(fresh=True, activity="seed", using=kwargs.get("using")))
     current_changeset(record=True)

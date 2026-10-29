@@ -44,6 +44,7 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
 from angee.base.permissions import actor_user_id, candidate_relationships
 from angee.base.querysets import MergeableQuerySet
+from angee.base.serialization import strip_null_bytes
 from angee.base.validators import validate_value
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access

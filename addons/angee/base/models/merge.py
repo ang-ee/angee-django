@@ -48,6 +48,7 @@ from django.db.models import ProtectedError, Q, RestrictedError
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import is_sudo
 
+from angee.base.hooks import resolve_hooks
 from angee.base.managers import MergeableUnscopedManager
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instances_from_public_ids

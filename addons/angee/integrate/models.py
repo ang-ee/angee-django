@@ -67,6 +67,7 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.refs import generic_pointer_target
+from angee.base.serialization import canonical_json
 from angee.graphql.capabilities import held_permissions
 from angee.integrate.connect import enabled_oauth_client_from_hint, oauth_client_slug_from_hint
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES

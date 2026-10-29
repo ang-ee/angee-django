@@ -77,6 +77,7 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import actor_user_id
 from angee.base.refs import RecordRef, generic_pointer_model
+from angee.base.serialization import strip_null_bytes
 from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.messaging.backends import ChannelBackend
