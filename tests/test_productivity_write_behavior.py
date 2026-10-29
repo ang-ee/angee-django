@@ -16,15 +16,12 @@ from django.utils import timezone
 from rebac import system_context
 from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 from strawberry import auto
 
 import tests.test_messaging  # noqa: F401 -- register related models before native database setup
-from angee.fields import StateField
-from angee.graphql.data import hasura_model_resource
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend
-from angee.graphql.node import AngeeNode
-from angee.graphql.schema import GraphQLSchemas
-from angee.models import (
+from angee.base.fields.state import StateField
+from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -35,10 +32,12 @@ from angee.models import (
     TrashMixin,
     TrashQuerySet,
 )
-from angee.models import Stage as OrderedStage
+from angee.base.models import Stage as OrderedStage
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
+from angee.graphql.node import AngeeNode
+from angee.graphql.schema import GraphQLSchemas
 from angee.projects.models import Task as AbstractTask
 from angee.projects.testing.models import Queue, Stage, Task
-from angee.testing.permissions import install_permission_schema
 from angee.work.models import TaskWork
 from tests import test_sequence  # noqa: F401 -- register Queue's sequence target before database setup
 from tests.composed_host import run_composed_tests
@@ -47,6 +46,7 @@ from tests.conftest import (
     create_platform_admin,
     execute_schema,
     result_data,
+    standalone_relation,
 )
 from tests.tables import model_tables
 
@@ -78,6 +78,9 @@ class RoutingPipelineStage(OrderedStage):
 
     class Meta:
         app_label = "tests"
+        constraints = [models.UniqueConstraint(
+            fields=("container", "position"), name="routing_stage_container_position",
+        )]
 
 
 class RoutingStageRecord(StagedModelMixin[RoutingPipelineStage], models.Model):
@@ -142,6 +145,7 @@ class CreateTask(TaskWork, CreateTaskHost, MergeableMixin, TrashMixin, AuditMixi
     """Native Work donor over the lifecycle columns it projects; duplicates are retained merges, removal is trash."""
 
     sqid_prefix = "ctk_"
+    queue = standalone_relation(TaskWork, "queue")
     TaskStatus = AbstractTask.TaskStatus
     TaskDroppedReason = AbstractTask.TaskDroppedReason
     title = models.CharField(max_length=240)
@@ -207,9 +211,9 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
             permission write = authenticated
         }
         """)
-    install_permission_schema(
+    install_schema(
         replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]),
-        active=active,
+        backend=active,
     )
     try:
         admin = create_platform_admin("productivity-create-admin")

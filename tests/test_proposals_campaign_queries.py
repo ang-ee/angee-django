@@ -16,10 +16,12 @@ from angee.graphql.capabilities import held_permissions, permission_annotations
 from angee.graphql.deletion import DeletePreview
 from angee.projects.testing.models import Task
 from tests.proposals_campaign import ProposalCampaign, as_actor
+from tests.proposals_campaign import campaign as campaign
+from tests.proposals_campaign import campaign_schema as campaign_schema
+from tests.proposals_campaign import campaign_store as campaign_store
 from tests.proposals_models import Proposal, Round
 from tests.queries import is_rebac_revision_read
-
-pytest_plugins = ("tests.proposals_campaign",)
+from tests.test_project_access import project_access_schema as project_access_schema
 
 # django-zed-rebac owns these fixed scope-compilation reads. Application row
 # reads and roster expansion have separate exact guards below.
@@ -349,4 +351,4 @@ def test_task_audience_list_projection_has_constant_query_count(campaign: Propos
             assert len(rows) == limit
             counts.append(len(queries))
         # Constant in rows; a record task's subject types and trash authority add arrow sources to each verb.
-        assert counts == [68, 68], counts
+        assert counts == [61, 61], counts

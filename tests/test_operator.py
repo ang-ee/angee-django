@@ -14,6 +14,7 @@ from django.core.cache import cache
 from django.core.management import call_command
 from rebac import ObjectRef, RelationshipTuple, SubjectRef
 from rebac.schema import ConstBinding, parse_zed
+from rebac.testing import install_schema
 
 from angee.integrate.errors import RequestNotSentError
 from angee.integrate.http import HttpClient
@@ -28,7 +29,6 @@ from angee.operator.daemon import (
     WorkspaceStatus,
 )
 from angee.operator.management.commands import operator_schema as operator_schema_command
-from angee.testing.permissions import install_permission_schema
 
 _CONNECTION_QUERY = "{ operatorConnection { endpoint token restartJob } }"
 _ACTOR = SubjectRef.of("auth/user", "abc")
@@ -321,7 +321,7 @@ def test_file_tools_call_the_files_api_and_carry_the_etag(monkeypatch: pytest.Mo
 # --- endpoint resolution ------------------------------------------------------
 #
 # The daemon resolves from Django settings only. Dev stack env and project YAML
-# are normalized by ``angee.compose.settings`` before apps read configuration.
+# are normalized by ``angee.settings`` before apps read configuration.
 
 
 def test_endpoint_defaults_to_same_origin_proxy() -> None:
@@ -710,7 +710,7 @@ def test_operator_admin_role_reaches_connection_read_tuple_free() -> None:
     reader = next(relation for relation in connection.relations if relation.name == "reader")
     assert reader.backing == ConstBinding(target_id="operator_admin")
 
-    backend = install_permission_schema(schema)
+    backend = install_schema(schema)
     operator = SubjectRef.of("auth/user", "operator-1")
     connection_ref = ObjectRef("operator/connection", "default")
 
@@ -735,7 +735,7 @@ def test_operator_admin_role_reaches_connection_read_tuple_free() -> None:
 def test_operator_schema_writes_the_live_sdl_into_the_runtime(monkeypatch, settings, tmp_path) -> None:
     """The stack job's export lands in the runtime, never in the operator package's committed snapshot."""
 
-    settings.ANGEE_RUNTIME_DIR = tmp_path
+    settings.COMPOSE_RUNTIME_DIR = tmp_path
     stub = SimpleNamespace(
         admin_bearer="token", server_base="http://operator", introspect_sdl=lambda: "type Query { ping: String }",
     )

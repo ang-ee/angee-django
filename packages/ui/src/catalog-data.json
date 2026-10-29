@@ -328,27 +328,27 @@
   {
     "package": "@angee/ui",
     "name": "APPEARANCE_CACHE_KEY",
-    "source": "packages/ui/src/theme/appearance.tsx",
+    "source": "packages/ui/src/theme/runtime.d.ts",
     "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
+    "reason": "Shared disposable appearance cache protocol.",
     "status": "stable",
     "storyId": null
   },
   {
     "package": "@angee/ui",
     "name": "APPEARANCE_CACHE_LIMIT",
-    "source": "packages/ui/src/theme/appearance.tsx",
+    "source": "packages/ui/src/theme/runtime.d.ts",
     "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "reason": "Shared disposable appearance cache protocol.",
     "status": "stable",
     "storyId": null
   },
   {
     "package": "@angee/ui",
     "name": "APPEARANCE_CACHE_SCHEMA",
-    "source": "packages/ui/src/theme/appearance.tsx",
+    "source": "packages/ui/src/theme/runtime.d.ts",
     "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "reason": "Shared disposable appearance cache protocol.",
     "status": "stable",
     "storyId": null
   },
@@ -2465,9 +2465,9 @@
   {
     "package": "@angee/ui",
     "name": "FORM_SPEC_ANNOTATIONS",
-    "source": "packages/ui/src/views/form/form-spec-schema.ts",
+    "source": "packages/ui/src/views/form/form-spec.annotations.generated.ts",
     "kind": null,
-    "reason": "Schema infrastructure: validates serialized runtime contracts.",
+    "reason": "Generated codec vocabulary consumed by the optional schema validator.",
     "status": "stable",
     "storyId": null
   },
@@ -5420,9 +5420,9 @@
   {
     "package": "@angee/ui",
     "name": "applyAppearanceRoot",
-    "source": "packages/ui/src/theme/appearance.tsx",
+    "source": "packages/ui/src/theme/runtime.d.ts",
     "kind": null,
-    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "reason": "Headless appearance DOM lifecycle shared by bootstrap and React.",
     "status": "stable",
     "storyId": null
   },
@@ -5528,6 +5528,15 @@
     "kind": "token",
     "status": "stable",
     "storyId": "foundations-glyphs--default"
+  },
+  {
+    "package": "@angee/ui",
+    "name": "bootstrapAppearance",
+    "source": "packages/ui/src/theme/runtime.d.ts",
+    "kind": null,
+    "reason": "Headless first-paint lifecycle bundled by app composition.",
+    "status": "stable",
+    "storyId": null
   },
   {
     "package": "@angee/ui",
@@ -6947,7 +6956,7 @@
     "name": "parseFormSpec",
     "source": "packages/ui/src/views/form/form-spec-schema.ts",
     "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
+    "reason": "Codec infrastructure: validates the generated wire contract.",
     "status": "stable",
     "storyId": null
   },
@@ -6956,7 +6965,7 @@
     "name": "parseFormSpecPayload",
     "source": "packages/ui/src/views/form/form-spec-schema.ts",
     "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
+    "reason": "Codec infrastructure: reads a JSON object envelope.",
     "status": "stable",
     "storyId": null
   },
@@ -8570,6 +8579,15 @@
     "source": "packages/ui/src/views/relation/relation-options.ts",
     "kind": "contribution",
     "owner": "@angee/ui:RelationFieldWidget",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useRelationPickerOptions",
+    "source": "packages/ui/src/views/relation/relation-options.ts",
+    "kind": null,
+    "reason": "Shared data hook owns picker query state without rendered anatomy.",
     "status": "stable",
     "storyId": null
   },

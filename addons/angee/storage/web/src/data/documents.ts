@@ -4,7 +4,6 @@
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 
-export const STORAGE_CATALOGUE_LIMIT = 500;
 /** The record edge declared by attachment-capable resource metadata. */
 export const FILE_ATTACHMENT_MODEL = "storage.FileAttachment";
 
@@ -39,66 +38,19 @@ export const StorageFileUploadFinalize = graphql(`
   }
 `);
 
-export const StorageDrives = graphql(`
-  query StorageDrives($limit: Int, $offset: Int) {
-    drives(limit: $limit, offset: $offset) {
-      id
-      slug
-      name
-      description
-      is_archived
+export const StorageFoldersPage = graphql(`
+  query StorageFoldersPage($where: folders_bool_exp!, $order: [folders_order_by!], $limit: Int!, $offset: Int!) {
+    folders(where: $where, order_by: $order, limit: $limit, offset: $offset) {
+      id name description is_virtual drive parent
     }
+    folders_aggregate(where: $where) { aggregate { count } }
   }
 `);
 
-// Admin-only: the backend catalogue, for the inline drive-create form's backend
-// picker. Non-admins get a denied result and an empty list (drive create is
-// storage-admin-gated server-side anyway).
-export const StorageBackends = graphql(`
-  query StorageBackends($limit: Int, $offset: Int) {
-    backends(limit: $limit, offset: $offset) {
-      id
-      slug
-      label
-    }
-  }
-`);
-
-// The folder tree loads lazily: top-level folders first, then a folder's
-// children only when it is expanded. Both arms share the projection and bound
-// each request with `limit`; the drive's partial indexes on `(drive, parent,
-// name)` and `(drive, name) WHERE parent IS NULL` serve them cheaply.
-export const StorageFolderRoots = graphql(`
-  query StorageFolderRoots($drive: String!, $limit: Int) {
-    folders(
-      where: { drive: { _eq: $drive }, parent: { _is_null: true } }
-      order_by: [{ name: asc }]
-      limit: $limit
-    ) {
-      id
-      name
-      description
-      is_virtual
-      drive
-      parent
-    }
-  }
-`);
-
-export const StorageFolderChildren = graphql(`
-  query StorageFolderChildren($drive: String!, $parent: String!, $limit: Int) {
-    folders(
-      where: { drive: { _eq: $drive }, parent: { _eq: $parent } }
-      order_by: [{ name: asc }]
-      limit: $limit
-    ) {
-      id
-      name
-      description
-      is_virtual
-      drive
-      parent
-    }
+// A requested scope is independent of whichever sibling page is visible.
+export const StorageFolderById = graphql(`
+  query StorageFolderById($id: String!) {
+    folders_by_pk(id: $id) { id name description is_virtual drive parent }
   }
 `);
 
@@ -156,10 +108,8 @@ export type StorageFile = NonNullable<
 /** A folder (tree node) or smart folder, as projected by the folder-tree
  * queries; the roots and children arms share this shape. Ids are public sqids. */
 export type StorageFolder = NonNullable<
-  DocumentType<typeof StorageFolderRoots>["folders"]
+  DocumentType<typeof StorageFoldersPage>["folders"]
 >[number];
 
-/** A drive (tree root), as projected by `StorageDrives`. */
-export type StorageDrive = NonNullable<
-  DocumentType<typeof StorageDrives>["drives"]
->[number];
+/** The drive selector needs only public identity and its declared label. */
+export interface StorageDrive { id: string; name: string }

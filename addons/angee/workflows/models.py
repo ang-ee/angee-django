@@ -19,22 +19,25 @@ from django.utils.functional import cached_property
 from rebac import system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.fields import DiagnosticTextField, ModelLabelField, StateField
-from angee.graphql.events import ChangeRelatedRecord
-from angee.graphql.schema import GraphQLSchemas
-from angee.iam.service_users import sync_service_user
-from angee.identity import public_id_for
-from angee.models import (
+from angee.base.fields.state import StateField
+from angee.base.fields.text import DiagnosticTextField, ModelLabelField
+from angee.base.identity import public_id_for
+from angee.base.models import (
     AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
     AppendOnlyModel,
     AppendOnlyQuerySet,
-    HistoryMixin,
+    MergePolicy,
     OwnerMixin,
+    RecordRefMixin,
     update_fields_with_auto_now,
 )
-from angee.refs import MergePolicy, RecordRefMixin
+from angee.graphql.events import ChangeRelatedRecord
+from angee.graphql.mixins import ImplementationChoicesMixin
+from angee.graphql.schema import GraphQLSchemas
+from angee.iam.service_users import sync_service_user
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, GraphEdge, GraphNode
 from angee.workflows.managers import (
@@ -146,7 +149,7 @@ class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     """Editable identity and draft, pointing to one immutable published version.
 
     A workflow is a grant root with transferable ownership
-    (:class:`~angee.models.OwnerMixin`); ``created_by`` stays attribution.
+    (:class:`~angee.base.models.OwnerMixin`); ``created_by`` stays attribution.
     An install without a user-backed actor leaves it ownerless, for platform
     administrators to manage or transfer.
     """
@@ -210,11 +213,11 @@ class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         return self.name
 
 
-class WorkflowVersionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
+class WorkflowVersionQuerySet(AppendOnlyQuerySet[Any], AngeeHistoryQuerySet[Any]):
     """Prevent collection mutation of published graph documents."""
 
 
-WorkflowVersionManager = AngeeManager.from_queryset(WorkflowVersionQuerySet)
+WorkflowVersionManager = AngeeHistoryManager.from_queryset(WorkflowVersionQuerySet)
 
 
 class WorkflowVersion(AppendOnlyModel, AngeeDataModel):
@@ -760,7 +763,7 @@ class StepRun(AngeeDataModel):
         ]
 
 
-_StepAttemptManager = AngeeManager.from_queryset(StepAttemptQuerySet)
+_StepAttemptManager = AngeeHistoryManager.from_queryset(StepAttemptQuerySet)
 
 
 class StepAttempt(AngeeDataModel):
@@ -871,7 +874,7 @@ class StepWatch(RecordRefMixin, HistoryMixin, AngeeDataModel):
         indexes = [models.Index(fields=("content_type", "object_id"), name="workflows_watch_record")]
 
 
-class Trigger(ResourceLoadMixin, AngeeDataModel):
+class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel):
     """Disabled-by-default admission policy with source-scoped domain hooks.
 
     An ``extends`` donor implementing ``trigger_input`` or ``check_admission``

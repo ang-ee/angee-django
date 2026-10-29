@@ -73,8 +73,8 @@ include_operator_installer:
   help: Include angee.platform_integrate_operator in INSTALLED_APPS.
 
 # Which addon roster the host composes. `base` is the consumer scaffold: the
-# foundation base addons plus the project's own consumer addons. `full` is the
-# whole platform composition — every base addon, the messaging bridges, and the
+# foundation and selected framework addons plus the project's consumer addons. `full` is the
+# whole platform composition — every framework addon, the messaging bridges, and the
 # notes example — the roster the framework-dev stack chains in.
 addons_profile:
   type: str
@@ -126,10 +126,10 @@ appearance_options:
 # The rendered web package reaches the framework's build-config (Vite, Vitest) by
 # PACKAGE NAME — `@angee/app/vite`, `@angee/app/vitest` — not a sibling path.
 # `@angee/app` is a dependency of the web package, so those exports resolve the
-# same way whether the framework is an editable checkout or an installed wheel.
-# That is why this template takes no `framework_*` path input. (The tsconfig is
-# inlined rather than extended: a package-name `extends` resolves in tsc but not
-# in Vite's oxc tsconfig loader.)
+# same way in a source workspace or the baked web image. The Python checkout
+# input below also supplies addon discovery roots; web configuration resolves
+# its own dependencies through pnpm. The tsconfig is inlined rather than
+# extended because Vite's oxc loader does not resolve package-name extends.
 
 # React major used for the @types/react* devDependencies. Kept as one input so the
 # rendered manifest pins a single React line.
@@ -142,8 +142,8 @@ react_version:
 # emits a plain PyPI dependency; a path (relative to the project root) emits a
 # `[tool.uv.sources]` editable override onto a local framework checkout — the
 # `stacks/local` chain passes `sources/angee` so host-run `uv run manage.py`
-# and the framework=source stack share one code source. For a framework=baked
-# instance without a checkout, blank this or keep the checkout cloned.
+# and the framework=source stack share one code source. A chained baked stack
+# omits the editable override and uses its image's native addon sources.
 framework_source_path:
   type: str
   default: ""

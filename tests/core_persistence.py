@@ -10,11 +10,10 @@ from django.conf import settings
 from django.db import models
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 
-from angee.models import (
+from angee.base.models import (
     AngeeModel,
-    AngeeQuerySet,
-    HistoryMixin,
     ImmutableFieldsMixin,
     ItemOwnershipMixin,
     OptimisticLockMixin,
@@ -24,7 +23,8 @@ from angee.models import (
     TrashMixin,
     TrashQuerySet,
 )
-from angee.testing.permissions import install_permission_schema
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 
 
 class RevisionRow(OptimisticLockMixin):
@@ -60,7 +60,7 @@ class OwnershipContainer(ItemOwnershipMixin):
         app_label = "scopedemo"
 
 
-class OwnedRows(OwnerQuerySet, AngeeQuerySet):
+class OwnedRows(OwnerQuerySet, AngeeHistoryQuerySet):
     """Compose release with the framework's ordinary queryset mechanics."""
 
 
@@ -113,7 +113,7 @@ definition scopedemo/owned_row {
 
 @pytest.fixture
 def ownership_tables(db):
-    install_permission_schema(parse_zed(OWNERSHIP_SCHEMA))
+    install_schema(parse_zed(OWNERSHIP_SCHEMA))
     try:
         yield
     finally:

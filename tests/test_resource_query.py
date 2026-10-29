@@ -18,7 +18,7 @@ from strawberry.scalars import JSON
 from strawberry_django_hasura import hasura_config
 from strawberry_django_hasura.inputs import build_bool_exp, comparison_for_python_type, host_module
 
-from angee.data.metadata import (
+from angee.graphql.data.contracts import (
     DataDefaultSortMetadata,
     DataQueryAxis,
     DataQueryDrill,

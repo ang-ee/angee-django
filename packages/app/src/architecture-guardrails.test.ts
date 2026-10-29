@@ -278,6 +278,24 @@ describe("React architecture guardrails", () => {
     ]);
   });
 
+  test("runtime dependency scans retain mixed imports while excluding erased type edges", () => {
+    const source = ts.createSourceFile("fixture.ts", `
+      import type { ErrorObject } from "ajv";
+      import { type Options } from "ajv/options";
+      export type { Schema } from "ajv/types";
+      export { type Schema as Erased } from "ajv/erased";
+      type Validator = import("ajv/validator").Validator;
+      import { type Config, compile } from "./compiler";
+      export { type Config as PublicConfig, compile } from "./exports";
+      import "./side-effect";
+      const lazy = import("./lazy");
+    `, ts.ScriptTarget.Latest, true);
+    expect(importSpecifiersFromSource(source)).toEqual([
+      "ajv", "ajv/options", "ajv/types", "ajv/erased", "ajv/validator", "./compiler", "./exports", "./side-effect", "./lazy",
+    ]);
+    expect(importSpecifiersFromSource(source, true)).toEqual(["./compiler", "./exports", "./side-effect", "./lazy"]);
+  });
+
   test.each(["vi", "v"])("reports project-schema mocks through the %s binding in a package", (binding) => {
     const scratch = join(PACKAGES_ROOT, "app", "test-results");
     mkdirSync(scratch, { recursive: true });
@@ -336,7 +354,7 @@ describe("React architecture guardrails", () => {
       if (visited.has(file)) return;
       visited.add(file);
       expect(file).not.toBe(schemaEntry);
-      for (const specifier of importSpecifiers(file)) {
+      for (const specifier of sourceAnalysis(file).runtimeSpecifiers) {
         expect(specifier).not.toMatch(/^ajv(?:-formats)?(?:\/|$)/);
         if (angeePackageName(specifier) === "@angee/ui") {
           const key = specifier === "@angee/ui" ? "." : `.${specifier.slice("@angee/ui".length)}`;
@@ -463,17 +481,16 @@ describe("React architecture guardrails", () => {
       ];
       expect(invalidCriticalExports(declarations)).toEqual([]);
       const contents = allPackageRoots().flatMap((pkg) =>
-        sourceFiles(pkg.root).map((file) => ({
-          file,
-          consumed: consumedIdentifiers(ts.createSourceFile(
-            file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true,
-          )),
-        })),
+        sourceFiles(pkg.root)
+          .filter((file) => !isTestFile(file) && !isStoryFile(file))
+          .map((file) => ({
+            file,
+            consumed: sourceAnalysis(file).consumed,
+          })),
       );
       const unused = declarations
         .filter((declaration) => !contents.some((candidate) => {
           if (resolve(candidate.file) === resolve(declaration.ownerFile)) return false;
-          if (isTestFile(candidate.file) || isStoryFile(candidate.file)) return false;
           return candidate.consumed.has(declaration.name);
         }))
         .map((declaration) => declaration.name);
@@ -932,26 +949,37 @@ function sourceFiles(root: string): string[] {
   return files;
 }
 
-// Source files do not change during a run, so each is parsed once across the
-// layering scan and the published-vitest graph of every guardrail.
-const importSpecifierCache = new Map<string, readonly string[]>();
+// Source files do not change during a run. Import and production-consumer scans
+// share one parse and retain only the facts their checks need.
+const sourceAnalysisCache = new Map<string, {
+  specifiers: readonly string[];
+  runtimeSpecifiers: readonly string[];
+  consumed: ReadonlySet<string>;
+}>();
 
 function importSpecifiers(file: string): readonly string[] {
-  const cached = importSpecifierCache.get(file);
+  return sourceAnalysis(file).specifiers;
+}
+
+function sourceAnalysis(file: string) {
+  const cached = sourceAnalysisCache.get(file);
   if (cached) return cached;
-  const text = readFileSync(file, "utf8");
   const source = ts.createSourceFile(
     file,
-    text,
+    readFileSync(file, "utf8"),
     ts.ScriptTarget.Latest,
     true,
   );
-  const specifiers = importSpecifiersFromSource(source);
-  importSpecifierCache.set(file, specifiers);
-  return specifiers;
+  const analysis = {
+    specifiers: importSpecifiersFromSource(source),
+    runtimeSpecifiers: importSpecifiersFromSource(source, true),
+    consumed: isTestFile(file) || isStoryFile(file) ? new Set<string>() : consumedIdentifiers(source),
+  };
+  sourceAnalysisCache.set(file, analysis);
+  return analysis;
 }
 
-function importSpecifiersFromSource(source: ts.SourceFile): string[] {
+function importSpecifiersFromSource(source: ts.SourceFile, runtimeOnly = false): string[] {
   const specifiers: string[] = [];
   const vitestBindings = new Set(["vi", "vitest"]);
   for (const statement of source.statements) {
@@ -968,11 +996,20 @@ function importSpecifiersFromSource(source: ts.SourceFile): string[] {
   }
   const visit = (node: ts.Node): void => {
     let specifier: ts.Node | undefined;
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+    if (ts.isImportDeclaration(node)) {
+      const clause = node.importClause;
+      if (runtimeOnly && (clause?.isTypeOnly || clause && !clause.name && clause.namedBindings
+        && ts.isNamedImports(clause.namedBindings) && clause.namedBindings.elements.length > 0
+        && clause.namedBindings.elements.every((binding) => binding.isTypeOnly))) return;
+      specifier = node.moduleSpecifier;
+    } else if (ts.isExportDeclaration(node)) {
+      if (runtimeOnly && (node.isTypeOnly || node.exportClause && ts.isNamedExports(node.exportClause)
+        && node.exportClause.elements.length > 0 && node.exportClause.elements.every((binding) => binding.isTypeOnly))) return;
       specifier = node.moduleSpecifier;
     } else if (ts.isExternalModuleReference(node)) {
       specifier = node.expression;
     } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      if (runtimeOnly) return;
       specifier = node.argument.literal;
     } else if (
       ts.isCallExpression(node)

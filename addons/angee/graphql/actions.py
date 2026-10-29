@@ -18,12 +18,13 @@ from django.db import models, transaction
 from rebac import PermissionDenied, RebacMixin, system_context
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_camel_case
+from strawberry_django.auth.utils import get_current_user
 
+from angee.base.models import TransitionNotAllowed
+from angee.base.permissions import require_rebac_queryset
 from angee.errors import DomainError
 from angee.graphql.ids import PublicID, instance_for_id, public_id_value
 from angee.graphql.writes import instance_for_write
-from angee.models import TransitionNotAllowed
-from angee.permissions import require_rebac_queryset
 from graphql import GraphQLError
 
 _ActionTarget = TypeVar("_ActionTarget", bound=models.Model)
@@ -266,7 +267,7 @@ def authorized_action_target(
     and leaves authorization to the caller.
     """
 
-    user = getattr(info.context.request, "user", None)
+    user = get_current_user(info)
     if user is None or not getattr(user, "is_authenticated", False):
         raise PermissionDenied("Authentication required.")
     instance = instance_for_write(model, id)
@@ -287,7 +288,7 @@ def authorized_permission_target(
     lookup; a narrowed-away row reads as not found.
     """
 
-    user = getattr(info.context.request, "user", None)
+    user = get_current_user(info)
     if user is None or not getattr(user, "is_authenticated", False):
         raise PermissionDenied("Authentication required.")
     scoped: models.QuerySet[_ActionTarget] = require_rebac_queryset(model).with_actor(user).with_action(permission)

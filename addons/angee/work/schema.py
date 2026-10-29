@@ -11,7 +11,10 @@ from django.apps import apps
 from django.db.models import F
 from rebac import system_context, to_subject_ref
 from strawberry import auto
+from strawberry_django.auth.utils import get_current_user
+from strawberry_django.utils.requests import get_request
 
+from angee.base.identity import public_subject_ref
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -21,15 +24,13 @@ from angee.graphql.actions import (
     many_actions,
 )
 from angee.graphql.capabilities import permissions_field
-from angee.graphql.data import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, instance_for_id, optional_public_id, to_public_id
 from angee.graphql.inputs import InputReference
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_labels, user_label, user_public_id
-from angee.iam.permissions import request_from_info
-from angee.identity import public_subject_ref
 from angee.projects.schema import DroppedReason, TaskType
 from angee.spaces.schema import SpaceGroupType
 
@@ -306,7 +307,7 @@ class WorkRemovedTaskQuery:
     ) -> list[RemovedTaskType]:
         """Return trash the reader may restore, scoped to a readable queue or parent."""
 
-        user = getattr(request_from_info(info), "user", None)
+        user = get_current_user(info)
         if user is None or not getattr(user, "is_authenticated", False):
             return []
         scope: dict[str, Any] = {}
@@ -320,7 +321,7 @@ class WorkRemovedTaskQuery:
         rows = list(Task.removed_for(user, **scope)[: max(1, min(limit, 100))])
         labels = user_display_labels(
             (row.trashed_by_id for row in rows),
-            request=request_from_info(info),
+            request=get_request(info),
         )
         return [
             RemovedTaskType(

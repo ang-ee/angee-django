@@ -16,7 +16,8 @@ from django.db.models import Field, Model
 from pydantic import BaseModel, PrivateAttr
 
 from angee.addons import is_angee_addon
-from angee.impl import ImplChoice, ImplClassField
+from angee.base.fields.implementation import ImplClassField
+from angee.base.implementations import ImplChoice
 
 
 class PlatformFieldRow(BaseModel):
@@ -225,7 +226,7 @@ def root_app_names() -> frozenset[str]:
     return frozenset(
         declaration
         for config in apps.get_app_configs()
-        if (declaration := getattr(config, "angee_root_declaration", None)) is not None
+        if (declaration := getattr(config, "compose_root_declaration", None)) is not None
     )
 
 
@@ -235,7 +236,7 @@ def root_app_aliases() -> dict[str, str]:
     return {
         declaration: config.name
         for config in apps.get_app_configs()
-        if (declaration := getattr(config, "angee_root_declaration", None)) is not None
+        if (declaration := getattr(config, "compose_root_declaration", None)) is not None
     }
 
 
@@ -267,7 +268,7 @@ def contributed_fields(config: AppConfig) -> list[ContributedFieldRow]:
     rows = []
     for owner in addons():
         for model in data_models(owner):
-            for field_name, addon_id in model.__dict__.get("angee_contributed_field_origins", ()):
+            for field_name, addon_id in model.__dict__.get("compose_contributed_field_origins", ()):
                 if addon_id != config.name:
                     continue
                 field = model._meta.get_field(field_name)

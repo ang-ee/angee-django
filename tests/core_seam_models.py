@@ -7,10 +7,10 @@ from django.db import models
 from rebac import to_subject_ref
 from rebac.backends import backend, reset_backend
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 
-from angee.errors import RecordAccessSubjectRefused
-from angee.models import Stage
-from angee.testing.permissions import install_permission_schema
+from angee.base.models import Stage
+from angee.base.permissions import RecordAccessSubjectRefused
 from tests.conftest import Vault
 from tests.core_persistence import OwnedRow
 
@@ -70,6 +70,9 @@ class FallbackStage(Stage):
     class Meta(Stage.Meta):
         abstract = False
         app_label = "scopedemo"
+        constraints = [models.UniqueConstraint(
+            fields=("container", "position"), name="fallback_stage_container_position",
+        )]
 
 
 SUBJECT_SCHEMA = """
@@ -102,7 +105,7 @@ definition scopedemo/subject_guarded_leaf {
 @pytest.fixture
 def subject_tables(ownership_tables):
     active = backend()
-    install_permission_schema(
+    install_schema(
         replace(
             active.schema(),
             definitions=[
@@ -110,7 +113,7 @@ def subject_tables(ownership_tables):
                 *parse_zed(SUBJECT_SCHEMA).definitions,
             ],
         ),
-        active=active,
+        backend=active,
     )
 
 
@@ -127,9 +130,9 @@ def constrained_vault_tables(composed_tables):
             permission write__owner = parent->transfer
         }
     """)
-    install_permission_schema(
+    install_schema(
         replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]),
-        active=active,
+        backend=active,
     )
     try:
         yield

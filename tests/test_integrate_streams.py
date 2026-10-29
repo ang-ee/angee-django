@@ -1163,7 +1163,7 @@ def test_identity_rescan_skips_an_identity_another_attempt_healed_while_it_read(
     assert failure_state(failure).status == SyncFailureStatus.RESOLVED
 
 
-def test_changed_remote_failure_defers_older_quarantine_for_the_same_identity(stream_bridge: Channel) -> None:
+def test_changed_remote_failure_keeps_one_current_problem_and_older_quarantine_history(stream_bridge: Channel) -> None:
     stream = current_stream(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
     adapter = ReadKeysAdapter(
         pages=[StreamPage((RecordChange("poison", {}, "old", mapped_payload={}),), {"page": 1})],
@@ -1185,8 +1185,11 @@ def test_changed_remote_failure_defers_older_quarantine_for_the_same_identity(st
         )
     )
     assert {row.source_hash for row in failures} == {"old", "new"}
-    assert all(row.status == SyncFailureStatus.OPEN and row.retry_at > timezone.now() for row in failures)
-    assert failures[0].retry_at == failures[1].retry_at
+    old, current = failures
+    assert old.status == SyncFailureStatus.RESOLVED and old.resolved_at is not None and old.retry_at is None
+    assert current.status == SyncFailureStatus.OPEN and current.retry_at > timezone.now()
+    assert [row.pk for row in SyncStream.objects.get(pk=stream.pk).sync_failures(open_only=True)] == [current.pk]
+    assert not RecordLink.objects.filter(stream=stream).rescan(limit=100)
     begin_stream_cycle(stream, adapter)
     assert adapter.reads == [("poison",)]
     assert not AppliedRecord.objects.exists()

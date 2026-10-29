@@ -21,7 +21,7 @@ away from zero. That mode is **this addon's stated policy** for quantity
 rounding, deliberately fixed here rather than caller-supplied (unlike the
 money/tax owners, whose amount rounding takes an explicit mode from company
 policy). ``rounding`` is a decimal step and, because unit steps are powers of ten,
-is read as a signed decimal-place position by :func:`angee.numeric.quantize`.
+is read as a signed decimal-place position by :meth:`decimal.Decimal.quantize`.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from django.db import models
 from django.db.models.functions import Abs, Cast, Coalesce, Floor, Log, Power, Round, Sign
 from django.db.models.lookups import Exact
 
-from angee.models import (
+from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -43,7 +43,7 @@ from angee.models import (
     ArchiveQuerySet,
     role_anchor,
 )
-from angee.numeric import quantize
+from angee.resources.mixins import ResourceLoadMixin
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +74,7 @@ class UomExpressions:
         )
 
 
-class UomCategory(AngeeDataModel):
+class UomCategory(ResourceLoadMixin, AngeeDataModel):
     """A family of units that measure the same quantity (weight, volume, time)."""
 
     runtime = True
@@ -109,7 +109,7 @@ class UomQuerySet(
 UomManager = AngeeManager.from_queryset(UomQuerySet)
 
 
-class Uom(ArchiveMixin, AngeeDataModel):
+class Uom(ResourceLoadMixin, ArchiveMixin, AngeeDataModel):
     """One unit within a category, mapped affinely onto the reference unit.
 
     ``value_in_reference = qty * ratio + offset``: ``ratio`` is the number of
@@ -169,8 +169,8 @@ class Uom(ArchiveMixin, AngeeDataModel):
         """Return the signed decimal-place position of this unit's ``rounding`` step.
 
         ``rounding`` is a decimal step (``0.001`` rounds to a milligram, ``1`` to a
-        whole unit, and ``10`` rounds to tens). :func:`angee.numeric.quantize`
-        accepts signed places, so the step is the inverse of its normalized
+        whole unit, and ``10`` rounds to tens). Decimal exponents accept signed
+        places, so the step is the inverse of its normalized
         exponent — exact because unit steps are powers of ten. A non-power-of-ten
         step such as ``0.5`` is not representable this way; see the module docstring.
         """
@@ -188,7 +188,7 @@ class Uom(ArchiveMixin, AngeeDataModel):
         remainder.
         """
 
-        return quantize(qty, self.rounding_places, decimal.ROUND_HALF_UP)
+        return qty.quantize(Decimal(1).scaleb(-self.rounding_places), rounding=decimal.ROUND_HALF_UP)
 
     @staticmethod
     def quantize_expression(
@@ -272,5 +272,5 @@ class Uom(ArchiveMixin, AngeeDataModel):
 
 UomRole = role_anchor("uom/role")
 """The ``uom/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective uom manager. See :func:`angee.models.role_anchor`.
+an effective uom manager. See :func:`angee.base.models.role_anchor`.
 """

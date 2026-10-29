@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from django.apps import AppConfig
 from django.core import checks
+from sentry_sdk.integrations.logging import ignore_logger
 
 
 class GraphQLConfig(AppConfig):
@@ -16,6 +17,9 @@ class GraphQLConfig(AppConfig):
         """Register schema checks and connect model-change hooks."""
 
         super().ready()
+        # The schema sanitizer owns the one diagnostic event without resolver
+        # values; Strawberry's ordinary log must not send a second Sentry event.
+        ignore_logger("strawberry.execution")
         # Phase-1 AppConfig loading imports this module before schema declarations
         # and concrete runtime models are safe to resolve; defer these imports until
         # Django calls ready() after app population.

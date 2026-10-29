@@ -27,7 +27,12 @@ class CredentialOidc(models.Model):
         abstract = True
 
     def check_disconnect(self) -> None:
-        """Keep a passwordless user's final OIDC account linked."""
+        """Keep a passwordless user's final OIDC account linked under its user lock.
+
+        The disconnect owner holds the transaction through credential deletion.
+        Locking the common user serializes removals of different accounts before
+        either checks the remaining sign-in methods.
+        """
 
         super().check_disconnect()
         credential = cast("Credential", self)
@@ -35,21 +40,28 @@ class CredentialOidc(models.Model):
             return
         if credential.oauth_client_id is None:
             return
+        using = credential._state.db
         oauth_field = type(credential).oauth_client.field
         # Disconnect must honor current login policy rather than a cached related row.
-        oauth_client = oauth_field.related_model._base_manager.filter(pk=credential.oauth_client_id).first()
+        oauth_client = (
+            oauth_field.related_model._base_manager.using(using).filter(pk=credential.oauth_client_id).first()
+        )
         if oauth_client is None or not oauth_client.login_enabled:
             return
         user_field = type(credential).user.field
         assert credential.user_id is not None
         # A password may have changed since this credential cached its user.
-        user = user_field.related_model._base_manager.get(pk=credential.user_id)
+        user = (
+            user_field.related_model._base_manager.using(using)
+            .select_for_update()
+            .get(pk=credential.user_id)
+        )
         if user.has_usable_password():
             return
         with system_context(reason="iam_integrate_oidc.unlink.guard"):
             account_count = (
                 type(credential)
-                .objects.filter(
+                .objects.using(using).filter(
                     user_id=credential.user_id,
                     kind=CredentialKind.OAUTH,
                     oauth_client__login_enabled=True,

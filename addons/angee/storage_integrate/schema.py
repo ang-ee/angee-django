@@ -11,7 +11,7 @@ from django.utils import timezone
 from strawberry import auto
 
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID, require_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes

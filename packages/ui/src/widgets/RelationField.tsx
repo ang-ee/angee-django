@@ -1,25 +1,13 @@
-import { lazy, useMemo, useState, type ReactElement, type Ref } from "react";
+import { useRef, useState, type ReactElement, type Ref } from "react";
 
 import { Glyph } from "../chrome/Glyph";
-import { LazyBoundary } from "../fragments/LazyBoundary";
 import { useUiT } from "../i18n";
-import { cn } from "../lib/cn";
-import { Skeleton } from "../ui/skeleton";
-import { inputVariants } from "../ui/input";
-import { widgetControlPresentationProps } from "../ui/widget-control";
+import { Button } from "../ui/button";
+import { Pager, type PagerProps } from "../ui/pager";
+import { Chip } from "../ui/chip";
+import { Combobox } from "../ui/combobox";
 import type { WidgetControlProps } from "./types";
 import type { Tone } from "../lib/tones";
-import {
-  PopoverContent,
-  PopoverPortal,
-  PopoverPositioner,
-  PopoverRoot,
-  PopoverTrigger,
-} from "../ui/popover";
-
-// cmdk (and the option list it renders) loads when the picker first opens, not
-// at boot — the popover mounts this body only while open.
-const RelationFieldCommandList = lazy(() => import("./RelationFieldCommandList"));
 
 /** One selectable related record. */
 export interface RelationOption {
@@ -37,6 +25,7 @@ export interface RelationSearchState {
   pending?: boolean;
   error?: string;
   retry?: () => void;
+  pagination?: Pick<PagerProps, "page" | "pageSize" | "total" | "onPageChange">;
 }
 
 export interface RelationFieldProps extends Pick<WidgetControlProps, "presentation"> {
@@ -72,7 +61,7 @@ export interface RelationFieldProps extends Pick<WidgetControlProps, "presentati
 
 /**
  * A searchable relation picker: a trigger showing the selected record, and a
- * popover (the owned `Command` list) with a search box, the filtered options,
+ * Combobox popup with a search box, the filtered options,
  * and — when `onCreate` is given and the typed query matches nothing — a
  * "Create …" row. Pure UI; the caller owns the options and what happens on
  * create (`RelationPicker` wires it to an inline create form).
@@ -99,36 +88,62 @@ export function RelationField({
   presentation,
 }: RelationFieldProps): ReactElement {
   const t = useUiT();
-  const [open, setOpen] = useState(false);
-
-  const selected = useMemo(
-    () => options.find((option) => option.value === value),
-    [options, value],
-  );
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const selected = options.find((option) => option.value === value);
+  const text = query.trim();
+  const normalized = text.toLowerCase();
+  const showCreate = Boolean(onCreate) && text !== ""
+    && !options.some((option) => option.label.trim().toLowerCase() === normalized)
+    && !searchState?.pending && !searchState?.error;
+  // The create action is an object identity, never a reserved record id.
+  const createOption = { create: true as const, value: "", label: t("relation.create", { query: text }) };
+  type Item = RelationOption | typeof createOption;
+  const items: Item[] = [
+    ...options,
+    ...(showCreate ? [createOption] : []),
+  ];
   const triggerLabel = selected
-    ? ariaLabel
-      ? `${ariaLabel}: ${selected.label}`
-      : selected.label
+    ? ariaLabel ? `${ariaLabel}: ${selected.label}` : selected.label
     : ariaLabel;
 
   return (
-    <PopoverRoot
-      open={open}
+    <Combobox.Root<Item>
+      autoHighlight
+      required={ariaRequired}
+      readOnly={readOnly}
+      value={selected ?? (value ? { value, label: value } : null)}
+      items={items}
+      filteredItems={searchState?.pending || searchState?.error ? [] : undefined}
+      isItemEqualToValue={(option, current) => !("create" in option) && !("create" in current) && option.value === current.value}
+      filter={onSearchChange ? null : (option, search) => "create" in option ||
+        `${option.label} ${option.value} ${option.description ?? ""} ${option.status?.label ?? ""}`.toLowerCase().includes(search.trim().toLowerCase())}
+      inputValue={query}
+      onInputValueChange={(next, details) => {
+        if (details.reason !== "input-change" && details.reason !== "input-clear") return;
+        setQuery(next);
+        onSearchChange?.(next);
+      }}
       onOpenChange={(next) => {
-        setOpen(next);
+        if (!next) {
+          setQuery("");
+          onSearchChange?.("");
+        }
         onOpenChange?.(next);
       }}
+      onValueChange={(next, details) => {
+        if (details.reason === "escape-key") { details.allowPropagation(); return; }
+        if (!next) return;
+        if ("create" in next) onCreate?.(text);
+        else onChange?.(next.value);
+      }}
     >
-      <PopoverTrigger
+      <Combobox.Trigger
         ref={triggerRef}
         id={id}
-        className={inputVariants({
-          focus: "visible",
-          ...widgetControlPresentationProps(presentation),
-          invalid: ariaInvalid,
-          readOnly,
-          class: "flex items-center gap-2 text-left",
-        })}
+        presentation={presentation}
+        invalid={ariaInvalid}
+        readOnly={readOnly}
         disabled={readOnly}
         aria-label={ariaLabelledBy ? undefined : triggerLabel}
         aria-labelledby={ariaLabelledBy}
@@ -136,37 +151,41 @@ export function RelationField({
         aria-required={ariaRequired}
         aria-invalid={ariaInvalid}
       >
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate",
-            !selected && "text-fg-muted",
-          )}
-        >
-          {selected ? selected.label : placeholder ?? t("relation.placeholder")}
-        </span>
-        <span data-widget-affordance="" className="shrink-0 text-fg-muted">
-          <Glyph decorative name="chevron-down" />
-        </span>
-      </PopoverTrigger>
-      <PopoverPortal>
-        <PopoverPositioner sideOffset={4} align="start">
-          <PopoverContent className="min-w-56 p-0">
-            <LazyBoundary pending={<Skeleton className="m-1 h-8" />}>
-              <RelationFieldCommandList
-                options={options}
-                value={value}
-                searchPlaceholder={searchPlaceholder}
-                aria-label={ariaLabel}
-                onSelect={(next) => onChange?.(next)}
-                onCreate={onCreate}
-                onSearchChange={onSearchChange}
-                searchState={searchState}
-                onDismiss={() => setOpen(false)}
-              />
-            </LazyBoundary>
-          </PopoverContent>
-        </PopoverPositioner>
-      </PopoverPortal>
-    </PopoverRoot>
+        <Combobox.Value placeholder={placeholder ?? t("relation.placeholder")}>
+          {() => selected?.label ?? placeholder ?? (value || t("relation.placeholder"))}
+        </Combobox.Value>
+        <Combobox.Icon />
+      </Combobox.Trigger>
+      <Combobox.Popup align="start" className="min-w-56 p-0" initialFocus={searchRef}>
+        <Combobox.Search ref={searchRef} placeholder={searchPlaceholder ?? t("relation.searchPlaceholder")} />
+        {searchState?.pending ? <div role="status" className="p-3 text-13 text-fg-muted">
+          {t("relation.loading")}
+        </div> : null}
+        {searchState?.error ? <div role="alert" className="p-3 text-13 text-danger-text">
+          {searchState.error}
+          {searchState.retry ? <Button size="sm" variant="ghost" onClick={searchState.retry}>
+            {t("collection.retry")}
+          </Button> : null}
+        </div> : null}
+        <Combobox.List>
+          {(option: Item) => <Combobox.Item key={"create" in option ? "create" : `record:${option.value}`} value={option}>
+            {"create" in option ? <><Glyph decorative name="plus" /><Combobox.ItemText>{option.label}</Combobox.ItemText></> : <>
+              <Combobox.ItemText>
+                <span className="block truncate">{option.label}</span>
+                {option.description ? <span className="block truncate text-2xs text-fg-muted">{option.description}</span> : null}
+              </Combobox.ItemText>
+              {option.status ? <Chip className="shrink-0" tone={option.status.tone}>{option.status.label}</Chip> : null}
+              <Combobox.ItemIndicator />
+            </>}
+          </Combobox.Item>}
+        </Combobox.List>
+        {searchState?.pagination && (searchState.pagination.page > 1 || (searchState.pagination.total ?? 0) > searchState.pagination.pageSize) ? (
+          <div className="border-t border-border-subtle p-2">
+            <Pager {...searchState.pagination} disabled={searchState.pending} labelElement="span" />
+          </div>
+        ) : null}
+        {!showCreate && !searchState?.pending && !searchState?.error ? <Combobox.Empty>{t("relation.noMatches")}</Combobox.Empty> : null}
+      </Combobox.Popup>
+    </Combobox.Root>
   );
 }

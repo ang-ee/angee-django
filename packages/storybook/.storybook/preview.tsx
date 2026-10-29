@@ -1,27 +1,9 @@
-import { useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import {
-  ModelMetadataProvider,
-} from "@angee/metadata";
-import type {
-  Decorator,
-  Preview } from "@storybook/react-vite";
-import { NuqsTestingAdapter } from "nuqs/adapters/testing";
-import {
-  AppearanceProvider,
-  AppRuntimeProvider,
-  type AppRuntime,
-} from "@angee/ui";
-import {
-  ActiveGraphQLSchemaProvider,
-} from "@angee/metadata";
-import {
-  createAngeeHasuraDataProviders,
-  Refine,
-  tanStackRouterProvider,
-  type AngeeHasuraSchemaConfig,
-  type ResourceProps,
-} from "@angee/refine";
-import { ToastProvider, baseIcons } from "@angee/ui";
+import { useMemo, useSyncExternalStore } from "react";
+import type { Decorator, Preview } from "@storybook/react-vite";
+import type { AppRuntime } from "@angee/ui";
+import { parseFlatSearch, stringifyFlatSearch } from "@angee/app/create-app";
+import type { AngeeHasuraSchemaConfig, ResourceProps } from "@angee/refine";
+import { RuntimeFixture, storyAppearance, useStorySnapshot, type RuntimeFixtureProps } from "../src/stories/runtime-fixtures";
 import {
   Outlet,
   RouterProvider,
@@ -32,7 +14,7 @@ import {
 } from "@tanstack/react-router";
 
 import { titleCase } from "@angee/ui/lib/titleCase";
-import { previewThemes, previewThemeId, themeGlobalValue } from "../src/theme-global";
+import { previewThemes, themeGlobalValue } from "../src/theme-global";
 
 import "../src/storybook.css";
 import "@angee/theme-aurora/styles";
@@ -40,7 +22,6 @@ import "@angee/theme-aurora/styles";
 // Stories read auth from the runtime (the ui-owned seam); no app-level auth
 // provider is mounted in the preview.
 const previewRuntime = {
-  icons: baseIcons,
   auth: {
     user: {
       id: "user_ada",
@@ -50,7 +31,6 @@ const previewRuntime = {
     status: "authenticated" as const,
     hasRole: () => true,
   },
-  themes: previewThemes,
 } satisfies Partial<AppRuntime>;
 
 const previewResources: ResourceProps[] = [
@@ -88,11 +68,6 @@ const previewSchemas = {
   },
 } satisfies Record<string, AngeeHasuraSchemaConfig>;
 
-const previewDataProviders = createAngeeHasuraDataProviders(
-  previewSchemas,
-  "public",
-);
-
 const storybookRoutes = [
   "/",
   "/activity",
@@ -109,40 +84,27 @@ const storybookRoutes = [
 
 type StoryRenderer = Parameters<Decorator>[0];
 type StoryContext = Parameters<Decorator>[1];
-type StorySnapshot = { Story: StoryRenderer; globals: StoryContext["globals"] };
+type StoryFixture = Partial<Omit<RuntimeFixtureProps, "children" | "appearance">>;
+type StorySnapshot = { Story: StoryRenderer; globals: StoryContext["globals"]; fixture: StoryFixture };
 
 const withAngeeProviders: Decorator = (Story, context) => {
-  // Full application stories own their router and runtime.
-  if (context.parameters.angeeOwnRuntime === true) return <Story />;
+  // Direct fixture stories use this same canonical stack inside their router.
+  // Their render functions pass toolbar globals through storyAppearance.
+  if (context.parameters.angeeOwnRuntime === true) return <DirectFixtureStory key={context.id} Story={Story} />;
   return <StoryProviders key={context.id} Story={Story} context={context} />;
 };
 
-function StoryProviders({ Story, context }: { Story: StoryRenderer; context: StoryContext }) {
-  const latest = useRef<StorySnapshot>({ Story, globals: context.globals });
-  const store = useMemo(() => {
-    const listeners = new Set<() => void>();
-    return {
-      subscribe(listener: () => void) {
-        listeners.add(listener);
-        return () => { listeners.delete(listener); };
-      },
-      getSnapshot: () => latest.current,
-      publish(snapshot: StorySnapshot) {
-        latest.current = snapshot;
-        listeners.forEach((listener) => listener());
-      },
-    };
-  }, []);
-  useLayoutEffect(() => {
-    if (latest.current.Story !== Story || latest.current.globals !== context.globals) {
-      store.publish({ Story, globals: context.globals });
-    }
-  }, [Story, context.globals, store]);
+function DirectFixtureStory({ Story }: { Story: StoryRenderer }) {
+  return Story();
+}
 
-  const resources: ResourceProps[] = context.parameters.angeeResources ?? previewResources;
+function StoryProviders({ Story, context }: { Story: StoryRenderer; context: StoryContext }) {
+  const declaration = context.parameters.angeeFixture as StoryFixture | (() => StoryFixture) | undefined;
+  const fixture = useMemo(() => typeof declaration === "function" ? declaration() : declaration ?? {}, [declaration]);
+  const store = useStorySnapshot<StorySnapshot>({ Story, globals: context.globals, fixture });
+
   const paths = [...new Set<string>([...storybookRoutes, ...(context.parameters.angeeRoutes ?? [])])];
   const initialRoute = typeof context.parameters.route === "string" ? context.parameters.route : "/notes";
-  const resourceKey = JSON.stringify(resources);
   const routeKey = JSON.stringify(paths);
   const router = useMemo(() => {
     function StoryContent() {
@@ -152,26 +114,15 @@ function StoryProviders({ Story, context }: { Story: StoryRenderer; context: Sto
       return snapshot.Story();
     }
     function StoryRoot() {
-      const { globals } = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
-      return (
-        <AppRuntimeProvider runtime={previewRuntime}>
-          <AppearanceProvider host={{
-            themeId: previewThemeId(globals.themeId),
-            colorScheme: globals.colorScheme === "dark" ? "dark" : globals.colorScheme === "light" ? "light" : "system",
-          }}>
-            <Refine dataProvider={previewDataProviders} resources={resources}
-              routerProvider={tanStackRouterProvider} options={{ syncWithLocation: false }}>
-              <ActiveGraphQLSchemaProvider schema="public">
-                <ModelMetadataProvider>
-                  <NuqsTestingAdapter>
-                    <ToastProvider><Outlet /></ToastProvider>
-                  </NuqsTestingAdapter>
-                </ModelMetadataProvider>
-              </ActiveGraphQLSchemaProvider>
-            </Refine>
-          </AppearanceProvider>
-        </AppRuntimeProvider>
-      );
+      const { globals, fixture } = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+      return <RuntimeFixture
+        {...fixture}
+        schemas={fixture.schemas ?? previewSchemas}
+        resources={fixture.resources ?? (fixture.schemas ? undefined : previewResources)}
+        runtime={{ ...previewRuntime, ...fixture.runtime }}
+        appearance={storyAppearance(globals)}
+        routed
+      ><Outlet /></RuntimeFixture>;
     }
     const rootRoute = createRootRoute({ component: StoryRoot });
     return createRouter({
@@ -179,11 +130,13 @@ function StoryProviders({ Story, context }: { Story: StoryRenderer; context: Sto
         getParentRoute: () => rootRoute, path, component: StoryContent,
       }))),
       history: createMemoryHistory({ initialEntries: [initialRoute] }),
+      parseSearch: parseFlatSearch,
+      stringifySearch: stringifyFlatSearch,
       defaultPreload: false,
     });
-    // Serialized declaration keys keep equivalent parameter arrays from
+    // Serialized route keys keep equivalent parameter arrays from
     // reconstructing the router when args or toolbar globals change.
-  }, [initialRoute, resourceKey, routeKey, store]);
+  }, [initialRoute, routeKey, store]);
 
   return (
     <div className="min-h-screen bg-canvas p-6 font-sans text-fg">

@@ -10,13 +10,13 @@ from django.db import models
 from rebac import RelationshipTuple, SubjectRef, system_context, to_object_ref, write_relationships
 from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 from strawberry import auto
 
-from angee.graphql.data import hasura_model_resource
+from angee.base.models import AngeeDataModel
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.models import AngeeDataModel
-from angee.testing.permissions import install_permission_schema
 from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.tables import model_tables
 
@@ -47,7 +47,7 @@ def test_native_aggregates_scope_each_logical_row_once() -> None:
     active = backend()
     assert isinstance(active, LocalBackend)
     with model_tables((ScopedAggregateRecord,)):
-        install_permission_schema(
+        install_schema(
             parse_zed(
                 """
                 definition auth/user {}
@@ -58,7 +58,7 @@ def test_native_aggregates_scope_each_logical_row_once() -> None:
                 }
                 """
             ),
-            active=active,
+            backend=active,
         )
         try:
             resource = hasura_model_resource(

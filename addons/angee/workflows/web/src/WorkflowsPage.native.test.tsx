@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 
-import { Catalogue, CatalogueStory, QueryError, Unavailable } from "./WorkflowsPage.stories";
+import { CatalogueStory } from "./WorkflowsPage.stories";
 
 beforeAll(() => {
   Element.prototype.getAnimations ??= () => [];
@@ -12,7 +12,7 @@ beforeAll(() => {
 afterEach(cleanup);
 
 test("opens a workflow from the catalogue with its retained versions and recent runs", async () => {
-  render(Catalogue.render());
+  render(<CatalogueStory list />);
   const workflow = await screen.findByRole("link", { name: /record_review/ });
   expect(new URL(workflow.getAttribute("href")!, "https://example.test").pathname).toBe("/workflows/wfl_review");
   expect(screen.queryByRole("button", { name: /New/ })).toBeNull();
@@ -32,7 +32,7 @@ test("versions and recent runs are filtered by the open workflow using native li
   fireEvent.click(await screen.findByRole("tab", { name: "Versions" }));
   await screen.findByText("usr_operator");
   fireEvent.click(screen.getByRole("tab", { name: "Recent runs" }));
-  await screen.findByText("Failed");
+  await screen.findAllByText("Failed");
   for (const name of ["workflowversion", "workflowrun"]) {
     const request = onRequest.mock.calls.find(([entry]) => entry.query.includes(`${name}(`))?.[0];
     expect(request?.variables.where).toEqual({ _and: [
@@ -54,7 +54,7 @@ test("the workflow trigger tab uses its canonical scope and routes retained poli
 });
 
 test("unreadable workflows show an empty state without a retry action", async () => {
-  render(Unavailable.render());
+  render(<CatalogueStory unavailable />);
   expect(await screen.findByRole("heading", { name: "Record unavailable" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 });
@@ -88,7 +88,7 @@ test("writers default to Studio while readers open their first pane without auth
 });
 
 test("transport errors offer the shared reload action", async () => {
-  render(QueryError.render());
+  render(<CatalogueStory queryError />);
   await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy(), { timeout: 10000 });
   expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   expect(screen.queryByText("Record unavailable")).toBeNull();

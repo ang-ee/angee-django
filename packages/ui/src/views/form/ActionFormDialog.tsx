@@ -1,33 +1,26 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { Controller, useWatch, type Control } from "react-hook-form";
-import { useModelMetadata } from "@angee/metadata";
+import { useWatch, type Control } from "react-hook-form";
 import type { ActionOutcome } from "@angee/refine";
 
 import { DialogForm } from "../../fragments/DialogForm";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { errorMessage } from "../../feedback";
 import { Button } from "../../ui/button";
-import { FieldDescription, FieldLabel, FieldRoot } from "../../ui/field";
 import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
 import { relationIdList, relationValueId } from "../../widgets/types";
-import { FieldDescriptorControl } from "./field-descriptor-control";
 import { useRuntimeViewAs } from "../../runtime";
 import {
   emptyDialogValue,
   emptyValueForField,
   mutationDialogValueCodecs,
 } from "./MutationDialog";
-import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
 import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
-import { RelationFieldWidget } from "../relation/RelationFieldWidget";
-import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { useActionForm } from "./use-action-form";
 import { ActionFormProvider } from "./ActionFormProvider";
-import { DescriptorFieldList } from "./DescriptorFieldList";
+import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
 import { actionOutcomeSubmitResult } from "./validation-errors";
-import { fieldErrorMessages } from "./form-view-model";
 import type { ActionArg, ActionArgs, ActionDescriptor, ActionFormContext, ActionFormDefinition } from "../page";
 
 export interface ActionFormDialogProps {
@@ -53,8 +46,7 @@ type ArgValues = Record<string, unknown>;
  * `args` — scalars, a single relation picker, or a relation list prefilled from
  * the invoking selection/record — then fires the authored mutation via the
  * action's `submit`. It composes the shared owners (`DialogForm`,
- * `FieldDescriptorControl`, `RelationFieldWidget`/`RelationMultiFieldWidget`)
- * with react-hook-form for collection, and `useActionForm` for the submit
+ * `DescriptorFieldList`) with react-hook-form for collection, and `useActionForm` for the submit
  * lifecycle; no hand-rolled `<form>`.
  *
  * On an `ok=false` outcome it binds the in-band `validationErrors` to their args
@@ -121,7 +113,6 @@ function ActionArgsDialog({
     formError,
     submitting,
     saveConflict,
-    clearFieldError: clearServerError,
   } = actionForm;
 
   const form = actionForm.form;
@@ -143,25 +134,7 @@ function ActionArgsDialog({
   const body = (
     <>
       {definition ? <ActionDescriptorFields definition={definition} control={form.control} readOnly={saveConflict} disabled={submitting} /> : null}
-      {args.map((arg) => (
-        <Controller
-          key={arg.name}
-          control={form.control}
-          name={arg.name}
-          render={({ field, fieldState }) => (
-            <ActionArgRow
-              arg={arg}
-              value={field.value}
-              messages={fieldState.error ? fieldErrorMessages([fieldState.error]) : []}
-              readOnly={submitting || saveConflict}
-              onChange={(next) => {
-                clearServerError(arg.name);
-                field.onChange(next);
-              }}
-            />
-          )}
-        />
-      ))}
+      {!definition ? <DescriptorFieldList fields={args.map(actionArgField)} readOnly={saveConflict} /> : null}
       <ErrorBanner description={formError} />
     </>
   );
@@ -253,166 +226,27 @@ function ActionDescriptorFields({ definition, control, readOnly, disabled }: {
   </fieldset>;
 }
 
-function ActionArgRow({
-  arg,
-  value,
-  messages,
-  readOnly,
-  onChange,
-}: {
-  arg: ActionArg;
-  value: unknown;
-  messages?: readonly string[];
-  readOnly?: boolean;
-  onChange: (value: unknown) => void;
-}): React.ReactElement {
-  const label = arg.label ?? titleCase(arg.name);
-  return (
-    <FieldRoot>
-      <FieldLabel optional={arg.optional}>{label}</FieldLabel>
-      <ActionArgControl
-        arg={arg}
-        value={value}
-        readOnly={readOnly}
-        onChange={onChange}
-      />
-      {arg.description ? (
-        <FieldDescription>{arg.description}</FieldDescription>
-      ) : null}
-      {messages && messages.length > 0 ? (
-        <p className="mt-1 text-12 leading-5 text-danger-text">
-          {messages.join(", ")}
-        </p>
-      ) : null}
-    </FieldRoot>
-  );
-}
-
-/** Route one arg to its control by kind — a scalar widget, a single relation
- * picker, or a relation-list multi-select — composing the shared owners. */
-function ActionArgControl({
-  arg,
-  value,
-  readOnly,
-  onChange,
-}: {
-  arg: ActionArg;
-  value: unknown;
-  readOnly?: boolean;
-  onChange: (value: unknown) => void;
-}): React.ReactElement {
-  if (arg.argKind === "relation") {
-    return (
-      <ActionRelationControl
-        arg={arg}
-        value={value}
-        readOnly={readOnly}
-        onChange={onChange}
-      />
-    );
+/** Translate action declarations into the canonical descriptor form contract. */
+function actionArgField(arg: ActionArg): DescriptorField {
+  const field: DescriptorField = {
+    ...arg,
+    label: arg.label ?? titleCase(arg.name),
+    required: !arg.optional,
+  };
+  if (arg.argKind === "relation" || arg.argKind === "relationList") {
+    field.widget = arg.argKind === "relationList" ? "many2many" : "many2one";
+    field.relation = {
+      resource: arg.resource,
+      filters: arg.filters,
+      create: arg.create,
+      ...(arg.argKind === "relation" ? {
+        optionDescriptionField: arg.optionDescriptionField,
+        optionStatusField: arg.optionStatusField,
+        optionStatusArguments: arg.optionStatusArguments,
+      } : {}),
+    };
   }
-  if (arg.argKind === "relationList") {
-    return (
-      <ActionRelationListControl
-        arg={arg}
-        value={value}
-        readOnly={readOnly}
-        onChange={onChange}
-      />
-    );
-  }
-  return (
-    <FieldDescriptorControl
-      field={arg}
-      value={value}
-      disabled={readOnly}
-      onChange={onChange}
-    />
-  );
-}
-
-function ActionRelationControl({
-  arg,
-  value,
-  readOnly,
-  onChange,
-}: {
-  arg: Extract<ActionArg, { argKind: "relation" }>;
-  value: unknown;
-  readOnly?: boolean;
-  onChange: (value: unknown) => void;
-}): React.ReactElement {
-  const model = useModelMetadata(arg.resource);
-  const relation = React.useMemo(
-    () => relationFieldInfoForResource(arg.resource, model),
-    [arg.resource, model],
-  );
-  if (!relation) {
-    // Metadata not yet loaded / resource exposes no list root: fall back to the
-    // descriptor's own widget rather than render a picker with no options.
-    return (
-      <FieldDescriptorControl
-        field={arg}
-        value={value}
-        disabled={readOnly}
-        onChange={onChange}
-      />
-    );
-  }
-  return (
-    <RelationFieldWidget
-      relation={relation}
-      filters={arg.filters}
-      optionDescriptionField={arg.optionDescriptionField}
-      optionStatusField={arg.optionStatusField}
-      optionStatusArguments={arg.optionStatusArguments}
-      create={arg.create ?? null}
-      value={relationValueId(value)}
-      readOnly={readOnly}
-      placeholder={arg.placeholder}
-      aria-label={typeof arg.label === "string" ? arg.label : arg.name}
-      onChange={onChange}
-    />
-  );
-}
-
-function ActionRelationListControl({
-  arg,
-  value,
-  readOnly,
-  onChange,
-}: {
-  arg: Extract<ActionArg, { argKind: "relationList" }>;
-  value: unknown;
-  readOnly?: boolean;
-  onChange: (value: unknown) => void;
-}): React.ReactElement {
-  const model = useModelMetadata(arg.resource);
-  const relation = React.useMemo(
-    () => relationFieldInfoForResource(arg.resource, model),
-    [arg.resource, model],
-  );
-  if (!relation) {
-    return (
-      <FieldDescriptorControl
-        field={arg}
-        value={value}
-        disabled={readOnly}
-        onChange={onChange}
-      />
-    );
-  }
-  return (
-    <RelationMultiFieldWidget
-      relation={relation}
-      filters={arg.filters}
-      create={arg.create ?? null}
-      value={Array.isArray(value) ? value : []}
-      readOnly={readOnly}
-      aria-label={typeof arg.label === "string" ? arg.label : arg.name}
-      onChange={onChange}
-    />
-  );
+  return field;
 }
 
 const EMPTY_ARGS: readonly ActionArg[] = [];

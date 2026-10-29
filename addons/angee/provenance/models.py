@@ -1,4 +1,4 @@
-"""Changeset metadata; concrete classes are emitted by the composer."""
+"""Angee provenance entities and statement-principal declarations."""
 
 from __future__ import annotations
 
@@ -10,16 +10,18 @@ from itertools import groupby
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.db import IntegrityError, connections, models, transaction
+from django.db import models, transaction
 from django.utils import timezone
 from rebac import (
     RebacMixin,
     RelationshipTuple,
     SubjectRef,
     actor_context,
+    app_settings,
     backend,
     current_actor,
     is_anonymous_actor,
@@ -27,29 +29,31 @@ from rebac import (
     to_object_ref,
     write_relationships,
 )
-from rebac.actors import is_sudo
+from rebac.actors import current_sudo_reason, is_sudo
 from rebac.errors import PermissionDenied
 from rebac.resources import model_resource_type
 from rebac.schema.walker import subject_allowed_by_relation
 
-from angee.actors import instance_actor
-from angee.changesets import changeset, current_changeset, discard_changeset_claim, require_changeset
-from angee.errors import CreationKeyConflict
-from angee.fields import StateField
-from angee.graphql.publishing import publish_change
-from angee.models import (
+from angee.base.fields.state import StateField
+from angee.base.models import (
     AngeeDataModel,
-    AngeeManager,
     AngeeUnscopedManager,
-    ChangesetQuerySet,
-    HistoryMixin,
-    SourceKind,
+    MergePolicy,
+    RecordRefMixin,
     SqidMixin,
-    StatementSourceMixin,
-    model_history,
     role_anchor,
 )
-from angee.refs import MergePolicy, RecordRefMixin
+from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.signals import bulk_updated
+from angee.provenance.context import changeset, current_changeset
+from angee.provenance.contrib.angee.exceptions import ChangesetRequired
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.managers import ChangesetManager
+from angee.provenance.querysets import model_history
+from angee.provenance.statements import (
+    SourceKind,
+    StatementSourceMixin,
+)
 from angee.serialization import canonical_json, canonical_json_sha256, json_safe
 
 ProvenanceRole = role_anchor("provenance/role")
@@ -57,49 +61,6 @@ ProvenanceRole = role_anchor("provenance/role")
 
 # A dotted machine identifier, the shape of a ``system_context`` reason code.
 MACHINE_REASON = re.compile(r"[a-z0-9_]+(?:\.[a-z0-9_]+)+")
-
-
-_ChangesetManagerBase = AngeeManager.from_queryset(ChangesetQuerySet)
-
-
-class ChangesetManager[ChangesetT: Changeset](_ChangesetManagerBase[ChangesetT]):
-    """Atomic idempotency claims on logical write boundaries."""
-
-    def claim(self, scope: str, key: str, *, fingerprint: str) -> ChangesetT | None:
-        """Claim ``(scope, key)`` on the fresh current boundary or return its completed match."""
-
-        for name, value in (("scope", scope), ("key", key), ("fingerprint", fingerprint)):
-            error_name = "idempotency_key" if name == "key" else name
-            try:
-                field = self.model._meta.get_field(name)
-                assert isinstance(field, models.Field)
-                field.clean(value, None)
-            except ValidationError as error:
-                raise ValidationError({error_name: error}) from error
-            if not value.strip():
-                raise ValidationError({error_name: f"A changeset {name} must not be blank."})
-        if not connections[self.db].in_atomic_block:
-            raise RuntimeError("Changeset claims require an outer transaction.atomic() boundary.")
-        claimed = require_changeset()
-        if not isinstance(claimed, self.model):
-            raise RuntimeError("Claims must use the configured changeset model.")
-        if not claimed._state.adding or claimed.pk is not None:
-            raise RuntimeError("Claim an idempotency key before the boundary records any writes.")
-        claimed.scope = scope
-        claimed.key = key
-        claimed.fingerprint = fingerprint
-        try:
-            with transaction.atomic(using=self.db):
-                current_changeset(required=True, record=True)
-        except IntegrityError:
-            discard_changeset_claim(claimed)
-            existing = self.model._base_manager.using(self.db).filter(scope=scope, key=key).first()
-            if existing is None:
-                raise
-            if existing.fingerprint != fingerprint:
-                raise CreationKeyConflict("This idempotency key was already used for different content.")
-            return existing
-        return None
 
 
 class StatementPrincipal(StatementSourceMixin, AngeeDataModel):
@@ -148,6 +109,8 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
     tuple is a permission projection, inserted atomically through REBAC's trusted
     proposed-relationships contract. History user stamps derive from the column.
     """
+
+    required_context_error: ClassVar[type[Exception]] = ChangesetRequired
 
     runtime = True
     sqid_prefix = "cst_"
@@ -222,6 +185,26 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
                 name="%(app_label)s_%(class)s_claim",
             ),
         )
+
+    @classmethod
+    def ambient_attribution(cls) -> tuple[str, str]:
+        """Project REBAC's ambient facts without changing its actor or authority."""
+
+        actor = current_actor()
+        return str(actor) if actor is not None else "", current_sudo_reason() or ""
+
+    @classmethod
+    def context_required(cls) -> bool:
+        """Retain REBAC's configured strict posture for captured Angee writes."""
+
+        return bool(app_settings.REBAC_STRICT_MODE)
+
+    def history_user(self) -> models.Model | None:
+        """Construct the native history user stamp from persisted attribution."""
+
+        actor = SubjectRef.parse(self.actor_ref) if self.actor_ref else None
+        user_id = actor_user_id(actor)
+        return get_user_model()(pk=user_id) if user_id is not None else None
 
     def offset_in(self, queryset: models.QuerySet[Any]) -> int:
         """Position in a scoped changeset sequence, using this owner's newest-first order."""
@@ -331,7 +314,12 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             touched=self.touched,
             counts=self.counts,
         )
-        publish_change(self, action="update", update_fields=("state", "outcome", "touched", "counts"), broadcast=False)
+        bulk_updated.send(
+            sender=type(self),
+            instances=(self,),
+            update_fields=("state", "outcome", "touched", "counts"),
+            using=self._state.db,
+        )
 
     def history_rows(self) -> Any:
         """Yield touched owners and their native versions in deterministic order."""
@@ -484,3 +472,9 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
                 for index in sorted(ordering.get_ready()):
                     yield batch[index]
                     ordering.done(index)
+
+
+# Phase 1 establishes the installed app set before native model imports. Export
+# this declared donor only when its target app participates in this composition.
+if apps.is_installed("angee.iam"):
+    from angee.provenance.contrib.iam.models import UserSource as UserSource

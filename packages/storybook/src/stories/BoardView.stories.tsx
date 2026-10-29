@@ -1,5 +1,5 @@
 import { testResourceQuery, testQueryField, testQueryAxis } from "@angee/metadata/testing";
-import { useMemo, useState, type ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type {
   AngeeSchemaMetadata,
@@ -8,7 +8,7 @@ import type {
 } from "@angee/metadata";
 import { ResourceList, type ListColumn } from "@angee/ui";
 
-import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
+import { jsonResponse, storySchema } from "./runtime-fixtures";
 
 interface TaskRow extends Row {
   id: string;
@@ -84,11 +84,12 @@ const metadata = {
 
         roots: {
           list: "tasks",
+          aggregate: "tasks_aggregate",
           detail: "tasks_by_pk",
           create: "insert_tasks_one",
           update: "update_tasks_by_pk",
         },
-        typeNames: { node: "TaskType" },
+        typeNames: { node: "TaskType", filter: "TaskFilter", order: "TaskOrder" },
         recordRepresentation: "title",
         capabilities: ["list", "detail", "create", "update"],
         fields: [
@@ -117,8 +118,8 @@ const metadata = {
         appLabel: "pm",
         modelName: "Stage",
 
-        roots: { list: "stages" },
-        typeNames: { node: "StageType" },
+        roots: { list: "stages", aggregate: "stages_aggregate" },
+        typeNames: { node: "StageType", filter: "StageFilter", order: "StageOrder" },
         recordRepresentation: "name",
         capabilities: ["list"],
         fields: [
@@ -137,7 +138,7 @@ const metadata = {
 
 const meta = {
   title: "Views/BoardView",
-  parameters: { layout: "padded" },
+  parameters: { angeeFixture: () => ({ schemas: createBoardStorySchemas() }), layout: "padded" },
 } satisfies Meta;
 
 export default meta;
@@ -159,44 +160,41 @@ export const DeclaredCard: Story = {
 function BoardFixture({ withFold, withCard = false }: { withFold: boolean; withCard?: boolean }): ReactElement {
   const [recordId, setRecordId] = useState<string | undefined>(undefined);
   const [creating, setCreating] = useState(false);
-  const schemas = useMemo(createBoardStorySchemas, []);
   return (
-    <RuntimeFixture schemas={schemas}>
-      <div className="min-h-[520px] min-w-[980px]">
-        <ResourceList<TaskRow>
-          resource="pm.Task"
-          columns={columns}
-          formFields={[
-            { name: "title", label: "Task", title: true },
-            { name: "priority", label: "Priority" },
-            { name: "stage", label: "Stage", createOnly: true },
-            {
-              name: "sort_order",
-              label: "Order",
-              createOnly: true,
-            },
-          ]}
-          recordId={recordId}
-          creating={creating}
-          onSelect={(id) => {
-            setCreating(id === null);
-            setRecordId(id ?? undefined);
-          }}
-          onClose={() => {
-            setCreating(false);
-            setRecordId(undefined);
-          }}
-          placement="drawer"
-          defaultView="board"
-          boardCard={withCard ? { title: "title", fields: ["priority"] } : undefined}
-          laneSource={{
-            field: "stage",
-            rankField: "sort_order",
-            ...(withFold ? { foldField: "fold" } : {}),
-          }}
-        />
-      </div>
-    </RuntimeFixture>
+    <div className="min-h-[520px] min-w-[980px]">
+      <ResourceList<TaskRow>
+        resource="pm.Task"
+        columns={columns}
+        formFields={[
+          { name: "title", label: "Task", title: true },
+          { name: "priority", label: "Priority" },
+          { name: "stage", label: "Stage", createOnly: true },
+          {
+            name: "sort_order",
+            label: "Order",
+            createOnly: true,
+          },
+        ]}
+        recordId={recordId}
+        creating={creating}
+        onSelect={(id) => {
+          setCreating(id === null);
+          setRecordId(id ?? undefined);
+        }}
+        onClose={() => {
+          setCreating(false);
+          setRecordId(undefined);
+        }}
+        placement="drawer"
+        defaultView="board"
+        boardCard={withCard ? { title: "title", fields: ["priority"] } : undefined}
+        laneSource={{
+          field: "stage",
+          rankField: "sort_order",
+          ...(withFold ? { foldField: "fold" } : {}),
+        }}
+      />
+    </div>
   );
 }
 
@@ -241,16 +239,10 @@ function createBoardStorySchemas() {
       ?? mutationTask;
     return jsonResponse({
       data: {
-        tasks: {
-          totalCount: storedTasks.length,
-          results: storedTasks,
-          pageInfo: { offset: 0, limit: 50 },
-        },
-        stages: {
-          totalCount: stages.length,
-          results: stages,
-          pageInfo: { offset: 0, limit: 200 },
-        },
+        tasks: storedTasks,
+        tasks_aggregate: { aggregate: { count: storedTasks.length } },
+        stages,
+        stages_aggregate: { aggregate: { count: stages.length } },
         tasks_by_pk: detailTask,
         insert_tasks_one: mutationTask,
         update_tasks_by_pk: mutationTask,

@@ -1,7 +1,15 @@
-import { describe, expect, test } from "vitest";
+// @vitest-environment happy-dom
+
+import { Storage as TestStorage } from "happy-dom";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
+  APPEARANCE_CACHE_KEY,
+  APPEARANCE_CACHE_LIMIT,
+  APPEARANCE_CACHE_SCHEMA,
+  bootstrapAppearance,
   defineTheme,
+  type AppearanceBootstrapPayload,
   THEME_TOKEN_NAMES,
   type ThemeDefinition,
   type ThemeTokenName,
@@ -61,5 +69,88 @@ describe("theme token layers", () => {
 
   test.each(rejected)("rejects an invalid %s", (_kind, name, value) => {
     expect(() => defineTheme(themeWithToken(name, value))).toThrow(TypeError);
+  });
+});
+
+
+const bootstrapPayload: AppearanceBootstrapPayload = {
+  fingerprint: "host-fingerprint",
+  host: {
+    themeId: "example.token-bounds",
+    colorScheme: "light",
+    fingerprint: "host-fingerprint",
+    tokenLayers: { shared: { "--brand": "#112233" }, light: {}, dark: {} },
+  },
+  catalogue: {
+    schema: 1,
+    fingerprint: "catalogue-fingerprint",
+    themes: [{ id: "example.token-bounds", legacyIds: ["example.old-bounds"] }],
+  },
+};
+
+function cacheAppearance(overrides: Record<string, unknown>) {
+  window.localStorage.setItem(APPEARANCE_CACHE_KEY, JSON.stringify({
+    schema: APPEARANCE_CACHE_SCHEMA,
+    fingerprint: bootstrapPayload.fingerprint,
+    actorId: "actor-one",
+    themeId: "example.token-bounds",
+    colorSchemePreference: "dark",
+    tokenLayers: { shared: { "--brand": "#abcdef" }, light: {}, dark: {} },
+    ...overrides,
+  }));
+}
+
+describe("first-paint appearance", () => {
+  beforeEach(() => {
+    Object.defineProperty(window, "localStorage", { configurable: true, value: new TestStorage() });
+    document.documentElement.removeAttribute("style");
+    delete document.documentElement.dataset.themeId;
+    delete document.documentElement.dataset.colorScheme;
+    delete document.documentElement.dataset.theme;
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  test.each(accepted)("uses the theme contract for cached %s", (_kind, name, value) => {
+    cacheAppearance({ tokenLayers: themeWithToken(name, value).tokens });
+    bootstrapAppearance(bootstrapPayload, window);
+    expect(document.documentElement.style.getPropertyValue(name)).toBe(value);
+    expect(document.documentElement.dataset.colorScheme).toBe("dark");
+  });
+
+  test.each(rejected)("falls back to host defaults for cached %s", (_kind, name, value) => {
+    cacheAppearance({ tokenLayers: themeWithToken(name, value).tokens });
+    bootstrapAppearance(bootstrapPayload, window);
+    expect(document.documentElement.style.getPropertyValue(name)).toBe("");
+    expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#112233");
+    expect(document.documentElement.dataset.colorScheme).toBe("light");
+  });
+
+  test.each<readonly [string, Record<string, unknown>]>([
+    ["schema", { schema: APPEARANCE_CACHE_SCHEMA + 1 }],
+    ["old single-scheme cache", { schema: 1, tokens: { "--brand": "#abcdef" } }],
+    ["fingerprint", { fingerprint: "other-host" }],
+    ["uninstalled theme", { themeId: "example.missing" }],
+    ["unknown token", { tokenLayers: { shared: { "--private-token": "15px" }, light: {}, dark: {} } }],
+    ["unsafe inactive scheme", { tokenLayers: { shared: {}, light: { "--brand": "url(https://example.test/image)" }, dark: {} } }],
+    ["missing scheme", { tokenLayers: { shared: {}, dark: {} } }],
+    ["oversized cache", { padding: "x".repeat(APPEARANCE_CACHE_LIMIT) }],
+  ])("rejects an invalid cache %s", (_name, overrides) => {
+    cacheAppearance(overrides);
+    bootstrapAppearance(bootstrapPayload, window);
+    expect(document.documentElement.dataset.colorScheme).toBe("light");
+    expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#112233");
+  });
+
+  test("canonicalizes aliases while actor identity is still unresolved", () => {
+    cacheAppearance({ themeId: "example.old-bounds" });
+    bootstrapAppearance(bootstrapPayload, window);
+    expect(document.documentElement.dataset.themeId).toBe("example.token-bounds");
+    expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#abcdef");
+  });
+
+  test("uses the host when browser storage is unavailable", () => {
+    vi.spyOn(window.localStorage, "getItem").mockImplementation(() => { throw new Error("blocked"); });
+    bootstrapAppearance(bootstrapPayload, window);
+    expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#112233");
   });
 });

@@ -23,8 +23,8 @@ name after `#` types the entry through `ContainerKinds`.
   `ContainerOutlet`, `useDrawers(edge)`, `ChatterTabContent`,
   `ResourceViewKindContent`, `RESOURCE_CONTAINERS`, `FORM_CONTAINERS`,
   `SHELL_CONTAINERS`, `CHATTER_CONTAINERS`. `ResourceViewKind` admits
-  namespaced contributed kinds. Chatter tab ids are namespaced, with their old
-  ids kept as `?chatterTab=` aliases for one release.
+  namespaced contributed kinds. Chatter tab ids use their namespaced
+  contribution IDs; the old `?chatterTab=` aliases are removed.
 - `@angee/app`: `LOGIN_CONTAINERS`, the `containers` and `dashboardStore`
   manifest keys (composed by `composeAddons`) and `ANGEE_UI.containers`;
   developer mode lists container narrowing, removals and provenance.

@@ -10,7 +10,10 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.evidence import FactAuthority
+from angee.base.fields.implementation import ImplClassField
+from angee.base.fields.state import StateField
+from angee.base.models import AngeeDataModel, AngeeModel, AppendOnlyModel, AuditMixin, DerivedFrom
+from angee.base.refs import RecordRef
 from angee.extraction.contracts import (
     CorrectionRef,
     DocumentPart,
@@ -36,10 +39,7 @@ from angee.extraction.pointers import (
     set_json_pointer,
 )
 from angee.extraction.profiles import ExtractionProfile
-from angee.fields import StateField
-from angee.impl import ImplClassField
-from angee.models import AngeeDataModel, AngeeModel, AppendOnlyModel, AuditMixin, DerivedFrom
-from angee.refs import record_ref_for
+from angee.provenance.evidence import FactAuthority
 from angee.serialization import canonical_json
 
 
@@ -148,11 +148,11 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel):
 
     @property
     def record_model_label(self) -> str:
-        return record_ref_for(self.target).model_label
+        return RecordRef.from_instance(self.target).model_label
 
     @property
     def record_public_id(self) -> str:
-        return record_ref_for(self.target).public_id
+        return RecordRef.from_instance(self.target).public_id
 
     def retain(self) -> None:
         """Validate the exclusive outcome before inserting immutable evidence."""

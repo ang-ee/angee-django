@@ -10,16 +10,16 @@ from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from rebac import system_context
 
-from angee.fields import StateField
-from angee.models import (
+from angee.base.fields.state import StateField
+from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
     AppendOnlyModel,
     AppendOnlyQuerySet,
-    HistoryMixin,
     OwnerMixin,
 )
+from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonError
 from angee.operator_backup.archives import archive_mount, validate_archive_destination
 from angee.operator_backup.contracts import (

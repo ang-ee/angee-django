@@ -1,3 +1,4 @@
+import { keysetFeedRows } from "@angee/refine";
 import {
   TIMELINE_SCOPE_ALL,
   TIMELINE_SCOPE_NEEDS_ME,
@@ -12,7 +13,7 @@ import * as React from "react";
 
 import type { TimelinePageEntry } from "./documents.console";
 import { useTimelineT, type TimelineT } from "./i18n";
-import { useTimelinePages } from "./useTimelinePages";
+import { useTimelineFeed } from "./useTimelineFeed";
 
 export const TIMELINE_TAB_ID = "timeline.rail";
 export const TIMELINE_KINDS_CONTAINER = "timeline#kinds";
@@ -31,9 +32,8 @@ export function RecordTimelinePane({ context, selection }: { context: ChatterVie
   const id = context.view.kind === "record" ? context.view.sqid ?? "" : "";
   const [scope, setScope] = React.useState<string>(selection?.focus === TIMELINE_FOCUS_NEEDS_ME ? TIMELINE_SCOPE_NEEDS_ME : TIMELINE_SCOPE_ALL);
   React.useEffect(() => {
-    if (selection?.focus === TIMELINE_FOCUS_NEEDS_ME) { setScope(TIMELINE_SCOPE_NEEDS_ME); setCursors([undefined]); }
+    if (selection?.focus === TIMELINE_FOCUS_NEEDS_ME) setScope(TIMELINE_SCOPE_NEEDS_ME);
   }, [selection?.focus]);
-  const [cursors, setCursors] = React.useState<readonly (string | undefined)[]>([undefined]);
   const { setActiveTab } = useChatter();
   const recordHref = useResourceRecordHrefLookup();
   const navigate = useNavigate();
@@ -43,45 +43,34 @@ export function RecordTimelinePane({ context, selection }: { context: ChatterVie
 
   const kindFilter = scope === TIMELINE_SCOPE_ALL || scope === TIMELINE_SCOPE_NEEDS_ME ? null : [scope];
   const needsMe = scope === TIMELINE_SCOPE_NEEDS_ME;
-  const pages = useTimelinePages({ model, id, kinds: kindFilter, needsMe }, cursors);
-  const first = pages[0];
-  const kinds = first?.data?.timeline.kinds;
-
-  const entries = React.useMemo<readonly TimelineRailEntry[]>(() => {
-    const seen = new Set<string>();
-    const rows: TimelineRailEntry[] = [];
-    for (const page of pages) {
-      for (const entry of page?.data?.timeline.entries ?? []) {
-        if (seen.has(entry.key)) continue;
-        seen.add(entry.key);
-        rows.push(toLine(entry, presentationById, recordHref, t));
-      }
-    }
-    return rows;
-  }, [pages, presentationById, recordHref, t]);
+  const feed = useTimelineFeed({ model, id, kinds: kindFilter, needsMe });
+  const metadata = feed.data?.pages[0]?.metadata;
+  const kinds = metadata?.kinds;
+  const rows = React.useMemo(() => {
+    // Keep the backend's complete ordering, including same-time tie breakers.
+    const order = new Map(feed.data?.pages.flatMap((page) => page.rows).map((row, index) => [row.id, index]));
+    return keysetFeedRows(feed.data, (left, right) => order.get(left.id)! - order.get(right.id)!);
+  }, [feed.data]);
+  const targets = React.useMemo(() => new Map(rows.map((entry) => [entry.key, entry])), [rows]);
+  const entries = React.useMemo(() => rows.map((entry) => toLine(entry, presentationById, recordHref, t)),
+    [rows, presentationById, recordHref, t]);
   const railKinds = React.useMemo<readonly TimelineRailKind[]>(() => (kinds ?? []).map((kind) => ({
     id: kind.id,
     count: kind.count ?? 0,
     // A kind no addon presents keeps a neutral face: its id is a Python label, never user text.
     ...(presentationById.get(kind.id) ?? { label: t("kind.unknown"), icon: "activity", tone: "muted" as const, verb: "", target: { page: true as const } }),
   })), [kinds, presentationById, t]);
-  const needsMeCount = first?.data?.timeline.needs_me ?? 0;
-  const last = pages[pages.length - 1];
-  const error = pages.find((page) => page?.error)?.error ?? null;
+  const needsMeCount = metadata?.needsMe ?? 0;
 
   const open = React.useCallback((line: TimelineRailEntry) => {
     const presentation = presentationById.get(line.kind);
-    const target = targets.current.get(line.key);
+    const target = targets.get(line.key);
     if (presentation && "tab" in presentation.target && target?.target_id) {
       setActiveTab(presentation.target.tab, { from: TIMELINE_TAB_ID, target: target.target_id, focus: presentation.target.focus });
       return;
     }
-    if (line.href) void navigate({ href: line.href } as never);
-  }, [navigate, presentationById, setActiveTab]);
-  const targets = React.useRef(new Map<string, TimelinePageEntry>());
-  React.useEffect(() => {
-    targets.current = new Map(pages.flatMap((page) => (page?.data?.timeline.entries ?? []).map((entry) => [entry.key, entry] as const)));
-  });
+    if (line.href) void navigate({ href: line.href });
+  }, [navigate, presentationById, setActiveTab, targets]);
 
   return (
     <TimelineRail
@@ -89,15 +78,12 @@ export function RecordTimelinePane({ context, selection }: { context: ChatterVie
       kinds={railKinds}
       needsMe={needsMeCount}
       scope={scope}
-      onScope={(next) => { setScope(next); setCursors([undefined]); }}
-      pending={pages.some((page) => page?.isLoading || page?.isFetching)}
-      error={error ? error.message : null}
-      onRetry={() => { for (const page of pages) void page?.refetch(); }}
-      hasMore={Boolean(last?.data?.timeline.has_more)}
-      onLoadOlder={() => {
-        const before = last?.data?.timeline.next_before;
-        if (before) setCursors((current) => [...current, before]);
-      }}
+      onScope={setScope}
+      pending={feed.isFetching}
+      error={feed.error?.message}
+      onRetry={() => { void feed.refetch(); }}
+      hasMore={feed.hasNextPage}
+      onLoadOlder={() => { void feed.fetchNextPage(); }}
       onOpen={open}
     />
   );

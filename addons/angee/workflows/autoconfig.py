@@ -46,4 +46,3 @@ SETTINGS: _Settings = {
     "ANGEE_WORKFLOW_MAX_DISPATCHES": 20,
     "ANGEE_WORKFLOW_RETENTION_DAYS": 90,
 }
-"""Django settings contributed when the workflows addon is installed."""

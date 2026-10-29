@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from enum import StrEnum
 from functools import partial
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import strawberry
 import strawberry_django
@@ -31,7 +31,9 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry.types import get_object_definition
 from strawberry_django.pagination import OffsetPaginated
+from strawberry_django.utils.requests import get_request
 
+from angee.base.identity import public_id_of
 from angee.errors import exception_text
 from angee.graphql.actions import (
     ActionResult,
@@ -41,7 +43,7 @@ from angee.graphql.actions import (
     resolve_action_target,
 )
 from angee.graphql.capabilities import PermissionsExtension, held_permissions
-from angee.graphql.data import (
+from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
     hasura_model_resource,
@@ -58,21 +60,19 @@ from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import is_platform_admin
-from angee.iam.permissions import request_from_info as _request
 from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
-from angee.identity import public_id_of
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.mixins import SyncStateMixin
-from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle, IntegrationManager
+from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationManager
 from angee.integrate.oauth import flow, state
-from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, PROVIDER_UNAVAILABLE, OAuthFlowError
+from angee.integrate.oauth.errors import PROVIDER_UNAVAILABLE, OAuthFlowError
 from angee.integrate.oauth.registrations import OAuthRegistrationExtension
 from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.registry import models_with
-from angee.integrate.states import ConflictKeep, SyncFailure, SyncFailureKind, SyncFailureStatus
+from angee.integrate.states import ConflictKeep, StreamState, SyncFailure, SyncFailureKind, SyncFailureStatus
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ RecordLink = apps.get_model("integrate", "RecordLink")
 User = get_user_model()
 _OPEN_FAILURE_LINKS = Prefetch(
     "links",
-    queryset=RecordLink.objects.with_open_failures(),
+    queryset=RecordLink.objects.with_open_failures(include_source=True),
     to_attr="open_failure_links",
 )
 
@@ -443,16 +443,16 @@ class OAuthStartPayload:
     redirect_uri: str = ""
     """The effective redirect URI the flow used (resent verbatim at completion)."""
 
+    @classmethod
+    def from_start(cls, started: flow.OAuthStart) -> Self:
+        """Project the flow-owned redirect facts onto the shared payload."""
 
-def _oauth_start_payload(started: flow.OAuthStart) -> OAuthStartPayload:
-    """Project the flow-owned start facts onto the GraphQL payload."""
-
-    return OAuthStartPayload(
-        authorize_url=started.authorize_url,
-        state=started.state,
-        mode=started.mode,
-        redirect_uri=started.redirect_uri,
-    )
+        return cls(
+            authorize_url=started.authorize_url,
+            state=started.state,
+            mode=started.mode,
+            redirect_uri=started.redirect_uri,
+        )
 
 
 @strawberry.type
@@ -481,6 +481,18 @@ class ConnectIntegrationResult:
     mode: str = "auto"
     redirect_uri: str = ""
     attached: bool = False
+
+    @classmethod
+    def from_connection(cls, integration: Any, started: flow.OAuthStart | None) -> ConnectIntegrationResult:
+        """Project the domain operation's existing OAuth start or completed attachment."""
+
+        target = cast("ConnectedIntegrationType", integration)
+        if started is None:
+            return cls(integration=target, attached=True)
+        return cls(
+            integration=target, authorize_url=started.authorize_url, state=started.state,
+            mode=started.mode, redirect_uri=started.redirect_uri,
+        )
 
 
 @strawberry.type
@@ -719,75 +731,6 @@ def _concrete_integration_target(info: strawberry.Info, user: Any, resource: str
     return target
 
 
-def _attach_completed_integration(info: strawberry.Info, integration_sqid: str, user: Any, credential: Any) -> None:
-    """Attach a freshly connected credential to the integration named in OAuth state."""
-
-    if not integration_sqid:
-        return
-    with system_context(reason="integrate.graphql.connect_integration.complete"):
-        integration = Integration.objects.filter(sqid=integration_sqid).first()
-    if integration is None or integration.owner_id != user.pk:
-        raise OAuthFlowError(INVALID_STATE, 400)
-    if credential.user_id != user.pk:
-        raise PermissionDenied("Credential does not belong to the current user.")
-    exposed = _exposed_model_labels(info)
-    integrity, _authorized = integration.concrete_children(actor=user, exposed_model_labels=exposed)
-    if len(integrity) != 1:
-        raise OAuthFlowError(INVALID_STATE, 400)
-    child = integrity[0]
-    try:
-        target = _concrete_integration_target(info, user, child._meta.label, PublicID(public_id_of(child)))
-    except (PermissionDenied, ValueError) as error:
-        raise OAuthFlowError(INVALID_STATE, 400) from error
-    if credential.pk != target.credential_id or target.lifecycle == IntegrationLifecycle.DISCONNECTED:
-        target.attach_credential(credential)
-
-
-def connect_integration_target(
-    info: strawberry.Info,
-    integration: Any,
-    oauth_client: Any,
-    *,
-    redirect_uri: str,
-    next_path: str,
-) -> ConnectIntegrationResult:
-    """Attach the user's live credential to an integration-like MTI row or start OAuth."""
-
-    user = _session_user(info)
-    integration.require_connect(user)
-    if oauth_client.configuration_state != "ready":
-        raise OAuthFlowError(
-            CLIENT_NOT_CONFIGURED,
-            400,
-            f"OAuth client is not fully configured ({oauth_client.configuration_state}).",
-        )
-    credential = Credential.objects.live_oauth_for_user(user, oauth_client)
-    if credential is not None:
-        if credential.user_id != user.pk:
-            raise PermissionDenied("Credential does not belong to the current user.")
-        integration.attach_credential(credential)
-        return ConnectIntegrationResult(integration=cast("ConnectedIntegrationType", integration), attached=True)
-    if not redirect_uri:
-        raise OAuthFlowError("redirect_uri_required", 400, "OAuth redirect URI is required.")
-    request = _request(info)
-    started = flow.start(
-        request,
-        oauth_client,
-        redirect_uri,
-        user_id=str(user.pk),
-        next_path=flow.coerce_next_path(next_path, request),
-        flow=state.StateFlow.CONNECT,
-        integration_id=str(integration.sqid),
-    )
-    return ConnectIntegrationResult(
-        integration=cast("ConnectedIntegrationType", integration),
-        authorize_url=started.authorize_url,
-        state=started.state,
-        mode=started.mode,
-        redirect_uri=started.redirect_uri,
-    )
-
-
 @strawberry.type
 class IntegrateConnectionsQuery:
     """Public account-connect picker and self-service connected-account queries."""
@@ -819,9 +762,11 @@ class ConnectionMutation:
         try:
             integration = _concrete_integration_target(info, user, resource, id)
             oauth_client = integration.connect_oauth_client(capfirst(str(integration._meta.verbose_name)))
-            return connect_integration_target(
-                info, integration, oauth_client, redirect_uri=redirect_uri, next_path=next
+            started = _connect.connect_integration_target(
+                integration, oauth_client, user=user, request=get_request(info),
+                redirect_uri=redirect_uri, next_path=next,
             )
+            return ConnectIntegrationResult.from_connection(integration, started)
         except OAuthFlowError as error:
             return ConnectIntegrationResult(error=error.public_message, error_code=error.code)
 
@@ -836,18 +781,9 @@ class ConnectionMutation:
         """Start an authenticated OAuth account-connect flow."""
 
         user = _session_user(info)
-        request = _request(info)
+        request = get_request(info)
         try:
             oauth_client = _enabled_oauth_client_from_id(id)
-            if oauth_client.configuration_state != "ready":
-                # Enabled but missing a client_id/endpoints would otherwise build an
-                # authorize URL the provider rejects opaquely; surface it as a typed
-                # start-flow error instead.
-                raise OAuthFlowError(
-                    CLIENT_NOT_CONFIGURED,
-                    400,
-                    f"OAuth client is not fully configured ({oauth_client.configuration_state}).",
-                )
             started = flow.start(
                 request,
                 oauth_client,
@@ -858,7 +794,7 @@ class ConnectionMutation:
             )
         except OAuthFlowError as error:
             return OAuthStartPayload(error=error.public_message, error_code=error.code)
-        return _oauth_start_payload(started)
+        return OAuthStartPayload.from_start(started)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def discover_oauth_endpoints(self, id: PublicID) -> ActionResult:
@@ -896,14 +832,17 @@ class ConnectionMutation:
     ) -> ConnectAccountResult:
         """Complete an authenticated OAuth account-connect flow."""
 
-        request = _request(info)
+        request = get_request(info)
         _session_user(info)
         try:
             oauth_client = flow.remembered_oauth_client(request, state)
             result = _connect.complete_account_connect(
                 oauth_client, code=code, state_token=state, redirect_uri=redirect_uri
             )
-            _attach_completed_integration(info, result.integration_id, result.user, result.credential)
+            Integration.objects.attach_completed_connect(
+                result.integration_id, result.user, result.credential,
+                exposed_model_labels=_exposed_model_labels(info),
+            )
         except OAuthFlowError as error:
             if error.transient:
                 error = OAuthFlowError(PROVIDER_UNAVAILABLE, 503)
@@ -929,7 +868,8 @@ class ConnectionMutation:
     ) -> UnlinkAccountResult:
         """Remove this session user's credential link to an external account and release it.
 
-        The verb authorizes the release: only the session user's own ownership is cleared.
+        CredentialManager.disconnect_account owns the persistence transaction;
+        only the session user's own ownership is cleared.
         ``Credential.check_disconnect()`` validates the model invariant before
         deletion. The login addon's model contribution vetoes removing a user's
         last sign-in account by raising a coded :class:`ValidationError`, surfaced here
@@ -938,20 +878,7 @@ class ConnectionMutation:
 
         user = _session_user(info)
         try:
-            with system_context(reason="integrate.graphql.disconnect_account.lookup"):
-                credential = (
-                    Credential.objects.select_related("oauth_client", "external_account")
-                    .filter(user=user, external_account__sqid=external_account_sqid)
-                    .first()
-                )
-            if credential is None:
-                return UnlinkAccountResult(ok=False)
-            assert credential.external_account_id is not None
-            with system_context(reason="integrate.graphql.disconnect_account"), transaction.atomic():
-                Credential.objects.prepare_disconnect(credential)
-                ExternalAccount.objects.filter(pk=credential.external_account_id).release(user)
-                deleted, _details = Credential.objects.filter(pk=credential.pk).with_action("delete").delete()
-            return UnlinkAccountResult(ok=deleted > 0)
+            return UnlinkAccountResult(ok=Credential.objects.disconnect_account(user, external_account_sqid))
         except ValidationError as error:
             return UnlinkAccountResult(ok=False, error=exception_text(error), error_code=error.code)
 
@@ -1251,6 +1178,16 @@ class IntegrationLabelMixin(IntegrationConnectionMixin):
 class BridgeSyncStatusMixin:
     """Project live sync status shared by all ``Bridge`` child resources."""
 
+    @strawberry_django.field(only=["id"], prefetch_related=[Prefetch(
+        "sync_streams",
+        queryset=SyncStream.objects.filter(state=StreamState.OPEN).prefetch_related(_OPEN_FAILURE_LINKS),
+        to_attr="open_sync_streams",
+    )])
+    def open_failure_count(self) -> int:
+        """Retained item failures remain visible after a run finishes."""
+
+        return cast(int, cast(Any, self).open_failure_count)
+
     @strawberry_django.field(name="is_syncing", only=["id"])
     def is_syncing(self) -> bool:
         """Return whether a worker currently holds this bridge's live sync lock."""
@@ -1404,6 +1341,18 @@ class SyncFailureType:
     details: JSON
 
     @strawberry.field
+    def message(self) -> str:
+        return cast(SyncFailure, cast(Any, self)._original_model).message
+
+    @strawberry.field
+    def source_label(self) -> str:
+        return cast(SyncFailure, cast(Any, self)._original_model).source_label
+
+    @strawberry.field
+    def source_url(self) -> str | None:
+        return cast(SyncFailure, cast(Any, self)._original_model).source_url
+
+    @strawberry.field
     def slot(self) -> int | None:
         return cast(SyncFailure, cast(Any, self)._original_model).slot
 
@@ -1487,8 +1436,15 @@ class RecordLinkType(AngeeNode):
     def source_url(self) -> str | None:
         """Return the selected connector's provider URL for this remote identity."""
 
-        integration = cast(Any, self).stream.integration.concrete_capability()
-        return cast(str | None, integration.source_url(self))
+        return cast(str | None, cast(Any, self).source_url)
+
+    @strawberry_django.field(
+        only=["stream_id", "external_key", "source_payload"], select_related=["stream__integration"],
+    )
+    def source_label(self) -> str:
+        """Connector-owned human label, shared by record sources and failures."""
+
+        return cast(str, cast(Any, self).source_label)
 
     @strawberry_django.field(only=["stream_id", "inbound", "outbox_last_error"], select_related=["stream"])
     def failures(self, open_only: bool = True) -> list[SyncFailureType]:

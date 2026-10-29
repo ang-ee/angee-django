@@ -5,4 +5,4 @@ name = "angee.integrate_vcs"
 description = "VCS bridges, repository inventory, sources, and templates"
 keywords = ["integrations", "vcs", "repositories"]
 category = "Integration"
-depends_on = ["angee.integrate"]
+depends_on = ["angee.base", "angee.integrate", "angee.web"]

@@ -8,7 +8,9 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin, urlunsplit
 
 from django.core.cache import cache
+from rebac import current_actor
 
+from angee.cache import increment_window
 from angee.integrate.http import HttpClient, OutboundBudget, OutboundBudgetState
 from angee.integrate.net import parse_http_url
 
@@ -74,6 +76,31 @@ class WebsiteFactsParser(HTMLParser):
             self.title_parts.append(data)
         if self.in_style and sum(map(len, self.styles)) < 64 * 1024:
             self.styles.append(data)
+
+
+class AppearanceAnalysisError(Exception):
+    """An analysis admission refusal with a stable public error code."""
+
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def analyse_for_actor(url: str) -> dict[str, object]:
+    """Admit the authenticated actor's bounded analysis request, then execute it."""
+
+    actor = current_actor()
+    if actor is None:
+        raise AppearanceAnalysisError("Authentication required.", code="UNAUTHENTICATED")
+    try:
+        count = increment_window(cache, f"appearance:analysis-rate:{actor.object}", timeout=60)
+    except Exception as error:
+        raise AppearanceAnalysisError(
+            "Appearance analysis is temporarily unavailable.", code="SERVICE_UNAVAILABLE",
+        ) from error
+    if count > 10:
+        raise AppearanceAnalysisError("Appearance analysis rate limit exceeded.", code="RATE_LIMITED")
+    return analyse_website(url, cache_partition=str(actor.object))
 
 
 def analyse_website(url: str, *, cache_partition: str) -> dict[str, object]:

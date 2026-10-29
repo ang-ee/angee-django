@@ -18,8 +18,8 @@ from rebac import system_context
 from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
+from strawberry_django.utils.requests import get_request
 
-from angee.iam.permissions import request_from_info as _request
 from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
 from angee.iam_integrate_oidc import identity
@@ -113,17 +113,6 @@ def _oidc_authorize_url(oauth_client: Any, state_token: str, record: oauth_state
     )
 
 
-def _oauth_start_payload(started: oauth_flow.OAuthStart) -> OAuthStartPayload:
-    """Project the flow-owned start facts onto the GraphQL payload."""
-
-    return OAuthStartPayload(
-        authorize_url=started.authorize_url,
-        state=started.state,
-        mode=started.mode,
-        redirect_uri=started.redirect_uri,
-    )
-
-
 @strawberry.type
 class OidcLoginQuery:
     """Public picker of login-capable OIDC providers."""
@@ -147,10 +136,10 @@ class OidcLoginMutation:
     ) -> OAuthStartPayload:
         """Start an OIDC login flow for an enabled login-capable OAuth client."""
 
-        request = _request(info)
+        request = get_request(info)
         try:
             oauth_client = _enabled_oidc_oauth_client(oauth_client_sqid)
-            return _oauth_start_payload(
+            return OAuthStartPayload.from_start(
                 oauth_flow.start(
                     request,
                     oauth_client,
@@ -173,7 +162,7 @@ class OidcLoginMutation:
     ) -> LoginCompletePayload:
         """Complete an OIDC login flow and bind the user to the session."""
 
-        request = _request(info)
+        request = get_request(info)
         try:
             oauth_client = oauth_flow.remembered_oauth_client(request, state)
             result = identity.complete_login(
@@ -209,10 +198,10 @@ class OidcLoginMutation:
         """Start an authenticated OIDC account-link flow."""
 
         user = _session_user(info)
-        request = _request(info)
+        request = get_request(info)
         try:
             oauth_client = _enabled_oidc_oauth_client(oauth_client_sqid)
-            return _oauth_start_payload(
+            return OAuthStartPayload.from_start(
                 oauth_flow.start(
                     request,
                     oauth_client,
@@ -236,7 +225,7 @@ class OidcLoginMutation:
     ) -> LinkAccountResult:
         """Complete an authenticated OIDC account-link flow."""
 
-        request = _request(info)
+        request = get_request(info)
         _session_user(info)
         try:
             oauth_client = oauth_flow.remembered_oauth_client(request, state)

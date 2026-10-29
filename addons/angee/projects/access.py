@@ -6,7 +6,7 @@ from typing import Any
 
 from rebac import PermissionDenied
 
-from angee.permissions import effective_rebac_definition
+from angee.base.permissions import effective_rebac_definition
 
 
 def require_binding_access(*, target: Any, project: Any) -> None:

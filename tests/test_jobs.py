@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
 
@@ -41,6 +45,33 @@ def test_jobs_app_exports_celery_app() -> None:
 
     assert apps.is_installed("angee.jobs")
     assert app.main == "angee"
+
+
+def test_core_celery_app_uses_native_task_without_loading_provenance() -> None:
+    """Jobs can construct its native app and task class with no provenance owner."""
+
+    script = """
+import os
+import sys
+from django.conf import settings
+settings.configure(SECRET_KEY="native-jobs", INSTALLED_APPS=[], CELERY_BROKER_URL="memory://")
+from celery.contrib.django.task import DjangoTask
+from angee.jobs.celery import app
+assert app.task_cls == "celery.contrib.django.task:DjangoTask"
+assert issubclass(app.Task, DjangoTask)
+assert not any(name == "angee.provenance" or name.startswith("angee.provenance.") for name in sys.modules)
+assert "ANGEE_PROJECT_DIR" not in os.environ
+assert "DJANGO_SETTINGS_MODULE" not in os.environ
+"""
+    environment = {
+        key: value for key, value in os.environ.items()
+        if key not in {"DJANGO_SETTINGS_MODULE", "ANGEE_PROJECT_DIR"}
+    }
+    environment["PYTHONPATH"] = os.pathsep.join(sys.path)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, env=environment, timeout=30, check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.django_db(transaction=True)
@@ -228,3 +259,78 @@ def test_addons_own_their_periodic_celery_schedules() -> None:
     assert integrate_schedule["integrate.sync_due_bridges"]["task"] == "integrate.sync_due_bridges"
     assert set(workflow_schedule) == {"workflows.tick"}
     assert workflow_schedule["workflows.tick"]["task"] == "workflows.tick"
+
+
+@pytest.mark.parametrize(
+    "installed,arguments,code,message",
+    [
+        (True, ["worker", "--help"], 0, "Start worker instance"),
+        (True, ["worker", "--not-a-celery-option"], 2, "No such option"),
+        (False, ["worker", "--help"], 1, "Unknown command: 'celery'"),
+    ],
+)
+def test_celery_command_loads_declared_roots_before_importing_jobs(
+    tmp_path: Path, installed: bool, arguments: list[str], code: int, message: str,
+) -> None:
+    """A real manage.py starts with only the core importable and no process attribution."""
+
+    source = Path(__file__).resolve().parents[1]
+    (tmp_path / "settings.yaml").write_text(
+        "SECRET_KEY: celery-entrypoint-test\n"
+        f"COMPOSE_RUNTIME_DIR: {str(tmp_path / 'runtime')!r}\n"
+        "COMPOSE_RUNTIME_MODULE: runtime\n"
+        f"ANGEE_ADDON_DIRS: [{str(source / 'addons')!r}]\n"
+        f"INSTALLED_APPS: {['angee.jobs'] if installed else []!r}\n"
+        "ANGEE_MANAGEMENT_CONTEXT: missing_process_context.open_context\n"
+        "DATABASES:\n  default:\n    ENGINE: django.db.backends.sqlite3\n    NAME: ':memory:'\n",
+    )
+    (tmp_path / "manage.py").write_text(
+        "from importlib.util import find_spec\n"
+        "import sys\n"
+        "assert find_spec('angee.jobs') is None, 'Addon path leaked into initial imports'\n"
+        "from angee.management import main\n"
+        "try:\n    main()\n"
+        "finally:\n"
+        "    assert not any(n == 'angee.provenance' or n.startswith('angee.provenance.') for n in sys.modules)\n",
+    )
+    environment = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith(("ANGEE_", "COMPOSE_", "YAMLCONF_", "SENTRY_"))
+        and key not in {"DJANGO_SETTINGS_MODULE", "DATABASE_URL"}
+    }
+    # This is the installed core's path, deliberately excluding its addon roots.
+    environment["PYTHONPATH"] = str(source)
+    result = subprocess.run(
+        [sys.executable, str(tmp_path / "manage.py"), "celery", *arguments],
+        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert result.returncode == code, result.stdout + result.stderr
+    assert message in result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["worker", "--beat", "--loglevel=INFO"],
+        ["worker", "-Q", "whatsapp,telegram", "--pool", "threads", "--concurrency", "16", "--loglevel=INFO"],
+    ],
+)
+def test_celery_management_command_delegates_native_arguments_and_exit_status(
+    monkeypatch: pytest.MonkeyPatch, arguments: list[str],
+) -> None:
+    """The Django adapter adds no worker parser or worker lifecycle."""
+
+    from angee.jobs.management.commands.celery import Command, app
+
+    seen = []
+
+    def start(argv: list[str]) -> int:
+        seen.append(argv)
+        return 7
+
+    monkeypatch.setattr(app, "start", start)
+    with pytest.raises(SystemExit) as error:
+        Command().run_from_argv(["manage.py", "celery", *arguments])
+    assert error.value.code == 7
+    assert seen == [arguments]

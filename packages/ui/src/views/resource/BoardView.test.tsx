@@ -263,6 +263,37 @@ describe("BoardView", () => {
     expect(onCardMove).toHaveBeenCalledWith({ id: "1", label: "Notes" }, "next");
   });
 
+  test.each([false, true])("lane quick-create allocates a numeric seed only without server intent: %s", (intent) => {
+    const onCreateInLane = vi.fn();
+    renderBoard({ rankField: "sort_order", rankInputField: intent ? "task_order" : undefined, onCreateInLane });
+    act(() => { screen.getByRole("button", { name: "board.addCard" }).click(); });
+    expect(onCreateInLane).toHaveBeenCalledWith("data", intent ? undefined : 1024);
+  });
+
+  test("forwards loaded neighbor intent through the native drag callback", () => {
+    const onCardMove = vi.fn();
+    renderBoard({
+      groups: [lane([
+        { id: "1", label: "First", sort_order: 1024 },
+        { id: "2", label: "Second", sort_order: 2048 },
+        { id: "3", label: "Third", sort_order: 3072 },
+      ])],
+      dragEnabled: true, rankField: "sort_order", rankInputField: "task_order", onCardMove,
+    });
+    act(() => {
+      dndMocks.contextProps?.onDragEnd?.({
+        active: { id: "1", data: { current: {
+          type: "board-card", row: { id: "1", label: "First", sort_order: 1024 }, laneId: "data",
+        } } },
+        over: { id: "2", data: { current: { type: "board-card", laneId: "data" } } },
+      });
+    });
+    expect(onCardMove).toHaveBeenCalledWith(
+      { id: "1", label: "First", sort_order: 1024 }, "data",
+      { preceding: ["2"], following: ["3"] },
+    );
+  });
+
   test("uses pointer collision with rectangle fallback for card moves", () => {
     const pointerHit = [{ id: "pointer" }];
     const rectHit = [{ id: "rect" }];

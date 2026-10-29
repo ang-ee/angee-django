@@ -40,7 +40,9 @@ from rebac.middleware import ActorMiddleware
 from strawberry.django.views import GraphQLView
 from strawberry.extensions import SchemaExtension
 
-from angee.fields import StateField
+from angee.base.fields.state import StateField
+from angee.base.models import AngeeModel, TransitionNotAllowed
+from angee.base.permissions import require_rebac_queryset
 from angee.graphql import schema as schema_module
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
@@ -53,8 +55,6 @@ from angee.graphql.schema import (
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.iam.permissions import session_user
-from angee.models import AngeeModel, TransitionNotAllowed
-from angee.permissions import require_rebac_queryset
 from tests.conftest import make_addon
 from tests.core_persistence import OwnedRow
 from tests.hierdemo.models import HierNode
@@ -795,6 +795,10 @@ def test_validation_errors_surface_per_field_extensions(composed: bool) -> None:
         names[2]: ["A client ID is required."],
     }
     assert extensions["formErrors"] == ["Provider is misconfigured."]
+    assert field_result.errors[0].message == (
+        "This field cannot be blank. This field cannot be blank. "
+        "A client ID is required. Provider is misconfigured."
+    )
 
     # A non-dict ValidationError carries only a form-level message.
     assert plain_result.errors is not None
@@ -802,6 +806,7 @@ def test_validation_errors_surface_per_field_extensions(composed: bool) -> None:
     assert plain_extensions is not None
     assert plain_extensions["validationErrors"] == {}
     assert plain_extensions["formErrors"] == ["Something went wrong."]
+    assert plain_result.errors[0].message == "Something went wrong."
 
 
 def test_unexpected_graphql_errors_hide_exception_details(caplog: pytest.LogCaptureFixture) -> None:

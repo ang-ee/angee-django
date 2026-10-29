@@ -15,7 +15,7 @@ from strawberry_django_aggregates import BigInt
 
 from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
 from angee.graphql.capabilities import permissions_field
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_public_id

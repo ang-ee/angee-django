@@ -42,8 +42,12 @@ from rebac.actors import current_sudo_reason, is_sudo
 
 import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
-from angee.actors import source_kind_for
 from angee.agents.testing.models import Agent
+from angee.base.models import (
+    AngeeModel,
+    AuditMixin,
+    SqidMixin,
+)
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
@@ -78,8 +82,12 @@ from angee.messaging.testing.models import (
     ThreadFollower,
     ThreadNotification,
 )
-from angee.models import AngeeModel, AuditMixin, HistoryMixin, SourceKind, SqidMixin
 from angee.projects.testing.models import Task as ProjectTask
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.statements import (
+    SourceKind,
+    StatementSourceMixin,
+)
 from angee.serialization import strip_null_bytes
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
 from tests.conftest import Backend, Drive, MimeType, make_integration
@@ -164,11 +172,14 @@ def test_channel_source_kind_is_its_backends_declaration(channel: Any, monkeypat
     """A channel is admitted as a statement source only as the kind its protocol declares."""
 
     principal = to_subject_ref(channel.integration_ptr)
-    assert (channel.source_kind, source_kind_for(principal)) == (None, None)
+    assert (channel.source_kind, StatementSourceMixin.source_kind_for(principal)) == (None, None)
 
     # An import-only protocol declares its channels' classification once, on the backend class.
     monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.IMPORT)
-    assert (channel.source_kind, source_kind_for(principal)) == (SourceKind.IMPORT, SourceKind.IMPORT)
+    assert (channel.source_kind, StatementSourceMixin.source_kind_for(principal)) == (
+        SourceKind.IMPORT,
+        SourceKind.IMPORT,
+    )
 
 
 def _parsed(
@@ -1012,7 +1023,7 @@ def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: Non
     chatter edge, reverse ``thread_attachments`` relation and target-delete policy must all
     agree on the child's canonical content type. A leftover attachment on
     a reused primary key would mis-resolve, so the delete must remove it (the placement
-    invariant in ``angee.refs``).
+    invariant in ``angee.base.refs``).
     """
 
     del composed_tables
@@ -1461,7 +1472,8 @@ def test_threaded_model_post_can_autofollow_direct_recipient(composed_tables: No
 
 
 @pytest.mark.django_db(transaction=True)
-def test_threaded_model_delivery_error_counts_for_author(composed_tables: None) -> None:
+@pytest.mark.parametrize("failure_reason", ["SMTP server refused the message.", "SMTP\x00" + "é" * 9000])
+def test_threaded_model_delivery_error_counts_for_author(composed_tables: None, failure_reason: str) -> None:
     """Delivery failures roll up to the author-facing chatter error counter."""
 
     del composed_tables
@@ -1479,13 +1491,19 @@ def test_threaded_model_delivery_error_counts_for_author(composed_tables: None) 
         user=recipient,
         status="exception",
         failure_type="mail_smtp",
-        failure_reason="SMTP server refused the message.",
+        failure_reason=failure_reason,
     )
 
+    returned_reason = notification.failure_reason
+    assert returned_reason.startswith("SMTP")
+    assert "\x00" not in returned_reason
+    assert len(returned_reason) <= ThreadNotification._meta.get_field("failure_reason").max_length
+    if failure_reason == "SMTP server refused the message.":
+        assert returned_reason == failure_reason
     notification.refresh_from_db()
     assert notification.notification_status == "exception"
     assert notification.failure_type == "mail_smtp"
-    assert notification.failure_reason == "SMTP server refused the message."
+    assert notification.failure_reason == returned_reason
     assert ThreadNotification.objects.error_count_for_record(ticket, user=author) == 1
     assert ThreadNotification.objects.error_count_for_record(ticket, user=recipient) == 0
 

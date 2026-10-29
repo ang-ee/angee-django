@@ -12,17 +12,22 @@ ROOT = Path(__file__).resolve().parents[1]
 BASE_SPEC = importlib.util.find_spec("angee")
 assert BASE_SPEC is not None and BASE_SPEC.origin is not None
 ANGEE = Path(BASE_SPEC.origin).resolve().parent
-MODEL_TOOLKIT = (
-    *(ANGEE / name for name in (
-        "actors.py", "apps.py", "autoconfig.py", "changesets.py", "checks.py",
-        "errors.py", "evidence.py", "fields.py", "identity.py", "impl.py",
-        "indexes.py", "jsonschema.py", "lineage.py", "middleware.py", "numeric.py",
-        "pagination.py", "permissions.py", "refs.py", "serialization.py", "signals.py",
-        "tiers.py", "validation.py",
-    )),
-    ANGEE / "management",
-    ANGEE / "models",
+BASE = ROOT / "addons" / "angee" / "base"
+SERVING_MANAGEMENT = (
+    ANGEE / "management" / "commands" / "runserver.py",
+    ANGEE / "management" / "commands" / "serve.py",
 )
+# These modules contain only the aliases required by fingerprinted migrations
+# or native Django command precedence. All implementations stay with the addon.
+CORE_ADDON_BINDINGS = {
+    ANGEE / "fields.py": "angee.base.fields",
+    ANGEE / "impl.py": "angee.base.fields.implementation",
+    ANGEE / "indexes.py": "angee.base.indexes",
+    ANGEE / "models" / "audit.py": "angee.base.models.audit",
+    ANGEE / "models" / "ownership.py": "angee.base.models.audit",
+    ANGEE / "management" / "commands" / "createsuperuser.py": "angee.iam.management.commands.createsuperuser",
+    ANGEE / "management" / "commands" / "changepassword.py": "angee.iam.management.commands.changepassword",
+}
 GRAPHQL = ROOT / "addons" / "angee" / "graphql"
 COMPOSE = ANGEE / "compose"
 RESOURCES = ROOT / "addons" / "angee" / "resources"  # resources is a base addon
@@ -88,21 +93,21 @@ def _tree_imports(root: Path) -> set[str]:
     ("source_path", "source", "expected"),
     [
         (
-            "angee/models/base.py",
+            "addons/angee/base/models/base.py",
             "from . import merge",
-            {"angee.models", "angee.models.merge"},
+            {"angee.base.models", "angee.base.models.merge"},
         ),
         (
             "addons/angee/example/models.py",
-            "from angee import models as base_models",
-            {"angee", "angee.models"},
+            "from angee.base import models as base_models",
+            {"angee.base", "angee.base.models"},
         ),
         (
             "addons/angee/example/__init__.py",
-            "from angee.models import retained_set_null",
+            "from angee.base.models.audit import retained_set_null",
             {
-                "angee.models",
-                "angee.models.retained_set_null",
+                "angee.base.models.audit",
+                "angee.base.models.audit.retained_set_null",
             },
         ),
     ],
@@ -116,16 +121,19 @@ def test_relative_imports_resolve_against_the_source_import_root(
     assert _module_imports(ROOT / source_path) == expected
 
 
-def test_root_model_toolkit_is_below_all_subsystems() -> None:
-    """The root model toolkit imports no sibling subsystem or addon."""
+def test_foundation_runtime_is_below_all_capability_addons() -> None:
+    """Foundation serving code has no composer or product-addon dependency."""
 
-    imports = set().union(*(_tree_imports(path) for path in MODEL_TOOLKIT))
-    forbidden = ("angee.compose", "angee.graphql", *_ADDON_PACKAGES)
-    assert not any(name.startswith(prefix) for name in imports for prefix in forbidden)
+    imports = set().union(*(
+        _module_imports(path) for path in BASE.rglob("*.py")
+        if path.name not in {"build.py", "typing.py"} and "testing" not in path.relative_to(BASE).parts
+    ))
+    forbidden = ("angee.compose", *(name for name in _ADDON_PACKAGES if name != "angee.base"))
+    assert not any(name == prefix or name.startswith(prefix + ".") for name in imports for prefix in forbidden)
 
 
 def test_core_does_not_import_folder_addons() -> None:
-    """The core wheel remains importable without folder-addon sources."""
+    """Host mechanisms import addons only through the documented native bindings."""
 
     violations = {
         str(path.relative_to(ROOT)): forbidden
@@ -135,6 +143,10 @@ def test_core_does_not_import_folder_addons() -> None:
                 name
                 for name in _module_imports(path)
                 if any(name == addon or name.startswith(f"{addon}.") for addon in _ADDON_PACKAGES)
+                and not (
+                    (allowed := CORE_ADDON_BINDINGS.get(path))
+                    and (name == allowed or name.startswith(allowed + "."))
+                )
             )
         )
     }
@@ -144,7 +156,7 @@ def test_core_does_not_import_folder_addons() -> None:
 def test_production_sources_do_not_import_test_support() -> None:
     """Addon test compositions and generic fixtures stay test-only."""
 
-    testing_packages = ("tests", "angee.testing", *(f"{addon}.testing" for addon in _ADDON_PACKAGES))
+    testing_packages = ("tests", "angee.base.testing", *(f"{addon}.testing" for addon in _ADDON_PACKAGES))
     violations = {}
     for root in (ANGEE, ROOT / "addons"):
         for path in sorted(root.rglob("*.py")):
@@ -178,11 +190,13 @@ def test_addons_do_not_use_a_shared_app_config_subclass() -> None:
     assert not violations
 
 
-def test_resources_does_not_import_compose() -> None:
-    """The resource subsystem does not import build-time compose code."""
+def test_resources_serving_does_not_import_compose() -> None:
+    """Resources contributes through build.py; serving never imports that adapter."""
 
-    imports = _tree_imports(RESOURCES)
-    assert not any(name.startswith("angee.compose") for name in imports)
+    imports = set().union(*(
+        _module_imports(path) for path in RESOURCES.rglob("*.py") if path.name != "build.py"
+    ))
+    assert not any(name.startswith(("angee.compose", "angee.resources.build")) for name in imports)
 
 
 def test_graphql_does_not_import_compose() -> None:
@@ -195,7 +209,9 @@ def test_graphql_does_not_import_compose() -> None:
 def test_stable_serving_entrypoints_do_not_import_compose() -> None:
     """Serving entrypoints use Django's populated registry, not compose."""
 
-    imports = _module_imports(ANGEE / "urls.py") | _module_imports(ANGEE / "asgi.py")
+    imports = set().union(*(
+        _module_imports(path) for path in (ANGEE / "urls.py", ANGEE / "asgi.py", *SERVING_MANAGEMENT)
+    ))
     forbidden = ("angee.compose",)
     assert not any(name.startswith(prefix) for name in imports for prefix in forbidden)
 
@@ -204,5 +220,3 @@ def test_compose_has_no_rebac_permission_renderer() -> None:
     """Per-addon REBAC schemas stay with their owning apps."""
 
     assert not (COMPOSE / "rebac.py").exists()
-# Pre-consolidation base-addon side of pre-90bdd58b tests/test_layering.py;
-# kept separate because it guards addon dependency direction.

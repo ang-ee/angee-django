@@ -39,10 +39,9 @@ from pydantic_ai.output import OutputObjectDefinition
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RequestUsage, RunUsage
-from rebac import SubjectRef, actor_context, system_context, to_subject_ref
+from rebac import SubjectRef, actor_context, current_actor, system_context, to_subject_ref
 from rebac.mixins import RebacModelBase
 
-from angee.actors import instance_actor
 from angee.agents.backends import InferenceBackend
 from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
 from angee.agents.deployments import InferenceDeploymentIdentity
@@ -51,27 +50,30 @@ from angee.agents.resources import AgentResource
 from angee.agents.runners import TurnOutcome
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
-from angee.fields import DiagnosticTextField, StateField
-from angee.graphql.events import ChangeRelatedRecord
-from angee.iam.service_users import sync_service_user
-from angee.impl import ImplClassField, ImplDefaultsMixin
-from angee.integrate.models import IntegrationCreateMode
-from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
-from angee.jobs.enqueue import enqueue_task
-from angee.jobs.locks import LockKey, record_lock_key
-from angee.models import (
+from angee.base.fields.implementation import ImplClassField
+from angee.base.fields.state import StateField
+from angee.base.fields.text import DiagnosticTextField
+from angee.base.models import (
     AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
     AuditMixin,
-    HistoryMixin,
     OwnerMixin,
     StateTransitions,
     role_anchor,
     save_state,
     transition,
 )
+from angee.base.models.implementations import ImplDefaultsMixin
+from angee.base.permissions import actor_user_id, instance_actor
+from angee.graphql.events import ChangeRelatedRecord
+from angee.iam.service_users import sync_service_user
+from angee.integrate.models import IntegrationCreateMode
+from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
+from angee.jobs.enqueue import enqueue_task
+from angee.jobs.locks import LockKey, record_lock_key
 from angee.operator.daemon import OperatorInstanceKind, WorkspaceStatus
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
@@ -359,7 +361,7 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
         effect at once and the backend owns any client lifetime it needs.
         """
 
-        backend_class = cast(type[InferenceBackend], self.resolve_impl("backend_class"))
+        backend_class = self.get_backend_class_impl()
         return backend_class(self)
 
     def test_connection(self) -> str:
@@ -394,7 +396,7 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
         )
 
 
-class InferenceModelManager[ModelT: InferenceModel](AngeeManager[ModelT]):
+class InferenceModelManager[ModelT: InferenceModel](AngeeHistoryManager[ModelT]):
     """Manager owning catalogue sync and selection of authorized deployments."""
 
     def usable(self, actor: Any, role: str, *, uses: Collection[InferenceModelUse]) -> tuple[ModelT, ...]:
@@ -424,7 +426,7 @@ class InferenceModelManager[ModelT: InferenceModel](AngeeManager[ModelT]):
         return len(specs)
 
 
-class InferenceModel(AuditMixin, AngeeDataModel):
+class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """One model in a provider's catalogue, agents bind to by FK.
 
     ``publisher`` is the model's maker, reusing the ``integrate.Vendor`` catalogue
@@ -620,7 +622,7 @@ class InferenceModel(AuditMixin, AngeeDataModel):
         return InferenceResult(response=response, usage=usage, output=output)
 
 
-class SkillManager(VcsOutputManager, AngeeManager):
+class SkillManager(VcsOutputManager, AngeeHistoryManager):
     """Manager owning the reconcile of skill rows from a skill source."""
 
     def sync_from_source(self, source: Any) -> int:
@@ -682,7 +684,7 @@ class Skill(VcsOutput, AuditMixin, AngeeDataModel):
         return self.name or self.path or f"skill:{self.public_id}"
 
 
-class MCPServer(AuditMixin, AngeeDataModel):
+class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """An MCP server an agent can reach — internal to the platform or external.
 
     An external server authenticates with an ``integrate.Credential``; the operator renders
@@ -714,7 +716,7 @@ class MCPServer(AuditMixin, AngeeDataModel):
     )
     config = models.JSONField(default=dict, blank=True)
 
-    objects = AngeeManager()
+    objects = AngeeHistoryManager()
 
     class Meta:
         """Django model options for MCP servers."""
@@ -876,6 +878,24 @@ class MCPTool(AuditMixin, AngeeDataModel):
         return self.name
 
 
+class AgentManager[AgentT: Agent](AngeeHistoryManager[AgentT]):
+    """Own the current actor's chat-agent selection."""
+
+    def chat_for_actor(self) -> AgentT | None:
+        """Return the user's most recently updated callable agent, if any."""
+
+        user_id = actor_user_id(current_actor())
+        if user_id is None:
+            return None
+        with system_context(reason="agents.chat_for_actor"):
+            candidates = (
+                self.filter(owner_id=user_id, is_template=False, runtime_status=RuntimeStatus.RUNNING)
+                .select_related("model")
+                .order_by("-updated_at", "-pk")
+            )
+            return next((agent for agent in candidates if agent.can_chat), None)
+
+
 class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     """An agent definition (or, when ``is_template``, an agent template).
 
@@ -885,7 +905,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     into the workspace, and the model's API credential into the service. ``service`` and
     ``workspace`` hold the operator instance names once rendered.
 
-    Ownership is transferable (:class:`~angee.models.OwnerMixin`). An agent
+    Ownership is transferable (:class:`~angee.base.models.OwnerMixin`). An agent
     installed before any user exists loads without an owner until an
     administrator transfers it, and deleting the owner clears it, leaving the
     agent to platform administrators.
@@ -1014,7 +1034,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         },
     )
 
-    objects = AngeeManager()
+    objects = AgentManager()
 
     class Meta:
         """Django model options for agents."""
@@ -1104,7 +1124,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         owns the service template, the credential→env mapping, and the model handle.
         """
 
-        runtime_class = cast(type[AgentRuntime], self.resolve_impl("runtime_class", default="none"))
+        runtime_class = self.get_runtime_class_impl(default="none")
         return runtime_class()
 
     @property
@@ -1833,8 +1853,22 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         return model.credential
 
 
-class AgentSessionManager[SessionT: AgentSession](AngeeManager[SessionT]):
+class AgentSessionManager[SessionT: AgentSession](AngeeHistoryManager[SessionT]):
     """Create conversations under the caller's native REBAC create gate."""
+
+    def current_for_agent(self, agent: Any) -> SessionT | None:
+        """Return this actor's latest open session for an in-process agent."""
+
+        user_id = actor_user_id(current_actor())
+        if user_id is None or not agent.runs_in_process:
+            return None
+        with system_context(reason="agents.session.current_for_agent"):
+            return (
+                self.filter(agent=agent, user_id=user_id)
+                .exclude(status=SessionStatus.CLOSED)
+                .order_by("-updated_at", "-pk")
+                .first()
+            )
 
     def start(self, agent: Any, *, user: Any, context: Mapping[str, Any], actor: Any = None) -> Any:
         """Start an idle conversation with a callable, running in-process agent.
@@ -2170,7 +2204,7 @@ class AgentSession(AuditMixin, AngeeDataModel):
         self._transition_fields = {"last_error"}
 
 
-class AgentTurnQuerySet[TurnT: AgentTurn](AngeeQuerySet[TurnT]):
+class AgentTurnQuerySet[TurnT: AgentTurn](AngeeHistoryQuerySet[TurnT]):
     """Turn scopes shared by session execution and transport callers."""
 
     def open(self) -> Self:
@@ -2184,7 +2218,7 @@ class AgentTurnQuerySet[TurnT: AgentTurn](AngeeQuerySet[TurnT]):
         return self.filter(status__in=ACTIVE_TURN_STATUSES)
 
 
-_AgentTurnManager = AngeeManager.from_queryset(AgentTurnQuerySet)
+_AgentTurnManager = AngeeHistoryManager.from_queryset(AgentTurnQuerySet)
 
 
 class AgentTurn(AuditMixin, AngeeDataModel):

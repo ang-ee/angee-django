@@ -472,7 +472,7 @@ describe("MutationDialog", () => {
     );
 
     expect(
-      (screen.getByRole("button", { name: "Owner" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("combobox", { name: "Owner" }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(warn).toHaveBeenCalledWith(
       expect.stringMatching(/descriptor relation.*missing\.Person/),

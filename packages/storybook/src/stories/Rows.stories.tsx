@@ -8,7 +8,7 @@ import {
   type RowsValue,
 } from "@angee/ui";
 
-import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
+import { jsonResponse, storySchema } from "./runtime-fixtures";
 
 const rowTemplate: readonly FormSpecFieldDescriptor[] = [
   { name: "source", label: "Source", widget: "text", readOnly: true },
@@ -97,7 +97,7 @@ storySchemas.public = { ...storySchemas.public!, metadata: channelMetadata };
 
 const meta = {
   title: "Widgets/Rows",
-  parameters: { layout: "padded" },
+  parameters: { angeeFixture: { schemas: storySchemas }, layout: "padded" },
 } satisfies Meta;
 
 export default meta;
@@ -117,27 +117,25 @@ function RowsDemo(): ReactElement {
     rowTemplate,
   } satisfies FormSpecFieldDescriptor;
   return (
-    <RuntimeFixture schemas={storySchemas}>
-      <div className="grid max-w-5xl gap-8">
-        <section className="grid gap-2">
-          <h3 className="text-13 font-semibold text-fg">Edit</h3>
-          <LabeledDescriptorField
-            field={field}
-            value={rows}
-            onChange={(value) => setRows(value as RowsValue)}
-          />
-        </section>
-        <section className="grid gap-2">
-          <h3 className="text-13 font-semibold text-fg">Read</h3>
-          <LabeledDescriptorField
-            field={field}
-            value={rows}
-            readOnly
-            onChange={() => undefined}
-          />
-        </section>
-      </div>
-    </RuntimeFixture>
+    <div className="grid max-w-5xl gap-8">
+      <section className="grid gap-2">
+        <h3 className="text-13 font-semibold text-fg">Edit</h3>
+        <LabeledDescriptorField
+          field={field}
+          value={rows}
+          onChange={(value) => setRows(value as RowsValue)}
+        />
+      </section>
+      <section className="grid gap-2">
+        <h3 className="text-13 font-semibold text-fg">Read</h3>
+        <LabeledDescriptorField
+          field={field}
+          value={rows}
+          readOnly
+          onChange={() => undefined}
+        />
+      </section>
+    </div>
   );
 }
 

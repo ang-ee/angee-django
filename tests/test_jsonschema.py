@@ -6,20 +6,10 @@ from typing import Any
 import pytest
 from django.core.exceptions import ValidationError
 
-from angee.jsonschema import (
-    LocalSchemaReferences,
-    check_schema,
-    embed_schema,
-    materialize_schema,
-    relation_positions,
-    schema_at,
-    schemas_match,
-    union_schema,
-    unmatched_properties,
-    validate,
-    validation_issues,
-    validator,
-)
+from angee.base.schemas.forms import materialize_schema, relation_positions
+from angee.base.schemas.references import LocalSchemaReferences, schemas_match
+from angee.base.validators import check_schema, validate, validation_issues, validator
+from angee.workflows.schemas import embed_schema, schema_at, union_schema, unmatched_properties
 
 
 @pytest.mark.parametrize("choice", ["anyOf", "oneOf"])

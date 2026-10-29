@@ -10,7 +10,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from graphql import GraphQLError
 from graphql.execution.values import get_argument_values
 from rebac import current_actor
@@ -19,10 +19,11 @@ from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
+from strawberry.types import get_object_definition
 
 from angee.graphql import capabilities
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
-from angee.graphql.data import (
+from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
     SortAlias,
     declared_hasura_resource_fields,
@@ -40,7 +41,7 @@ from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.parties.schema import PartyType
-from angee.projects.inputs import MilestoneTemplate
+from angee.projects.inputs import MilestoneTemplate, TaskOrder
 from angee.projects.models import ProjectSetupState
 from angee.projects.models import Task as TaskModel
 from angee.storage.schema import FolderType
@@ -133,6 +134,33 @@ strawberry.enum(TaskVisibility)
 @pydantic_input(model=MilestoneTemplate, all_fields=True)
 class ProjectMilestoneSetupInput:
     """Typed milestone template; addons contribute native setup choices."""
+
+
+@pydantic_input(model=TaskOrder, all_fields=True)
+class TaskOrderInput:
+    """Bounded visible neighbors; the model resolves project scope and rank."""
+
+
+@strawberry.input
+class TaskOrderFields:
+    """Task-owned board placement, independent of explicit numeric rank writes."""
+
+    task_order: TaskOrderInput | None = strawberry.UNSET
+
+
+class TaskHasuraWriteBackend(AngeeHasuraWriteBackend):
+    """Acquire Task ordering ownership before the native backend locks its row."""
+
+    def update(
+        self, info: strawberry.Info, pk: str, data: dict[str, Any], *, expected_revision: int | None = None,
+    ) -> Any:
+        if data.get("task_order") is not None and "sort_order" in data:
+            raise ValidationError({"task_order": "Choose ordering neighbors or an explicit rank, not both."})
+        model = cast(type[TaskModel], self.model)
+        rows = model._default_manager.all()
+        rows._for_write = True
+        with model.ordering_write(using=rows.db):
+            return super().update(info, pk, data, expected_revision=expected_revision)
 
 
 @strawberry.input
@@ -1152,7 +1180,7 @@ def _task_resource(node_type: type) -> Any:
             "sub_sort_order",
             *_TASK_EXTENSION_UPDATE_FIELDS,
         ],
-        write_backend=AngeeHasuraWriteBackend(
+        write_backend=TaskHasuraWriteBackend(
             Task,
             public_id_fields=(
                 "project",
@@ -1259,7 +1287,14 @@ def _projects_schema_bucket(
 ) -> dict[str, Any]:
     """Return the projects surface with its schema-specific Project and Task nodes."""
 
+    task_order_input = strawberry.input(
+        name=get_object_definition(task_resource.set_input_type, strict=True).name,
+        extend=True,
+    )(type("TaskOrderSetInput", (TaskOrderFields,), {
+        "__doc__": "Task-owned ordering intent on the native update input.",
+    }))
     return {
+        "input_extensions": [task_order_input],
         "query": [
             project_resource.query,
             _MILESTONE_RESOURCE.query,
@@ -1312,6 +1347,7 @@ _CONSOLE_PROJECTS_SCHEMA_BUCKET = _projects_schema_bucket(
 )
 _CONSOLE_PROJECTS_SCHEMA_BUCKET["types"].append(UserType)
 _CONSOLE_PROJECTS_SCHEMA_BUCKET["input_extensions"] = [
+    *_CONSOLE_PROJECTS_SCHEMA_BUCKET["input_extensions"],
     *tags_input_extensions(_CONSOLE_PROJECT_RESOURCE),
     *tags_input_extensions(_CONSOLE_TASK_RESOURCE),
 ]

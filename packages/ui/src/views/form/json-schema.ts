@@ -1,8 +1,9 @@
-import Ajv2020 from "ajv/dist/2020.js";
-import type { AnySchema, ErrorObject, Options } from "ajv";
-import addFormats from "ajv-formats";
+import type Ajv2020 from "ajv/dist/2020.js";
+import type { AnySchema, ErrorObject } from "ajv";
 import * as v from "valibot";
 import { get, set, type FieldErrors, type FieldValues, type Resolver } from "react-hook-form";
+
+import { createJsonSchemaAjv } from "./json-schema-validator";
 
 import type { UiTranslate } from "../../i18n";
 import { enUiMessages } from "../../i18n/en";
@@ -11,24 +12,13 @@ import type { WidgetMap } from "../../runtime/contracts";
 import { JsonValueSchema } from "../../widgets/json-value";
 import type { ActionFormDefinition } from "../page/Action";
 import { deserializeFormSpec, formSpecInitialValues, normalizeFormSpecValues, type FormSpecFieldDescriptor } from "./form-spec";
-import { FORM_SPEC_ANNOTATIONS, parseFormSpec, parseFormSpecPayload } from "./form-spec-schema";
+import { parseFormSpec, parseFormSpecPayload } from "./form-spec-schema";
 import { applyFormErrors, invalidFormSubmit, type ValidationErrors } from "./validation-errors";
 
 const fallbackT = createAngeeI18nInstance({}).getFixedT(null, "ui");
 const translateDefault: UiTranslate = (key, vars) => fallbackT(key, { ...vars, defaultValue: enUiMessages[key] ?? key });
 
-/** Draft 2020-12 with native formats, discriminator selection and FormSpec annotations. */
-export function createJsonSchemaAjv(options: Options = {}): Ajv2020 {
-  const ajv = new Ajv2020({
-    strict: true, coerceTypes: false, useDefaults: false, removeAdditional: false,
-    ...options, allErrors: true, discriminator: true,
-  });
-  addFormats(ajv, { mode: "full" });
-  for (const keyword of FORM_SPEC_ANNOTATIONS) {
-    if (!ajv.getKeyword(keyword)) ajv.addKeyword(keyword);
-  }
-  return ajv;
-}
+export { createJsonSchemaAjv } from "./json-schema-validator";
 
 /** A caller-owned message, with native keyword parameters available for translation. */
 export type JsonSchemaErrorMessage = (error: ErrorObject<string, Record<string, unknown>>) => string;

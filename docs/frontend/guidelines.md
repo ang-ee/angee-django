@@ -130,9 +130,8 @@ shared UI copy through an addon bundle.
 The [public catalog](../../packages/ui/src/catalog.ts) assigns one UX kind to
 each shipped component and its owner-specific hooks. The
 [Library overview](../../packages/storybook/src/stories/Library.stories.tsx) (story id `library-overview--default`)
-renders the owners; the
-[composition report](../../packages/storybook/src/stories/Composition.stories.tsx) (story id `reports-composition--default`)
-shows their dependencies.
+renders the owners. The running application's `createApp(...).explain` exposes
+menu and container provenance through the [runtime explanation owner](../../packages/app/src/explain.ts).
 
 | Kind | Meaning |
 |---|---|
@@ -151,9 +150,6 @@ catalog and container contracts, and brings the concrete gap and intended
 composition to the framework owner. Extend that owner or contribute through its
 container. A new owner belongs in `@angee/ui` (or app composition in
 `@angee/app`) with its story and catalog entry, never as an addon-local copy.
-Addon route instances awaiting the lane-2 page shapes appear in the composition
-report as “composes no page shape yet”; they are information, not ownership
-violations.
 
 **The shipped owner is the only Storybook authority.** Authoritative stories
 render real `@angee/ui`, `@angee/app` shell owners and shipped addon components,
@@ -162,7 +158,7 @@ needing its own markup belongs under `Explorations/<YYYY-MM-DD> <name>` (a
 `packages/storybook/src/explorations/` folder with its own story glob in
 `.storybook/main.mjs`; none exists today), names the ruling it fed and its
 superseding owner, and is deleted once that owner exists. Explorations sort last
-and never enter the Library or the shipped composition tree.
+and never enter the Library.
 
 The `@angee/ui/catalog` subpath audits runtime exports, including aliases; the
 root entry does not load it. Type-only exports are contracts, not rendered
@@ -176,8 +172,7 @@ stable.
 The [generator](../../packages/storybook/scripts/catalog.mjs) reads these facts
 through TypeScript, reports independent owners of the same shell place, and
 derives story links only from CSF `meta.component` or `parameters.owner`.
-Missing coverage stays `null` and is visible in the Library. This lane omits
-`composes`; the composition graph carries the inventory edges separately.
+Missing coverage stays `null` and is visible in the Library.
 `recipeAxes(recipe)` reads native tailwind-variants metadata for specimens.
 The guard regenerates and diffs the catalog, so shape-valid but stale facts fail.
 
@@ -214,10 +209,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   schema. Optional schema contributions keep their documents and UI registrations
   in the contributing addon's web package, so hosts without it never scan those
   operations; see [OIDC sign-in](../../addons/angee/iam_integrate_oidc/web/src/index.ts).
-  An opaque `JSON`-scalar value is parsed at its domain owner with a
-  valibot schema (`safeParse`), never asserted into an application shape; a
-  recursive shape a declarative schema cannot express may wrap its type guard
-  in `v.custom`, keeping the parse boundary in the schema.
+  An opaque `JSON`-scalar value is parsed at its domain owner with its declared
+  schema, never asserted into an application shape. Resource metadata uses
+  Valibot `safeParse`; FormSpec uses the standalone Ajv validator generated from
+  its shared [JSON Schema](../../addons/angee/base/schemas/form_spec.schema.json).
+  Reuse the existing contract and validator instead of maintaining another schema.
 - **Eligible ActionResult mutations are derived, not authored.** Codegen in
   `packages/app/bin/angee-web-codegen.mjs` derives mutations with at least one
   argument when every argument is required (non-null without a default), or
@@ -377,7 +373,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   multiword terminal widget name, matching the web widget registry. Backend field
   metadata and the owning addon's `widgets` contribution use the identical key,
   for example `angee.integrate.integrationSyncCursor`. The validator in
-  [`angee.data.field_classification`](../../angee/data/field_classification.py)
+  [`angee.graphql.data.resource_fields`](../../addons/angee/graphql/data/resource_fields.py)
   also accepts existing underscore names; unknown bare names remain errors.
 - **A resource registry key is the emitted canonical `modelLabel`** (for example
   `"integrate.OAuthClient"`). Addon composition may accept a unique bare or
@@ -1036,7 +1032,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   the resource's declared `subjectField`; never construct a subject from a
   public display id. The shared package owns presentation, and IAM owns the
   generated GraphQL document adapter.
-- Never poll for data freshness. Live updates ride GraphQL subscriptions through
+- Live model updates ride GraphQL subscriptions through
   refine's live provider and react-query invalidation, not a `setInterval`
   refetch loop. Opt a model into live cross-actor refresh by declaring
   `changes(Model, field="<model>Changed")` in its `schema.py`; local writes
@@ -1048,10 +1044,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   resolver actually reads. Refine's own resource hooks still invalidate per
   push. Stream foreign-system state (e.g. the operator
   daemon's `onWorkspaceStatusChange`) over its own subscriptions.
-  A timed `setInterval` is only ever for non-data UI motion (a carousel) or
-  rotating a short-lived credential before it expires — never to re-read a
-  resolver hoping it changed. If a foreign system publishes no change
-  subscription, add one there rather than polling it from the client.
+  A dashboard widget may explicitly declare interval refresh through its
+  [refresh contract](../../packages/ui/src/dashboard/headless.ts). Its data
+  adapter forwards that interval to native Query `refetchInterval`; Query owns
+  scheduling and observer cleanup. This declaration does not authorize a
+  private polling loop in a page or addon. Use `setInterval` only for non-data
+  UI motion or rotating a short-lived credential. Foreign systems should
+  publish their own change subscriptions.
 - Authored mutation result envelopes are decoded at the hook boundary. Pass
   `errorFrom` to `useAuthoredMutation` for `{error, error_code}` payloads; the
   hook throws before invalidating, so pages do not repeat result-error checks or
@@ -1933,10 +1932,13 @@ Hard-won traps — the wise learn from others' mistakes
   `render: () => …` has dead meta args. Removing them when `meta.component` has a
   required prop breaks `StoryObj<typeof meta>` (it still demands the arg) — type the
   self-rendering stories as bare `StoryObj` (keep `component:` for autodocs). A
-  data-bound view story uses the shared `runtime-fixtures` owner (`RuntimeFixture` +
-  `storySchema(fetch)` + `jsonResponse`), not a hand-rolled provider stack; global
-  providers (`ToastProvider`, router, runtime, client) come from the preview
-  decorator — don't nest a second one.
+  data-bound view story declares `parameters.angeeFixture` with its schemas,
+  resources, runtime and operation documents; the preview mounts the shared
+  [`RuntimeFixture`](../../packages/storybook/src/stories/runtime-fixtures.tsx).
+  Use `storySchema(fetch)` and `jsonResponse` for transport fixtures. Routed
+  fixtures reused by tests set `angeeOwnRuntime: true` and pass
+  `appearance={storyAppearance(context.globals)}` into the same owner. Each
+  story has one provider stack, including appearance, data, toasts and modals.
 - **`Workbench` (`layouts/Workbench.tsx`) is the collapsible inner-shell owner;
   `Explorer` is removed.** Every multi-pane content region (console body, storage,
   knowledge, iam schema, agents sessions) composes `Workbench` over `page/SplitPanes`
@@ -2012,7 +2014,9 @@ Hard-won traps — the wise learn from others' mistakes
   children render straight into the panel, which owns scroll and padding while the
   pane owns width, border and background; `RailPanel` owns the inspector card. Lay
   out a bounded graph — the selection or a capped neighbourhood — never a whole
-  schema: Dagre holds the main thread for minutes at around two thousand nodes.
+  schema. Bound relationships as well as nodes: layout and canvas initialization
+  both occupy the main thread. The [platform graph](../../addons/angee/platform/web/src/lib/explorer.ts)
+  pages incident relationships while keeping every model and relationship reachable.
 - **A connect action is one ceremony.** Pass the button as `MutationDialog.trigger`
   so the dialog owns open state, reset and native focus pairing. Addons retain
   vendor pairing and source selection.

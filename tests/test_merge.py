@@ -13,6 +13,7 @@ import pytest
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.db import router
 from django.db.models import DO_NOTHING
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
@@ -20,21 +21,17 @@ from rebac import PermissionDenied, RelationshipTuple, actor_context, system_con
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
-from angee.changesets import changeset
+from angee.base.identity import public_id_of
+from angee.base.models import MergePolicy, RecordRefMixin, references
+from angee.base.models import merge as merge_module
+from angee.base.models.merge_references import EdgeReference, ForeignKeyReference, MergeContractMixin
 from angee.graphql import records
-from angee.identity import public_id_of
 from angee.messaging.testing.models import Directory, Participant, Party, Reaction
-from angee.models import (
-    EdgeReference,
-    ForeignKeyReference,
-    MergeContractMixin,
-    SourceKind,
-    fold_records,
-    references,
-)
-from angee.models import merge as merge_module
 from angee.projects.testing.models import Link, Project, Queue, Task
-from angee.refs import MergePolicy, RecordRefMixin
+from angee.provenance.context import changeset, changeset_model, current_changeset
+from angee.provenance.statements import (
+    SourceKind,
+)
 from angee.resources.testing.models import Resource
 from angee.spaces.testing.models import Group
 from angee.tags import schema as tags_schema
@@ -42,8 +39,7 @@ from angee.tags.testing.models import Tag, TagAssignment
 from angee.workflows.testing.models import StepWatch, Workflow, WorkflowRun
 from tests.conftest import addon_schema, create_user, execute_schema, make_integration, result_data
 from tests.mtidemo.models import MtiChild, MtiParent
-from tests.recordrefdemo.models import CustomColumnEdge, SelfLinkedNode, TagSlot
-from tests.scopedemo.models import ProjectionDoc
+from tests.recordrefdemo.models import CustomColumnEdge, MergeReferenceNode, SelfLinkedNode, TagSlot
 from tests.workflow_steps import document
 
 pytestmark = pytest.mark.usefixtures("composed_permissions")
@@ -232,15 +228,14 @@ def test_a_survivor_referring_to_a_merged_record_refuses_before_anything_moves()
     """Moving the survivor's own reference would point it at itself, so the fold refuses and nothing moves."""
 
     with system_context(reason="merge test self reference"):
-        merged = ProjectionDoc.objects.create(title="merged")
-        survivor = ProjectionDoc.objects.create(title="survivor", parent=merged)
-        child = ProjectionDoc.objects.create(title="child", parent=merged)
-    retired: list[Any] = []
-    with pytest.raises(ValidationError, match="refers to"):
-        fold_records(survivor, [merged], carry=lambda: None, retire=retired.append, blockers=())
-    assert retired == []
+        merged = MergeReferenceNode.objects.create(title="merged")
+        survivor = MergeReferenceNode.objects.create(title="survivor", parent=merged)
+        child = MergeReferenceNode.objects.create(title="child", parent=merged)
+        with pytest.raises(ValidationError, match="refers to"):
+            survivor.fold([merged])
     with system_context(reason="merge test read"):
-        assert set(ProjectionDoc._base_manager.filter(parent=merged).values_list("pk", flat=True)) == {
+        assert MergeReferenceNode._base_manager.filter(pk=merged.pk).exists()
+        assert set(MergeReferenceNode._base_manager.filter(parent=merged).values_list("pk", flat=True)) == {
             survivor.pk,
             child.pk,
         }
@@ -634,3 +629,23 @@ def test_metadata_marks_a_mergeable_resource() -> None:
     assert resources["tags.Tag"].mergeable
     wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
     assert wire["tags.Tag"]["mergeable"] is True
+
+
+def test_an_unsaved_fold_changeset_still_honors_its_native_write_router(monkeypatch) -> None:
+    """Lazy attribution cannot join a fold routed to another database."""
+
+    with system_context(reason="test unsaved fold routing"):
+        survivor = MergeReferenceNode.objects.create(title="kept")
+        merged = MergeReferenceNode.objects.create(title="other")
+    native_write = router.db_for_write
+    attribution_model = changeset_model()
+
+    def route(model, **hints):
+        return "secondary" if model is attribution_model else native_write(model, **hints)
+
+    monkeypatch.setattr(router, "db_for_write", route)
+    with system_context(reason="test routed fold refusal"), changeset(fresh=True):
+        assert current_changeset()._state.db is None
+        with pytest.raises(ValidationError, match="share the database"):
+            survivor.fold([merged])
+        assert set(MergeReferenceNode._base_manager.values_list("pk", flat=True)) == {survivor.pk, merged.pk}

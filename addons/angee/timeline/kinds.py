@@ -5,17 +5,15 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
 from functools import lru_cache
 from typing import Any
 
 from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 from django.db import models
-from django.db.models import Q
 from django.dispatch import receiver
 
-from angee.impl import resolve_hooks
+from angee.hooks import resolve_hooks
 
 HOOK_SETTING = "ANGEE_TIMELINE_KINDS"
 type RecordIdentity = tuple[type[models.Model], int]
@@ -118,32 +116,6 @@ def actor_label(user: Any) -> str:
     return str(user) if user is not None else ""
 
 
-@dataclass(frozen=True)
-class Cursor:
-    """A keyset cursor on the page order ``(at desc, kind asc, pk desc)``."""
-
-    at: datetime
-    kind: str
-    pk: int
-
-    def encode(self) -> str:
-        return f"{self.at.isoformat()}|{self.kind}|{self.pk}"
-
-    @classmethod
-    def decode(cls, value: str) -> Cursor:
-        at, kind, pk = value.split("|", 2)
-        if not kind or not pk.isdigit():
-            raise ValueError("A timeline cursor is '<iso datetime>|<kind>|<pk>'.")
-        return cls(at=datetime.fromisoformat(at), kind=kind, pk=int(pk))
-
-    def predicate(self) -> Q:
-        """Events strictly after this cursor on the page order."""
-
-        return (
-            Q(_timeline_at__lt=self.at)
-            | Q(_timeline_at=self.at, _timeline_kind__gt=self.kind)
-            | Q(_timeline_at=self.at, _timeline_kind=self.kind, pk__lt=self.pk)
-        )
 
 
 def timeline_subject(model: type[models.Model]) -> bool:

@@ -15,28 +15,28 @@ from django.test.utils import isolate_apps
 from rebac import RebacMixin
 from rebac.models import RebacResource, Relationship, RelationshipRegistry
 
-from angee import checks as base_checks
-from angee.apps import BaseConfig
-from angee.checks import (
-    check_hierarchy_queryset_order,
-    check_hooks,
-    check_impl_registries,
+from angee.base import checks as base_checks
+from angee.base.apps import BaseConfig
+from angee.base.checks import (
     check_ownership,
     check_rebac_database,
 )
-from angee.fields import StateField
-from angee.impl import ImplClassField
-from angee.models import (
+from angee.base.fields.implementation import ImplClassField
+from angee.base.fields.state import StateField
+from angee.base.implementations import check_impl_registries
+from angee.base.models import (
     AngeeManager,
     AngeeModel,
     AppendOnlyModel,
     AppendOnlyQuerySet,
     AuditMixin,
+    HierarchyMixin,
     HierarchyQuerySet,
     OwnerMixin,
     TrashMixin,
     TrashQuerySet,
 )
+from angee.hooks import check_hooks
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
 
@@ -147,7 +147,6 @@ def test_installed_hook_owners_declare_their_settings() -> None:
     assert {
         "ANGEE_MCP_ACTOR_VERIFIER",
         "ANGEE_WEBFORM_TOKEN_HOOK",
-        "ANGEE_TASK_LOCK_BACKEND",
         "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS",
         "ANGEE_PARTIES_SIGNING_PROVIDERS",
         "ANGEE_MERGE_GUARDS",
@@ -220,24 +219,17 @@ def test_rebac_database_check_registered_by_base() -> None:
 
     config = apps.get_app_config("base")
     assert isinstance(config, BaseConfig)
-    assert config.name == "angee"
+    assert config.name == "angee.base"
     config.ready()
     config.ready()
     assert sum(check is check_rebac_database for check in registry.registered_checks) == 1
     assert checks.Tags.models in check_rebac_database.tags
-    assert sum(check is check_hierarchy_queryset_order for check in registry.registered_checks) == 1
-    assert checks.Tags.models in check_hierarchy_queryset_order.tags
     assert sum(check is check_hooks for check in registry.registered_checks) == 1
     assert checks.Tags.models in check_hooks.tags
 
 
 @pytest.mark.parametrize("ordering", ["first", "last", "override", "inherited", "plain"])
-@pytest.mark.parametrize("selected_apps", [False, True])
-def test_hierarchy_queryset_order_checks_every_declared_manager(
-    monkeypatch: pytest.MonkeyPatch,
-    ordering: str,
-    selected_apps: bool,
-) -> None:
+def test_hierarchy_queryset_order_checks_every_declared_manager(ordering: str) -> None:
     """Path maintenance may skip its own guard, but must retain other update guards."""
 
     class Guard(models.QuerySet):
@@ -258,18 +250,16 @@ def test_hierarchy_queryset_order_checks_every_declared_manager(
         pass
 
     queryset = {"first": First, "last": Last, "override": Override, "inherited": Inherited, "plain": Guard}[ordering]
-    with isolate_apps("django.contrib.contenttypes") as registry:
+    with isolate_apps("django.contrib.contenttypes"):
 
-        class Node(models.Model):
+        class Node(HierarchyMixin, models.Model):
             objects = models.Manager()
             hierarchy = models.Manager.from_queryset(queryset)()
 
             class Meta:
                 app_label = "contenttypes"
 
-        monkeypatch.setattr(base_checks, "apps", registry)
-        configs = list(registry.get_app_configs()) if selected_apps else None
-        errors = check_hierarchy_queryset_order(configs)
+        errors = [error for error in Node.check() if error.id == "angee.E021"]
 
     if ordering in {"last", "override"}:
         [error] = errors
@@ -336,7 +326,10 @@ definition tests/owned_child {
         path = tmp_path / "ownership.zed"
         path.write_text(source)
         monkeypatch.setattr(apps.get_app_config("contenttypes"), "rebac_schema", str(path), raising=False)
-        errors = check_ownership([isolated.get_app_config("contenttypes")])
+        errors = [
+            error for model in isolated.get_models() for error in model.check()
+            if error.id == "angee.E027"
+        ]
 
     if mutation == "valid":
         assert errors == []
@@ -365,7 +358,7 @@ def test_a_child_sharing_its_owners_definition_takes_its_transfer_gate(tmp_path,
             "    permission transfer = owner\n    permission write__owner = transfer\n}\n"
         )
         monkeypatch.setattr(apps.get_app_config("contenttypes"), "rebac_schema", str(path), raising=False)
-        assert check_ownership([isolated.get_app_config("contenttypes")]) == []
+        assert not [error for model in isolated.get_models() for error in model.check() if error.id == "angee.E027"]
 
 
 @pytest.mark.parametrize(

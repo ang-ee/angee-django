@@ -367,7 +367,7 @@ describe("DescriptorFieldList", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Show errors" }));
     const title = screen.getByRole("textbox", { name: "Title" });
-    const source = screen.getByRole("button", { name: "Source" });
+    const source = screen.getByRole("combobox", { name: "Source" });
     const titleError = await screen.findByText("Choose a title");
     const sourceError = screen.getByText("Choose a source");
     const description = screen.getByText("Give the record a name");

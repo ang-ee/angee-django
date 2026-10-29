@@ -172,7 +172,7 @@ describe("RelationPicker edit affordance", () => {
       />,
     );
 
-    const trigger = screen.getByRole("button", {
+    const trigger = screen.getByRole("combobox", {
       name: "OAuth Client: Acme OAuth",
     });
     expect(trigger.id).toBe("decision-target");
@@ -210,7 +210,7 @@ describe("RelationPicker edit affordance", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "OAuth Client" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "OAuth Client" }));
     fireEvent.click(await screen.findByText("Globex OAuth"));
 
     expect(onChange).toHaveBeenCalledWith("client-2");
@@ -250,7 +250,7 @@ describe("RelationPicker edit affordance", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "OAuth Client" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "OAuth Client" }));
     fireEvent.change(await screen.findByPlaceholderText("Search…"), {
       target: { value: "Acme" },
     });
@@ -280,7 +280,7 @@ describe("RelationPicker edit affordance", () => {
       },
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "OAuth Client" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "OAuth Client" }));
     fireEvent.change(await screen.findByPlaceholderText("Search…"), {
       target: { value: "Acme" },
     });

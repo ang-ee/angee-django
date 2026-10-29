@@ -7,12 +7,13 @@ import type { ListViewNavigationScope, RowRecord } from "./types";
 
 /** The native server-list read shared by rendered tables and record navigation. */
 export function useResourceListQuery({
-  resource, scope, fields, enabled = true,
+  resource, scope, fields, enabled = true, refetchInterval,
 }: {
   resource: DataResourceMetadata | null | undefined;
   scope: ListViewNavigationScope | null;
   fields: readonly string[];
   enabled?: boolean;
+  refetchInterval?: number | false;
 }) {
   const request = React.useMemo(() => {
     if (!resource || !scope) return { meta: undefined, error: null };
@@ -30,7 +31,7 @@ export function useResourceListQuery({
     dataProviderName: resource?.schemaName,
     pagination: { mode: "server", currentPage: scope?.page ?? 1, pageSize: scope?.pageSize ?? 1 },
     filters: [], sorters: [], meta: request.meta,
-    queryOptions: { enabled: enabled && Boolean(resource && scope) && !request.error, placeholderData: undefined },
+    queryOptions: { enabled: enabled && Boolean(resource && scope) && !request.error, placeholderData: undefined, refetchInterval },
   });
   if (!request.error) return result;
   const failed = {

@@ -50,8 +50,10 @@ from angee.messaging.backends import (
     ParsedHandle,
     ParsedMessage,
 )
-from angee.models import SourceKind
 from angee.posts.ingest import land_post_relations, land_posts
+from angee.provenance.statements import (
+    SourceKind,
+)
 
 RECONCILIATION_SKEW_MARGIN = timedelta(minutes=3)
 """Provider clocks and whole-second timestamps can precede the local claim."""

@@ -70,6 +70,53 @@ describe("platform explorer selectors", () => {
     expect(graph.edges.map((edge) => edge.id)).toEqual(["operator.task:owner"]);
   });
 
+  test("selects deterministic models and keeps isolated selections", () => {
+    const data = explorerResult();
+    data.platform_explorer!.models = [...models].reverse();
+    data.platform_explorer!.edges = [];
+    const fallback = selectPlatformModelGraph(data, { model: "missing" });
+    expect(fallback.model?.label).toBe("iam.user");
+    expect(fallback.nodes.map((node) => node.id)).toEqual(["iam.user"]);
+    expect(selectPlatformModelGraph(data, { model: "operator.task" }).nodes.map((node) => node.id))
+      .toEqual(["operator.task"]);
+  });
+
+  test("keeps only incident edges, preserving direction, parallel edges and self loops", () => {
+    const data = explorerResult();
+    data.platform_explorer!.models = [...models, { ...models[1]!, label: "other.model" }];
+    data.platform_explorer!.edges = [
+      ...edges,
+      { ...edges[0]!, id: "parallel", source: "iam.user", target: "operator.task" },
+      { ...edges[0]!, id: "self", source: "iam.user", target: "iam.user" },
+      { ...edges[0]!, id: "peer", source: "operator.task", target: "other.model" },
+    ];
+    const graph = selectPlatformModelGraph(data, { model: "iam.user" });
+    expect(graph.edges.map((edge) => edge.id)).toEqual(["operator.task:owner", "parallel", "self"]);
+    expect(graph.edges[0]?.source).toBe("operator.task");
+    expect(graph.nodes.map((node) => node.id)).toEqual(["iam.user", "operator.task"]);
+    expect(graph.relationTotal).toBe(3);
+  });
+
+  test("pages every incident relationship with a fixed bound and clamps invalid pages", () => {
+    const data = explorerResult();
+    const peers = Array.from({ length: 103 }, (_, index) => ({
+      ...models[1]!, label: `peer.${String(index).padStart(3, "0")}`,
+    }));
+    data.platform_explorer!.models = [models[0]!, ...peers];
+    data.platform_explorer!.edges = peers.map((peer) => ({
+      ...edges[0]!, id: peer.label, source: "iam.user", target: peer.label,
+    })).reverse();
+    const pages = [1, 2, 3].map((relationPage) => selectPlatformModelGraph(data, { relationPage }));
+    expect(pages.map((page) => page.edges.length)).toEqual([50, 50, 3]);
+    expect(pages.map((page) => page.nodes.length)).toEqual([51, 51, 4]);
+    expect(new Set(pages.flatMap((page) => page.edges.map((edge) => edge.id))).size).toBe(103);
+    expect(pages[0]?.relationTotal).toBe(103);
+    expect(selectPlatformModelGraph(data, { relationPage: 99 }).relationPage).toBe(3);
+    for (const relationPage of [0, -1, NaN, 1.5, Infinity]) {
+      expect(selectPlatformModelGraph(data, { relationPage }).relationPage).toBe(1);
+    }
+  });
+
   test("treats a null explorer payload as an empty platform surface", () => {
     const data: PlatformExplorerResult = { platform_explorer: null };
 

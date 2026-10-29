@@ -1,12 +1,6 @@
-// Authored GraphQL for the knowledge wiki. Vaults and pages are read through
-// Hasura-shaped resources (fetched once; the browser scopes to the active vault
-// client-side, see `page-rows.ts`); the open page's body and backlinks load on
-// demand through the public detail query. Concrete page creation and body writes
-// are authored here; ordinary updates use the resource mutation.
+// Scoped, paged resource reads and authored Knowledge verbs.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
-
-export const KNOWLEDGE_LIST_LIMIT = 500;
 
 export const PAGE_MODEL = "knowledge.Page";
 export const MARKDOWN_PAGE_MODEL = "knowledge.MarkdownPage";
@@ -41,12 +35,13 @@ export const KnowledgeCreateVaultFrom = graphql(`
 `);
 
 export const KnowledgeUpdatePageBody = graphql(`
-  mutation KnowledgeUpdatePageBody($page: ID!, $body: String!, $expected_hash: String) {
-    update_page_body(page: $page, body: $body, expected_hash: $expected_hash) {
+  mutation KnowledgeUpdatePageBody($page: ID!, $body: String!, $expected_hash: String, $title: String) {
+    update_page_body(page: $page, body: $body, expected_hash: $expected_hash, title: $title) {
       ok
       error
       error_code
       markdown {
+        title
         body
         body_hash
         word_count
@@ -56,20 +51,21 @@ export const KnowledgeUpdatePageBody = graphql(`
 `);
 
 export const KnowledgeVaults = graphql(`
-  query KnowledgeVaults($limit: Int, $offset: Int) {
-    vaults(where: { is_trashed: { _eq: false } }, limit: $limit, offset: $offset) {
+  query KnowledgeVaults($limit: Int, $offset: Int, $where: vaults_bool_exp) {
+    vaults(where: $where, order_by: [{ name: asc }], limit: $limit, offset: $offset) {
       id
       name
       description
       icon
       accent
+      permissions
     }
   }
 `);
 
 export const KnowledgeVault = graphql(`
   query KnowledgeVault($id: String!) {
-    vaults_by_pk(id: $id) { id permissions }
+    vaults_by_pk(id: $id) { id name permissions }
   }
 `);
 
@@ -81,21 +77,24 @@ export const KnowledgeVaultByName = graphql(`
 `);
 
 export const KnowledgePages = graphql(`
-  query KnowledgePages($limit: Int, $offset: Int, $where: pages_bool_exp) {
-    pages(where: $where, limit: $limit, offset: $offset) {
+  query KnowledgePages($limit: Int, $offset: Int, $where: pages_bool_exp, $order: [pages_order_by!]) {
+    pages(where: $where, order_by: $order, limit: $limit, offset: $offset) {
       id
       permissions
       title
       kind
       icon
       vault
+      vault_label
       parent
+      has_children
       updated_at
       created_by_label
       is_trashed
       trash_reason
       trashed_by_label
     }
+    pages_aggregate(where: $where) { aggregate { count } }
   }
 `);
 
@@ -151,6 +150,12 @@ export const KnowledgeUnbindRecord = graphql(`
   }
 `);
 
+export const KnowledgeCreateRecordNote = graphql(`
+  mutation KnowledgeCreateRecordNote($model_label: String!, $record_id: ID!, $vault: ID!, $body: String!, $role: String!, $idempotency_key: String!) {
+    create_record_note(model_label: $model_label, record_id: $record_id, vault: $vault, body: $body, role: $role, idempotency_key: $idempotency_key) { id page }
+  }
+`);
+
 export const KnowledgePage = graphql(`
   query KnowledgePage($id: String!) {
     pages_by_pk(id: $id) {
@@ -160,9 +165,14 @@ export const KnowledgePage = graphql(`
       kind
       icon
       vault
+      vault_label
       parent
+      has_children
+      is_trashed
       updated_at
       created_by_label
+      ancestors { id title parent kind icon has_children permissions }
+      wikilinks { title page }
       markdown {
         body
         body_hash

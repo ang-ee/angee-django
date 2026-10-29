@@ -17,14 +17,14 @@ from typing import Any
 from hatch_angee import discover
 
 from angee.compose.composer import Composer
-from angee.compose.project import ProjectContract
+from angee.conf import ProjectContract, prepend_import_paths
 from angee.project import PROJECT_DIR_ENV
 
 # Types of composer/autoconfig-owned settings published below. Their values
 # remain owned by Composer and the installed addons' autoconfig modules.
 ASGI_APPLICATION: str
 ANGEE_WEB_STATEMENT_TIMEOUT: int
-ANGEE_RUNTIME_DIR: Path
+COMPOSE_RUNTIME_DIR: Path
 CELERY_TASK_SOFT_TIME_LIMIT: int
 CELERY_TASK_TIME_LIMIT: int
 
@@ -40,12 +40,12 @@ else:
     _ROOT_APPS = sorted(manifest.name for _, manifest in discover(_ADDON_DIRS))
     _CACHE_ROOT = _SOURCE_ROOT / ".mypy_cache"
 _NAMESPACE = runpy.run_module(
-    "angee.compose.defaults",
+    "angee.defaults",
     init_globals={
         "BASE_DIR": _CACHE_ROOT,
         "SECRET_KEY": "framework-type-checking",
-        "ANGEE_RUNTIME_DIR": _CACHE_ROOT / "typing_runtime",
-        "ANGEE_RUNTIME_MODULE": "typing_runtime",
+        "COMPOSE_RUNTIME_DIR": _CACHE_ROOT / "typing_runtime",
+        "COMPOSE_RUNTIME_MODULE": "typing_runtime",
         "ANGEE_ADDON_DIRS": _ADDON_DIRS,
         "INSTALLED_APPS": _ROOT_APPS,
         "DATABASES": {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
@@ -53,6 +53,7 @@ _NAMESPACE = runpy.run_module(
     },
 )
 _NAMESPACE = {name: value for name, value in _NAMESPACE.items() if name.isupper() and not name.startswith("_")}
+prepend_import_paths(_ADDON_DIRS)
 Composer(_NAMESPACE).compose_settings()
 _NAMESPACE["INSTALLED_APPS"].append("tests.typing_host.TypingHostConfig")
 globals().update(_NAMESPACE)

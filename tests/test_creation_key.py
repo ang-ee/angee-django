@@ -10,13 +10,9 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
 
-from angee.changesets import (
-    changeset,
-    changeset_model_label,
-    creation_fingerprint,
-    current_changeset,
-)
-from angee.models import CreationKeyConflict
+from angee.provenance.context import changeset, changeset_model_label, current_changeset
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
+from angee.provenance.contrib.angee.serialization import creation_fingerprint
 
 pytestmark = pytest.mark.django_db(transaction=True)
 

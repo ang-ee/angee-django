@@ -5,7 +5,15 @@ name = "angee.iam"
 description = "Identity, the swappable user model, and the REBAC permission hub"
 keywords = ["identity", "rebac", "auth"]
 category = "Foundation"
-depends_on = ["angee.resources", "angee.graphql", "axes", "django.contrib.auth", "django.contrib.sessions"]
+depends_on = [
+  "angee.base",
+  "angee.resources",
+  "angee.graphql",
+  "axes",
+  "django.contrib.auth",
+  "django.contrib.sessions",
+  "angee.web",
+]
 dependencies = [
   "django-axes>=8.0",
 ]

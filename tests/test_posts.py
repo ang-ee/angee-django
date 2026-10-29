@@ -30,15 +30,17 @@ from rebac import (
     write_relationships,
 )
 
-from angee.actors import source_kind_for
 from angee.integrate import scheduler
 from angee.integrate.testing.integration import Integration
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.messaging.testing.models import Channel, Handle, Message, MessageEdge, Reaction, Thread
-from angee.models import SourceKind
 from angee.posts.backends import ParsedMetrics, ParsedPost, ParsedReaction
 from angee.posts.ingest import land_posts
 from angee.posts.models import ThreadPublic
+from angee.provenance.statements import (
+    SourceKind,
+    StatementSourceMixin,
+)
 from tests.conftest import (
     Feed,
     FeedFollow,
@@ -84,7 +86,7 @@ def test_a_feed_is_an_import_statement_source(posts_tables: None) -> None:
     with system_context(reason="test feed statement source"):
         feed = _feed("import-source")
         integration = Integration._base_manager.get(pk=feed.pk)
-    assert source_kind_for(to_subject_ref(integration)) == SourceKind.IMPORT
+    assert StatementSourceMixin.source_kind_for(to_subject_ref(integration)) == SourceKind.IMPORT
 
 
 def _post(

@@ -15,7 +15,7 @@ from strawberry.scalars import JSON
 from strawberry.types import get_object_definition
 
 from angee.graphql.actions import ActionResult, action_target
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes

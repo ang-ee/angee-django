@@ -35,7 +35,7 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout, ReadTimeout
 from urllib3.exceptions import MaxRetryError, NameResolutionError, NewConnectionError, ProtocolError
 
-from angee.changesets import changeset_model
+from angee.base.models import StaleRevisionError
 from angee.graphql.actions import MAX_ACTION_SELECTION, ActionSelectionInput
 from angee.graphql.ids import PublicID
 from angee.graphql.schema import GraphQLSchemas
@@ -50,11 +50,11 @@ from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, ParsedH
 from angee.messaging.email import AnymailEmailChannelBackend
 from angee.messaging.events import message_ingested
 from angee.messaging.managers import DeliveryReconciliationBusy
-from angee.models import StaleRevisionError
 from angee.posts import mcp_tools
 from angee.posts.backends import RECONCILIATION_SKEW_MARGIN, FeedBackend, FeedChannelBackend, ParsedPost, RecordRefusal
 from angee.posts.ingest import land_posts
 from angee.posts.models import validate_reply_hold
+from angee.provenance.context import changeset_model
 
 Message = apps.get_model("messaging", "Message")
 Channel = apps.get_model("messaging", "Channel")

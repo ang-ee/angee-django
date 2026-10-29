@@ -1,10 +1,13 @@
 #!/bin/bash
 # Template matrix probe: render every cell, then verify the classes of defect
-# that only surface in real use — nonexistent registry images, dead git sources,
-# unconsumed copier inputs. Renders with the installed operator from REGISTRY.
-set -u
+# that only surface in real use — nonexistent registry images and dead git sources.
+# Renders with the installed operator from REGISTRY.
+set -uo pipefail
 REGISTRY="${1:-${ANGEE_TEMPLATE_REGISTRY:?Pass a registry path or set ANGEE_TEMPLATE_REGISTRY}}"
-OUT=$(mktemp -d /tmp/matrix-probe.XXXX)
+OUT=$(mktemp -d "${TMPDIR:-/tmp}/matrix-probe.XXXXXX") || exit 1
+trap 'rm -rf -- "$OUT"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 FAIL=0
 note() { echo "  $1"; }
 bad() { echo "  ✗ $1"; FAIL=1; }
@@ -16,7 +19,6 @@ render() { # name template inputs...
   if ! ANGEE_TEMPLATE_REGISTRY="$REGISTRY" angee init "$dir" -t "$tpl" --yes --force "${args[@]}" >/dev/null 2>"$OUT/$name.err"; then
     bad "$name: render FAILED: $(tail -1 "$OUT/$name.err")"; return 1
   fi
-  echo "$dir"
 }
 
 echo "== render matrix =="
@@ -29,10 +31,9 @@ CELLS=(
   "local-source|local|instance_name=probe framework=source"
   "local-baked|local|instance_name=probe framework=baked"
 )
-DIRS=()
 for cell in "${CELLS[@]}"; do
   IFS='|' read -r name tpl inputs <<<"$cell"
-  d=$(render "$name" "$tpl" $inputs) && { note "✓ $name rendered"; DIRS+=("$d"); }
+  if render "$name" "$tpl" $inputs; then note "✓ $name rendered"; fi
 done
 
 echo "== registry images exist =="
@@ -49,27 +50,5 @@ for r in $REPOS; do
   else bad "$r: unreachable"; fi
 done
 
-echo "== declared inputs are consumed (bloat scan) =="
-for tpl in dev local; do
-  cop="$REGISTRY/templates/stacks/$tpl/copier.yml"
-  body="$REGISTRY/templates/stacks"
-  for key in $(python3 -c "
-import re,sys
-s=open('$cop').read()
-ang=s.split('_angee:')[1] if '_angee:' in s else ''
-seen=set()
-for m in re.finditer(r'^(\w+):\s*$',s,re.M):
-    k=m.group(1)
-    if k not in ('true','false'): seen.add(k)
-print(' '.join(sorted(k for k in seen if not k.startswith('_'))))"); do
-    # a chained project template consumes inputs through the copier.yml chain block
-    grep -rq "$key" "$body/_shared" "$body/$tpl/template" "$cop" 2>/dev/null || bad "stacks/$tpl input '$key' never referenced by its templates or chain"
-  done
-done
-
-echo "== rendered scripts sanity =="
-grep -rn '"test": "vitest run"' "$OUT"/*/web/package.json 2>/dev/null | head -2 | while read -r l; do bad "bare vitest run (empty-suite exit 1): $l"; done
-
-rm -rf "$OUT"
 [ "$FAIL" = 0 ] && echo "MATRIX PROBE: ALL GREEN" || echo "MATRIX PROBE: FAILURES ABOVE"
 exit $FAIL

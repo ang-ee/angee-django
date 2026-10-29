@@ -39,8 +39,8 @@ from django.db import models
 from django.utils import timezone
 from rebac import system_context
 
-from angee.fields import StateField
-from angee.models import AngeeDataModel, AngeeManager, AngeeModel, role_anchor
+from angee.base.fields.state import StateField
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel, role_anchor
 
 
 class PeriodReset(models.TextChoices):
@@ -237,5 +237,5 @@ class SequenceCounter(AngeeModel):
 
 SequenceRole = role_anchor("sequence/role")
 """The ``sequence/role`` anchor: its const ``admin`` arm resolves a platform admin
-as an effective sequence manager. See :func:`angee.models.role_anchor`.
+as an effective sequence manager. See :func:`angee.base.models.role_anchor`.
 """

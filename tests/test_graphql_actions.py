@@ -23,7 +23,8 @@ from rebac import (
 )
 
 import angee.graphql.actions as actions_module
-from angee.errors import RecordAccessSubjectRefused
+from angee.base.models import StaleRevisionError, TransitionNotAllowed
+from angee.base.permissions import RecordAccessSubjectRefused
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -34,7 +35,7 @@ from angee.graphql.actions import (
     resolve_action_target,
 )
 from angee.graphql.schema import AngeeSchema
-from angee.models import CreationKeyConflict, StaleRevisionError, TransitionNotAllowed
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import create_user
 from tests.linesdemo.models import Document
 

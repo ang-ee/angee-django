@@ -101,6 +101,8 @@ jobs:
           python-version: ${{ inputs.python-version }}
       - run: uv run --locked python -m ruff check . --no-cache
       - run: uv run --locked python -m mypy angee addons
+        env:
+          PYTHONPATH: .:addons
 
   # The suite runs as six contiguous shards of equal stored time
   # (.test_durations, pytest-split); a test missing from it still runs in one.
@@ -247,12 +249,17 @@ jobs:
   # fixture), and run the optional bridge source tests.
   # The consolidated checkout supplies core, packages, addons, examples, and
   # templates. Only the optional full-profile bridges remain external.
-  stack:
+  # Consumer collections span independent PostgreSQL hosts; the first group
+  # also checks lint, types and frontend fragments. The stack job keeps one verdict.
+  stack-shard:
+    name: stack ${{ matrix.group }}/${{ strategy.job-total }}
     if: ${{ inputs.stack-enabled }}
     runs-on: ubuntu-latest
-    # Composition, fragment checks and the serial bridges suite no longer fit
-    # 30 minutes.
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(inputs.consumer-path != '' && '[1,2,3,4,5,6]' || '[1]') }}
     services:
       postgres:
         image: postgres:17
@@ -371,7 +378,7 @@ jobs:
         working-directory: stack
         run: |
           uv sync
-          uv run python -m angee.compose.bootstrap
+          uv run python -m angee.management.bootstrap
           uv sync
           uv run manage.py angee build
           uv run manage.py schema
@@ -384,13 +391,13 @@ jobs:
         working-directory: stack/workspaces/src/angee
         run: uv export --locked --only-group dev --no-hashes --no-emit-project --output-file "$GITHUB_WORKSPACE/check-tools.txt"
       - name: Lint the consumer with the framework policy
-        if: ${{ inputs.consumer-path != '' }}
+        if: ${{ inputs.consumer-path != '' && matrix.group == 1 }}
         working-directory: stack
         env:
           CONSUMER_PATH: ${{ inputs.consumer-path }}
         run: uv run --with-requirements "$GITHUB_WORKSPACE/check-tools.txt" python -m ruff check "workspaces/src/$CONSUMER_PATH" --no-cache
       - name: Typecheck the consumer with the framework policy and native typing host
-        if: ${{ inputs.consumer-path != '' }}
+        if: ${{ inputs.consumer-path != '' && matrix.group == 1 }}
         working-directory: stack
         env:
           ANGEE_PROJECT_DIR: ${{ github.workspace }}/stack
@@ -408,9 +415,14 @@ jobs:
           sys.path.insert(0, str(framework))
           from tests import typing_settings
 
+          os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (
+              str(framework),
+              *(str(path) for path in typing_settings.ANGEE_ADDON_DIRS),
+              os.environ.get("PYTHONPATH"),
+          )))
           os.environ["MYPYPATH"] = os.pathsep.join(filter(None, (
               *(str(path) for path in typing_settings.ANGEE_ADDON_DIRS),
-              str(typing_settings.ANGEE_RUNTIME_DIR.parent),
+              str(typing_settings.COMPOSE_RUNTIME_DIR.parent),
               os.environ.get("MYPYPATH"),
           )))
           subprocess.run([
@@ -424,16 +436,18 @@ jobs:
           docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -c "ALTER SYSTEM SET max_locks_per_transaction = 256"
           docker restart ${{ job.services.postgres.id }}
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres -d angee; do sleep 1; done
-      - name: Run the consumer's complete Python tests on PostgreSQL
+      - name: Run the consumer's PostgreSQL test shard
         if: ${{ inputs.consumer-path != '' }}
         working-directory: stack
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
           ANGEE_PROJECT_DIR: ${{ github.workspace }}/stack
-          DJANGO_SETTINGS_MODULE: angee.compose.settings
+          DJANGO_SETTINGS_MODULE: angee.settings
           CONSUMER_PATH: ${{ inputs.consumer-path }}
           CONSUMER_TESTS: ${{ inputs.consumer-tests }}
           CONSUMER_PYTEST_PLUGINS: ${{ inputs.consumer-pytest-plugins }}
+          CONSUMER_SPLITS: ${{ strategy.job-total }}
+          CONSUMER_GROUP: ${{ matrix.group }}
         run: |
           uv run --with-requirements "$GITHUB_WORKSPACE/check-tools.txt" python - <<'PY'
           import json
@@ -457,18 +471,24 @@ jobs:
               "-c", "/dev/null", "--rootdir", str(slot), "--confcutdir", str(slot),
               "--import-mode=importlib", "--nomigrations", "-o", "python_files=test*.py",
               # Register pytest-django before the shared django_db_setup override.
-              "-p", "django", "-p", "angee.testing.fixtures", "-p", "angee.parties.testing.fixtures",
+              "-p", "django", "-p", "angee.base.testing.fixtures", "-p", "angee.provenance.testing.fixtures",
+              "-p", "angee.parties.testing.fixtures",
               *(arg for plugin in plugins for arg in ("-p", plugin)),
               "-p", "no:randomly", "-n", "4", "--dist", "worksteal", "-q",
+              "--splits", os.environ["CONSUMER_SPLITS"], "--group", os.environ["CONSUMER_GROUP"],
+              "--splitting-algorithm", "least_duration", "--durations=25",
+              "-o", "faulthandler_timeout=300",
               *(str(slot / path) for path in paths),
           ]))
           PY
       - name: Install the stack JS workspace and generate typed documents
+        if: ${{ matrix.group == 1 }}
         working-directory: stack
         run: |
           pnpm install --no-frozen-lockfile
           pnpm --dir web codegen
       - name: Typecheck and test all fragments against the composition
+        if: ${{ matrix.group == 1 }}
         working-directory: stack
         env:
           CONSUMER_PATH: ${{ inputs.consumer-path }}
@@ -481,10 +501,19 @@ jobs:
             pnpm -r test
           fi
       - name: Pytest the bridge source contracts
-        if: ${{ inputs.addons-profile == 'full' }}
+        if: ${{ inputs.addons-profile == 'full' && matrix.group == 1 }}
         working-directory: stack
         run: >-
           uv run --project "$GITHUB_WORKSPACE/stack"
           --directory "$GITHUB_WORKSPACE/stack/workspaces/src/angee-messaging-bridges"
           --with-requirements "$GITHUB_WORKSPACE/check-tools.txt"
           pytest -q ${{ inputs.pytest-extra-args }}
+
+  # Preserve the public check name and fail it for any unsuccessful matrix result.
+  stack:
+    if: ${{ always() && inputs.stack-enabled }}
+    needs: [stack-shard]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: test "${{ needs.stack-shard.result }}" = success

@@ -1,42 +1,61 @@
-"""Task owns its ordering inventory and delegates allocation to each rank field."""
+"""Task ordering persists through the rank field's connection-aware save hooks."""
 
 from __future__ import annotations
 
+import math
+from collections.abc import Callable
 from typing import Any
 
 import pytest
-from django.test.utils import isolate_apps
+from django.db import connection
+from rebac import system_context
 
-from angee.fields import FractionalRankField
-from angee.projects.models import Task as AbstractTask
+from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
+from angee.projects.testing.models import Task
 
 
-def test_task_ordering_allocation_retains_explicit_ranks(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Allocate omitted ranks once without changing explicitly assigned ranks."""
+@pytest.mark.django_db(transaction=True)
+def test_task_ordering_allocation_retains_explicit_ranks() -> None:
+    """An omitted rank appends once on save; explicit ranks survive repeated saves."""
 
-    with isolate_apps():
+    with system_context(reason="test.task_rank_allocation"):
+        Task.objects.create(title="Existing tail", sort_order=100.0, sub_sort_order=4096.0)
+        task = Task(title="Append child order", sort_order=12.5)
+        allocations: list[str] = []
 
-        class RankTask(AbstractTask):
-            class Meta(AbstractTask.Meta):
-                abstract = False
-                app_label = "tests"
+        def record_rank_reads(
+            execute: Callable[..., Any], sql: str, params: Any, many: bool, context: dict[str, Any],
+        ) -> Any:
+            # Observe the real contextual tail lookup rather than replacing its owner.
+            if sql.startswith("SELECT") and sql.split(" FROM ", 1)[0].endswith(' AS "sub_sort_order"'):
+                allocations.append(context["connection"].alias)
+            return execute(sql, params, many, context)
 
-        # The isolated registry omits the unrelated nullable relation targets.
-        task = RankTask(
-            sort_order=12.5,
-            **{field.attname: None for field in RankTask._meta.fields if field.many_to_one},
-        )
-        allocations = []
+        with connection.execute_wrapper(record_rank_reads):
+            task.save(using=connection.alias)
+            assert task.sort_order == 12.5
+            assert task.sub_sort_order == 4096.0 + FractionalRankField.STEP
+            task.save(using=connection.alias)
 
-        def allocate(field: FractionalRankField, instance: Any) -> float:
-            allocations.append((field.name, instance))
-            return 1024.0
-
-        monkeypatch.setattr(FractionalRankField, "_get_append_rank_for_instance", allocate)
-        task.allocate_ordering_ranks()
-        assert allocations == [("sub_sort_order", task)]
+        assert allocations == [connection.alias]
+        task.refresh_from_db(using=connection.alias)
         assert task.sort_order == 12.5
-        assert task.sub_sort_order == 1024.0
+        assert task.sub_sort_order == 4096.0 + FractionalRankField.STEP
 
-        task.allocate_ordering_ranks()
-        assert allocations == [("sub_sort_order", task)]
+
+@pytest.mark.parametrize(("previous", "following", "expected"), [
+    (None, None, 1024.0), (None, 1024.0, 0.0),
+    (1024.0, 2048.0, 1536.0), (2048.0, None, 3072.0),
+    (-1e308, 1e308, 0.0),
+])
+def test_persisted_rank_gap_allocation(previous, following, expected):
+    """The numeric owner allocates strict gaps without overflowing endpoints."""
+
+    assert FractionalRankField.get_rank_between(previous, following) == expected
+
+
+def test_persisted_rank_gap_exhaustion_refuses_instead_of_reusing_a_neighbor():
+    """Adjacent binary64 endpoints cannot silently turn a move into a collision."""
+
+    with pytest.raises(FractionalRankExhausted):
+        FractionalRankField.get_rank_between(1.0, math.nextafter(1.0, math.inf))

@@ -24,11 +24,12 @@ from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.state import ModelState, ProjectState
 from django.db.models.functions import Lower
+from django.test import override_settings
 from django.utils import timezone
 
 from angee.addons import addon_manifest
+from angee.base.fields.identity import SqidField
 from angee.compose.migrations import DropGuardAutodetector, RuntimeMigrations
-from angee.fields import SqidField
 from angee.resources.entries import resource_manifest_for, retired_models_for
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
 from tests.conftest import make_addon, write_addon_manifest
@@ -499,7 +500,7 @@ def test_autodetected_column_drop_requires_every_row_empty(field, value, storage
     assert message.startswith(
         f"unsafe autodetected column drop: probe.task.{field}: {storage} holds data in 1 row(s) on database 'default'. "
     )
-    assert "[[migrations]]" in message
+    assert "cutover migration" in message
 
 
 @pytest.mark.parametrize("rows", [0, 1])
@@ -531,7 +532,7 @@ def test_autodetected_table_drop_requires_an_empty_table(rows: int) -> None:
         "unsafe autodetected table drop: probe.retired: table probe_retired holds data in 1 row(s) on database "
         "'default'. "
     )
-    assert "[[migrations]]" in message
+    assert "cutover migration" in message
 
 
 def seed_ledger(model_label: str, public_id: str, *, addon: str = "probe", xref: str = "seeded") -> None:
@@ -597,6 +598,12 @@ def test_autodetected_table_drop_lets_rows_its_retiring_addon_seeded_go(monkeypa
     monkeypatch.setitem(addon_manifest(owner).resources, "retired_models", ["probe.Retired"])
     (migration,) = DropGuardAutodetector(history, current).changes(graph=graph)["probe"]
     assert [type(operation).__name__ for operation in migration.operations] == ["DeleteModel"]
+
+    # The compiler by itself grants no resource exemption. Removing the owner
+    # leaves even this vouched-for row protected by the ordinary populated guard.
+    with override_settings(COMPOSE_INTEGRATIONS=[]):
+        with pytest.raises(CommandError, match=refused):
+            DropGuardAutodetector(history, current).changes(graph=graph)
 
     # Another addon's seeded row, a ledger id that is not the row's canonical public
     # id, and an unledgered row each still count as data.

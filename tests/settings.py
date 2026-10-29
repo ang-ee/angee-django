@@ -35,6 +35,8 @@ INSTALLED_APPS = [
     "simple_history",
     "tests.settings.BareComposeConfig",
     "angee",
+    "angee.base",
+    "angee.web",
     "angee.provenance",
     "tests.settings.BareGraphQLConfig",
     "angee.timeline",
@@ -57,6 +59,7 @@ INSTALLED_APPS = [
     "angee.workflows_extraction",
     "angee.workflows_integrate",
     "angee.knowledge",
+    "angee.knowledge_integrate_notion",
     "angee.mcp",
     "angee.storage",
     "angee.storage_integrate",
@@ -132,7 +135,7 @@ else:
     }
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
-ANGEE_RUNTIME_MODULE = "tests.runtime"
+COMPOSE_RUNTIME_MODULE = "tests.runtime"
 ANGEE_ADDON_DIRS = (Path(__file__).resolve().parent.parent / "addons",)
 # Bare tests run Django's per-process LocMem cache. Production OAuth redirects
 # must use a shared cache; tests opt in explicitly so the state guard remains loud.

@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 
-import { Recovery, Waiting, RunStory, type RunRequest } from "./RunsPage.stories";
+import { RunStory, type RunRequest } from "./RunsPage.stories";
 import { runFixture, stepRunFixture } from "./testing";
 import { StepRuns } from "./StepRuns";
 
@@ -74,7 +74,7 @@ async function openStep() {
 }
 
 test("routed record uses the framework action menu, facts and retained JSON", async () => {
-  render(Recovery.render());
+  render(<RunStory />);
   expect(await screen.findByText("Operator")).toBeTruthy();
   expect(await screen.findByText("Review notes")).toBeTruthy();
   expect(screen.getByRole("tab", { name: "Step runs" })).toBeTruthy();
@@ -239,7 +239,7 @@ test("map facts distinguish ordinary steps, item zero, and empty map parents", a
 });
 
 test("selected step opens in the shared drawer with attempts and records", async () => {
-  render(Recovery.render());
+  render(<RunStory />);
   const step = await openStep();
   expect(await within(step).findByRole("heading", { name: "Inspect source" })).toBeTruthy();
   expect(within(step).queryByText("Wait reason")).toBeNull();
@@ -257,7 +257,7 @@ test("selected step opens in the shared drawer with attempts and records", async
   expect((await screen.findByRole("link", { name: "Retained note" })).getAttribute("href")).toBe("/notes/nte_7");
 });
 
-test("run list groups and filters status, workflow and origin through shared metadata", async () => {
+test("run list filters status, workflow and origin through shared metadata", async () => {
   const requests: RunRequest[] = [];
   render(<RunStory list onRequest={(request) => requests.push(request)} />);
   await screen.findByRole("button", { name: "Failed" });
@@ -272,7 +272,22 @@ test("run list groups and filters status, workflow and origin through shared met
     return where.includes('"status":{"_eq":"failed"}') && where.includes('"origin":{"_eq":"manual"}');
   })).toBe(true));
   fireEvent.click(within(panel).getByRole("button", { name: "Record review" }));
-  await waitFor(() => expect(requests.some(({ variables }) => (JSON.stringify(variables.where) ?? "").includes('"version__workflow":{"_eq":"wfl_review"}'))).toBe(true));
+  await waitFor(() => expect(requests.some(({ variables }) => {
+    const where = JSON.stringify(variables.where) ?? "";
+    return where.includes('"status":{"_eq":"failed"}')
+      && where.includes('"version__workflow":{"_eq":"wfl_review"}')
+      && where.includes('"origin":{"_eq":"manual"}');
+  })).toBe(true));
+});
+
+test("run list adds grouping axes and filters a group while retaining route filters", async () => {
+  const requests: RunRequest[] = [];
+  const filter = { status: { exact: "failed" }, origin: { exact: "manual" } };
+  render(<RunStory list initialEntry={`/workflows/runs?filter=${encodeURIComponent(JSON.stringify(filter))}`}
+    onRequest={(request) => requests.push(request)} />);
+  await screen.findByRole("button", { name: "Failed" });
+  fireEvent.click(await screen.findByRole("button", { name: "Search options" }));
+  await screen.findByRole("dialog", { name: "Search options" });
   // The combined box keeps filters and the complete group catalog together.
   const beforeWorkflowGroup = requests.length;
   fireEvent.click(await screen.findByRole("button", { name: "More axes…" }));
@@ -282,7 +297,8 @@ test("run list groups and filters status, workflow and origin through shared met
   fireEvent.click(workflow);
   await waitFor(() => expect(screen.getByRole("combobox", { name: "Group axis" }).textContent).toContain("Workflow"));
   fireEvent.click(screen.getByRole("button", { name: "Add level" }));
-  await waitFor(() => expect(requests.slice(beforeWorkflowGroup).some(({ variables }) => (JSON.stringify(variables.group_by) ?? "").includes("VERSION__WORKFLOW"))).toBe(true));
+  await waitFor(() => expect(requests.slice(beforeWorkflowGroup).map(({ variables }) => variables.group_by))
+    .toContainEqual(expect.arrayContaining([expect.objectContaining({ field: "VERSION__WORKFLOW" })])));
   const beforeOriginGroup = requests.length;
   fireEvent.click(screen.getByRole("combobox", { name: "Group axis" }));
   const origin = await screen.findByRole("option", { name: "Origin" });
@@ -292,9 +308,11 @@ test("run list groups and filters status, workflow and origin through shared met
   fireEvent.click(screen.getByRole("button", { name: "Add level" }));
   fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   await waitFor(() => expect(screen.queryByRole("button", { name: "More axes…" })).toBeNull());
+  const beforeGroupFilter = requests.length;
   fireEvent.click(await screen.findByRole("button", { name: "Record review" }));
-  await waitFor(() => expect(requests.slice(beforeOriginGroup).some(({ variables }) => (JSON.stringify(variables.group_by) ?? "").includes("ORIGIN"))).toBe(true));
-  await waitFor(() => expect(requests.some(({ variables }) => {
+  await waitFor(() => expect(requests.slice(beforeOriginGroup).map(({ variables }) => variables.group_by))
+    .toContainEqual(expect.arrayContaining([expect.objectContaining({ field: "ORIGIN" })])));
+  await waitFor(() => expect(requests.slice(beforeGroupFilter).some(({ variables }) => {
     const where = JSON.stringify(variables.where) ?? "";
     return where.includes('"status":{"_eq":"failed"}')
       && where.includes('"version__workflow":{"_eq":"wfl_review"}')
@@ -303,7 +321,7 @@ test("run list groups and filters status, workflow and origin through shared met
 });
 
 test("waiting reason appears only on a waiting step and retry uses backend capability", async () => {
-  render(Waiting.render());
+  render(<RunStory waiting />);
   const step = await openStep();
   expect(await within(step).findByText("Dispatch attempts exhausted.")).toBeTruthy();
   const dialog = await action("Retry step", step);

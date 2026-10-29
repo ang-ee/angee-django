@@ -5,8 +5,8 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { enPlatformMessages } from "./i18n";
 
 // The platform app is a route-less Settings category (`group: "platform"`). The
-// addon owns the schema explorer group; Resources contributes its import ledger
-// under `parentId: "platform"` while other base addons own sibling categories.
+// addon owns the schema explorer and import-ledger console; other base addons
+// contribute sibling categories.
 const platformMenu: readonly BaseMenuItem[] = [
   {
     id: "platform",
@@ -26,6 +26,7 @@ const platformMenu: readonly BaseMenuItem[] = [
           { id: "platform.addons", label: "Addons", route: "platform.addons", icon: "grid" },
         ],
       },
+      { id: "resources", label: "Resources", icon: "archive", route: "resources.ledger" },
     ],
   },
 ];
@@ -47,6 +48,7 @@ const platformRoutes: readonly BaseAddonRoute[] = [
     detailMenu: "platform.addons",
     detailComponent: lazyRouteComponent(() => import("./views/AddonDetail"), "AddonDetail"),
   }),
+  { name: "resources.ledger", path: "/platform/resources", resource: "resources.Resource", component: lazyRouteComponent(() => import("./views/ResourcesPage"), "ResourcesPage") },
 ];
 
 const platform = defineBaseAddon({

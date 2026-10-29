@@ -5,4 +5,4 @@ name = "angee.integrate_iphone"
 description = "Dependency-free reader for unencrypted Apple-device backups"
 keywords = ["apple", "iphone", "backup"]
 category = "Integration"
-depends_on = ["angee"]
+depends_on = []

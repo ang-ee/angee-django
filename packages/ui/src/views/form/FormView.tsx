@@ -11,6 +11,7 @@ import { cn } from "../../lib/cn";
 import { ContainerOutlet } from "../../lib/container-outlet";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { EmptyState } from "../../fragments/EmptyState";
+import type { RecordHeaderProps } from "../../fragments/RecordHeader";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import { errorMessage } from "../../feedback";
 import {
@@ -82,6 +83,8 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   title?: React.ReactNode | ((context: RecordToolbarContext) => React.ReactNode);
   /** The eyebrow above the title: the record's kind and container ("Vendor bill · Apexive"). */
   eyebrow?: React.ReactNode | ((context: RecordToolbarContext) => React.ReactNode);
+  /** Use the shared record header's density without changing the record's scrolling layout. */
+  headerDensity?: RecordHeaderProps["density"];
   submitLabel?: React.ReactNode;
   toolbarStart?:
     | React.ReactNode
@@ -151,6 +154,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     toolbar,
     title,
     eyebrow,
+    headerDensity,
     recordExtras,
     formExtras,
     headerExtras,
@@ -313,7 +317,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   const headerContextLine = awaitingRecord ? undefined : contextLine ? (contextLine(recordToolbarContext) ?? <></>) : undefined;
   const recordHeader = (compact = false) => {
     const header = <FormViewRecordHeader surface={surface} compact={compact} awaiting={awaitingRecord} title={formTitle}
-      eyebrow={formEyebrow} extra={headerExtra} contextLine={headerContextLine} />;
+      density={compact ? "compact" : headerDensity} eyebrow={formEyebrow} extra={headerExtra} contextLine={headerContextLine} />;
     return recordChromeContext
       ? <RecordChromeProvider value={recordChromeContext}>{header}</RecordChromeProvider>
       : header;

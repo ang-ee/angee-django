@@ -11,11 +11,12 @@ from django.core.exceptions import ImproperlyConfigured
 
 from angee.compose.appgraph import AppGraph
 from angee.compose.autoconfig import AutoConfig
-from angee.paths import resolve_path
+from angee.compose.declarations import AppDeclarationSource
+from angee.utils.paths import resolve_path
 
 
 class Composer:
-    """Compose Angee's Django settings from project-declared apps."""
+    """Compose native Django settings from project-declared apps."""
 
     def __init__(self, namespace: MutableMapping[str, Any]) -> None:
         """Store the settings namespace being composed."""
@@ -23,30 +24,24 @@ class Composer:
         self.namespace = namespace
 
     def compose_settings(self, *, project_apps: object | None = None) -> None:
-        """Apply Angee's composed settings into ``namespace``."""
+        """Apply composed settings into ``namespace``."""
 
         installed_apps = self.namespace.get("INSTALLED_APPS")
         if installed_apps is None:
             raise ImproperlyConfigured("settings must define INSTALLED_APPS")
-        # Direct Composer consumers (notably disposable composed hosts) add
-        # addon roots after the foundation package has already been imported.
-        # Refresh the shared ``angee`` package portions before resolving apps.
-        from angee.compose.project import prepend_import_paths
-
-        prepend_import_paths(self.namespace.get("ANGEE_ADDON_DIRS", ()))
         root_apps = self._app_entries(installed_apps)
         declared_apps = None if project_apps is None else self._app_entries(project_apps)
 
-        runtime_setting = self.namespace.get("ANGEE_RUNTIME_DIR")
+        runtime_setting = self.namespace.get("COMPOSE_RUNTIME_DIR")
         if runtime_setting is None:
-            raise ImproperlyConfigured("settings must define ANGEE_RUNTIME_DIR")
+            raise ImproperlyConfigured("settings must define COMPOSE_RUNTIME_DIR")
         runtime_dir = resolve_path(runtime_setting)
 
-        app_configs = AppGraph().resolve(root_apps, declared_roots=declared_apps)
+        app_configs = AppGraph(AppDeclarationSource.configured(self.namespace)).resolve(
+            root_apps, declared_roots=declared_apps,
+        )
         self.namespace["INSTALLED_APPS"] = list(app_configs)
-        self._set_composer_setting("ROOT_URLCONF", "angee.urls")
-        self._set_composer_setting("ASGI_APPLICATION", "angee.asgi.application")
-        self._set_composer_setting("ANGEE_RUNTIME_DIR", runtime_dir)
+        self._set_composer_setting("COMPOSE_RUNTIME_DIR", runtime_dir)
         runtime_parent = str(runtime_dir.parent.resolve())
         if runtime_parent in sys.path:
             sys.path.remove(runtime_parent)
@@ -71,7 +66,7 @@ class Composer:
         """Assign a Composer-owned setting, rejecting conflicting project values."""
 
         if key in self.namespace:
-            current = resolve_path(self.namespace[key]) if key == "ANGEE_RUNTIME_DIR" else self.namespace[key]
+            current = resolve_path(self.namespace[key]) if key == "COMPOSE_RUNTIME_DIR" else self.namespace[key]
             if current != value:
                 raise ImproperlyConfigured(f"Project settings define Composer-owned setting {key}")
         self.namespace[key] = value

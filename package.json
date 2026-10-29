@@ -8,8 +8,8 @@
   },
   "scripts": {
     "changeset": "pnpm dlx @changesets/cli@2.29.7",
-    "version-packages": "pnpm dlx @changesets/cli@2.29.7 version",
-    "release": "pnpm -r --filter './packages/**' --filter '!@angee/storybook' build && pnpm dlx @changesets/cli@2.29.7 publish",
+    "version-packages": "pnpm run changeset version",
+    "release": "pnpm -r --filter './packages/**' --filter '!@angee/storybook' build && pnpm run changeset publish",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"
   }

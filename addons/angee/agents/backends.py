@@ -22,7 +22,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
 
-from angee.impl import ImplBase
+from angee.base.implementations import ImplBase
 from angee.integrate.errors import IntegrationError
 
 

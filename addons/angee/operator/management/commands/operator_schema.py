@@ -3,7 +3,7 @@
 The daemon owns its GraphQL schema; rather than hand-maintain types, the console
 derives them from the daemon's own SDL. This command introspects the running
 daemon over the addon's authenticated connection and writes the SDL to
-`<ANGEE_RUNTIME_DIR>/schemas/external/operator.graphql`, which frontend codegen
+`<COMPOSE_RUNTIME_DIR>/schemas/external/operator.graphql`, which frontend codegen
 prefers over the package's committed snapshot (`web/schema/operator.graphql`).
 It is the daemon-side analogue of `manage.py schema`: generated output belongs to
 the runtime, so a stack's job never rewrites a source checkout. Refresh the
@@ -20,12 +20,13 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from angee.operator.daemon import OperatorDaemon
+from angee.utils.files import write_atomic
 
 
 def sdl_path() -> Path:
     """The live SDL's runtime location, read by codegen before the committed snapshot."""
 
-    return Path(settings.ANGEE_RUNTIME_DIR) / "schemas" / "external" / "operator.graphql"
+    return Path(settings.COMPOSE_RUNTIME_DIR) / "schemas" / "external" / "operator.graphql"
 
 
 class Command(BaseCommand):
@@ -55,6 +56,5 @@ class Command(BaseCommand):
         if sdl is None:
             raise CommandError(f"operator daemon unreachable after {options['retries']} attempts; SDL not refreshed")
         path = sdl_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(sdl if sdl.endswith("\n") else f"{sdl}\n")
+        write_atomic(path, sdl if sdl.endswith("\n") else f"{sdl}\n")
         self.stdout.write(self.style.SUCCESS(f"operator schema -> {path}"))

@@ -4,6 +4,7 @@ description = "Project-backed solicitation rounds with sealed proposals, compari
 keywords = ["proposals", "solicitation", "competition", "comparison", "review"]
 category = "Productivity"
 depends_on = [
+  "angee.base",
   "angee.graphql",
   "angee.iam",
   "angee.messaging",
@@ -12,6 +13,8 @@ depends_on = [
   "angee.projects",
   "angee.spaces",
   "angee.storage",
+  "angee.provenance",
+  "angee.web",
 ]
 
 [[migrations]]

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
-from angee.impl import ImplBase
+from angee.base.implementations import ImplBase
 from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.live import PairingProjection, SessionLoggedOut
@@ -87,6 +87,11 @@ class BridgeImpl(IntegrationImpl):
 
         del link
         return None
+
+    def source_label(self, link: Any) -> str:
+        """Human source identity; connectors may project their typed observation's title."""
+
+        return str(link.external_key)
 
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Declare each independently ordered partition exactly once.

@@ -205,6 +205,9 @@ export function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
     ...(boardLaneState?.rankField
       ? { boardRankField: boardLaneState.rankField }
       : {}),
+    ...(boardLaneState?.rankInputField
+      ? { boardRankInputField: boardLaneState.rankInputField }
+      : {}),
     boardOptimisticPlacementByRowId:
       boardLaneState?.optimisticPlacementByRowId ?? EMPTY_BOARD_PLACEMENTS,
     ...(boardLaneState?.onCardMove

@@ -24,7 +24,7 @@ from strawberry_django_hasura import (
     hasura_run_query_resource,
 )
 
-from angee.data.metadata import DataAggregateMeasureMetadata
+from angee.graphql.data.contracts import DataAggregateMeasureMetadata
 from angee.graphql.data.hasura import hasura_query_axes
 from angee.graphql.data.metadata import (
     DataResourceContribution,

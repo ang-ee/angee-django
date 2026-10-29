@@ -1,11 +1,10 @@
 import { useCallback, useRef, type ReactElement } from "react";
 
-import { useCanonicalResourceModelLabels, useResourceInvalidates } from "@angee/metadata";
-import { extractActionOutcome, useAuthoredMutation } from "@angee/refine";
+import { extractActionOutcome } from "@angee/refine";
 
 import {
   Action, Column, createClientKey, DrawerResourceList, Field, Form, List, SettingsSection, SettingsShell,
-  type ActionDescriptor } from "@angee/ui";
+  useAuthoredResourceMutation, type ActionDescriptor } from "@angee/ui";
 import { KnowledgeCreateVaultFrom, PAGE_READ_MODELS } from "../data/documents";
 import { useKnowledgeT } from "../i18n";
 
@@ -20,11 +19,8 @@ const CLONE_MODELS = [VAULT_MODEL, ...PAGE_READ_MODELS];
 export function KnowledgeSettingsPage(): ReactElement {
   const t = useKnowledgeT();
   const pendingClone = useRef<{ template: string; name: string; key: string } | null>(null);
-  const invalidateModels = useCanonicalResourceModelLabels(CLONE_MODELS);
-  const invalidates = useResourceInvalidates(invalidateModels);
-  const [createFrom] = useAuthoredMutation(KnowledgeCreateVaultFrom, {
-    invalidateModels,
-    invalidates,
+  const [createFrom] = useAuthoredResourceMutation(KnowledgeCreateVaultFrom, {
+    invalidateModels: CLONE_MODELS,
     shouldInvalidate: (data) => data?.create_vault_from.ok === true,
   });
   const cloneSubmit = useCallback<NonNullable<ActionDescriptor["submit"]>>(

@@ -753,8 +753,16 @@ function GraphNode({
   const t = useUiT();
   const updateNodeInternals = useUpdateNodeInternals();
   const portsSignature = JSON.stringify(data.node.ports?.map((port) => port.id));
+  const previousHandles = React.useRef({ portsSignature, type: data.style.type });
   const horizontal = sourcePosition === Position.Right || sourcePosition === Position.Left;
-  React.useEffect(() => { updateNodeInternals(id); }, [id, portsSignature, data.style.type, sourcePosition, targetPosition, updateNodeInternals]);
+  // XYFlow measures mounted nodes and orientation changes. Only our dynamic
+  // handle declarations need an explicit update when their shape changes.
+  React.useEffect(() => {
+    const previous = previousHandles.current;
+    if (previous.portsSignature === portsSignature && previous.type === data.style.type) return;
+    previousHandles.current = { portsSignature, type: data.style.type };
+    updateNodeInternals(id);
+  }, [id, portsSignature, data.style.type, updateNodeInternals]);
   return (
     <>
       {data.style.type !== "input" ? <Handle type="target" position={targetPosition} isConnectable={isConnectable} aria-label={t("graph.input")} /> : null}

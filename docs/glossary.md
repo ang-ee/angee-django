@@ -21,17 +21,19 @@ product rail.
 shows root apps and their sub-apps at most two levels; each app's own menu items
 belong in the top bar.
 
-**Framework core** — Angee's composition language and loom: the data contract,
-composer, model toolkit, serving seams, and jobs seam. It is the `django-angee`
-wheel, not an addon.
+**Framework core** — generic Django composition, Angee host configuration and
+serving entrypoints, and shared framework primitives. Reusable model behavior
+and product capabilities belong to addons.
 
 **Framework addon** — a reusable product capability that is part of Angee itself
 and builds on the framework core. Framework addons live under `addons/`.
 
-**Base addon** — a synonym for framework addon, not another architectural level.
+**Foundation addon (`angee.base`)** — the reusable model foundation: models,
+mixins, fields, managers, querysets, identity, validation and permission
+integration. Its persisted Django app label is `base`.
 
 **Consumer addon** — an addon written by a product team for a specific project,
-built on top of the framework and base addons.
+built on top of the framework and its reusable addons.
 
 **Composer** — the framework machinery that resolves addon declarations and
 emits concrete model modules, permission extensions and other `runtime/`
@@ -131,7 +133,7 @@ also accepts non-user REBAC subjects.
 converts it to the FK's Python type and returns no user for other subject types.
 
 **Changeset** — attribution for one logical write, owned by
-[`changeset()`](../angee/changesets.py) and stored by the
+[`changeset()`](../addons/angee/provenance/context.py) and stored by the
 [provenance addon](../addons/angee/provenance/models.py).
 
 **Action / activity** — action uses FHIR AuditEvent's C/U/D verbs; activity
@@ -148,17 +150,16 @@ distinct history events.
 `statements = StatementRecords(aspects=…)` gets a typed `<Model>Statement` table
 beside its history table, read through the subject like history rows and
 written only by `statements.set()` and the status verbs
-([owner](../angee/models/statements.py)).
+([owner](../addons/angee/provenance/statements.py)).
 
 **Aspect** — a declared field group of a canonical model, optionally with a
-typed member (a Handle, a counterparty), carrying its survivorship strategy and
-source precedence. The aspect is the unit of resolution; a value field belongs
+typed member (a Handle, a counterparty), carrying its source precedence. The aspect is the unit of resolution; a value field belongs
 to exactly one aspect, and consumer donors contribute aspects additively.
 
 **Survivorship** — how an aspect's asserted normal-rank statements resolve onto
-the operational row through `SOURCE_PRIORITY`. Preferred person statements always
-precede it; the winner is marked **applied** and its values materialise on the
-row. A re-derivation, never a migration, when a knob flips.
+the operational row through the model's source-priority ordering. Preferred
+person statements precede normal statements; the winner is marked **applied**
+and its values materialise on the row. Changing precedence re-derives that row.
 
 **SourceKind** — the assertion-time classification of the asserting principal:
 `PERSON`, `SYSTEM_OF_RECORD`, `DIRECTORY`, `NETWORK`, `IMPORT`, `SEED`,
@@ -359,7 +360,7 @@ read, created, changed, deleted or called. Admission inputs use the same relatio
 with no step. Readers see record identities through their current read scope.
 
 **Derived-from evidence** — a frozen fact or source link admitted through
-`angee.evidence`'s standing-read check. Decisions, run inputs and
+`angee.provenance.evidence`'s standing-read check. Decisions, run inputs and
 extraction retain their own edges to this shared source identity.
 
 ## Decisions

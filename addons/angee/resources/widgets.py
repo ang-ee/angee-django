@@ -12,8 +12,8 @@ from django.db import models
 from import_export import fields, widgets
 from rebac import GenericTarget, generic_target
 
-from angee.fields import ModelLabelField
-from angee.refs import RecordRefMixin
+from angee.base.fields.text import ModelLabelField
+from angee.base.models import RecordRefMixin
 from angee.serialization import canonical_json
 
 if TYPE_CHECKING:

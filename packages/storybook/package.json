@@ -16,9 +16,9 @@
     "dev": "NODE_OPTIONS=\"${NODE_OPTIONS:+$NODE_OPTIONS }--disable-warning=DEP0205\" storybook dev -p \"${STORYBOOK_PORT:-6006}\"",
     "build": "NODE_OPTIONS=\"${NODE_OPTIONS:+$NODE_OPTIONS }--disable-warning=DEP0205\" storybook build -o storybook-static",
     "typecheck": "tsc --noEmit",
+    "test": "node --test scripts/*.test.mjs",
     "catalog:generate": "node scripts/catalog.mjs",
-    "catalog:check": "node --test scripts/catalog.test.mjs",
-    "composition:check": "node scripts/composition-report.mjs --check"
+    "catalog:check": "node --test scripts/catalog.test.mjs"
   },
   "dependencies": {
     "@angee/app": "workspace:*",
@@ -34,7 +34,7 @@
     "@angee/theme-warm-red": "workspace:*",
     "@angee/ui": "workspace:*",
     "@refinedev/core": "^5.0.12",
-    "nuqs": "^2.5.0",
+    "nuqs": "^2.10.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-hook-form": "^7.81.0"

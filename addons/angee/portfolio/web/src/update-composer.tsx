@@ -18,9 +18,7 @@ export function parsePortfolioUpdateValues(
   healthOptions: readonly WidgetOption[],
   message = "A portfolio update health assertion is required.",
 ): PortfolioUpdateValues {
-  const health = mutationDialogValueCodecs
-    .requiredString(values.health, "health")
-    .toUpperCase();
+  const health = mutationDialogValueCodecs.requiredString(values.health, "health");
   const canonical = canonicalOptionValue(healthOptions, health);
   if (canonical === undefined) {
     throw new TypeError(message);
@@ -102,7 +100,6 @@ export function PortfolioUpdateComposer({
   targetModel,
 }: PortfolioUpdateComposerProps): React.ReactElement {
   const t = usePortfolioT();
-  const [open, setOpen] = React.useState(false);
   const healthOptions = useEnumOptions(UPDATE_MODEL, "health", { casing: "upper" });
   const [reportProject] = useActionOutcomeMutation<ActionFieldName>(
     "report_project_update", {
@@ -142,24 +139,20 @@ export function PortfolioUpdateComposer({
   );
 
   return (
-    <>
-      <Button type="button" variant="primary" size="sm" onClick={() => setOpen(true)}>
+    <MutationDialog<PortfolioUpdateValues>
+      trigger={<Button type="button" variant="primary" size="sm">
         <Glyph decorative name="portfolio-update" />
         {t("update.button")}
-      </Button>
-      <MutationDialog<PortfolioUpdateValues>
-        open={open}
-        onOpenChange={setOpen}
-        title={t("update.title")}
-        description={t("update.description")}
-        fields={fields}
-        initialValues={{ health: "ON_TRACK" }}
-        submitLabel={t("update.submit")}
-        submittingLabel={t("update.submitting")}
-        errorFallback={t("update.error")}
-        parseValues={(values) => parsePortfolioUpdateValues(values, healthOptions, t("update.healthRequired"))}
-        onSubmit={submit}
-      />
-    </>
+      </Button>}
+      title={t("update.title")}
+      description={t("update.description")}
+      fields={fields}
+      initialValues={{ health: "ON_TRACK" }}
+      submitLabel={t("update.submit")}
+      submittingLabel={t("update.submitting")}
+      errorFallback={t("update.error")}
+      parseValues={(values) => parsePortfolioUpdateValues(values, healthOptions, t("update.healthRequired"))}
+      onSubmit={submit}
+    />
   );
 }

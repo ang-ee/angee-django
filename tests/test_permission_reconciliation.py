@@ -1,15 +1,8 @@
-"""The REBAC-schema reconcile that keeps schema drift from deadlocking checks.
+"""Composed policy upgrades dispatch to native REBAC synchronization.
 
-When an addon leaves ``INSTALLED_APPS``, ``rebac sync`` never revisits it, so its
-``Schema*`` rows orphan and the library's ``rebac.E009`` check then blocks every
-checked command (``makemigrations``, ``migrate``, ``rebac sync``) — breaking the
-rebuild the uninstall triggers. The core ``reconcile_permission_schema`` (run
-check-free by the ``reconcile_permissions`` command) is the global prune that removes
-those orphans and stale rows inside still-composed packages.
-
-Stale-schema scenarios group historical setup and reconciliation with the
-library's ``schema_changes`` so the final policy is validated after removed
-model and field references have been pruned.
+Angee owns effective addon schema composition and provision ordering. Native
+REBAC owns stale declaration and stored tuple retirement; these integration
+cases exercise it against Angee's real IAM and record-edge declarations.
 """
 
 from __future__ import annotations
@@ -19,10 +12,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from django.apps import apps
-from django.conf import settings
-from django.core.management import call_command, get_commands
-from django.test import override_settings
+from django.core.management import call_command
 from rebac import schema_changes
 from rebac.schema.ast import FieldBinding, backing_to_dict
 
@@ -83,41 +73,6 @@ def _managed(package: str, resource_type: str):
         last_synced_at=timezone.now(),
     )
     return definition
-
-
-def _managed_relation(package: str, resource_type: str, name: str):
-    """Create a SchemaRelation with package-managed provenance."""
-
-    from django.contrib.contenttypes.models import ContentType
-    from django.utils import timezone
-    from rebac.models import PackageManagedRecord, SchemaDefinition, SchemaRelation
-
-    definition = SchemaDefinition.objects.create(resource_type=resource_type)
-    relation = SchemaRelation.objects.create(
-        definition=definition,
-        name=name,
-        allowed_subjects=[{"type": "auth/user", "relation": "", "wildcard": False}],
-        backing=backing_to_dict(FieldBinding(path="created_by")),
-    )
-    PackageManagedRecord.objects.create(
-        package=package,
-        external_id=f"definition:{resource_type}",
-        schema_revision=1,
-        target_ct=ContentType.objects.get_for_model(SchemaDefinition),
-        target_pk=definition.pk,
-        content_hash="x",
-        last_synced_at=timezone.now(),
-    )
-    PackageManagedRecord.objects.create(
-        package=package,
-        external_id=f"relation:{resource_type}#{name}",
-        schema_revision=1,
-        target_ct=ContentType.objects.get_for_model(SchemaRelation),
-        target_pk=relation.pk,
-        content_hash="x",
-        last_synced_at=timezone.now(),
-    )
-    return definition, relation
 
 
 def _managed_relation_for_definition(
@@ -216,7 +171,7 @@ def test_reconcile_prunes_old_iam_company_rows_after_schema_removal(
     assert old_direct_member.exists()
 
     delattr(iam, "rebac_schema")
-    call_command("reconcile_permissions", verbosity=0)
+    call_command("rebac", "sync", "--prune-stale", "--yes", skip_checks=True, verbosity=0)
 
     assert not SchemaDefinition.objects.filter(resource_type="iam/company").exists()
     assert not SchemaRelation.objects.filter(definition=company).exists()
@@ -239,79 +194,6 @@ def test_reconcile_prunes_old_iam_company_rows_after_schema_removal(
     assert SchemaDefinition.objects.filter(resource_type="auth/user").exists()
 
 
-def test_reconcile_prunes_orphaned_package_and_keeps_composed(db) -> None:
-    """A managed row whose package is not a composed app is pruned with its target,
-    while a row for a composed app survives untouched."""
-
-    from django.apps import apps
-    from rebac.models import PackageManagedRecord, SchemaDefinition
-
-    from angee.permissions import reconcile_permission_schema
-
-    orphan = _managed("ghost.addon", "ghost/thing")  # no such app in the composed set
-    kept_package = apps.get_app_config("messaging").name
-    kept = _managed(kept_package, "messaging/message")
-
-    assert reconcile_permission_schema() == 1
-
-    assert not SchemaDefinition.objects.filter(pk=orphan.pk).exists()
-    assert not PackageManagedRecord.objects.filter(package="ghost.addon").exists()
-    assert SchemaDefinition.objects.filter(pk=kept.pk).exists()
-    assert PackageManagedRecord.objects.filter(package=kept_package).exists()
-
-
-def test_reconcile_prunes_schema_when_installed_package_has_no_permissions_file(db) -> None:
-    """Retiring the last declaration cannot leave removed types blocking checks."""
-    from django.apps import apps
-    from rebac.models import PackageManagedRecord, SchemaDefinition
-
-    from angee.permissions import reconcile_permission_schema
-
-    package = apps.get_app_config("contenttypes").name
-    stale = _managed(package, "retired/review")
-    unmanaged = SchemaDefinition.objects.create(resource_type="manual/policy")
-
-    assert reconcile_permission_schema() == 1
-    assert not SchemaDefinition.objects.filter(pk=stale.pk).exists()
-    assert not PackageManagedRecord.objects.filter(package=package).exists()
-    assert SchemaDefinition.objects.filter(pk=unmanaged.pk).exists()
-
-
-@schema_changes()
-def test_reconcile_prunes_stale_rows_inside_composed_package(db) -> None:
-    """A removed definition in a still-installed addon is pruned before checks run."""
-
-    from django.apps import apps
-    from rebac.models import PackageManagedRecord, SchemaDefinition, SchemaRelation
-
-    from angee.permissions import reconcile_permission_schema
-
-    package = apps.get_app_config("messaging").name
-    stale_definition, stale_relation = _managed_relation(
-        package,
-        "messaging/message_metrics",
-        "owner",
-    )
-    kept = _managed(package, "messaging/message")
-
-    assert reconcile_permission_schema() == 2
-
-    assert not SchemaRelation.objects.filter(pk=stale_relation.pk).exists()
-    assert not SchemaDefinition.objects.filter(pk=stale_definition.pk).exists()
-    assert not PackageManagedRecord.objects.filter(
-        package=package,
-        external_id__in=(
-            "definition:messaging/message_metrics",
-            "relation:messaging/message_metrics#owner",
-        ),
-    ).exists()
-    assert SchemaDefinition.objects.filter(pk=kept.pk).exists()
-    assert PackageManagedRecord.objects.filter(
-        package=package,
-        external_id="definition:messaging/message",
-    ).exists()
-
-
 @pytest.mark.parametrize("storage_mode", ("denormalized", "registry"))
 @schema_changes()
 def test_reconcile_directly_purges_stale_relations_from_active_store(
@@ -329,7 +211,6 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
         active_relationship_model,
     )
 
-    from angee.permissions import reconcile_permission_schema
 
     settings.REBAC_LOCAL_BACKEND_STORAGE = storage_mode
     package = apps.get_app_config("nexus").name
@@ -370,8 +251,24 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
         subject_type="auth/user",
         subject_id="kept-reader",
     )
+    stale_userset = relationship_model.objects.create(
+        resource_type="knowledge/role",
+        resource_id="vault_viewer",
+        relation="member",
+        subject_type="nexus/tie",
+        subject_id="old-tie",
+        optional_subject_relation="legacy_reader",
+    )
+    kept_userset = relationship_model.objects.create(
+        resource_type="knowledge/role",
+        resource_id="vault_viewer",
+        relation="member",
+        subject_type="nexus/tie",
+        subject_id="old-tie",
+        optional_subject_relation="party_a",
+    )
 
-    assert reconcile_permission_schema() == 2
+    call_command("rebac", "sync", "--prune-stale", "--yes", skip_checks=True, verbosity=0)
 
     assert SchemaDefinition.objects.filter(pk=definition.pk).exists()
     assert SchemaRelation.objects.filter(pk=kept.pk).exists()
@@ -384,24 +281,9 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
         ),
     ).exists()
     assert not relationship_model.objects.filter(pk=stale_tuple.pk).exists()
+    assert not relationship_model.objects.filter(pk=stale_userset.pk).exists()
+    assert relationship_model.objects.filter(pk=kept_userset.pk).exists()
     assert relationship_model.objects.filter(pk=unrelated_tuple.pk).exists()
-
-
-def test_reconcile_is_a_noop_when_nothing_stale(db) -> None:
-    """Every managed package composed (here: none managed at all) prunes nothing."""
-
-    from angee.permissions import reconcile_permission_schema
-
-    assert reconcile_permission_schema() == 0
-
-
-def test_reconcile_command_is_available_without_platform() -> None:
-    """Every composed host can reconcile policy independently of the admin console."""
-
-    installed = [name for name in settings.INSTALLED_APPS if name != "angee.platform"]
-    with override_settings(INSTALLED_APPS=installed):
-        assert not apps.is_installed("angee.platform")
-        assert get_commands()["reconcile_permissions"] == "angee"
 
 
 def test_permissions_import_before_app_population() -> None:
@@ -416,7 +298,7 @@ settings.configure(
     INSTALLED_APPS=["django.contrib.contenttypes", "rebac", "angee"],
 )
 assert not apps.apps_ready
-import angee.permissions
+import angee.base.permissions
 assert not apps.apps_ready
 assert not apps.models_ready
 """],

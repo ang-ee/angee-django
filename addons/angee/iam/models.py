@@ -34,6 +34,7 @@ from rebac import (
     resolve_subjects,
     system_context,
     to_subject_ref,
+    user_subject_type,
 )
 from rebac.errors import MissingActorError
 from rebac.memberships import grant as grant_membership
@@ -42,21 +43,19 @@ from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.resources import model_resource_type
 from rebac.roles import ROLE_RELATION
 
-from angee.errors import DomainError
-from angee.fields import StateField
-from angee.iam.events import person_created
-from angee.iam.identity import user_label
-from angee.iam.roles import protected_account_holders
-from angee.identity import canonical_subject_ref, instance_from_public_id
-from angee.models import (
+from angee.base.fields.state import StateField
+from angee.base.identity import canonical_subject_ref, instance_from_public_id
+from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
     OptimisticLockMixin,
-    SourceKind,
-    StatementSourceMixin,
     role_anchor,
 )
+from angee.errors import DomainError
+from angee.iam.events import person_created
+from angee.iam.identity import user_label
+from angee.iam.roles import protected_account_holders
 
 VISIBLE_PEOPLE_DEFAULT_LIMIT = 20
 """Default page size for member-facing people surfaces."""
@@ -116,8 +115,8 @@ class Group(AngeeDataModel):
         """Validate one canonical user subject accepted by group membership."""
 
         subject = canonical_subject_ref(value)
-        if subject.subject_type != "auth/user" or subject.optional_relation:
-            raise ValueError("Group members must use canonical 'auth/user:<id>' subjects.")
+        if subject.subject_type != user_subject_type() or subject.optional_relation:
+            raise ValueError(f"Group members must use canonical '{user_subject_type()}:<id>' subjects.")
         if require_existing and subject not in resolve_subjects((subject,)):
             raise ValueError(f"Group member {value!r} was not found.")
         return subject
@@ -626,7 +625,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             return None
 
 
-class User(StatementSourceMixin, AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDataModel):
+class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDataModel):
     """Abstract swappable user model composed into Angee runtimes.
 
     ``kind=service`` rows are non-login principals for agents and automation:
@@ -671,14 +670,6 @@ class User(StatementSourceMixin, AbstractBaseUser, RebacPermissionsMixin, Optimi
         """Whether this principal represents a human, independently of activity."""
 
         return self.kind == UserKind.PERSON
-
-    @property
-    def source_kind(self) -> SourceKind | None:
-        """Classify active person accounts; other users are not statement sources."""
-
-        if not self.is_active or not self.is_person:
-            return None
-        return cast(SourceKind, SourceKind.PERSON)
 
     class Meta:
         """Django model options for the IAM user source."""

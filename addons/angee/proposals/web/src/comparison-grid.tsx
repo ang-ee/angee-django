@@ -1,15 +1,13 @@
 import { holdsPermission } from "@angee/metadata";
-import { extractActionOutcome } from "@angee/refine";
-import { Avatar, Chip, Button, FieldDescriptorControl, FormView, Glyph, InlineTextAction, Select, Table, TableBody, NavLink, TableCell, TableHead, TableHeader, TableRow, VisibilityControl, avatarInitials, canonicalOptionValue, cn, errorMessage, optionLabel, textRoleVariants, useAuthoredResourceMutation, useEnumOptions, useRuntimeAuth, useRuntimeViewAs, type FieldDescriptor, type WidgetOption } from "@angee/ui";
+import { Avatar, Chip, Button, FieldDescriptorControl, FormView, Glyph, InlineTextAction, Select, Table, TableBody, NavLink, TableCell, TableHead, TableHeader, TableRow, VisibilityControl, avatarInitials, canonicalOptionValue, cn, errorMessage, optionLabel, textRoleVariants, useEnumOptions, useRuntimeAuth, useRuntimeViewAs, type FieldDescriptor, type WidgetOption } from "@angee/ui";
 import * as React from "react";
 
 import type { ComparisonAnswer, ComparisonProposal, ComparisonTopic } from "./comparison-data";
-import { useComparisonAnswerWrite } from "./comparison-writes";
+import { useComparisonAnswerVisibility, useComparisonAnswerWrite } from "./comparison-writes";
 import {
   comparisonCellValue, comparisonRows, isEmptyComparisonValue, proposalColumnLabel,
   proposalIsOwn, type ComparisonFactField, type ComparisonRow,
 } from "./comparison-model";
-import { ANSWER_VISIBILITY } from "./documents";
 import { useProposalsT, type ProposalsT } from "./i18n";
 import { ANSWER_MODEL } from "./resources";
 
@@ -204,14 +202,11 @@ function ManageAnswerAudience({ answer, options }: {
   answer: ComparisonAnswer; options: readonly WidgetOption[];
 }): React.ReactElement {
   const t = useProposalsT();
-  const [change, state] = useAuthoredResourceMutation(ANSWER_VISIBILITY, { invalidateModels: [ANSWER_MODEL] });
+  const visibility = useComparisonAnswerVisibility();
   return <span className="inline-flex flex-wrap items-center gap-1"><VisibilityControl value={answer.visibility} options={options}
     label={t("comparison.postingTo")} allowedValues={answer.allowed_visibility ?? []}
-    readOnly={state.fetching || typeof answer.revision !== "number"}
-    onSelect={async (value) => extractActionOutcome(await change({
-      answer: answer.id, revision: answer.revision,
-      visibility: value.toUpperCase() as "ROUND" | "RESPONDER" | "SEALED",
-    }), "set_proposal_answer_visibility")} />
+    readOnly={visibility.pending || typeof answer.revision !== "number"}
+    onSelect={(value) => visibility.change(answer.id, answer.revision, value)} />
     {answer.shared_with_responders === true ? <Chip tone="neutral">
       {t("comparison.visibility.shared")}
     </Chip> : null}

@@ -1,12 +1,10 @@
 import { moneyWidget } from "@angee/money";
 import {
-  AppRuntimeProvider,
   Page,
   PageBody,
   PageHeader,
   defaultWidgets,
 } from "@angee/ui";
-import type { ReactElement, ReactNode } from "react";
 
 import type {
   ComparisonAnswer,
@@ -135,73 +133,57 @@ const responderPreOpenAnswers = answers.filter(
 
 const meta = {
   title: "Proposals/Round comparison",
-  parameters: { layout: "fullscreen" },
+  parameters: { angeeFixture: { runtime: { widgets: { ...defaultWidgets, money: moneyWidget } } }, layout: "fullscreen" },
 };
 
 export default meta;
 
-function RuntimeFixture({ children }: { children: ReactNode }): ReactElement {
-  return (
-    <AppRuntimeProvider
-      runtime={{ widgets: { ...defaultWidgets, money: moneyWidget } }}
-    >
-      {children}
-    </AppRuntimeProvider>
-  );
-}
-
 export const CompetitiveRound = {
   render: () => (
-    <RuntimeFixture>
-      <Page className="h-screen">
-        <PageHeader
-          title={`Compare ${String(round.name)}`}
-          description="Three readable responders, aligned topics, and answer audiences."
+    <Page className="h-screen">
+      <PageHeader
+        title={`Compare ${String(round.name)}`}
+        description="Three readable responders, aligned topics, and answer audiences."
+      />
+      <PageBody gutter="none">
+        <RoundComparisonGrid
+          topics={topics}
+          proposals={proposals}
+          answers={answers}
         />
-        <PageBody gutter="none">
-          <RoundComparisonGrid
-            topics={topics}
-            proposals={proposals}
-            answers={answers}
-          />
-        </PageBody>
-      </Page>
-    </RuntimeFixture>
+      </PageBody>
+    </Page>
   ),
 };
 
 export const ResponderPreOpen = {
   render: () => (
-    <RuntimeFixture>
-      <Page className="h-screen">
-        <PageHeader
-          title={`Compare ${String(responderPreOpenRound.name)}`}
-          description="Before disclosure, the server returns this responder's column alone."
+    <Page className="h-screen">
+      <PageHeader
+        title={`Compare ${String(responderPreOpenRound.name)}`}
+        description="Before disclosure, the server returns this responder's column alone."
+      />
+      <PageBody gutter="none">
+        <RoundComparisonGrid
+          topics={topics}
+          proposals={responderPreOpenProposals}
+          answers={responderPreOpenAnswers}
         />
-        <PageBody gutter="none">
-          <RoundComparisonGrid
-            topics={topics}
-            proposals={responderPreOpenProposals}
-            answers={responderPreOpenAnswers}
-          />
-        </PageBody>
-      </Page>
-    </RuntimeFixture>
+      </PageBody>
+    </Page>
   ),
 };
 
 export const Statements = {
   render: () => (
-    <RuntimeFixture>
-      <Page className="h-screen">
-        <PageHeader title="Statements" description="A separate card per readable response." />
-        <PageBody>
-          <ProposalStatements proposals={[
-            { ...proposals[0]!, statement: "Six weeks, assuming design access." },
-            { ...proposals[1]!, statement: null },
-          ]} />
-        </PageBody>
-      </Page>
-    </RuntimeFixture>
+    <Page className="h-screen">
+      <PageHeader title="Statements" description="A separate card per readable response." />
+      <PageBody>
+        <ProposalStatements proposals={[
+          { ...proposals[0]!, statement: "Six weeks, assuming design access." },
+          { ...proposals[1]!, statement: null },
+        ]} />
+      </PageBody>
+    </Page>
   ),
 };

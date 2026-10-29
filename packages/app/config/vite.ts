@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig, mergeConfig, type Plugin, type UserConfig } from "vite";
+import { build, defineConfig, mergeConfig, type Plugin, type UserConfig } from "vite";
 import {
   assertThemeCatalogue,
   resolveThemeOptions,
-  THEME_TOKEN_NAMES,
+  type AppearanceBootstrapPayload,
   type ThemeDefinition,
 } from "@angee/ui/theme-runtime";
 
@@ -27,7 +27,7 @@ const ANGEE_WATCH_IGNORED: readonly string[] = ["**/.jj/**"];
 // `runtime/gql/` path), so the proxy map and plugin choices live once, here, and
 // never drift across the example and the downstream template. Shipping this in
 // `@angee/app` (not a repo-root file) is what lets a project reach it by package
-// name whether the framework is an editable checkout or an installed wheel.
+// name from either a source checkout or a published JavaScript package.
 //
 // This module is loaded by Node as a Vite config and therefore imports ONLY the
 // Node-side build plugins and node builtins — never `react`/`react-dom` or any
@@ -420,23 +420,6 @@ function preloadSchemaMetadata(): Plugin {
 const VIRTUAL_APPEARANCE = "virtual:angee-appearance";
 const RESOLVED_VIRTUAL_APPEARANCE = `\0${VIRTUAL_APPEARANCE}`;
 
-interface AppearanceBuildPayload {
-  fingerprint: string;
-  host: {
-    themeId: string | null;
-    colorScheme: "light" | "dark" | "system";
-    options?: { version: number; value: unknown };
-    fingerprint: string;
-    tokenLayers: Record<"shared" | "light" | "dark", Record<string, string>>;
-  };
-  catalogue: {
-    schema: number;
-    fingerprint: string;
-    themes: Array<{ id: string; legacyIds?: readonly string[]; defaultTokens?: Record<string, Record<string, string>> }>;
-  };
-  tokenNames: readonly string[];
-}
-
 interface ThemeCatalogueFile {
   schema: number;
   fingerprint: string;
@@ -452,7 +435,7 @@ interface ThemeCatalogueFile {
 async function appearanceBuildPayload(
   gqlRuntimeDir: string,
   raw: AngeeWebViteConfig["appearance"],
-): Promise<AppearanceBuildPayload> {
+): Promise<AppearanceBootstrapPayload> {
   const colorScheme = raw?.colorScheme ?? "system";
   if (colorScheme !== "light" && colorScheme !== "dark" && colorScheme !== "system") {
     throw new Error(`Unsupported host appearance color scheme ${JSON.stringify(colorScheme)}.`);
@@ -505,7 +488,7 @@ async function appearanceBuildPayload(
     .update(sourceCatalogue.fingerprint)
     .update(JSON.stringify(normalizedHost))
     .digest("hex");
-  const catalogue: AppearanceBuildPayload["catalogue"] = {
+  const catalogue: AppearanceBootstrapPayload["catalogue"] = {
     schema: sourceCatalogue.schema,
     fingerprint: sourceCatalogue.fingerprint,
     themes: sourceCatalogue.themes.map(({ id, legacyIds, defaultTokens }) => ({ id, legacyIds, defaultTokens })),
@@ -517,7 +500,6 @@ async function appearanceBuildPayload(
       fingerprint,
     },
     catalogue,
-    tokenNames: THEME_TOKEN_NAMES,
   };
 }
 
@@ -529,8 +511,8 @@ async function importNodeModule(specifier: string): Promise<{ themes?: unknown }
   return load(specifier);
 }
 
-function angeeAppearancePlugin(payload: AppearanceBuildPayload): Plugin {
-  const serialized = JSON.stringify(payload).replaceAll("<", "\\u003c");
+function angeeAppearancePlugin(payload: AppearanceBootstrapPayload): Plugin {
+  let bootstrap: Promise<string> | undefined;
   return {
     name: "angee:appearance",
     resolveId(id) {
@@ -544,11 +526,12 @@ function angeeAppearancePlugin(payload: AppearanceBuildPayload): Plugin {
     },
     transformIndexHtml: {
       order: "pre",
-      handler() {
+      async handler() {
+        bootstrap ??= appearanceBootstrapScript(payload);
         return [{
           tag: "script",
           attrs: { "data-angee-appearance-bootstrap": "" },
-          children: appearanceBootstrapScript(serialized),
+          children: await bootstrap,
           injectTo: "head-prepend",
         }];
       },
@@ -556,6 +539,37 @@ function angeeAppearancePlugin(payload: AppearanceBuildPayload): Plugin {
   };
 }
 
-function appearanceBootstrapScript(serializedPayload: string): string {
-  return `(()=>{const p=${serializedPayload},r=document.documentElement,n=new Set(p.tokenNames),themes=new Map(p.catalogue.themes.flatMap(t=>[[t.id,t],...(t.legacyIds||[]).map(a=>[a,t])])),safeValue=x=>typeof x==="string"&&x.length>0&&x.length<=256&&!/[;{}@]|url\\s*\\(|expression\\s*\\(|!important/i.test(x),safeTokens=t=>t&&typeof t==="object"&&!Array.isArray(t)&&Object.entries(t).length<=n.size&&Object.entries(t).every(([k,x])=>n.has(k)&&safeValue(x)),hostTokens=s=>({...p.host.tokenLayers.shared,...p.host.tokenLayers[s]});let v={themeId:p.host.themeId,colorSchemePreference:p.host.colorScheme,options:p.host.options,tokens:null};try{const s=localStorage.getItem("angee:appearance");if(s&&s.length<=131072){const c=JSON.parse(s),validTheme=c.themeId===null||typeof c.themeId==="string"&&themes.has(c.themeId),validScheme=c.colorSchemePreference==="light"||c.colorSchemePreference==="dark"||c.colorSchemePreference==="system";if(c.schema===1&&c.fingerprint===p.fingerprint&&validTheme&&validScheme&&(c.tokens==null||safeTokens(c.tokens))){v=c}}}catch{}v={...v,themeId:themes.get(v.themeId)?.id??v.themeId};const q=v.colorSchemePreference||"system",scheme=q==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):q,t=v.tokens||(v.themeId===p.host.themeId?hostTokens(scheme):(()=>{const d=themes.get(v.themeId)?.defaultTokens;return d?{...(d.shared||{}),...(d[scheme]||{})}:{}})());if(v.themeId)r.dataset.themeId=v.themeId;else delete r.dataset.themeId;r.dataset.colorScheme=scheme;r.dataset.theme=scheme;r.style.colorScheme=scheme;for(const [k,x] of Object.entries(t||{})){if(n.has(k)&&safeValue(x))r.style.setProperty(k,x)}})();`;
+async function appearanceBootstrapScript(payload: AppearanceBootstrapPayload): Promise<string> {
+  // Library entries are normalized to absolute paths before plugin resolution.
+  const entry = fileURLToPath(new URL("./appearance-bootstrap.virtual.js", import.meta.url));
+  const runtime = fileURLToPath(import.meta.resolve("@angee/ui/theme-runtime"));
+  // Vite owns dependency closure and minification; no second token validator or
+  // function-source serializer lives in app configuration. Write nothing to disk.
+  const result = await build({
+    configFile: false,
+    envFile: false,
+    publicDir: false,
+    logLevel: "silent",
+    plugins: [{
+      name: "angee:appearance-entry",
+      resolveId(id) { return id === entry ? entry : undefined; },
+      load(id) {
+        return id === entry
+          ? `import { bootstrapAppearance } from ${JSON.stringify(runtime)}; bootstrapAppearance(${JSON.stringify(payload)});`
+          : undefined;
+      },
+    }],
+    build: {
+      write: false,
+      minify: true,
+      lib: { entry, name: "AngeeAppearanceBootstrap", fileName: "appearance-bootstrap", formats: ["iife"] },
+    },
+  });
+  const outputs = Array.isArray(result) ? result : [result];
+  const chunks = outputs.flatMap((output) => "output" in output ? output.output : []);
+  if (chunks.length !== 1 || chunks[0]?.type !== "chunk") {
+    throw new Error("Appearance bootstrap must compile to one synchronous script.");
+  }
+  // Keep HTML's script parser from interpreting a closing tag inside a JS string.
+  return chunks[0].code.replace(/<\/script/gi, "<\\/script");
 }

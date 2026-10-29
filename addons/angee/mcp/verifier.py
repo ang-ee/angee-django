@@ -18,7 +18,7 @@ from asgiref.sync import sync_to_async
 from fastmcp.server.auth import AccessToken, TokenVerifier
 from rebac import SubjectRef
 
-from angee.impl import resolve_hook
+from angee.hooks import resolve_hook
 
 MCPActorVerifier = Callable[[str], SubjectRef | None]
 """A ``verify(bearer) -> SubjectRef | None`` callable named by ``ANGEE_MCP_ACTOR_VERIFIER``."""

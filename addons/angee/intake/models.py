@@ -15,19 +15,34 @@ from django.core.validators import DomainNameValidator, validate_email
 from django.db import models, transaction
 from django.db.models.expressions import BaseExpression
 from django.db.models.functions import Coalesce, NullIf
-from rebac import PermissionDenied, actor_context, check_new, current_actor, system_context, to_object_ref
+from rebac import (
+    PermissionDenied,
+    actor_context,
+    check_new,
+    current_actor,
+    system_context,
+    to_object_ref,
+    user_subject_type,
+)
 from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
-from angee.actors import actor_user_id, instance_actor
-from angee.changesets import changeset, changeset_model, creation_fingerprint, require_changeset
+from angee.base.fields.state import StateField
+from angee.base.models import (
+    AngeeDataModel,
+    AuditMixin,
+    OptimisticLockMixin,
+)
+from angee.base.permissions import RecordAccessSubjectRefused, actor_user_id, instance_actor
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
-from angee.errors import DomainError, RecordAccessSubjectRefused
-from angee.fields import StateField
+from angee.errors import DomainError
 from angee.intake.choices import NeedAccessAction
 from angee.intake.resources import NeedResource
-from angee.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AuditMixin, HistoryMixin, OptimisticLockMixin
+from angee.provenance.context import changeset, changeset_model, require_changeset
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
@@ -63,7 +78,7 @@ class NeedImportance(models.TextChoices):
     IMPORTANT = "important", "Important"
 
 
-class NeedQuerySet[NeedT: Need](AngeeQuerySet[NeedT]):
+class NeedQuerySet[NeedT: Need](AngeeHistoryQuerySet[NeedT]):
     """Request collections follow their stored target, including project tasks."""
 
     def for_project(self, project: models.Model) -> Self:
@@ -72,7 +87,7 @@ class NeedQuerySet[NeedT: Need](AngeeQuerySet[NeedT]):
         return self.filter(models.Q(project=project) | models.Q(task__project=project))
 
 
-_NeedManagerBase = AngeeManager.from_queryset(NeedQuerySet)
+_NeedManagerBase = AngeeHistoryManager.from_queryset(NeedQuerySet)
 
 
 class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
@@ -107,20 +122,19 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
         if scope is None:
             raise PermissionDenied("Filing a task requires a user actor.")
         values = dict(queue_id=queue.pk, title=title, note=body, due_date=due_date, estimate=estimate)
-        fingerprint = creation_fingerprint(
-            {"task": values, "party": party, "importance": importance},
-        )
+        claim_values = {"task": values, "party": party, "importance": importance}
 
         with changeset(fresh=True), transaction.atomic():
-            replay = changeset_model().objects.claim(
+            created = changeset_model().objects.claim_created(
                 f"intake.file-task:{scope}",
                 idempotency_key,
-                fingerprint=fingerprint,
+                values=claim_values,
+                model=task_model,
+                unavailable=ValidationError(
+                    {"idempotency_key": "The claimed task is unavailable."},
+                ),
             )
-            if replay is not None:
-                created = replay.created_row
-                if not isinstance(created, task_model):
-                    raise ValidationError({"idempotency_key": "The claimed task is unavailable."})
+            if created is not None:
                 return task_model.objects.with_actor(actor).get(pk=created.pk)
             task = task_model.objects.with_actor(actor).create(**values, created_by_id=scope)
             self.capture(target=task, party=party, body=body, importance=importance)
@@ -309,7 +323,6 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             owner=None,
             **(values or {}),
         )
-        task.allocate_ordering_ranks()
         with task._work_verb_write():
             task.full_clean(validate_unique=False, validate_constraints=False)
             task.sudo(reason="intake.need.create_triage_task").save(ownerless=True)
@@ -471,7 +484,9 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
     def _new_access_decision(self) -> Any:
         """Ask one question assigned to the target's current sharers."""
         with system_context(reason="intake.need.access_question"):
-            readers = backend().lookup_subjects(resource=to_object_ref(self), action="share", subject_type="auth/user")
+            readers = backend().lookup_subjects(
+                resource=to_object_ref(self), action="share", subject_type=user_subject_type(),
+            )
             assignees = tuple(
                 get_user_model().objects.filter(pk__in=[actor_user_id(ref) for ref in readers], is_active=True)
             )
@@ -1057,7 +1072,7 @@ class ChannelIntake(models.Model):
                     raise ValidationError({"intake_field_map": f"Unsupported target field: {target}."})
                 if field is None or field.read_only or field.email:
                     raise ValidationError({"intake_field_map": f"{target} requires a writable, non-email property."})
-                if field.kind not in kinds:
+                if field.schema["type"] not in kinds:
                     raise ValidationError({"intake_field_map": f"The form property has the wrong kind for {target}."})
                 if name in used:
                     raise ValidationError({"intake_field_map": "Map each form property only once."})

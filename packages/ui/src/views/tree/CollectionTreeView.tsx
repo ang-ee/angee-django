@@ -6,7 +6,7 @@ import { Button } from "../../ui/button";
 import { useUiT } from "../../i18n";
 import { LoadingPanel } from "../../fragments/LoadingPanel";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
-import { TreeView } from "./TreeView";
+import { TreeView, type TreeViewProps } from "./TreeView";
 import { ResourceListFrame } from "../resource/ResourceListFrame";
 import { useResourceView } from "../resource/resource-view-context";
 import { ResourceViewUtilities } from "../resource/resource-view-utilities";
@@ -17,11 +17,14 @@ import type { ResourceToolbarProps } from "../../toolbars";
 import { ResourcePaneFooter } from "../../toolbars/ResourceToolbar";
 import {
   useCollectionQueryBatch,
+  type CollectionPageRequest,
   type CollectionSource,
 } from "../resource/collection-source";
 import type { ListViewProps } from "../resource/resource-view-types";
 
-export interface CollectionTreeViewProps<TRow extends Row> extends Pick<
+export interface CollectionTreeViewProps<TRow extends Row> extends Pick<TreeViewProps<TRow>,
+  "icon" | "insertion" | "draggableRow" | "dropAccept" | "canDropOnNode" | "onNodeDrop"
+>, Pick<
   ListViewProps<TRow>,
   | "resource"
   | "presentation"
@@ -33,7 +36,6 @@ export interface CollectionTreeViewProps<TRow extends Row> extends Pick<
   | "toolbarWrap"
   | "pane"
   | "textFilterField"
-  | "onRowClick"
   | "emptyContent"
 > {
   source: CollectionSource<TRow>;
@@ -44,6 +46,10 @@ export interface CollectionTreeViewProps<TRow extends Row> extends Pick<
   badge?: keyof TRow & string;
   selectedId?: string;
   renderRow?: (row: TRow) => ReactNode;
+  /** Readable detail/path retained independently of paged siblings; missing ancestors pin only its UI projection at root. */
+  revealRows?: readonly TRow[];
+  /** Selection carries the exact paged branch which supplied the row. */
+  onRowClick?: (row: TRow, request: CollectionPageRequest) => void;
 }
 
 /** Native tree plus the same authored transport, filter toolbar and independent page state as ListView.
@@ -70,8 +76,12 @@ export function CollectionTreeView<TRow extends Row>(
     ids: ReadonlySet<string>;
   }>({ query: queryKey, ids: new Set() });
   const ids = useMemo(
-    () => (expanded.query === queryKey ? [...expanded.ids] : []),
-    [expanded, queryKey],
+    () => [...new Set([
+      ...(expanded.query === queryKey ? expanded.ids : []),
+      ...(props.revealRows ?? []).flatMap((row) => row[props.parent] ? [String(row[props.parent])] : []),
+      ...(props.insertion?.parentId ? [props.insertion.parentId] : []),
+    ])],
+    [expanded, queryKey, props.revealRows, props.parent, props.insertion?.parentId],
   );
   const requests = useMemo(
     () =>
@@ -112,13 +122,31 @@ export function CollectionTreeView<TRow extends Row>(
         ...Object.fromEntries(clamped.map(({ id, ...page }) => [id, page])),
       }));
   }, [children, requests, view.setPaginationByScope]);
-  const rows = useMemo(
-    () => [
+  const rows = useMemo(() => {
+    const loaded = new Map<string, TRow>([
       ...surface.rows.map((row) => ({ ...row, [props.parent]: null })),
       ...[...children.values()].flatMap((result) => result.data?.rows ?? []),
-    ],
-    [surface.rows, children, props.parent],
-  );
+    ].map((row) => [String(row[props.rowKey]), row]));
+    const knownIds = new Set([
+      ...loaded.keys(), ...(props.revealRows ?? []).map((row) => String(row[props.rowKey])),
+    ]);
+    const visible = new Map(loaded);
+    for (const row of props.revealRows ?? []) {
+      const id = String(row[props.rowKey]);
+      const existing = loaded.get(id);
+      // A detail read may know a parent outside the current sibling page. Pin
+      // that orphan in this UI projection, while loaded pages own their edges.
+      const parent = existing ? existing[props.parent] : row[props.parent];
+      visible.set(id, { ...row, [props.parent]: parent && !knownIds.has(String(parent)) ? null : parent });
+    }
+    const visibleParents = new Set([...visible.values()].map((row) => String(row[props.parent] ?? "")));
+    return [...visible.values()].map((row) => {
+      const id = String(row[props.rowKey]);
+      const branch = children.get(id);
+      return branch?.data?.total === 0 && !branch.fetching && !branch.error && !visibleParents.has(id)
+        ? { ...row, [props.hasChildren]: false } : row;
+    });
+  }, [surface.rows, children, props.parent, props.revealRows, props.rowKey, props.hasChildren]);
   const catalog = useSearchCatalog({
     query: props.source.query,
     search: props.search,
@@ -165,8 +193,23 @@ export function CollectionTreeView<TRow extends Row>(
         label={props.label}
         hasChildren={props.hasChildren}
         badge={props.badge}
+        icon={props.icon}
+        insertion={props.insertion}
+        draggableRow={props.draggableRow}
+        dropAccept={props.dropAccept}
+        canDropOnNode={props.canDropOnNode}
+        onNodeDrop={props.onNodeDrop}
+        revealIds={props.selectedId ? [props.selectedId] : undefined}
         selectedId={props.selectedId}
-        onSelect={props.onRowClick}
+        onSelect={(row) => {
+          const request = requests.find(({ key }) => children.get(key)?.data?.rows.some(
+            (candidate) => candidate[props.rowKey] === row[props.rowKey],
+          ));
+          props.onRowClick?.(row, request ?? {
+            filter: view.state.filter, order: surface.sortOrder,
+            page: view.state.pagination.pageIndex + 1, pageSize: view.state.pagination.pageSize,
+          });
+        }}
         emptyContent={props.emptyContent}
         onExpand={(id) =>
           setExpanded((current) => ({
