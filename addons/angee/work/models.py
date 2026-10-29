@@ -158,7 +158,7 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
             membership.save(update_fields=(*desired, "updated_at"))
 
 
-class Queue(Composable, ImmutableFieldsMixin, metaclass=RebacModelBase, inherits="spaces.Group"):
+class Queue(ImmutableFieldsMixin, Composable, metaclass=RebacModelBase, inherits="spaces.Group"):
     """An ongoing operational context, materialized as a ``spaces.Group`` child."""
 
     immutable_fields = ("provision_stages",)
@@ -963,7 +963,7 @@ class MilestoneWork(Composable, extends="projects.Milestone"):
         stage_model._base_manager.get(pk=self.active_stage_id).validate_rule_stage(queue_id)
 
 
-class TaskWork(Composable, StagedModelMixin[Stage], extends="projects.Task"):
+class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
     """Same-row work contribution folded into ``projects.Task``."""
 
     stage_container_field_name = "queue"
@@ -1817,7 +1817,7 @@ class TaskWork(Composable, StagedModelMixin[Stage], extends="projects.Task"):
             return getattr(super(), name)(*args, **kwargs)
 
 
-class UserWork(Composable, ResourceLoadMixin, extends="iam.User"):
+class UserWork(ResourceLoadMixin, Composable, extends="iam.User"):
     """Provision personal queues after IAM user resources load."""
 
 

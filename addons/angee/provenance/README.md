@@ -47,9 +47,9 @@ Strict mode refuses a captured write without an open boundary
 | Entrypoint | Boundary | Owner |
 |---|---|---|
 | HTTP request | one per request, sync or async, failed on status ≥ 400 or a GraphQL `errors` result | [`ChangesetMiddleware`](middleware.py), the [GraphQL result receiver](graphql.py) |
-| WebSocket connection (GraphQL subscriptions, agent ACP) | one per ASGI connection scope | [`ChangesetScopeMiddleware`](middleware.py) via [`angee.asgi`](../../../angee/asgi.py) |
+| WebSocket connection (GraphQL subscriptions, agent ACP) | one per ASGI connection scope | [`ChangesetScopeMiddleware`](middleware.py) via the [GraphQL Channels contribution](../graphql/asgi.py) |
 | Celery task | one per task run, `task.<name>` | [`angee.provenance.tasks.Task`](tasks.py) |
-| Management command | one per command, `manage.<command>`; `serve`, `runserver` and `test` hand it to their requests, connections, tasks and tests | [`angee.management.main()`](../../../angee/management/__init__.py), called by every rendered `manage.py` |
+| Management command | one per command, `manage.<command>`; `serve`, `runserver` and `test` hand it to their requests, connections, tasks and tests | the native launcher's `COMPOSE_COMMAND_CONTEXT`, contributed by [provenance](contrib/angee/context.py) |
 | Bridge live session | one per session run, in the task or the spawned child | [`run_bridge_session_job`](../integrate/session_runner.py) |
 | Separate logical writes | `fresh=True` for merge, revert, seed and MCP tool calls | their owners |
 | Test | one per test, `pytest` | the `captured_changeset` fixture of the [`angee.provenance.testing.fixtures`](testing/fixtures.py) plugin provenance test hosts load explicitly |
@@ -65,9 +65,9 @@ boundary's outcome. An entrypoint that owns the whole process (a management
 command, a test) opens its boundary with `process=True`, so a plain thread or
 pool it starts without copying the context writes under it too, in its own row;
 concurrent entrypoints (requests, connections, tasks) never publish one, and their
-threads carry the context explicitly. A `manage.py` rendered before the framework owned the
-entrypoint has no boundary; its first captured write fails naming the remedy
-(call `angee.management.main()`; re-render from the project template).
+threads carry the context explicitly. Management command attribution is contributed through `COMPOSE_COMMAND_CONTEXT`.
+The rendered `manage.py` calls `django_compose.management.execute`, which enters
+those hooks after setup. Re-render an obsolete entrypoint from the project template.
 
 `Changeset.revert()` restores the state before each row's first write, refusing
 any later touch. It authorizes writes on the subjects, restores parents before

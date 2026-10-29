@@ -2425,7 +2425,7 @@ class ProjectProposalAccess(Composable, extends="projects.Project"):
         abstract = True
 
 
-class TaskProposalAccess(Composable, ImmutableFieldsMixin, extends="projects.Task"):
+class TaskProposalAccess(ImmutableFieldsMixin, Composable, extends="projects.Task"):
     """Contribute question facts and track-item sharing to the task owner."""
 
     rebac_grantable = {"proposal_viewer": "share"}

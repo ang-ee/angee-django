@@ -74,8 +74,8 @@ hooks, explicit owners, deterministic order, fail-fast on collisions.
 
 ## Backend
 
-**Source model** — an abstract Django model declared in an addon. Its own
-`runtime` and `extends` markers select its composition role; unmarked abstract
+**Source model** — an abstract Django model declared in an addon. Native `Composable` class keywords (`concrete`, `extends`, `inherits`,
+`demands`) select its composition role; unmarked abstract
 helpers are ordinary reusable bases. Edit the source model, not emitted output.
 
 **Concrete app** — the generated concrete model module and migration package
@@ -83,16 +83,17 @@ for a source Django app. Its models register under the source app's existing
 AppConfig identity. Change the source, not the generated artifact.
 
 **`runtime/`** — the directory of generated backend output (concrete apps,
-GraphQL SDL, codegen stubs, migrations). Output, not source.
+GraphQL SDL and web artifacts). Generated models/artifacts are replaceable;
+tracked native migration packages beneath it are durable project history.
 
 **Model extension (same-row)** — a narrow abstract donor with its own
-`extends = "app.Model"` and no own `runtime = True`. The donor class precedes the
+`extends="app.Model"`. The donor class precedes the
 target source in the generated model's bases, adding fields or behavior to the
 same database row.
 
 **Model extension (materialized child)** — a Django multi-table-inheritance
-child emitted from a narrow abstract source declaring both `runtime = True` and
-`extends = "app.Model"`. It shares the concrete parent's identity and stores
+child emitted from a narrow abstract `Composable` source declaring
+`inherits="app.Model"`. It shares the concrete parent's identity and stores
 kind-specific fields in its own table. Its source precedes the concrete parent
 in the generated bases, so child behavior overrides through ordinary Python MRO.
 In conversation, "extend a model" can mean either this child-row reading or the

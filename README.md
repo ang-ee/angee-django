@@ -6,7 +6,7 @@ on the [Angee platform](https://angee.ai).**
 [![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](https://github.com/ang-ee/angee-django/blob/main/LICENSE)
 [![Docs](https://img.shields.io/badge/docs-docs.angee.ai-1f6feb.svg)](https://docs.angee.ai)
 ![Python](https://img.shields.io/badge/python-3.14%2B-3776AB.svg)
-![Django](https://img.shields.io/badge/django-6.0%2B-092E20.svg)
+![Django](https://img.shields.io/badge/django-6.1-092E20.svg)
 ![React](https://img.shields.io/badge/react-19-61DAFB.svg)
 ![Status](https://img.shields.io/badge/status-early%20alpha%20preview-orange.svg)
 
@@ -60,7 +60,7 @@ are.*
    │                                                              │
    │    addons  (source models · GraphQL · REBAC · React views)   │
    │        │                                                     │
-   │        │  runtime-build · explicit composition               │
+   │        │  compose · explicit native composition               │
    │        ▼                                                     │
    │    runtime/   →   Django + GraphQL + React application       │
    └──────────────────────────────────────────────────────────────┘
@@ -105,10 +105,12 @@ hand. For the full onboarding path
 
 This repository holds the framework's source surfaces together:
 
-- **`core/angee/`** — generic Django composition, host configuration and serving
-  entrypoints, and shared framework primitives.
+- **`addons/angee/base/`** — model foundation, deployment settings and shared primitives.
+- **`addons/angee/server/`** — optional HTTP serving policy over native compiler seams.
+- **`tools/hatch-angee/`** — native Hatchling package layout defaults.
 - **`addons/`** — the `angee.base` model foundation and capability addons,
   including provenance, jobs, web builds and GraphQL, with co-located web fragments.
+  Generic composition is owned by the `django-compose` dependency.
 - **`packages/`** — the published `@angee/*` React packages and workshops.
 - **`examples/`** — showcase consumer addons and the reference e2e suite.
 - **`templates/`** — Copier sources for projects, stacks, workspaces, and services.

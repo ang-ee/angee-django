@@ -73,7 +73,7 @@ its projection. The `/mcp` mount auto-lights via `has_tools()`.
 ## Adding a real backing column
 
 A production plugin that stores embeddings contributes an abstract source model
-with `extends = "knowledge.Page"` carrying the embedding (pgvector) field. The
+with the native class keyword `extends="knowledge.Page"` carrying the embedding (pgvector) field. The
 composer folds it into the runtime `Page`; field-name collisions across addons
 **fail fast** at compose time. That column, its backfill, the pgvector extension,
 and the ANN index ship as **this plugin's migration** — never the knowledge

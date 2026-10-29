@@ -22,7 +22,7 @@ Commands live in [Composition and schema](../../../../docs/checks.md#composition
   cross the bridge first.
 - **A schema change leaves PostgreSQL planner statistics behind.** An added or
   altered column has none until `ANALYZE`, and autovacuum analyzes on row churn,
-  not schema changes. `angee provision` analyzes the tables of every app it
+  not schema changes. `manage.py provision` analyzes the tables of every app it
   migrates; follow a manual `migrate` with `ANALYZE` of the changed tables.
 - **Row updates followed by DDL on the same tables need immediate constraints.**
   PostgreSQL queues deferred foreign-key checks for rows a migration updates and
@@ -35,7 +35,7 @@ Commands live in [Composition and schema](../../../../docs/checks.md#composition
   ([Rules](../../../../docs/backend/guidelines.md#rules), model markers).
 - **Regenerate the SDL after rebuilding the runtime.** Serving never emits it
   ([Development server](../../../../docs/backend/guidelines.md#development-server));
-  rerun the schema emit and check from
+  rerun native compose and the schema check from
   [Composition and schema](../../../../docs/checks.md#composition-and-schema). A
   missing `runtime/schemas/*.graphql` makes Vite ENOENT and the SPA silently
   fails to mount (every e2e fails at list load) while `:5173` still returns 200;

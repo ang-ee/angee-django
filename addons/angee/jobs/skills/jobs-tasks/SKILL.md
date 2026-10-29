@@ -46,7 +46,7 @@ that owns the state change. Reference examples are `addons/angee/parties/tasks.p
 
 ## Steps
 
-1. **Depend on jobs and name the task.** `pyproject.toml` `depends_on` includes `"angee.jobs"` (transitively
+1. **Depend on jobs and name the task.** `pyproject.toml` `[project].dependencies` includes `"angee-jobs>=3,<4"` (transitively
    through `angee.integrate` for most capability addons). The task name is `"<label>.<verb>"`; keep it a
    constant when another module enqueues it (`addons/angee/messaging/constants.py` → `DELIVER_MESSAGE_TASK`).
    **Owner rule:** the name is a wire contract; one constant, read by the task, the enqueue call and the beat

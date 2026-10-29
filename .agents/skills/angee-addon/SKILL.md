@@ -20,10 +20,10 @@ wires declarations only; the reference example throughout is `examples/addons/ex
 | File or module | Owns | Reference |
 |---|---|---|
 | `pyproject.toml` | Identity, dependencies, declared capability seams | `examples/addons/example/notes/pyproject.toml` |
-| Native `EntryPoint`, `Distribution`, `packaging.Requirement` | Addon identity, installed requirement activation, and package metadata | `core/angee/addons.py` |
-| `core/angee/addons.py` | Package-data projection and entry-point identity agreement, optional-module and dotted-reference conventions | `core/angee/addons.py:19,73,79,91` |
+| Native `EntryPoint`, `Distribution`, `packaging.Requirement` | Addon identity, installed requirement activation, and package metadata | `addons/angee/base/addons.py` |
+| `addons/angee/base/addons.py` | Package-data projection and entry-point identity agreement, optional-module and dotted-reference conventions | `native `django_compose.addons` index + base reader` |
 | `apps.py` (optional) | `name`, pinned `label`, `ready()` hooks, check registration | `addons/angee/money/apps.py:17`, `addons/angee/base/apps.py:22` |
-| `autoconfig.py` | Settings fragments merged by `AutoConfig` in dependency order | `examples/addons/example/notes/autoconfig.py:5`, `addons/angee/base/autoconfig.py:23,42` |
+| `autoconfig.py` | Settings fragments merged by native `django_compose.conf` in dependency order | `examples/addons/example/notes/autoconfig.py:5`, `addons/angee/base/autoconfig.py:23,42` |
 | `testing/models.py`, `tests/settings.py`, `tests/conftest.py` | Concrete models and roster of the bare test host | `addons/angee/tags/testing/models.py`, `tests/settings.py:29,144`, `tests/conftest.py:645` |
 | `web/package.json`, `web/src/{index.tsx,i18n.ts,index.test.ts}` | The rendered fragment and its namespace | `examples/addons/example/notes/web/`, `templates/addons/web/template/` |
 | `addons/angee/web/build.py` (`WebRuntime`), stack `pnpm-workspace.yaml` | Fragment discovery and `runtime/web/manifest.json`; which `web/` folders the JS install links | `addons/angee/web/build.py:77,242`, `templates/stacks/dev/template/pnpm-workspace.yaml.jinja` |
@@ -32,8 +32,8 @@ wires declarations only; the reference example throughout is `examples/addons/ex
 
 - Copy shapes from `examples/addons/example/notes` (consumer, e2e target); `addons/angee/tags` is the
   smallest framework addon, `addons/angee/money` the one with checks in `ready()`.
-- `angee.addons.optional_addon_module` / `resolve_addon_reference` own conventional discovery (`schema.py`,
-  `permissions.zed`, `mcp_tools.py`, `urls.py`, `asgi.py`); `AutoConfig` (`core/angee/compose/autoconfig.py:29`)
+- `angee.base.addons.optional_addon_module` / `resolve_addon_reference` own conventional discovery (`schema.py`,
+  `permissions.zed`, `mcp_tools.py`, `urls.py`, `asgi.py`); native `django_compose.conf` (`django_compose.conf`)
   owns settings merge. Declare, never load.
 - `defineBaseAddon`, `resourcePageRoutes` (`packages/app/src/define-base-addon.ts:162,66`), `createNamespaceT`
   (`packages/ui/src/i18n/index.ts:45`), `expectValidBaseAddon` (`packages/app/src/testing.tsx:101`),
@@ -54,7 +54,7 @@ wires declarations only; the reference example throughout is `examples/addons/ex
 
    ```toml
    build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
-   tool.angee.category = "Example"
+   tool.angee.platform.category = "Example"
    [project]
    name = "example-notes"
    version = "1.0.0"
@@ -67,8 +67,9 @@ wires declarations only; the reference example throughout is `examples/addons/ex
 
    Only requirements whose markers are true with `extra=""` activate addon apps.
    `apps.py` declares foreign Django app edges with `requires_apps`; it carries no
-   copy of addon requirements. Non-default overrides use `graphql.schema`,
-   `base.permissions`, and `mcp.tools` under `tool.angee`. Resource paths are
+   copy of addon requirements. GraphQL overrides live under `tool.angee.graphql`;
+   permission paths belong to `AppConfig.rebac_schema`. MCP uses its Python
+   contribution owner rather than redundant tool metadata. Resource paths are
    relative to `resources/`; the resource owner preserves canonical ledger paths.
    Native upgrade sources live at `compose_migrations/<label>/<name>.py`, outside
    Django's conventional `migrations/`. Web identity and external codegen belong
@@ -76,6 +77,10 @@ wires declarations only; the reference example throughout is `examples/addons/ex
    **Owner rule:** package metadata owns requirements, capability owners interpret
    their tool tables, and Django owns app lifecycle
    ([composition owners](../../../docs/backend/guidelines.md#composition-owners)).
+
+   A library is explicitly packaged without an `angee.addons` entry point; do not
+   infer library identity from missing `apps.py`. The layout backend lives at
+   `tools/hatch-angee` and delegates native builds to Hatchling.
 
 3. **Add `apps.py` only for native customization.** Notes has none. Add one for checks,
    signals or a pinned label (shape: `addons/angee/money/apps.py:17`):
@@ -111,7 +116,7 @@ wires declarations only; the reference example throughout is `examples/addons/ex
    A rowless contract owner registers a stable native Django system check using `check_impl_registry`. If a value derives from the host → a `settings(namespace)` hook reading only
    its namespace (`addons/angee/base/autoconfig.py:42`). Contribute only what the addon owns: `angee.base`
    already appends `PermissionIntegration` (`addons/angee/base/autoconfig.py:24`); a second registration is refused
-   (`core/angee/compose/declarations.py:126`). **Owner rule:**
+   (`django_compose.declarations.resolve_integrations`). **Owner rule:**
    [Autoconfig](../../../docs/composer.md#autoconfig) owns merge semantics; settings loading never imports models.
 
    
@@ -155,9 +160,9 @@ wires declarations only; the reference example throughout is `examples/addons/ex
 
 ## Do not
 
-- A package fact (requirements, capability paths, a label that merely repeats the folder name) mirrored on `AppConfig`: the manifest owns it and installed entry points establish identity (`core/angee/addons.py:19`); `label` belongs on `AppConfig` only to pin an already persisted label (`addons/angee/base/apps.py:22`) ([composition owners](../../../docs/backend/guidelines.md#composition-owners)).
-- An addon-local registry, loader or settings parser for a fact `AutoConfig` or the manifest readers already read: the existing owner takes one explicit line instead ([keep policy above detail](../../../docs/guidelines.md#keep-policy-above-detail)).
-- A second registration of a framework-owned integration such as `PermissionIntegration` when the base already appends it (`addons/angee/base/autoconfig.py:24`; duplicates refused at `core/angee/compose/declarations.py:126`).
+- A package fact (requirements, capability paths, a label that merely repeats the folder name) mirrored on `AppConfig`: the manifest owns it and installed entry points establish identity (native installed index); `label` belongs on `AppConfig` only to pin an already persisted label (`addons/angee/base/apps.py:22`) ([composition owners](../../../docs/backend/guidelines.md#composition-owners)).
+- An addon-local registry, loader or settings parser for a fact native `django_compose.conf` or the manifest readers already read: the existing owner takes one explicit line instead ([keep policy above detail](../../../docs/guidelines.md#keep-policy-above-detail)).
+- A second registration of a framework-owned integration such as `PermissionIntegration` when the base already appends it (`addons/angee/base/autoconfig.py:24`; duplicates refused at `django_compose.declarations.resolve_integrations`).
 - Model or `django.conf.settings` imports at `apps.py`/`autoconfig.py` module scope: settings merge runs before apps are ready, so only `ready()` and `settings(namespace)` may import ([Autoconfig](../../../docs/composer.md#autoconfig)).
 - A module named for a noun (`statements.py`) when the concern already has an owning module (`models.py`, `managers.py`, a verb module) ([Naming](../../../docs/backend/guidelines.md#naming)).
 - Customer, deployment or product names in framework-level code or fixtures; a consumer addon names its own product ([naming](../../../docs/guidelines.md#name-so-code-can-be-found-not-guessed)).
@@ -185,7 +190,7 @@ fragment's `index.test.ts` passes; `runtime/web/manifest.json` (`addons/angee/we
 - A passing composed `web` typecheck says nothing about a fragment's test files; CI runs the per-package row ([frontend checks](../../../docs/checks.md#frontend-packages-and-addon-fragments)).
 - A noun-named module beside `models.py` fails review outright ([Naming](../../../docs/backend/guidelines.md#naming)).
 - Customer and product names in framework tests or fixtures are a defect ([name so code can be found](../../../docs/guidelines.md#name-so-code-can-be-found-not-guessed)).
-- A manifest fact mirrored on `AppConfig` drifts; the binding is validated once (`core/angee/addons.py:19`, [composition owners](../../../docs/backend/guidelines.md#composition-owners)).
+- A manifest fact mirrored on `AppConfig` drifts; the binding is validated once (`native installed index`, [composition owners](../../../docs/backend/guidelines.md#composition-owners)).
 - An invented list or marker loses to one explicit line in the existing owner ([keep policy above detail](../../../docs/guidelines.md#keep-policy-above-detail)).
 
 ## Read next
@@ -195,18 +200,3 @@ fragment's `index.test.ts` passes; `runtime/web/manifest.json` (`addons/angee/we
 - [Frontend package layering](../../../docs/frontend/guidelines.md#package-layering), [Ownership boundaries](../../../docs/frontend/guidelines.md#ownership-boundaries)
 - Extending an engine instead of declaring a new addon: the capability guide beside that engine, loaded by path — [mcp-tools](../../../addons/angee/mcp/skills/mcp-tools/SKILL.md), [jobs-tasks](../../../addons/angee/jobs/skills/jobs-tasks/SKILL.md), [integrate-bridges](../../../addons/angee/integrate/skills/integrate-bridges/SKILL.md), [workflow-definitions](../../../addons/angee/workflows/skills/workflow-definitions/SKILL.md), [provenance-attribution](../../../addons/angee/provenance/skills/provenance-attribution/SKILL.md), [agent-composition](../../../addons/angee/agents/skills/agent-composition/SKILL.md).
 - Route: `angee-design` → `angee-addon` → `angee-models` + `angee-permissions` → `angee-graphql` + `angee-resources` → `angee-forms` + `angee-pages`, with `angee-tests` beside each artifact, then `angee-project`, `angee-runtime` and acceptance through `slice`.
-
-## Sources
-
-<!--
-Docs: AGENTS.md; docs/guidelines.md; docs/backend/guidelines.md #django-native-rule, #package-layering, #composition-owners, #naming, #checks; docs/composer.md #addon-discovery, #autoconfig, #addon-declarations, #serving; docs/frontend/guidelines.md #stack, #package-layering, #reserved-translation-namespace, #rules; docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #source-addon-test-models, #agent-methodology-and-documentation, #composition-and-schema, #frontend-packages-and-addon-fragments; docs/glossary.md #composition.
-Code (grep -n on the working tree): native package readers in core/angee/addons.py; core/angee/addons.py:19,73,79,91; core/angee/compose/autoconfig.py:29;
-core/angee/compose/declarations.py:126; core/angee/conf.py:421; addons/angee/base/{autoconfig.py:23-24,42,apps.py:15-22,build.py:133,checks.py:16-37};
-addons/angee/graphql/schema.py:650-680; addons/angee/mcp/server.py:92-101; addons/angee/resources/entries.py:111; addons/angee/web/build.py:77,101,115,149,242;
-addons/angee/money/apps.py:17-30; addons/angee/tags/{pyproject.toml,testing/models.py,web/src/*}; examples/addons/example/notes/{pyproject.toml,autoconfig.py,README.md,web/*};
-packages/app/src/{define-base-addon.ts:20,66,124,162,testing.tsx:101,architecture-guardrails.test.ts:231,774}; packages/app/config/vitest.ts:90;
-packages/ui/src/i18n/index.ts:45; packages/app/bin/angee-web-codegen.mjs:60-110; tests/settings.py:29,71,144; tests/conftest.py:645; tests/test_addons.py:95;
-pyproject.toml:205-208; templates/addons/web/template/**; templates/stacks/dev/template/pnpm-workspace.yaml.jinja.
-Doc gaps: no pyproject.toml key reference in docs/; no pnpm-workspace registration guide.
-Mismatches: tags/apps.py and notes/apps.py do not exist (auto-created configs); notes/web ships no index.test.ts or vitest.config.ts (the template renders both).
--->

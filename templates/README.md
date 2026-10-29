@@ -158,7 +158,8 @@ Commit what you author; ignore what a tool regenerates:
 <root>/                    # project == stack (ANGEE_ROOT=.)
   ── committed ──
   angee.yaml               # stack: operator · postgres · django · frontend ingress
-  manage.py                # ANGEE_PROJECT_DIR = here
+  manage.py                # native django-compose management launcher
+  settings.py              # authored base.configure entrypoint
   settings.yaml            # INSTALLED_APPS (base) · DATABASE_URL → postgres
   AGENTS.md · CLAUDE.md    # stack-root ownership rules for coding agents
   addons/<ns>/             # your addons
@@ -170,8 +171,10 @@ Commit what you author; ignore what a tool regenerates:
 ```
 
 `runtime/<label>/migrations/` is **committed**; other runtime output is ignored.
-`uv sync` installs the declared distributions. The stack's explicit `runtime-build`
-job generates the runtime; `uv build` builds Python distribution archives.
+`uv sync --locked` installs distributions on a stopped/new host. The explicit
+`compose` job emits artifacts, then `provision` applies database state. The operator
+keeps the `py-sync` holds stopped until the full chained run succeeds; a plain
+held job leaves them stopped. `uv build` builds distribution archives only.
 After rebuilding changed models, author native migrations with `makemigrations`,
 then review and commit history before provisioning.
 Generated runtime, resolved secrets, compiled compose files and materialized

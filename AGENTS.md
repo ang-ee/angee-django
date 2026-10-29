@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Angee is a thin composition framework for Django + React applications. The
-framework owns the seams; addons own product capabilities. The composer turns
+framework owns the seams; addons own product capabilities. The upstream compiler turns
 addon contracts and project settings into a runnable project. Projects declare
 root apps through Django `INSTALLED_APPS`.
 
@@ -67,7 +67,8 @@ highest standard.
   composer. Commands, resolvers, routes, and adapters dispatch to policy owners.
 - **Compose through declared contracts.** Addon identity and requirements belong to native package metadata in
   `pyproject.toml`; capability facts belong to its `[tool.angee]` tables; Django `AppConfig` owns app identity and lifecycle. Use schema
-  buckets, model `extends`, input/type extensions, settings/autoconfig,
+  buckets, native `Composable` class keywords (`concrete`, `extends`, `inherits`,
+  `demands`), input/type extensions, settings/autoconfig,
   `ImplClassField`, containers, registered forms/glyphs, generated SDL, and native
   dependency extension points. Never probe foreign object shapes or monkey-patch
   composed model classes. The [owner decision tree](docs/guidelines.md#put-behavior-on-the-owning-object)
@@ -153,8 +154,10 @@ already been loaded. Read the relevant owner before acting.
 
 The first question for any change is *what level does it belong to?*
 
-- **Framework core** — generic Django composition, the Angee host, serving
-  entrypoints and small shared primitives. Core owns no product models.
+- **Upstream compiler (`django-compose`)** — generic Django composition, artifact
+  verification and native lifecycle seams. Angee consumes its public contracts.
+- **Serving addon (`angee.server`)** — HTTP defaults, Uvicorn commands and connection
+  policy; model-only projects do not activate it.
 - **Foundation addon (`angee.base`)** — reusable Django models, fields, managers,
   querysets, identity, validation and permission integration. Its app label is `base`.
 - **Framework addon** — a reusable capability that ships with Angee. Provenance,
@@ -168,33 +171,43 @@ product specifics down into the framework. Every fact lives at its owning level.
 
 ```text
 .                    # consolidated framework source slot
-├── core/angee/      # django-angee host, generic compose/, serving seams and shared primitives
 ├── addons/          # angee.base foundation and capability addons; co-located web fragments
+├── tools/hatch-angee/ # native Hatchling layout backend; no runtime compiler
 ├── packages/        # schema-independent @angee/* packages and workshop/test tooling
 ├── examples/        # consumer addons and reference browser suite
 ├── templates/       # Copier project, stack, workspace, service, and addon sources
-├── tests/           # core, addon, and template contract tests
+├── tests/           # shared-owner, addon, and template contract tests
 ├── docs/            # principles, operational guidance, and owner links
 ├── .agents/         # public shared agent methodology
 └── README.md        # human entry point; this file is the contributor entry point
 ```
 
-The `angee.*` namespace spans the core and folder addons. The core wheel is
-`django-angee`; each addon is a separate Python distribution with `pyproject.toml`. Core dependencies belong to `core/pyproject.toml`, addon
-dependencies to their `[project].dependencies`, and resolved versions to lockfiles. In a
-materialized workspace the stack root owns the JS install; the repository's own
-pnpm manifest also supports standalone package CI. See [the stack](docs/stack.md).
+The `angee.*` namespace is a native PEP 420 namespace contributed by addon
+packages. Each addon is a separate distribution with a `pyproject.toml` and one
+`angee.addons` entry point. The root `angee` meta-distribution requires the
+framework cohort. Dependencies belong to the owning package's
+`[project].dependencies`, resolved versions to native lockfiles, and capability
+facts to `[tool.angee.<capability>]`. A library is explicitly packaged without an
+addon entry point; absence of `apps.py` never changes package identity.
+
+`angee.base` owns reusable models, settings/bootstrap and small shared primitives;
+`angee.server` owns HTTP policy. Generic composition belongs to `django-compose`.
+The in-tree `tools/hatch-angee` workspace member only supplies package layout
+defaults over Hatchling. In a materialized workspace the stack root owns JS
+installation; the repository manifest also supports standalone package CI.
+See [the stack](docs/stack.md).
 
 Personal-messaging bridges remain in the optional external
-`angee-messaging-bridges` repository. The Go operator, `hatch-angee`, and
+`angee-messaging-bridges` repository. The Go operator and
 `strawberry-django-hasura` remain independently published. Private work-state is
 an optional **workspace sibling slot**, not a required directory in this tree;
 see [Where Knowledge Lives](#where-knowledge-lives).
 
 ## Area Rules
 
-- **Core:** do not absorb product capability or addon vocabulary. Core changes
-  require the full Python suite because every composed area can be affected.
+- **Shared owners:** keep generic composition in the upstream compiler and Angee
+  primitives in base. Changes affecting every composed area require the full
+  relevant Python suite.
 - **Addons:** keep the manifest, capability, resources, permissions, and web
   fragment together. Generated SDL and `@angee/gql` belong to the composed host.
 - **Packages:** all published framework packages, including `@angee/app`, remain
@@ -267,7 +280,7 @@ watchers by hand. The angee operator is the stack's monitoring and management
 service: it is not part of the frontend or backend and keeps running while it
 restarts them, so use it for every restart.
 `angee --root "$angee_root" job run deps --chained-restart` restarts the whole
-application (current instance templates start that chain at `runtime-build`), and
+application (instance templates start that chain at `py-sync`), and
 `angee --root "$angee_root" restart <service>...` restarts single services. Apply
 dependency changes with the whole-application restart; never `uv sync` the stack's
 venv while the stack runs. Existing stacks retain their rendered job names until
@@ -295,7 +308,7 @@ Durable project knowledge is checked in, not held only in private agent memory.
   local-source symlink, or a Jujutsu workspace of a shared store. When
   `.work/.jj` exists, write through `jj` only and follow `.work/AGENTS.md`.
   Use its `plans/specs/`, `plans/`, `notes/`, and `handovers/` directories; do
-  not create `core/angee/.work` inside this source slot. Follow the workspace's
+  not create `angee/.work` inside this source slot. Follow the workspace's
   synchronization rules and the user's instructions.
 - **No work-state source:** keep task-specific plans and handoff notes in the
   conversation. Do not invent a private repository/path or put private history

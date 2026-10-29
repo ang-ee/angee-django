@@ -34,8 +34,8 @@ _message_after_copy: |
   Login:    admin / the generated admin-password secret in .env
 
   The framework's notes example is NOT installed by default (INSTALLED_APPS is
-  base-only). Add it later by adding `sources/angee/examples/addons` to
-  ANGEE_ADDON_DIRS and enabling example.notes in settings.yaml's INSTALLED_APPS.
+  base-only). Add it later by declaring its distribution and native source override in the project's
+  pyproject.toml, then enabling example.notes in settings.yaml's INSTALLED_APPS.
 
 _angee:
   schema: 1

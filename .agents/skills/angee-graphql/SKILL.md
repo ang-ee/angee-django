@@ -28,7 +28,7 @@ Run `angee-design` first for the owner map; `angee-models` and
 | `addons/angee/graphql/actions.py` | `ActionResult:40`, `action_guard:195`, `authorized_action_target:240`, `authorized_permission_target:276`, `resolve_action_target:321` | `addons/angee/work/schema.py:480-495` |
 | `addons/angee/graphql/{node,ids,deletion,capabilities}.py` | `AngeeNode` (`node.py:18`), `instance_for_id`/`require_instance_for_id` (`ids.py:54,68`), `delete_by_public_id`/`attach_delete_preview_metadata` (`deletion.py:334,396`), `permissions_field` (`capabilities.py:135`) | `examples/addons/example/notes/schema.py:41-62` |
 | `addons/angee/graphql/subscriptions.py`, `apps.py` | `changes:30`; `GraphQLConfig.ready` (`apps.py:22`) registers the schema checks and connects publishers | `addons/angee/knowledge/schema.py:845-852` |
-| `addons/angee/graphql/sdl.py`, `management/commands/schema.py`, `urls.py` | `GraphQLSdl:27` renders `runtime/schemas/<name>.graphql` + `<name>.metadata.json`; `schema [--check]`; `graphql/<schema_name>/` (`urls.py:11`) | `docs/composer.md#serving` |
+| `addons/angee/graphql/sdl.py`, `management/commands/schema.py`, `urls.py` | `GraphQLSdl:27` renders `runtime/schemas/<name>.graphql` + `<name>.metadata.json`; ready-phase `SchemaIntegration` emits through compose; `schema --check` reads; `graphql/<schema_name>/` (`urls.py:11`) | `docs/composer.md#serving` |
 | `packages/app/bin/angee-web-codegen.mjs`, `<addon>/web/src/documents*.ts` | One `@angee/gql/<name>` per SDL (`:67-70`), document globs by file name (`:467-472`), derived action documents (`:475`) | `addons/angee/tags/web/src/documents.ts`, `packages/refine/src/dialect/authored-hooks.tsx:92,213` |
 
 ## Reuse first
@@ -161,7 +161,7 @@ Run `angee-design` first for the owner map; `angee-models` and
    Admin-only surfaces go to `console` alone (money, tags); outward reads also to `public`. Every resource's `.types` ride the `types` bucket. Values are sequences, never sets.
    **Owner rule:** the addon declares exposure per named schema; `GraphQLSchemas` merges buckets across addons, builds one Strawberry schema per name and finalizes resource metadata from it ([Rules](../../../docs/backend/guidelines.md#rules) "GraphQL authoring is native Strawberry").
 
-8. **Emit SDL, run codegen, then ship documents only for authored operations.** Order: `schema` → host codegen → fragment checks ([Composition and schema](../../../docs/checks.md#composition-and-schema)).
+8. **Emit SDL, run codegen, then ship documents only for authored operations.** Order: native `compose` (including SDL/metadata) → host codegen → fragment checks ([Composition and schema](../../../docs/checks.md#composition-and-schema)).
 
    ```ts
    import { graphql } from "@angee/gql/console";
