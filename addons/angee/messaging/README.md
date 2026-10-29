@@ -88,6 +88,27 @@ its idempotency key and provenance survive without a second visible row or count
 Advisory task locks reduce contention; the row claim is authoritative. This is
 at-most-once recovery of an uncertain effect, not an exactly-once provider guarantee.
 
+Configure outbound email through Django's native default mailer, for example
+`MAILERS = {"default": {"BACKEND": "anymail.backends.mailgun.EmailBackend"}}`,
+with the provider's `ANYMAIL` settings. A missing default mailer leaves delivery
+unconfigured. The sender opens, sends through, and closes the same native backend;
+it never contacts an implicit localhost SMTP transport.
+
+Django 6.1 configuration cutoff: the host no longer consumes `EMAIL_URL` or
+`EMAIL_BACKEND` environment inputs. Migrate deployment mail configuration and old
+project `EMAIL_*` settings to the native `MAILERS` mapping in `settings.yaml`;
+existing django-yamlconf overlays own secret values. No legacy adapter is retained.
+
+```yaml
+MAILERS:
+  default:
+    BACKEND: django.core.mail.backends.smtp.EmailBackend
+    OPTIONS:
+      host: smtp.example.test
+      port: 587
+      use_tls: true
+```
+
 Email uses the provider's definite refusal evidence: SMTP 4xx retries and SMTP
 5xx fails; connection failure before SMTP sending retries. Once sending begins,
 lost acknowledgements remain uncertain. For HTTP ESPs, Anymail-wrapped connect

@@ -50,9 +50,8 @@ SETTINGS: _Settings = {
     "ANGEE_WEBFORM_RATE_LIMIT_WINDOW": 60,
     "ANGEE_WEBFORM_HONEYPOT_FIELD": "_website",
     "ANGEE_WEBFORM_TOKEN_HOOK": "",
-    # Django supplies an implicit localhost SMTP backend when EMAIL_BACKEND is
-    # absent. Outbound messaging must not mistake that floor for an explicitly
-    # configured delivery transport.
+    # Only an explicitly declared native default mailer configures delivery;
+    # Django's legacy implicit localhost SMTP backend is not a transport choice.
     "ANGEE_EMAIL_DELIVERY_CONFIGURED": False,
     # Addons append provenance keys written by their trusted local owners.
     "ANGEE_MESSAGING_PROTECTED_LOCAL_KEYS": [
@@ -65,7 +64,7 @@ def settings(namespace: Mapping[str, Any]) -> dict[str, Any]:
     """Derive mail-provider defaults from the host environment and transport."""
 
     contributed: dict[str, Any] = {
-        "ANGEE_EMAIL_DELIVERY_CONFIGURED": bool(namespace.get("EMAIL_BACKEND")),
+        "ANGEE_EMAIL_DELIVERY_CONFIGURED": "default" in namespace.get("MAILERS", {}),
     }
     if "ANYMAIL" in namespace:
         anymail = namespace["ANYMAIL"]

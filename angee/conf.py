@@ -392,12 +392,6 @@ class ProjectContract:
             seed.setdefault("DATABASES", {"default": database})
         if "CACHE_URL" in os.environ:
             seed.setdefault("CACHES", {"default": self.env.cache()})
-        if "EMAIL_BACKEND" in os.environ:
-            seed.setdefault("EMAIL_BACKEND", os.environ["EMAIL_BACKEND"])
-        if "EMAIL_URL" in os.environ:
-            for email_setting, email_value in self.env.email_url().items():
-                seed.setdefault(email_setting, email_value)
-
         self.namespace.update(
             {
                 name: value

@@ -33,7 +33,7 @@ declare it. `angee-addon` owns an addon's local declarations; `angee-runtime` ow
 - Render rather than hand-write: `angee init` chains `projects/web` under a stack template;
   the two `.copier-answers*.yml` files record every input, which is what a later
   `angee stack update --template` re-renders from ([templates](../../../templates/README.md#kinds)).
-- `ProjectContract` and `angee.defaults` already map `DATABASE_URL`, `CACHE_URL`, `EMAIL_URL`,
+- `ProjectContract` and `angee.defaults` already map `DATABASE_URL`, `CACHE_URL`,
   `ANGEE_DB_POOL*`, `ANGEE_PUBLIC_ORIGIN`, `SENTRY_DSN` ([stack rows](../../../docs/stack.md#backend)).
 - django-yamlconf owns overlays, `YAMLCONF_<NAME>`, `:jsonenv`, `:append`, dotted keys and provenance
   ([Autoconfig](../../../docs/composer.md#autoconfig)); `AppGraph` expands `depends_on` ([App graph](../../../docs/composer.md#app-graph-and-settings)).
@@ -123,7 +123,7 @@ declare it. `angee-addon` owns an addon's local declarations; `angee-runtime` ow
      shell: { brand: { name: <Brand> }, hosts: { app.example.test: <app> } }
    ```
 
-   `DATABASE_URL`, `CACHE_URL`, `EMAIL_URL` come from the process environment (stack `env:`; a
+   `DATABASE_URL`, `CACHE_URL` come from the process environment (stack `env:`; a
    project-root `.env` serves host-run `manage.py`, process env winning); an explicit `DATABASES` wins
    over the URL. A name an addon declares with the `ANGEE_` prefix is read from the environment as-is;
    any other needs `YAMLCONF_`. `YAMLCONF_CONFFILE` adds a whole overlay (the baked image uses it for
