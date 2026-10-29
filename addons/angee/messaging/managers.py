@@ -55,6 +55,7 @@ from rebac import (
     SubjectRef,
     actor_context,
     current_actor,
+    database_context,
     generic_target,
     system_context,
     to_subject_ref,
@@ -74,6 +75,7 @@ from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.permissions import actor_user_id, require_rebac_queryset
 from angee.base.querysets import AngeeQuerySet, MergeableQuerySet, row_lock_paths
 from angee.base.refs import generic_pointer_model, generic_pointer_target
+from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256, strip_null_bytes
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.graphql.publishing import mute_changes
 from angee.integrate.errors import IntegrationError, safe_integration_failure
@@ -96,7 +98,6 @@ from angee.parties.models import Handle
 from angee.provenance.context import changeset, changeset_model, require_changeset
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
-from angee.serialization import STRINGIFIED_JSON, canonical_json_sha256, strip_null_bytes
 from angee.storage.uploads import attachment_extension, fallback_attachment_name, truncate_filename
 
 if TYPE_CHECKING:
@@ -972,7 +973,7 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
         # Let Django's FK descriptor resolve either channel= or channel_id=,
         # and use that same proposed row for the insert if no occurrence exists.
         thread = self.model(platform=platform, external_id=external_id, **defaults)
-        manager = self.db_manager(hints={"instance": thread})
+        manager = self.db_manager(self._db or thread._state.db, hints={"instance": thread})
         using = manager.db
         identities = manager.system_context(reason="messaging.thread.identity").lock_if_supported()
         queryset = _external_id_annotated(identities).filter(
@@ -1052,7 +1053,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
 
         if record.pk is None:
             return None
-        edges = self.model._base_manager.db_manager(hints={"instance": record})
+        edges = self.model._base_manager.db_manager(self._db or record._state.db, hints={"instance": record})
         content_type, object_id = generic_pointer_target(record)
         attachment = (
             edges.select_related("thread")
@@ -1165,7 +1166,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         thread_model = self.model.thread.field.related_model
         fragment_model = apps.get_model("messaging", "Fragment")
         title_text = strip_null_bytes(title or str(record)).strip()
-        manager = self.db_manager(hints={"instance": record})
+        manager = self.db_manager(self._db or record._state.db, hints={"instance": record})
         using = manager.db
         # A chatter edge is the record's own thread: the record's verb has admitted
         # the actor, and the edge and its thread are written as system rows. A
@@ -1218,12 +1219,14 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         """
 
         if thread.host_broadcasts_changes != host_broadcasts:
-            type(thread)._base_manager.db_manager(hints={"instance": thread}).filter(pk=thread.pk).update(
+            type(thread)._base_manager.db_manager(thread._state.db, hints={"instance": thread}).filter(
+                pk=thread.pk,
+            ).update(
                 host_broadcasts_changes=host_broadcasts,
             )
             thread.host_broadcasts_changes = host_broadcasts
         if host_broadcasts and thread.owner_id is not None:
-            type(thread).objects.db_manager(hints={"instance": thread}).filter(pk=thread.pk).release(
+            type(thread).objects.db_manager(thread._state.db, hints={"instance": thread}).filter(pk=thread.pk).release(
                 get_user_model()(pk=thread.owner_id)
             )
             thread.owner = None
@@ -1588,7 +1591,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         attachment = _record_attachment(record, role=role)
         if attachment is None:
             return False
-        return self.model._base_manager.filter(
+        return self.model._base_manager.using(self.db).filter(
             thread_id__in=attachment.thread.member_threads().values("pk"), party_id=party_id,
         ).exists()
 
@@ -1611,12 +1614,12 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         needs that record's write permission. Only a new follow seeds a receipt.
         """
 
-        follows = self.db_manager(hints={"instance": record})
+        follows = self.db_manager(self._db or record._state.db, hints={"instance": record})
         using = follows.db
         attachments = apps.get_model("messaging", "ThreadAttachment").objects.db_manager(
-            hints={"instance": record},
+            using, hints={"instance": record},
         )
-        with transaction.atomic(using=using):
+        with database_context(using), transaction.atomic(using=using):
             attachment = attachments.for_record(record, role=role)
             target = attachment.target if attachment is not None else record
             if target is None:
@@ -1714,7 +1717,9 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         target = message
         if target is None:
             target = (
-                message_model._base_manager.filter(thread_id__in=thread.member_threads().values("pk"), is_trashed=False)
+                message_model._base_manager.using(self.db).filter(
+                    thread_id__in=thread.member_threads().values("pk"), is_trashed=False,
+                )
                 .annotate(_order_at=MessageQuerySet.chronological_time())
                 .order_by("-_order_at", "-pk")
                 .first()
@@ -1724,7 +1729,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         if message is not None and not thread.member_threads().filter(pk=message.thread_id).exists():
             raise ValueError("Receipt anchor does not belong to this thread.")
         target_key = target.chronological_key
-        with transaction.atomic():
+        with transaction.atomic(using=self.db):
             # Lock only the follower row (`of=("self",)`): the receipt FK is
             # nullable, and Postgres refuses FOR UPDATE on the nullable side of
             # the select_related outer join. lock_if_supported keeps the SQLite
@@ -1742,7 +1747,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             if current is not None and current.chronological_key >= target_key:
                 return 0
             follower.last_read_message = target
-            follower.save(update_fields=("last_read_message", "updated_at"))
+            follower.save(using=follower._state.db, update_fields=("last_read_message", "updated_at"))
         return 1
 
     def unread_messages(self, thread: Any, *, party: Any = None, user: Any = None, user_id: Any = None) -> Any:
@@ -1860,7 +1865,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             return 0
         self._require_follow_access(record, party_id)
         with system_context(reason="messaging.follower.unsubscribe"):
-            deleted, _details = self.model._base_manager.filter(
+            deleted, _details = self.model._base_manager.using(self.db).filter(
                 thread_id__in=attachment.thread.member_threads().values("pk"), party_id=party_id,
             ).delete()
         return deleted
@@ -2135,7 +2140,10 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         if message.thread_id is None:
             return 0
         follower_model = apps.get_model("messaging", "ThreadFollower")
-        followers = {row.party_id: row for row in follower_model.objects.effective_for_thread(message.thread)}
+        followers = {
+            row.party_id: row
+            for row in follower_model.objects.db_manager(self.db).effective_for_thread(message.thread)
+        }
         subtype = message.subtype
         policy_type = follower_model.NotificationPolicy
         # Identity reads grant no access; the record gates each account below.
@@ -2170,7 +2178,7 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
 
         people = (
             apps.get_model("parties", "Person")
-            ._base_manager.filter(pk__in=audience, user__isnull=False)
+            ._base_manager.using(self.db).filter(pk__in=audience, user__isnull=False)
             .select_related("user")
         )
         deliveries: dict[Any, tuple[NotificationPolicy, ThreadFollower | None]] = {}
@@ -2181,7 +2189,9 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
 
         # Direct addressing bypasses audience preferences, including mute. It still
         # shares the author exclusion and record-read gate with every other source.
-        for account in get_user_model()._base_manager.filter(pk__in=_normalise_user_ids(recipient_user_ids)):
+        for account in get_user_model()._base_manager.using(self.db).filter(
+            pk__in=_normalise_user_ids(recipient_user_ids),
+        ):
             accounts[account.pk] = account
             deliveries.setdefault(account.pk, (policy_type.INBOX, None))
 
@@ -2189,7 +2199,7 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
             key: account for key, account in accounts.items() if created_by_id is None or str(key) != str(created_by_id)
         }
         reader_ids = record.thread_reader_ids(eligible.values()) if record is not None else set(eligible)
-        existing = {row.user_id: row for row in self.model._base_manager.filter(message=message)}
+        existing = {row.user_id: row for row in self.model._base_manager.using(self.db).filter(message=message)}
         new_rows: list[Any] = []
         for user_id, (policy, follower) in deliveries.items():
             if user_id not in reader_ids:
@@ -2206,7 +2216,10 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
             if existing_row is not None:
                 for field, value in values.items():
                     setattr(existing_row, field, value)
-                existing_row.save(update_fields=("thread", "attachment", "follower", "notification_type", "updated_at"))
+                existing_row.save(
+                    using=existing_row._state.db,
+                    update_fields=("thread", "attachment", "follower", "notification_type", "updated_at"),
+                )
             else:
                 new_rows.append(
                     self.model(
@@ -2217,7 +2230,7 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
                         created_by_id=created_by_id,
                     )
                 )
-        self.model._base_manager.bulk_create(new_rows, ignore_conflicts=True)
+        self.model._base_manager.using(self.db).bulk_create(new_rows, ignore_conflicts=True)
         return len(new_rows)
 
 
@@ -2307,6 +2320,7 @@ def _message_subtype(
     subtype_key: str,
     model_label: str = "",
     created_by_id: Any = None,
+    using: str | None = None,
 ) -> Any | None:
     """Return/create the subtype row that classifies a chatter message."""
 
@@ -2319,7 +2333,7 @@ def _message_subtype(
         _humanize_key(subtype_key),
         _humanize_key(subtype_key),
     )
-    subtype, _created = subtype_model.objects.get_or_create(
+    subtype, _created = subtype_model.objects.db_manager(using).get_or_create(
         model_label=model_label,
         key=subtype_key,
         defaults={
@@ -3486,14 +3500,16 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             raise ValueError("Parent message does not belong to this thread.")
         if (autofollow_author or autofollow_recipients) and (record is None or attachment is None):
             raise ValueError("Autofollow requires the record and its thread attachment.")
+        using = self._db or thread._state.db or self.db
+        messages = self.db_manager(using)
         part_model = apps.get_model("messaging", "Part")
         fragment_model = apps.get_model("messaging", "Fragment")
         notification_model = apps.get_model("messaging", "ThreadNotification")
         sent_at = timezone.now()
-        claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
-        with claim_boundary, transaction.atomic():
+        claim_boundary = changeset(fresh=True, using=using) if idempotency_key is not None else nullcontext()
+        with database_context(using), claim_boundary, transaction.atomic(using=using):
             if idempotency_key is not None:
-                message = changeset_model().objects.claim_created(
+                message = changeset_model().objects.db_manager(using).claim_created(
                     f"messaging.post:{actor}",
                     idempotency_key,
                     values=claim_values,
@@ -3509,16 +3525,16 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             subtype = _message_subtype(
                 subtype_key=subtype_key,
                 model_label=subtype_model_label,
-                created_by_id=created_by_id,
+                created_by_id=created_by_id, using=using,
             )
 
             sender = None
             if created_by_id is not None:
                 user_model = self.model.created_by.field.related_model
-                sender = apps.get_model("parties", "Handle").objects.for_user(
-                    user_model._base_manager.get(pk=created_by_id)
+                sender = apps.get_model("parties", "Handle").objects.db_manager(using).for_user(
+                    user_model._base_manager.using(using).get(pk=created_by_id)
                 )
-            message = self.create(
+            message = messages.create(
                 thread_id=thread.pk,
                 sender=sender,
                 platform=thread.platform,
@@ -3533,10 +3549,10 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             )
             position = 0
             if body:
-                fragment = fragment_model.objects.upsert(
+                fragment = fragment_model.objects.db_manager(using).upsert(
                     text=body, kind=fragment_model.FragmentKind.PARAGRAPH, created_by_id=created_by_id
                 )
-                part_model.objects.create(
+                part_model.objects.db_manager(using).create(
                     message_id=message.pk,
                     position=position,
                     type="text/plain",
@@ -3547,7 +3563,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 )
                 position += 1
             for file in attachments:
-                part_model.objects.create(
+                part_model.objects.db_manager(using).create(
                     message_id=message.pk,
                     position=position,
                     type=_file_mime_type(file),
@@ -3558,7 +3574,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     created_by_id=created_by_id,
                 )
                 position += 1
-            notification_model.objects.fanout_for_message(
+            notification_model.objects.db_manager(using).fanout_for_message(
                 message,
                 attachment=attachment,
                 created_by_id=created_by_id,
@@ -3574,13 +3590,15 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     candidates = set(recipient_user_ids if autofollow_recipients else ())
                     if autofollow_author and created_by_id is not None:
                         candidates.add(created_by_id)
-                    accounts = list(get_user_model()._base_manager.filter(pk__in=candidates))
+                    accounts = list(get_user_model()._base_manager.using(using).filter(pk__in=candidates))
                     readers = record.thread_reader_ids(account for account in accounts if account.kind == "person")
                     for account in accounts:
                         if account.kind != "person" or account.pk in readers:
-                            follower_model.objects.subscribe(record, user=account, role=attachment.role)
+                            follower_model.objects.db_manager(using).subscribe(
+                                record, user=account, role=attachment.role,
+                            )
             if created_by_id is not None:
-                follower_model.objects.mark_read_up_to(thread, user_id=created_by_id, message=message)
+                follower_model.objects.db_manager(using).mark_read_up_to(thread, user_id=created_by_id, message=message)
             with system_context(reason="messaging.thread.count"):
                 self._advance_thread(thread, message.sent_at)
             type(message).thread.field.set_cached_value(message, thread)
@@ -3831,7 +3849,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         for field, expression in values.items():
             setattr(thread, field, expression)
         with system_context(reason="messaging.thread.bump"):
-            thread.save(update_fields=tuple(values))
+            thread.save(using=thread._state.db, update_fields=tuple(values))
 
     def correct_source_thread(
         self, message: MessageT, *, channel: Channel, expected_thread: Thread, thread: Thread,
