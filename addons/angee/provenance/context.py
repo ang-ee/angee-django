@@ -190,7 +190,7 @@ class _ChangesetBoundary:
     @staticmethod
     def _close_row(row: _ChangesetRow, outcome: str) -> None:
         instance = row.instance
-        using = router.db_for_write(changeset_model(), instance=instance)
+        using = instance._state.db or router.db_for_write(changeset_model(), instance=instance)
 
         def close_persisted() -> None:
             if not row.persisted:
